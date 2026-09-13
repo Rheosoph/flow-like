@@ -1,79 +1,18 @@
 {
   "fill" : {
-    "automatic-gradient" : "display-p3:1.00000,0.96156,0.96361,1.00000"
+    "linear-gradient" : [
+      "extended-srgb:1.00000,0.55294,0.15686,1.00000",
+      "extended-srgb:1.00000,0.21961,0.23529,1.00000"
+    ]
   },
   "groups" : [
     {
       "layers" : [
         {
-          "blend-mode-specializations" : [
-            {
-              "value" : "normal"
-            },
-            {
-              "appearance" : "dark",
-              "value" : "normal"
-            }
-          ],
-          "fill-specializations" : [
-            {
-              "value" : "automatic"
-            },
-            {
-              "appearance" : "dark",
-              "value" : "automatic"
-            }
-          ],
-          "glass" : false,
-          "hidden" : false,
-          "image-name" : "Base Logo (2).png",
-          "name" : "Base Logo (2)",
-          "opacity-specializations" : [
-            {
-              "appearance" : "dark",
-              "value" : 0
-            },
-            {
-              "appearance" : "tinted",
-              "value" : 0
-            }
-          ],
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
-              0,
-              0
-            ]
-          }
+          "image-name" : "flow-like.svg",
+          "name" : "flow-like"
         }
       ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
-    },
-    {
-      "hidden" : false,
-      "layers" : [
-        {
-          "glass" : true,
-          "hidden" : false,
-          "image-name" : "Base Logo (1).png",
-          "name" : "Base Logo (1)",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
-              0,
-              0
-            ]
-          }
-        }
-      ],
-      "lighting" : "individual",
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.5
@@ -85,6 +24,9 @@
     }
   ],
   "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
     "squares" : "shared"
   }
 }

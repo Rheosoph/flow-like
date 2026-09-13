@@ -2,7 +2,9 @@ use crate::{
     entity::{invitation, notification, sea_orm_active_enums::NotificationType},
     error::ApiError,
     middleware::jwt::AppUser,
-    push_notifications::{DispatchNotificationInput, dispatch_notification},
+    push_notifications::{
+        DispatchNotificationInput, PushDispatchStatus, dispatch_notification_with_status,
+    },
     state::AppState,
 };
 use axum::{
@@ -121,7 +123,8 @@ pub async fn list_notifications(
         query = query.filter(notification::Column::Type.eq(kind));
     }
 
-    let notifications = query.limit(limit).offset(offset).all(&state.db).await?;
+    let mut notifications = query.limit(limit).offset(offset).all(&state.db).await?;
+    crate::notification_images::refresh_notification_icons(&state, &mut notifications).await?;
 
     Ok(Json(notifications))
 }
@@ -259,7 +262,9 @@ pub struct CreateUserNotificationParams {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CreateUserNotificationResponse {
     pub id: String,
+    pub persisted: bool,
     pub success: bool,
+    pub push_status: PushDispatchStatus,
 }
 
 /// POST /user/notifications/create
@@ -301,7 +306,7 @@ pub async fn create_user_notification(
         None
     };
 
-    let notification_id = dispatch_notification(
+    let result = dispatch_notification_with_status(
         &state,
         DispatchNotificationInput {
             user_id: sub,
@@ -325,8 +330,10 @@ pub async fn create_user_notification(
     })?;
 
     Ok(Json(CreateUserNotificationResponse {
-        id: notification_id,
-        success: true,
+        id: result.id,
+        persisted: true,
+        success: result.push_status.is_success(),
+        push_status: result.push_status,
     }))
 }
 

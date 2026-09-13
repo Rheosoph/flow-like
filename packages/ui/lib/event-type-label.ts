@@ -1,5 +1,6 @@
 const EVENT_TYPE_LABELS: Readonly<Record<string, string>> = {
 	simple_chat: "Chat UI",
+	geolocation: "Location Region",
 };
 
 export function formatEventTypeLabel(eventType: string): string {

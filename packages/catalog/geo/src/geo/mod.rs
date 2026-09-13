@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod geometry;
 pub mod h3;
+pub mod location;
+pub mod location_event;
 pub mod map;
 pub mod routing;
 pub mod search;

@@ -599,6 +599,57 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		showPreview: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
+	cameraView: {
+		type: { type: "string", required: true },
+		value: {
+			type: "boundValue",
+			description:
+				"Current session IDs, microphone state and available audio history, then captured frame metadata and temporary image reference.",
+		},
+		label: { type: "boundValue" },
+		disabled: { type: "boundValue" },
+		facingMode: { type: "boundValue", enum: ["environment", "user"] },
+		deviceId: {
+			type: "boundValue",
+			description: "Optional exact camera device id.",
+		},
+		mirrored: {
+			type: "boundValue",
+			description: "Mirror the preview. Captured pixels remain unmirrored.",
+		},
+		fit: { type: "boundValue", enum: ["contain", "cover"] },
+		intervalMs: {
+			type: "boundValue",
+			description:
+				"Sampling interval in milliseconds. Zero disables automatic capture; minimum 250 ms. Bind an Interval frame Event.",
+		},
+		maxWidth: {
+			type: "boundValue",
+			description: "Captured image width limit, 160 to 4096 pixels.",
+		},
+		quality: { type: "boundValue", description: "JPEG quality, 0.1 to 1." },
+		audioEnabled: {
+			type: "boundValue",
+			description:
+				"Offer microphone recording when the user starts the camera. Off by default; enabling this setting alone never starts recording.",
+		},
+		audioBufferSeconds: {
+			type: "boundValue",
+			description:
+				"Recent audio to retain in memory, in whole seconds from 1 to 300. Default 60. Capture Camera Audio requests a clip from this history.",
+		},
+		overlays: {
+			type: "boundValue",
+			description:
+				"Annotations with matching sessionId and frameId, normalized to the captured image.",
+		},
+		effects: {
+			type: "boundValue",
+			description:
+				"Preview-only grayscale, sepia, blur, brightness and contrast.",
+		},
+		actions: { type: "actions" },
+	},
 	voiceInput: {
 		type: { type: "string", required: true },
 		value: { type: "boundValue" },

@@ -2,6 +2,11 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { type ReactNode, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
+import {
+	appRouteUrl,
+	parseAppRouteTarget,
+	readAppQuery,
+} from "../../lib/app-route-url";
 import type { IEvent } from "../../lib/schema/flow/event";
 import type { IPage } from "../../state/backend-state/page-state";
 
@@ -35,10 +40,14 @@ mock.module("../../lib/idb-storage", () => ({
 mock.module("@flow-like/locales", () => ({
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
-const router = { push: mock(() => {}), replace: mock(() => {}) };
+const router = {
+	push: mock((_href: string) => {}),
+	replace: mock((_href: string) => {}),
+};
+let hostSearch = "host=ignored";
 mock.module("next/navigation", () => ({
 	useRouter: () => router,
-	useSearchParams: () => new URLSearchParams("host=ignored"),
+	useSearchParams: () => new URLSearchParams(hostSearch),
 }));
 mock.module("react-oidc-context", () => ({ useAuth: () => null }));
 mock.module("../../hooks/use-asset-source", () => ({
@@ -101,6 +110,9 @@ afterEach(async () => {
 	intervals.clear();
 	runs.length = 0;
 	hydration = Promise.resolve();
+	hostSearch = "host=ignored";
+	router.push.mockClear();
+	router.replace.mockClear();
 });
 afterAll(() => mock.restore());
 
@@ -126,8 +138,10 @@ function createPage(id: string): IPage {
 	};
 }
 
-async function mount(appId: string, page: IPage) {
-	const window = new Window({ url: "https://example.test/use" });
+async function mount(appId: string, page: IPage, embedded = true) {
+	const window = new Window({
+		url: `https://example.test/use?${hostSearch.replace(/^\?/, "")}`,
+	});
 	const globals = {
 		window,
 		document: window.document,
@@ -167,7 +181,7 @@ async function mount(appId: string, page: IPage) {
 					page={nextPage}
 					pageExecutionRevision="execution-v1"
 					route="/settings"
-					queryParams={{ source: "embedded" }}
+					queryParams={embedded ? { source: "embedded" } : undefined}
 				/>,
 			),
 		);
@@ -177,6 +191,42 @@ async function mount(appId: string, page: IPage) {
 }
 
 describe("page lifecycle frontend state", () => {
+	test("native app query reaches page load and its updates cannot change the outer app", async () => {
+		const url = new URL(
+			appRouteUrl(
+				"chosen",
+				parseAppRouteTarget("/settings?id=order&tag=a&tag=b", [
+					{ name: "raw", value: "A+B & 東京 50% #" },
+				]),
+			),
+			"https://example.test",
+		);
+		hostSearch = url.search;
+		await mount("native-query-page", createPage("query-page"), false);
+		expect(runs[0].payload.payload).toMatchObject({
+			_query_params: { id: "order", tag: "b", raw: "A+B & 東京 50% #" },
+			_query_params_format: "app",
+			_query_param_values: { tag: ["a", "b"] },
+		});
+		await act(() =>
+			runs[0].onEvents([
+				{
+					event_type: "a2ui",
+					payload: {
+						type: "setQueryParam",
+						key: "id",
+						value: "updated order",
+						replace: false,
+					},
+				},
+			]),
+		);
+		const next = new URL(router.push.mock.calls[0][0], "https://example.test");
+		expect(next.searchParams.get("id")).toBe("chosen");
+		expect(readAppQuery(next.search).get("id")).toBe("updated order");
+		expect(readAppQuery(next.search).getAll("tag")).toEqual(["a", "b"]);
+	});
+
 	test("hydrates load input and carries state responses into interval and unload runs", async () => {
 		let releaseHydration = () => {};
 		hydration = new Promise((resolve) => {

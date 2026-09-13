@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
 	AlignCenter,
 	Calendar,
+	Camera,
 	CheckSquare,
 	ChevronRight,
 	Circle,
@@ -411,6 +412,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Mic,
 		category: "Interactive",
 		description: "Record audio or speech-to-text",
+	},
+	{
+		type: "cameraView",
+		label: "Camera View",
+		icon: Camera,
+		category: "Interactive",
+		description: "Live camera, frame capture and Event-driven overlays",
 	},
 	{
 		type: "link",

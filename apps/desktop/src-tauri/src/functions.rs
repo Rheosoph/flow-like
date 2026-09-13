@@ -12,6 +12,7 @@ pub mod event_sink_commands;
 pub mod feedback;
 pub mod file;
 pub mod flow;
+pub mod native;
 pub mod notifications;
 pub mod permissions;
 pub mod recording;

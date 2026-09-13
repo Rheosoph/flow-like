@@ -8182,6 +8182,7 @@ dependencies = [
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
+ "flow-like-catalog-std-ui",
  "flow-like-model-provider",
  "flow-like-runtime",
  "flow-like-storage",
@@ -8468,6 +8469,7 @@ dependencies = [
  "geo 0.31.0",
  "geohash",
  "h3o",
+ "rayon",
  "schemars 1.2.1",
  "serde",
  "tokio",
@@ -8825,6 +8827,9 @@ name = "flow-like-catalog-std-ui"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "anyhow",
+ "arboard",
+ "chrono",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-data-support",

@@ -79,7 +79,7 @@ impl NodeLogic for NotifyUserNode {
         node.add_output_pin(
             "success",
             "Success",
-            "Whether the notification was sent successfully",
+            "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.",
             VariableType::Boolean,
         );
 
@@ -116,7 +116,9 @@ impl NodeLogic for NotifyUserNode {
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
-        notification = notification.with_icon(&icon);
+        if !icon.is_empty() {
+            notification = notification.with_icon(&icon);
+        }
 
         // Send notification via InterCom stream for local display / event history.
         // Remote persistence happens below through the dedicated notification API.
@@ -125,30 +127,40 @@ impl NodeLogic for NotifyUserNode {
             .await?;
 
         // Persist notification via backend API for push delivery
-        match persist_notification(
+        let success = match persist_notification(
             context,
             PersistNotificationParams {
                 title,
                 description: (!description.is_empty()).then_some(description),
-                icon: Some(icon),
+                icon: (!icon.is_empty()).then_some(icon),
                 link: Some(resolved_link),
                 target_user_sub: None,
             },
         )
         .await
         {
-            Ok(true) => context.log_message("Notification persisted via API", LogLevel::Debug),
-            Ok(false) => {
-                context.log_message("Notification sent locally (no hub/token)", LogLevel::Debug)
+            Ok(true) => {
+                context.log_message("Notification persisted via API", LogLevel::Debug);
+                true
             }
-            Err(e) => context.log_message(
-                &format!("Failed to persist notification via API: {e}"),
-                LogLevel::Warn,
-            ),
-        }
+            Ok(false) => {
+                context.log_message(
+                    "Notification emitted locally (no hub/token)",
+                    LogLevel::Debug,
+                );
+                true
+            }
+            Err(e) => {
+                context.log_message(
+                    &format!("Notification persistence or push failed: {e}"),
+                    LogLevel::Warn,
+                );
+                false
+            }
+        };
 
         context
-            .set_pin_value("success", flow_like_types::json::json!(true))
+            .set_pin_value("success", flow_like_types::json::json!(success))
             .await?;
         context.activate_exec_pin("exec_out").await?;
 

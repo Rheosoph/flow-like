@@ -503,6 +503,7 @@ export interface IEventState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	): Promise<ILogMetadata | undefined>;
 
 	/** Execute an event remotely via the server-side SSE invoke endpoint */
@@ -514,6 +515,7 @@ export interface IEventState {
 		onEventId?: (id: string) => void,
 		cb?: (event: IIntercomEvent[]) => void,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	): Promise<ILogMetadata | undefined>;
 
 	/** Call a hosted MCP operation and return its protocol result. */
@@ -522,6 +524,7 @@ export interface IEventState {
 		eventId: string,
 		method: string,
 		params?: Record<string, unknown>,
+		beforeDispatch?: () => void,
 	): Promise<Record<string, unknown>>;
 
 	cancelExecution(runId: string): Promise<void>;

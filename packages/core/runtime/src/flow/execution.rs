@@ -54,6 +54,7 @@ use std::{sync::Arc, time::SystemTime};
 use trace::Trace;
 
 pub mod context;
+pub mod device;
 pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
@@ -1283,7 +1284,8 @@ impl InternalRun {
 
                 // The board default was parsed once at template build; only
                 // caller/event overrides still need a JSON parse.
-                let value = if std::ptr::eq(variable, &tv.variable) {
+                let uses_board_default = std::ptr::eq(variable, &tv.variable);
+                let value = if uses_board_default {
                     tv.parsed_default.as_deref().cloned().unwrap_or(Value::Null)
                 } else {
                     match &variable.default_value {
@@ -1298,7 +1300,9 @@ impl InternalRun {
                 if tv.variable.data_type == crate::flow::variable::VariableType::Geometry {
                     // The caller supplies the value; the board owns its Geometry contract.
                     var = tv.variable.clone();
-                    if variable.default_value.is_some() || !value.is_null() {
+                    // Stored null defaults are unset; explicit runtime values remain strict.
+                    if (!uses_board_default && variable.default_value.is_some()) || !value.is_null()
+                    {
                         var.validate_value(&value)?;
                     }
                 }
@@ -2539,6 +2543,136 @@ mod tests {
             Some(false),
         )
         .into_callback()
+    }
+
+    mod geometry_defaults {
+        use super::*;
+        use crate::flow::utils::evaluate_pin_value;
+        use flow_like_types::json::json;
+        use std::collections::HashMap;
+
+        async fn run_with_default(
+            value_type: ValueType,
+            default: Option<Value>,
+            runtime_override: Option<Value>,
+        ) -> flow_like_types::Result<InternalRun> {
+            let state = state_with_noop_node().await;
+            let mut board = Board::new_detached(Some("geometry-defaults".into()), Path::default());
+            let mut node = NoopLogic.get_node();
+            node.add_input_pin("geometry", "Geometry", "", VariableType::Geometry)
+                .set_value_type(value_type.clone())
+                .set_default_value(default.clone());
+            let node_id = node.id.clone();
+            board.nodes.insert(node_id.clone(), node);
+
+            let mut variable = Variable::new("geometry", VariableType::Geometry, value_type);
+            variable.id = "geometry".into();
+            variable.runtime_configured = true;
+            if let Some(default) = default {
+                variable.set_default_value(default);
+            }
+            let runtime_variables = runtime_override.map(|value| {
+                let mut supplied = variable.clone();
+                supplied.set_default_value(value);
+                HashMap::from([(variable.id.clone(), supplied)])
+            });
+            board.variables.insert(variable.id.clone(), variable);
+
+            InternalRun::new(
+                "test-app",
+                Arc::new(board),
+                None,
+                &state,
+                &Profile::default(),
+                &RunPayload {
+                    id: node_id,
+                    payload: None,
+                    runtime_variables,
+                    filter_secrets: None,
+                },
+                false,
+                test_intercom_callback(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn null_geometry_defaults_initialize_as_unset_for_every_container() {
+            for value_type in [
+                ValueType::Normal,
+                ValueType::Array,
+                ValueType::HashSet,
+                ValueType::HashMap,
+            ] {
+                for default in [None, Some(Value::Null)] {
+                    let run = run_with_default(value_type.clone(), default, None)
+                        .await
+                        .expect("an unset Geometry declaration must allow run initialization");
+                    let variable = run.variables.lock().await["geometry"].clone();
+                    assert!(variable.value.lock().await.is_null());
+
+                    let node = run.nodes.values().next().unwrap();
+                    let pin = node.get_pin_by_name("geometry").await.unwrap();
+                    assert!(!pin.has_default());
+                    assert!(pin.default_value.is_none());
+                    let error = evaluate_pin_value(pin, &None).await.unwrap_err();
+                    assert!(error.to_string().contains("has no value"), "{error}");
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn geometry_defaults_preserve_supplied_values_for_every_container() {
+            let point = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+            for (value_type, value) in [
+                (ValueType::Normal, point.clone()),
+                (ValueType::Array, json!([point])),
+                (ValueType::HashSet, json!([point])),
+                (ValueType::HashMap, json!({"location": point})),
+            ] {
+                let run = run_with_default(value_type, Some(value.clone()), None)
+                    .await
+                    .unwrap();
+                let variable = run.variables.lock().await["geometry"].clone();
+                assert_eq!(*variable.value.lock().await, value);
+                let pin = run
+                    .nodes
+                    .values()
+                    .next()
+                    .unwrap()
+                    .get_pin_by_name("geometry")
+                    .await
+                    .unwrap();
+                assert!(pin.has_default());
+                assert_eq!(evaluate_pin_value(pin, &None).await.unwrap(), value);
+            }
+        }
+
+        #[tokio::test]
+        async fn unset_geometry_defaults_do_not_allow_null_runtime_overrides() {
+            for value_type in [
+                ValueType::Normal,
+                ValueType::Array,
+                ValueType::HashSet,
+                ValueType::HashMap,
+            ] {
+                let result =
+                    run_with_default(value_type, Some(Value::Null), Some(Value::Null)).await;
+                assert!(
+                    result.is_err(),
+                    "explicit Geometry overrides must be valid values"
+                );
+            }
+            let point = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+            let run = run_with_default(ValueType::Normal, Some(Value::Null), Some(point.clone()))
+                .await
+                .expect("a valid Geometry override can populate an unset variable");
+            let variable = run.variables.lock().await["geometry"].clone();
+            assert_eq!(*variable.value.lock().await, point);
+        }
     }
 
     mod runtime_variable_privacy {

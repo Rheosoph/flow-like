@@ -112,6 +112,7 @@ export const APP_TYPE_ORDER: IAppType[] = [
 const CHAT_EVENTS = new Set(["simple_chat", "discord", "telegram", "email"]);
 const FORM_EVENTS = new Set(["generic_form"]);
 const HEADLESS_EVENTS = new Set([
+	"geolocation",
 	"cron",
 	"api",
 	"rest",

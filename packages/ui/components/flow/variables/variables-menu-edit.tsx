@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { IValueType } from "../../../lib/schema/flow/pin";
 import {
 	type IVariable,
@@ -39,12 +39,19 @@ export function VariablesMenuEdit({
 	updateVariable: (variable: IVariable) => Promise<void>;
 	refs?: Record<string, string>;
 }>) {
-	const [intermediateValue, setIntermediateValue] = useState(variable);
+	const [intermediateValue, setValue] = useState(variable);
 
 	useEffect(() => {
-		if (intermediateValue === variable) return;
-		updateVariable(intermediateValue);
-	}, [intermediateValue]);
+		setValue(variable);
+	}, [variable]);
+
+	const setIntermediateValue = useCallback(
+		(next: IVariable) => {
+			setValue(next);
+			void updateVariable(next);
+		},
+		[updateVariable],
+	);
 
 	// HashMap keys are always strings; the value type is the variable's data
 	// type, so a single editor covers every data type (including Generic).

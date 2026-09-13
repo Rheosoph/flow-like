@@ -133,6 +133,12 @@ impl CompiledRunTemplate {
                 schema,
                 cp.default_value.as_deref(),
             )?;
+            let default_value = cp
+                .default_value
+                .as_ref()
+                .and_then(|bytes| flow_like_types::json::from_slice::<Value>(bytes).ok())
+                .filter(|value| data_type != VariableType::Geometry || !value.is_null())
+                .map(Arc::new);
             pins.push(TemplatePin {
                 id: Arc::from(cp.id.as_str()),
                 name: Arc::from(cp.name.as_str()),
@@ -140,11 +146,7 @@ impl CompiledRunTemplate {
                 data_type,
                 value_type,
                 schema: schema.map(Arc::from),
-                default_value: cp
-                    .default_value
-                    .as_ref()
-                    .and_then(|bytes| flow_like_types::json::from_slice::<Value>(bytes).ok())
-                    .map(Arc::new),
+                default_value,
                 layer_pin: cp.owner_node == NONE_IDX && cp.owner_layer != NONE_IDX,
                 index: cp.index,
                 owner_node: cp.owner_node,

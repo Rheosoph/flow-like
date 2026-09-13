@@ -42,6 +42,7 @@ pub mod model_tier;
 pub mod permission;
 pub mod publication;
 pub mod push_notifications;
+pub mod notification_images;
 pub mod realtime_ice;
 mod runtime_config;
 pub mod state;

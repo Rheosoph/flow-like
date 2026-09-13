@@ -13,18 +13,28 @@ use flow_like_types::{
 };
 
 #[cfg(feature = "execute")]
+use super::{
+    charge_topology_validation_work, check_topology_validation, cpu, ensure_geometry_pair_budget,
+    topology_is_valid, topology_validation_error, topology_validation_errors,
+};
+#[cfg(feature = "execute")]
 use flow_like_geometry::{from_geo, to_geo};
 #[cfg(feature = "execute")]
-use flow_like_types::{Result, Value, anyhow, bail, geometry::canonicalize_geometry};
+use flow_like_types::{
+    Result, Value, anyhow, bail,
+    geometry::{MAX_GEOMETRY_POSITIONS, canonicalize_geometry},
+};
 #[cfg(feature = "execute")]
 use geo::{
     BooleanOps, Buffer, Coord, CoordsIter, Distance, Euclidean, Geometry, GeometryCollection,
-    LineString, MultiLineString, MultiPoint, MultiPolygon, Polygon, Relate, Validation,
+    LineString, MultiLineString, MultiPoint, MultiPolygon, Polygon, Relate,
     algorithm::{
         buffer::{BufferStyle, LineCap, LineJoin},
         unary_union,
     },
 };
+#[cfg(feature = "execute")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEFAULT_STYLE_ANGLE_DEGREES: f64 = 11.459_155_902_616_466;
 
@@ -87,13 +97,13 @@ fn definition(operation: Operation) -> Node {
     let (id, alias, title, description) = match operation {
         Union => (
             "geometry_union",
-            "union",
+            "booleanUnion",
             "Geometry Union (Planar)",
             "Combines Polygon or MultiPolygon regions in the longitude/latitude coordinate plane. Returns a MultiPolygon.",
         ),
         Difference => (
             "geometry_difference",
-            "difference",
+            "booleanDifference",
             "Geometry Difference (Planar)",
             "Subtracts Polygon or MultiPolygon B from A in the longitude/latitude coordinate plane. Returns a MultiPolygon.",
         ),
@@ -185,7 +195,7 @@ fn definition(operation: Operation) -> Node {
             "geometry_validation_errors",
             "validationErrors",
             "Geometry Validation Errors",
-            "Returns all topology errors currently detectable by the validator. A valid geometry returns an empty array.",
+            "Returns up to 256 topology errors. If more exist, the final array entry reports truncation. A valid geometry returns an empty array.",
         ),
         IsEmpty => (
             "geometry_is_empty",
@@ -197,7 +207,7 @@ fn definition(operation: Operation) -> Node {
             "geometry_repair",
             "repair",
             "Repair Geometry",
-            "Repairs a limited set of safe topology defects: consecutive duplicate coordinates, ring closure, overlapping polygon parts, and polygon self-intersections that planar overlay can resolve. Collections are repaired recursively. Other defects return an error.",
+            "Repairs a limited set of topology defects: consecutive duplicate coordinates, duplicate MultiPoint members, overlapping MultiPolygon parts, and polygon self-intersections that planar overlay can resolve. GeometryCollection members are repaired independently. Other defects return an error.",
         ),
         PlanarBuffer => (
             "geometry_planar_buffer",
@@ -297,7 +307,7 @@ fn definition(operation: Operation) -> Node {
                 &mut node,
                 "errors",
                 VariableType::String,
-                "Topology validation errors",
+                "Topology validation errors, capped at 256 entries plus a truncation notice",
             )
             .set_value_type(ValueType::Array);
         }
@@ -419,9 +429,7 @@ fn raw_geometry(value: &Value) -> Result<Geometry<f64>> {
 #[cfg(feature = "execute")]
 fn checked_geometry(value: &Value) -> Result<Geometry<f64>> {
     let geometry = raw_geometry(value)?;
-    geometry
-        .check_validation()
-        .map_err(|error| anyhow!("Invalid geometry for spatial operation: {error}"))?;
+    check_topology_validation(&geometry, "Invalid geometry for spatial operation")?;
     Ok(geometry)
 }
 
@@ -445,9 +453,7 @@ fn line_set(geometry: Geometry<f64>) -> Result<MultiLineString<f64>> {
 
 #[cfg(feature = "execute")]
 fn encoded_geometry(geometry: Geometry<f64>, kind: GeometryKind) -> Result<Value> {
-    geometry
-        .check_validation()
-        .map_err(|error| anyhow!("Spatial operation produced invalid geometry: {error}"))?;
+    check_topology_validation(&geometry, "Spatial operation produced invalid geometry")?;
     Ok(canonicalize_geometry(&from_geo(&geometry)?, Some(kind))?)
 }
 
@@ -461,9 +467,7 @@ fn geometry_result(
 
 #[cfg(feature = "execute")]
 fn any_geometry_result(geometry: Geometry<f64>) -> Result<Vec<(&'static str, Value)>> {
-    geometry
-        .check_validation()
-        .map_err(|error| anyhow!("Geometry repair produced invalid geometry: {error}"))?;
+    check_topology_validation(&geometry, "Geometry repair produced invalid geometry")?;
     Ok(vec![(
         "geometry_out",
         canonicalize_geometry(&from_geo(&geometry)?, None)?,
@@ -473,6 +477,71 @@ fn any_geometry_result(geometry: Geometry<f64>) -> Result<Vec<(&'static str, Val
 #[cfg(feature = "execute")]
 fn same_coord(a: Coord<f64>, b: Coord<f64>) -> bool {
     a.x == b.x && a.y == b.y
+}
+
+#[cfg(feature = "execute")]
+fn repaired_ring_segment_count(ring: &LineString<f64>) -> usize {
+    let mut first = None;
+    let mut previous = None;
+    let mut positions = 0usize;
+    for coordinate in ring.0.iter().copied() {
+        if previous.is_none_or(|value| !same_coord(value, coordinate)) {
+            first.get_or_insert(coordinate);
+            previous = Some(coordinate);
+            positions = positions.saturating_add(1);
+        }
+    }
+    if first.is_some_and(|first| previous.is_some_and(|last| !same_coord(last, first))) {
+        positions = positions.saturating_add(1);
+    }
+    positions.saturating_sub(1)
+}
+
+#[cfg(feature = "execute")]
+fn charge_repaired_polygon_work(work: &mut usize, polygon: &Polygon<f64>) -> Result<usize> {
+    let exterior = repaired_ring_segment_count(polygon.exterior());
+    charge_topology_validation_work(work, exterior, exterior)?;
+    let mut preceding_holes = 0usize;
+    let mut polygon_segments = exterior;
+    for hole in polygon.interiors() {
+        let segments = repaired_ring_segment_count(hole);
+        charge_topology_validation_work(work, segments, segments)?;
+        charge_topology_validation_work(work, exterior, segments)?;
+        charge_topology_validation_work(work, preceding_holes, segments)?;
+        preceding_holes = preceding_holes.saturating_add(segments);
+        polygon_segments = polygon_segments.saturating_add(segments);
+    }
+    Ok(polygon_segments)
+}
+
+#[cfg(feature = "execute")]
+fn charge_repair_validation_work(work: &mut usize, geometry: &Geometry<f64>) -> Result<()> {
+    match geometry {
+        Geometry::Polygon(polygon) => charge_repaired_polygon_work(work, polygon).map(|_| ()),
+        Geometry::MultiPolygon(polygons) => {
+            let mut preceding_polygons = 0usize;
+            for polygon in &polygons.0 {
+                let segments = charge_repaired_polygon_work(work, polygon)?;
+                charge_topology_validation_work(work, preceding_polygons, segments)?;
+                preceding_polygons = preceding_polygons.saturating_add(segments);
+            }
+            Ok(())
+        }
+        Geometry::GeometryCollection(collection) => {
+            for member in &collection.0 {
+                charge_repair_validation_work(work, member)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn repair_validation_work(geometry: &Geometry<f64>) -> Result<usize> {
+    let mut work = 0usize;
+    charge_repair_validation_work(&mut work, geometry)?;
+    Ok(work)
 }
 
 /// Remove only adjacent duplicate positions. Removing non-adjacent positions can change topology.
@@ -499,13 +568,18 @@ fn clean_line(line: LineString<f64>, ring: bool) -> Result<LineString<f64>> {
         {
             coordinates.push(first);
         }
-        let mut distinct = Vec::new();
+        // Only the first three distinct vertices matter. Keeping every unique
+        // coordinate would make a maximum-size ring quadratic to inspect.
+        let mut distinct = Vec::with_capacity(3);
         for coordinate in coordinates.iter().copied().take(coordinates.len() - 1) {
             if !distinct
                 .iter()
                 .any(|existing| same_coord(*existing, coordinate))
             {
                 distinct.push(coordinate);
+                if distinct.len() == 3 {
+                    break;
+                }
             }
         }
         ensure!(
@@ -524,31 +598,30 @@ fn clean_line(line: LineString<f64>, ring: bool) -> Result<LineString<f64>> {
 #[cfg(feature = "execute")]
 fn clean_polygon(polygon: Polygon<f64>) -> Result<Polygon<f64>> {
     let exterior = clean_line(polygon.exterior().clone(), true)?;
-    let interiors = polygon
+    let work = polygon
         .interiors()
         .iter()
-        .cloned()
-        .map(|ring| clean_line(ring, true))
-        .collect::<Result<Vec<_>>>()?;
+        .fold(0usize, |count, ring| count.saturating_add(ring.0.len()));
+    let interiors = cpu::map_ordered(polygon.interiors(), work, |_, ring| {
+        clean_line(ring.clone(), true)
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
     Ok(Polygon::new(exterior, interiors))
 }
 
 #[cfg(feature = "execute")]
 fn overlay_repair(polygons: MultiPolygon<f64>) -> Result<MultiPolygon<f64>> {
-    if polygons.is_valid() {
+    let Some(original_error) = topology_validation_error(&polygons)? else {
         return Ok(polygons);
-    }
-    let original_error = polygons
-        .check_validation()
-        .expect_err("invalidity checked above")
-        .to_string();
+    };
 
     let overlaid = unary_union(polygons.0.iter());
-    if !overlaid.0.is_empty() && overlaid.is_valid() {
+    if !overlaid.0.is_empty() && topology_is_valid(&overlaid)? {
         return Ok(overlaid);
     }
     let buffered = polygons.buffer(0.0);
-    if !buffered.0.is_empty() && buffered.is_valid() {
+    if !buffered.0.is_empty() && topology_is_valid(&buffered)? {
         return Ok(buffered);
     }
     bail!("Geometry cannot be safely repaired: {original_error}")
@@ -565,62 +638,208 @@ fn repair_polygon(polygon: Polygon<f64>) -> Result<Geometry<f64>> {
 }
 
 #[cfg(feature = "execute")]
-fn repair_geometry(geometry: Geometry<f64>) -> Result<Geometry<f64>> {
+fn repair_geometry_inner(
+    geometry: Geometry<f64>,
+    emitted_positions: &AtomicUsize,
+) -> Result<Geometry<f64>> {
+    // Charge the complete collection before any member can consume the full
+    // validation and overlay budget on a worker of its own.
+    let validation_work = repair_validation_work(&geometry)?;
     let repaired = match geometry {
         Geometry::Point(point) => Geometry::Point(point),
         Geometry::MultiPoint(points) => {
+            use std::collections::HashSet;
+
             let mut unique = Vec::with_capacity(points.0.len());
+            let mut seen = HashSet::with_capacity(points.0.len());
             for point in points.0 {
-                if !unique
-                    .iter()
-                    .any(|existing: &geo::Point<f64>| same_coord(existing.0, point.0))
-                {
+                let key = (
+                    if point.x() == 0.0 {
+                        0
+                    } else {
+                        point.x().to_bits()
+                    },
+                    if point.y() == 0.0 {
+                        0
+                    } else {
+                        point.y().to_bits()
+                    },
+                );
+                if seen.insert(key) {
                     unique.push(point);
                 }
             }
             Geometry::MultiPoint(MultiPoint(unique))
         }
         Geometry::LineString(line) => Geometry::LineString(clean_line(line, false)?),
-        Geometry::MultiLineString(lines) => Geometry::MultiLineString(MultiLineString(
-            lines
-                .0
-                .into_iter()
-                .map(|line| clean_line(line, false))
-                .collect::<Result<Vec<_>>>()?,
-        )),
-        Geometry::Polygon(polygon) => return repair_polygon(polygon),
+        Geometry::MultiLineString(lines) => {
+            let work = lines.coords_count();
+            let cleaned =
+                cpu::map_ordered(&lines.0, work, |_, line| clean_line(line.clone(), false))
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?;
+            Geometry::MultiLineString(MultiLineString(cleaned))
+        }
+        Geometry::Polygon(polygon) => repair_polygon(polygon)?,
         Geometry::MultiPolygon(polygons) => {
-            let cleaned = polygons
-                .0
-                .into_iter()
-                .map(clean_polygon)
-                .collect::<Result<Vec<_>>>()?;
+            let work = polygons.coords_count();
+            let cleaned = cpu::map_ordered(&polygons.0, work, |_, polygon| {
+                clean_polygon(polygon.clone())
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
             Geometry::MultiPolygon(overlay_repair(MultiPolygon(cleaned))?)
         }
         Geometry::GeometryCollection(collection) => {
-            Geometry::GeometryCollection(GeometryCollection(
-                collection
-                    .0
-                    .into_iter()
-                    .map(repair_geometry)
-                    .collect::<Result<Vec<_>>>()?,
-            ))
+            let work = collection.coords_count().max(validation_work);
+            let repaired = cpu::map_ordered(&collection.0, work, |_, member| {
+                repair_geometry_inner(member.clone(), emitted_positions)
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+            Geometry::GeometryCollection(GeometryCollection(repaired))
         }
         _ => bail!("Unsupported geometry variant for repair"),
     };
-    repaired
-        .check_validation()
-        .map_err(|error| anyhow!("Geometry cannot be safely repaired: {error}"))?;
+    if !matches!(&repaired, Geometry::GeometryCollection(_)) {
+        let positions = repaired.coords_count();
+        emitted_positions
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current
+                    .checked_add(positions)
+                    .filter(|total| *total <= MAX_GEOMETRY_POSITIONS)
+            })
+            .map_err(|_| {
+                anyhow!("Geometry repair exceeds the position limit of {MAX_GEOMETRY_POSITIONS}")
+            })?;
+    }
+    ensure!(
+        repaired.coords_count() <= MAX_GEOMETRY_POSITIONS,
+        "Geometry repair exceeds the position limit of {MAX_GEOMETRY_POSITIONS}"
+    );
+    check_topology_validation(&repaired, "Geometry cannot be safely repaired")?;
     Ok(repaired)
 }
 
 #[cfg(feature = "execute")]
+fn repair_geometry(geometry: Geometry<f64>) -> Result<Geometry<f64>> {
+    repair_geometry_inner(geometry, &AtomicUsize::new(0))
+}
+
+#[cfg(feature = "execute")]
 fn validation_errors(inputs: &Value) -> Result<Vec<String>> {
-    Ok(raw_geometry(input(inputs, "geometry")?)?
-        .validation_errors()
-        .into_iter()
-        .map(|error| error.to_string())
-        .collect())
+    topology_validation_errors(&raw_geometry(input(inputs, "geometry")?)?)
+}
+
+#[cfg(feature = "execute")]
+#[derive(Default)]
+struct BufferInputCounts {
+    points: usize,
+    line_positions: usize,
+    lines: usize,
+    area_positions: usize,
+}
+
+#[cfg(feature = "execute")]
+fn count_buffer_input(geometry: &Geometry<f64>, counts: &mut BufferInputCounts) {
+    match geometry {
+        Geometry::Point(_) => counts.points = counts.points.saturating_add(1),
+        Geometry::MultiPoint(points) => {
+            counts.points = counts.points.saturating_add(points.0.len());
+        }
+        Geometry::Line(_) => {
+            counts.line_positions = counts.line_positions.saturating_add(2);
+            counts.lines = counts.lines.saturating_add(1);
+        }
+        Geometry::LineString(line) => {
+            counts.line_positions = counts.line_positions.saturating_add(line.0.len());
+            counts.lines = counts.lines.saturating_add(1);
+        }
+        Geometry::MultiLineString(lines) => {
+            for line in &lines.0 {
+                counts.line_positions = counts.line_positions.saturating_add(line.0.len());
+                counts.lines = counts.lines.saturating_add(1);
+            }
+        }
+        Geometry::Polygon(polygon) => {
+            counts.area_positions = counts.area_positions.saturating_add(polygon.coords_count());
+        }
+        Geometry::MultiPolygon(polygons) => {
+            counts.area_positions = counts
+                .area_positions
+                .saturating_add(polygons.coords_count());
+        }
+        Geometry::GeometryCollection(collection) => {
+            for member in &collection.0 {
+                count_buffer_input(member, counts);
+            }
+        }
+        Geometry::Rect(_) => {
+            counts.area_positions = counts.area_positions.saturating_add(5);
+        }
+        Geometry::Triangle(_) => {
+            counts.area_positions = counts.area_positions.saturating_add(4);
+        }
+    }
+}
+
+#[cfg(feature = "execute")]
+fn add_buffer_position_estimate(
+    estimate: &mut usize,
+    count: usize,
+    expansion: usize,
+) -> Result<()> {
+    let remaining = MAX_GEOMETRY_POSITIONS.saturating_sub(*estimate);
+    if count != 0 && expansion > remaining / count {
+        bail!(
+            "Planar buffer may construct more than {MAX_GEOMETRY_POSITIONS} positions for the selected cap, join, and arc step; increase arc_step_degrees, choose non-round styles, or reduce the input"
+        );
+    }
+    *estimate += count * expansion;
+    Ok(())
+}
+
+/// i_overlay can add an arc of up to PI radians at every join and two such
+/// arcs around a point. Bound that temporary construction before it allocates.
+#[cfg(feature = "execute")]
+fn ensure_buffer_position_budget(
+    geometry: &Geometry<f64>,
+    distance: f64,
+    arc_step: f64,
+    cap: &str,
+    join: &str,
+) -> Result<()> {
+    let mut counts = BufferInputCounts::default();
+    count_buffer_input(geometry, &mut counts);
+
+    let half_circle_steps = (std::f64::consts::PI / arc_step).ceil() as usize;
+    let join_expansion = match join {
+        "Round" => half_circle_steps.saturating_add(3),
+        "Miter" => 6,
+        "Bevel" => 4,
+        _ => unreachable!("join style was validated before buffer preflight"),
+    };
+    let cap_expansion = match cap {
+        "Round" => half_circle_steps.saturating_add(1),
+        "Square" => 3,
+        "Butt" => 1,
+        _ => unreachable!("cap style was validated before buffer preflight"),
+    };
+    let point_expansion = match cap {
+        "Round" => half_circle_steps.saturating_mul(2).saturating_add(1),
+        "Square" => 5,
+        "Butt" => 0,
+        _ => unreachable!("cap style was validated before buffer preflight"),
+    };
+
+    let mut estimate = 0usize;
+    add_buffer_position_estimate(&mut estimate, counts.area_positions, join_expansion)?;
+    if distance > 0.0 {
+        add_buffer_position_estimate(&mut estimate, counts.points, point_expansion)?;
+        add_buffer_position_estimate(&mut estimate, counts.line_positions, join_expansion)?;
+        add_buffer_position_estimate(&mut estimate, counts.lines.saturating_mul(2), cap_expansion)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "execute")]
@@ -628,8 +847,11 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
     use Operation::*;
     match operation {
         Union | Difference | SymmetricDifference => {
-            let a = polygon_set(checked_geometry(input(inputs, "a")?)?)?;
-            let b = polygon_set(checked_geometry(input(inputs, "b")?)?)?;
+            let a = checked_geometry(input(inputs, "a")?)?;
+            let b = checked_geometry(input(inputs, "b")?)?;
+            ensure_geometry_pair_budget(&a, &b, "Polygon overlay")?;
+            let a = polygon_set(a)?;
+            let b = polygon_set(b)?;
             let result = match operation {
                 Union => a.union(&b),
                 Difference => a.difference(&b),
@@ -643,8 +865,15 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .as_array()
                 .ok_or_else(|| anyhow!("geometries must be an array"))?;
             let mut polygons = Vec::new();
+            let mut coordinate_count = 0usize;
             for value in values {
-                polygons.extend(polygon_set(checked_geometry(value)?)?.0);
+                let geometry = checked_geometry(value)?;
+                coordinate_count = coordinate_count.saturating_add(geometry.coords_count());
+                ensure!(
+                    coordinate_count <= MAX_GEOMETRY_POSITIONS,
+                    "Unary union inputs exceed the Geometry position limit of {MAX_GEOMETRY_POSITIONS}"
+                );
+                polygons.extend(polygon_set(geometry)?.0);
             }
             let result = if polygons.is_empty() {
                 MultiPolygon(vec![])
@@ -654,8 +883,11 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
             geometry_result(result.into(), GeometryKind::MultiPolygon)
         }
         ClipLine => {
-            let line = line_set(checked_geometry(input(inputs, "line")?)?)?;
-            let mask = polygon_set(checked_geometry(input(inputs, "mask")?)?)?;
+            let line = checked_geometry(input(inputs, "line")?)?;
+            let mask = checked_geometry(input(inputs, "mask")?)?;
+            ensure_geometry_pair_budget(&line, &mask, "Line clipping")?;
+            let line = line_set(line)?;
+            let mask = polygon_set(mask)?;
             geometry_result(
                 mask.clip(&line, false).into(),
                 GeometryKind::MultiLineString,
@@ -664,6 +896,17 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
         Covers | CoveredBy | Touches | Crosses | Overlaps | TopologicallyEquals | Disjoint => {
             let a = checked_geometry(input(inputs, "a")?)?;
             let b = checked_geometry(input(inputs, "b")?)?;
+            let operation_name = match operation {
+                Covers => "Geometry covers predicate",
+                CoveredBy => "Geometry covered-by predicate",
+                Touches => "Geometry touches predicate",
+                Crosses => "Geometry crosses predicate",
+                Overlaps => "Geometry overlaps predicate",
+                TopologicallyEquals => "Geometry topological equality predicate",
+                Disjoint => "Geometry disjoint predicate",
+                _ => unreachable!(),
+            };
+            ensure_geometry_pair_budget(&a, &b, operation_name)?;
             let relation = a.relate(&b);
             let result = match operation {
                 Covers => relation.is_covers(),
@@ -680,6 +923,7 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
         DWithin => {
             let a = checked_geometry(input(inputs, "a")?)?;
             let b = checked_geometry(input(inputs, "b")?)?;
+            ensure_geometry_pair_budget(&a, &b, "Geometry within-distance predicate")?;
             let distance = number(inputs, "distance")?;
             ensure!(
                 (0.0..=403.0).contains(&distance),
@@ -697,6 +941,7 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
         RelatePattern => {
             let a = checked_geometry(input(inputs, "a")?)?;
             let b = checked_geometry(input(inputs, "b")?)?;
+            ensure_geometry_pair_budget(&a, &b, "DE-9IM geometry relation")?;
             let pattern = text(inputs, "pattern")?;
             let result = a
                 .relate(&b)
@@ -704,15 +949,13 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .map_err(|error| anyhow!("Invalid DE-9IM pattern: {error}"))?;
             Ok(vec![("result", json!(result))])
         }
-        IsTopologicallyValid => Ok(vec![(
-            "result",
-            json!(raw_geometry(input(inputs, "geometry")?)?.is_valid()),
-        )]),
+        IsTopologicallyValid => {
+            let geometry = raw_geometry(input(inputs, "geometry")?)?;
+            Ok(vec![("result", json!(topology_is_valid(&geometry)?))])
+        }
         ValidityReason => {
-            let reason = validation_errors(inputs)?
-                .into_iter()
-                .next()
-                .unwrap_or_default();
+            let geometry = raw_geometry(input(inputs, "geometry")?)?;
+            let reason = topology_validation_error(&geometry)?.unwrap_or_default();
             Ok(vec![("reason", json!(reason))])
         }
         ValidationErrors => Ok(vec![("errors", json!(validation_errors(inputs)?))]),
@@ -744,18 +987,29 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 "miter_min_angle_degrees must be between 1.8 and 178.2"
             );
             let arc_step = arc_step.to_radians();
+            let cap = text(inputs, "cap")?;
+            let join = text(inputs, "join")?;
+            ensure!(
+                matches!(cap, "Round" | "Square" | "Butt"),
+                "Unknown buffer cap style: {cap}"
+            );
+            ensure!(
+                matches!(join, "Round" | "Miter" | "Bevel"),
+                "Unknown buffer join style: {join}"
+            );
+            ensure_buffer_position_budget(&geometry, distance, arc_step, cap, join)?;
             let mut style = BufferStyle::new(distance);
-            style = style.line_cap(match text(inputs, "cap")? {
+            style = style.line_cap(match cap {
                 "Round" => LineCap::Round(arc_step),
                 "Square" => LineCap::Square,
                 "Butt" => LineCap::Butt,
-                value => bail!("Unknown buffer cap style: {value}"),
+                _ => unreachable!("cap style was validated before buffer construction"),
             });
-            style = style.line_join(match text(inputs, "join")? {
+            style = style.line_join(match join {
                 "Round" => LineJoin::Round(arc_step),
                 "Miter" => LineJoin::Miter(miter_angle.to_radians()),
                 "Bevel" => LineJoin::Bevel,
-                value => bail!("Unknown buffer join style: {value}"),
+                _ => unreachable!("join style was validated before buffer construction"),
             });
             geometry_result(
                 geometry.buffer_with_style(style).into(),
@@ -778,7 +1032,8 @@ async fn run_operation(operation: Operation, context: &mut ExecutionContext) -> 
             context.evaluate_pin::<Value>(&pin.name).await?,
         );
     }
-    for (name, value) in execute(operation, &Value::Object(values))? {
+    let outputs = super::cpu::run(move || execute(operation, &Value::Object(values))).await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -919,7 +1174,7 @@ implement_node!(GeometryPlanarBufferNode, Operation::PlanarBuffer);
 #[cfg(all(test, feature = "execute"))]
 mod tests {
     use super::*;
-    use geo::Area;
+    use geo::{Area, Validation};
 
     fn output(operation: Operation, inputs: Value, name: &str) -> Value {
         execute(operation, &inputs)
@@ -1138,6 +1393,31 @@ mod tests {
     }
 
     #[test]
+    fn validity_nodes_error_when_topology_work_exceeds_the_budget() {
+        let mut ring = (0..1_415)
+            .map(|index| {
+                let angle = std::f64::consts::TAU * index as f64 / 1_415.0;
+                json!([angle.cos(), angle.sin()])
+            })
+            .collect::<Vec<_>>();
+        ring.push(ring[0].clone());
+        let geometry = json!({"type":"Polygon", "coordinates":[ring]});
+
+        for operation in [
+            Operation::IsTopologicallyValid,
+            Operation::ValidityReason,
+            Operation::ValidationErrors,
+        ] {
+            assert!(
+                execute(operation, &json!({"geometry":geometry.clone()}))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("topology validation exceeds the work limit")
+            );
+        }
+    }
+
+    #[test]
     fn repair_removes_redundant_positions_recursively_and_rejects_collapsed_lines() {
         let repeated = json!({
             "type": "Polygon",
@@ -1184,6 +1464,130 @@ mod tests {
     }
 
     #[test]
+    fn repair_budget_counts_segments_after_adjacent_duplicates_are_removed() {
+        let mut ring = Vec::with_capacity(40_001);
+        for position in [
+            json!([0.0, 0.0]),
+            json!([1.0, 0.0]),
+            json!([1.0, 1.0]),
+            json!([0.0, 1.0]),
+        ] {
+            ring.extend(std::iter::repeat_n(position, 10_000));
+        }
+        ring.push(json!([0.0, 0.0]));
+        let repaired = output(
+            Operation::Repair,
+            json!({
+                "geometry":{"type":"Polygon", "coordinates":[ring]}
+            }),
+            "geometry_out",
+        );
+        assert_eq!(repaired["coordinates"][0].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn repair_helpers_remain_bounded_at_the_position_limit() {
+        let mut ring = (0..99_999)
+            .map(|index| Coord {
+                x: index as f64 / 1_000.0,
+                y: (index % 997) as f64 / 1_000.0,
+            })
+            .collect::<Vec<_>>();
+        ring.push(ring[0]);
+        assert_eq!(
+            clean_line(LineString::new(ring), true).unwrap().0.len(),
+            100_000
+        );
+
+        let points = (0..100_000)
+            .map(|index| {
+                geo::Point::new(
+                    (index % 1_000) as f64 / 1_000.0,
+                    (index / 1_000) as f64 / 1_000.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let Geometry::MultiPoint(repaired) =
+            repair_geometry(Geometry::MultiPoint(MultiPoint(points))).unwrap()
+        else {
+            panic!("repair changed the geometry kind");
+        };
+        assert_eq!(repaired.0.len(), 100_000);
+    }
+
+    #[tokio::test]
+    async fn parallel_repair_preserves_multiline_member_order() {
+        const LINES: usize = 4;
+        const POSITIONS: usize = 4_096;
+        let lines = (0..LINES)
+            .map(|line_index| {
+                (0..POSITIONS)
+                    .map(|position| json!([-170.0 + (position % 340) as f64, line_index as f64]))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let values = super::super::cpu::run(move || {
+            execute(
+                Operation::Repair,
+                &json!({
+                    "geometry":{"type":"MultiLineString", "coordinates":lines}
+                }),
+            )
+        })
+        .await
+        .unwrap();
+        let geometry = values
+            .into_iter()
+            .find(|(name, _)| *name == "geometry_out")
+            .unwrap()
+            .1;
+        let repaired = geometry["coordinates"].as_array().unwrap();
+        assert_eq!(repaired.len(), LINES);
+        for (index, line) in repaired.iter().enumerate() {
+            assert_eq!(line.as_array().unwrap().len(), POSITIONS);
+            assert_eq!(line[0], json!([-170.0, index as f64]));
+        }
+    }
+
+    #[test]
+    fn repair_charges_collection_topology_work_before_member_repairs() {
+        let polygons = [-10.0, 10.0]
+            .into_iter()
+            .map(|center| {
+                let mut ring = (0..1_001)
+                    .map(|index| {
+                        let angle = std::f64::consts::TAU * index as f64 / 1_001.0;
+                        json!([center + angle.cos(), angle.sin()])
+                    })
+                    .collect::<Vec<_>>();
+                ring.push(ring[0].clone());
+                json!({"type":"Polygon", "coordinates":[ring]})
+            })
+            .collect::<Vec<_>>();
+        let error = execute(
+            Operation::Repair,
+            &json!({
+                "geometry":{"type":"GeometryCollection", "geometries":polygons}
+            }),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("topology validation exceeds the work limit")
+        );
+    }
+
+    #[test]
+    fn repaired_members_share_one_emitted_position_budget() {
+        let emitted = AtomicUsize::new(MAX_GEOMETRY_POSITIONS - 1);
+        repair_geometry_inner(Geometry::Point(geo::Point::new(0.0, 0.0)), &emitted).unwrap();
+        let error = repair_geometry_inner(Geometry::Point(geo::Point::new(1.0, 1.0)), &emitted)
+            .unwrap_err();
+        assert!(error.to_string().contains("position limit"));
+    }
+
+    #[test]
     fn empty_and_buffer_nodes_handle_edges_and_validate_style() {
         assert_eq!(
             output(
@@ -1217,6 +1621,35 @@ mod tests {
                 })
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn planar_buffer_rejects_round_expansion_before_construction() {
+        let coordinates = (0..1_000)
+            .map(|index| {
+                json!([
+                    -170.0 + index as f64 / 1_000.0,
+                    if index % 2 == 0 { 0.0 } else { 0.01 }
+                ])
+            })
+            .collect::<Vec<_>>();
+        let error = execute(
+            Operation::PlanarBuffer,
+            &json!({
+                "geometry":{"type":"LineString", "coordinates":coordinates},
+                "distance":0.1,
+                "cap":"Round",
+                "join":"Round",
+                "arc_step_degrees":1.8,
+                "miter_min_angle_degrees":DEFAULT_STYLE_ANGLE_DEGREES
+            }),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Planar buffer may construct more than")
         );
     }
 

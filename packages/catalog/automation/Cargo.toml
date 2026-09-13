@@ -8,6 +8,7 @@ default = []
 local-ml = ["flow-like-catalog-core/local-ml"]
 # Execution feature - enables heavy dependencies for node execution
 execute = [
+    "flow-like-catalog-std-ui/local-clipboard",
     "flow-like-catalog-core/execute",
     "dep:thirtyfour",
     "dep:enigo",
@@ -20,6 +21,7 @@ execute = [
 ]
 
 [dependencies]
+flow-like-catalog-std-ui = { workspace = true }
 flow-like-catalog-core.workspace = true
 flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types.workspace = true

@@ -18,7 +18,6 @@ import {
 	Workflow,
 	X,
 } from "lucide-react";
-import { DynamicIcon, type IconName } from "lucide-react/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -35,6 +34,7 @@ import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IInvite, INotification } from "../../state/backend-state/types";
+import { NotificationIcon } from "../notifications/notification-icon";
 import {
 	Badge,
 	Button,
@@ -46,93 +46,6 @@ import {
 } from "../ui";
 
 type NotificationsTab = "all" | "invitations" | "notifications";
-
-const FLOWLIKE_NOTIFICATION_ICON = "/app-logo.webp";
-
-function isImageIcon(icon: string): boolean {
-	const value = icon.trim();
-	return (
-		value.startsWith("http://") ||
-		value.startsWith("https://") ||
-		value.startsWith("data:image/") ||
-		value.startsWith("asset://") ||
-		value.startsWith("/") ||
-		/\.(avif|gif|jpe?g|png|svg|webp)([?#].*)?$/i.test(value)
-	);
-}
-
-// The backend sends Lucide icon names (e.g. "mail", "shopping-bag"), not glyphs.
-// A kebab-case ASCII token is a name to resolve; anything else (emoji) is text.
-function isLucideIconName(value: string): boolean {
-	return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value);
-}
-
-function NotificationIcon({
-	icon,
-	read,
-}: Readonly<{ icon?: string; read: boolean }>) {
-	const value = icon?.trim();
-	const dimmed = read && "opacity-70 grayscale";
-
-	if (value && isImageIcon(value)) {
-		return (
-			<img
-				src={value}
-				alt=""
-				className={cn("size-6 rounded-sm object-contain", dimmed)}
-				onError={(event) => {
-					const image = event.currentTarget;
-					if (image.dataset.fallbackIcon === "true") return;
-					image.dataset.fallbackIcon = "true";
-					image.src = FLOWLIKE_NOTIFICATION_ICON;
-				}}
-			/>
-		);
-	}
-
-	if (value && isLucideIconName(value)) {
-		return (
-			<DynamicIcon
-				name={value as IconName}
-				className={cn(
-					"size-6",
-					read ? "text-muted-foreground" : "text-primary",
-				)}
-				fallback={() => (
-					<span
-						className={cn(
-							"flex size-6 items-center justify-center text-base leading-none",
-							dimmed,
-						)}
-					>
-						{value}
-					</span>
-				)}
-			/>
-		);
-	}
-
-	if (value) {
-		return (
-			<span
-				className={cn(
-					"flex size-6 items-center justify-center text-base leading-none",
-					dimmed,
-				)}
-			>
-				{value}
-			</span>
-		);
-	}
-
-	return (
-		<img
-			src={FLOWLIKE_NOTIFICATION_ICON}
-			alt=""
-			className={cn("size-6 rounded-sm object-contain", dimmed)}
-		/>
-	);
-}
 
 export function NotificationsPageScreen() {
 	const { t } = useTranslation("common");
@@ -982,6 +895,7 @@ function NotificationCard({
 					>
 						<NotificationIcon
 							icon={notification.icon}
+							appId={notification.app_id}
 							read={notification.read}
 						/>
 					</div>

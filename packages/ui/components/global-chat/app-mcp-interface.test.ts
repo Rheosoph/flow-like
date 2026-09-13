@@ -17,6 +17,31 @@ function fixture(result: Record<string, unknown>) {
 }
 
 describe("FlowPilot MCP app interfaces", () => {
+	test("retains a live scope guard until the MCP transport is ready", async () => {
+		const ready = Promise.withResolvers<void>();
+		let current = true;
+		let dispatched = false;
+		const pending = callMcpAppTool(
+			{
+				async invokeMcp(_app, _event, _method, _params, beforeDispatch) {
+					await ready.promise;
+					beforeDispatch?.();
+					dispatched = true;
+					return {};
+				},
+			},
+			"app",
+			"event",
+			{ mcp_tool: "list_notes" },
+			() => {
+				if (!current) throw new Error("Account changed");
+			},
+		);
+		current = false;
+		ready.resolve();
+		await expect(pending).rejects.toThrow("Account changed");
+		expect(dispatched).toBe(false);
+	});
 	test("describes registered tool schemas including a tool with no arguments", async () => {
 		const tools = [
 			{ name: "list_notes", inputSchema: { type: "object", properties: {} } },

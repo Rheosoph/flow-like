@@ -1,5 +1,7 @@
 #if canImport(UIKit)
 import FlowLikeMLX
+import FlowLikeNative
+import AppIntents
 import UIKit
 import UserNotifications
 import ObjectiveC
@@ -30,6 +32,12 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         // Touch the static Swift package product so its C ABI symbols are
         // retained for Rust, and install MLX's iOS memory policy early.
         FlowLikeMLXRuntime.prepareForAppLifecycle()
+        FlowLikeNativeRuntime.prepareForAppLifecycle()
+        MainActor.assumeIsolated {
+            NativeSystemIntegration.refreshAppShortcuts = {
+                FlowLikeShortcuts.updateAppShortcutParameters()
+            }
+        }
         NotificationCenter.default.addObserver(
             forName: UIApplication.didFinishLaunchingNotification,
             object: nil,
@@ -117,9 +125,11 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        Self.callPlugin(
-            "applicationDidReceiveRemoteNotificationWithUserInfo:",
-            with: notification.request.content.userInfo as NSDictionary)
+        if notification.request.trigger is UNPushNotificationTrigger {
+            Self.callPlugin(
+                "applicationDidReceiveRemoteNotificationWithUserInfo:",
+                with: notification.request.content.userInfo as NSDictionary)
+        }
         if #available(iOS 14.0, *) {
             completionHandler([.banner, .sound, .badge])
         } else {
@@ -132,6 +142,10 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        guard response.notification.request.trigger is UNPushNotificationTrigger else {
+            completionHandler()
+            return
+        }
         let userInfo = response.notification.request.content.userInfo
         NSLog("[FlowLikePush] userNotificationCenter:didReceive: keys=\(userInfo.keys)")
         Self.persistPendingTap(userInfo)

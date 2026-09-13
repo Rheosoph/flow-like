@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Flow Like uses your location when you request it in a workflow or map.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Flow Like monitors the regions you enable so location Events can run when you arrive or leave, including while the app is closed.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -23,12 +27,12 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleURLName</key>
+			<string>flow-like</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>flow-like</string>
 			</array>
-			<key>CFBundleURLName</key>
-			<string>flow-like</string>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
@@ -96,5 +100,13 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.flow-like.app.page</string>
+	</array>
+	<key>NSLocationUsageDescription</key>
+	<string>Flow Like uses your location when you request it in a workflow or map.</string>
 </dict>
 </plist>

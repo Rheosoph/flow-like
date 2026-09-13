@@ -1,4 +1,5 @@
 pub mod begin_rendering;
+pub mod camera;
 pub mod create_component;
 pub mod create_surface;
 pub mod data_update;

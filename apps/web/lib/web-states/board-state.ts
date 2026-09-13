@@ -1,3 +1,4 @@
+import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowIrCommitDisposition,
 	type FlowIrCommitDispositionResult,
@@ -507,6 +508,31 @@ export class WebBoardState implements IBoardState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined> {
+		return withDeviceCommandBridge(
+			{ appId, executionTarget: "remote" },
+			cb,
+			(bridgeCallback) =>
+				this.executeBoardInternal(
+					appId,
+					boardId,
+					payload,
+					streamState,
+					eventId,
+					bridgeCallback,
+					skipConsentCheck,
+				),
+		);
+	}
+
+	private async executeBoardInternal(
+		appId: string,
+		boardId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		eventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+		skipConsentCheck?: boolean,
+	): Promise<ILogMetadata | undefined> {
 		// Check OAuth tokens before execution
 		const board = await this.getBoard(
 			appId,
@@ -588,6 +614,39 @@ export class WebBoardState implements IBoardState {
 	}
 
 	async executeBoardRemote(
+		appId: string,
+		boardId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		eventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+		oauthTokens?: Record<
+			string,
+			{
+				access_token: string;
+				refresh_token?: string;
+				expires_at?: number;
+				token_type?: string;
+			}
+		>,
+	): Promise<ILogMetadata | undefined> {
+		return withDeviceCommandBridge(
+			{ appId, executionTarget: "remote" },
+			cb,
+			(bridgeCallback) =>
+				this.executeBoardRemoteInternal(
+					appId,
+					boardId,
+					payload,
+					streamState,
+					eventId,
+					bridgeCallback,
+					oauthTokens,
+				),
+		);
+	}
+
+	private async executeBoardRemoteInternal(
 		appId: string,
 		boardId: string,
 		payload: IRunPayload,

@@ -26,6 +26,10 @@ import {
 	apiResponseError,
 	isMissingResourceError,
 } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	cancelDeviceCommands,
+	withDeviceCommandBridge,
+} from "@flow-like/flow-like-ui/lib/device-bridge";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type {
 	ICanaryExplainResult,
@@ -412,6 +416,37 @@ export class WebEventState implements IEventState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
+	): Promise<ILogMetadata | undefined> {
+		beforeDispatch?.();
+		return withDeviceCommandBridge(
+			{ appId, eventId, executionTarget: "remote" },
+			cb,
+			(bridgeCallback) =>
+				this.executeEventInternal(
+					appId,
+					eventId,
+					payload,
+					streamState,
+					onEventId,
+					bridgeCallback,
+					skipConsentCheck,
+					pageTrigger,
+					beforeDispatch,
+				),
+		);
+	}
+
+	private async executeEventInternal(
+		appId: string,
+		eventId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		onEventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+		skipConsentCheck?: boolean,
+		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	): Promise<ILogMetadata | undefined> {
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthService = getOAuthService(
@@ -536,6 +571,7 @@ export class WebEventState implements IEventState {
 
 		let executionFinished = false;
 		try {
+			beforeDispatch?.();
 			const response = await fetch(url, {
 				method: "POST",
 				headers,
@@ -673,7 +709,9 @@ export class WebEventState implements IEventState {
 		eventId: string,
 		method: string,
 		params?: Record<string, unknown>,
+		beforeDispatch?: () => void,
 	): Promise<Record<string, unknown>> {
+		beforeDispatch?.();
 		return apiPost<Record<string, unknown>>(
 			`apps/${appId}/events/${eventId}/mcp-operation`,
 			{ method, params: params ?? {}, profile_id: this.backend.profile?.id },
@@ -682,6 +720,7 @@ export class WebEventState implements IEventState {
 	}
 
 	async cancelExecution(runId: string): Promise<void> {
+		cancelDeviceCommands(runId);
 		await apiPost(`runs/${runId}/cancel`, undefined, this.backend.auth);
 	}
 

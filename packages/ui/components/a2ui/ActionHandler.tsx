@@ -14,6 +14,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { setAppQueryParam } from "../../lib/app-route-url";
 import { getCurrentPageContext } from "../../lib/page-context";
 import { classifyPageContractError } from "../../lib/page-contract-drift";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
@@ -845,11 +846,7 @@ export function useExecuteAction() {
 						};
 
 						const url = new URL(window.location.href);
-						if (value === undefined || value === "") {
-							url.searchParams.delete(key);
-						} else {
-							url.searchParams.set(key, value);
-						}
+						setAppQueryParam(url, key, value);
 
 						console.log("[A2UI] Updating query param", {
 							key,

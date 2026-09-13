@@ -7,13 +7,16 @@ export async function fileToAttachment(
 	files: File[],
 	backend: IBackendState,
 	offline: boolean,
+	assertCurrent?: () => void,
 ): Promise<IAttachment[]> {
 	if (!files || files.length === 0) return [];
 
 	const attachments: IAttachment[] = [];
 
 	for (const file of files) {
+		assertCurrent?.();
 		const url = await backend.helperState.fileToUrl(file, offline);
+		assertCurrent?.();
 		attachments.push({
 			name: file.name,
 			type: file.type,

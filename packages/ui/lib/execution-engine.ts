@@ -9,6 +9,16 @@ interface ISubscriber {
 	onComplete?: (events: IIntercomEvent[]) => void;
 }
 
+export interface ActiveEventExecution {
+	scope?: string;
+	streamId: string;
+	appId: string;
+	eventId: string;
+	runId?: string;
+	title: string;
+	startedAt: string;
+}
+
 interface IEventStream {
 	subscribers: Map<string, ISubscriber>;
 	accumulatedEvents: IIntercomEvent[];
@@ -16,6 +26,8 @@ interface IEventStream {
 	seenEventIds: Set<string>;
 	executionPromise?: Promise<any>;
 	isComplete: boolean;
+	activeExecution?: Omit<ActiveEventExecution, "streamId">;
+	owner?: IBackendState;
 	path?: string;
 	title?: string;
 	interfaceType?: string;
@@ -45,6 +57,8 @@ interface IExecuteEventOptions {
 	interfaceType?: string;
 	skipConsentCheck?: boolean;
 	pageTrigger?: PageTrigger;
+	/** Revalidate the initiating request after asynchronous setup and immediately before dispatch. */
+	beforeDispatch?: () => void;
 	/**
 	 * Optional callback for incremental saves during streaming.
 	 * Called every `saveIntervalEvents` events and on completion.
@@ -74,6 +88,7 @@ export type ExecuteEventFn = (
 	cb?: (event: IIntercomEvent[]) => void,
 	skipConsentCheck?: boolean,
 	pageTrigger?: PageTrigger,
+	beforeDispatch?: () => void,
 ) => Promise<ILogMetadata | undefined>;
 
 export class ExecutionEngineProvider {
@@ -81,11 +96,16 @@ export class ExecutionEngineProvider {
 	private backend: IBackendState | null = null;
 	private globalListeners: Set<() => void> = new Set();
 	private executeEventFn: ExecuteEventFn | null = null;
+	private executionScope?: string;
 
 	constructor() {}
 
 	setBackend(backend: IBackendState): void {
 		this.backend = backend;
+	}
+
+	setExecutionScope(scope: string): void {
+		this.executionScope = scope;
 	}
 
 	setExecuteEventFn(fn: ExecuteEventFn): void {
@@ -158,6 +178,7 @@ export class ExecutionEngineProvider {
 		streamId: string,
 		options: IExecuteEventOptions,
 	): Promise<any> {
+		options.beforeDispatch?.();
 		if (!this.backend) {
 			throw new Error("Backend not initialized in ExecutionEngineProvider");
 		}
@@ -210,6 +231,15 @@ export class ExecutionEngineProvider {
 			this.executeEventFn ??
 			this.backend.eventState.executeEvent.bind(this.backend.eventState);
 
+		stream.owner = this.backend;
+		stream.activeExecution = {
+			...(this.executionScope ? { scope: this.executionScope } : {}),
+			appId: options.appId,
+			eventId: options.eventId,
+			title: options.title || "Workflow run",
+			startedAt: new Date().toISOString(),
+		};
+
 		// Track event count for incremental saves
 		const saveInterval = options.saveIntervalEvents ?? 10;
 		const saveMinIntervalMs = options.saveMinIntervalMs ?? 1000;
@@ -222,6 +252,9 @@ export class ExecutionEngineProvider {
 			options.payload,
 			options.streamState ?? false,
 			(executionId: string) => {
+				if (stream!.activeExecution)
+					stream!.activeExecution.runId = executionId;
+				this.notifyGlobalListeners();
 				options.onExecutionStart?.(executionId);
 			},
 			(events: IIntercomEvent[]) => {
@@ -276,9 +309,11 @@ export class ExecutionEngineProvider {
 			},
 			options.skipConsentCheck,
 			options.pageTrigger,
+			options.beforeDispatch,
 		);
 
 		stream.executionPromise = executionPromise;
+		this.notifyGlobalListeners();
 
 		executionPromise
 			.then(async () => {
@@ -350,6 +385,20 @@ export class ExecutionEngineProvider {
 
 	getAccumulatedEvents(streamId: string): IIntercomEvent[] {
 		return this.eventStreams.get(streamId)?.accumulatedEvents ?? [];
+	}
+
+	/** Running Event metadata only. Message content and completed streams are excluded. */
+	getActiveExecutions(scope = this.executionScope): ActiveEventExecution[] {
+		return Array.from(this.eventStreams.entries()).flatMap(
+			([streamId, stream]) =>
+				stream.executionPromise &&
+				!stream.isComplete &&
+				stream.activeExecution &&
+				stream.activeExecution.scope === scope &&
+				stream.owner === this.backend
+					? [{ streamId, ...stream.activeExecution }]
+					: [],
+		);
 	}
 
 	getBackgroundStreams(): {

@@ -6,6 +6,16 @@ import { USE_EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config-use";
 import { describe, expect, test } from "vitest";
 
 describe("runtime event config", () => {
+	test("configures Location Events as native geolocation sinks without a fake runtime page", () => {
+		expect(EVENT_CONFIG.events_location.eventTypes).toEqual(["geolocation"]);
+		expect(
+			EVENT_CONFIG.events_location.configInterfaces.geolocation,
+		).toBeDefined();
+		expect(
+			EVENT_CONFIG.events_location.sinkAvailability?.geolocation,
+		).toMatchObject({ availability: "local", dispatchesRemoteEvents: true });
+		expect(USE_EVENT_CONFIG.events_location.useInterfaces).toEqual({});
+	});
 	// `/use` loads USE_EVENT_CONFIG instead of EVENT_CONFIG so a running app never pulls the
 	// builder's configuration panels into its bundle. The two are written by hand, so drift
 	// would silently make an event type unrenderable at runtime while it still looks

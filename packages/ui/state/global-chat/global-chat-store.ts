@@ -16,6 +16,7 @@ import type {
 import { mergeChatWidgets } from "../../components/interfaces/chat-default/event-processor";
 import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
+import type { NativeActionRequest } from "../../lib/native-action-result";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import {
 	type AgentDebugReportMetadata,
@@ -152,6 +153,9 @@ export interface InlineAppSurface {
 }
 
 export interface GlobalChatDraft {
+	/** Native input can wait for model readiness; never deliver it under a different account. */
+	nativeScope?: string;
+	nativeRequest?: NativeActionRequest;
 	prompt: string;
 	/** Backend-prefixed model id (e.g. "github-copilot:…", "codex:…") or a raw Bits id. */
 	modelId?: string;
@@ -227,6 +231,7 @@ export interface GlobalChatQueuedMessage {
 	content: string;
 	/** Raw browser files, held until the send actually happens (they are uploaded at send time). */
 	files?: File[];
+	nativeRequest?: NativeActionRequest;
 	createdAt: number;
 }
 
@@ -277,6 +282,8 @@ export interface GlobalToolPrompt {
 interface GlobalChatState {
 	/** Pending message handed off from the landing bar to the /chat view. */
 	draft: GlobalChatDraft | null;
+	/** Native requests wait in order while model selection or execution capacity is unavailable. */
+	nativeDrafts: GlobalChatDraft[];
 	/** Docked overlay visibility, toggled when the agent navigates or the user opens the dock. */
 	mode: GlobalChatMode;
 	/** Whether automatic opens are suppressed because the user explicitly dismissed the dock. */
@@ -357,7 +364,7 @@ interface GlobalChatState {
 
 	setDraft: (draft: GlobalChatDraft) => void;
 	/** Returns the pending draft once and clears it, so it is only auto-sent a single time. */
-	consumeDraft: () => GlobalChatDraft | null;
+	consumeDraft: (expected?: GlobalChatDraft) => GlobalChatDraft | null;
 	/** Explicitly open the dock, regardless of a previous dismissal. */
 	openOverlay: () => void;
 	/** Open the dock for agent/navigation activity unless the user dismissed it. */
@@ -571,6 +578,7 @@ function switchConversation(
 
 export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	draft: null,
+	nativeDrafts: [],
 	mode: "closed",
 	overlayAutoOpenDismissed: false,
 	activeConversationId: createId(),
@@ -595,10 +603,40 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	pendingComponents: null,
 	pendingComponentsOwnerRunId: null,
 
-	setDraft: (draft) => set({ draft }),
-	consumeDraft: () => {
-		const { draft } = get();
-		if (draft) set({ draft: null });
+	setDraft: (draft) =>
+		set((state) => {
+			const incomingNative = Boolean(draft.nativeRequest || draft.nativeScope);
+			const pending = [state.draft, ...state.nativeDrafts];
+			if (
+				draft.nativeRequest &&
+				pending.some(
+					(item) =>
+						item?.nativeRequest?.id === draft.nativeRequest?.id &&
+						item?.nativeRequest?.scope === draft.nativeRequest?.scope,
+				)
+			)
+				return state;
+			if (!state.draft) return { draft };
+			if (incomingNative) {
+				if (state.nativeDrafts.length >= 31)
+					throw new Error(
+						"Too many pending FlowPilot requests. Try again after a response finishes.",
+					);
+				return { nativeDrafts: [...state.nativeDrafts, draft] };
+			}
+			// Hero-bar drafts still replace one another, while accepted native requests stay queued.
+			if (state.draft.nativeRequest || state.draft.nativeScope)
+				return { draft, nativeDrafts: [state.draft, ...state.nativeDrafts] };
+			return { draft };
+		}),
+	consumeDraft: (expected) => {
+		const { draft, nativeDrafts } = get();
+		if (expected && draft !== expected) return null;
+		if (draft)
+			set({
+				draft: nativeDrafts[0] ?? null,
+				nativeDrafts: nativeDrafts.slice(1),
+			});
 		return draft;
 	},
 	openOverlay: () => {

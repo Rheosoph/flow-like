@@ -18,8 +18,8 @@ import {
 	IExecutionMode,
 	IExecutionStage,
 	ILogLevel,
-	IVersionType,
-} from "../../../lib";
+} from "../../../lib/schema/flow/board";
+import { IVersionType } from "../../../lib/schema/flow/version-type";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";

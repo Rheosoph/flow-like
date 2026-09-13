@@ -82,7 +82,7 @@ impl NodeLogic for NotifyProjectUserNode {
         node.add_output_pin(
             "success",
             "Success",
-            "Whether the notification was sent successfully",
+            "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.",
             VariableType::Boolean,
         );
 
@@ -132,7 +132,9 @@ impl NodeLogic for NotifyProjectUserNode {
         if !description.is_empty() {
             notification = notification.with_description(&description);
         }
-        notification = notification.with_icon(&icon);
+        if !icon.is_empty() {
+            notification = notification.with_icon(&icon);
+        }
 
         // Send notification via InterCom stream for local display / event history.
         // Remote persistence happens below through the dedicated notification API.
@@ -141,36 +143,43 @@ impl NodeLogic for NotifyProjectUserNode {
             .await?;
 
         // Persist notification via backend API for push delivery
-        match persist_notification(
+        let success = match persist_notification(
             context,
             PersistNotificationParams {
                 title,
                 description: (!description.is_empty()).then_some(description),
-                icon: Some(icon),
+                icon: (!icon.is_empty()).then_some(icon),
                 link: Some(resolved_link),
                 target_user_sub: Some(user_sub.clone()),
             },
         )
         .await
         {
-            Ok(true) => context.log_message(
-                &format!("Notification persisted via API (target user: {user_sub})"),
-                LogLevel::Debug,
-            ),
-            Ok(false) => context.log_message(
-                &format!(
-                    "Notification sent locally for user: {user_sub} (no hub/token or offline)"
-                ),
-                LogLevel::Debug,
-            ),
-            Err(e) => context.log_message(
-                &format!("Failed to persist notification for user {user_sub} via API: {e}"),
-                LogLevel::Warn,
-            ),
-        }
+            Ok(true) => {
+                context.log_message(
+                    &format!("Notification persisted via API (target user: {user_sub})"),
+                    LogLevel::Debug,
+                );
+                true
+            }
+            Ok(false) => {
+                context.log_message(
+                    &format!("Notification emitted locally for user {user_sub}"),
+                    LogLevel::Debug,
+                );
+                true
+            }
+            Err(e) => {
+                context.log_message(
+                    &format!("Notification persistence or push failed for user {user_sub}: {e}"),
+                    LogLevel::Warn,
+                );
+                false
+            }
+        };
 
         context
-            .set_pin_value("success", flow_like_types::json::json!(true))
+            .set_pin_value("success", flow_like_types::json::json!(success))
             .await?;
         context.activate_exec_pin("exec_out").await?;
 

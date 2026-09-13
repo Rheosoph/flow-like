@@ -16,13 +16,17 @@ use flow_like_geometry::to_geo;
 #[cfg(feature = "execute")]
 use flow_like_types::{
     Result, Value, anyhow, bail,
-    geometry::canonicalize_geometry,
+    geometry::{MAX_GEOMETRY_POSITIONS, canonicalize_geometry},
     json::{Map, json},
 };
 #[cfg(feature = "execute")]
-use geo::Validation;
-#[cfg(feature = "execute")]
 use std::collections::HashMap;
+
+#[cfg(feature = "execute")]
+use super::{add_estimated_geometry_positions, check_topology_validation, cpu};
+
+#[cfg(feature = "execute")]
+const MAX_COLLECTION_BOUNDARY_POLYGON_PAIRS: usize = 2_000_000;
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -215,7 +219,7 @@ fn definition(operation: Operation) -> Node {
             "geometry_boundary",
             "boundary",
             "Geometry Boundary",
-            "Returns the planar topological boundary. Point boundaries are empty, line boundaries are endpoint MultiPoints and polygon boundaries are MultiLineStrings.",
+            "Returns the planar topological boundary. Point boundaries are empty, line boundaries are endpoint MultiPoints and polygon boundaries are MultiLineStrings. GeometryCollections containing both lineal and polygonal members are unsupported.",
         ),
         ToMulti => (
             "geometry_to_multi",
@@ -497,19 +501,26 @@ fn index(inputs: &Value) -> Result<usize> {
 #[cfg(feature = "execute")]
 fn geometry(value: &Value, kind: Option<GeometryKind>) -> Result<Value> {
     let value = canonicalize_geometry(value, kind)?;
-    to_geo(&value)?
-        .check_validation()
-        .map_err(|error| anyhow!("Invalid geometry topology: {error}"))?;
+    check_topology_validation(&to_geo(&value)?, "Invalid geometry topology")?;
     Ok(value)
 }
 
 #[cfg(feature = "execute")]
 fn geometry_array(value: &Value, kind: Option<GeometryKind>) -> Result<Vec<Value>> {
-    value
+    let values = value
         .as_array()
-        .ok_or_else(|| anyhow!("Expected an array of geometries"))?
-        .iter()
-        .map(|value| geometry(value, kind))
+        .ok_or_else(|| anyhow!("Expected an array of geometries"))?;
+    if values.len() > MAX_GEOMETRY_POSITIONS {
+        bail!("Geometry array contains more than {MAX_GEOMETRY_POSITIONS} members");
+    }
+    let mut positions = 0usize;
+    let mut members = 1usize;
+    for value in values {
+        add_estimated_geometry_positions(value, &mut positions, &mut members, "Geometry array")?;
+    }
+    let work = positions.saturating_add(values.len());
+    cpu::map_ordered(values, work, |_, value| geometry(value, kind))
+        .into_iter()
         .collect()
 }
 
@@ -665,6 +676,87 @@ fn line_boundaries<'a>(lines: impl IntoIterator<Item = &'a Value>) -> Result<Vec
 }
 
 #[cfg(feature = "execute")]
+#[derive(Default)]
+struct CollectionBoundaryComponents {
+    lines: Vec<Value>,
+    polygons: Vec<Value>,
+}
+
+#[cfg(feature = "execute")]
+fn collect_collection_boundary_components(
+    value: &Value,
+    components: &mut CollectionBoundaryComponents,
+) {
+    match value["type"].as_str().unwrap() {
+        "Point" | "MultiPoint" => {}
+        "LineString" => components.lines.push(value["coordinates"].clone()),
+        "MultiLineString" => components
+            .lines
+            .extend(value["coordinates"].as_array().unwrap().iter().cloned()),
+        "Polygon" => components.polygons.push(value["coordinates"].clone()),
+        "MultiPolygon" => components
+            .polygons
+            .extend(value["coordinates"].as_array().unwrap().iter().cloned()),
+        "GeometryCollection" => {
+            for member in value["geometries"].as_array().unwrap() {
+                collect_collection_boundary_components(member, components);
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn collection_boundary(value: &Value) -> Result<Value> {
+    let mut components = CollectionBoundaryComponents::default();
+    collect_collection_boundary_components(value, &mut components);
+    if !components.lines.is_empty() && !components.polygons.is_empty() {
+        bail!(
+            "Boundary does not support GeometryCollections containing both lineal and polygonal members; extract homogeneous parts first"
+        );
+    }
+    if !components.polygons.is_empty() {
+        let polygon_pairs = components
+            .polygons
+            .len()
+            .saturating_mul(components.polygons.len().saturating_sub(1))
+            / 2;
+        if polygon_pairs > MAX_COLLECTION_BOUNDARY_POLYGON_PAIRS {
+            bail!(
+                "Polygonal GeometryCollection boundary requires {polygon_pairs} topology comparisons, exceeding the limit of {MAX_COLLECTION_BOUNDARY_POLYGON_PAIRS}"
+            );
+        }
+        let polygons = geometry(
+            &json!({"type":"MultiPolygon", "coordinates":components.polygons}),
+            Some(GeometryKind::MultiPolygon),
+        )
+        .map_err(|error| {
+            anyhow!(
+                "Polygonal GeometryCollection boundary requires members that form a valid MultiPolygon: {error}"
+            )
+        })?;
+        let mut rings = Vec::new();
+        for polygon in polygons["coordinates"].as_array().unwrap() {
+            rings.extend(polygon.as_array().unwrap().iter().cloned());
+        }
+        return geometry(
+            &json!({"type":"MultiLineString", "coordinates":rings}),
+            None,
+        );
+    }
+    if !components.lines.is_empty() {
+        return geometry(
+            &json!({
+                "type":"MultiPoint",
+                "coordinates":line_boundaries(&components.lines)?
+            }),
+            None,
+        );
+    }
+    geometry(&json!({"type":"GeometryCollection", "geometries":[]}), None)
+}
+
+#[cfg(feature = "execute")]
 fn boundary(value: &Value) -> Result<Value> {
     let value = geometry(value, None)?;
     let result = match value["type"].as_str().unwrap() {
@@ -688,15 +780,7 @@ fn boundary(value: &Value) -> Result<Value> {
             }
             json!({"type":"MultiLineString", "coordinates":rings})
         }
-        "GeometryCollection" => {
-            let members = value["geometries"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(boundary)
-                .collect::<Result<Vec<_>>>()?;
-            json!({"type":"GeometryCollection", "geometries":members})
-        }
+        "GeometryCollection" => return collection_boundary(&value),
         _ => unreachable!(),
     };
     geometry(&result, None)
@@ -881,7 +965,8 @@ async fn run_operation(operation: Operation, context: &mut ExecutionContext) -> 
             context.evaluate_pin::<Value>(&pin.name).await?,
         );
     }
-    for (name, value) in execute(operation, &Value::Object(inputs))? {
+    let outputs = super::cpu::run(move || execute(operation, &Value::Object(inputs))).await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -1285,6 +1370,115 @@ mod execution_tests {
     }
 
     #[test]
+    fn collection_boundary_applies_global_rules_to_homogeneous_members() {
+        let joined_lines = json!({
+            "type":"GeometryCollection",
+            "geometries":[
+                line(json!([[0,0],[1,0]])),
+                {
+                    "type":"GeometryCollection",
+                    "geometries":[line(json!([[1,0],[2,0]]))]
+                }
+            ]
+        });
+        assert_eq!(
+            result(
+                Operation::Boundary,
+                json!({"geometry":joined_lines}),
+                "geometry_out"
+            ),
+            json!({"type":"MultiPoint","coordinates":[[0,0],[2,0]]})
+        );
+
+        let point_collection = json!({
+            "type":"GeometryCollection",
+            "geometries":[point(1.0,2.0), {"type":"MultiPoint","coordinates":[]}]
+        });
+        assert_eq!(
+            result(
+                Operation::Boundary,
+                json!({"geometry":point_collection}),
+                "geometry_out"
+            ),
+            json!({"type":"GeometryCollection","geometries":[]})
+        );
+
+        let polygons = json!({
+            "type":"GeometryCollection",
+            "geometries":[
+                {
+                    "type":"Polygon",
+                    "coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]
+                },
+                {
+                    "type":"Polygon",
+                    "coordinates":[[[2,0],[3,0],[3,1],[2,1],[2,0]]]
+                }
+            ]
+        });
+        let boundary = result(
+            Operation::Boundary,
+            json!({"geometry":polygons}),
+            "geometry_out",
+        );
+        assert_eq!(boundary["type"], "MultiLineString");
+        assert_eq!(boundary["coordinates"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn collection_boundary_ignores_points_and_rejects_mixed_positive_dimensions() {
+        let points_and_line = json!({
+            "type":"GeometryCollection",
+            "geometries":[point(0.0,0.0), line(json!([[1,0],[2,0]]))]
+        });
+        assert_eq!(
+            result(
+                Operation::Boundary,
+                json!({"geometry":points_and_line}),
+                "geometry_out"
+            ),
+            json!({"type":"MultiPoint","coordinates":[[1,0],[2,0]]})
+        );
+
+        let mixed = json!({
+            "type":"GeometryCollection",
+            "geometries":[
+                line(json!([[0,0],[1,0]])),
+                {
+                    "type":"Polygon",
+                    "coordinates":[[[2,0],[3,0],[3,1],[2,1],[2,0]]]
+                }
+            ]
+        });
+        assert!(
+            execute(Operation::Boundary, &json!({"geometry":mixed}))
+                .unwrap_err()
+                .to_string()
+                .contains("both lineal and polygonal")
+        );
+
+        let shared_edge = json!({
+            "type":"GeometryCollection",
+            "geometries":[
+                {
+                    "type":"Polygon",
+                    "coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]
+                },
+                {
+                    "type":"Polygon",
+                    "coordinates":[[[1,0],[2,0],[2,1],[1,1],[1,0]]]
+                }
+            ]
+        });
+        assert!(
+            execute(Operation::Boundary, &json!({"geometry":shared_edge}))
+                .unwrap_err()
+                .to_string()
+                .contains("valid MultiPolygon")
+        );
+    }
+
+    #[test]
     fn single_multi_conversion_requires_unambiguous_unwrap() {
         let source = point(1.0, 2.0);
         let multi = result(
@@ -1318,5 +1512,37 @@ mod execution_tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn parallel_geometry_array_validation_preserves_member_order() {
+        const COUNT: usize = 16_384;
+        let points = (0..COUNT)
+            .map(|index| point(-170.0 + (index % 340) as f64, (index / 1_000) as f64))
+            .collect::<Vec<_>>();
+        let values = super::super::cpu::run(move || {
+            execute(Operation::MakeMultiPoint, &json!({"points":points}))
+        })
+        .await
+        .unwrap();
+        let geometry = values
+            .into_iter()
+            .find(|(name, _)| *name == "geometry_out")
+            .unwrap()
+            .1;
+        let coordinates = geometry["coordinates"].as_array().unwrap();
+        assert_eq!(coordinates.len(), COUNT);
+        assert_eq!(coordinates[0], json!([-170.0, 0.0]));
+        assert_eq!(coordinates[COUNT - 1], json!([-107.0, 16.0]));
+    }
+
+    #[test]
+    fn geometry_array_preflight_bounds_unvalidated_nesting() {
+        let mut nested = point(0.0, 0.0);
+        for _ in 0..=flow_like_types::geometry::MAX_GEOMETRY_DEPTH {
+            nested = json!({"type":"GeometryCollection", "geometries":[nested]});
+        }
+        let error = geometry_array(&json!([nested]), None).unwrap_err();
+        assert!(error.to_string().contains("depth or member limit"));
     }
 }

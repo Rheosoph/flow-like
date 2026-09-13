@@ -8,19 +8,28 @@
 
 /* Begin PBXBuildFile section */
 		0397521AECC609F3FB0D060D /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D685BD1CD447858983F1221 /* libapp.a */; };
-		0C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework */; };
-		C0DE00000000000000000002 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000001 /* CoreML.framework */; };
-		F10A00000000000000000001 /* FlowLikeMLX in Frameworks */ = {isa = PBXBuildFile; productRef = F10A00000000000000000003 /* FlowLikeMLX */; };
 		050A989B75BD371962346B70 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = FE841B414893A9D8539A5AD4 /* main.mm */; };
+		0C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework */; };
 		1C0F0E1D2C3B4A5968776655 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5C0F0E1D2C3B4A5968776655 /* CoreMedia.framework */; };
+		1F7A2D8C72626B3A31AF988C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EE732013078B776E0BC753E5 /* Foundation.framework */; };
+		2087B6374CF0CA9F63A263FD /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E01B000ACCCCBB2C69F16D7 /* ShareViewController.swift */; };
 		255CFA4E3B311D277951C11C /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 589BB68C31884596100EACBD /* QuartzCore.framework */; };
+		25ED6DCD1A02D70ECA20CE7A /* FlowLikeNative in Frameworks */ = {isa = PBXBuildFile; productRef = D4090193B8DBC4457D62FF79 /* FlowLikeNative */; };
 		2C0F0E1D2C3B4A5968776655 /* CoreVideo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6C0F0E1D2C3B4A5968776655 /* CoreVideo.framework */; };
 		3C0F0E1D2C3B4A5968776655 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C0F0E1D2C3B4A5968776655 /* VideoToolbox.framework */; };
+		46E7BB24CE7C57D3CDB26868 /* FlowLikeWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = DA3E32623C20C26CDF61C4C6 /* FlowLikeWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		59953E28A025FC5224BA82C7 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EE732013078B776E0BC753E5 /* Foundation.framework */; };
 		5E3B45C78E5B4FCEB6240D47 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5E3B45C68E5B4FCEB6240D47 /* Accelerate.framework */; };
 		76FD7A6616CCEDA792151279 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 79B308C6B28E642F68F1B8B6 /* WebKit.framework */; };
+		7CC49F66AE79A8FD19AD5E5F /* FlowLikeWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032A7EF789533951C0F228A6 /* FlowLikeWidgets.swift */; };
 		93885DD61620BAB3F4966EEE /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 77962E4059BACBDB96D6BDF3 /* Security.framework */; };
 		9D3CC2A8FC9EE8D73A28C132 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6C578A692AD05CABF96675D4 /* Metal.framework */; };
+		AC2DCF4E74F1FC2B101B9060 /* FlowLikeNative in Frameworks */ = {isa = PBXBuildFile; productRef = 1A2AA95FE784EB3780745CA0 /* FlowLikeNative */; };
+		B008C5DD4E936C3400FA2FFA /* FlowLikeNative in Frameworks */ = {isa = PBXBuildFile; productRef = 8BDBC05D802DF2385EC98CBF /* FlowLikeNative */; };
 		BD999E1D015351A22CC3CFE6 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B8D6074E6775B2FD3D0199A8 /* UIKit.framework */; };
+		BDF343E9B02551D659FEAF03 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAD38A1138CE2F34B3B7A454 /* Intents.swift */; };
+		BF6BC6199B77F0BA89963C91 /* FlowLikeShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 326AB852630A7AEFCB546CF6 /* FlowLikeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C0DE00000000000000000002 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0DE00000000000000000001 /* CoreML.framework */; };
 		C3C6EB3F74C498D2FE8F7661 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = FFF51C4D6D9AD2D1364150A6 /* assets */; };
 		DC1EA3752E7C10EC00431604 /* onnxruntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */; };
 		DC29A1BE2FB3412A009DF63B /* icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = DC29A1BD2FB3412A009DF63B /* icon.icon */; };
@@ -30,15 +39,61 @@
 		DC66728F2F6BE82400160C5D /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC66728E2F6BE81E00160C5D /* AppDelegate.swift */; };
 		DC6672922F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */; };
 		E083E5A09A5613BE75ECDE6C /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 9765DE5BE922A06C0CA8BA5F /* LaunchScreen.storyboard */; };
+		F10A00000000000000000001 /* FlowLikeMLX in Frameworks */ = {isa = PBXBuildFile; productRef = F10A00000000000000000003 /* FlowLikeMLX */; };
+		F3255B55D0A6ADDB1FBED393 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAD38A1138CE2F34B3B7A454 /* Intents.swift */; };
 		F439207FAC54CA183A9531D5 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA58C22D1BB3716CAD06FD10 /* MetalKit.framework */; };
 		FA0CC56A2E28AAAE51733B8B /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F2764F91BCC1150304FB91AC /* CoreGraphics.framework */; };
+		AF9D041810BC8FF962FDA2A8 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDD6B5CA082587B0EE70E721 /* NotificationService.swift */; };
+		3109D2925F7E1D47A46A5225 /* FlowLikeNotifications.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 2E7E2ADA27C45E5A48DDB17C /* FlowLikeNotifications.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		4F34FDDC58D886A00AC45181 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C2521A9DB2E17032A7BB97A8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 13093E80D907B4A6430D6B0C;
+			remoteInfo = FlowLikeWidgets;
+		};
+		8176A16429200E1DCF17D53B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C2521A9DB2E17032A7BB97A8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 87A0F181199184ECE5C965C0;
+			remoteInfo = FlowLikeShare;
+		};
+		51EBA0A2EADA5D3245A54DAD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C2521A9DB2E17032A7BB97A8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 17632F34883125C70EF26C4C;
+			remoteInfo = FlowLikeNotifications;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		CF00BF35451E5BA9FFFDEEFA /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				46E7BB24CE7C57D3CDB26868 /* FlowLikeWidgets.appex in Embed App Extensions */,
+				BF6BC6199B77F0BA89963C91 /* FlowLikeShare.appex in Embed App Extensions */,
+				3109D2925F7E1D47A46A5225 /* FlowLikeNotifications.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		032A7EF789533951C0F228A6 /* FlowLikeWidgets.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = FlowLikeWidgets.swift; path = ../../apple/FlowLikeNative/Extensions/Widgets/FlowLikeWidgets.swift; sourceTree = "<group>"; };
 		126ECE883F9B6CFCF97E5091 /* run.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = run.rs; sourceTree = "<group>"; };
 		194092FA8C7BD83859D3D7A1 /* Flow Like.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Flow Like.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2A3149ABC578B5319B6AE7BD /* flow-like-desktop_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "flow-like-desktop_iOS.entitlements"; sourceTree = "<group>"; };
 		2DC2BD7DCECA149C913C9DA7 /* init.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = init.rs; sourceTree = "<group>"; };
+		326AB852630A7AEFCB546CF6 /* FlowLikeShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FlowLikeShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		351CF710F444B50A57BC6375 /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
 		466A2F4F4A1A047C4FB34CF1 /* download.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = download.rs; sourceTree = "<group>"; };
 		46D1C931E5CF1C31D0D1461C /* ai.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = ai.rs; sourceTree = "<group>"; };
@@ -47,16 +102,16 @@
 		495C3C1B4008EDF92FC2DDFD /* file.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = file.rs; sourceTree = "<group>"; };
 		4AFFB9703CAB963454E6E4D5 /* system.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = system.rs; sourceTree = "<group>"; };
 		4C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
-		C0DE00000000000000000001 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		55488E56095458887B8AE4D8 /* template.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = template.rs; sourceTree = "<group>"; };
 		575D60A2EAACB2C4309E4D75 /* event.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = event.rs; sourceTree = "<group>"; };
 		589BB68C31884596100EACBD /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		5C0F0E1D2C3B4A5968776655 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
-		602BEA7C0AEAF0B345D0A89E /* flow.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = flow.rs; sourceTree = "<group>"; };
+		5E01B000ACCCCBB2C69F16D7 /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ShareViewController.swift; path = ../../apple/FlowLikeNative/Extensions/Share/ShareViewController.swift; sourceTree = "<group>"; };
 		5E3B45C68E5B4FCEB6240D47 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		602BEA7C0AEAF0B345D0A89E /* flow.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = flow.rs; sourceTree = "<group>"; };
 		6BE5BCE176455BB86BFA6908 /* bit.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = bit.rs; sourceTree = "<group>"; };
-		6C578A692AD05CABF96675D4 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		6C0F0E1D2C3B4A5968776655 /* CoreVideo.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreVideo.framework; path = System/Library/Frameworks/CoreVideo.framework; sourceTree = SDKROOT; };
+		6C578A692AD05CABF96675D4 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		72A4D58469E08182F44E66F3 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		77962E4059BACBDB96D6BDF3 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		79B308C6B28E642F68F1B8B6 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
@@ -71,11 +126,14 @@
 		AE2C1D36CB4979388AED491D /* app.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = app.rs; sourceTree = "<group>"; };
 		B32AEA5BAB9462446DED7809 /* profile.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = profile.rs; sourceTree = "<group>"; };
 		B8D6074E6775B2FD3D0199A8 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		C0DE00000000000000000001 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		C44466C17D90E7C9708C7F85 /* storage.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = storage.rs; sourceTree = "<group>"; };
 		CA039BD6723B3108B51527B4 /* state.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = state.rs; sourceTree = "<group>"; };
 		CA58C22D1BB3716CAD06FD10 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		D2EB56FFB6E36FC9B47C6810 /* settings.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = settings.rs; sourceTree = "<group>"; };
 		D555BD5F5EF13E82EB52F947 /* tables.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = tables.rs; sourceTree = "<group>"; };
+		DA3E32623C20C26CDF61C4C6 /* FlowLikeWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FlowLikeWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DAD38A1138CE2F34B3B7A454 /* Intents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = Intents.swift; path = ../../apple/FlowLikeNative/Sources/FlowLikeNative/Intents.swift; sourceTree = "<group>"; };
 		DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = thirdparty/onnxruntime.xcframework; sourceTree = "<group>"; };
 		DC29A1BD2FB3412A009DF63B /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DC29A1BF2FB341A6009DF63B /* splash.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = splash.png; sourceTree = "<group>"; };
@@ -83,12 +141,15 @@
 		DC66728E2F6BE81E00160C5D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		DC6672902F6BE83700160C5D /* flow-like-desktop_iOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "flow-like-desktop_iOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		DF38CBDD0FEF44AD730DA6C5 /* functions.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = functions.rs; sourceTree = "<group>"; };
+		EE732013078B776E0BC753E5 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		F2764F91BCC1150304FB91AC /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		F662587278F1EFF589CA19D6 /* settings.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = settings.rs; sourceTree = "<group>"; };
 		FC00BF458AFB38F4365DCE58 /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = main.rs; sourceTree = "<group>"; };
 		FD9644A2B542410640ED0BDA /* sharing.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = sharing.rs; sourceTree = "<group>"; };
 		FE841B414893A9D8539A5AD4 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		FFF51C4D6D9AD2D1364150A6 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
+		2E7E2ADA27C45E5A48DDB17C /* FlowLikeNotifications.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FlowLikeNotifications.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		FDD6B5CA082587B0EE70E721 /* NotificationService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = NotificationService.swift; path = ../../apple/FlowLikeNative/Extensions/Notifications/NotificationService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -114,6 +175,32 @@
 				BD999E1D015351A22CC3CFE6 /* UIKit.framework in Frameworks */,
 				3C0F0E1D2C3B4A5968776655 /* VideoToolbox.framework in Frameworks */,
 				76FD7A6616CCEDA792151279 /* WebKit.framework in Frameworks */,
+				AC2DCF4E74F1FC2B101B9060 /* FlowLikeNative in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		993E9CB589B088B36C99A50A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1F7A2D8C72626B3A31AF988C /* Foundation.framework in Frameworks */,
+				B008C5DD4E936C3400FA2FFA /* FlowLikeNative in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F6CC11E8C889C9A0ECDE312D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				59953E28A025FC5224BA82C7 /* Foundation.framework in Frameworks */,
+				25ED6DCD1A02D70ECA20CE7A /* FlowLikeNative in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		426837C37F2C9C6BF47F90BF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,6 +238,9 @@
 			isa = PBXGroup;
 			children = (
 				194092FA8C7BD83859D3D7A1 /* Flow Like.app */,
+				DA3E32623C20C26CDF61C4C6 /* FlowLikeWidgets.appex */,
+				326AB852630A7AEFCB546CF6 /* FlowLikeShare.appex */,
+				2E7E2ADA27C45E5A48DDB17C /* FlowLikeNotifications.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -189,6 +279,10 @@
 				6A68EDA8DC2D514C157984C2 /* Products */,
 				DC29A1BD2FB3412A009DF63B /* icon.icon */,
 				DC29A1BF2FB341A6009DF63B /* splash.png */,
+				032A7EF789533951C0F228A6 /* FlowLikeWidgets.swift */,
+				5E01B000ACCCCBB2C69F16D7 /* ShareViewController.swift */,
+				FDD6B5CA082587B0EE70E721 /* NotificationService.swift */,
+				DAD38A1138CE2F34B3B7A454 /* Intents.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -210,6 +304,7 @@
 				B8D6074E6775B2FD3D0199A8 /* UIKit.framework */,
 				7C0F0E1D2C3B4A5968776655 /* VideoToolbox.framework */,
 				79B308C6B28E642F68F1B8B6 /* WebKit.framework */,
+				E4849872F255C10FB218B59C /* iOS */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -255,6 +350,14 @@
 			path = download;
 			sourceTree = "<group>";
 		};
+		E4849872F255C10FB218B59C /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				EE732013078B776E0BC753E5 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		E55C5CF5129B692CA8C1B26D /* functions */ = {
 			isa = PBXGroup;
 			children = (
@@ -296,6 +399,48 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		13093E80D907B4A6430D6B0C /* FlowLikeWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 74AE6E6F468A104C9F5EAB34 /* Build configuration list for PBXNativeTarget "FlowLikeWidgets" */;
+			buildPhases = (
+				BA5513918FAED3DDCCE1AC75 /* Match Containing App Version */,
+				7603DB82064A802DEFF549F5 /* Sources */,
+				993E9CB589B088B36C99A50A /* Frameworks */,
+				39DEAF332EC47C5FE29CBFE8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FlowLikeWidgets;
+			packageProductDependencies = (
+				8BDBC05D802DF2385EC98CBF /* FlowLikeNative */,
+			);
+			productName = FlowLikeWidgets;
+			productReference = DA3E32623C20C26CDF61C4C6 /* FlowLikeWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		87A0F181199184ECE5C965C0 /* FlowLikeShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 45269EA5B15CB9F700483B7D /* Build configuration list for PBXNativeTarget "FlowLikeShare" */;
+			buildPhases = (
+				57021F6E6A97A61919DC73C4 /* Match Containing App Version */,
+				282EA31CF823BE10E8ABE5F7 /* Sources */,
+				F6CC11E8C889C9A0ECDE312D /* Frameworks */,
+				194260A964094B041C5046BE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FlowLikeShare;
+			packageProductDependencies = (
+				D4090193B8DBC4457D62FF79 /* FlowLikeNative */,
+			);
+			productName = FlowLikeShare;
+			productReference = 326AB852630A7AEFCB546CF6 /* FlowLikeShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		9CB33D41E41562D2F070169F /* flow-like-desktop_iOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5F8BEFC3C00D819A30B3BE10 /* Build configuration list for PBXNativeTarget "flow-like-desktop_iOS" */;
@@ -304,20 +449,43 @@
 				165E40D989D4CBE7614FCEE2 /* Sources */,
 				6D34A5FE1E98113C0EDB6793 /* Resources */,
 				7267BDB5AAAF550E67DCACD0 /* Frameworks */,
+				CF00BF35451E5BA9FFFDEEFA /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				9D2F2998CF268B69B1AB71B0 /* PBXTargetDependency */,
+				79464340D4400A5689DA4F82 /* PBXTargetDependency */,
+				8E11478BFAB7A307BD69671E /* PBXTargetDependency */,
 			);
 			name = "flow-like-desktop_iOS";
 			packageProductDependencies = (
 				F10A00000000000000000003 /* FlowLikeMLX */,
 				DC66728C2F6BE41C00160C5D /* FirebaseMessaging */,
 				DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */,
+				1A2AA95FE784EB3780745CA0 /* FlowLikeNative */,
 			);
 			productName = "flow-like-desktop_iOS";
 			productReference = 194092FA8C7BD83859D3D7A1 /* Flow Like.app */;
 			productType = "com.apple.product-type.application";
+		};
+		17632F34883125C70EF26C4C /* FlowLikeNotifications */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 76274A856FEC118CC9D8F58A /* Build configuration list for PBXNativeTarget "FlowLikeNotifications" */;
+			buildPhases = (
+				60223C8B6AC87FDF344020DD /* Match Containing App Version */,
+				E6E4EF74B399C446E9FD290A /* Sources */,
+				426837C37F2C9C6BF47F90BF /* Frameworks */,
+				ADB3FD97C02640A0DAAB089E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FlowLikeNotifications;
+			productName = FlowLikeNotifications;
+			productReference = 2E7E2ADA27C45E5A48DDB17C /* FlowLikeNotifications.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -344,18 +512,37 @@
 			mainGroup = 95311537C7BD5DE850EE9940;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				F10A00000000000000000002 /* XCLocalSwiftPackageReference "../../apple/FlowLikeMLX" */,
+				F10A00000000000000000002 /* XCLocalSwiftPackageReference "FlowLikeMLX" */,
 				DC66728B2F6BE41C00160C5D /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				53B69E276395CE7A9584DF19 /* XCLocalSwiftPackageReference "FlowLikeNative" */,
 			);
+			productRefGroup = 6A68EDA8DC2D514C157984C2 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				9CB33D41E41562D2F070169F /* flow-like-desktop_iOS */,
+				13093E80D907B4A6430D6B0C /* FlowLikeWidgets */,
+				87A0F181199184ECE5C965C0 /* FlowLikeShare */,
+				17632F34883125C70EF26C4C /* FlowLikeNotifications */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		194260A964094B041C5046BE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		39DEAF332EC47C5FE29CBFE8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6D34A5FE1E98113C0EDB6793 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -368,9 +555,36 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ADB3FD97C02640A0DAAB089E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		57021F6E6A97A61919DC73C4 /* Match Containing App Version */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Match Containing App Version";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${PROJECT_DIR}/../../../scripts/apple-bundle-version.py\" \\\n  --config \"${PROJECT_DIR}/../../tauri.conf.json\" --platform iOS \\\n  --container-info \"${PROJECT_DIR}/flow-like-desktop_iOS/Info.plist\" \\\n  --template \"${PROJECT_DIR}/../../apple/FlowLikeNative/Extensions/Share/Info-iOS.plist\" \\\n  --output \"${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist\"\n";
+		};
 		B448A5960DB91980A98ED258 /* Build Rust Code */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -392,6 +606,46 @@
 			shellPath = /bin/zsh;
 			shellScript = "# ---- Build Rust Code (Xcode Run Script) ----\nset -euo pipefail\n\n# Tools in PATH (Bun, Homebrew, Cargo)\nexport PATH=\"$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.nvm/versions/node/v22.11.0/bin:$HOME/.cargo/bin:$PATH\"\n\n# Xcode archives cannot reliably connect to a user-level compiler cache daemon.\n# Empty overrides disable wrappers from ~/.cargo/config.toml for this build only.\nexport RUSTC_WRAPPER=\"\"\nexport RUSTC_WORKSPACE_WRAPPER=\"\"\n\n# Required by Xcode\nPLATFORM_DISPLAY_NAME=\"${PLATFORM_DISPLAY_NAME:?}\"\nSDKROOT=\"${SDKROOT:?}\"\nCONFIGURATION=\"${CONFIGURATION:?}\"\nCURRENT_ARCH=\"${CURRENT_ARCH:-arm64}\"\n\n# Build for iOS Simulator explicitly (avoid darwin artifacts)\ncase \"$PLATFORM_DISPLAY_NAME\" in\n  *Simulator*|*simulator*)\n    export CARGO_BUILD_TARGET=\"aarch64-apple-ios-sim\"\n    export TARGET=\"aarch64-apple-ios-sim\"\n    export ORT_IOS_XCFWK_LOCATION=\"$(pwd)/thirdparty/onnxruntime.xcframework\"\n    echo \"ONNX-Framework Location: $ORT_IOS_XCFWK_LOCATION\"\n    test -f \"$ORT_IOS_XCFWK_LOCATION/ios-arm64/onnxruntime.framework/onnxruntime\" \\\n        || echo \"xcframework path/subdir is wrong\"\n    ;;\n  *)\n    export CARGO_BUILD_TARGET=\"aarch64-apple-ios\"\n    export TARGET=\"aarch64-apple-ios\"\n    export ORT_IOS_XCFWK_LOCATION=\"$(pwd)/thirdparty/onnxruntime.xcframework\"\n    echo \"ONNX-Framework Location: $ORT_IOS_XCFWK_LOCATION\"\n    test -f \"$ORT_IOS_XCFWK_LOCATION/ios-arm64/onnxruntime.framework/onnxruntime\" \\\n        || echo \"xcframework path/subdir is wrong\"\n    # export ORT_STRATEGY=system  \n    # export ORT_LIB_LOCATION=\"./thirdparty/onnxruntime/onnxruntime.xcframework/ios-arm64\"\n    # export ORT_LIB_PROFILE=Release\n    ;;\nesac\n\n# Make optional envs safe under `set -u`\nexport FORCE_COLOR=\"${FORCE_COLOR:-1}\"             # or \"\" if you don't want color\nFRAMEWORK_SEARCH_PATHS=\"${FRAMEWORK_SEARCH_PATHS:-}\"\nHEADER_SEARCH_PATHS=\"${HEADER_SEARCH_PATHS:-}\"\nGCC_PREPROCESSOR_DEFINITIONS=\"${GCC_PREPROCESSOR_DEFINITIONS:-}\"\nARCHS=\"${ARCHS:-${CURRENT_ARCH:-}}\"\n\n# Required envs (fail early if Xcode didn't set them)\nPLATFORM_DISPLAY_NAME=\"${PLATFORM_DISPLAY_NAME:?}\"\nSDKROOT=\"${SDKROOT:?}\"\nCONFIGURATION=\"${CONFIGURATION:?}\"\n\nif [[ \"${CONFIGURATION}\" =~ ^[Dd]ebug ]]; then\n  export RUSTFLAGS=\"${RUSTFLAGS:+$RUSTFLAGS } -C debug-assertions=yes\"\nelse\n  export RUSTFLAGS=\"${RUSTFLAGS:+$RUSTFLAGS } -C debug-assertions=no -C opt-level=z -C panic=unwind -C strip=symbols -C debuginfo=0\"\nfi\n\n# Sanity logs\necho \"bun: $(which bun)\"; bun --version || true\necho \"cargo: $(which cargo)\"; cargo --version || true\necho \"target: ${CARGO_BUILD_TARGET}\";\n\n# Call tauri helper with safe quoting\n# Do not leak Xcode's iPhoneOS SDKROOT into Cargo host build dependencies.\nenv -u SDKROOT bun tauri ios xcode-script -v \\\n  --platform \"$PLATFORM_DISPLAY_NAME\" \\\n  --sdk-root \"$SDKROOT\" \\\n  --framework-search-paths \"$FRAMEWORK_SEARCH_PATHS\" \\\n  --header-search-paths \"$HEADER_SEARCH_PATHS\" \\\n  --gcc-preprocessor-definitions \"$GCC_PREPROCESSOR_DEFINITIONS\" \\\n  --configuration ${CONFIGURATION:?} \\\n  -v \\\n  ${ARCHS:?}\n";
 		};
+		BA5513918FAED3DDCCE1AC75 /* Match Containing App Version */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Match Containing App Version";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${PROJECT_DIR}/../../../scripts/apple-bundle-version.py\" \\\n  --config \"${PROJECT_DIR}/../../tauri.conf.json\" --platform iOS \\\n  --container-info \"${PROJECT_DIR}/flow-like-desktop_iOS/Info.plist\" \\\n  --template \"${PROJECT_DIR}/../../apple/FlowLikeNative/Extensions/Widgets/Info-iOS.plist\" \\\n  --output \"${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist\"\n";
+		};
+		60223C8B6AC87FDF344020DD /* Match Containing App Version */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Match Containing App Version";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${PROJECT_DIR}/../../../scripts/apple-bundle-version.py\" \\\n  --config \"${PROJECT_DIR}/../../tauri.conf.json\" --platform iOS \\\n  --container-info \"${PROJECT_DIR}/flow-like-desktop_iOS/Info.plist\" \\\n  --template \"${PROJECT_DIR}/../../apple/FlowLikeNative/Extensions/Notifications/Info-iOS.plist\" \\\n  --output \"${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -401,12 +655,107 @@
 			files = (
 				DC66728F2F6BE82400160C5D /* AppDelegate.swift in Sources */,
 				050A989B75BD371962346B70 /* main.mm in Sources */,
+				F3255B55D0A6ADDB1FBED393 /* Intents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		282EA31CF823BE10E8ABE5F7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2087B6374CF0CA9F63A263FD /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7603DB82064A802DEFF549F5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CC49F66AE79A8FD19AD5E5F /* FlowLikeWidgets.swift in Sources */,
+				BDF343E9B02551D659FEAF03 /* Intents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E6E4EF74B399C446E9FD290A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AF9D041810BC8FF962FDA2A8 /* NotificationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		79464340D4400A5689DA4F82 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = FlowLikeShare;
+			target = 87A0F181199184ECE5C965C0 /* FlowLikeShare */;
+			targetProxy = 8176A16429200E1DCF17D53B /* PBXContainerItemProxy */;
+		};
+		9D2F2998CF268B69B1AB71B0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = FlowLikeWidgets;
+			target = 13093E80D907B4A6430D6B0C /* FlowLikeWidgets */;
+			targetProxy = 4F34FDDC58D886A00AC45181 /* PBXContainerItemProxy */;
+		};
+		8E11478BFAB7A307BD69671E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = FlowLikeNotifications;
+			target = 17632F34883125C70EF26C4C /* FlowLikeNotifications */;
+			targetProxy = 51EBA0A2EADA5D3245A54DAD /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		13FFC11712E5B0159AAB0A79 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Share/Share-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.share";
+				PRODUCT_NAME = FlowLikeShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
+		2C93AF51F504D7CCEF137722 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Share/Share-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.share";
+				PRODUCT_NAME = FlowLikeShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		35405AC582CAC53167F343E4 /* debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -450,6 +799,7 @@
 				PRODUCT_NAME = "Flow Like";
 				RUSTUP_TOOLCHAIN = 1.97.1;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST FLOW_LIKE_SHORTCUTS_HOST";
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -457,6 +807,31 @@
 				VALID_ARCHS = arm64;
 			};
 			name = debug;
+		};
+		3B3A2BB4C650CC5B305ABDAB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Widgets/Widgets-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.widgets";
+				PRODUCT_NAME = FlowLikeWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
 		};
 		48FC71EEA28A00129CA85835 /* release */ = {
 			isa = XCBuildConfiguration;
@@ -501,6 +876,7 @@
 				PRODUCT_NAME = "Flow Like";
 				RUSTUP_TOOLCHAIN = 1.97.1;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST FLOW_LIKE_SHORTCUTS_HOST";
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/flow-like-desktop/flow-like-desktop_iOS-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -571,6 +947,107 @@
 			};
 			name = debug;
 		};
+		76F3B73487BAA7B336DADA87 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Share/Share-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.share";
+				PRODUCT_NAME = FlowLikeShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = release;
+		};
+		9748920EC0E5B74AD3D13BCE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Share/Share-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.share";
+				PRODUCT_NAME = FlowLikeShare;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A11BD6205F4133BFABD71211 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Widgets/Widgets-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.widgets";
+				PRODUCT_NAME = FlowLikeWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
+		BFD4E4BF63D60993DDBEBA00 /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Widgets/Widgets-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.widgets";
+				PRODUCT_NAME = FlowLikeWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = release;
+		};
 		C70AA12B7732B4303E8030D9 /* release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -627,9 +1104,93 @@
 			};
 			name = release;
 		};
+		DB098C0424A750FC5D81A7C9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = "../../apple/FlowLikeNative/Extensions/Widgets/Widgets-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.widgets";
+				PRODUCT_NAME = FlowLikeWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) FLOW_LIKE_INTENTS_HOST";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		9D55386F2157199A7F31FA55 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.notifications";
+				PRODUCT_NAME = FlowLikeNotifications;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
+		B9085BD50A13657EFCF7A86E /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = VVT9DYMA6M;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.flow-like.app.notifications";
+				PRODUCT_NAME = FlowLikeNotifications;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		45269EA5B15CB9F700483B7D /* Build configuration list for PBXNativeTarget "FlowLikeShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9748920EC0E5B74AD3D13BCE /* Release */,
+				2C93AF51F504D7CCEF137722 /* Debug */,
+				13FFC11712E5B0159AAB0A79 /* debug */,
+				76F3B73487BAA7B336DADA87 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		5F8BEFC3C00D819A30B3BE10 /* Build configuration list for PBXNativeTarget "flow-like-desktop_iOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -648,10 +1209,34 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = debug;
 		};
+		74AE6E6F468A104C9F5EAB34 /* Build configuration list for PBXNativeTarget "FlowLikeWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DB098C0424A750FC5D81A7C9 /* Release */,
+				3B3A2BB4C650CC5B305ABDAB /* Debug */,
+				A11BD6205F4133BFABD71211 /* debug */,
+				BFD4E4BF63D60993DDBEBA00 /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		76274A856FEC118CC9D8F58A /* Build configuration list for PBXNativeTarget "FlowLikeNotifications" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9D55386F2157199A7F31FA55 /* debug */,
+				B9085BD50A13657EFCF7A86E /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		F10A00000000000000000002 /* XCLocalSwiftPackageReference "../../apple/FlowLikeMLX" */ = {
+		53B69E276395CE7A9584DF19 /* XCLocalSwiftPackageReference "FlowLikeNative" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../apple/FlowLikeNative;
+		};
+		F10A00000000000000000002 /* XCLocalSwiftPackageReference "FlowLikeMLX" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../apple/FlowLikeMLX;
 		};
@@ -669,10 +1254,20 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		F10A00000000000000000003 /* FlowLikeMLX */ = {
+		1A2AA95FE784EB3780745CA0 /* FlowLikeNative */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = F10A00000000000000000002 /* XCLocalSwiftPackageReference "../../apple/FlowLikeMLX" */;
-			productName = FlowLikeMLX;
+			package = 53B69E276395CE7A9584DF19 /* XCLocalSwiftPackageReference "FlowLikeNative" */;
+			productName = FlowLikeNative;
+		};
+		8BDBC05D802DF2385EC98CBF /* FlowLikeNative */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 53B69E276395CE7A9584DF19 /* XCLocalSwiftPackageReference "FlowLikeNative" */;
+			productName = FlowLikeNative;
+		};
+		D4090193B8DBC4457D62FF79 /* FlowLikeNative */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 53B69E276395CE7A9584DF19 /* XCLocalSwiftPackageReference "FlowLikeNative" */;
+			productName = FlowLikeNative;
 		};
 		DC66728C2F6BE41C00160C5D /* FirebaseMessaging */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -682,6 +1277,11 @@
 		DC6672912F6BF9CF00160C5D /* FirebaseInAppMessaging-Beta */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = "FirebaseInAppMessaging-Beta";
+		};
+		F10A00000000000000000003 /* FlowLikeMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F10A00000000000000000002 /* XCLocalSwiftPackageReference "FlowLikeMLX" */;
+			productName = FlowLikeMLX;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

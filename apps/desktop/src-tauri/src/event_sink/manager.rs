@@ -359,6 +359,17 @@ impl EventSinkManager {
         })
     }
 
+    pub(super) fn read_registration(
+        db: DbConnection,
+        event_id: &str,
+    ) -> Result<Option<EventRegistration>> {
+        RegistrationStorage { conn: db }.get_registration(event_id)
+    }
+
+    pub(super) fn read_registrations(db: DbConnection) -> Result<Vec<EventRegistration>> {
+        RegistrationStorage { conn: db }.list_registrations()
+    }
+
     /// Check if a sink type has been started, and mark it as started if not
     async fn ensure_sink_started(
         &self,
@@ -1128,6 +1139,15 @@ impl EventSinkManager {
                 tracing::info!("⚙️ Starting {} sink during initialization", sink_type);
 
                 let start_result = match sink_type.as_str() {
+                    "geolocation" => {
+                        manager
+                            .ensure_sink_started(
+                                "geolocation",
+                                &app_handle,
+                                &super::geolocation::GeoLocationSink::default(),
+                            )
+                            .await
+                    }
                     "cron" => {
                         let cron_sink = CronSink {
                             schedule: CronSchedule::Expression {

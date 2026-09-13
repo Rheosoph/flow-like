@@ -25,7 +25,10 @@ import {
 	SelectValue,
 } from "../../ui/select";
 import { GeometryEditor } from "./geometry-editor";
-import { type GeometryFieldProps, GeometryJsonField } from "./geometry-json-field";
+import {
+	type GeometryFieldProps,
+	GeometryJsonField,
+} from "./geometry-json-field";
 
 export function GeometrySubtypeSelect({
 	schema,
@@ -151,8 +154,8 @@ export function GeometryVariable({
 				if (valid)
 					onChange({
 						...variable,
-						default_value:
-							value == null ? null : convertJsonToUint8Array(value),
+						// JSON null explicitly clears secrets; absent bytes retain their saved value.
+						default_value: convertJsonToUint8Array(value ?? null),
 					});
 			}}
 		/>

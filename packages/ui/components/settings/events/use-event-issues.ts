@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { getCronScheduledTime } from "../../../lib/event-entry";
+import { validateGeolocationEvent } from "../../../lib/geolocation-event";
 import type { EventSectionId } from "../../../lib/event-sections";
 import {
 	getEventSections,
@@ -54,6 +55,7 @@ const HEADLESS_EVENT_TYPES = new Set([
 	"discord",
 	"telegram",
 	"email",
+	"geolocation",
 ]);
 
 export const isHeadlessEventType = (eventType: string): boolean =>
@@ -104,6 +106,17 @@ export function computeEventIssues({
 		sectionIds.includes(preferred)
 			? preferred
 			: (sectionIds.find(isTriggerSection) ?? "trigger");
+	if (event.event_type === "geolocation") {
+		const error = validateGeolocationEvent(config);
+		if (error)
+			issues.push({
+				id: "geolocation-region",
+				severity: "blocking",
+				section: trigger("region"),
+				title: "Location region is invalid",
+				detail: error,
+			});
+	}
 
 	for (const secret of SECRET_FIELDS[event.event_type] ?? []) {
 		if (secret.keys.every((key) => missing(config?.[key]))) {

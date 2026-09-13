@@ -1159,24 +1159,33 @@ declare namespace computer {
     function clipboardGetText({ session: Struct }): { sessionOut: Struct, text: string, hasText: bool };
 
     /**
-     * Sets an image to the system clipboard
+     * Writes to the local device clipboard, or to the calling frontend when this Event runs remotely
      * @node computer_clipboard_set_image @alias computerClipboardSetImage
-     * @param session — Computer session handle
-     * @param image — Image to copy to clipboard (NodeImage)
-     * @returns sessionOut — Computer session handle (pass-through)
+     * @param session (optional) — Optional automation session, passed through for existing flows
+     * @param image — Image to copy
+     * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
+     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
+     * @returns sessionOut — Optional automation session
+     * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function clipboardSetImage({ session: Struct, image: Struct }): Struct;
+    function clipboardSetImage({ session?: Struct, image: Struct, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
 
     /**
-     * Sets text content to the system clipboard
+     * Writes to the local device clipboard, or to the calling frontend when this Event runs remotely
      * @node computer_clipboard_set_text @alias computerClipboardSetText
-     * @param session — Computer session handle
-     * @param text — Text to copy to clipboard
-     * @returns sessionOut — Computer session handle (pass-through)
+     * @param session (optional) — Optional automation session, passed through for existing flows
+     * @param text — Text to copy
+     * @param html (optional) — Optional rich text, with Text as the plain-text fallback
+     * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
+     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
+     * @returns sessionOut — Optional automation session
+     * @returns error — Structured error code and message
      * @impure has side effects / drives control flow
      */
-    function clipboardSetText({ session: Struct, text: string }): Struct;
+    function clipboardSetText({ session?: Struct, text: string, html?: string, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
 
     // === Automation/Computer/Display ===
 

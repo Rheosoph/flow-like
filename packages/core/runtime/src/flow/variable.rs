@@ -322,6 +322,8 @@ pub fn validate_typed_value(
     Ok(())
 }
 
+/// An absent default or JSON null leaves the declaration unset. Supplied geometry
+/// values, including every container member, must satisfy the geometry contract.
 pub fn validate_typed_default(
     data_type: &VariableType,
     value_type: &ValueType,
@@ -338,8 +340,10 @@ pub fn validate_typed_default(
                 "Geometry default exceeds the byte limit"
             ));
         }
-        let value = json::from_slice(default)?;
-        validate_typed_value(data_type, value_type, schema, &value)?;
+        let value: Value = json::from_slice(default)?;
+        if !value.is_null() {
+            validate_typed_value(data_type, value_type, schema, &value)?;
+        }
     }
     Ok(())
 }
@@ -484,15 +488,6 @@ mod tests {
             );
         }
         validate_typed_default(&VariableType::Geometry, &ValueType::Normal, None, None).unwrap();
-        assert!(
-            validate_typed_default(
-                &VariableType::Geometry,
-                &ValueType::Normal,
-                None,
-                Some(b"null")
-            )
-            .is_err()
-        );
         assert!(geometry_kind_from_schema(Some(r#"{"type":"object"}"#)).is_err());
         assert_eq!(VariableType::Byte.to_proto(), 9);
         assert_eq!(VariableType::Geometry.to_proto(), 10);
@@ -502,6 +497,90 @@ mod tests {
         );
         assert!(VariableType::try_from_proto(11).is_err());
         assert!(VariableType::try_from_proto(-1).is_err());
+    }
+
+    #[test]
+    fn geometry_defaults_allow_unset_declarations_but_reject_invalid_values() {
+        use super::*;
+        use flow_like_types::geometry::{GeometryKind, MAX_GEOMETRY_BYTES, marker};
+
+        for schema in std::iter::once(None)
+            .chain(GeometryKind::ALL.into_iter().map(|kind| Some(marker(kind))))
+        {
+            for container in [
+                ValueType::Normal,
+                ValueType::Array,
+                ValueType::HashSet,
+                ValueType::HashMap,
+            ] {
+                for default in [
+                    None,
+                    Some(b"null".as_slice()),
+                    Some(b" \nnull\t".as_slice()),
+                ] {
+                    validate_typed_default(&VariableType::Geometry, &container, schema, default)
+                        .unwrap();
+                }
+                // Unset declarations do not make null a valid runtime geometry.
+                assert!(
+                    validate_typed_value(&VariableType::Geometry, &container, schema, &Value::Null)
+                        .is_err()
+                );
+            }
+        }
+
+        for (container, value) in [
+            (ValueType::Normal, json::json!("null")),
+            (ValueType::Normal, json::json!({})),
+            (
+                ValueType::Normal,
+                json::json!({"type":"Point","coordinates":[181,0]}),
+            ),
+            (
+                ValueType::Normal,
+                json::json!({"type":"GeometryCollection","geometries":[null]}),
+            ),
+            (ValueType::Array, json::json!([null])),
+            (ValueType::HashSet, json::json!([null])),
+            (ValueType::HashMap, json::json!({"place":null})),
+        ] {
+            assert!(
+                validate_typed_default(
+                    &VariableType::Geometry,
+                    &container,
+                    None,
+                    Some(&json::to_vec(&value).unwrap()),
+                )
+                .is_err(),
+                "{container:?}: {value}"
+            );
+        }
+
+        for schema in [Some("unresolved-ref"), Some(r#"{"type":"object"}"#)] {
+            for default in [None, Some(b"null".as_slice())] {
+                assert!(
+                    validate_typed_default(
+                        &VariableType::Geometry,
+                        &ValueType::Normal,
+                        schema,
+                        default,
+                    )
+                    .is_err()
+                );
+            }
+        }
+        let oversized_null = format!("null{}", " ".repeat(MAX_GEOMETRY_BYTES));
+        for default in [b"".as_slice(), b"nul", oversized_null.as_bytes()] {
+            assert!(
+                validate_typed_default(
+                    &VariableType::Geometry,
+                    &ValueType::Normal,
+                    None,
+                    Some(default),
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

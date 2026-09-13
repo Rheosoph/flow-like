@@ -42,7 +42,9 @@ class AppDelegate: TauriAppDelegate {
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    PushNotificationPlugin.applicationDidReceiveRemoteNotification(userInfo: notification.request.content.userInfo)
+    if notification.request.trigger is UNPushNotificationTrigger {
+      PushNotificationPlugin.applicationDidReceiveRemoteNotification(userInfo: notification.request.content.userInfo)
+    }
     completionHandler([.banner, .sound, .badge])
   }
 
@@ -51,7 +53,9 @@ class AppDelegate: TauriAppDelegate {
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
-    PushNotificationPlugin.applicationDidReceiveNotificationResponse(userInfo: response.notification.request.content.userInfo)
+    if response.notification.request.trigger is UNPushNotificationTrigger {
+      PushNotificationPlugin.applicationDidReceiveNotificationResponse(userInfo: response.notification.request.content.userInfo)
+    }
     completionHandler()
   }
 }

@@ -37,6 +37,7 @@ export async function callMcpAppTool(
 	appId: string,
 	eventId: string,
 	args: Record<string, unknown>,
+	beforeDispatch?: () => void,
 ) {
 	const name = argString(args, "mcp_tool");
 	if (!name) {
@@ -58,10 +59,14 @@ export async function callMcpAppTool(
 			message: "MCP tool execution is unavailable on this backend.",
 		};
 	}
-	const result = await eventState.invokeMcp(appId, eventId, "tools/call", {
+	const params = {
 		name,
 		arguments: argObject(args, "payload") ?? {},
-	});
+	};
+	beforeDispatch?.();
+	const result = await (beforeDispatch
+		? eventState.invokeMcp(appId, eventId, "tools/call", params, beforeDispatch)
+		: eventState.invokeMcp(appId, eventId, "tools/call", params));
 	return {
 		status: result.isError === true ? "error" : "ok",
 		app_id: appId,

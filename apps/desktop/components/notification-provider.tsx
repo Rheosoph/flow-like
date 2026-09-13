@@ -5,6 +5,8 @@ import type {
 	IIntercomEvent,
 	INotificationEvent,
 } from "@flow-like/flow-like-ui";
+import { NotificationIcon } from "@flow-like/flow-like-ui/components/notifications/notification-icon";
+import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification-icon";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
@@ -17,6 +19,11 @@ import {
 	FLOW_NOTIFICATION_EVENT,
 	type FlowNotificationBatchDetail,
 } from "../lib/flow-notification-events";
+import {
+	type LocalNotificationOptions,
+	presentLocalNotification,
+	shouldShowRemotePushToast,
+} from "../lib/notification-presentation";
 import { addLocalNotification } from "../lib/notifications-db";
 import {
 	type PushTargetPlatform,
@@ -36,7 +43,7 @@ type NotificationPermission = "granted" | "denied" | "default";
 type NotificationApi = {
 	isPermissionGranted: () => Promise<boolean>;
 	requestPermission: () => Promise<NotificationPermission>;
-	sendNotification: (options: { title: string; body?: string }) => void;
+	sendNotification: (options: LocalNotificationOptions) => Promise<void>;
 };
 
 type RemotePushPluginState = "loading" | "available" | "unavailable";
@@ -49,11 +56,26 @@ async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 		return {
 			isPermissionGranted: mod.isPermissionGranted,
 			requestPermission: mod.requestPermission,
-			sendNotification: mod.sendNotification,
+			// The public JS wrapper discards the native promise. Await scheduling
+			// here so attachment failures can fall back to a text notification.
+			sendNotification: (options) =>
+				invoke<void>("plugin:notification|notify", { options }),
 		};
 	} catch {
 		return null;
 	}
+}
+
+function showNotificationToast(
+	title: string,
+	description?: string,
+	icon?: string,
+	appId?: string,
+) {
+	toast.info(title, {
+		description,
+		icon: <NotificationIcon icon={icon} appId={appId} className="size-5" />,
+	});
 }
 
 function dataString(
@@ -238,7 +260,7 @@ export default function NotificationProvider({
 		void storeNotification({
 			title: notification.title ?? "Notification",
 			description: notification.body,
-			icon: dataString(notification.data, "icon"),
+			icon: remoteNotificationIcon(notification.data),
 			link: dataString(notification.data, "link"),
 			appIdOverride: dataString(notification.data, "app_id") ?? appId,
 			sourceRunId: dataString(notification.data, "source_run_id"),
@@ -554,7 +576,7 @@ export default function NotificationProvider({
 							await storeNotification({
 								title: notification.title ?? "Notification",
 								description: notification.body,
-								icon: dataString(notification.data, "icon"),
+								icon: remoteNotificationIcon(notification.data),
 								link: dataString(notification.data, "link"),
 								appIdOverride: dataString(notification.data, "app_id") ?? appId,
 								sourceRunId: dataString(notification.data, "source_run_id"),
@@ -565,9 +587,14 @@ export default function NotificationProvider({
 										| "SYSTEM") ?? "SYSTEM",
 							});
 
-							toast.info(notification.title ?? "Notification", {
-								description: notification.body,
-							});
+							if (shouldShowRemotePushToast(platform)) {
+								showNotificationToast(
+									notification.title ?? "Notification",
+									notification.body,
+									remoteNotificationIcon(notification.data),
+									dataString(notification.data, "app_id") ?? appId,
+								);
+							}
 						},
 					),
 				);
@@ -637,15 +664,24 @@ export default function NotificationProvider({
 					permissionGranted.current &&
 					notification.show_desktop
 				) {
-					notificationApi.current.sendNotification({
-						title: notification.title,
-						body: notification.description ?? undefined,
-					});
-				} else {
-					toast.info(notification.title, {
-						description: notification.description,
-					});
+					try {
+						await presentLocalNotification(notification, {
+							isIOS: detectPushPlatform() === "IOS",
+							prepareAttachment: (source) =>
+								invoke<string>("prepare_notification_attachment", { source }),
+							send: notificationApi.current.sendNotification,
+						});
+						continue;
+					} catch {
+						// The native permission may have changed since startup.
+					}
 				}
+				showNotificationToast(
+					notification.title,
+					notification.description,
+					notification.icon,
+					notificationAppId ?? appId,
+				);
 			}
 		};
 

@@ -224,6 +224,7 @@ The current runtime contains 71 component types.
 | `fileInput` | File upload | `value`, `accept`, `multiple`, `directory`, `maxSize`, `maxFiles`, `error` |
 | `imageInput` | Image upload with preview | file-input properties plus `aspectRatio` and `showPreview` |
 | `voiceInput` | Record audio or speech-to-text input | `value`, `variant`, `size`, `mode`, `invoke`, `resultMode` |
+| `cameraView` | User-started camera with recent audio capture and annotations | `value`, `facingMode`, `deviceId`, `intervalMs`, `maxWidth`, `quality`, `audioEnabled`, `audioBufferSeconds`, `overlays`, `effects` |
 | `link` | Internal route or external link | `href`, `label`, `route`, `queryParams`, `target`, `variant` |
 | `imageLabeler` | Draw and edit labeled image regions | image, labels, boxes, and editing options |
 | `imageHotspot` | Interactive image hotspots | image, hotspots, selection, and action options |
@@ -324,6 +325,206 @@ overrides.
     mode.
   </Card>
 </CardGrid>
+
+## Device location
+
+Enable `showLocate` on a `geoMap` to show **Find my location**. The button reads
+one foreground location fix using the native provider on supported Apple devices
+or the browser location provider. It does not start tracking when the map renders.
+The editing canvas disables location acquisition. Closing the Page, hiding it,
+or moving the app into the background cancels the request and discards late fixes.
+
+Bind **Location found** in the map's Actions tab to receive these fields:
+
+- `coordinate`: the existing `{latitude, longitude}` object.
+- `geometry`: a Geometry Point, `{"type":"Point","coordinates":[longitude,latitude]}`.
+- `location`: the full fix, including `geometry`, `latitude`, `longitude`,
+  `accuracy`, `timestamp`, `altitude`, `altitudeAccuracy`, `speed`, and `heading`.
+
+Accuracy and altitude are measured in meters, speed in meters per second, and
+heading in degrees. Timestamp is Unix time in milliseconds. Unavailable altitude,
+altitude accuracy, speed, or heading is `null`. Geometry remains two-dimensional;
+altitude belongs in the fix metadata. Existing map Event bindings that read
+`coordinate` keep their current shape.
+
+**Location error** carries `code` and `message`, also available under `error`.
+The map shows the error beside its controls. This Event runs only when explicitly
+bound; older wildcard or legacy actions do not inherit it.
+
+Use **Get Current Location** (`geo.getCurrentLocation`, under **Web / Geo /
+Location**) to read location from an Event without a map. Its **High Accuracy**
+input defaults to false, **Maximum Age** defaults to zero seconds and accepts up
+to 300 seconds, and **Timeout** defaults to 30 seconds with a range of 1 to 120.
+Success provides a typed Point on `geometry`, the full fix on `location`, and the
+legacy object on `coordinate`. The Error branch provides a structured code and
+message. An Event running remotely reads from its invoking device and requests
+permission to share that fix with the app.
+
+Connect `geometry` directly to Geometry Point inputs, **Point Distance (Meters)**,
+or map update nodes. **Point to Legacy Coordinate** adapts it for existing H3,
+routing, and geocoding nodes. Use geodesic distance in meters for geographic
+radius checks; planar distance operates in coordinate degrees.
+
+## Live camera
+
+Use `cameraView` when a Page needs to capture a photo, translate visible text,
+combine a scene with recent speech, or show detection results over a live preview.
+The user starts the camera with its
+**Start camera** button. Loading a Page, editing its layout, or calling a node
+cannot grant camera access or start the camera.
+
+```json
+{
+  "id": "inspection-camera",
+  "component": {
+    "type": "cameraView",
+    "label": { "literalString": "Inspection camera" },
+    "facingMode": { "literalString": "environment" },
+    "intervalMs": { "literalNumber": 2000 },
+    "maxWidth": { "literalNumber": 1280 },
+    "quality": { "literalNumber": 0.85 },
+    "value": { "path": "/camera/frame" },
+    "overlays": { "path": "/camera/annotations" }
+  }
+}
+```
+
+Bind the component's **Image captured** or **Interval frame** event in the
+builder's Actions tab. These events use the Page's existing Event authorization
+and Widget action bindings. Interval capture requires an explicit `frame`
+handler. Setting an interval without one never transfers frames. Zero disables
+sampling; positive values have a minimum of 250 milliseconds. A tick is skipped
+while the previous capture or Event is still running.
+
+After Start, the `value` binding and **Camera ready** event expose `surfaceId`,
+`componentId`, `sessionId`, `status`, `audioEnabled`, `audioActive`,
+`audioBufferSeconds`, and `audioAvailableMs`. `audioActive` indicates whether the
+microphone is recording; `audioAvailableMs` is the recent history available for a
+clip. A separate button can read this bound
+session and pass its IDs to **Capture Camera Frame**. Every camera command
+requires the current session ID, so an earlier Event cannot capture from a camera
+that the user has restarted.
+
+The capture payload contains `surfaceId`, `componentId`, `sessionId`, `frameId`,
+`capturedAt`, `width`, `height`, and an `image` temporary-storage reference.
+It is also available as `frame` and `value` in the action context. The `value`
+binding then stores this reference, without image bytes. **Read Camera Image** turns
+the frame into the image handle used by OCR and detection nodes. **Capture Camera
+Frame** requests a new frame from a camera on the invoking screen, including
+when the requesting Event runs remotely.
+
+### Capture recent audio
+
+Set `audioEnabled` to `{ "literalBool": true }` to offer microphone capture.
+The user must press **Start camera and microphone** and grant microphone permission.
+The default is false, so existing Pages capture video only. `audioBufferSeconds`
+sets the amount of recent audio retained in memory, in whole seconds from 1 to
+300; the default is 60. Older samples are discarded as new samples arrive.
+The buffer stays on the device until an Event explicitly requests a clip.
+Automatic frame events transfer images only.
+
+Pass the current `surfaceId`, `componentId`, and `sessionId` to **Capture Camera
+Audio** (`ui.captureCameraAudio`) and choose the recent duration to retrieve.
+The **Duration** input defaults to 10 seconds. **Capture Camera Input**
+(`ui.captureCameraInput`) takes a new frame and a clip from the same active
+session before uploading either, so later upload time does
+not shift the captured input. Both nodes accept a duration from 0.1 to 300
+seconds and return the available portion if the buffer is shorter. Check the
+actual **Recorded Duration** output. An empty buffer or an inactive microphone
+follows the Error branch.
+
+Both nodes provide **Clip** metadata, **Audio URL**, **Audio Path** when available,
+and the actual **Recorded Duration** in seconds. The combined node also provides
+**Frame**.
+Connect Audio Path to **Speech to Text**, or pass Audio URL to an audio service.
+Connect Frame to **Read Camera Image** for OCR or vision analysis. Audio is a
+16 kHz, mono, PCM16 WAV file in the Event's configured temporary storage.
+Workflows receive file references; audio bytes do not travel in component events.
+
+Clip metadata includes `surfaceId`, `componentId`, `sessionId`, `clipId`,
+`capturedAt`, `startedAt`, `endedAt`, `durationMs`, `requestedDurationMs`,
+`sampleRate`, `channels`, and an `audio` file reference containing `name`, `type`,
+`size`, `url`, and optional `flowPath`. Requests always use the
+current session ID and cannot read history from an earlier camera session.
+
+### Annotate and control the preview
+
+**Update Camera Overlays** accepts the original frame and an array of annotations.
+Keep that frame attached to the analysis result: the frontend rejects an update
+after a newer frame is captured or the camera session ends. Annotation types are
+`box`, `text`, `point`, `polygon`, `blur`, and `dim`. Every annotation needs a unique
+`id`. Coordinates are normalized to the upright captured image, with `(0, 0)` at
+the top left. Boxes and effect regions use `x`, `y`, `width`, and `height`;
+polygons use `points`, an array of `[x, y]` pairs. Text uses `x`, `y`, and `text`.
+
+```json
+[
+  { "id": "object-1", "type": "box", "x": 0.1, "y": 0.2,
+    "width": 0.3, "height": 0.4, "text": "Package", "confidence": 0.96 },
+  { "id": "translation-1", "type": "text", "x": 0.15, "y": 0.65,
+    "text": "Keep upright", "color": "#ffffff", "fontSize": 18 }
+]
+```
+
+Annotations expire after five seconds by default, configurable from 100 to
+60,000 milliseconds. Sending an empty array clears them. For data-bound updates,
+wrap the array as `{ sessionId, frameId, overlays, ttlMs }`. `overlayClick` carries
+the clicked annotation and its frame identity. Mirroring changes only the
+preview; the component aligns annotations with both mirrored previews and
+`contain`/`cover` fitting.
+
+The `effects` object supports `grayscale` and `sepia` from 0 to 1, `blur` from 0
+to 24 pixels, and `brightness`/`contrast` from 0 to 3. These effects and annotation
+regions affect the preview only. Captured images contain the original pixels,
+so a preview blur does not redact an image sent to an Event.
+
+**Freeze** pauses the displayed frame for inspection, disables microphone tracks,
+and discards audio history. **Resume** returns to live video and re-enables the
+already granted microphone tracks with an empty buffer. It never opens a new
+microphone permission request. **Stop** releases the camera and microphone and
+discards audio history. The **Control Camera** node exposes the same
+operations for the session that produced a frame. Camera tracks and interval
+scheduling stop when the Page unmounts, the document becomes hidden, the component
+or its parent is hidden, or the native host reports an inactive device. Returning
+to the screen requires another user start. Late permission replies and analysis
+results cannot reopen or modify an ended session. Leaving or hiding the screen
+also discards audio history. Browser capture requires HTTPS or localhost and
+browser/device permission. Media references use the requesting Event's configured
+local or remote temporary storage.
+
+If microphone processing is suspended or interrupted while the screen remains
+visible, the session stops and its audio history is discarded. Press **Start
+camera and microphone** again to begin a new session.
+
+## Play audio from a workflow
+
+Use **Play Sound** (`ui.playSound`, under **UI → Audio**) to play audio on the
+screen that invoked an Event. It works with local and remote Events and does not
+require an audio component on the Page. Connect **Text to Speech** or **Capture
+Camera Audio** to its **Audio Path** input, or supply an audio download URL through
+**Audio URL**. Supply exactly one of these inputs.
+
+**Volume** defaults to 1 and accepts values from 0 to 1; 0 mutes playback. If a
+browser cannot apply a requested nonzero volume, the node reports
+`unsupported_volume`. Use Volume 1 and the device's volume buttons in that case.
+**Timeout** defaults to 300 seconds and accepts 1 to 600 seconds
+for the frontend to load the sound, obtain a user tap if needed, and finish
+playback. If the browser blocks automatic playback, the screen shows a **Play
+sound** action. The workflow waits for that tap within the timeout.
+
+The normal execution output runs after playback finishes. **Duration** reports
+the completed sound's length in seconds. Loading errors, rejected playback,
+cancellation, and timeout follow the Error branch with a structured code and
+message. Navigating to another Page, switching accounts, hiding or backgrounding
+the screen, or cancelling the Event stops playback and cancels pending sound
+requests. A new sound for the same app stops the previous one. An
+Event without an available invoking screen cannot play sound through this node.
+
+Audio travels as a URL or file reference. When a FlowPath needs a temporary copy
+for frontend access, the node uses the Event's configured temporary storage and
+limits that copy to 32 MiB. It does not send audio bytes through the device
+command channel. See the [Play Sound node reference](/nodes/ui/audio/ui-play-sound/)
+for its pins.
 
 ## Related guides
 

@@ -1,7 +1,10 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef } from "react";
+import { Suspense, createContext, useContext, useEffect, useRef } from "react";
+import { useAuth } from "react-oidc-context";
 import { RunningTasksIndicator } from "../components/execution-indicator";
+import { FrontendAudioLifecycle } from "../components/frontend-audio-lifecycle";
+import { getApiOrigin } from "../lib/api-url";
 import {
 	ExecutionEngineProvider,
 	type OnIncrementalSaveFn,
@@ -20,6 +23,12 @@ export function ExecutionEngineProviderComponent({
 	children,
 }: { children: React.ReactNode }) {
 	const backend = useBackend();
+	const auth = useAuth();
+	const scope = JSON.stringify([
+		getApiOrigin(backend.profile),
+		backend.profile?.id ?? "",
+		(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ?? "local",
+	]);
 	const executionService = useExecutionServiceOptional();
 	const engineRef = useRef<ExecutionEngineProvider | null>(null);
 
@@ -30,8 +39,9 @@ export function ExecutionEngineProviderComponent({
 	useEffect(() => {
 		if (engineRef.current && backend) {
 			engineRef.current.setBackend(backend);
+			engineRef.current.setExecutionScope(scope);
 		}
-	}, [backend]);
+	}, [backend, scope]);
 
 	useEffect(() => {
 		if (engineRef.current && executionService) {
@@ -41,6 +51,9 @@ export function ExecutionEngineProviderComponent({
 
 	return (
 		<ExecutionEngineContext.Provider value={engineRef.current}>
+			<Suspense fallback={null}>
+				<FrontendAudioLifecycle scope={scope} />
+			</Suspense>
 			{children}
 			<RunningTasksIndicator />
 		</ExecutionEngineContext.Provider>

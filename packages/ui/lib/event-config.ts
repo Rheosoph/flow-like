@@ -1,5 +1,6 @@
 import { ChatInterface } from "../components/interfaces/chat-default";
 import { CronJobConfig } from "../components/interfaces/configs/cron";
+import { GeolocationConfig } from "../components/interfaces/configs/geolocation";
 import { DaemonConfig } from "../components/interfaces/configs/daemon";
 import { DeeplinkConfig } from "../components/interfaces/configs/deeplink";
 import { DiscordConfig } from "../components/interfaces/configs/discord";
@@ -20,6 +21,11 @@ export {
 } from "./event-definitions";
 
 export const EVENT_CONFIG: IEventMapping = {
+	events_location: {
+		...EVENT_DEFINITIONS.events_location,
+		configInterfaces: { geolocation: GeolocationConfig },
+		useInterfaces: {},
+	},
 	events_chat: {
 		...EVENT_DEFINITIONS.events_chat,
 		configInterfaces: {

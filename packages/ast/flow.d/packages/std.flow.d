@@ -680,6 +680,39 @@ declare namespace bytes {
     function toHex(this: bytes[], { input: bytes[] }): string;
 }
 
+declare namespace computer {
+    // === Automation/Computer/Clipboard ===
+
+    /**
+     * Writes to the local device clipboard, or to the calling frontend when this Event runs remotely
+     * @node computer_clipboard_set_image @alias computerClipboardSetImage
+     * @param session (optional) — Optional automation session, passed through for existing flows
+     * @param image — Image to copy
+     * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
+     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
+     * @returns sessionOut — Optional automation session
+     * @returns error — Structured error code and message
+     * @impure has side effects / drives control flow
+     */
+    function clipboardSetImage({ session?: Struct, image: Struct, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
+
+    /**
+     * Writes to the local device clipboard, or to the calling frontend when this Event runs remotely
+     * @node computer_clipboard_set_text @alias computerClipboardSetText
+     * @param session (optional) — Optional automation session, passed through for existing flows
+     * @param text — Text to copy
+     * @param html (optional) — Optional rich text, with Text as the plain-text fallback
+     * @param localOnly (optional) — Prevent cross-device clipboard sharing on supported platforms
+     * @param expiresInSeconds (optional) — Seconds before content expires; zero leaves it on the clipboard. Requires platform support
+     * @param timeoutSeconds (optional) — Maximum time to wait for the invoking client
+     * @returns sessionOut — Optional automation session
+     * @returns error — Structured error code and message
+     * @impure has side effects / drives control flow
+     */
+    function clipboardSetText({ session?: Struct, text: string, html?: string, localOnly?: bool, expiresInSeconds?: int, timeoutSeconds?: int }): { sessionOut: Struct, error: Struct };
+}
+
 declare namespace control {
     // === Control ===
 
@@ -4411,6 +4444,104 @@ declare namespace types {
 }
 
 declare namespace ui {
+    // === UI/Audio ===
+
+    /**
+     * Play audio on the invoking frontend and continue when playback finishes, including when the Event runs remotely
+     * @node ui_play_sound @alias uiPlaySound
+     * @param audioUrl (optional) — Audio or signed download URL. Supply either Audio URL or Audio Path
+     * @param audioPath (optional) — FlowPath from Text to Speech, Capture Camera Audio, or file nodes. Supply either Audio Path or Audio URL
+     * @param volume (optional) — Playback volume from 0 to 1, subject to device volume controls
+     * @param timeoutSeconds (optional) — Maximum seconds for the frontend to load, obtain a Play tap if required, and finish audio. Playback stops on timeout
+     * @returns durationSeconds — Duration of the completed sound in seconds
+     * @returns error — Structured error code and message
+     * @impure has side effects / drives control flow
+     */
+    function playSound({ audioUrl?: string, audioPath?: Struct, volume?: float, timeoutSeconds?: int }): { durationSeconds: float, error: any };
+
+    // === UI/Camera ===
+
+    /**
+     * Request recent microphone audio from a Camera View the user started with audio enabled; returns the available part of the requested window
+     * @node a2ui_camera_capture_audio @alias a2uiCameraCaptureAudio
+     * @param surfaceId — The camera's rendered surface
+     * @param componentId — The Camera View component id
+     * @param sessionId — Current sessionId from Camera View's value binding or ready Event
+     * @param durationSeconds (optional) — Recent audio window in seconds, from 0.1 to 300. A shorter recording or buffer returns the available audio
+     * @returns error — Structured code and message
+     * @returns clip — Audio file, actual time window and camera session identity
+     * @returns audioUrl — Temporary audio URL; remote captures return a signed download URL
+     * @returns audioPath — Optional temporary FlowPath for Speech to Text and file nodes in this run
+     * @returns recordedDurationSeconds — Actual audio duration in seconds
+     * @impure has side effects / drives control flow
+     */
+    function captureCameraAudio({ surfaceId: string, componentId: string, sessionId: string, durationSeconds?: float }): { error: any, clip: Struct, audioUrl: string, audioPath: Struct, recordedDurationSeconds: float };
+
+    /**
+     * Capture from a camera the user started on the invoking screen
+     * @node a2ui_camera_capture @alias a2uiCameraCapture
+     * @param surfaceId — The camera's rendered surface
+     * @param componentId — The Camera View component id
+     * @param sessionId — The current sessionId from Camera View's value binding or ready Event
+     * @param maxWidth (optional) — JPEG width limit in pixels
+     * @param quality (optional) — JPEG quality from 0.1 to 1
+     * @returns error — Structured code and message
+     * @returns frame — Image reference and session/frame identity
+     * @impure has side effects / drives control flow
+     */
+    function captureCameraFrame({ surfaceId: string, componentId: string, sessionId: string, maxWidth?: int, quality?: float }): { error: any, frame: Struct };
+
+    /**
+     * Capture a camera frame and recent microphone audio from the active screen before uploading both temporary files
+     * @node a2ui_camera_capture_input @alias a2uiCameraCaptureInput
+     * @param surfaceId — The camera's rendered surface
+     * @param componentId — The Camera View component id
+     * @param sessionId — Current sessionId from Camera View's value binding or ready Event
+     * @param durationSeconds (optional) — Recent audio window in seconds, from 0.1 to 300. A shorter recording or buffer returns the available audio
+     * @param maxWidth (optional) — JPEG width limit in pixels
+     * @param quality (optional) — JPEG quality from 0.1 to 1
+     * @returns error — Structured code and message
+     * @returns frame — Camera frame captured with the audio window
+     * @returns clip — Audio file, actual time window and camera session identity
+     * @returns audioUrl — Temporary audio URL; remote captures return a signed download URL
+     * @returns audioPath — Optional temporary FlowPath for Speech to Text and file nodes in this run
+     * @returns recordedDurationSeconds — Actual audio duration in seconds
+     * @impure has side effects / drives control flow
+     */
+    function captureCameraInput({ surfaceId: string, componentId: string, sessionId: string, durationSeconds?: float, maxWidth?: int, quality?: float }): { error: any, frame: Struct, clip: Struct, audioUrl: string, audioPath: Struct, recordedDurationSeconds: float };
+
+    /**
+     * Freeze, resume or stop the camera session that produced a frame
+     * @node a2ui_camera_control @alias a2uiCameraControl
+     * @param frame — Frame from Camera View or Capture Camera Frame
+     * @param operation (optional) — Camera operation
+     * @returns error — Structured code and message
+     * @impure has side effects / drives control flow
+     */
+    function controlCamera({ frame: Struct, operation?: string }): any;
+
+    /**
+     * Load a captured camera frame into an image for OCR or detection nodes
+     * @node a2ui_camera_read_image @alias a2uiCameraReadImage
+     * @param frame — Frame from Camera View or Capture Camera Frame
+     * @returns error — Structured code and message
+     * @returns image — Captured image pixels
+     * @impure has side effects / drives control flow
+     */
+    function readCameraImage({ frame: Struct }): { error: any, image: Struct };
+
+    /**
+     * Set annotations on the matching live frame; an empty array clears them
+     * @node a2ui_camera_update_overlays @alias a2uiCameraUpdateOverlays
+     * @param frame — Frame from Camera View or Capture Camera Frame
+     * @param overlays (optional) — Normalized boxes, text, points, polygons, blur or dim regions
+     * @param effects (optional) — Preview-only grayscale, sepia, blur, brightness and contrast
+     * @param ttlMs (optional) — Remove annotations after 100 to 60000 milliseconds
+     * @returns error — Structured code and message
+     * @impure has side effects / drives control flow
+     */
+    function updateCameraOverlays({ frame: Struct, overlays?: Struct[], effects?: any, ttlMs?: int }): any;
+
     // === UI/Component ===
 
     /**

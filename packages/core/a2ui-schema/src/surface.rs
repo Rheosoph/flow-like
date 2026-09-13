@@ -230,6 +230,16 @@ pub enum A2UIServerMessage {
         channel: Option<flow_like_types_contracts::channel::ChannelHandle>,
     },
     ShowScreen,
+    /// A live client operation. Only the invoking frontend handles this message;
+    /// stored run output must never replay device side effects.
+    DeviceCommand {
+        request_id: String,
+        command: String,
+        args: Value,
+        timeout_ms: u64,
+        app_id: String,
+        channel: flow_like_types_contracts::channel::ChannelHandle,
+    },
     UpsertElement {
         element_id: String,
         value: Value,

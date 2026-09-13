@@ -13,6 +13,11 @@ import {
 import { useAuth } from "react-oidc-context";
 import { useAssetSource } from "../../hooks/use-asset-source";
 import {
+	appQueryContext,
+	readAppQuery,
+	setAppQueryParam,
+} from "../../lib/app-route-url";
+import {
 	type PageSurfaceIdentity,
 	pageSurfaceCacheKey,
 	pageSurfaceQueryKey,
@@ -139,25 +144,20 @@ function PageInterfaceInner({
 	const frontendStateStore = getFrontendStateStore(appId);
 	const router = useRouter();
 	const hostSearch = useSearchParams().toString();
-	const runtimeQueryParams = useMemo(() => {
-		if (providedQueryParams) return { ...providedQueryParams };
-		const result: Record<string, string> = {};
-		new URLSearchParams(hostSearch).forEach((value, key) => {
-			result[key] = value;
-		});
-		return result;
+	const runtimeQueryContext = useMemo(() => {
+		if (providedQueryParams)
+			return { _query_params: { ...providedQueryParams } };
+		return appQueryContext(hostSearch);
 	}, [hostSearch, providedQueryParams]);
 	const search = useMemo(() => {
-		const params = new URLSearchParams();
-		for (const [key, value] of Object.entries(runtimeQueryParams).toSorted(
-			([left], [right]) => left.localeCompare(right),
-		)) {
-			params.set(key, value);
-		}
+		const params = providedQueryParams
+			? new URLSearchParams(providedQueryParams)
+			: readAppQuery(hostSearch);
+		params.sort();
 		return params.toString();
-	}, [runtimeQueryParams]);
-	const runtimeQueryParamsRef = useRef(runtimeQueryParams);
-	runtimeQueryParamsRef.current = runtimeQueryParams;
+	}, [hostSearch, providedQueryParams]);
+	const runtimeQueryContextRef = useRef(runtimeQueryContext);
+	runtimeQueryContextRef.current = runtimeQueryContext;
 	const auth = useAuth();
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
@@ -426,11 +426,7 @@ function PageInterfaceInner({
 				};
 
 				const url = new URL(window.location.href);
-				if (value === undefined || value === "") {
-					url.searchParams.delete(key);
-				} else {
-					url.searchParams.set(key, value);
-				}
+				setAppQueryParam(url, key, value);
 
 				if (replace) {
 					router.replace(url.pathname + url.search);
@@ -498,7 +494,7 @@ function PageInterfaceInner({
 						_elements: surfaceElements,
 						_elements_mode: "demand",
 						_route: pageRoute || "/",
-						_query_params: { ...runtimeQueryParamsRef.current },
+						...runtimeQueryContextRef.current,
 						_page_id: page.id,
 						_global_state: frontendState.globalState,
 						_page_state: frontendState.pageStates[page.id] ?? {},

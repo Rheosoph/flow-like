@@ -20,7 +20,9 @@ import {
 import { createPortal } from "react-dom";
 
 import { observeResize } from "../../lib/observe-resize";
+import type { LocationFix } from "../../lib/location";
 import { cn } from "../../lib/utils";
+import { useMapLocation, type MapLocationError } from "./map-location";
 
 // Check document class for theme (works with next-themes, etc.)
 function getDocumentTheme(): Theme | null {
@@ -729,6 +731,13 @@ type MapControlsProps = {
 	className?: string;
 	/** Callback with user coordinates when located */
 	onLocate?: (coords: { longitude: number; latitude: number }) => void;
+	/** Full device fix, including the Geometry Point and accuracy metadata. */
+	onLocationFix?: (fix: LocationFix) => void | Promise<void>;
+	onLocateError?: (error: MapLocationError) => void;
+	locationAppId?: string;
+	/** Change when a mounted map is reused for another screen. */
+	locationScope?: string;
+	locateEnabled?: boolean;
 };
 
 const positionClasses = {
@@ -781,10 +790,29 @@ function MapControls({
 	showFullscreen = false,
 	className,
 	onLocate,
+	onLocationFix,
+	onLocateError,
+	locationAppId,
+	locationScope,
+	locateEnabled = true,
 }: MapControlsProps) {
 	const { t } = useTranslation("common");
 	const { map } = useMap();
-	const [waitingForLocation, setWaitingForLocation] = useState(false);
+	const location = useMapLocation({
+		appId: locationAppId,
+		scope: locationScope,
+		enabled: showLocate && locateEnabled,
+		onError: onLocateError,
+		onLocation: async (fix) => {
+			map?.flyTo({
+				center: [fix.longitude, fix.latitude],
+				zoom: 14,
+				duration: 1500,
+			});
+			onLocate?.({ longitude: fix.longitude, latitude: fix.latitude });
+			await onLocationFix?.(fix);
+		},
+	});
 
 	const handleZoomIn = useCallback(() => {
 		map?.zoomTo(map.getZoom() + 1, { duration: 300 });
@@ -798,31 +826,6 @@ function MapControls({
 		map?.resetNorthPitch({ duration: 300 });
 	}, [map]);
 
-	const handleLocate = useCallback(() => {
-		setWaitingForLocation(true);
-		if ("geolocation" in navigator) {
-			navigator.geolocation.getCurrentPosition(
-				(pos) => {
-					const coords = {
-						longitude: pos.coords.longitude,
-						latitude: pos.coords.latitude,
-					};
-					map?.flyTo({
-						center: [coords.longitude, coords.latitude],
-						zoom: 14,
-						duration: 1500,
-					});
-					onLocate?.(coords);
-					setWaitingForLocation(false);
-				},
-				(error) => {
-					console.error("Error getting location:", error);
-					setWaitingForLocation(false);
-				},
-			);
-		}
-	}, [map, onLocate]);
-
 	const handleFullscreen = useCallback(() => {
 		const container = map?.getContainer();
 		if (!container) return;
@@ -835,6 +838,7 @@ function MapControls({
 
 	return (
 		<div
+			ref={location.elementRef}
 			className={cn(
 				"absolute z-10 flex flex-col gap-1.5",
 				positionClasses[position],
@@ -862,11 +866,11 @@ function MapControls({
 			{showLocate && (
 				<ControlGroup>
 					<ControlButton
-						onClick={handleLocate}
+						onClick={() => void location.locate()}
 						label={t("findMyLocation", "Find my location")}
-						disabled={waitingForLocation}
+						disabled={location.waiting || !locateEnabled}
 					>
-						{waitingForLocation ? (
+						{location.waiting ? (
 							<Loader2 className="size-4 animate-spin" />
 						) : (
 							<Locate className="size-4" />
@@ -883,6 +887,14 @@ function MapControls({
 						<Maximize className="size-4" />
 					</ControlButton>
 				</ControlGroup>
+			)}
+			{location.error && (
+				<p
+					role="alert"
+					className="max-w-64 rounded-md border bg-background p-2 text-xs text-destructive shadow-sm"
+				>
+					{location.error.message}
+				</p>
 			)}
 		</div>
 	);
