@@ -1,0 +1,39 @@
+# Only local, sanitized application traces enter this pipeline. Request metrics
+# use EMF on stdout, so there is no collector metrics/logs receiver or exporter.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 127.0.0.1:4317
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 96
+    spike_limit_mib: 24
+  # Last in the pipeline: return the local handoff before X-Ray's network call,
+  # while keeping the Lambda extension active until pending exports finish.
+  decouple:
+    max_queue_size: 20
+
+exporters:
+  # The Lambda role already grants xray:PutTraceSegments. This uses standard
+  # X-Ray ingestion and does not change account-wide Transaction Search settings.
+  awsxray:
+    region: ${env:AWS_REGION}
+    local_mode: true
+    request_timeout_seconds: 2
+    max_retries: 0
+    num_workers: 1
+
+service:
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, decouple]
+      exporters: [awsxray]

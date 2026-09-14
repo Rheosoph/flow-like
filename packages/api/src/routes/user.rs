@@ -80,10 +80,12 @@ pub mod notifications;
 pub mod pat;
 pub mod pricing;
 pub mod push_targets;
+pub mod quotas;
 pub mod schedules;
 pub mod subscribe;
 pub mod templates;
 pub mod upsert_info;
+mod usage_detail;
 pub mod widgets;
 
 pub fn routes() -> Router<AppState> {
@@ -105,6 +107,12 @@ pub fn routes() -> Router<AppState> {
         .route("/info", get(user_info).put(upsert_info::upsert_info))
         .route("/billing", get(get_billing_session))
         .route("/pricing", get(get_pricing))
+        .route("/usage/quotas", get(quotas::get_quotas))
+        .route("/usage/operations", get(quotas::get_operations))
+        .route(
+            "/usage/operations/{id}",
+            get(usage_detail::get_operation_detail),
+        )
         .route("/subscribe", post(create_subscription_checkout))
         .route("/lookup", post(lookup::user_batch_lookup))
         .route("/contacts", get(contacts::user_contacts))

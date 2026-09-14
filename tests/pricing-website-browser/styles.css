@@ -1,0 +1,4 @@
+@import "../../packages/ui/global.css";
+@import "../../apps/website/src/styles/website-base.css";
+@source "../../apps/website/src/components/pricing/*.astro";
+@source "./src/pages/*.astro";

@@ -38,7 +38,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -402,7 +402,7 @@ pub async fn invoke_board(
             }
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to dispatch job");
-                ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
+                ApiError::from(e)
             })?;
 
         return Ok(Json(InvokeBoardResponse {
@@ -447,7 +447,7 @@ pub async fn invoke_board(
             }
                 .map_err(|e| {
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
-                    ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
+                    ApiError::from(e)
                 })?;
 
             tracing::info!(run_id = %run_id, "Got Lambda response, starting stream proxy");
@@ -475,7 +475,7 @@ pub async fn invoke_board(
             }
                 .map_err(|e| {
                     tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
-                    ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
+                    ApiError::from(e)
                 })?;
 
             tracing::info!(run_id = %run_id, "Got executor response, starting stream proxy");

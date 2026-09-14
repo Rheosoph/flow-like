@@ -4,7 +4,8 @@
 //! serverless compute, so the cost of a run is its duration multiplied by the
 //! memory footprint of the functions that served it. The reference deployment
 //! serves a run with an x86_64 function holding 2 GB for the whole run plus an
-//! arm64 function holding 1.2 GB for roughly half of it.
+//! arm64 function holding 1.25 GB while a realtime execution waits. Async
+//! dispatch has a short API leg; this legacy aggregate is a realtime estimate.
 //!
 //! Deployments that size their functions differently scale the whole estimate
 //! with `COMPUTE_COST_MULTIPLIER`; an unset or unusable value keeps the
@@ -52,8 +53,8 @@ const LEGS: [ComputeLeg; 2] = [
     },
     ComputeLeg {
         architecture: "arm64",
-        memory_gb: 1.2,
-        duration_share: 0.5,
+        memory_gb: 1.25,
+        duration_share: 1.0,
         micro_dollars_per_gb_second: 13.3334,
     },
 ];
@@ -158,8 +159,8 @@ pub fn compute_cost_from_avg_latency(avg_latency_ms: Option<f64>, executions: i6
 mod tests {
     use super::*;
 
-    /// 2 GB x86 for a full second plus 1.2 GB Arm for half of it.
-    const ONE_SECOND_MICRO_DOLLARS: f64 = 2.0 * 16.6667 + 0.6 * 13.3334;
+    /// Realtime holds both the 2 GB executor and 1.25 GB API for the full second.
+    const ONE_SECOND_MICRO_DOLLARS: f64 = 2.0 * 16.6667 + 1.25 * 13.3334;
 
     #[test]
     fn one_second_run_costs_both_legs_plus_two_invocations() {

@@ -1,6 +1,9 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod compute_attempt;
+mod telemetry;
+
 use flow_like_api::construct_router;
 use flow_like_api::state::{DbDialect, State};
 use flow_like_aws_data::lambda::TokenRefreshLayer;
@@ -12,18 +15,27 @@ use flow_like_storage::object_store::aws::AmazonS3Builder;
 use flow_like_types::tokio;
 use lambda_http::{Error, run_with_streaming_response};
 use std::sync::Arc;
-use tower::Layer;
-use tracing_subscriber::prelude::*;
+use tower::{Layer, util::BoxCloneService};
+use tracing::Instrument;
 
 #[flow_like_types::tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let env_filter = flow_like_api::warn_env_filter();
+    let telemetry = telemetry::init()?;
+    let app = initialize()
+        .instrument(
+            tracing::info_span!(target: "flow_like::observability", parent: None, "api.initialize"),
+        )
+        .await;
+    telemetry.flush().await;
+    run_with_streaming_response(telemetry.wrap(app?)).await
+}
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(env_filter))
-        .init();
-
-    // Build secret store (AWS Parameter Store + env fallback)
+async fn initialize() -> Result<
+    BoxCloneService<lambda_http::Request, axum::response::Response, std::convert::Infallible>,
+    Error,
+> {
+    // Initialize once per Lambda runtime process. The request loop below reuses
+    // this secret store, the router and API state for warm invocations.
     let secret_prefix = std::env::var("SECRET_PREFIX").ok();
     let secret_config = SecretStoreConfig::default()
         .with_provider(ProviderConfig::AwsParameterStore(
@@ -36,8 +48,13 @@ async fn main() -> Result<(), Error> {
         .with_provider(ProviderConfig::Env(EnvProviderConfig {
             prefix: secret_prefix,
         }));
-    let secrets = flow_like_secrets::SecretStore::new(secret_config.clone())
-        .expect("Failed to create secret store");
+    let secrets = Arc::new(
+        flow_like_secrets::SecretStore::new(secret_config).expect("Failed to create secret store"),
+    );
+    secrets
+        .warmup()
+        .instrument(tracing::info_span!(target: "flow_like::observability", "secrets.prefetch"))
+        .await;
 
     // CDN bucket (e.g. Cloudflare R2) — separate endpoint + credentials
     let cdn_bucket_name = std::env::var("CDN_BUCKET_NAME").expect("CDN_BUCKET_NAME must be set");
@@ -82,21 +99,35 @@ async fn main() -> Result<(), Error> {
                     .expect("failed to connect to Aurora DSQL"),
             );
             let state = Arc::new(
-                State::new_with_database(
+                State::new_with_secrets(
                     catalog,
                     cdn_bucket,
-                    Some(secret_config),
-                    database.connection.clone(),
+                    secrets,
+                    Some(database.connection.clone()),
                     Some(DbDialect::Dsql),
+                )
+                .instrument(
+                    tracing::info_span!(target: "flow_like::observability", "api.state.initialize"),
                 )
                 .await,
             );
-            let app = TokenRefreshLayer::new(database).layer(construct_router(state));
-            run_with_streaming_response(app).await
+            let app =
+                TokenRefreshLayer::new(database).layer(construct_router(state.clone()).layer(
+                    axum::middleware::from_fn_with_state(state, compute_attempt::record_attempt),
+                ));
+            Ok(BoxCloneService::new(app))
         }
         None => {
-            let state = Arc::new(State::new(catalog, cdn_bucket, Some(secret_config)).await);
-            run_with_streaming_response(construct_router(state)).await
+            let state = Arc::new(
+                State::new_with_secrets(catalog, cdn_bucket, secrets, None, None)
+                    .instrument(
+                        tracing::info_span!(target: "flow_like::observability", "api.state.initialize"),
+                    )
+                    .await,
+            );
+            Ok(BoxCloneService::new(construct_router(state.clone()).layer(
+                axum::middleware::from_fn_with_state(state, compute_attempt::record_attempt),
+            )))
         }
     }
 }

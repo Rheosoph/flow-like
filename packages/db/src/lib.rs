@@ -8,6 +8,7 @@
 
 pub mod batch;
 pub mod conflict;
+pub mod coordination;
 pub mod dialect;
 pub mod pool;
 pub mod retry;

@@ -39,6 +39,9 @@ export type IConversionMode = "consumer" | "enterprise";
 
 /** Marketing metadata for a tier, keyed by tier id in `IConversionConfig`. */
 export interface ITierDisplay {
+	monthly_price_cents?: number | null;
+	annual_price_cents?: number | null;
+	currency?: string | null;
 	/** Name shown instead of the raw tier key (e.g. "Starter" for FREE) */
 	display_name?: null | string;
 	/** One-line value proposition under the tier name */
@@ -259,6 +262,9 @@ export interface IUserTier {
 	max_llm_calls?: number;
 	max_non_visible_projects: number;
 	max_remote_executions: number;
+	max_runtime_ms?: number;
+	max_concurrent_executions?: number;
+	max_ai_cost_micros?: number;
 	max_total_size: number;
 	product_id?: string | null;
 	[property: string]: any;

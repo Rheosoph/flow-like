@@ -14,7 +14,10 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use flow_like_catalog::initialize as initialize_catalog;
-use flow_like_executor::{ExecutorConfig, ExecutorState, executor_router};
+use flow_like_executor::{
+    ExecutorConfig, ExecutorState, executor_router,
+    quota::{CURRENT_COMPUTE, ComputeContext},
+};
 use flow_like_types::dispatch::DIRECT_LAMBDA_INVOKE_API_ID;
 use flow_like_types::tokio;
 use lambda_http::{
@@ -37,10 +40,18 @@ async fn dispatch_request(
     request: Request,
 ) -> Result<axum::response::Response, Error> {
     let propagate_failure = is_direct_async_execute(&request);
-    let response = app
-        .oneshot(request)
-        .await
-        .expect("Axum routers are infallible");
+    let compute = request.lambda_context_ref().map(|context| {
+        ComputeContext::new(
+            context.env_config.function_name.clone(),
+            context.request_id.clone(),
+            context.env_config.memory,
+        )
+    });
+    let response = match compute {
+        Some(context) => CURRENT_COMPUTE.scope(context, app.oneshot(request)).await,
+        None => app.oneshot(request).await,
+    }
+    .expect("Axum routers are infallible");
 
     if propagate_failure && !response.status().is_success() {
         let status = response.status();

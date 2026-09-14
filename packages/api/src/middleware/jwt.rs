@@ -1,5 +1,6 @@
 use sea_orm::sea_query::ExprTrait;
 use std::sync::Arc;
+use tracing::Instrument;
 
 use crate::{
     entity::{
@@ -941,6 +942,7 @@ pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, Autho
     let db_tier = match user.tier {
         sea_orm_active_enums::UserTier::Free => "FREE",
         sea_orm_active_enums::UserTier::Premium => "PREMIUM",
+        sea_orm_active_enums::UserTier::Max => "MAX",
         sea_orm_active_enums::UserTier::Pro => "PRO",
         sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
     };
@@ -1109,6 +1111,12 @@ async fn resolve_legacy_api_key_creator_user_id(
 ) -> Result<Option<String>, AuthorizationError> {
     let app = App::find_by_id(app_id)
         .one(&state.db)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "db.query",
+            db.operation = "select",
+            db.table = "App"
+        ))
         .await?
         .ok_or(ApiError::FORBIDDEN)?;
 
@@ -1121,6 +1129,12 @@ async fn resolve_legacy_api_key_creator_user_id(
             )
             .order_by_asc(membership::Column::CreatedAt)
             .one(&state.db)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "db.query",
+                db.operation = "select",
+                db.table = "Membership"
+            ))
             .await?;
 
         if let Some(owner) = owner {
@@ -1133,6 +1147,12 @@ async fn resolve_legacy_api_key_creator_user_id(
         .order_by_asc(membership::Column::CreatedAt)
         .find_also_related(role::Entity)
         .all(&state.db)
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "db.query",
+            db.operation = "select",
+            db.table = "Membership"
+        ))
         .await?;
 
     for (member, role) in members_with_roles {
@@ -1152,6 +1172,19 @@ pub async fn jwt_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response<Body>, AuthorizationError> {
+    let request = authenticate_request(&state, request).await?;
+    Ok(next.run(request).await)
+}
+
+#[tracing::instrument(
+    target = "flow_like::observability",
+    name = "auth.authenticate",
+    skip_all
+)]
+async fn authenticate_request(
+    state: &AppState,
+    request: Request,
+) -> Result<Request, AuthorizationError> {
     let mut request = request;
 
     let client_ip = ClientIp(extract_client_ip(&request));
@@ -1175,7 +1208,7 @@ pub async fn jwt_middleware(
                             access_token: token.to_string(),
                         });
                         request.extensions_mut().insert::<AppUser>(user);
-                        return Ok(next.run(request).await);
+                        return Ok(request);
                     }
                     // Expired cache entry: fall through to fresh validation,
                     // which honors the configured leeway and re-inserts on
@@ -1199,7 +1232,7 @@ pub async fn jwt_middleware(
                         correlation,
                     });
                     request.extensions_mut().insert::<AppUser>(user);
-                    return Ok(next.run(request).await);
+                    return Ok(request);
                 }
                 CachedAuth::AppConnection {
                     sub,
@@ -1217,7 +1250,7 @@ pub async fn jwt_middleware(
                         request
                             .extensions_mut()
                             .insert::<AppUser>(AppUser::Unauthorized);
-                        return Ok(next.run(request).await);
+                        return Ok(request);
                     }
                     let user = AppUser::ConnectedApp(ConnectedAppUser {
                         sub,
@@ -1229,7 +1262,7 @@ pub async fn jwt_middleware(
                         correlation,
                     });
                     request.extensions_mut().insert::<AppUser>(user);
-                    return Ok(next.run(request).await);
+                    return Ok(request);
                 }
                 _ => {}
             }
@@ -1252,7 +1285,7 @@ pub async fn jwt_middleware(
                     access_token: token.to_string(),
                 });
                 request.extensions_mut().insert::<AppUser>(user);
-                return Ok(next.run(request).await);
+                return Ok(request);
             }
 
             // A token that validates cryptographically but has no usable
@@ -1284,7 +1317,7 @@ pub async fn jwt_middleware(
                 correlation: claims.correlation,
             });
             request.extensions_mut().insert::<AppUser>(user);
-            return Ok(next.run(request).await);
+            return Ok(request);
         }
 
         // Executor failed — try app-connection JWT (app-to-app calls)
@@ -1312,7 +1345,7 @@ pub async fn jwt_middleware(
                 correlation: claims.correlation,
             });
             request.extensions_mut().insert::<AppUser>(user);
-            return Ok(next.run(request).await);
+            return Ok(request);
         }
     }
 
@@ -1335,14 +1368,14 @@ pub async fn jwt_middleware(
                             sub,
                         });
                         request.extensions_mut().insert::<AppUser>(pat_user);
-                        return Ok(next.run(request).await);
+                        return Ok(request);
                     }
                     CachedAuth::Invalid => {
                         // Token was previously validated as invalid/expired
                         request
                             .extensions_mut()
                             .insert::<AppUser>(AppUser::Unauthorized);
-                        return Ok(next.run(request).await);
+                        return Ok(request);
                     }
                     _ => {}
                 }
@@ -1357,7 +1390,7 @@ pub async fn jwt_middleware(
                 request
                     .extensions_mut()
                     .insert::<AppUser>(AppUser::Unauthorized);
-                return Ok(next.run(request).await);
+                return Ok(request);
             }
             let pat_id = parts[0];
             let pat_secret = parts[1];
@@ -1373,6 +1406,12 @@ pub async fn jwt_middleware(
                         .and(pat::Column::Key.eq(secret_hash)),
                 )
                 .one(&state.db)
+                .instrument(tracing::info_span!(
+                    target: "flow_like::observability",
+                    "db.query",
+                    db.operation = "select",
+                    db.table = "Pat"
+                ))
                 .await?;
 
             if let Some(pat) = db_pat {
@@ -1383,7 +1422,7 @@ pub async fn jwt_middleware(
                         request
                             .extensions_mut()
                             .insert::<AppUser>(AppUser::Unauthorized);
-                        return Ok(next.run(request).await);
+                        return Ok(request);
                     }
                 }
 
@@ -1400,7 +1439,7 @@ pub async fn jwt_middleware(
                     sub: pat.user_id.clone(),
                 });
                 request.extensions_mut().insert::<AppUser>(pat_user);
-                return Ok(next.run(request).await);
+                return Ok(request);
             }
         }
     }
@@ -1426,13 +1465,13 @@ pub async fn jwt_middleware(
                         creator_user_id,
                     });
                     request.extensions_mut().insert::<AppUser>(app_user);
-                    return Ok(next.run(request).await);
+                    return Ok(request);
                 }
                 CachedAuth::Invalid => {
                     request
                         .extensions_mut()
                         .insert::<AppUser>(AppUser::Unauthorized);
-                    return Ok(next.run(request).await);
+                    return Ok(request);
                 }
                 _ => {}
             }
@@ -1445,7 +1484,7 @@ pub async fn jwt_middleware(
             request
                 .extensions_mut()
                 .insert::<AppUser>(AppUser::Unauthorized);
-            return Ok(next.run(request).await);
+            return Ok(request);
         }
 
         let key_parts = &api_key_str[4..];
@@ -1455,7 +1494,7 @@ pub async fn jwt_middleware(
             request
                 .extensions_mut()
                 .insert::<AppUser>(AppUser::Unauthorized);
-            return Ok(next.run(request).await);
+            return Ok(request);
         }
 
         let app_id_from_key = parts[0];
@@ -1474,6 +1513,12 @@ pub async fn jwt_middleware(
                     .and(technical_user::Column::Key.eq(secret_hash)),
             )
             .one(&state.db)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "db.query",
+                db.operation = "select",
+                db.table = "TechnicalUser"
+            ))
             .await?;
 
         if let Some(app) = db_app {
@@ -1482,7 +1527,7 @@ pub async fn jwt_middleware(
                 request
                     .extensions_mut()
                     .insert::<AppUser>(AppUser::Unauthorized);
-                return Ok(next.run(request).await);
+                return Ok(request);
             }
 
             if let Some(valid_until) = app.valid_until {
@@ -1492,7 +1537,7 @@ pub async fn jwt_middleware(
                     request
                         .extensions_mut()
                         .insert::<AppUser>(AppUser::Unauthorized);
-                    return Ok(next.run(request).await);
+                    return Ok(request);
                 }
             }
 
@@ -1518,14 +1563,14 @@ pub async fn jwt_middleware(
                 creator_user_id,
             });
             request.extensions_mut().insert::<AppUser>(app_user);
-            return Ok(next.run(request).await);
+            return Ok(request);
         }
     }
 
     request
         .extensions_mut()
         .insert::<AppUser>(AppUser::Unauthorized);
-    Ok(next.run(request).await)
+    Ok(request)
 }
 
 #[cfg(test)]

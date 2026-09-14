@@ -4,12 +4,12 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{verify_jwt_async, ExecutorClaims, ExecutorPageExecutionClaims};
+use crate::jwt::{ExecutorClaims, ExecutorPageExecutionClaims, verify_jwt_async};
 use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use crate::widgets::{HubAccess, HubWidgetSource};
 use flow_like::credentials::StoreType;
-use flow_like::flow::compiled::{template_from_bytes, CompiledRunTemplate, TemplateCache};
+use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache, template_from_bytes};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
+#[cfg(test)]
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
@@ -497,8 +499,29 @@ pub async fn execute(
     config: ExecutorConfig,
 ) -> Result<ExecutionResult, ExecutorError> {
     let mut callback_task = CallbackTask::default();
+    let quota_token = request.executor_jwt.clone();
+    if let Ok(claims) = verify_jwt_async(&quota_token).await {
+        crate::quota::record_compute(&claims, &quota_token, "started").await;
+    }
     let result = execute_inner(request, config, &mut callback_task).await;
     callback_task.abort_and_join().await;
+    if result.is_err() {
+        if let Ok(claims) = verify_jwt_async(&quota_token).await {
+            crate::quota::reject(&claims, &quota_token).await;
+        }
+    }
+    if let Ok(claims) = verify_jwt_async(&quota_token).await {
+        crate::quota::record_compute(
+            &claims,
+            &quota_token,
+            if result.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            },
+        )
+        .await;
+    }
     result
 }
 
@@ -586,21 +609,18 @@ async fn execute_inner(
             match interpret_start_acknowledgement(&acknowledgement)? {
                 StartAcknowledgement::Execute => break,
                 StartAcknowledgement::Busy { expires_at } => {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    let wait_ms = expires_at.saturating_sub(now).clamp(250, 30_000) as u64;
                     tracing::info!(
                         run_id = %claims.run_id,
-                        wait_ms,
-                        "another delivery owns the execution lease; waiting to retry claim"
+                        expires_at,
+                        "another delivery owns this run; acknowledging the duplicate"
                     );
-                    if let Some(cancellation) = config.cancellation() {
-                        tokio::select! {
-                            _ = cancellation.cancelled() => return Err(ExecutorError::Timeout),
-                            _ = tokio::time::sleep(Duration::from_millis(wait_ms)) => {}
-                        }
-                    } else {
-                        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-                    }
+                    return Ok(ExecutionResult {
+                        run_id: claims.run_id,
+                        status: crate::types::ExecutionStatus::Running,
+                        output: None,
+                        error: None,
+                        duration_ms: 0,
+                    });
                 }
                 StartAcknowledgement::AlreadyTerminal(status) => {
                     tracing::info!(
@@ -925,11 +945,11 @@ async fn execute_inner(
         channel.close().await;
         return Err(error);
     }
-    let cancellation = config.cancellation();
+    let cancellation = Some(config.cancellation().unwrap_or_default());
     if let Some(token) = &cancellation {
         run.set_cancellation_token(token.clone());
         run.set_cancellation_log(
-            "Execution deadline reached",
+            "Execution cancelled or its deadline was reached",
             flow_like::flow::execution::LogLevel::Error,
         );
     }
@@ -937,13 +957,24 @@ async fn execute_inner(
     // Execute with timeout while continuously renewing the independent Cosmos
     // ownership lease. Losing that lease cancels the run before another
     // delivery is allowed to take over.
+    let mut quota_lease = crate::quota::begin(&claims, &executor_jwt).await?;
+    if let (Some(lease), Some(token)) = (&mut quota_lease, &cancellation) {
+        lease.watch_cancellation(token.clone());
+    }
+    let runtime_timeout = quota_lease
+        .as_ref()
+        .map(|lease| lease.limit.min(config.execution_timeout()))
+        .unwrap_or_else(|| config.execution_timeout());
+    let workflow_started = Instant::now();
     let mut execution_future = Box::pin(async {
-        if let (Some(deadline), Some(token)) = (config.execution_deadline(), &cancellation) {
+        if let Some(token) = &cancellation {
+            let deadline = config
+                .execution_deadline()
+                .unwrap_or_else(|| tokio::time::Instant::now() + runtime_timeout)
+                .min(tokio::time::Instant::now() + runtime_timeout);
             let mut execution = Box::pin(run.execute(state.clone()));
             tokio::select! {
-                result = &mut execution => {
-                    if token.is_cancelled() { Err(()) } else { Ok(result) }
-                },
+                result = &mut execution => Ok(result),
                 _ = tokio::time::sleep_until(deadline) => {
                     token.cancel();
                     // Let the run join its flush task and close resources before
@@ -953,7 +984,7 @@ async fn execute_inner(
                 }
             }
         } else {
-            tokio::time::timeout(config.execution_timeout(), run.execute(state.clone()))
+            tokio::time::timeout(runtime_timeout, run.execute(state.clone()))
                 .await
                 .map_err(|_| ())
         }
@@ -993,13 +1024,15 @@ async fn execute_inner(
             token.cancel();
         }
     }
-    channel.close().await;
-
     if let Some(error) = lease_failure {
         if cancellation.is_some() {
             let _ = execution_future.as_mut().await;
         }
         drop(execution_future);
+        if let Some(lease) = &quota_lease {
+            lease.finish(lease.elapsed_ms(), "lease_lost").await?;
+        }
+        channel.close().await;
         callback_task.abort_and_join().await;
         drop(run);
         drop(intercom_handler);
@@ -1008,13 +1041,31 @@ async fn execute_inner(
     }
     let execution_result = execution_result.expect("execution result exists without lease failure");
     drop(execution_future);
+    let workflow_duration_ms = workflow_started
+        .elapsed()
+        .as_nanos()
+        .div_ceil(1_000_000)
+        .min(u64::MAX as u128) as u64;
+    if let Some(lease) = &quota_lease {
+        let status = if execution_result.is_err() {
+            "timeout".to_owned()
+        } else {
+            format!(
+                "{:?}",
+                ExecutionStatus::from_final_run_status(&run.get_status().await)
+            )
+            .to_lowercase()
+        };
+        lease.finish(workflow_duration_ms, &status).await?;
+    }
+    channel.close().await;
 
     // Flush any remaining buffered intercom events
     if let Err(e) = intercom_handler.flush().await {
         tracing::warn!(error = %e, "Failed to flush intercom handler");
     }
 
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let duration_ms = workflow_duration_ms;
 
     let (status, output, error) = match &execution_result {
         Ok(log_meta) => {
@@ -1883,14 +1934,16 @@ mod page_request_binding_tests {
         let page = latest_page();
         validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", None)
             .expect("the decoded ETag-bound Latest selector is accepted");
-        assert!(validate_page_request_binding(
-            &page,
-            Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
-            Some("etag-a"),
-            "entry-1",
-            None,
-        )
-        .is_err());
+        assert!(
+            validate_page_request_binding(
+                &page,
+                Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
+                Some("etag-a"),
+                "entry-1",
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1925,14 +1978,10 @@ mod page_request_binding_tests {
                 cwasm_checksum: "cwasm-checksum".into(),
             },
         )]);
-        assert!(validate_page_request_binding(
-            &page,
-            None,
-            Some("etag-a"),
-            "entry-1",
-            Some(&packages),
-        )
-        .is_err());
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", Some(&packages),)
+                .is_err()
+        );
     }
 }
 
@@ -1982,26 +2031,34 @@ mod callback_acknowledgement_tests {
 
     #[test]
     fn terminal_acknowledgement_requires_persisted_terminal_state() {
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Completed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Running"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(false, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Completed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Running"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(false, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
     }
 
     #[tokio::test]

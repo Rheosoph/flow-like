@@ -82,6 +82,11 @@ pub struct ExecutionClaims {
     /// Digest of the complete dispatch envelope, added after transport preparation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_hash: Option<String>,
+    /// Workflow duration admitted before dispatch, excluding platform setup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_limit_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_receipt_url: Option<String>,
     /// Callback URL for progress/event reporting
     pub callback_url: String,
     /// Token type - executor or user
@@ -169,6 +174,8 @@ fn sign_inner(
         page_execution,
         shadow: params.shadow,
         dispatch_hash: None,
+        runtime_limit_ms: None,
+        quota_receipt_url: None,
         callback_url: params.callback_url,
         token_type: params.token_type,
         iss: issuer().to_string(),
@@ -193,6 +200,17 @@ pub(super) fn bind_dispatch(token: &str, hash: String) -> Result<String, Executi
         ));
     }
     claims.dispatch_hash = Some(hash);
+    backend_jwt::sign(&claims)
+}
+
+pub(super) fn bind_runtime_limit(
+    token: &str,
+    runtime_limit_ms: u64,
+    receipt_url: Option<String>,
+) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
+    claims.runtime_limit_ms = Some(runtime_limit_ms);
+    claims.quota_receipt_url = receipt_url;
     backend_jwt::sign(&claims)
 }
 

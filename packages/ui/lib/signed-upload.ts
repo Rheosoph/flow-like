@@ -18,6 +18,8 @@ export interface ISignedUploadOptions {
 	contentType?: string;
 	/** Preserves the original filename on the stored object. */
 	contentDisposition?: string;
+	/** S3 POST policy fields, including its exact destination and byte bound. */
+	fields?: Readonly<Record<string, string>>;
 }
 
 export function uploadToSignedUrl(
@@ -25,7 +27,7 @@ export function uploadToSignedUrl(
 	file: Blob,
 	options: ISignedUploadOptions = {},
 ): Promise<void> {
-	const { onBytes, signal, contentType, contentDisposition } = options;
+	const { onBytes, signal, contentType, contentDisposition, fields } = options;
 
 	return new Promise<void>((resolve, reject) => {
 		if (signal?.aborted) {
@@ -52,7 +54,16 @@ export function uploadToSignedUrl(
 		};
 
 		xhr.upload.addEventListener("progress", (event) => {
-			if (event.lengthComputable) onBytes?.(event.loaded, event.total);
+			if (event.lengthComputable) {
+				const loaded =
+					fields && event.total > 0
+						? Math.min(
+								file.size,
+								Math.round((file.size * event.loaded) / event.total),
+							)
+						: event.loaded;
+				onBytes?.(loaded, file.size);
+			}
 		});
 
 		xhr.addEventListener("load", () => {
@@ -92,7 +103,17 @@ export function uploadToSignedUrl(
 			finish(() => reject(new BulkUploadAbortError())),
 		);
 
-		xhr.open("PUT", signedUrl);
+		xhr.open(fields ? "POST" : "PUT", signedUrl);
+		if (fields) {
+			const form = new FormData();
+			for (const [name, value] of Object.entries(fields))
+				form.append(name, value);
+			// S3 requires the file field last. The browser supplies the multipart boundary.
+			form.append("file", file);
+			signal?.addEventListener("abort", onAbort, { once: true });
+			xhr.send(form);
+			return;
+		}
 		xhr.setRequestHeader(
 			"Content-Type",
 			contentType || file.type || "application/octet-stream",

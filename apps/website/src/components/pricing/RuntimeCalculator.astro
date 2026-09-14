@@ -1,0 +1,87 @@
+---
+import config from "../../../../../flow-like.config.json";
+import { estimateCloudRuns } from "../../../../../packages/ui/lib/runtime-estimate";
+interface Props { lang: string; }
+const { lang } = Astro.props;
+const plans = ["FREE", "PREMIUM", "PRO", "MAX"] as const;
+const averageSeconds = 30;
+const formatRuns = (value: number | null) => value === null ? "Unlimited" : value.toLocaleString(lang);
+---
+
+<cloud-run-calculator class="block rounded-2xl border border-border bg-card p-5 sm:p-6" lang="en" data-locale={lang}>
+  <div class="flex flex-wrap items-start justify-between gap-5">
+    <div class="max-w-xl">
+      <h3 class="text-xl font-semibold">How many cloud runs could that cover?</h3>
+      <p id="runtime-calculator-help" class="mt-2 text-sm leading-relaxed text-muted-foreground">Estimate monthly runs from your average cloud runtime, including time waiting for external services. Each result uses the lower of the runtime allowance and the monthly cloud-start limit.</p>
+    </div>
+    <div class="w-full min-w-0 sm:w-auto">
+      <label for="runtime-calculator-seconds" class="block text-sm font-medium">Average cloud runtime per run</label>
+      <div class="mt-2 flex items-center gap-2">
+        <input id="runtime-calculator-seconds" data-runtime-seconds type="number" inputmode="decimal" min="0.001" step="any" value={averageSeconds} aria-describedby="runtime-calculator-help runtime-calculator-error" class="min-w-0 w-28 rounded-lg border border-border bg-background px-3 py-2 text-base tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" />
+        <span class="text-sm text-muted-foreground">seconds</span>
+      </div>
+      <div class="mt-3 flex flex-wrap gap-2" role="group" aria-label="Example average runtimes">
+        {[{seconds: 5, label: "5 seconds"}, {seconds: 30, label: "30 seconds"}, {seconds: 120, label: "2 minutes"}].map(preset => <button type="button" data-runtime-preset={preset.seconds} aria-pressed={preset.seconds === averageSeconds ? "true" : "false"} class="rounded-full border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted aria-pressed:bg-primary aria-pressed:text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">{preset.label}</button>)}
+      </div>
+    </div>
+  </div>
+  <p id="runtime-calculator-error" data-runtime-error class="mt-3 text-sm text-destructive" hidden>Enter a duration of at least 0.001 seconds.</p>
+  <div class="mt-5" role="status" aria-live="polite" aria-atomic="true" aria-label="Estimated cloud runs per month">
+    <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estimated runs per month</p>
+    <dl class="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {plans.map(key => {
+        const tier = config.tiers[key];
+        const estimate = estimateCloudRuns(tier.max_runtime_ms, tier.max_remote_executions, averageSeconds * 1000);
+        return <div class="min-w-0 rounded-xl bg-muted/40 p-4" data-runtime-plan={key} data-runtime-limit={tier.max_runtime_ms} data-start-limit={tier.max_remote_executions}>
+          <dt class="text-sm font-medium">{config.conversion.tier_display[key].display_name}</dt>
+          <dd class="mt-1.5"><span class="block text-2xl font-semibold tabular-nums" data-runtime-result>{estimate ? formatRuns(estimate.runs) : "Not available"}</span><span class="mt-1.5 block text-xs leading-relaxed text-muted-foreground" data-runtime-cap>{estimate?.startLimited ? "Capped by monthly cloud starts" : "Within runtime and start allowances"}</span></dd>
+        </div>;
+      })}
+    </dl>
+  </div>
+  <p class="mt-4 text-xs leading-relaxed text-muted-foreground">Actual runtime varies by workflow and external waits. Estimates assume each run uses the same runtime and one cloud start. Hosted AI budgets, AI operation limits, concurrency and other plan limits still apply. Local execution is always free.</p>
+</cloud-run-calculator>
+
+<script>
+  import { estimateCloudRuns } from "../../../../../packages/ui/lib/runtime-estimate";
+
+  class CloudRunCalculator extends HTMLElement {
+    private events?: AbortController;
+
+    connectedCallback() {
+      this.events?.abort();
+      this.events = new AbortController();
+      const input = this.querySelector<HTMLInputElement>("[data-runtime-seconds]");
+      const error = this.querySelector<HTMLElement>("[data-runtime-error]");
+      if (!input || !error) return;
+      const render = () => {
+        const seconds = input.valueAsNumber;
+        const valid = Number.isFinite(seconds) && seconds >= 0.001 && Number.isFinite(seconds * 1000);
+        input.setAttribute("aria-invalid", String(!valid));
+        error.hidden = valid;
+        this.querySelectorAll<HTMLButtonElement>("[data-runtime-preset]").forEach(button => {
+          button.setAttribute("aria-pressed", String(valid && Number(button.dataset.runtimePreset) === seconds));
+        });
+        this.querySelectorAll<HTMLElement>("[data-runtime-plan]").forEach(plan => {
+          const output = plan.querySelector<HTMLElement>("[data-runtime-result]");
+          const cap = plan.querySelector<HTMLElement>("[data-runtime-cap]");
+          if (!output || !cap) return;
+          const estimate = valid ? estimateCloudRuns(Number(plan.dataset.runtimeLimit), Number(plan.dataset.startLimit), seconds * 1000) : null;
+          output.textContent = !valid ? "Enter a duration" : !estimate ? "Not available" : estimate.runs === null ? "Unlimited" : estimate.runs.toLocaleString(this.dataset.locale);
+          cap.textContent = !valid || !estimate ? "Estimate unavailable" : estimate.startLimited ? "Capped by monthly cloud starts" : "Within runtime and start allowances";
+        });
+      };
+      input.addEventListener("input", render, {signal: this.events.signal});
+      this.querySelectorAll<HTMLButtonElement>("[data-runtime-preset]").forEach(button => {
+        button.addEventListener("click", () => {
+          input.value = button.dataset.runtimePreset ?? "30";
+          render();
+        }, {signal: this.events!.signal});
+      });
+      render();
+    }
+
+    disconnectedCallback() { this.events?.abort(); }
+  }
+  if (!customElements.get("cloud-run-calculator")) customElements.define("cloud-run-calculator", CloudRunCalculator);
+</script>

@@ -13,6 +13,7 @@ use std::{
     task::{Context, Poll},
 };
 use tower::{Layer, Service};
+use tracing::Instrument;
 
 #[derive(Clone)]
 pub struct TokenRefreshLayer {
@@ -66,7 +67,15 @@ where
             // A failed mint is not fatal here: the pool may still hold live
             // connections, and a truly dead token surfaces as a connection
             // error on the request itself.
-            if let Err(error) = database.refresh_token_if_stale().await {
+            if let Err(error) = database
+                .refresh_token_if_stale()
+                .instrument(tracing::info_span!(
+                    target: "flow_like::observability",
+                    "dsql.token_check",
+                    cloud.service = "dsql"
+                ))
+                .await
+            {
                 tracing::warn!(%error, "Aurora DSQL token refresh failed before request");
             }
             inner.call(request).await

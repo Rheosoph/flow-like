@@ -23,7 +23,21 @@ use crate::{
 };
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/run", post(run_maintenance_job))
+    Router::new()
+        .route("/run", post(run_maintenance_job))
+        .nest("/quotas", crate::routes::quota_recovery::routes())
+        .route(
+            "/hosted-ai/{id}",
+            post(crate::routes::chat::hosted_worker::work),
+        )
+        .route(
+            "/compute-attempts/reconcile",
+            post(crate::routes::compute_reconciliation::reconcile),
+        )
+        .route(
+            "/compute-attempts/pending",
+            axum::routing::get(crate::routes::compute_reconciliation::pending),
+        )
 }
 
 #[tracing::instrument(
@@ -105,6 +119,15 @@ async fn run_maintenance_job(
             )))
         }
         MaintenanceRunRequest::RunSweep => {
+            recover_capacity_and_payloads(&state).await;
+            crate::quota::recover_unstarted_releases(&state.db, state.db_dialect, 100).await?;
+            crate::quota::flag_stale(&state.db, 100).await?;
+            crate::quota::reconcile_runtime_receipts(&state).await?;
+            state.dispatcher.recover_dispatches(&state).await?;
+            crate::routes::chat::hosted_worker::recover_usage_receipts(&state).await?;
+            crate::usage_accounting::reconcile_hosted_invocations(&state, 15).await?;
+            crate::routes::chat::hosted_worker::recover_queued(&state).await?;
+            crate::rolling_usage::maintain(&state).await?;
             let config = RunSweeperConfig::from_env();
             let swept = sweep_runs_once(
                 &crate::audit::ExecutionAuditContext::from(&state),
@@ -250,10 +273,24 @@ async fn run_maintenance_job(
     }
 }
 
+/// Each bounded pass continues after an unrelated storage recovery failure.
+async fn recover_capacity_and_payloads(state: &AppState) {
+    if let Err(error) = crate::quota_payloads::cleanup(state, None).await {
+        tracing::error!(%error, "Private quota payload retention failed; billing records retained");
+    }
+    if let Err(error) = crate::capacity::prepare_pending(state).await {
+        tracing::error!(%error, "Capacity baseline preparation failed; partial allowances remain unavailable");
+    }
+    if let Err(error) = crate::capacity::sweep_upload_grants(state).await {
+        tracing::error!(%error, "Storage upload reservation reconciliation failed; reservations retained");
+    }
+}
+
 /// Prune storage-accounting tombstones past their retention window. A failure
 /// is logged rather than returned: it must not discard the execution-state
 /// cleanup the same job still has to do.
 async fn sweep_accounting_tombstones(state: &AppState) -> u64 {
+    recover_capacity_and_payloads(state).await;
     let Some(retention_days) = crate::storage_accounting::tombstone_retention_days() else {
         return 0;
     };
@@ -276,7 +313,7 @@ async fn sweep_accounting_tombstones(state: &AppState) -> u64 {
     }
 }
 
-fn authorize(headers: &HeaderMap, expected_token: Option<&str>) -> Result<(), ApiError> {
+pub(crate) fn authorize(headers: &HeaderMap, expected_token: Option<&str>) -> Result<(), ApiError> {
     let expected_token = expected_token.ok_or_else(|| {
         ApiError::service_unavailable("MAINTENANCE_TOKEN is not configured on the API")
     })?;

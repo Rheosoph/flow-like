@@ -1424,6 +1424,7 @@ name = "aws-api"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
+ "chrono",
  "flow-like",
  "flow-like-api",
  "flow-like-aws-data",
@@ -1431,12 +1432,17 @@ dependencies = [
  "flow-like-secrets",
  "flow-like-storage",
  "flow-like-types",
+ "hyper 1.10.1",
  "lambda_http",
  "mimalloc",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "serde",
  "serde_json",
  "tower 0.5.3",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
 ]
 
@@ -1609,6 +1615,10 @@ dependencies = [
 name = "aws-maintenance"
 version = "0.1.0"
 dependencies = [
+ "aws-credential-types",
+ "aws-sigv4",
+ "blake3",
+ "chrono",
  "flow-like-types-contracts",
  "lambda_runtime 1.1.2",
  "mimalloc",
@@ -8053,6 +8063,7 @@ dependencies = [
  "kube 0.98.0",
  "lettre",
  "moka",
+ "opentelemetry",
  "p256",
  "parking_lot",
  "pin-project-lite",
@@ -8073,6 +8084,7 @@ dependencies = [
  "tower 0.5.3",
  "tower-http 0.6.8",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "urlencoding",
  "utoipa",
@@ -9020,6 +9032,7 @@ dependencies = [
 name = "flow-like-db"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "sea-orm",
  "thiserror 2.0.18",
  "tokio",

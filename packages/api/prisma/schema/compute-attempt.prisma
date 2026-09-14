@@ -1,0 +1,39 @@
+/// Infrastructure attempts never debit public workflow runtime a second time.
+model ComputeAttempt {
+  id                 String   @id
+  functionName       String
+  requestId          String
+  operationId        String?
+  payerId            String?
+  role               String
+  costClass          String
+  memoryMb           Int
+  architecture       String
+  region             String
+  measuredDurationMs BigInt?
+  billedDurationMs   BigInt?
+  costMicroUsd       BigInt?
+  evidenceRank       Int      @default(0)
+  evidence           String
+  rateVersion        String
+  status             String
+  startedAt          DateTime @db.Timestamptz(3)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@unique([functionName, requestId])
+  @@index([operationId, startedAt])
+  @@index([payerId, startedAt])
+  @@index([status, startedAt])
+  @@index([status, id])
+  @@index([evidenceRank, id])
+}
+
+model ComputeAttemptRevision {
+  id        String   @id
+  attemptId String
+  evidence  String
+  payload   String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([attemptId, createdAt])
+}

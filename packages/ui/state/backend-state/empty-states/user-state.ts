@@ -23,6 +23,9 @@ import type {
 	IUserTemplateInfo,
 	IUserUpdate,
 	IUserWidgetInfo,
+	QuotaOperationDetail,
+	QuotaOperationsPage,
+	QuotaOverview,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type {
 	IHomeDefault,
@@ -119,6 +122,18 @@ export class EmptyUserState implements IUserState {
 
 	deletePAT(id: string): Promise<void> {
 		throw new Error("Method not implemented.");
+	}
+
+	getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage> {
+		throw new Error("Usage is unavailable without an account.");
+	}
+
+	getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail> {
+		throw new Error("Usage is unavailable without an account.");
+	}
+
+	getQuotaUsage(_includeHistory?: boolean): Promise<QuotaOverview> {
+		throw new Error("Usage is unavailable without an account.");
 	}
 
 	getPricing(): Promise<IPricingResponse> {

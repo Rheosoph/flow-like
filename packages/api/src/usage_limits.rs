@@ -206,16 +206,36 @@ pub async fn enforce_app_usage_limits_for_user(
     token_delta: Option<i64>,
     cost_delta: Option<i64>,
 ) -> Result<(), ApiError> {
-    match check_app_usage_limits_for_user(
+    let app_id = app_id.map(ToOwned::to_owned);
+    let user_id = user_id.map(ToOwned::to_owned);
+    let technical_user_id = technical_user_id.map(ToOwned::to_owned);
+    let rejection = crate::db::retry_transaction(
         &state.db,
-        app_id,
-        user_id,
-        technical_user_id,
-        token_delta,
-        cost_delta,
+        state.db_dialect,
+        None,
+        &crate::db::RetryPolicy::default(),
+        move |txn| {
+            let app_id = app_id.clone();
+            let user_id = user_id.clone();
+            let technical_user_id = technical_user_id.clone();
+            Box::pin(async move {
+                if let Some(app) = app_id.as_deref() {
+                    crate::db::coordination::coordinate(txn, "usage-budget", &[app]).await?;
+                }
+                check_app_usage_limits_for_user(
+                    txn,
+                    app_id.as_deref(),
+                    user_id.as_deref(),
+                    technical_user_id.as_deref(),
+                    token_delta,
+                    cost_delta,
+                )
+                .await
+            })
+        },
     )
-    .await?
-    {
+    .await?;
+    match rejection {
         Some(rejection) => Err(rejection),
         None => Ok(()),
     }
@@ -255,21 +275,19 @@ pub(crate) async fn check_app_usage_limits_for_user<C: ConnectionTrait>(
     }
 
     for limit in limits {
-        let Some(start) = period_start(&limit.period) else {
+        if period_start(&limit.period).is_none() {
             continue;
-        };
+        }
         if limit.cost_micro_dollars.is_none() && limit.token_limit.is_none() {
             continue;
         }
 
-        let scoped_user_id = if limit.user_id.is_empty() {
-            None
-        } else {
-            Some(limit.user_id.as_str())
-        };
-        let current = query_usage_totals(db, app_id, scoped_user_id, start)
+        let Some(current) = crate::rolling_usage::totals(db, app_id, &limit.user_id, &limit.period)
             .await
-            .map_err(ApiError::from)?;
+            .map_err(ApiError::from)?
+        else {
+            return Ok(Some(ApiError::usage_refresh_pending()));
+        };
         let used_tokens = current
             .tokens
             .saturating_add(token_delta.unwrap_or(0).max(0));
@@ -417,7 +435,7 @@ WHERE "createdAt" >= $1 AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "techn
 COALESCE(SUM("estimatedTokens"), 0)::BIGINT AS tokens,
 COUNT(*)::BIGINT AS invocations
 FROM "UsageInvocation"
-WHERE "startedAt" >= $1 AND "status" = 'pending' AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)
+WHERE "startedAt" >= $1 AND "status" IN ('pending', 'unknown_usage') AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)
 AND NOT EXISTS (SELECT 1 FROM "LLMUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")
 AND NOT EXISTS (SELECT 1 FROM "EmbeddingUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")"#
         }
@@ -440,7 +458,7 @@ WHERE "createdAt" >= ? AND "appId" = ? AND (? = '' OR "userId" = ? OR "technical
 COALESCE(SUM("estimatedTokens"), 0) AS tokens,
 COUNT(*) AS invocations
 FROM "UsageInvocation"
-WHERE "startedAt" >= ? AND "status" = 'pending' AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)
+WHERE "startedAt" >= ? AND "status" IN ('pending', 'unknown_usage') AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)
 AND NOT EXISTS (SELECT 1 FROM "LLMUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")
 AND NOT EXISTS (SELECT 1 FROM "EmbeddingUsageTracking" tracked WHERE tracked."invocationId" = "UsageInvocation"."id")"#
         }

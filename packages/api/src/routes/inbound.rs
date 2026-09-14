@@ -39,7 +39,7 @@ use jsonwebtoken::{
     Algorithm,
     jwk::{AlgorithmParameters, Jwk, JwkSet, KeyAlgorithm, KeyOperations, PublicKeyUse},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 
 use crate::{
@@ -355,7 +355,7 @@ async fn stable_serving(
 ) -> Result<Option<StableServing>, ApiError> {
     let row = find_event_setup(&state.db, &event_row.app_id, &event_row.id, STABLE_VARIANT)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .map_err(ApiError::from)?
         .filter(has_serving_pointer);
     if let Some(row) = row {
         let mut target = ResolvedTarget::primary(core_event);
@@ -461,7 +461,7 @@ async fn resolve_served_variant(
     if let Some(name) = target.variant_name.clone() {
         let setup = find_event_setup(&state.db, &event_row.app_id, &event_row.id, &name)
             .await
-            .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+            .map_err(ApiError::from)?
             .filter(has_serving_pointer);
         match setup {
             Some(row) => {
@@ -527,7 +527,7 @@ async fn dispatch_inbound_rest(
         .filter(event::Column::AppId.eq(&resolved.app_id))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::not_found("event not found"))?;
 
     dispatch_rest_for_event(
@@ -731,7 +731,7 @@ pub(crate) async fn dispatch_rest_for_event(
             .filter(event_remote_auth::Column::Variant.eq(registration_variant.as_str()))
             .one(&state.db)
             .await
-            .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+            .map_err(ApiError::from)?
             .ok_or_else(|| {
                 ApiError::internal_error(flow_like_types::anyhow!("dangling auth_id"))
             })?;
@@ -828,7 +828,7 @@ async fn dispatch_inbound_mcp(
         .filter(event::Column::AppId.eq(&resolved.app_id))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::not_found("event not found"))?;
 
     dispatch_mcp_for_event(
@@ -925,7 +925,7 @@ pub(crate) async fn dispatch_mcp_for_event(
         .filter(event_remote_registration::Column::Kind.eq("mcp_raw"))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
+        .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::not_found("no MCP registration found"))?;
     let mut config = registration
         .extras_json
@@ -1668,7 +1668,7 @@ async fn match_registration(
         .filter(event_remote_registration::Column::Variant.eq(variant))
         .all(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+        .map_err(ApiError::from)?;
 
     let method_str = method.as_str().to_uppercase();
     let method_ok = |r: &event_remote_registration::Model| -> bool {
@@ -2329,7 +2329,7 @@ async fn dispatch_rest_file(
     let mut resp = Response::builder()
         .status(StatusCode::TEMPORARY_REDIRECT)
         .body(axum::body::Body::empty())
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+        .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
     let headers_mut = resp.headers_mut();
     if let Ok(loc) = axum::http::HeaderValue::from_str(signed.as_str()) {
         headers_mut.insert(axum::http::header::LOCATION, loc);
@@ -2490,7 +2490,7 @@ async fn dispatch_event_collect(
         .filter(event_sink::Column::EventId.eq(&event_row.id))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+        .map_err(ApiError::from)?;
 
     if let Some(sink) = sink.as_ref()
         && !sink.active
@@ -2529,8 +2529,7 @@ async fn dispatch_event_collect(
         )
         .await?;
     let shared_credentials = credentials.into_shared_credentials();
-    let credentials_json = serde_json::to_string(&shared_credentials)
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+    let credentials_json = serde_json::to_string(&shared_credentials).map_err(ApiError::from)?;
 
     let oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>> = sink
         .as_ref()
@@ -2582,7 +2581,7 @@ async fn dispatch_event_collect(
         ttl_seconds: Some(24 * 60 * 60),
         shadow: None,
     })
-    .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+    .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
 
     let input_payload_len = payload
         .as_ref()
@@ -2592,8 +2591,7 @@ async fn dispatch_event_collect(
                 .unwrap_or(0)
         })
         .unwrap_or(0);
-    let event_json = dispatch_event_json(&core_event, target)
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+    let event_json = dispatch_event_json(&core_event, target).map_err(ApiError::from)?;
     let wasm_packages = resolve_wasm_packages(state, &event_row.app_id).await;
 
     let request = DispatchRequest {
@@ -2675,7 +2673,7 @@ async fn dispatch_event_collect(
     };
     crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+        .map_err(ApiError::from)?;
 
     crate::audit::record_execution_dispatch(state, &run_id, "inbound").await?;
 
@@ -2691,7 +2689,7 @@ async fn dispatch_event_collect(
                         Err(error)
                     }
                 }
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+                .map_err(ApiError::from)?;
             collect_generic_result_bytes(byte_stream, run_id, db, INBOUND_RESULT_TIMEOUT)
                 .await
                 .ok_or_else(|| {
@@ -2710,7 +2708,7 @@ async fn dispatch_event_collect(
                         Err(error)
                     }
                 }
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+                .map_err(ApiError::from)?;
             collect_generic_result(executor_response, run_id, db, INBOUND_RESULT_TIMEOUT)
                 .await
                 .ok_or_else(|| {

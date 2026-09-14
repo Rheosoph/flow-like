@@ -6,6 +6,7 @@ use axum::{
 use crate::state::AppState;
 
 pub mod completions;
+pub(crate) mod hosted_worker;
 mod relay;
 pub mod responses;
 pub mod usage;

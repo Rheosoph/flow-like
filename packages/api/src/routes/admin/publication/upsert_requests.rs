@@ -149,12 +149,23 @@ pub async fn upsert_request(
     // The status flip and the visibility write must not be able to diverge —
     // an accepted request whose target never became public is invisible to
     // everyone but the database.
+    let capacity_plan = if let PublicationTarget::App(app_id) = &target {
+        if let Some(payer) = crate::capacity::payer_for_app(&state.db, app_id).await? {
+            crate::capacity::prepare_account(&state, &payer).await?;
+            Some(crate::quota::payer_plan(&state, &payer).await?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let updated = state
         .transaction(|txn| {
             let request = request.clone();
             let new_status = new_status.clone();
             let approver_id = approver_id.clone();
             let target = target.clone();
+            let capacity_plan = capacity_plan.clone();
             Box::pin(async move {
                 let mut active: publication_request::ActiveModel =
                     request.clone().into_active_model();
@@ -166,6 +177,16 @@ pub async fn upsert_request(
                 if new_status == PublicationRequestStatus::Accepted {
                     match target {
                         PublicationTarget::App(app_id) => {
+                            if let Some((plan, tier)) = capacity_plan {
+                                crate::capacity::set_visibility(
+                                    txn,
+                                    &app_id,
+                                    &request.target_visibility,
+                                    &plan,
+                                    i64::from(tier.max_non_visible_projects),
+                                )
+                                .await?;
+                            }
                             app::ActiveModel {
                                 id: Set(app_id),
                                 visibility: Set(request.target_visibility),
