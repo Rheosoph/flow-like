@@ -27,6 +27,7 @@ mod routes;
 
 pub mod alerting;
 pub mod audit;
+mod bit_pricing;
 pub mod cache;
 pub mod capacity;
 pub mod channel;

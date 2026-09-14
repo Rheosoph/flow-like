@@ -3,7 +3,7 @@ use flow_like_types::{Value, create_id};
 use sea_orm::{
     ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection,
     DatabaseTransaction, DbErr, EntityTrait, IsolationLevel, Order, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait, sea_query::Expr,
+    QuerySelect, TransactionTrait, sea_query::NullOrdering,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -165,8 +165,6 @@ impl AuditService {
         id: String,
         once: bool,
     ) -> Result<audit_entry::Model, DbErr> {
-        use sea_orm::sea_query::ExprTrait;
-
         match input.chain_id.as_deref() {
             Some(chain_id) => {
                 crate::db::coordination::coordinate(txn, "audit-branch", &[chain_id]).await?;
@@ -192,15 +190,11 @@ impl AuditService {
             }
         }
 
-        let last_entry = audit_entry::Entity::find()
-            .filter(if let Some(ref cid) = input.chain_id {
-                Expr::col(audit_entry::Column::ChainId).eq(Expr::value(cid.clone()))
-            } else {
-                Expr::col(audit_entry::Column::ChainId).is_null()
-            })
-            .order_by(audit_entry::Column::Sequence, Order::Desc)
-            .one(txn)
-            .await?;
+        let last_entry = newest_first(
+            audit_entry::Entity::find().filter(chain_filter(input.chain_id.as_deref())),
+        )
+        .one(txn)
+        .await?;
 
         let (prev_hash, prev_signature, next_seq) = match last_entry {
             Some(ref entry) => (
@@ -216,11 +210,10 @@ impl AuditService {
                 // current tail of the root chain so branches are cryptographically
                 // linked to the global timeline. Root chain uses genesis.
                 if input.chain_id.is_some() {
-                    let root_tail = audit_entry::Entity::find()
-                        .filter(Expr::col(audit_entry::Column::ChainId).is_null())
-                        .order_by(audit_entry::Column::Sequence, Order::Desc)
-                        .one(txn)
-                        .await?;
+                    let root_tail =
+                        newest_first(audit_entry::Entity::find().filter(chain_filter(None)))
+                            .one(txn)
+                            .await?;
                     match root_tail {
                         Some(entry) => (entry.entry_hash.clone(), entry.signature.clone(), 1),
                         None => (GENESIS_HASH.to_string(), None, 1),
@@ -421,8 +414,7 @@ impl AuditService {
         let limit = filter.limit.unwrap_or(50).min(200);
         let offset = filter.offset.unwrap_or(0);
 
-        let entries = query
-            .order_by(audit_entry::Column::Sequence, Order::Desc)
+        let entries = newest_first(query)
             .offset(offset)
             .limit(limit)
             .all(db)
@@ -432,7 +424,20 @@ impl AuditService {
     }
 }
 
-fn chain_filter(chain_id: Option<&str>) -> sea_orm::sea_query::SimpleExpr {
+/// Order by the full `(chainId, sequence)` index key. DSQL only scans that index
+/// backward when both columns are ordered; `sequence` alone makes it read and sort
+/// the whole root chain (`chainId IS NULL`), which took over a second per append.
+pub(crate) fn newest_first<Q: QueryOrder>(query: Q) -> Q {
+    query
+        .order_by_with_nulls(
+            audit_entry::Column::ChainId,
+            Order::Desc,
+            NullOrdering::First,
+        )
+        .order_by(audit_entry::Column::Sequence, Order::Desc)
+}
+
+pub(crate) fn chain_filter(chain_id: Option<&str>) -> sea_orm::sea_query::SimpleExpr {
     match chain_id {
         Some(cid) => audit_entry::Column::ChainId.eq(cid),
         None => audit_entry::Column::ChainId.is_null(),

@@ -15,8 +15,7 @@ use crate::{
     state::AppState,
     usage_accounting::{
         HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
-        configured_hosted_rate, record_provider_request_id, settle_hosted_usage_invocation,
-        start_usage_invocation,
+        record_provider_request_id, settle_hosted_usage_invocation, start_usage_invocation,
     },
 };
 use axum::{
@@ -36,112 +35,6 @@ use serde_json::Value as JsonValue;
 use std::convert::Infallible;
 
 const APP_ID_HEADER: &str = "x-flow-like-app-id";
-
-static HOSTED_RATES: std::sync::LazyLock<moka::sync::Cache<String, HostedRateSnapshot>> =
-    std::sync::LazyLock::new(|| {
-        moka::sync::Cache::builder()
-            .max_capacity(4096)
-            .time_to_live(std::time::Duration::from_secs(300))
-            .build()
-    });
-
-fn rate_from_catalog(model: &JsonValue) -> Result<HostedRateSnapshot, ApiError> {
-    let price = |name: &str| -> Result<i64, ApiError> {
-        let entry = model.get("pricing").and_then(|value| value.get(name));
-        // OpenRouter omits `request` for models without a per-request fee.
-        if entry.is_none() && name == "request" {
-            return Ok(0);
-        }
-        let value = entry
-            .and_then(|value| {
-                value
-                    .as_str()
-                    .and_then(|value| value.parse::<f64>().ok())
-                    .or_else(|| value.as_f64())
-            })
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .ok_or_else(|| {
-                ApiError::internal(format!("Hosted model {name} price is unavailable"))
-            })?;
-        let micros = value
-            * if name == "request" {
-                1_000_000.0
-            } else {
-                1_000_000_000_000.0
-            };
-        if micros >= i64::MAX as f64 {
-            return Err(ApiError::internal("Hosted model price is out of range"));
-        }
-        Ok(micros.ceil() as i64)
-    };
-    let rate = HostedRateSnapshot {
-        version: format!(
-            "openrouter-{}",
-            chrono::Utc::now().format("%Y-%m-%dT%H:%MZ")
-        ),
-        input_micro_usd_per_million_tokens: price("prompt")?,
-        input_micro_usd_per_million_bytes: None,
-        max_input_bytes: None,
-        output_micro_usd_per_million_tokens: price("completion")?,
-        request_micro_usd: price("request")?,
-        context_tokens: model
-            .get("context_length")
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(0),
-        usd_micro_per_eur: 1_159_200,
-        funding_basis_points: 550,
-        api_micro_usd_per_million_ms: 20_001,
-        serving_request_micro_usd: 1,
-        max_request_ms: 240_000,
-    };
-    rate.validate()?;
-    Ok(rate)
-}
-
-async fn hosted_rate(
-    provider: &HostedProvider,
-    model: &str,
-    api_key: &str,
-) -> Result<HostedRateSnapshot, ApiError> {
-    if let Some(rate) = configured_hosted_rate(provider.label(), model)? {
-        return Ok(rate);
-    }
-    if *provider != HostedProvider::OpenRouter {
-        return Err(ApiError::internal("Hosted model pricing is not configured"));
-    }
-    if let Some(rate) = HOSTED_RATES.get(model) {
-        return Ok(rate);
-    }
-    let response = flow_like_types::reqwest::Client::new()
-        .get("https://openrouter.ai/api/v1/models")
-        .bearer_auth(api_key)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|_| ApiError::internal("Unable to verify hosted model pricing"))?
-        .error_for_status()
-        .map_err(|_| ApiError::internal("Unable to verify hosted model pricing"))?;
-    let catalog: JsonValue = response
-        .json()
-        .await
-        .map_err(|_| ApiError::internal("Hosted model pricing response is invalid"))?;
-    for entry in catalog
-        .get("data")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let (Some(id), Ok(rate)) = (
-            entry.get("id").and_then(JsonValue::as_str),
-            rate_from_catalog(entry),
-        ) {
-            HOSTED_RATES.insert(id.to_owned(), rate);
-        }
-    }
-    HOSTED_RATES
-        .get(model)
-        .ok_or_else(|| ApiError::internal("Hosted model pricing is unavailable"))
-}
 
 /// Bound the provider work before reserving money. Hidden conversation state and
 /// media inputs reserve the context ceiling because their tokens are not in the
@@ -227,7 +120,7 @@ fn bound_hosted_request(
         .into(),
         serde_json::json!(output),
     );
-    if *provider == HostedProvider::OpenRouter {
+    if *provider == HostedProvider::OpenRouter && rate.provider_pricing_available {
         let routing = obj
             .entry("provider")
             .or_insert_with(|| serde_json::json!({}));
@@ -427,7 +320,7 @@ async fn resolve_usage_context(
 async fn fetch_provider(
     state: &AppState,
     model_field: &str,
-) -> Result<(ModelProvider, HostedProvider), ApiError> {
+) -> Result<(Bit, ModelProvider, HostedProvider), ApiError> {
     let bit_model = bit::Entity::find_by_id(model_field)
         .one(&state.db)
         .await?
@@ -446,7 +339,7 @@ async fn fetch_provider(
         },
     )?;
 
-    Ok((provider, hosted_provider))
+    Ok((bit_model, provider, hosted_provider))
 }
 
 async fn enforce_tier(
@@ -726,7 +619,7 @@ async fn resolved_provider_cost(
         .ok()??;
     let rate: HostedRateSnapshot =
         serde_json::from_value(row.raw_usage?.get("accounting")?.clone()).ok()?;
-    Some(rate.provider_cost(input, output))
+    rate.known_provider_cost(input, output)
 }
 
 async fn finalize_llm_usage(
@@ -1123,7 +1016,7 @@ pub(super) async fn relay_request(
         .get("model")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::bad_request("Missing 'model' field"))?;
-    let (provider, hosted_provider) = fetch_provider(&state, model_field).await?;
+    let (bit, provider, hosted_provider) = fetch_provider(&state, model_field).await?;
 
     let bit_surface = provider.api_surface_or_default();
     if bit_surface != surface {
@@ -1156,7 +1049,7 @@ pub(super) async fn relay_request(
     let (url, api_key) = build_provider_url(&state, &hosted_provider, surface).await?;
     let provider_label = hosted_provider.label().to_string();
     let user_sub = usage_context.user_id.clone();
-    let mut rate = hosted_rate(&hosted_provider, &upstream_model_id, &api_key).await?;
+    let (mut rate, _) = crate::bit_pricing::hosted_bit_rate(&bit);
     super::hosted_worker::apply_worker_tariff(&mut rate);
     let (estimated_tokens, estimated_cost) =
         bound_hosted_request(&mut upstream_body, surface, &rate, &hosted_provider)?;
@@ -1335,31 +1228,62 @@ where
 mod tests {
     use super::*;
 
+    fn test_bit(pricing: JsonValue) -> Bit {
+        Bit {
+            id: "hosted-preset".into(),
+            bit_type: flow_like::bit::BitTypes::Llm,
+            parameters: serde_json::json!({
+                "context_length": 32_768,
+                "provider": {"provider_name": "hosted:openrouter", "model_id": "@preset/claude-sonnet"},
+                "pricing": pricing,
+            }),
+            ..Default::default()
+        }
+    }
+
     fn test_rate() -> HostedRateSnapshot {
-        rate_from_catalog(&serde_json::json!({
-            "context_length": 32_768,
-            "pricing": {"prompt":"0.000001","completion":"0.000004","request":"0"}
-        }))
-        .unwrap()
+        crate::bit_pricing::hosted_bit_rate(&test_bit(serde_json::json!({
+            "input_micro_usd_per_million_tokens": 1_000_000,
+            "output_micro_usd_per_million_tokens": 4_000_000,
+        })))
+        .0
     }
 
     #[test]
-    fn catalog_rate_accepts_models_without_request_fee() {
-        let rate = rate_from_catalog(&serde_json::json!({
-            "context_length": 131_072,
-            "pricing": {"prompt":"0.00000003","completion":"0.00000015","input_cache_read":"0.00000003"}
-        }))
+    fn missing_bit_price_allows_presets_without_restricting_them_to_free_providers() {
+        let (rate, _) = crate::bit_pricing::hosted_bit_rate(&test_bit(JsonValue::Null));
+        rate.validate().unwrap();
+        for surface in [ModelApiSurface::ChatCompletions, ModelApiSurface::Responses] {
+            let mut body = serde_json::json!({
+                "model": "@preset/claude-sonnet",
+                "messages": [{"role": "user", "content": "Hello"}],
+            });
+            let (tokens, cost) =
+                bound_hosted_request(&mut body, surface, &rate, &HostedProvider::OpenRouter)
+                    .unwrap();
+            assert!(tokens > 0);
+            assert_eq!(cost, 0);
+            assert!(body.get("provider").is_none());
+            assert_eq!(body["model"], "@preset/claude-sonnet");
+        }
+    }
+
+    #[test]
+    fn explicitly_free_bit_still_limits_provider_prices_to_zero() {
+        let (rate, _) = crate::bit_pricing::hosted_bit_rate(&test_bit(serde_json::json!({
+            "input_micro_usd_per_million_tokens": 0,
+            "output_micro_usd_per_million_tokens": 0,
+        })));
+        let mut body = serde_json::json!({"model": "@preset/free"});
+        bound_hosted_request(
+            &mut body,
+            ModelApiSurface::ChatCompletions,
+            &rate,
+            &HostedProvider::OpenRouter,
+        )
         .unwrap();
-        assert_eq!(rate.request_micro_usd, 0);
-        assert_eq!(rate.input_micro_usd_per_million_tokens, 30_000);
-        assert_eq!(rate.output_micro_usd_per_million_tokens, 150_000);
-        assert!(
-            rate_from_catalog(&serde_json::json!({
-                "context_length": 131_072,
-                "pricing": {"completion":"0.00000015"}
-            }))
-            .is_err()
-        );
+        assert_eq!(body["provider"]["max_price"]["prompt"], 0.0);
+        assert_eq!(body["provider"]["max_price"]["completion"], 0.0);
     }
 
     #[test]

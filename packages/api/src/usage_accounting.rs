@@ -24,6 +24,9 @@ pub const STATUS_UNKNOWN_USAGE: &str = "unknown_usage";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HostedRateSnapshot {
     pub version: String,
+    /// Missing Bit prices allow inference, but cannot establish a token-based cost.
+    #[serde(default = "default_provider_pricing_available")]
+    pub provider_pricing_available: bool,
     pub input_micro_usd_per_million_tokens: i64,
     /// An explicitly estimated internal embedding tariff per UTF-8 input byte.
     /// Internal gateways that report word counts cannot supply tokenizer usage.
@@ -45,6 +48,10 @@ pub struct HostedRateSnapshot {
     pub serving_request_micro_usd: i64,
     #[serde(default = "default_request_timeout_ms")]
     pub max_request_ms: i64,
+}
+
+fn default_provider_pricing_available() -> bool {
+    true
 }
 
 fn default_usd_micro_per_eur() -> i64 {
@@ -97,6 +104,11 @@ impl HostedRateSnapshot {
         .saturating_add(self.request_micro_usd)
     }
 
+    pub fn known_provider_cost(&self, input_tokens: i64, output_tokens: i64) -> Option<i64> {
+        self.provider_pricing_available
+            .then(|| self.provider_cost(input_tokens, output_tokens))
+    }
+
     pub fn provider_cost_bytes(&self, input_bytes: i64) -> Result<i64, ApiError> {
         let rate = self.input_micro_usd_per_million_bytes.ok_or_else(|| ApiError::internal(
             "Internal embedding pricing requires input_micro_usd_per_million_bytes; its reported word counts are not tokenizer usage",
@@ -125,25 +137,6 @@ impl HostedRateSnapshot {
             self.usd_micro_per_eur,
         )
     }
-}
-
-/// Explicit deployment tariffs cover providers without an authoritative pricing
-/// API. Request payloads and user-editable model metadata never select the rate.
-pub fn configured_hosted_rate(
-    provider: &str,
-    model: &str,
-) -> Result<Option<HostedRateSnapshot>, ApiError> {
-    let Ok(raw) = std::env::var("FLOWLIKE_HOSTED_MODEL_RATES") else {
-        return Ok(None);
-    };
-    let rates: std::collections::HashMap<String, HostedRateSnapshot> =
-        serde_json::from_str(&raw)
-            .map_err(|_| ApiError::internal("FLOWLIKE_HOSTED_MODEL_RATES is invalid"))?;
-    let rate = rates.get(&format!("{provider}:{model}")).cloned();
-    if let Some(rate) = &rate {
-        rate.validate()?;
-    }
-    Ok(rate)
 }
 
 #[derive(Clone, Debug)]
@@ -724,6 +717,7 @@ mod tests {
     fn rate() -> HostedRateSnapshot {
         HostedRateSnapshot {
             version: "test-rate".into(),
+            provider_pricing_available: true,
             input_micro_usd_per_million_tokens: 1_000_000,
             input_micro_usd_per_million_bytes: None,
             max_input_bytes: None,
@@ -750,6 +744,40 @@ mod tests {
     fn free_inference_still_has_hosted_serving_cost() {
         let rate = rate();
         assert_eq!(rate.all_in_micro_eur(0, 10_000), 174);
+    }
+
+    #[test]
+    fn missing_price_keeps_token_only_provider_cost_unknown() {
+        let mut rate = rate();
+        rate.provider_pricing_available = false;
+        rate.input_micro_usd_per_million_tokens = 0;
+        rate.output_micro_usd_per_million_tokens = 0;
+        assert_eq!(rate.known_provider_cost(1_000, 250), None);
+
+        rate.provider_pricing_available = true;
+        assert_eq!(rate.known_provider_cost(1_000, 250), Some(0));
+    }
+
+    #[test]
+    fn reservation_retains_missing_pricing_marker() {
+        let mut rate = rate();
+        rate.provider_pricing_available = false;
+        let saved = serde_json::to_value(&rate).unwrap();
+        let restored: HostedRateSnapshot = serde_json::from_value(saved).unwrap();
+        assert!(!restored.provider_pricing_available);
+        assert_eq!(restored.known_provider_cost(1_000, 250), None);
+    }
+
+    #[test]
+    fn existing_reservations_keep_their_known_prices() {
+        let mut saved = serde_json::to_value(rate()).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("provider_pricing_available");
+        let restored: HostedRateSnapshot = serde_json::from_value(saved).unwrap();
+        assert!(restored.provider_pricing_available);
+        assert_eq!(restored.known_provider_cost(1_000, 250), Some(2_000));
     }
 
     #[test]

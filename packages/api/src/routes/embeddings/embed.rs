@@ -233,6 +233,7 @@ fn is_internal_hosted_embedding_provider(provider_name: &str) -> bool {
 fn internal_embedding_rate() -> HostedRateSnapshot {
     let mut rate = HostedRateSnapshot {
         version: "internal-embedding-2026-09-14".into(),
+        provider_pricing_available: true,
         input_micro_usd_per_million_tokens: 0,
         input_micro_usd_per_million_bytes: Some(50_000),
         max_input_bytes: Some((INTERNAL_MAX_BATCH_SIZE * INTERNAL_MAX_TEXT_LEN) as i64),
