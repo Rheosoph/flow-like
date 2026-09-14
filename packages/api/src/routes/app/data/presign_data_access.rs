@@ -96,6 +96,9 @@ pub async fn presign_data_access(
 
     let permission = ensure_permission!(user, &app_id, &state, required_permission);
     let sub = permission.sub()?;
+    if access_mode == "write" {
+        crate::capacity::check_storage_write(&state, &app_id, &sub, 0).await?;
+    }
 
     let scoped_credentials = RuntimeCredentials::scoped(&sub, &app_id, &state, credentials_access)
         .await
@@ -188,6 +191,9 @@ pub async fn presign_user_data_access(
 
     let permission = ensure_in_project!(user, &app_id, &state);
     let sub = permission.sub()?;
+    if access_mode == "write" {
+        crate::capacity::check_storage_write(&state, &app_id, &sub, 0).await?;
+    }
 
     let scoped_credentials = RuntimeCredentials::scoped(&sub, &app_id, &state, credentials_access)
         .await

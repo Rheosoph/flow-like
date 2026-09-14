@@ -11,6 +11,20 @@ pub struct Model {
     pub id: String,
     #[sea_orm(column_name = "stripeId", column_type = "Text", nullable, unique)]
     pub stripe_id: Option<String>,
+    #[sea_orm(column_name = "subscriptionPeriodStart", nullable)]
+    pub subscription_period_start: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "subscriptionPeriodEnd", nullable)]
+    pub subscription_period_end: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "billingPeriodAnchor", nullable)]
+    pub billing_period_anchor: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "subscriptionId", column_type = "Text", nullable)]
+    pub subscription_id: Option<String>,
+    #[sea_orm(column_name = "subscriptionEventCreatedAt", nullable)]
+    pub subscription_event_created_at: Option<i64>,
+    #[sea_orm(column_name = "subscriptionEventId", column_type = "Text", nullable)]
+    pub subscription_event_id: Option<String>,
+    #[sea_orm(column_name = "subscriptionSyncRevision", nullable)]
+    pub subscription_sync_revision: Option<i64>,
     #[sea_orm(column_name = "trackingId", column_type = "Text", nullable, unique)]
     pub tracking_id: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]

@@ -1,3 +1,6 @@
+import type { QuotaDetail } from "./quota";
+export const PLAN_LIMIT_EVENT = "flow-like:plan-limit";
+
 export interface ApiResponseErrorOptions {
 	status: number;
 	statusText?: string;
@@ -5,6 +8,7 @@ export interface ApiResponseErrorOptions {
 	code?: string;
 	errorId?: string;
 	path?: string;
+	quota?: QuotaDetail;
 }
 
 const CAPABILITY_PATH_SEGMENTS = [
@@ -41,6 +45,7 @@ export class ApiResponseError extends Error {
 	readonly path?: string;
 	/** The server's message without the `[CODE]` prefix — safe to show to users. */
 	readonly serverMessage: string;
+	readonly quota?: QuotaDetail;
 
 	constructor(options: ApiResponseErrorOptions) {
 		const label = options.code || `HTTP_${options.status}`;
@@ -53,6 +58,7 @@ export class ApiResponseError extends Error {
 		this.errorId = options.errorId;
 		this.path = options.path;
 		this.serverMessage = options.message;
+		this.quota = options.quota;
 	}
 
 	toJSON() {
@@ -64,6 +70,7 @@ export class ApiResponseError extends Error {
 			code: this.code,
 			errorId: this.errorId,
 			path: this.path,
+			quota: this.quota,
 		};
 	}
 }
@@ -89,7 +96,12 @@ export function isUpgradeRequiredError(
 ): error is ApiResponseError {
 	if (typeof error !== "object" || error === null) return false;
 	const candidate = error as Partial<ApiResponseError>;
-	return candidate.status === 402 || candidate.code === "PAYMENT_REQUIRED";
+	if (candidate.code === "PURCHASE_REQUIRED") return false;
+	return (
+		candidate.status === 402 ||
+		candidate.code === "PAYMENT_REQUIRED" ||
+		candidate.code === "PLAN_LIMIT_EXCEEDED"
+	);
 }
 
 /**
@@ -128,6 +140,7 @@ export function apiResponseError(
 	let code: string | undefined;
 	let errorId: string | undefined;
 	let message: string | undefined;
+	let quota: QuotaDetail | undefined;
 
 	if (body) {
 		try {
@@ -136,6 +149,13 @@ export function apiResponseError(
 				parsed.error && typeof parsed.error === "object"
 					? (parsed.error as Record<string, unknown>)
 					: undefined;
+			const quotaValue = nested?.quota ?? parsed.quota;
+			if (
+				quotaValue &&
+				typeof quotaValue === "object" &&
+				typeof (quotaValue as QuotaDetail).resource === "string"
+			)
+				quota = quotaValue as QuotaDetail;
 			code = nonEmptyString(nested?.code) ?? nonEmptyString(parsed.code);
 			errorId = nonEmptyString(nested?.id) ?? nonEmptyString(parsed.id);
 			message =
@@ -163,12 +183,17 @@ export function apiResponseError(
 		nonEmptyString(response.statusText) ||
 		`HTTP request failed with status ${response.status}`;
 
-	return new ApiResponseError({
+	const error = new ApiResponseError({
 		status: response.status,
 		statusText: nonEmptyString(response.statusText),
 		message,
 		code,
 		errorId,
 		path,
+		quota,
 	});
+	if (typeof window !== "undefined" && isUpgradeRequiredError(error)) {
+		window.dispatchEvent(new window.CustomEvent(PLAN_LIMIT_EVENT, { detail: error }));
+	}
+	return error;
 }

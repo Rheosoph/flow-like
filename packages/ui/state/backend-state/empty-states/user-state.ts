@@ -14,6 +14,9 @@ import type {
 import type {
 	IBillingSession,
 	IPricingResponse,
+	QuotaOverview,
+	QuotaOperationsPage,
+	QuotaOperationDetail,
 	IPushTargetStatus,
 	IRegisterPushTargetRequest,
 	IRegisterPushTargetResponse,
@@ -119,6 +122,18 @@ export class EmptyUserState implements IUserState {
 
 	deletePAT(id: string): Promise<void> {
 		throw new Error("Method not implemented.");
+	}
+
+	getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage> {
+		throw new Error("Usage is unavailable without an account.");
+	}
+
+	getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail> {
+		throw new Error("Usage is unavailable without an account.");
+	}
+
+	getQuotaUsage(): Promise<QuotaOverview> {
+		throw new Error("Usage is unavailable without an account.");
 	}
 
 	getPricing(): Promise<IPricingResponse> {

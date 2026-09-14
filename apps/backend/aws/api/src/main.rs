@@ -1,6 +1,8 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod compute_attempt;
+
 use flow_like_api::construct_router;
 use flow_like_api::state::{DbDialect, State};
 use flow_like_aws_data::lambda::TokenRefreshLayer;
@@ -91,12 +93,18 @@ async fn main() -> Result<(), Error> {
                 )
                 .await,
             );
-            let app = TokenRefreshLayer::new(database).layer(construct_router(state));
+            let app =
+                TokenRefreshLayer::new(database).layer(construct_router(state.clone()).layer(
+                    axum::middleware::from_fn_with_state(state, compute_attempt::record_attempt),
+                ));
             run_with_streaming_response(app).await
         }
         None => {
             let state = Arc::new(State::new(catalog, cdn_bucket, Some(secret_config)).await);
-            run_with_streaming_response(construct_router(state)).await
+            run_with_streaming_response(construct_router(state.clone()).layer(
+                axum::middleware::from_fn_with_state(state, compute_attempt::record_attempt),
+            ))
+            .await
         }
     }
 }

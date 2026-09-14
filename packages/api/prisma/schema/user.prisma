@@ -1,8 +1,15 @@
 model User {
   id String @id
 
-  stripeId   String? @unique
-  trackingId String? @unique
+  stripeId                   String?   @unique
+  trackingId                 String?   @unique
+  subscriptionPeriodStart    DateTime? @db.Timestamptz(3)
+  subscriptionPeriodEnd      DateTime? @db.Timestamptz(3)
+  billingPeriodAnchor        DateTime? @db.Timestamptz(3)
+  subscriptionId             String?
+  subscriptionEventCreatedAt BigInt?
+  subscriptionEventId        String?
+  subscriptionSyncRevision   BigInt?
 
   email             String?
   username          String? @unique
@@ -75,13 +82,13 @@ model Profile {
   settings Json?
 
   // JSON with the apps that are part of the profile. Contains the app ID, if it is favorite, pinned and position of the two
-  apps      Json?
-  shortcuts Json?
-  homeLayout Json?
+  apps          Json?
+  shortcuts     Json?
+  homeLayout    Json?
   homeDefaultId String?
-  bitIds    Json?
-  hub       String
-  hubs      Json?
+  bitIds        Json?
+  hub           String
+  hubs          Json?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -193,6 +200,7 @@ model LLMUsageTracking {
   @@index([provider, createdAt])
   @@index([invocationId])
   @@index([technicalUserId, createdAt])
+  @@index([appId, createdAt, id])
 }
 
 model EmbeddingUsageTracking {
@@ -228,6 +236,7 @@ model EmbeddingUsageTracking {
   @@index([provider, createdAt])
   @@index([invocationId])
   @@index([technicalUserId, createdAt])
+  @@index([appId, createdAt, id])
 }
 
 model ExecutionUsageTracking {
@@ -302,6 +311,8 @@ model UsageInvocation {
   @@index([technicalUserId, createdAt])
   @@index([provider, modelId, createdAt])
   @@index([providerRequestId])
+  @@index([appId, startedAt, id])
+  @@index([status, updatedAt])
 }
 
 model UsageAlert {
@@ -473,7 +484,6 @@ model ExecutionRun {
   @@index([parentRunId])
   @@index([traceId])
   @@index([eventId, runVariant, createdAt])
-
   @@index([technicalUserId])
 }
 

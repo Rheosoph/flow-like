@@ -145,6 +145,9 @@ pub struct ForkJobSpec {
     pub language: String,
     pub visibility: Visibility,
     pub policy: ForkPolicy,
+    /// Server-verified public/purchased source; never deserialized from an upload body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_fork_source_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_event_token_encrypted: Option<String>,
 }
@@ -162,6 +165,10 @@ impl ForkJobSpec {
             language: language.to_string(),
             visibility,
             policy: ForkPolicy::from_app_row(src_app_row),
+            public_fork_source_id: crate::capacity::public_fork_source(
+                &src_app_row.visibility,
+                &src_app_row.id,
+            ),
             remote_event_token_encrypted: remote_event_token
                 .map(|token| encrypt_token(token, &state.encryption_key)),
         }
@@ -173,6 +180,7 @@ impl ForkJobSpec {
             language: language.to_string(),
             visibility: Visibility::Private,
             policy: ForkPolicy::default(),
+            public_fork_source_id: None,
             remote_event_token_encrypted: None,
         }
     }
@@ -384,6 +392,35 @@ pub async fn enqueue(
     user_sub: &str,
     spec: ForkJobSpec,
 ) -> Result<fork_job::Model, ApiError> {
+    let (plan, tier) = crate::quota::payer_plan(state, user_sub).await?;
+    let visibility = spec.visibility.clone();
+    crate::capacity::check_storage_write(state, "", user_sub, 0).await?;
+    if spec.kind == ForkJobKind::OnlineCopy {
+        let breakdown = super::preview::compute_fork_size_breakdown(state, source_app_id).await?;
+        let (selected_bytes, _) = breakdown.selected(&spec.policy);
+        let bytes = i64::try_from(selected_bytes)
+            .map_err(|_| ApiError::bad_request("The fork is too large."))?;
+        crate::capacity::check_storage_write(state, "", user_sub, bytes).await?;
+    }
+    // The stored source row decides exemption. Offline manifests cannot grant it.
+    let mut public_source = if spec.public_fork_source_id.is_some() {
+        spec.public_fork_source_id.clone()
+    } else if spec.kind == ForkJobKind::OnlineCopy {
+        app::Entity::find_by_id(source_app_id)
+            .one(&state.db)
+            .await?
+            .and_then(|source| crate::capacity::public_fork_source(&source.visibility, &source.id))
+    } else {
+        None
+    };
+    if public_source.is_none() && spec.kind == ForkJobKind::OnlineCopy {
+        use sea_orm::{ConnectionTrait, Statement};
+        if state.db.query_one_raw(Statement::from_sql_and_values(state.db.get_database_backend(),
+            r#"SELECT "id" FROM "AppPurchase" WHERE "appId" = $1 AND "userId" = $2 AND "status" = 'COMPLETED' AND "completedAt" IS NOT NULL AND "refundedAt" IS NULL LIMIT 1"#,
+            [source_app_id.into(),user_sub.into()])).await?.is_some() {
+            public_source = Some(source_app_id.to_owned());
+        }
+    }
     let job_id = create_id();
     let now = now();
     let model = fork_job::Model {
@@ -405,7 +442,22 @@ pub async fn enqueue(
     state
         .transaction(|txn| {
             let row = model.clone().into_active_model();
+            let payer = user_sub.to_owned();
+            let app_id = model.dest_app_id.clone();
+            let visibility = visibility.clone();
+            let public_source = public_source.clone();
+            let plan = plan.clone();
             Box::pin(async move {
+                crate::capacity::admit_project(
+                    txn,
+                    &payer,
+                    &app_id,
+                    &visibility,
+                    public_source.as_deref(),
+                    &plan,
+                    i64::from(tier.max_non_visible_projects),
+                )
+                .await?;
                 fork_job::Entity::insert(row)
                     .on_conflict(do_nothing())
                     .exec_without_returning(txn)
@@ -1395,6 +1447,7 @@ mod tests {
             language: "en".to_string(),
             visibility: Visibility::Private,
             policy: ForkPolicy::default(),
+            public_fork_source_id: None,
             remote_event_token_encrypted: Some("enc".to_string()),
         };
         let stripped = serde_json::to_value(spec.without_secrets()).expect("serialize");

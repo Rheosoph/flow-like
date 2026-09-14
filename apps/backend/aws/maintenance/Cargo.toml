@@ -12,4 +12,8 @@ reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
+aws-sigv4 = "1.5.1"
+aws-credential-types = "1.3.0"
+chrono.workspace = true
+blake3.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

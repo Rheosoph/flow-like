@@ -941,6 +941,7 @@ pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, Autho
     let db_tier = match user.tier {
         sea_orm_active_enums::UserTier::Free => "FREE",
         sea_orm_active_enums::UserTier::Premium => "PREMIUM",
+        sea_orm_active_enums::UserTier::Max => "MAX",
         sea_orm_active_enums::UserTier::Pro => "PRO",
         sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
     };

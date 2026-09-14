@@ -61,13 +61,18 @@ pub async fn assign_role(
         return Err(ApiError::FORBIDDEN);
     }
 
+    crate::capacity::prepare_account(&state, &caller_sub).await?;
+    crate::capacity::prepare_account(&state, &sub).await?;
+    let (target_plan, target_tier) = crate::quota::payer_plan(&state, &sub).await?;
     let assignment = state
         .transaction(|txn| {
             let app_id = app_id.clone();
             let role_id = role_id.clone();
             let sub = sub.clone();
             let caller_sub = caller_sub.clone();
+            let target_plan = target_plan.clone();
             Box::pin(async move {
+                flow_like_db::coordination::app_capacity(txn, &app_id).await?;
                 let target_role = role::Entity::find_by_id(role_id.clone())
                     .filter(role::Column::AppId.eq(app_id.clone()))
                     .one(txn)
@@ -100,6 +105,11 @@ pub async fn assign_role(
                 }
 
                 if target_permission.contains(RolePermissions::Owner) {
+                    let new_payer = crate::entity::user::Entity::find_by_id(&sub)
+                        .one(txn).await?.ok_or(ApiError::NOT_FOUND)?;
+                    if new_payer.status != crate::entity::sea_orm_active_enums::UserStatus::Active {
+                        return Err(ApiError::conflict("Ownership can only transfer to an active account."));
+                    }
                     let caller_role = role::Entity::find()
                         .inner_join(membership::Entity)
                         .filter(membership::Column::AppId.eq(app_id.clone()))
@@ -142,6 +152,11 @@ pub async fn assign_role(
                         .one(txn)
                         .await?
                         .ok_or(ApiError::NOT_FOUND)?;
+
+                    crate::capacity::transfer_project(
+                        txn, &app_id, &sub, &target_plan,
+                        i64::from(target_tier.max_non_visible_projects), target_tier.max_total_size,
+                    ).await?;
 
                     let new_owner = membership::Entity::update_many()
                         .filter(membership::Column::AppId.eq(app_id.clone()))

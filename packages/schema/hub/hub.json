@@ -570,6 +570,21 @@
 				},
 				"product_id": {
 					"type": ["string", "null"]
+				},
+				"max_runtime_ms": {
+					"type": "integer",
+					"format": "int64",
+					"default": -1
+				},
+				"max_ai_cost_micros": {
+					"type": "integer",
+					"format": "int64",
+					"default": -1
+				},
+				"max_concurrent_executions": {
+					"type": "integer",
+					"format": "int32",
+					"default": -1
 				}
 			},
 			"required": [

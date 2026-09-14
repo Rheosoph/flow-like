@@ -28,8 +28,10 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod cache;
+pub mod capacity;
 pub mod channel;
 pub mod compute_cost;
+pub mod compute_attempts;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
@@ -41,6 +43,11 @@ pub mod mail;
 pub mod model_tier;
 pub mod permission;
 pub mod publication;
+pub mod quota;
+pub mod quota_payloads;
+pub mod quota_warnings;
+#[cfg(test)]
+mod quota_integration_tests;
 pub mod push_notifications;
 pub mod notification_images;
 pub mod realtime_ice;
@@ -54,6 +61,7 @@ mod storage_queue;
 pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
+pub(crate) mod rolling_usage;
 pub mod user_management;
 pub mod utils;
 
@@ -114,6 +122,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
 /// policy is not acceptable. Keeping CORS inside every nested route layer
 /// prevents an inner wildcard response from bypassing a stricter outer layer.
 pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
+    state.dispatcher.set_quota_state(&state);
     // Executors hold no meta-store credential and obtain their board only as
     // the presigned compiled artifact the dispatcher hands them, so the
     // artifact must exist before every dispatch. Installed here because the

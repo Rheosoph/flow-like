@@ -1,3 +1,5 @@
+import type { QuotaOverview, QuotaOperationsPage, QuotaOperationDetail } from "../../lib/quota";
+export type { QuotaOverview, QuotaOperationsPage, QuotaOperationDetail } from "../../lib/quota";
 import type {
 	IHomeDefault,
 	IHomeDefaults,
@@ -157,6 +159,7 @@ export interface IUserInfo {
 }
 
 export interface IPriceInfo {
+	id?: string;
 	amount: number;
 	currency: string;
 	interval?: string;
@@ -172,12 +175,16 @@ export interface ITierInfo {
 	product_id?: string;
 	max_non_visible_projects: number;
 	max_remote_executions: number;
+	max_runtime_ms?: number;
+	max_concurrent_executions?: number;
+	max_ai_cost_micros?: number;
 	execution_tier: string;
 	max_total_size: number;
 	max_llm_cost: number;
 	max_llm_calls?: number;
 	llm_tiers: string[];
 	price?: IPriceInfo;
+	prices?: IPriceInfo[];
 	contact_url?: string;
 }
 
@@ -200,6 +207,8 @@ export interface IPricingResponse {
 
 export interface ISubscribeRequest {
 	tier: string;
+	price_id?: string;
+	interval?: "month" | "year";
 	success_url: string;
 	cancel_url: string;
 }
@@ -364,6 +373,9 @@ export interface IUserState {
 	>;
 	deletePAT(id: string): Promise<void>;
 	getPricing(): Promise<IPricingResponse>;
+	getQuotaUsage(): Promise<QuotaOverview>;
+	getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail>;
+	getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage>;
 	createSubscription(request: ISubscribeRequest): Promise<ISubscribeResponse>;
 	getBillingSession(): Promise<IBillingSession>;
 	/** Get all widgets accessible to the user across all apps with ReadWidgets permission */

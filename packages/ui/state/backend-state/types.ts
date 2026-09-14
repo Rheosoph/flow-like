@@ -3,6 +3,8 @@ import type { IEventExecutionMode, IExecutionMode } from "../../lib/schema";
 export interface IStorageItemActionResult {
 	prefix: string;
 	url?: string;
+	method?: "PUT" | "POST";
+	fields?: Record<string, string>;
 	error?: string;
 }
 

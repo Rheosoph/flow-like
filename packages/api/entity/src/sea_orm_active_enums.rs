@@ -534,6 +534,8 @@ pub enum UserTier {
     Premium,
     #[sea_orm(string_value = "PRO")]
     Pro,
+    #[sea_orm(string_value = "MAX")]
+    Max,
     #[sea_orm(string_value = "ENTERPRISE")]
     Enterprise,
 }

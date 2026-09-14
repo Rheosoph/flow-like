@@ -1,4 +1,4 @@
-//! Authorized hard cancellation of isolated Compose executions.
+//! Authorized cloud stop requests and confirmed termination of isolated executions.
 
 use std::{sync::Arc, time::Duration};
 
@@ -90,6 +90,15 @@ pub async fn cancel_run(
     {
         return Err(ApiError::FORBIDDEN);
     }
+    if run.mode != RunMode::Local
+        && crate::quota::request_cloud_cancellation(&state, &run.id).await?
+    {
+        return Ok(Json(CancelRunResponse {
+            run_id: run.id,
+            status: "cancellation_requested".into(),
+            cancelled: false,
+        }));
+    }
     let run = terminate_and_persist(&state, store.as_ref(), &run, &caller).await?;
     Ok(Json(CancelRunResponse {
         run_id: run.id,
@@ -104,9 +113,6 @@ pub(crate) async fn cancel_channel_run(
     state: &AppState,
     claims: &ChannelClaims,
 ) -> Result<bool, ApiError> {
-    if !isolated_execution() {
-        return Ok(false);
-    }
     let Some(app_id) = &claims.app_id else {
         return Ok(false);
     };
@@ -121,6 +127,12 @@ pub(crate) async fn cancel_channel_run(
         return Ok(false);
     };
     if run.mode == RunMode::Local {
+        return Ok(false);
+    }
+    if crate::quota::request_cloud_cancellation(state, &run.id).await? {
+        return Ok(true);
+    }
+    if !isolated_execution() {
         return Ok(false);
     }
     terminate_and_persist(state, store.as_ref(), &run, &claims.sub).await?;

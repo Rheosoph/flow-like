@@ -26,6 +26,9 @@ import type {
 import {
 	type IBillingSession,
 	type IPricingResponse,
+	type QuotaOverview,
+	type QuotaOperationsPage,
+	type QuotaOperationDetail,
 	type IPushTargetStatus,
 	type IRegisterPushTargetRequest,
 	type IRegisterPushTargetResponse,
@@ -899,6 +902,39 @@ export class UserState implements IUserState {
 		);
 
 		return;
+	}
+
+	async getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage> {
+		if (!this.backend.profile || !this.backend.auth)
+			throw new Error("Profile or auth context not available");
+		return fetcher<QuotaOperationsPage>(
+			this.backend.profile,
+			`user/usage/operations?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail> {
+		if (!this.backend.profile || !this.backend.auth)
+			throw new Error("Profile or auth context not available");
+		return fetcher<QuotaOperationDetail>(
+			this.backend.profile,
+			`user/usage/operations/${encodeURIComponent(id)}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async getQuotaUsage(): Promise<QuotaOverview> {
+		if (!this.backend.profile || !this.backend.auth)
+			throw new Error("Profile or auth context not available");
+		return fetcher<QuotaOverview>(
+			this.backend.profile,
+			"user/usage/quotas",
+			{ method: "GET" },
+			this.backend.auth,
+		);
 	}
 
 	async getPricing(): Promise<IPricingResponse> {

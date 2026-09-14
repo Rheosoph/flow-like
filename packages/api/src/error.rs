@@ -7,6 +7,24 @@ use axum::{Json, http::HeaderValue};
 
 use serde::Serialize;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaLimitDetails {
+    pub resource: String,
+    pub scope: String,
+    pub payer_id: String,
+    pub plan: String,
+    pub used: i64,
+    pub reserved: i64,
+    pub requested: i64,
+    pub limit: i64,
+    pub unit: String,
+    pub period_end: Option<String>,
+    pub actions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_model_tier: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReportPolicy {
     Ignore,
@@ -31,6 +49,7 @@ pub struct ApiError {
     report_summary: Option<String>,
     report_details: Option<String>,
     db_conflict: Option<crate::db::DbConflict>,
+    quota: Option<QuotaLimitDetails>,
 }
 
 // Associated constants for enum-like usage without parentheses
@@ -43,6 +62,7 @@ impl ApiError {
         report_summary: None,
         report_details: None,
         db_conflict: None,
+        quota: None,
     };
 
     pub const FORBIDDEN: ApiError = ApiError {
@@ -53,6 +73,7 @@ impl ApiError {
         report_summary: None,
         report_details: None,
         db_conflict: None,
+        quota: None,
     };
 
     pub const UNAUTHORIZED: ApiError = ApiError {
@@ -63,6 +84,7 @@ impl ApiError {
         report_summary: None,
         report_details: None,
         db_conflict: None,
+        quota: None,
     };
 
     pub fn internal_error(err: flow_like_types::Error) -> Self {
@@ -86,6 +108,15 @@ impl ApiError {
 }
 
 impl ApiError {
+    pub fn usage_refresh_pending() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "USAGE_REFRESH_PENDING",
+            Some("Your app usage totals are refreshing. Please retry shortly.".into()),
+            ReportPolicy::Ignore,
+        )
+    }
+
     pub fn board_format_upgrade_required(required: u32, supported: u32) -> Self {
         Self::new(
             StatusCode::UPGRADE_REQUIRED,
@@ -117,6 +148,7 @@ impl ApiError {
             report_summary: None,
             report_details: None,
             db_conflict: None,
+            quota: None,
         }
     }
 
@@ -213,6 +245,56 @@ impl ApiError {
         )
     }
 
+    pub fn purchase_required(msg: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "PURCHASE_REQUIRED",
+            Some(msg.into()),
+            ReportPolicy::Ignore,
+        )
+    }
+
+    pub fn quota_exceeded(details: QuotaLimitDetails) -> Self {
+        let message = format!(
+            "Your {} plan does not have enough {} available for this action. View usage to review active reservations and your options.",
+            details.plan,
+            details.resource.replace('_', " ")
+        );
+        let mut error = Self::new(
+            StatusCode::PAYMENT_REQUIRED,
+            "PLAN_LIMIT_EXCEEDED",
+            Some(message),
+            ReportPolicy::Ignore,
+        );
+        error.quota = Some(details);
+        error
+    }
+
+    pub fn hosted_model_unavailable(payer_id: &str, plan: &str, required_tier: &str) -> Self {
+        let mut error = Self::quota_exceeded(QuotaLimitDetails {
+            resource: "hosted_model_access".into(),
+            scope: "account".into(),
+            payer_id: payer_id.into(),
+            plan: plan.into(),
+            used: 0,
+            reserved: 0,
+            requested: 1,
+            limit: 0,
+            unit: "access".into(),
+            required_model_tier: Some(required_tier.into()),
+            period_end: None,
+            actions: vec![
+                "upgrade".into(),
+                "use_own_model".into(),
+                "choose_included_model".into(),
+            ],
+        });
+        error.public_message = Some(format!(
+            "The billing account's {plan} plan does not include this {required_tier} hosted model. Choose an included model, use your own provider, or upgrade the billing account."
+        ));
+        error
+    }
+
     pub fn gone(msg: impl Into<String>) -> Self {
         let msg = msg.into();
         tracing::warn!("Gone: {}", msg);
@@ -302,6 +384,8 @@ impl IntoResponse for ApiError {
             #[serde(skip_serializing_if = "Option::is_none")]
             id: Option<&'a str>,
             message: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            quota: Option<&'a QuotaLimitDetails>,
         }
 
         let code = if self.public_code.is_empty() {
@@ -333,6 +417,7 @@ impl IntoResponse for ApiError {
                     code,
                     id: error_id.as_deref(),
                     message: public_message,
+                    quota: self.quota.as_ref(),
                 },
             }),
         )

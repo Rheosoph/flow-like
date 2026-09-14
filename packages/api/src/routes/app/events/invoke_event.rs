@@ -44,7 +44,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -778,10 +778,7 @@ async fn invoke_event_impl(
             Err(e) => {
                 mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
                 tracing::error!(error = %e, "Failed to dispatch job");
-                return Err(ApiError::internal_error(anyhow!(
-                    "Failed to dispatch job: {}",
-                    e
-                )));
+                return Err(ApiError::from(e));
             }
         };
 
@@ -819,10 +816,7 @@ async fn invoke_event_impl(
                     Err(e) => {
                         mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
                         tracing::error!(error = %e, "Failed to dispatch Lambda streaming job");
-                        return Err(ApiError::internal_error(anyhow!(
-                            "Failed to dispatch job: {}",
-                            e
-                        )));
+                        return Err(ApiError::from(e));
                     }
                 };
 
@@ -844,10 +838,7 @@ async fn invoke_event_impl(
                     Err(e) => {
                         mark_sync_dispatch_failure(&state, &run_id, &app_id, &e).await;
                         tracing::error!(error = %e, "Failed to dispatch HTTP SSE job");
-                        return Err(ApiError::internal_error(anyhow!(
-                            "Failed to dispatch job: {}",
-                            e
-                        )));
+                        return Err(ApiError::from(e));
                     }
                 };
 

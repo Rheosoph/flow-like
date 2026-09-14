@@ -54,39 +54,60 @@ pub async fn update_user(
         .check_global_permission(&state, GlobalPermission::Admin)
         .await?;
 
-    let existing = user::Entity::find_by_id(&user_id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::not_found("User not found"))?;
-
-    let mut active: user::ActiveModel = existing.into();
-
-    if let Some(status_str) = &request.status {
-        let status = match status_str.to_uppercase().as_str() {
-            "ACTIVE" => UserStatus::Active,
-            "INACTIVE" => UserStatus::Inactive,
-            "BANNED" => UserStatus::Banned,
-            _ => return Err(ApiError::bad_request("Invalid status value")),
-        };
-        active.status = Set(status);
-    }
-
-    if let Some(tier_str) = &request.tier {
-        let tier = match tier_str.to_uppercase().as_str() {
-            "FREE" => UserTier::Free,
-            "PREMIUM" => UserTier::Premium,
-            "PRO" => UserTier::Pro,
-            "ENTERPRISE" => UserTier::Enterprise,
-            _ => return Err(ApiError::bad_request("Invalid tier value")),
-        };
-        active.tier = Set(tier);
-    }
-
-    if let Some(perm) = request.permission {
-        active.permission = Set(perm);
-    }
-
-    let updated = active.update(&state.db).await?;
+    let status = request
+        .status
+        .as_ref()
+        .map(|value| match value.to_uppercase().as_str() {
+            "ACTIVE" => Ok(UserStatus::Active),
+            "INACTIVE" => Ok(UserStatus::Inactive),
+            "BANNED" => Ok(UserStatus::Banned),
+            _ => Err(ApiError::bad_request("Invalid status value")),
+        })
+        .transpose()?;
+    let tier = request
+        .tier
+        .as_ref()
+        .map(|value| match value.to_uppercase().as_str() {
+            "FREE" => Ok(UserTier::Free),
+            "PREMIUM" => Ok(UserTier::Premium),
+            "PRO" => Ok(UserTier::Pro),
+            "MAX" => Ok(UserTier::Max),
+            "ENTERPRISE" => Ok(UserTier::Enterprise),
+            _ => Err(ApiError::bad_request("Invalid tier value")),
+        })
+        .transpose()?;
+    let permission = request.permission;
+    let payer_id = user_id.clone();
+    let updated = crate::db::retry_transaction(
+        &state.db,
+        state.db_dialect,
+        None,
+        &crate::db::RetryPolicy::idempotent(),
+        move |txn| {
+            let payer_id = payer_id.clone();
+            let status = status.clone();
+            let tier = tier.clone();
+            Box::pin(async move {
+                crate::db::coordination::coordinate(txn, "account-quota", &[&payer_id]).await?;
+                let existing = user::Entity::find_by_id(&payer_id)
+                    .one(txn)
+                    .await?
+                    .ok_or_else(|| ApiError::not_found("User not found"))?;
+                let mut active: user::ActiveModel = existing.into();
+                if let Some(status) = status {
+                    active.status = Set(status);
+                }
+                if let Some(tier) = tier {
+                    active.tier = Set(tier);
+                }
+                if let Some(permission) = permission {
+                    active.permission = Set(permission);
+                }
+                Ok::<_, ApiError>(active.update(txn).await?)
+            })
+        },
+    )
+    .await?;
 
     audit!(
         state,
@@ -110,6 +131,7 @@ pub async fn update_user(
         tier: match updated.tier {
             UserTier::Free => "FREE".to_string(),
             UserTier::Premium => "PREMIUM".to_string(),
+            UserTier::Max => "MAX".to_string(),
             UserTier::Pro => "PRO".to_string(),
             UserTier::Enterprise => "ENTERPRISE".to_string(),
         },

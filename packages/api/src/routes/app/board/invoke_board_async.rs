@@ -32,7 +32,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::ActiveValue::Set;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -335,7 +335,7 @@ pub async fn invoke_board_async(
             }
         .map_err(|e| {
             tracing::error!(error = %e, "Failed to dispatch job to queue");
-            ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
+            ApiError::from(e)
         })?;
 
     Ok(Json(InvokeBoardAsyncResponse {

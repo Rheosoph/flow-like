@@ -182,6 +182,8 @@ export interface IBeginOnlineForkBody {
 }
 
 export interface IBeginOnlineForkResponse {
+	project_limit_exempt?: boolean;
+	project_limit_notice?: string | null;
 	new_app_id: string;
 	fork_session_id: string;
 	upload_path: string;

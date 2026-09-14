@@ -14,12 +14,14 @@ use axum::{
 pub mod cancel;
 pub mod progress;
 pub mod public_key;
+pub mod quota;
 pub mod widgets;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         // Executor endpoints (require executor JWT)
         .route("/progress", post(progress::report_progress))
+        .route("/quota", post(quota::report))
         .route("/events", post(progress::push_events))
         .route("/result", get(progress::executor_result))
         .route("/apps/{app_id}/widgets", get(widgets::get_app_widgets))

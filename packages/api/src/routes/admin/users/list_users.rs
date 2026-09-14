@@ -66,6 +66,7 @@ fn user_tier_to_str(t: &UserTier) -> String {
     match t {
         UserTier::Free => "FREE".to_string(),
         UserTier::Premium => "PREMIUM".to_string(),
+        UserTier::Max => "MAX".to_string(),
         UserTier::Pro => "PRO".to_string(),
         UserTier::Enterprise => "ENTERPRISE".to_string(),
     }
@@ -128,6 +129,7 @@ pub async fn list_users(
         let t = match tier.to_uppercase().as_str() {
             "FREE" => Some(UserTier::Free),
             "PREMIUM" => Some(UserTier::Premium),
+            "MAX" => Some(UserTier::Max),
             "PRO" => Some(UserTier::Pro),
             "ENTERPRISE" => Some(UserTier::Enterprise),
             _ => None,

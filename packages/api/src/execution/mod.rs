@@ -6,6 +6,8 @@
 mod channel_jwt;
 pub mod compiled_artifacts;
 mod dispatch;
+#[cfg(feature = "lambda")]
+pub mod dispatch_intent;
 mod jwt;
 mod page_action_jwt;
 mod page_action_sealer;
@@ -50,6 +52,7 @@ pub use queue::{OAuthTokenInput, QueueConfig, QueueError, QueuedJob};
 pub use regression::spawn_regression_suites_worker;
 pub use run_sweeper::{RunSweeperConfig, spawn_run_sweeper};
 pub(crate) use sse_proxy::completed_run_status;
+pub(crate) use sse_proxy::update_run_on_completion_with_runtime;
 pub use sse_proxy::{
     collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
     proxy_sse_response_with_page_actions, update_run_on_completion,

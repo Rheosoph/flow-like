@@ -72,7 +72,7 @@ pub async fn download(
         if access.is_none() {
             return match package.visibility {
                 WasmPackageVisibility::Public if package.price > 0 => Err(
-                    ApiError::payment_required("Purchase required to download this package"),
+                    ApiError::purchase_required("Purchase required to download this package"),
                 ),
                 WasmPackageVisibility::PublicRequestAccess => Err(ApiError::forbidden(
                     "Access request required for this package",

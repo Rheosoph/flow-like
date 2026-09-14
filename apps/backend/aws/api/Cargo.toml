@@ -23,3 +23,5 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+chrono.workspace = true

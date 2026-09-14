@@ -58,7 +58,7 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 type UserStatus = "ACTIVE" | "INACTIVE" | "BANNED";
-type UserTier = "FREE" | "PREMIUM" | "PRO" | "ENTERPRISE";
+type UserTier = "FREE" | "PREMIUM" | "PRO" | "MAX" | "ENTERPRISE";
 
 interface AdminUserRecord {
 	id: string;
@@ -100,6 +100,7 @@ const TIER_VARIANTS: Record<
 	FREE: "outline",
 	PREMIUM: "secondary",
 	PRO: "default",
+	MAX: "default",
 	ENTERPRISE: "default",
 };
 
@@ -297,6 +298,7 @@ function UserRow({
 						<SelectItem value="FREE">{t("free", "Free")}</SelectItem>
 						<SelectItem value="PREMIUM">{t("premium", "Premium")}</SelectItem>
 						<SelectItem value="PRO">{t("pro", "Pro")}</SelectItem>
+						<SelectItem value="MAX">Max</SelectItem>
 						<SelectItem value="ENTERPRISE">
 							{t("enterprise", "Enterprise")}
 						</SelectItem>
@@ -566,6 +568,7 @@ export default function AdminUsersPage() {
 											{t("premium", "Premium")}
 										</SelectItem>
 										<SelectItem value="PRO">{t("pro", "Pro")}</SelectItem>
+										<SelectItem value="MAX">Max</SelectItem>
 										<SelectItem value="ENTERPRISE">
 											{t("enterprise", "Enterprise")}
 										</SelectItem>

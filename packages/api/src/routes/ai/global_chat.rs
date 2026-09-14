@@ -11,10 +11,10 @@
 //! shared server, so they are simply not offered here (see [`global_chat_backends`]).
 //!
 //! ## Metering
-//! No explicit metering is wired here: a *hosted* Bit's LLM client posts to this server's own
-//! `/chat/completions` proxy authenticated with the user's JWT, so `invoke_llm` runs `enforce_tier`
-//! and full usage tracking on every round of the agentic loop. Supplying a real profile whose Bits
-//! are hosted (and passing the user token) is what makes metering + tier enforcement automatic.
+//! Hosted inference is metered by the shared model proxy. This route separately
+//! meters its own orchestration: hosted-only sessions use the included AI budget,
+//! while customer-funded or mixed sessions use cloud runtime. Studio's local
+//! assistant path does not reach this route.
 //!
 //! ## Bidirectional tools
 //! SSE is server→client only, but the platform tools (navigate, create app, delegate to the board /
@@ -847,29 +847,180 @@ fn normalize_tool_result(result: Option<Value>) -> Value {
 // Handlers
 // ---------------------------------------------------------------------------------------------
 
-/// Global FlowPilot assistant chat (browser). Streams over SSE: an opening `run` event carries
-/// `{ "runId": ..., "channel": ChannelHandle }` — the channel clients push stop/steer into;
-/// `token` events carry raw stream chunks; `tool_request` events carry
-/// `{ requestId, toolName, arguments, approval, channel }` where `channel` is the ticket the
-/// result is pushed through; a terminal `final` event carries the [`UnifiedCopilotResponse`]
-/// JSON, or `error` carries `{ "error": string }`.
+/// The admitted cloud orchestration allowance accompanies the private worker job.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct AssistantUsage {
+    pub operation_id: String,
+    pub funding_class: String,
+    pub deadline: chrono::DateTime<chrono::Utc>,
+    pub max_runtime_ms: i64,
+    pub rate: crate::usage_accounting::HostedRateSnapshot,
+    pub worker: bool,
+}
+
+fn reserved_is_new(usage: &AssistantUsage) -> bool {
+    !usage.worker
+}
+
+pub(crate) fn ensure_metered_or_customer_provider(provider: &str) -> Result<(), ApiError> {
+    let name = provider.trim().to_ascii_lowercase();
+    if flow_like::flow_like_model_provider::provider::is_hosted_provider_name(&name)
+        || name.starts_with("custom:")
+    {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "Choose a hosted model or a model configured with your own provider credentials",
+    ))
+}
+
+pub(crate) async fn reserve_assistant_usage(
+    state: &AppState,
+    sub: &str,
+    model: &str,
+    provider: &str,
+    funding: &str,
+    app_id: Option<&str>,
+) -> Result<AssistantUsage, ApiError> {
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    let payer = crate::quota::resolve_payer(state, Some(sub), app_id).await?;
+    let (_, tier) = crate::quota::payer_plan(state, &payer).await?;
+    let now = chrono::Utc::now();
+    let row = state.db.query_one_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "SELECT used,reserved FROM \"QuotaPeriod\" WHERE \"payerId\"=$1 AND \"periodStart\"<=$2 AND \"periodEnd\">$2 ORDER BY \"periodStart\" DESC LIMIT 1",
+        [payer.clone().into(), now.timestamp_millis().into()])).await?;
+    let mut occupied = crate::quota::QuotaAmounts::default();
+    if let Some(row) = row {
+        let used: crate::quota::QuotaAmounts =
+            serde_json::from_str(&row.try_get::<String>("", "used")?)?;
+        let reserved: crate::quota::QuotaAmounts =
+            serde_json::from_str(&row.try_get::<String>("", "reserved")?)?;
+        occupied.runtime_ms = used.runtime_ms.saturating_add(reserved.runtime_ms);
+        occupied.ai_cost_micros = used.ai_cost_micros.saturating_add(reserved.ai_cost_micros);
+    }
+    let mut rate = crate::usage_accounting::HostedRateSnapshot {
+        version: "assistant-api-2026-09-13".into(),
+        input_micro_usd_per_million_tokens: 0,
+        input_micro_usd_per_million_bytes: None,
+        max_input_bytes: None,
+        output_micro_usd_per_million_tokens: 0,
+        request_micro_usd: 0,
+        context_tokens: 1,
+        usd_micro_per_eur: 1_159_200,
+        funding_basis_points: 0,
+        api_micro_usd_per_million_ms: 20_001,
+        serving_request_micro_usd: 1,
+        max_request_ms: 600_000,
+    };
+    crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    let runtime_ms = if funding == "hosted" || !crate::quota::enforcing() {
+        600_000
+    } else if tier.max_runtime_ms < 0 {
+        600_000
+    } else {
+        tier.max_runtime_ms
+            .saturating_sub(occupied.runtime_ms)
+            .clamp(1, 600_000)
+    };
+    let operation_id = flow_like_types::create_id();
+    let deadline = now + chrono::Duration::milliseconds(runtime_ms);
+    crate::quota::reserve(
+        state,
+        crate::quota::QuotaRequest {
+            operation_id: operation_id.clone(),
+            payer_id: payer.clone(),
+            actor_id: Some(sub.into()),
+            app_id: app_id.map(ToOwned::to_owned),
+            model_id: Some(model.into()),
+            provider: Some(provider.into()),
+            kind: "assistant".into(),
+            funding_class: funding.into(),
+            execution_mode: "cloud_assistant".into(),
+            deadline,
+            amounts: if funding == "hosted" {
+                crate::quota::QuotaAmounts {
+                    ai_cost_micros: rate.all_in_micro_eur(0, runtime_ms),
+                    ..Default::default()
+                }
+            } else {
+                crate::quota::QuotaAmounts {
+                    runtime_ms,
+                    cloud_starts: 1,
+                    ..Default::default()
+                }
+            },
+        },
+    )
+    .await?;
+    crate::compute_attempts::associate_current(
+        &state.db,
+        &operation_id,
+        &payer,
+        "assistant",
+        if funding == "hosted" {
+            "ai_serving"
+        } else {
+            "cloud_orchestration"
+        },
+    )
+    .await?;
+    Ok(AssistantUsage {
+        operation_id,
+        funding_class: funding.into(),
+        deadline,
+        max_runtime_ms: runtime_ms,
+        rate,
+        worker: false,
+    })
+}
+
+pub(crate) async fn settle_assistant_usage(
+    state: &AppState,
+    usage: &AssistantUsage,
+    elapsed_ms: i64,
+    success: bool,
+) -> Result<(), ApiError> {
+    let amounts = if usage.funding_class == "hosted" {
+        crate::quota::QuotaAmounts {
+            ai_cost_micros: usage.rate.all_in_micro_eur(0, elapsed_ms),
+            ..Default::default()
+        }
+    } else {
+        crate::quota::QuotaAmounts {
+            runtime_ms: elapsed_ms,
+            cloud_starts: 1,
+            ..Default::default()
+        }
+    };
+    crate::quota::settle(state, &usage.operation_id, "assistant-terminal", amounts, true,
+        json!({"status":if success {"completed"} else {"failed"},"elapsedMs":elapsed_ms,"accounting":usage.rate,"fundingClass":usage.funding_class,
+            "providerCostMicroUsd":0,"servingCostMicroUsd":usage.rate.serving_cost(elapsed_ms),
+            "costMicroEur":if usage.funding_class=="hosted" {Some(usage.rate.all_in_micro_eur(0,elapsed_ms))} else {None}})).await
+}
+
 pub async fn global_chat(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
-    Json(mut payload): Json<GlobalChatRequest>,
+    Json(raw_payload): Json<Value>,
 ) -> Result<axum::response::Response, ApiError> {
     let sub = user.sub()?;
+    let token = user_access_token(&user).ok_or_else(|| {
+        ApiError::bad_request("FlowPilot in the browser requires an interactive session")
+    })?;
+    run_global_chat(state, sub, token, raw_payload, None).await
+}
+
+pub(crate) async fn run_global_chat(
+    state: AppState,
+    sub: String,
+    token: String,
+    mut raw_payload: Value,
+    reserved: Option<AssistantUsage>,
+) -> Result<axum::response::Response, ApiError> {
+    let mut payload: GlobalChatRequest = serde_json::from_value(raw_payload.clone())
+        .map_err(|_| ApiError::bad_request("Invalid assistant request"))?;
     validate(&payload)?;
-
-    // The user's JWT authenticates hosted-Bit model calls against this server's metered
-    // `/chat/completions`; without it a hosted model build has no api-key and the proxy 401s.
-    let token = user_access_token(&user);
-    if token.is_none() {
-        return Err(ApiError::bad_request(
-            "FlowPilot in the browser requires an interactive (OpenID) session; API keys and tokens cannot call hosted models on your behalf.",
-        ));
-    }
-
+    let token = Some(token);
     let (profile, model_access) =
         load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
             .await?
@@ -882,6 +1033,96 @@ pub async fn global_chat(
         return Err(rejection);
     }
     let flow_like_state = master_flow_like_state(&state).await?;
+    let selected_model = profile
+        .resolve_completion_model(
+            payload.model_id.as_deref(),
+            &flow_like::bit::BitModelPreference {
+                reasoning_weight: Some(1.0),
+                ..Default::default()
+            },
+            false,
+            flow_like::state::FlowLikeState::completion_model_capabilities(&flow_like_state).await,
+            flow_like_state.http_client.clone(),
+        )
+        .await?;
+    let provider = selected_model.try_to_provider().ok_or_else(|| {
+        ApiError::bad_request("Selected assistant model is not a completion provider")
+    })?;
+    ensure_metered_or_customer_provider(&provider.provider_name)?;
+    let hosted = flow_like::flow_like_model_provider::provider::is_hosted_provider_name(
+        &provider.provider_name,
+    );
+    let embedding_hosted = if let Some(embedding) = payload.embedding_model_id.as_deref() {
+        let bit = profile
+            .find_bit(embedding, flow_like_state.http_client.clone())
+            .await?;
+        let embedding = bit.try_to_embedding().ok_or_else(|| {
+            ApiError::bad_request("Selected memory model is not an embedding provider")
+        })?;
+        Some(
+            embedding
+                .remote
+                .as_ref()
+                .is_some_and(|remote| remote.implementation.is_some())
+                || flow_like::flow_like_model_provider::provider::is_hosted_provider_name(
+                    &embedding.provider.provider_name,
+                ),
+        )
+    } else {
+        None
+    };
+    let funding = if hosted && embedding_hosted != Some(false) {
+        "hosted"
+    } else if hosted || embedding_hosted == Some(true) {
+        "mixed"
+    } else {
+        "byok"
+    };
+    payload.model_id = Some(selected_model.id.clone());
+    raw_payload["model_id"] = json!(selected_model.id);
+    let usage = match reserved {
+        Some(usage) if usage.funding_class == funding => usage,
+        Some(_) => {
+            return Err(ApiError::conflict(
+                "Assistant model funding changed before execution. Please start a new turn.",
+            ));
+        }
+        None => {
+            reserve_assistant_usage(
+                &state,
+                &sub,
+                &selected_model.id,
+                &provider.provider_name,
+                funding,
+                None,
+            )
+            .await?
+        }
+    };
+    if crate::routes::chat::hosted_worker::enabled() && reserved_is_new(&usage) {
+        let mut worker_usage = usage.clone();
+        worker_usage.worker = true;
+        return crate::routes::chat::hosted_worker::dispatch(
+            state,
+            crate::routes::chat::hosted_worker::HostedAiJob {
+                operation_id: usage.operation_id.clone(),
+                deadline: usage.deadline,
+                request: crate::routes::chat::hosted_worker::HostedWork::GlobalAssistant {
+                    payload: raw_payload,
+                    sub,
+                    token: token.unwrap_or_default(),
+                    usage: worker_usage,
+                },
+            },
+        )
+        .await;
+    }
+    if !usage.worker && !crate::quota::mark_started(&state, &usage.operation_id).await? {
+        return Err(ApiError::conflict(
+            "Assistant operation has already started",
+        ));
+    }
+    let usage_started = std::time::Instant::now();
     let run_id = next_run_id();
 
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.
@@ -959,8 +1200,12 @@ pub async fn global_chat(
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
     let channel_for_task = channel.clone();
 
+    let usage_state = state.clone();
     flow_like_types::tokio::spawn(async move {
-        let result = run_platform_chat(
+        let remaining = (usage.deadline - chrono::Utc::now())
+            .num_milliseconds()
+            .max(1) as u64;
+        let result = flow_like_types::tokio::time::timeout(Duration::from_millis(remaining), run_platform_chat(
             flow_like_state,
             Some(profile),
             context,
@@ -972,8 +1217,9 @@ pub async fn global_chat(
             bridge,
             memory,
             Some(on_token),
-        )
-        .await
+        )).await
+        .map_err(|_| "The cloud assistant reached its runtime allowance. You can continue locally in Studio or review your plan's usage.".to_owned())
+        .and_then(|result| result.map_err(|error| error.to_string()))
         .map(|message| UnifiedCopilotResponse {
             message,
             commands: Vec::new(),
@@ -986,6 +1232,17 @@ pub async fn global_chat(
             active_scope: scope,
         })
         .map_err(|e| e.to_string());
+
+        if let Err(error) = settle_assistant_usage(
+            &usage_state,
+            &usage,
+            usage_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+            result.is_ok(),
+        )
+        .await
+        {
+            tracing::error!(%error, operation_id = %usage.operation_id, "Assistant usage settlement remains pending");
+        }
 
         // Close here (not in the SSE stream) so rows and transport connections never leak when the
         // client disconnects.

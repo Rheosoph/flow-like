@@ -417,6 +417,8 @@ pub struct DispatchResponse {
 /// Dispatch errors
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchError {
+    #[error("{0}")]
+    Quota(crate::error::ApiError),
     #[error("Configuration error: {0}")]
     Configuration(String),
     #[error("Network error: {0}")]
@@ -439,6 +441,15 @@ pub enum DispatchError {
     Serialization(String),
     #[error("Compiled artifact error: {0}")]
     Artifact(String),
+}
+
+impl From<DispatchError> for crate::error::ApiError {
+    fn from(error: DispatchError) -> Self {
+        match error {
+            DispatchError::Quota(error) => error,
+            error => Self::internal(error.to_string()),
+        }
+    }
 }
 
 fn validate_runtime_variable_transport(
@@ -522,6 +533,7 @@ pub struct Dispatcher {
     artifact_ensurer: std::sync::OnceLock<ArtifactEnsurer>,
     async_wasm_package_resolver: std::sync::OnceLock<WasmPackageResolver>,
     channels: Option<Arc<ChannelIssuer>>,
+    quota_state: std::sync::OnceLock<std::sync::Weak<crate::state::State>>,
     #[cfg(feature = "lambda")]
     lambda_client: Option<aws_sdk_lambda::Client>,
     #[cfg(feature = "sqs")]
@@ -599,6 +611,7 @@ impl Dispatcher {
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
             channels: None,
+            quota_state: std::sync::OnceLock::new(),
             #[cfg(feature = "lambda")]
             lambda_client,
             #[cfg(feature = "sqs")]
@@ -617,6 +630,7 @@ impl Dispatcher {
             artifact_ensurer: std::sync::OnceLock::new(),
             async_wasm_package_resolver: std::sync::OnceLock::new(),
             channels: None,
+            quota_state: std::sync::OnceLock::new(),
             #[cfg(feature = "lambda")]
             lambda_client: None,
             #[cfg(feature = "sqs")]
@@ -631,6 +645,79 @@ impl Dispatcher {
     /// Get the configured sync/streaming backend type
     pub fn backend(&self) -> ExecutionBackend {
         self.config.backend.clone()
+    }
+
+    pub fn set_quota_state(&self, state: &crate::state::AppState) {
+        let _ = self.quota_state.set(Arc::downgrade(state));
+    }
+
+    async fn admit_runtime(
+        &self,
+        request: &mut DispatchRequest,
+        mode: &str,
+    ) -> Result<(), DispatchError> {
+        if let Some(state) = self.quota_state.get().and_then(std::sync::Weak::upgrade) {
+            let receipt_url = match state.meta_bucket.as_ref() {
+                FlowLikeStore::AWS(_) | FlowLikeStore::Azure(_) | FlowLikeStore::Google(_) => Some(
+                    state
+                        .meta_bucket
+                        .sign(
+                            "PUT",
+                            &crate::quota::receipt_path(&request.run_id),
+                            crate::quota::receipt_ttl(&state, &request.run_id)
+                                .await
+                                .map_err(DispatchError::Quota)?,
+                        )
+                        .await
+                        .map_err(|e| {
+                            DispatchError::Configuration(format!(
+                                "Cannot prepare durable runtime accounting: {e}"
+                            ))
+                        })?
+                        .to_string(),
+                ),
+                _ => None,
+            };
+            let limit = crate::quota::reserve_cloud(&state, request, mode)
+                .await
+                .map_err(DispatchError::Quota)?;
+            request.jwt = match super::jwt::bind_runtime_limit(&request.jwt, limit, receipt_url) {
+                Ok(token) => token,
+                Err(error) => {
+                    crate::quota::release_failed_dispatch(
+                        &state,
+                        &request.run_id,
+                        "Cannot sign runtime allowance",
+                    )
+                    .await
+                    .map_err(DispatchError::Quota)?;
+                    return Err(DispatchError::Configuration(error.to_string()));
+                }
+            };
+        }
+        Ok(())
+    }
+
+    async fn release_configuration_failure(&self, run_id: &str, error: &DispatchError) {
+        if !matches!(
+            error,
+            DispatchError::Configuration(_)
+                | DispatchError::Serialization(_)
+                | DispatchError::Artifact(_)
+        ) {
+            return;
+        }
+        if let Some(state) = self.quota_state.get().and_then(std::sync::Weak::upgrade) {
+            if let Err(error) = crate::quota::release_failed_dispatch(
+                &state,
+                run_id,
+                "Dispatch configuration rejected work before delivery",
+            )
+            .await
+            {
+                tracing::warn!(%run_id,%error,"Unstarted reservation requires scheduled recovery");
+            }
+        }
     }
 
     /// Install the pre-dispatch artifact ensurer. Set once at router
@@ -816,9 +903,18 @@ impl Dispatcher {
         self.attach_channel(&mut request).await;
         let ensured = self.ensure_artifact(&request).await?;
         request.artifact = Some(self.sign_artifact(&ensured, &backend).await?);
+        self.admit_runtime(
+            &mut request,
+            if backend == ExecutionBackend::Http {
+                "realtime"
+            } else {
+                "async"
+            },
+        )
+        .await?;
         let job_id = create_id();
 
-        match backend {
+        let result = match backend {
             ExecutionBackend::Http => self.dispatch_http(&job_id, &request).await,
             ExecutionBackend::LambdaInvoke => self.dispatch_lambda_invoke(&job_id, &request).await,
             ExecutionBackend::LambdaStream => Err(DispatchError::Configuration(
@@ -833,7 +929,12 @@ impl Dispatcher {
             }
             ExecutionBackend::Kafka => self.dispatch_kafka(&job_id, &request).await,
             ExecutionBackend::Redis => self.dispatch_redis(&job_id, &request).await,
+        };
+        if let Err(error) = &result {
+            self.release_configuration_failure(&request.run_id, error)
+                .await;
         }
+        result
     }
 
     /// Dispatch an execution request and return a streaming response
@@ -847,15 +948,21 @@ impl Dispatcher {
         self.attach_channel(&mut request).await;
         let ensured = self.ensure_artifact(&request).await?;
         request.artifact = Some(self.sign_artifact(&ensured, &self.config.backend).await?);
+        self.admit_runtime(&mut request, "realtime").await?;
         let job_id = create_id();
 
-        match self.config.backend {
+        let result = match self.config.backend {
             ExecutionBackend::LambdaStream => self.dispatch_lambda_stream(&job_id, &request).await,
             _ => Err(DispatchError::Configuration(format!(
                 "Streaming dispatch not supported for {:?} backend. Use LambdaStream backend.",
                 self.config.backend
             ))),
+        };
+        if let Err(error) = &result {
+            self.release_configuration_failure(&request.run_id, error)
+                .await;
         }
+        result
     }
 
     #[cfg(not(feature = "lambda"))]
@@ -921,6 +1028,8 @@ impl Dispatcher {
             })?;
 
         tracing::info!(url = %url, "Dispatching HTTP SSE");
+
+        self.admit_runtime(&mut request, "realtime").await?;
 
         let job_id = create_id();
         let body = build_executor_payload(&job_id, &request)?;
@@ -1030,6 +1139,37 @@ impl Dispatcher {
             ));
         }
 
+        if let Some(state) = self.quota_state.get().and_then(std::sync::Weak::upgrade) {
+            let intent = match super::dispatch_intent::stage(
+                &state,
+                &request.run_id,
+                job_id,
+                function_name,
+                tenant_id.as_deref(),
+                &payload,
+            )
+            .await
+            {
+                Ok(intent) => intent,
+                Err(error) => {
+                    crate::quota::release_failed_dispatch(
+                        &state,
+                        &request.run_id,
+                        "Cannot persist cloud dispatch",
+                    )
+                    .await
+                    .map_err(DispatchError::Quota)?;
+                    return Err(DispatchError::Quota(error));
+                }
+            };
+            self.deliver_intent(&state, &intent).await?;
+            return Ok(DispatchResponse {
+                job_id: intent.job_id,
+                status: "invoked".into(),
+                backend: "lambda_invoke".into(),
+            });
+        }
+
         let mut invoke = client
             .invoke()
             .function_name(function_name)
@@ -1058,6 +1198,77 @@ impl Dispatcher {
     }
 
     #[cfg(feature = "lambda")]
+    async fn deliver_intent(
+        &self,
+        state: &crate::state::AppState,
+        intent: &super::dispatch_intent::DispatchIntent,
+    ) -> Result<(), DispatchError> {
+        if !super::dispatch_intent::claim(state, &intent.id)
+            .await
+            .map_err(DispatchError::Quota)?
+        {
+            return Ok(());
+        }
+        let payload = super::dispatch_intent::payload(state, intent)
+            .await
+            .map_err(DispatchError::Quota)?;
+        let client = self
+            .lambda_client
+            .as_ref()
+            .ok_or_else(|| DispatchError::Configuration("Lambda client not initialized".into()))?;
+        let mut invoke = client
+            .invoke()
+            .function_name(&intent.function_name)
+            .invocation_type(aws_sdk_lambda::types::InvocationType::Event)
+            .payload(aws_sdk_lambda::primitives::Blob::new(payload));
+        if let Some(tenant) = &intent.tenant_id {
+            invoke = invoke.tenant_id(tenant);
+        }
+        let result = invoke
+            .send()
+            .await
+            .map_err(|e| lambda_dispatch_error(e, intent.tenant_id.is_some()))?;
+        if result.status_code() != 202 {
+            return Err(DispatchError::Lambda(format!(
+                "Unexpected asynchronous invocation status {}",
+                result.status_code()
+            )));
+        }
+        super::dispatch_intent::accepted(state, &intent.id)
+            .await
+            .map_err(DispatchError::Quota)?;
+        Ok(())
+    }
+
+    pub async fn recover_dispatches(
+        &self,
+        state: &crate::state::AppState,
+    ) -> Result<u64, crate::error::ApiError> {
+        #[cfg(feature = "lambda")]
+        {
+            let started = std::time::Instant::now();
+            let mut delivered = 0;
+            for intent in super::dispatch_intent::due(state).await? {
+                if started.elapsed() > std::time::Duration::from_secs(20) {
+                    break;
+                }
+                match self.deliver_intent(state, &intent).await {
+                    Ok(()) => delivered += 1,
+                    Err(error) => {
+                        tracing::warn!(operation_id=%intent.id,%error,"Cloud dispatch remains pending for recovery")
+                    }
+                }
+            }
+            Ok(delivered)
+        }
+        #[cfg(not(feature = "lambda"))]
+        {
+            let _ = state;
+            Ok(0)
+        }
+    }
+
+    #[cfg(feature = "lambda")]
     async fn stage_native_lambda_payload(
         &self,
         job_id: &str,
@@ -1074,12 +1285,27 @@ impl Dispatcher {
                 "native asynchronous execution payload exceeds 64 MiB".into(),
             ));
         }
-        let staging = self.staging_bucket.as_ref().ok_or_else(|| {
-            DispatchError::Configuration(
-                "a staging store is required for large asynchronous Lambda payloads".into(),
-            )
-        })?;
-        let path = StorePath::from(format!("tmp/lambda/{job_id}.json"));
+        let runtime_state = self.quota_state.get().and_then(std::sync::Weak::upgrade);
+        let staging = runtime_state
+            .as_ref()
+            .map(|state| &state.meta_bucket)
+            .or(self.staging_bucket.as_ref())
+            .ok_or_else(|| {
+                DispatchError::Configuration(
+                    "a staging store is required for large asynchronous Lambda payloads".into(),
+                )
+            })?;
+        let run_id = body
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                DispatchError::Configuration("Dispatch payload has no run identity".into())
+            })?;
+        let path = StorePath::from(format!(
+            "system/dispatch/{}/{}-body.json",
+            blake3::hash(run_id.as_bytes()).to_hex(),
+            blake3::hash(job_id.as_bytes()).to_hex()
+        ));
         staging
             .put(&path, payload)
             .await
@@ -3731,7 +3957,11 @@ mod tests {
         ));
         assert!(event.len() < LAMBDA_ASYNC_MAX_PAYLOAD_BYTES);
         let staged = store
-            .get(&StorePath::from("tmp/lambda/job-large.json"))
+            .get(&StorePath::from(format!(
+                "system/dispatch/{}/{}-body.json",
+                blake3::hash(request.run_id.as_bytes()).to_hex(),
+                blake3::hash(b"job-large").to_hex()
+            )))
             .await
             .unwrap()
             .bytes()

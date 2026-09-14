@@ -1,0 +1,17 @@
+/// Retries deliver the same envelope; worker claims prevent re-execution.
+model CloudDispatchIntent {
+  id            String  @id
+  payerId       String
+  jobId         String
+  functionName  String
+  tenantId      String?
+  payloadPath   String
+  state         String
+  nextAttemptAt BigInt
+  expiresAt     BigInt
+  attempts      BigInt  @default(0)
+  createdAt     BigInt
+
+  @@index([state, nextAttemptAt])
+  @@index([payerId, id])
+}

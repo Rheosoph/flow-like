@@ -1,0 +1,32 @@
+/// Exact rolling app budgets with one expiry entry per retained invocation and window.
+model AppRollingUsage {
+  id             String   @id
+  appId          String
+  userId         String
+  period         String
+  cost           BigInt   @default(0)
+  tokens         BigInt   @default(0)
+  calls          BigInt   @default(0)
+  ready          Boolean  @default(false)
+  backfillCutoff DateTime @db.Timestamptz(3)
+  cursorAt       DateTime @db.Timestamptz(3)
+  cursorId       String   @default("")
+  sweptAt        BigInt   @default(0)
+
+  @@unique([appId, userId, period], map: "AppRollingUsage_scope_key")
+  @@index([sweptAt])
+}
+
+model AppRollingContribution {
+  id        String @id
+  counterId String
+  appId     String
+  sourceId  String
+  expiresAt BigInt
+  cost      BigInt
+  tokens    BigInt
+  calls     BigInt
+
+  @@index([counterId, expiresAt])
+  @@index([appId])
+}

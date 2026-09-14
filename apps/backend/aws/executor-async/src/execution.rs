@@ -2,7 +2,10 @@
 
 use crate::guard::{VerifiedIdentity, invocation_budget, validate_dispatch};
 use flow_like_executor::{
-    ExecutionRequest, ExecutorConfig, jwt::verify_jwt_async, resolve_payload,
+    ExecutionRequest, ExecutorConfig,
+    jwt::verify_jwt_async,
+    quota::{CURRENT_COMPUTE, ComputeContext},
+    resolve_payload,
 };
 use flow_like_types::tokio;
 use flow_like_types::tokio_util::sync::CancellationToken;
@@ -35,7 +38,13 @@ pub async fn execute(payload: DispatchPayloadRef, context: &Context) -> Result<(
     let cleanup_deadline = started + cleanup_budget;
     let cancellation = CancellationToken::new();
     let config = config.with_execution_deadline(execution_deadline, cancellation.clone());
-    let mut operation = std::pin::pin!(execute_job(payload, tenant_id, config));
+    let compute = ComputeContext::new(
+        context.env_config.function_name.clone(),
+        context.request_id.clone(),
+        context.env_config.memory,
+    );
+    let mut operation =
+        std::pin::pin!(CURRENT_COMPUTE.scope(compute, execute_job(payload, tenant_id, config),));
 
     tokio::select! {
         biased;

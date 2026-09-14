@@ -1,5 +1,6 @@
 "use client";
 
+import type { QuotaDetail } from "../lib/quota";
 import { create } from "zustand";
 import { isUpgradeRequiredError } from "../lib/api-error";
 
@@ -8,6 +9,10 @@ export type UpgradeReason =
 	| "model-tier"
 	| "storage"
 	| "executions"
+	| "runtime"
+	| "concurrency"
+	| "ai-budget"
+	| "ai-calls"
 	| "generic";
 
 export interface UpgradeDialogTrigger {
@@ -16,6 +21,7 @@ export interface UpgradeDialogTrigger {
 	message?: string;
 	/** Tier that would unlock the blocked action, when known. */
 	requiredTier?: string;
+	quota?: QuotaDetail;
 }
 
 interface UpgradeDialogState {
@@ -76,6 +82,24 @@ export function handleUpgradeRequiredError(
 	if (!isUpgradeRequiredError(error)) return false;
 	const store = useUpgradeDialogStore.getState();
 	if (!store.enabled) return false;
-	store.open({ reason, message: error.serverMessage ?? error.message });
+	const quotaReasons: Record<string, UpgradeReason> = {
+		cloud_runtime_ms: "runtime",
+		concurrent_cloud_executions: "concurrency",
+		cloud_starts: "executions",
+		hosted_ai_cost_micros: "ai-budget",
+		hosted_ai_calls: "ai-calls",
+		hosted_model_access: "model-tier",
+		storage_bytes: "storage",
+		projects: "project-limit",
+		project_count: "project-limit",
+	};
+	store.open({
+		reason: error.quota
+			? (quotaReasons[error.quota.resource] ?? reason)
+			: reason,
+		message: error.serverMessage ?? error.message,
+		quota: error.quota,
+		requiredTier: error.quota?.requiredModelTier,
+	});
 	return true;
 }

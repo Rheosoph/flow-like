@@ -1,0 +1,79 @@
+/// Integer counters are serialized as a small fixed-shape JSON string.
+model QuotaPeriod {
+  id                String @id
+  payerId           String
+  periodStart       BigInt
+  periodEnd         BigInt
+  used              String
+  reserved          String
+  updatedAt         BigInt
+  trackingStartedAt BigInt @default(0)
+
+  @@index([payerId, periodEnd])
+}
+
+model QuotaAccount {
+  payerId String @id
+  active  BigInt @default(0)
+}
+
+/// Immutable admission context; corrections use unique QuotaEvent identities.
+model QuotaOperation {
+  id                 String  @id
+  payerId            String
+  periodId           String
+  actorId            String?
+  appId              String?
+  modelId            String?
+  provider           String?
+  kind               String
+  fundingClass       String
+  executionMode      String
+  plan               String  @default("legacy")
+  entitlementVersion String  @default("legacy")
+  status             String
+  ceiling            String
+  used               String
+  reserved           String
+  deadline           BigInt
+  generation         BigInt  @default(0)
+  ownerId            String?
+  cancelRequested    Boolean @default(false)
+  createdAt          BigInt
+  updatedAt          BigInt
+  payloadsDeletedAt  BigInt?
+  nextReceiptCheckAt BigInt  @default(0)
+
+  @@index([status, kind, nextReceiptCheckAt, id])
+  @@index([status, payloadsDeletedAt, deadline])
+  @@index([payerId, id])
+  @@index([appId, id])
+  @@index([status, deadline])
+  @@index([status, updatedAt])
+}
+
+model QuotaEvent {
+  id          String @id
+  operationId String
+  payerId     String
+  actual      String
+  detail      String
+  createdAt   BigInt
+
+  @@index([operationId, createdAt])
+}
+
+model QuotaDailyUsage {
+  id            String  @id
+  payerId       String
+  day           String
+  appId         String?
+  modelId       String?
+  provider      String?
+  fundingClass  String
+  executionMode String
+  used          String
+  updatedAt     BigInt
+
+  @@index([payerId, day, id])
+}

@@ -412,8 +412,10 @@ export class StorageState implements IStorageState {
 		const endpoint =
 			scope === "user" ? `apps/${appId}/data/user` : `apps/${appId}/data`;
 
-		return runBulkUpload<string>(
-			toUploadTasks(prefix, files),
+		const tasks = toUploadTasks(prefix, files);
+		const sizes = new Map(tasks.map((task) => [task.path, task.file.size]));
+		return runBulkUpload<IStorageItemActionResult & { url: string }>(
+			tasks,
 			{
 				prepare: async (paths, signal) => {
 					const signed = await fetcher<IStorageItemActionResult[]>(
@@ -421,14 +423,21 @@ export class StorageState implements IStorageState {
 						endpoint,
 						{
 							method: "PUT",
-							body: JSON.stringify({ prefixes: paths }),
+							body: JSON.stringify({
+								prefixes: paths,
+								sizes: paths.map((path) => sizes.get(path)),
+							}),
 							signal,
 						},
 						auth,
 					);
-					const targets = new Map<string, string>();
+					const targets = new Map<
+						string,
+						IStorageItemActionResult & { url: string }
+					>();
 					for (const entry of signed) {
-						if (entry.url) targets.set(entry.prefix, entry.url);
+						if (entry.url)
+							targets.set(entry.prefix, { ...entry, url: entry.url });
 						else if (entry.error) {
 							console.warn(
 								`Failed to sign upload for ${entry.prefix}: ${entry.error}`,
@@ -437,8 +446,12 @@ export class StorageState implements IStorageState {
 					}
 					return targets;
 				},
-				send: (signedUrl, task, onBytes, signal) =>
-					uploadToSignedUrl(signedUrl, task.file, { onBytes, signal }),
+				send: (target, task, onBytes, signal) =>
+					uploadToSignedUrl(target.url, task.file, {
+						onBytes,
+						signal,
+						fields: target.fields,
+					}),
 			},
 			{ onProgress, signal: options?.signal },
 		);

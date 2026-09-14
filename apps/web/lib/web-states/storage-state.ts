@@ -30,22 +30,33 @@ export class WebStorageState implements IStorageState {
 		onProgress?: BulkUploadProgressCallback,
 		options?: IStorageUploadOptions,
 	): Promise<void> {
-		const result = await runBulkUpload<string>(
-			toUploadTasks(prefix, files),
+		const tasks = toUploadTasks(prefix, files);
+		const sizes = new Map(tasks.map((task) => [task.path, task.file.size]));
+		const result = await runBulkUpload<
+			IStorageItemActionResult & { url: string }
+		>(
+			tasks,
 			{
 				prepare: async (paths, signal) => {
 					const signed = await apiFetch<IStorageItemActionResult[]>(
 						endpoint,
 						{
 							method: "PUT",
-							body: JSON.stringify({ prefixes: paths }),
+							body: JSON.stringify({
+								prefixes: paths,
+								sizes: paths.map((path) => sizes.get(path)),
+							}),
 							signal,
 						},
 						this.backend.auth,
 					);
-					const targets = new Map<string, string>();
+					const targets = new Map<
+						string,
+						IStorageItemActionResult & { url: string }
+					>();
 					for (const entry of signed) {
-						if (entry.url) targets.set(entry.prefix, entry.url);
+						if (entry.url)
+							targets.set(entry.prefix, { ...entry, url: entry.url });
 						else if (entry.error) {
 							console.warn(
 								`Failed to get signed URL for ${entry.prefix}: ${entry.error}`,
@@ -54,8 +65,12 @@ export class WebStorageState implements IStorageState {
 					}
 					return targets;
 				},
-				send: (signedUrl, task, onBytes, signal) =>
-					uploadToSignedUrl(signedUrl, task.file, { onBytes, signal }),
+				send: (target, task, onBytes, signal) =>
+					uploadToSignedUrl(target.url, task.file, {
+						onBytes,
+						signal,
+						fields: target.fields,
+					}),
 			},
 			{ onProgress, signal: options?.signal },
 		);

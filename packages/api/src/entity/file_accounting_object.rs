@@ -16,6 +16,8 @@ pub struct Model {
     pub app_id: String,
     #[sea_orm(column_name = "userId")]
     pub user_id: Option<String>,
+    #[sea_orm(column_name = "payerId")]
+    pub payer_id: Option<String>,
     pub size: i64,
     pub sequencer: String,
     #[sea_orm(column_name = "updatedAt")]

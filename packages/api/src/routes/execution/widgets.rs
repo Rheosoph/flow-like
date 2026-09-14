@@ -79,6 +79,8 @@ mod tests {
     fn claims(app_id: &str, chain: Option<Vec<&str>>) -> ExecutionClaims {
         ExecutionClaims {
             dispatch_hash: None,
+            runtime_limit_ms: None,
+            quota_receipt_url: None,
             sub: "user-1".into(),
             technical_user_id: None,
             run_id: "run-1".into(),

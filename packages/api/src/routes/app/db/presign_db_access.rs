@@ -150,6 +150,9 @@ pub async fn presign_db_access(
 
     let permission = ensure_in_project!(user, &app_id, &state);
     let sub = permission.sub()?;
+    if access_mode == "write" {
+        crate::capacity::check_storage_write(&state, &app_id, &sub, 0).await?;
+    }
 
     // Get scoped credentials for the user
     let scoped_credentials = RuntimeCredentials::scoped(&sub, &app_id, &state, credentials_access)
@@ -248,6 +251,9 @@ pub async fn presign_project_db_access(
     let permission =
         crate::ensure_any_permission!(user, &app_id, &state, file_permission, db_permission);
     let identifier = permission.identifier();
+    if access_mode == "write" {
+        crate::capacity::check_storage_write(&state, &app_id, &identifier, 0).await?;
+    }
 
     let scoped_credentials =
         RuntimeCredentials::scoped(&identifier, &app_id, &state, credentials_access)

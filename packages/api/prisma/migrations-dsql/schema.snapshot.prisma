@@ -1355,6 +1355,48 @@ model AuditEntry {
   @@index([action])
 }
 
+// ---- capacity.prisma
+/// Current occupancy, separate from monthly runtime and AI allowances.
+model AccountCapacity {
+  payerId              String   @id
+  storageBytes         BigInt   @default(0)
+  reservedStorageBytes BigInt   @default(0)
+  projectCount         BigInt   @default(0)
+  initialized          Boolean  @default(false)
+  baselineAppId        String   @default("")
+  updatedAt            DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([initialized, updatedAt, payerId])
+}
+
+/// Server-owned provenance and slot ownership survive source retirement and deletion.
+model ProjectCapacity {
+  appId              String   @id
+  payerId            String
+  counted            Boolean
+  publicForkSourceId String?
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([payerId, active])
+}
+
+/// One outstanding byte bound per object key; repeated grants cannot multiply headroom.
+model StorageUploadGrant {
+  id            String   @id
+  payerId       String
+  appId         String
+  bucket        String
+  objectKey     String
+  maxBytes      BigInt
+  reservedBytes BigInt
+  expiresAt     DateTime @db.Timestamptz(3)
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@index([appId])
+}
+
 // ---- catalog.prisma
 model Node {
   id String @id
@@ -1393,6 +1435,66 @@ model Channel {
   @@index([expiresAt])
 }
 
+// ---- compute-attempt.prisma
+/// Infrastructure attempts never debit public workflow runtime a second time.
+model ComputeAttempt {
+  id                 String   @id
+  functionName       String
+  requestId          String
+  operationId        String?
+  payerId            String?
+  role               String
+  costClass          String
+  memoryMb           Int
+  architecture       String
+  region             String
+  measuredDurationMs BigInt?
+  billedDurationMs   BigInt?
+  costMicroUsd       BigInt?
+  evidenceRank       Int      @default(0)
+  evidence           String
+  rateVersion        String
+  status             String
+  startedAt          DateTime @db.Timestamptz(3)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@unique([functionName, requestId])
+  @@index([operationId, startedAt])
+  @@index([payerId, startedAt])
+  @@index([status, startedAt])
+  @@index([status, id])
+  @@index([evidenceRank, id])
+}
+
+model ComputeAttemptRevision {
+  id        String   @id
+  attemptId String
+  evidence  String
+  payload   String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([attemptId, createdAt])
+}
+
+// ---- dispatch-intent.prisma
+/// Retries deliver the same envelope; worker claims prevent re-execution.
+model CloudDispatchIntent {
+  id            String  @id
+  payerId       String
+  jobId         String
+  functionName  String
+  tenantId      String?
+  payloadPath   String
+  state         String
+  nextAttemptAt BigInt
+  expiresAt     BigInt
+  attempts      BigInt  @default(0)
+  createdAt     BigInt
+
+  @@index([state, nextAttemptAt])
+  @@index([payerId, id])
+}
+
 // ---- error-reporting.prisma
 model ErrorReport {
   id         String   @id
@@ -1417,6 +1519,8 @@ model FileAccountingObject {
   objectKey String
   appId     String
   userId    String?
+  /// Account charged for this object's bytes, retained for late delete events.
+  payerId   String?
   size      BigInt
   sequencer String
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)
@@ -2085,6 +2189,101 @@ model Meta {
   @@index([lang])
 }
 
+// ---- quota-warning.prisma
+/// A monthly threshold or storage/project occupancy episode shared by every client.
+model QuotaWarningState {
+  id               String   @id
+  payerId          String
+  resource         String
+  periodKey        String
+  highestThreshold Int      @default(0)
+  episode          BigInt   @default(0)
+  updatedAt        DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([payerId])
+}
+
+// ---- quota.prisma
+/// Integer counters are serialized as a small fixed-shape JSON string.
+model QuotaPeriod {
+  id                String @id
+  payerId           String
+  periodStart       BigInt
+  periodEnd         BigInt
+  used              String
+  reserved          String
+  updatedAt         BigInt
+  trackingStartedAt BigInt @default(0)
+
+  @@index([payerId, periodEnd])
+}
+
+model QuotaAccount {
+  payerId String @id
+  active  BigInt @default(0)
+}
+
+/// Immutable admission context; corrections use unique QuotaEvent identities.
+model QuotaOperation {
+  id                 String  @id
+  payerId            String
+  periodId           String
+  actorId            String?
+  appId              String?
+  modelId            String?
+  provider           String?
+  kind               String
+  fundingClass       String
+  executionMode      String
+  plan               String  @default("legacy")
+  entitlementVersion String  @default("legacy")
+  status             String
+  ceiling            String
+  used               String
+  reserved           String
+  deadline           BigInt
+  generation         BigInt  @default(0)
+  ownerId            String?
+  cancelRequested    Boolean @default(false)
+  createdAt          BigInt
+  updatedAt          BigInt
+  payloadsDeletedAt  BigInt?
+  nextReceiptCheckAt BigInt  @default(0)
+
+  @@index([status, kind, nextReceiptCheckAt, id])
+  @@index([status, payloadsDeletedAt, deadline])
+  @@index([payerId, id])
+  @@index([appId, id])
+  @@index([status, deadline])
+  @@index([status, updatedAt])
+}
+
+model QuotaEvent {
+  id          String @id
+  operationId String
+  payerId     String
+  actual      String
+  detail      String
+  createdAt   BigInt
+
+  @@index([operationId, createdAt])
+}
+
+model QuotaDailyUsage {
+  id            String  @id
+  payerId       String
+  day           String
+  appId         String?
+  modelId       String?
+  provider      String?
+  fundingClass  String
+  executionMode String
+  used          String
+  updatedAt     BigInt
+
+  @@index([payerId, day, id])
+}
+
 // ---- regression.prisma
 /// Postgres projection of a regression suite. The bucket
 /// (apps/{appId}/regression/) owns the suite config + fixtures + payloads;
@@ -2206,6 +2405,40 @@ model RegressionCaseResult {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([suiteRunId])
+}
+
+// ---- rolling-usage.prisma
+/// Exact rolling app budgets with one expiry entry per retained invocation and window.
+model AppRollingUsage {
+  id             String   @id
+  appId          String
+  userId         String
+  period         String
+  cost           BigInt   @default(0)
+  tokens         BigInt   @default(0)
+  calls          BigInt   @default(0)
+  ready          Boolean  @default(false)
+  backfillCutoff DateTime @db.Timestamptz(3)
+  cursorAt       DateTime @db.Timestamptz(3)
+  cursorId       String   @default("")
+  sweptAt        BigInt   @default(0)
+
+  @@unique([appId, userId, period], map: "AppRollingUsage_scope_key")
+  @@index([sweptAt])
+}
+
+model AppRollingContribution {
+  id        String @id
+  counterId String
+  appId     String
+  sourceId  String
+  expiresAt BigInt
+  cost      BigInt
+  tokens    BigInt
+  calls     BigInt
+
+  @@index([counterId, expiresAt])
+  @@index([appId])
 }
 
 // ---- solution.prisma
@@ -2703,8 +2936,15 @@ model TelemetryFlowpilotFailureDaily {
 model User {
   id String @id
 
-  stripeId   String? @unique
-  trackingId String? @unique
+  stripeId                   String?   @unique
+  trackingId                 String?   @unique
+  subscriptionPeriodStart    DateTime? @db.Timestamptz(3)
+  subscriptionPeriodEnd      DateTime? @db.Timestamptz(3)
+  billingPeriodAnchor        DateTime? @db.Timestamptz(3)
+  subscriptionId             String?
+  subscriptionEventCreatedAt BigInt?
+  subscriptionEventId        String?
+  subscriptionSyncRevision   BigInt?
 
   email             String?
   username          String? @unique
@@ -2895,6 +3135,7 @@ model LLMUsageTracking {
   @@index([provider, createdAt])
   @@index([invocationId])
   @@index([technicalUserId, createdAt])
+  @@index([appId, createdAt, id])
 }
 
 model EmbeddingUsageTracking {
@@ -2930,6 +3171,7 @@ model EmbeddingUsageTracking {
   @@index([provider, createdAt])
   @@index([invocationId])
   @@index([technicalUserId, createdAt])
+  @@index([appId, createdAt, id])
 }
 
 model ExecutionUsageTracking {
@@ -3004,6 +3246,8 @@ model UsageInvocation {
   @@index([technicalUserId, createdAt])
   @@index([provider, modelId, createdAt])
   @@index([providerRequestId])
+  @@index([appId, startedAt, id])
+  @@index([status, updatedAt])
 }
 
 model UsageAlert {

@@ -180,8 +180,9 @@ export function useOfflineToOnlineFork() {
 					{ appId: sourceAppId },
 				);
 
+				const sourceApp = await backend.appState.getApp(sourceAppId);
 				const beginBody: IBeginOnlineForkBody = {
-					source_app_id: sourceAppId,
+					source_app_id: sourceApp.forked_from ?? sourceAppId,
 					summary,
 					language: LANGUAGE,
 				};
@@ -191,7 +192,7 @@ export function useOfflineToOnlineFork() {
 					beginBody,
 				);
 
-				const sourceApp = await backend.appState.getApp(sourceAppId);
+				if (begin.project_limit_notice) toast.info(begin.project_limit_notice);
 				const appMeta = await backend.appState.getAppMeta(
 					sourceAppId,
 					LANGUAGE,

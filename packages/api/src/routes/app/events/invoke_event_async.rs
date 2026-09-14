@@ -37,7 +37,7 @@ use axum::{
     http::HeaderMap,
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -652,10 +652,7 @@ pub async fn invoke_event_async(
         Err(e) => {
             tracing::error!(error = %e, "Failed to dispatch job to queue");
             mark_async_dispatch_failure(&state, &run_id, &app_id, &e).await;
-            return Err(ApiError::internal_error(anyhow!(
-                "Failed to dispatch job: {}",
-                e
-            )));
+            return Err(ApiError::from(e));
         }
     };
 

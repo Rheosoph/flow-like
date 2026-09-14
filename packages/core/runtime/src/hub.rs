@@ -116,12 +116,28 @@ impl Default for PushNotificationsConfig {
 pub struct UserTier {
     pub max_non_visible_projects: i32,
     pub max_remote_executions: i32,
+    /// Monthly cloud workflow runtime in milliseconds; negative means unlimited.
+    #[serde(default = "unlimited_quota")]
+    pub max_runtime_ms: i64,
+    #[serde(default = "unlimited_quota_i32")]
+    pub max_concurrent_executions: i32,
+    /// Monthly hosted AI allowance in EUR millionths, including serving costs.
+    #[serde(default = "unlimited_quota")]
+    pub max_ai_cost_micros: i64,
     pub execution_tier: String,
     pub max_total_size: i64,
     pub max_llm_cost: i32,
     pub max_llm_calls: Option<i32>,
     pub llm_tiers: Vec<String>,
     pub product_id: Option<String>,
+}
+
+fn unlimited_quota_i32() -> i32 {
+    -1
+}
+
+fn unlimited_quota() -> i64 {
+    -1
 }
 
 pub type UserTiers = HashMap<String, UserTier>;
@@ -139,6 +155,9 @@ pub enum ConversionMode {
 /// Marketing metadata for a tier, keyed by tier id in `ConversionConfig`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, Default)]
 pub struct TierDisplay {
+    pub monthly_price_cents: Option<i64>,
+    pub annual_price_cents: Option<i64>,
+    pub currency: Option<String>,
     /// Name shown instead of the raw tier key (e.g. "Starter" for FREE)
     pub display_name: Option<String>,
     /// One-line value proposition under the tier name
