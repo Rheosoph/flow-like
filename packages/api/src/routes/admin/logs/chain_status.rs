@@ -1,6 +1,6 @@
 //! Cryptographic audit log status for the dashboard.
 
-use crate::audit::service::AuditService;
+use crate::audit::service::{AuditService, chain_filter, newest_first};
 use crate::audit::sign;
 use crate::entity::audit_entry;
 use crate::error::ApiError;
@@ -54,23 +54,9 @@ async fn build_summary(
     label: String,
     verify: bool,
 ) -> Result<ChainSummary, ApiError> {
-    let mut q = audit_entry::Entity::find();
-    q = match chain_id {
-        Some(cid) => q.filter(audit_entry::Column::ChainId.eq(cid)),
-        None => q.filter(audit_entry::Column::ChainId.is_null()),
-    };
-
+    let q = audit_entry::Entity::find().filter(chain_filter(chain_id));
     let entries = q.clone().count(&state.db).await? as i64;
-
-    let mut tail_q = audit_entry::Entity::find();
-    tail_q = match chain_id {
-        Some(cid) => tail_q.filter(audit_entry::Column::ChainId.eq(cid)),
-        None => tail_q.filter(audit_entry::Column::ChainId.is_null()),
-    };
-    let tail = tail_q
-        .order_by(audit_entry::Column::Sequence, Order::Desc)
-        .one(&state.db)
-        .await?;
+    let tail = newest_first(q).one(&state.db).await?;
 
     let (last_sequence, last_entry_at, last_entry_hash, signed, kid) = match tail {
         Some(e) => (

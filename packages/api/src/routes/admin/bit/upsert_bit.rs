@@ -228,6 +228,8 @@ pub async fn upsert_bit(
     user.check_global_permission(&state, GlobalPermission::WriteBits)
         .await?;
 
+    crate::bit_pricing::validate_bit_pricing(&bit)?;
+
     let (tx, rx) = mpsc::channel::<StreamMsg>(64);
     let state_cloned = state.clone();
     let bit_id_cloned = bit_id.clone();
