@@ -85,7 +85,7 @@ async fn mark_event_processed(
 
 async fn handle_stripe_event(
     state: &AppState,
-    _stripe_client: &stripe::Client,
+    stripe_client: &stripe::Client,
     event: &Event,
 ) -> Result<(), ApiError> {
     match event.type_ {
@@ -103,7 +103,14 @@ async fn handle_stripe_event(
         | EventType::CustomerSubscriptionUpdated
         | EventType::CustomerSubscriptionDeleted => {
             if let EventObject::Subscription(subscription) = &event.data.object {
-                handle_subscription_change(state, subscription, &event.type_).await?;
+                handle_subscription_change(
+                    state,
+                    stripe_client,
+                    subscription,
+                    event.created,
+                    &event.id.to_string(),
+                )
+                .await?;
             }
         }
         EventType::PaymentIntentSucceeded => {
@@ -131,6 +138,11 @@ async fn handle_checkout_completed(
     use crate::entity::solution_request;
 
     let session_id = session.id.to_string();
+
+    // Subscription lifecycle events reconcile their own canonical Stripe state.
+    if session.mode == stripe::CheckoutSessionMode::Subscription {
+        return Ok(());
+    }
 
     tracing::info!(
         session_id = %session_id,
@@ -611,66 +623,196 @@ async fn handle_checkout_expired(
     Ok(())
 }
 
+fn older_subscription_event(incoming: i64, stored: Option<i64>) -> bool {
+    stored.is_some_and(|latest| incoming < latest)
+}
+
+fn canonical_subscription<'a>(
+    subscriptions: &'a [(
+        stripe::Subscription,
+        crate::entity::sea_orm_active_enums::UserTier,
+    )],
+    current_id: Option<&str>,
+) -> Option<&'a (
+    stripe::Subscription,
+    crate::entity::sea_orm_active_enums::UserTier,
+)> {
+    let is_active = |subscription: &stripe::Subscription| {
+        matches!(
+            subscription.status,
+            stripe::SubscriptionStatus::Active | stripe::SubscriptionStatus::Trialing
+        )
+    };
+    subscriptions
+        .iter()
+        .filter(|(subscription, _)| is_active(subscription))
+        .max_by_key(|(subscription, _)| {
+            (
+                current_id == Some(subscription.id.as_str()),
+                subscription.created,
+                subscription.id.as_str(),
+            )
+        })
+        .or_else(|| {
+            subscriptions
+                .iter()
+                .find(|(subscription, _)| current_id == Some(subscription.id.as_str()))
+        })
+        .or_else(|| {
+            subscriptions
+                .iter()
+                .max_by_key(|(subscription, _)| (subscription.created, subscription.id.as_str()))
+        })
+}
+
 async fn handle_subscription_change(
     state: &AppState,
-    subscription: &stripe::Subscription,
-    event_type: &EventType,
+    stripe_client: &stripe::Client,
+    incoming: &stripe::Subscription,
+    event_created: i64,
+    event_id: &str,
 ) -> Result<(), ApiError> {
     use crate::entity::{sea_orm_active_enums::UserTier, user};
-
-    let customer_id = match &subscription.customer {
-        stripe::Expandable::Id(id) => id.to_string(),
-        stripe::Expandable::Object(c) => c.id.to_string(),
+    let customer_id = match &incoming.customer {
+        stripe::Expandable::Id(id) => id.clone(),
+        stripe::Expandable::Object(customer) => customer.id.clone(),
     };
-
-    tracing::info!(
-        subscription_id = %subscription.id,
-        customer_id = %customer_id,
-        event_type = %event_type,
-        status = ?subscription.status,
-        "Processing subscription change"
-    );
-
-    let user_result = user::Entity::find()
-        .filter(user::Column::StripeId.eq(&customer_id))
-        .one(&state.db)
-        .await?;
-
-    if let Some(user_model) = user_result {
+    // Stripe does not order webhook deliveries. Fetch current provider state outside
+    // the account lock, then fence that snapshot with the persisted sync revision.
+    for _ in 0..3 {
+        let Some(snapshot) = user::Entity::find()
+            .filter(user::Column::StripeId.eq(customer_id.as_str()))
+            .one(&state.db)
+            .await?
+        else {
+            return Ok(());
+        };
+        if older_subscription_event(event_created, snapshot.subscription_event_created_at) {
+            return Ok(());
+        }
+        let mut cursor = None;
+        let mut subscriptions = Vec::new();
+        for page in 0..10 {
+            let result = stripe::Subscription::list(
+                stripe_client,
+                &stripe::ListSubscriptions {
+                    customer: Some(customer_id.clone()),
+                    status: Some(stripe::SubscriptionStatusFilter::All),
+                    limit: Some(100),
+                    starting_after: cursor.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            cursor = result
+                .data
+                .last()
+                .map(|subscription| subscription.id.clone());
+            for subscription in result.data {
+                if let Some(tier) = determine_tier_from_subscription(state, &subscription) {
+                    subscriptions.push((subscription, tier));
+                }
+            }
+            if !result.has_more {
+                break;
+            }
+            if page == 9 || cursor.is_none() {
+                return Err(ApiError::service_unavailable(
+                    "Subscription history needs billing reconciliation",
+                ));
+            }
+        }
+        let Some((subscription, configured_tier)) =
+            canonical_subscription(&subscriptions, snapshot.subscription_id.as_deref())
+        else {
+            return Ok(());
+        };
         let new_tier = match subscription.status {
             stripe::SubscriptionStatus::Active | stripe::SubscriptionStatus::Trialing => {
-                determine_tier_from_subscription(state, subscription)
+                Some(configured_tier.clone())
             }
             stripe::SubscriptionStatus::Canceled
             | stripe::SubscriptionStatus::Unpaid
-            | stripe::SubscriptionStatus::IncompleteExpired => UserTier::Free,
-            _ => return Ok(()),
+            | stripe::SubscriptionStatus::IncompleteExpired => Some(UserTier::Free),
+            _ => None,
         };
-
-        let mut active: user::ActiveModel = user_model.into();
-        active.tier = Set(new_tier.clone());
-        active.updated_at = Set(chrono::Utc::now().fixed_offset());
-        active.update(&state.db).await?;
-
-        tracing::info!(
-            customer_id = %customer_id,
-            new_tier = ?new_tier,
-            "User tier updated based on subscription"
-        );
-    } else {
-        tracing::warn!(
-            customer_id = %customer_id,
-            "No user found for Stripe customer"
-        );
+        let payer_id = snapshot.id;
+        let expected_revision = snapshot.subscription_sync_revision.unwrap_or(0);
+        let canonical_id = subscription.id.to_string();
+        let event_id = event_id.to_owned();
+        let cycle_anchor = chrono::DateTime::from_timestamp(subscription.billing_cycle_anchor, 0)
+            .map(|time| time.fixed_offset());
+        let period_start = chrono::DateTime::from_timestamp(subscription.current_period_start, 0)
+            .map(|time| time.fixed_offset());
+        let period_end = chrono::DateTime::from_timestamp(subscription.current_period_end, 0)
+            .map(|time| time.fixed_offset());
+        let applied = crate::db::retry_transaction(
+            &state.db,
+            state.db_dialect,
+            None,
+            &crate::db::RetryPolicy::idempotent(),
+            move |txn| {
+                let payer_id = payer_id.clone();
+                let new_tier = new_tier.clone();
+                let canonical_id = canonical_id.clone();
+                let event_id = event_id.clone();
+                Box::pin(async move {
+                    crate::db::coordination::coordinate(txn, "account-quota", &[&payer_id]).await?;
+                    let Some(user_model) = user::Entity::find_by_id(&payer_id).one(txn).await?
+                    else {
+                        return Ok::<bool, ApiError>(true);
+                    };
+                    if older_subscription_event(
+                        event_created,
+                        user_model.subscription_event_created_at,
+                    ) {
+                        return Ok::<bool, ApiError>(true);
+                    }
+                    if user_model.subscription_sync_revision.unwrap_or(0) != expected_revision {
+                        return Ok::<bool, ApiError>(false);
+                    }
+                    let existing_anchor = user_model.billing_period_anchor;
+                    let next_revision = expected_revision
+                        .checked_add(1)
+                        .ok_or_else(|| ApiError::internal("Billing revision overflow"))?;
+                    let mut active: user::ActiveModel = user_model.into();
+                    active.subscription_id = Set(Some(canonical_id));
+                    active.subscription_event_created_at = Set(Some(event_created));
+                    active.subscription_event_id = Set(Some(event_id));
+                    active.subscription_sync_revision = Set(Some(next_revision));
+                    if let Some(new_tier) = new_tier {
+                        let is_paid = new_tier != UserTier::Free;
+                        active.tier = Set(new_tier);
+                        active.billing_period_anchor = Set(if is_paid {
+                            existing_anchor.or(cycle_anchor)
+                        } else {
+                            None
+                        });
+                        active.subscription_period_start =
+                            Set(if is_paid { period_start } else { None });
+                        active.subscription_period_end =
+                            Set(if is_paid { period_end } else { None });
+                    }
+                    active.updated_at = Set(chrono::Utc::now().fixed_offset());
+                    active.update(txn).await?;
+                    Ok::<bool, ApiError>(true)
+                })
+            },
+        )
+        .await?;
+        if applied {
+            return Ok(());
+        }
     }
-
-    Ok(())
+    Err(ApiError::service_unavailable(
+        "Concurrent subscription updates need a webhook retry",
+    ))
 }
 
 fn determine_tier_from_subscription(
     state: &AppState,
     subscription: &stripe::Subscription,
-) -> crate::entity::sea_orm_active_enums::UserTier {
+) -> Option<crate::entity::sea_orm_active_enums::UserTier> {
     use crate::entity::sea_orm_active_enums::UserTier;
 
     for item in &subscription.items.data {
@@ -686,42 +828,21 @@ fn determine_tier_from_subscription(
                     if let Some(config_product_id) = &tier_config.product_id
                         && config_product_id == &product_id
                     {
-                        return match tier_name.to_uppercase().as_str() {
+                        return Some(match tier_name.to_uppercase().as_str() {
                             "ENTERPRISE" => UserTier::Enterprise,
+                            "MAX" => UserTier::Max,
                             "PRO" => UserTier::Pro,
                             "PREMIUM" => UserTier::Premium,
-                            _ => UserTier::Free,
-                        };
+                            "FREE" => UserTier::Free,
+                            _ => return None,
+                        });
                     }
-                }
-
-                // Fallback: check if product_id contains tier name
-                let product_lower = product_id.to_lowercase();
-                if product_lower.contains("enterprise") {
-                    return UserTier::Enterprise;
-                } else if product_lower.contains("pro") {
-                    return UserTier::Pro;
-                } else if product_lower.contains("premium") {
-                    return UserTier::Premium;
-                }
-            }
-
-            // Also check price metadata for tier info
-            if let Some(metadata) = &price.metadata
-                && let Some(tier) = metadata.get("tier")
-            {
-                match tier.to_uppercase().as_str() {
-                    "ENTERPRISE" => return UserTier::Enterprise,
-                    "PRO" => return UserTier::Pro,
-                    "PREMIUM" => return UserTier::Premium,
-                    _ => {}
                 }
             }
         }
     }
 
-    // Default to Free if no matching tier found
-    UserTier::Free
+    None
 }
 
 async fn handle_payment_intent_succeeded(
@@ -824,4 +945,109 @@ async fn handle_payment_intent_failed(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod subscription_ordering_tests {
+    use super::*;
+    use crate::entity::sea_orm_active_enums::UserTier;
+    use std::str::FromStr;
+
+    fn subscription(
+        id: &str,
+        status: stripe::SubscriptionStatus,
+        created: i64,
+        tier: UserTier,
+    ) -> (stripe::Subscription, UserTier) {
+        (
+            stripe::Subscription {
+                id: stripe::SubscriptionId::from_str(id).unwrap(),
+                status,
+                created,
+                ..Default::default()
+            },
+            tier,
+        )
+    }
+
+    #[test]
+    fn old_subscription_cancellation_preserves_active_replacement() {
+        let subscriptions = [
+            subscription(
+                "sub_old",
+                stripe::SubscriptionStatus::Canceled,
+                100,
+                UserTier::Premium,
+            ),
+            subscription(
+                "sub_new",
+                stripe::SubscriptionStatus::Active,
+                200,
+                UserTier::Max,
+            ),
+        ];
+        assert_eq!(
+            canonical_subscription(&subscriptions, Some("sub_new"))
+                .unwrap()
+                .0
+                .id
+                .as_str(),
+            "sub_new"
+        );
+        assert_eq!(
+            canonical_subscription(&subscriptions, Some("sub_old"))
+                .unwrap()
+                .1,
+            UserTier::Max
+        );
+    }
+
+    #[test]
+    fn older_update_cannot_override_newer_downgrade_watermark() {
+        assert!(older_subscription_event(100, Some(101)));
+        assert!(
+            !older_subscription_event(101, Some(101)),
+            "same-second events require canonical state and a sync-revision fence"
+        );
+        assert!(!older_subscription_event(101, None));
+        let subscriptions = [subscription(
+            "sub_current",
+            stripe::SubscriptionStatus::Canceled,
+            100,
+            UserTier::Pro,
+        )];
+        assert_eq!(
+            canonical_subscription(&subscriptions, Some("sub_current"))
+                .unwrap()
+                .0
+                .status,
+            stripe::SubscriptionStatus::Canceled
+        );
+    }
+
+    #[test]
+    fn same_second_duplicate_active_subscriptions_keep_the_billing_identity() {
+        let subscriptions = [
+            subscription(
+                "sub_a",
+                stripe::SubscriptionStatus::Active,
+                100,
+                UserTier::Pro,
+            ),
+            subscription(
+                "sub_b",
+                stripe::SubscriptionStatus::Active,
+                100,
+                UserTier::Max,
+            ),
+        ];
+        assert_eq!(
+            canonical_subscription(&subscriptions, Some("sub_a"))
+                .unwrap()
+                .0
+                .id
+                .as_str(),
+            "sub_a"
+        );
+    }
 }

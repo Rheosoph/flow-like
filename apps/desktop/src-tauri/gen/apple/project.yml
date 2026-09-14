@@ -4,8 +4,13 @@ options:
   deploymentTarget:
     iOS: "17.0"
 packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: 12.11.0
   FlowLikeMLX:
     path: ../../apple/FlowLikeMLX
+  FlowLikeNative:
+    path: ../../apple/FlowLikeNative
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -32,7 +37,9 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+      - path: ../../apple/FlowLikeNative/Sources/FlowLikeNative/Intents.swift
       - path: Assets.xcassets
+      - path: icon.icon
       - path: Externals
       - path: flow-like-desktop_iOS
       - path: assets
@@ -56,14 +63,23 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.0.4
         CFBundleVersion: "0.0.4"
+        NSSupportsLiveActivities: true
+        NSLocationWhenInUseUsageDescription: Flow Like uses your location when you request it in a workflow or map.
+        NSLocationAlwaysAndWhenInUseUsageDescription: Flow Like monitors the regions you enable so location Events can run when you arrive or leave, including while the app is closed.
+        NSUserActivityTypes: [com.flow-like.app.page]
     entitlements:
       path: flow-like-desktop_iOS/flow-like-desktop_iOS.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.flow-like.app]
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
         RUST_LOG: info
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: icon
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: false
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FLOW_LIKE_INTENTS_HOST FLOW_LIKE_SHORTCUTS_HOST"
         ENABLE_BITCODE: false
         ARCHS: [arm64]
         VALID_ARCHS: arm64
@@ -75,6 +91,18 @@ targets:
         OTHER_LDFLAGS: ["-lz"]
       groups: [app]
     dependencies:
+      - package: Firebase
+        product: FirebaseMessaging
+      - package: Firebase
+        product: FirebaseInAppMessaging-Beta
+      - package: FlowLikeNative
+        product: FlowLikeNative
+      - target: FlowLikeWidgets
+        embed: true
+      - target: FlowLikeShare
+        embed: true
+      - target: FlowLikeNotifications
+        embed: true
       - package: FlowLikeMLX
         product: FlowLikeMLX
       - framework: libapp.a
@@ -104,3 +132,85 @@ targets:
         outputFiles:
           - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  FlowLikeWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ../../apple/FlowLikeNative/Extensions/Widgets/FlowLikeWidgets.swift
+      - ../../apple/FlowLikeNative/Sources/FlowLikeNative/Intents.swift
+    dependencies:
+      - package: FlowLikeNative
+    entitlements:
+      path: ../../apple/FlowLikeNative/Extensions/Widgets/Widgets-iOS.entitlements
+    settings:
+      base:
+        INFOPLIST_FILE: "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.widgets
+        SWIFT_VERSION: "5.0"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) FLOW_LIKE_INTENTS_HOST"
+        DEVELOPMENT_TEAM: VVT9DYMA6M
+        APPLICATION_EXTENSION_API_ONLY: true
+    preBuildScripts:
+      - name: Match Containing App Version
+        script: >-
+          python3 "${PROJECT_DIR}/../../../scripts/apple-bundle-version.py"
+          --config "${PROJECT_DIR}/../../tauri.conf.json" --platform iOS
+          --container-info "${PROJECT_DIR}/flow-like-desktop_iOS/Info.plist"
+          --template "${PROJECT_DIR}/../../apple/FlowLikeNative/Extensions/Widgets/Info-iOS.plist"
+          --output "${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist"
+        basedOnDependencyAnalysis: false
+        outputFiles: ["$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"]
+    scheme: {}
+  FlowLikeShare:
+    type: app-extension
+    platform: iOS
+    sources: [../../apple/FlowLikeNative/Extensions/Share/ShareViewController.swift]
+    dependencies:
+      - package: FlowLikeNative
+    entitlements:
+      path: ../../apple/FlowLikeNative/Extensions/Share/Share-iOS.entitlements
+    settings:
+      base:
+        INFOPLIST_FILE: "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.share
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: VVT9DYMA6M
+        APPLICATION_EXTENSION_API_ONLY: true
+    preBuildScripts:
+      - name: Match Containing App Version
+        script: >-
+          python3 "${PROJECT_DIR}/../../../scripts/apple-bundle-version.py"
+          --config "${PROJECT_DIR}/../../tauri.conf.json" --platform iOS
+          --container-info "${PROJECT_DIR}/flow-like-desktop_iOS/Info.plist"
+          --template "${PROJECT_DIR}/../../apple/FlowLikeNative/Extensions/Share/Info-iOS.plist"
+          --output "${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist"
+        basedOnDependencyAnalysis: false
+        outputFiles: ["$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"]
+    scheme: {}
+  FlowLikeNotifications:
+    type: app-extension
+    platform: iOS
+    sources: [../../apple/FlowLikeNative/Extensions/Notifications/NotificationService.swift]
+    settings:
+      base:
+        INFOPLIST_FILE: "$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"
+        ENABLE_USER_SCRIPT_SANDBOXING: false
+        PRODUCT_BUNDLE_IDENTIFIER: com.flow-like.app.notifications
+        SWIFT_VERSION: "5.0"
+        DEVELOPMENT_TEAM: VVT9DYMA6M
+        CODE_SIGN_STYLE: Automatic
+        APPLICATION_EXTENSION_API_ONLY: true
+        SKIP_INSTALL: true
+    preBuildScripts:
+      - name: Match Containing App Version
+        script: >-
+          python3 "${PROJECT_DIR}/../../../scripts/apple-bundle-version.py"
+          --config "${PROJECT_DIR}/../../tauri.conf.json" --platform iOS
+          --container-info "${PROJECT_DIR}/flow-like-desktop_iOS/Info.plist"
+          --template "${PROJECT_DIR}/../../apple/FlowLikeNative/Extensions/Notifications/Info-iOS.plist"
+          --output "${DERIVED_FILE_DIR}/FlowLikeNative-Info.plist"
+        basedOnDependencyAnalysis: false
+        outputFiles: ["$(DERIVED_FILE_DIR)/FlowLikeNative-Info.plist"]
+    scheme: {}

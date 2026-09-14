@@ -7,6 +7,8 @@ model FileAccountingObject {
   objectKey String
   appId     String
   userId    String?
+  /// Account charged for this object's bytes, retained for late delete events.
+  payerId   String?
   size      BigInt
   sequencer String
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(3)

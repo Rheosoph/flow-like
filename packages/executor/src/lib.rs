@@ -40,6 +40,7 @@ pub mod config;
 pub mod error;
 pub mod execute;
 pub mod jwt;
+pub mod quota;
 pub mod resolve;
 pub mod router;
 pub mod streaming;

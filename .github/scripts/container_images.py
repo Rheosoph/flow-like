@@ -68,8 +68,9 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
 # Publication records identify the fallback separately from the runtime contract.
 TARGETS = tuple(sorted([
     target("aws", "api", "linux/arm64"),
-    target("aws", "executor"),
+    target("aws", "executor", "linux/arm64"),
     target("aws", "executor-async", recipe="apps/backend/aws/executor-ecs/Dockerfile"),
+    target("aws", "executor-lambda-async", "linux/arm64", recipe="apps/backend/aws/executor-async/Dockerfile"),
     target("aws", "compiler", "linux/arm64", recipe="apps/backend/aws/compiler-ecs/Dockerfile"),
     target("aws", "file-tracker", "linux/arm64"),
     target("aws", "media-transformer", "linux/arm64"),

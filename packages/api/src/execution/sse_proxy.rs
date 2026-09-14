@@ -145,10 +145,8 @@ fn create_sse_stream(
                 }
                 Err(err) => {
                     tracing::warn!(run_id = %run_id, error = %err, "SSE parse error");
-                    if let Some(db) = &db
-                        && let Err(e) = update_run_on_completion(db, &run_id, RunStatus::Failed, 0).await {
-                            tracing::error!(run_id = %run_id, error = %e, "Failed to mark run failed after SSE parse error");
-                        }
+                    // A transport failure says nothing about the worker outcome.
+                    // Its authenticated terminal report owns the run status.
                     let payload = serde_json::json!({ "error": err.to_string() });
                     let error_event = Event::default()
                         .event("error")
@@ -400,6 +398,16 @@ pub async fn update_run_on_completion(
     status: RunStatus,
     log_level: i32,
 ) -> Result<(), sea_orm::DbErr> {
+    update_run_on_completion_with_runtime(context, run_id, status, log_level, None).await
+}
+
+pub async fn update_run_on_completion_with_runtime(
+    context: &ExecutionAuditContext,
+    run_id: &str,
+    status: RunStatus,
+    log_level: i32,
+    runtime_ms: Option<u64>,
+) -> Result<(), sea_orm::DbErr> {
     let db = context.db.as_ref();
     if let Some(existing) = ExecutionRun::find_by_id(run_id).one(db).await? {
         if !matches!(existing.status, RunStatus::Pending | RunStatus::Running) {
@@ -421,7 +429,9 @@ pub async fn update_run_on_completion(
         let tracking_technical_user_id = existing.technical_user_id.clone();
         let tracking_app_id = existing.app_id.clone();
         let tracking_started_at = started_at.unwrap_or(created_at);
-        let tracking_duration_us = (now - tracking_started_at).num_microseconds().unwrap_or(0);
+        let tracking_duration_us = runtime_ms
+            .map(|ms| i64::try_from(ms.saturating_mul(1000)).unwrap_or(i64::MAX))
+            .unwrap_or_else(|| (now - tracking_started_at).num_microseconds().unwrap_or(0));
         let tracking_status = match status {
             RunStatus::Completed => ExecutionStatus::Info,
             RunStatus::Failed | RunStatus::Timeout => ExecutionStatus::Error,

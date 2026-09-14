@@ -2,7 +2,7 @@ import type Graph from "graphology";
 import type { LayoutPosition } from "./graph-layout";
 
 const STORE_PREFIX = "flow-like:graph-scene:";
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 /** Above this a scene is not worth persisting — the layout is cheap to redo and the JSON is not. */
 const MAX_STORED_NODES = 3000;
 
@@ -16,6 +16,8 @@ interface StoredGraphScene {
 export interface GraphSceneSnapshot {
 	positions: Map<string, LayoutPosition>;
 	pinned: Set<string>;
+	/** Old automatic coordinates need a fresh layout; hand-placed pins survive. */
+	needsLayout: boolean;
 }
 
 /**
@@ -29,11 +31,22 @@ export function loadGraphScene(key: string): GraphSceneSnapshot | null {
 		const raw = window.localStorage.getItem(`${STORE_PREFIX}${key}`);
 		if (!raw) return null;
 		const parsed = JSON.parse(raw) as StoredGraphScene;
-		if (parsed?.v !== STORE_VERSION || typeof parsed.positions !== "object") {
+		if (
+			(parsed?.v !== 1 && parsed?.v !== STORE_VERSION) ||
+			!parsed.positions ||
+			typeof parsed.positions !== "object"
+		) {
 			return null;
 		}
+		const needsLayout = parsed.v !== STORE_VERSION;
+		const storedPins = new Set(
+			Array.isArray(parsed.pinned)
+				? parsed.pinned.filter((nodeId) => typeof nodeId === "string")
+				: [],
+		);
 		const positions = new Map<string, LayoutPosition>();
 		for (const [nodeId, coords] of Object.entries(parsed.positions)) {
+			if (needsLayout && !storedPins.has(nodeId)) continue;
 			if (
 				Array.isArray(coords) &&
 				Number.isFinite(coords[0]) &&
@@ -44,7 +57,10 @@ export function loadGraphScene(key: string): GraphSceneSnapshot | null {
 		}
 		return {
 			positions,
-			pinned: new Set(Array.isArray(parsed.pinned) ? parsed.pinned : []),
+			pinned: new Set(
+				[...storedPins].filter((nodeId) => positions.has(nodeId)),
+			),
+			needsLayout,
 		};
 	} catch {
 		return null;

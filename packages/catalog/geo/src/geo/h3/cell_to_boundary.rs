@@ -5,8 +5,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{async_trait, json::json};
 
-use crate::geo::GeoCoordinate;
-
 #[crate::register_node]
 #[derive(Default)]
 pub struct CellToBoundaryNode {}
@@ -26,6 +24,7 @@ impl NodeLogic for CellToBoundaryNode {
             "Returns the polygon boundary (vertices) of an H3 cell. Useful for visualization and geospatial operations.",
             "Web/Geo/H3",
         );
+        node.set_version(2);
         node.set_flowscript_name("h3", "cellToBoundary");
         node.add_icon("/flow/icons/hexagon.svg");
 
@@ -37,13 +36,13 @@ impl NodeLogic for CellToBoundaryNode {
         )
         .set_default_value(Some(json!("")));
 
-        node.add_output_pin(
-            "boundary",
-            "Boundary",
-            "Array of coordinates representing the cell boundary (closed polygon)",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>();
+        crate::geo::pins::geometry_output(
+            &mut node,
+            "geometry_out",
+            "Geometry",
+            "Cell boundary as a Polygon, or MultiPolygon when it crosses the antimeridian",
+            None,
+        );
 
         node.add_output_pin(
             "vertex_count",
@@ -71,20 +70,20 @@ impl NodeLogic for CellToBoundaryNode {
         use h3o::CellIndex;
         use std::str::FromStr;
 
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
         let cell_str: String = context.evaluate_pin("cell").await?;
 
         let cell = CellIndex::from_str(&cell_str)
             .map_err(|e| flow_like_types::anyhow!("Invalid H3 cell index: {}", e))?;
 
-        let boundary = cell.boundary();
-        let coords: Vec<GeoCoordinate> = boundary
-            .iter()
-            .map(|ll| GeoCoordinate::new(ll.lat(), ll.lng()))
-            .collect();
+        let vertex_count = cell.boundary().len() as i64;
 
-        let vertex_count = coords.len() as i64;
-
-        context.set_pin_value("boundary", json!(coords)).await?;
+        context
+            .set_pin_value(
+                "geometry_out",
+                crate::geo::geometry::integrations::h3_boundary_geometry(cell)?,
+            )
+            .await?;
         context
             .set_pin_value("vertex_count", json!(vertex_count))
             .await?;

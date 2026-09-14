@@ -1,5 +1,7 @@
 "use client";
 
+import { NativeEventSettingsCard } from "./native-event-settings";
+
 import {
 	Badge,
 	Button,
@@ -1673,6 +1675,24 @@ function EventConfiguration({
 						<SectionGuidance event={formData} section={activeSection} />
 
 						{activeSection === "identity" && (
+							<NativeEventSettingsCard
+								appId={appId}
+								event={formData}
+								disabled={!canWriteEvents}
+								onChange={(settings) => {
+									if (!isEditing) setIsEditing(true);
+									handleInputChange(
+										"config",
+										convertJsonToUint8Array({
+											...parsedConfig,
+											native_integration: settings,
+										}),
+									);
+								}}
+							/>
+						)}
+
+						{activeSection === "identity" && (
 							<Card>
 								<CardHeader>
 									<CardTitle className="flex items-center gap-2">
@@ -2579,7 +2599,15 @@ function EventConfiguration({
 											if (!isEditing) setIsEditing(true);
 											handleInputChange(
 												"config",
-												convertJsonToUint8Array(config),
+												convertJsonToUint8Array({
+													...config,
+													...(parsedConfig.native_integration
+														? {
+																native_integration:
+																	parsedConfig.native_integration,
+															}
+														: {}),
+												}),
 											);
 										}}
 									/>

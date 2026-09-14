@@ -4,12 +4,12 @@
 
 use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
-use crate::jwt::{verify_jwt_async, ExecutorClaims, ExecutorPageExecutionClaims};
+use crate::jwt::{ExecutorClaims, ExecutorPageExecutionClaims, verify_jwt_async};
 use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
 use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
 use crate::widgets::{HubAccess, HubWidgetSource};
 use flow_like::credentials::StoreType;
-use flow_like::flow::compiled::{template_from_bytes, CompiledRunTemplate, TemplateCache};
+use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache, template_from_bytes};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
+#[cfg(test)]
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
@@ -496,6 +498,75 @@ pub async fn execute(
     request: ExecutionRequest,
     config: ExecutorConfig,
 ) -> Result<ExecutionResult, ExecutorError> {
+    let mut callback_task = CallbackTask::default();
+    let quota_token = request.executor_jwt.clone();
+    if let Ok(claims) = verify_jwt_async(&quota_token).await {
+        crate::quota::record_compute(&claims, &quota_token, "started").await;
+    }
+    let result = execute_inner(request, config, &mut callback_task).await;
+    callback_task.abort_and_join().await;
+    if result.is_err() {
+        if let Ok(claims) = verify_jwt_async(&quota_token).await {
+            crate::quota::reject(&claims, &quota_token).await;
+        }
+    }
+    if let Ok(claims) = verify_jwt_async(&quota_token).await {
+        crate::quota::record_compute(
+            &claims,
+            &quota_token,
+            if result.is_ok() {
+                "completed"
+            } else {
+                "failed"
+            },
+        )
+        .await;
+    }
+    result
+}
+
+#[derive(Default)]
+struct CallbackTask {
+    handle: Option<tokio::task::JoinHandle<Result<(), ExecutorError>>>,
+}
+
+impl CallbackTask {
+    async fn abort_and_join(&mut self) {
+        if let Some(handle) = self.handle.as_mut() {
+            handle.abort();
+            let _ = handle.await;
+        }
+        self.handle = None;
+    }
+}
+
+impl Drop for CallbackTask {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.handle {
+            handle.abort();
+        }
+    }
+}
+
+fn check_execution_deadline(config: &ExecutorConfig) -> Result<(), ExecutorError> {
+    if config
+        .execution_deadline()
+        .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
+        || config
+            .cancellation()
+            .is_some_and(|token| token.is_cancelled())
+    {
+        return Err(ExecutorError::Timeout);
+    }
+    Ok(())
+}
+
+async fn execute_inner(
+    request: ExecutionRequest,
+    config: ExecutorConfig,
+    callback_task: &mut CallbackTask,
+) -> Result<ExecutionResult, ExecutorError> {
+    check_execution_deadline(&config)?;
     let start = Instant::now();
 
     // Verify JWT and extract claims
@@ -524,6 +595,7 @@ pub async fn execute(
         );
         let client = callback_client();
         loop {
+            check_execution_deadline(&config)?;
             let start_update = lease_progress_update(&lease, config.strict_lease_duration_ms());
             let acknowledgement = send_progress(
                 &progress_url,
@@ -537,14 +609,18 @@ pub async fn execute(
             match interpret_start_acknowledgement(&acknowledgement)? {
                 StartAcknowledgement::Execute => break,
                 StartAcknowledgement::Busy { expires_at } => {
-                    let now = chrono::Utc::now().timestamp_millis();
-                    let wait_ms = expires_at.saturating_sub(now).clamp(250, 30_000) as u64;
                     tracing::info!(
                         run_id = %claims.run_id,
-                        wait_ms,
-                        "another delivery owns the execution lease; waiting to retry claim"
+                        expires_at,
+                        "another delivery owns this run; acknowledging the duplicate"
                     );
-                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                    return Ok(ExecutionResult {
+                        run_id: claims.run_id,
+                        status: crate::types::ExecutionStatus::Running,
+                        output: None,
+                        error: None,
+                        duration_ms: 0,
+                    });
                 }
                 StartAcknowledgement::AlreadyTerminal(status) => {
                     tracing::info!(
@@ -567,6 +643,7 @@ pub async fn execute(
         None
     };
 
+    check_execution_deadline(&config)?;
     // Build FlowLike state from the request credentials
     let state = build_flow_state(
         &request.credentials,
@@ -589,7 +666,7 @@ pub async fn execute(
     let callback_jwt = executor_jwt.clone();
     let callback_config = config.clone();
     let callback_lease = queue_lease.clone();
-    let callback_handle = tokio::spawn(async move {
+    callback_task.handle = Some(tokio::spawn(async move {
         let result = run_callback_batcher(
             event_rx,
             callback_claims,
@@ -602,7 +679,7 @@ pub async fn execute(
             let _ = callback_failure_tx.send(Some(error.to_string()));
         }
         result
-    });
+    }));
 
     let mut wasm_nodes = Vec::new();
     let mut failed_wasm_package_ids = BTreeSet::new();
@@ -637,6 +714,7 @@ pub async fn execute(
 
     let state = Arc::new(state);
 
+    check_execution_deadline(&config)?;
     let board_id = &request.board_id;
     // Template build resolves every node against the registry, so a board
     // whose WASM packages failed to download errors here first — keep the
@@ -690,6 +768,7 @@ pub async fn execute(
         return Err(error);
     }
 
+    check_execution_deadline(&config)?;
     // Send start event to API
     send_event(
         &event_tx,
@@ -811,6 +890,10 @@ pub async fn execute(
         }
     };
 
+    if let Err(error) = check_execution_deadline(&config) {
+        channel.close().await;
+        return Err(error);
+    }
     let run = InternalRun::from_template(
         &request.app_id,
         template.clone(),
@@ -832,6 +915,7 @@ pub async fn execute(
     let mut run = match run {
         Ok(run) => run,
         Err(error) => {
+            channel.close().await;
             record_executor_rejection(
                 &state,
                 &request,
@@ -857,12 +941,54 @@ pub async fn execute(
         run.set_user_context(user_context);
     }
 
+    if let Err(error) = check_execution_deadline(&config) {
+        channel.close().await;
+        return Err(error);
+    }
+    let cancellation = Some(config.cancellation().unwrap_or_default());
+    if let Some(token) = &cancellation {
+        run.set_cancellation_token(token.clone());
+        run.set_cancellation_log(
+            "Execution cancelled or its deadline was reached",
+            flow_like::flow::execution::LogLevel::Error,
+        );
+    }
+
     // Execute with timeout while continuously renewing the independent Cosmos
     // ownership lease. Losing that lease cancels the run before another
     // delivery is allowed to take over.
-    let mut execution_future = Box::pin(tokio::time::timeout(config.execution_timeout(), async {
-        run.execute(state.clone()).await
-    }));
+    let mut quota_lease = crate::quota::begin(&claims, &executor_jwt).await?;
+    if let (Some(lease), Some(token)) = (&mut quota_lease, &cancellation) {
+        lease.watch_cancellation(token.clone());
+    }
+    let runtime_timeout = quota_lease
+        .as_ref()
+        .map(|lease| lease.limit.min(config.execution_timeout()))
+        .unwrap_or_else(|| config.execution_timeout());
+    let workflow_started = Instant::now();
+    let mut execution_future = Box::pin(async {
+        if let Some(token) = &cancellation {
+            let deadline = config
+                .execution_deadline()
+                .unwrap_or_else(|| tokio::time::Instant::now() + runtime_timeout)
+                .min(tokio::time::Instant::now() + runtime_timeout);
+            let mut execution = Box::pin(run.execute(state.clone()));
+            tokio::select! {
+                result = &mut execution => Ok(result),
+                _ = tokio::time::sleep_until(deadline) => {
+                    token.cancel();
+                    // Let the run join its flush task and close resources before
+                    // the runtime decides whether its cleanup grace is exhausted.
+                    let _ = execution.await;
+                    Err(())
+                }
+            }
+        } else {
+            tokio::time::timeout(runtime_timeout, run.execute(state.clone()))
+                .await
+                .map_err(|_| ())
+        }
+    });
     let mut lease_failure = None;
     let execution_result = if let Some(lease) = queue_lease.as_ref() {
         let mut renewal = Box::pin(maintain_queue_lease(
@@ -893,11 +1019,21 @@ pub async fn execute(
         Some(execution_future.as_mut().await)
     };
 
-    channel.close().await;
-
+    if lease_failure.is_some() {
+        if let Some(token) = &cancellation {
+            token.cancel();
+        }
+    }
     if let Some(error) = lease_failure {
+        if cancellation.is_some() {
+            let _ = execution_future.as_mut().await;
+        }
         drop(execution_future);
-        callback_handle.abort();
+        if let Some(lease) = &quota_lease {
+            lease.finish(lease.elapsed_ms(), "lease_lost").await?;
+        }
+        channel.close().await;
+        callback_task.abort_and_join().await;
         drop(run);
         drop(intercom_handler);
         drop(event_tx);
@@ -905,13 +1041,31 @@ pub async fn execute(
     }
     let execution_result = execution_result.expect("execution result exists without lease failure");
     drop(execution_future);
+    let workflow_duration_ms = workflow_started
+        .elapsed()
+        .as_nanos()
+        .div_ceil(1_000_000)
+        .min(u64::MAX as u128) as u64;
+    if let Some(lease) = &quota_lease {
+        let status = if execution_result.is_err() {
+            "timeout".to_owned()
+        } else {
+            format!(
+                "{:?}",
+                ExecutionStatus::from_final_run_status(&run.get_status().await)
+            )
+            .to_lowercase()
+        };
+        lease.finish(workflow_duration_ms, &status).await?;
+    }
+    channel.close().await;
 
     // Flush any remaining buffered intercom events
     if let Err(e) = intercom_handler.flush().await {
         tracing::warn!(error = %e, "Failed to flush intercom handler");
     }
 
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let duration_ms = workflow_duration_ms;
 
     let (status, output, error) = match &execution_result {
         Ok(log_meta) => {
@@ -1011,7 +1165,13 @@ pub async fn execute(
     drop(intercom_handler);
     drop(event_tx);
 
-    match callback_handle.await {
+    let callback_result = callback_task
+        .handle
+        .as_mut()
+        .expect("callback task exists")
+        .await;
+    callback_task.handle = None;
+    match callback_result {
         Ok(result) if queue_lease.is_some() => result?,
         Ok(_) => {}
         Err(error) if queue_lease.is_some() => {
@@ -1774,14 +1934,16 @@ mod page_request_binding_tests {
         let page = latest_page();
         validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", None)
             .expect("the decoded ETag-bound Latest selector is accepted");
-        assert!(validate_page_request_binding(
-            &page,
-            Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
-            Some("etag-a"),
-            "entry-1",
-            None,
-        )
-        .is_err());
+        assert!(
+            validate_page_request_binding(
+                &page,
+                Some(ETAG_BOUND_LATEST_VERSION_SENTINEL),
+                Some("etag-a"),
+                "entry-1",
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1816,14 +1978,10 @@ mod page_request_binding_tests {
                 cwasm_checksum: "cwasm-checksum".into(),
             },
         )]);
-        assert!(validate_page_request_binding(
-            &page,
-            None,
-            Some("etag-a"),
-            "entry-1",
-            Some(&packages),
-        )
-        .is_err());
+        assert!(
+            validate_page_request_binding(&page, None, Some("etag-a"), "entry-1", Some(&packages),)
+                .is_err()
+        );
     }
 }
 
@@ -1873,25 +2031,112 @@ mod callback_acknowledgement_tests {
 
     #[test]
     fn terminal_acknowledgement_requires_persisted_terminal_state() {
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Completed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Running"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(true, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_err());
-        assert!(ensure_terminal_acknowledgement(
-            &acknowledgement(false, "Failed"),
-            &ExecutionStatus::Completed,
-        )
-        .is_ok());
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Completed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Running"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(true, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_terminal_acknowledgement(
+                &acknowledgement(false, "Failed"),
+                &ExecutionStatus::Completed,
+            )
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn callback_cleanup_joins_the_task_before_returning() {
+        use std::sync::atomic::AtomicBool;
+
+        struct Finished(Arc<AtomicBool>);
+        impl Drop for Finished {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let task_finished = finished.clone();
+        let task_started = started.clone();
+        let mut task = CallbackTask {
+            handle: Some(tokio::spawn(async move {
+                let _finished = Finished(task_finished);
+                task_started.notify_one();
+                std::future::pending::<()>().await;
+                Ok(())
+            })),
+        };
+        started.notified().await;
+        task.abort_and_join().await;
+        assert!(finished.load(Ordering::SeqCst));
+        assert!(task.handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropping_execution_does_not_detach_its_callback_task() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(tokio::sync::Notify::new());
+        struct NotifyOnDrop(Arc<tokio::sync::Notify>);
+        impl Drop for NotifyOnDrop {
+            fn drop(&mut self) {
+                self.0.notify_one();
+            }
+        }
+        let task_started = started.clone();
+        let task_finished = finished.clone();
+        let task = CallbackTask {
+            handle: Some(tokio::spawn(async move {
+                let _finished = NotifyOnDrop(task_finished);
+                task_started.notify_one();
+                std::future::pending::<()>().await;
+                Ok(())
+            })),
+        };
+        started.notified().await;
+        drop(task);
+        tokio::time::timeout(Duration::from_secs(1), finished.notified())
+            .await
+            .expect("callback task was aborted with its owner");
+    }
+
+    #[test]
+    fn cancelled_or_expired_invocations_cannot_start_more_execution_work() {
+        use flow_like_types::tokio_util::sync::CancellationToken;
+
+        let token = CancellationToken::new();
+        let future = tokio::time::Instant::now() + Duration::from_secs(60);
+        let config = ExecutorConfig::default().with_execution_deadline(future, token.clone());
+        assert!(check_execution_deadline(&config).is_ok());
+        token.cancel();
+        assert!(matches!(
+            check_execution_deadline(&config),
+            Err(ExecutorError::Timeout)
+        ));
+        let expired = ExecutorConfig::default().with_execution_deadline(
+            tokio::time::Instant::now() - Duration::from_secs(1),
+            CancellationToken::new(),
+        );
+        assert!(matches!(
+            check_execution_deadline(&expired),
+            Err(ExecutorError::Timeout)
+        ));
     }
 }

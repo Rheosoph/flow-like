@@ -1,0 +1,23 @@
+---
+import PricingTiers from "../../../../apps/website/src/components/pricing/PricingTiers.astro";
+import PricingFAQ from "../../../../apps/website/src/components/pricing/PricingFAQ.astro";
+import "../../styles.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flow-Like website pricing preview</title>
+  </head>
+  <body class="bg-background text-foreground antialiased">
+    <header class="border-b px-6 py-3 text-sm text-muted-foreground">
+      Local preview · actual website components · configured plan data
+    </header>
+    <main>
+      <div id="pricing"><PricingTiers lang="en" /></div>
+      <div id="faq"><PricingFAQ lang="en" /></div>
+    </main>
+  </body>
+</html>

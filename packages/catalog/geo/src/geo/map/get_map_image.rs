@@ -5,9 +5,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeImage;
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
 
-use crate::geo::GeoCoordinate;
+use crate::geo::pins::geometry_input;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -28,6 +28,7 @@ impl NodeLogic for GetMapImageNode {
             "Fetches a static map image for the given coordinates using OpenStreetMap tiles. Returns a satellite/standard map image centered on the location.",
             "Web/Geo/Map",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "getMapImage");
         node.add_icon("/flow/icons/map.svg");
 
@@ -37,14 +38,13 @@ impl NodeLogic for GetMapImageNode {
             "Initiate the map image request",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "coordinate",
-            "Coordinate",
-            "The geographic coordinate (latitude, longitude) to center the map on",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        geometry_input(
+            &mut node,
+            "geometry",
+            "Geometry",
+            "Point at the map center",
+            Some(GeometryKind::Point),
+        );
 
         node.add_input_pin(
             "zoom",
@@ -127,7 +127,7 @@ impl NodeLogic for GetMapImageNode {
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
 
-        let coordinate: GeoCoordinate = context.evaluate_pin("coordinate").await?;
+        let coordinate = crate::geo::pins::coordinate_input(context, "geometry").await?;
         let zoom: i64 = context.evaluate_pin("zoom").await?;
         let width: i64 = context.evaluate_pin("width").await?;
         let height: i64 = context.evaluate_pin("height").await?;

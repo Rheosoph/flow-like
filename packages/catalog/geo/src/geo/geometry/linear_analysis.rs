@@ -12,24 +12,29 @@ use flow_like_types::{
 };
 
 #[cfg(feature = "execute")]
+use super::{check_topology_validation, cpu};
+#[cfg(feature = "execute")]
 use flow_like_geometry::{from_geo, to_geo};
 #[cfg(feature = "execute")]
 use flow_like_types::{
     Result, Value, anyhow, bail,
-    geometry::{canonicalize_geometry, validate_geometry},
+    geometry::canonicalize_geometry,
     json::{Map, json},
 };
 #[cfg(feature = "execute")]
 use geo::{
-    Closest, ClosestPoint, Coord, CoordsIter, Euclidean, Geodesic, Geometry, HausdorffDistance,
-    Intersects, Line, LineString, MapCoords, MultiLineString, Point, Validation,
+    Closest, ClosestPoint, Coord, CoordsIter, Distance, Euclidean, Geodesic, Geometry, Intersects,
+    Line, LineString, MapCoords, MultiLineString, Point,
     line_intersection::{LineIntersection, line_intersection},
     line_measures::FrechetDistance,
 };
 #[cfg(feature = "execute")]
 use std::collections::HashMap;
 
+#[cfg(feature = "execute")]
 const MAX_PAIR_COMPARISONS: usize = 25_000_000;
+#[cfg(feature = "execute")]
+const MAX_GEODESIC_FRECHET_COMPARISONS: usize = 2_000_000;
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -83,8 +88,8 @@ fn definition(operation: Operation) -> Node {
         ShortestLine => (
             "geometry_shortest_line",
             "shortestLine",
-            "Geometry Shortest Line (Planar)",
-            "Returns the shortest two-position LineString from A to B in coordinate degrees. Intersecting inputs produce coincident positions.",
+            "Geometry Shortest Connection (Planar)",
+            "Returns the shortest connection from A to B in coordinate degrees. Intersecting inputs return a Point; disjoint inputs return a LineString.",
         ),
         HausdorffDistance => (
             "geometry_hausdorff_distance",
@@ -140,8 +145,8 @@ fn definition(operation: Operation) -> Node {
             geometry_input(&mut node, "b", "Destination geometry", None);
             geometry_output(
                 &mut node,
-                "Shortest segment from A to B",
-                Some(GeometryKind::LineString),
+                "Shortest Point or LineString connection from A to B",
+                None,
             );
         }
         HausdorffDistance => {
@@ -264,9 +269,7 @@ fn number(inputs: &Value, name: &str) -> Result<f64> {
 fn checked_geometry(value: &Value) -> Result<Geometry<f64>> {
     let value = canonicalize_geometry(value, None)?;
     let geometry = to_geo(&value)?;
-    geometry
-        .check_validation()
-        .map_err(|error| anyhow!("Invalid geometry topology: {error}"))?;
+    check_topology_validation(&geometry, "Invalid geometry topology")?;
     Ok(geometry)
 }
 
@@ -291,9 +294,7 @@ fn checked_point(value: &Value) -> Result<Point<f64>> {
 #[cfg(feature = "execute")]
 fn encoded_geometry(geometry: Geometry<f64>) -> Result<Value> {
     let value = canonicalize_geometry(&from_geo(&geometry)?, None)?;
-    to_geo(&value)?
-        .check_validation()
-        .map_err(|error| anyhow!("Geometry operation collapsed topology: {error}"))?;
+    check_topology_validation(&to_geo(&value)?, "Geometry operation collapsed topology")?;
     Ok(value)
 }
 
@@ -307,10 +308,20 @@ fn finite_distance(distance: f64) -> Result<Value> {
 
 #[cfg(feature = "execute")]
 fn guard_pair_comparisons(a: usize, b: usize, operation: &str) -> Result<()> {
+    guard_pair_comparisons_with_limit(a, b, operation, MAX_PAIR_COMPARISONS)
+}
+
+#[cfg(feature = "execute")]
+fn guard_pair_comparisons_with_limit(
+    a: usize,
+    b: usize,
+    operation: &str,
+    limit: usize,
+) -> Result<()> {
     let comparisons = a.checked_mul(b).unwrap_or(usize::MAX);
-    if comparisons > MAX_PAIR_COMPARISONS {
+    if comparisons > limit {
         bail!(
-            "{operation} requires {comparisons} coordinate-pair comparisons, exceeding the limit of {MAX_PAIR_COMPARISONS}"
+            "{operation} requires {comparisons} coordinate-pair comparisons, exceeding the limit of {limit}"
         );
     }
     Ok(())
@@ -364,6 +375,24 @@ fn squared_distance(a: Coord<f64>, b: Coord<f64>) -> f64 {
 }
 
 #[cfg(feature = "execute")]
+fn coordinate_pair_is_before(
+    candidate_from: Coord<f64>,
+    candidate_to: Coord<f64>,
+    current_from: Coord<f64>,
+    current_to: Coord<f64>,
+) -> bool {
+    [
+        candidate_from.x.total_cmp(&current_from.x),
+        candidate_from.y.total_cmp(&current_from.y),
+        candidate_to.x.total_cmp(&current_to.x),
+        candidate_to.y.total_cmp(&current_to.y),
+    ]
+    .into_iter()
+    .find(|ordering| !ordering.is_eq())
+    .is_some_and(|ordering| ordering.is_lt())
+}
+
+#[cfg(feature = "execute")]
 fn shortest_line(a: &Geometry<f64>, b: &Geometry<f64>) -> Result<(Coord<f64>, Coord<f64>)> {
     let a_coords: Vec<_> = a.coords_iter().collect();
     let b_coords: Vec<_> = b.coords_iter().collect();
@@ -371,33 +400,42 @@ fn shortest_line(a: &Geometry<f64>, b: &Geometry<f64>) -> Result<(Coord<f64>, Co
         bail!("Empty geometries have no shortest line");
     }
     guard_pair_comparisons(a_coords.len(), b_coords.len(), "Shortest Line")?;
+    let work = a_coords.len().saturating_mul(b_coords.len());
 
     if a.intersects(b) {
-        for coord in &a_coords {
-            if let Some((point, true)) = closest_coord(b, *coord) {
-                return Ok((point, point));
-            }
+        // Ordered search preserves the first common position and stops unnecessary work.
+        let common_from_a = cpu::find_map_first_ordered(&a_coords, work, |_, coord| {
+            closest_coord(b, *coord).and_then(|(point, intersects)| intersects.then_some(point))
+        });
+        if let Some(point) = common_from_a {
+            return Ok((point, point));
         }
-        for coord in &b_coords {
-            if let Some((point, true)) = closest_coord(a, *coord) {
-                return Ok((point, point));
-            }
+        let common_from_b = cpu::find_map_first_ordered(&b_coords, work, |_, coord| {
+            closest_coord(a, *coord).and_then(|(point, intersects)| intersects.then_some(point))
+        });
+        if let Some(point) = common_from_b {
+            return Ok((point, point));
         }
         let mut a_segments = Vec::new();
         let mut b_segments = Vec::new();
         collect_segments(a, &mut a_segments);
         collect_segments(b, &mut b_segments);
         guard_pair_comparisons(a_segments.len(), b_segments.len(), "Shortest Line")?;
-        for a_segment in a_segments {
-            for b_segment in &b_segments {
-                if let Some(intersection) = line_intersection(a_segment, *b_segment) {
-                    let point = match intersection {
+        let common_segments = cpu::find_map_first_ordered(
+            &a_segments,
+            a_segments.len().saturating_mul(b_segments.len()),
+            |_, a_segment| {
+                b_segments.iter().find_map(|b_segment| {
+                    line_intersection(*a_segment, *b_segment).map(|intersection| match intersection
+                    {
                         LineIntersection::SinglePoint { intersection, .. } => intersection,
                         LineIntersection::Collinear { intersection } => intersection.start,
-                    };
-                    return Ok((point, point));
-                }
-            }
+                    })
+                })
+            },
+        );
+        if let Some(point) = common_segments {
+            return Ok((point, point));
         }
         bail!("Intersecting geometries did not expose a finite common position");
     }
@@ -405,22 +443,51 @@ fn shortest_line(a: &Geometry<f64>, b: &Geometry<f64>) -> Result<(Coord<f64>, Co
     let mut best: Option<(Coord<f64>, Coord<f64>, f64)> = None;
     let mut consider = |from: Coord<f64>, to: Coord<f64>| {
         let distance = squared_distance(from, to);
-        if best.is_none_or(|(_, _, current)| distance < current) {
+        if best.is_none_or(|(current_from, current_to, current_distance)| {
+            distance < current_distance
+                || (distance == current_distance
+                    && coordinate_pair_is_before(from, to, current_from, current_to))
+        }) {
             best = Some((from, to, distance));
         }
     };
-    for coord in a_coords {
-        if let Some((closest, _)) = closest_coord(b, coord) {
-            consider(coord, closest);
-        }
-    }
-    for coord in b_coords {
-        if let Some((closest, _)) = closest_coord(a, coord) {
-            consider(closest, coord);
-        }
+    let candidates = cpu::map_indices(
+        a_coords.len() + b_coords.len(),
+        work.saturating_mul(2),
+        |index| {
+            if let Some(coord) = a_coords.get(index) {
+                closest_coord(b, *coord).map(|(closest, _)| (*coord, closest))
+            } else {
+                let coord = b_coords[index - a_coords.len()];
+                closest_coord(a, coord).map(|(closest, _)| (closest, coord))
+            }
+        },
+    );
+    for (from, to) in candidates.into_iter().flatten() {
+        consider(from, to);
     }
     best.map(|(from, to, _)| (from, to))
         .ok_or_else(|| anyhow!("Could not determine a shortest line"))
+}
+
+#[cfg(feature = "execute")]
+fn vertex_hausdorff_distance(a: &[Coord<f64>], b: &[Coord<f64>]) -> f64 {
+    let nearest = cpu::map_indices(
+        a.len() + b.len(),
+        a.len().saturating_mul(b.len()).saturating_mul(2),
+        |index| {
+            let (coord, other) = if let Some(coord) = a.get(index) {
+                (*coord, b)
+            } else {
+                (b[index - a.len()], a)
+            };
+            other
+                .iter()
+                .map(|other| Euclidean.distance(coord, *other))
+                .fold(f64::MAX, f64::min)
+        },
+    );
+    nearest.into_iter().fold(f64::MIN, f64::max)
 }
 
 #[cfg(feature = "execute")]
@@ -566,12 +633,12 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
             let a = checked_geometry(input(inputs, "a")?)?;
             let b = checked_geometry(input(inputs, "b")?)?;
             let (from, to) = shortest_line(&a, &b)?;
-            let result = json!({
-                "type":"LineString",
-                "coordinates":[[from.x,from.y],[to.x,to.y]]
-            });
-            validate_geometry(&result, Some(GeometryKind::LineString))?;
-            Ok(vec![("geometry_out", result)])
+            let result = if from == to {
+                Geometry::Point(Point::from(from))
+            } else {
+                Geometry::LineString(LineString::new(vec![from, to]))
+            };
+            Ok(vec![("geometry_out", encoded_geometry(result)?)])
         }
         HausdorffDistance => {
             let a = checked_geometry(input(inputs, "a")?)?;
@@ -582,16 +649,28 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 bail!("Empty geometries have no Hausdorff distance");
             }
             guard_pair_comparisons(a_count, b_count, "Hausdorff Distance")?;
+            let a_coords: Vec<_> = a.coords_iter().collect();
+            let b_coords: Vec<_> = b.coords_iter().collect();
             Ok(vec![(
                 "distance",
-                finite_distance(a.hausdorff_distance(&b))?,
+                finite_distance(vertex_hausdorff_distance(&a_coords, &b_coords))?,
             )])
         }
         PlanarFrechetDistance | GeodesicFrechetDistance => {
             let a = checked_line(input(inputs, "a")?)?;
             let b = checked_line(input(inputs, "b")?)?;
-            guard_pair_comparisons(a.0.len(), b.0.len(), "Fréchet Distance")?;
-            let distance = if matches!(operation, GeodesicFrechetDistance) {
+            let geodesic = matches!(operation, GeodesicFrechetDistance);
+            if geodesic {
+                guard_pair_comparisons_with_limit(
+                    a.0.len(),
+                    b.0.len(),
+                    "Geodesic Fréchet Distance",
+                    MAX_GEODESIC_FRECHET_COMPARISONS,
+                )?;
+            } else {
+                guard_pair_comparisons(a.0.len(), b.0.len(), "Planar Fréchet Distance")?;
+            }
+            let distance = if geodesic {
                 Geodesic.frechet_distance(&a, &b)
             } else {
                 Euclidean.frechet_distance(&a, &b)
@@ -663,7 +742,8 @@ async fn run_operation(operation: Operation, context: &mut ExecutionContext) -> 
             context.evaluate_pin::<Value>(&pin.name).await?,
         );
     }
-    for (name, value) in execute(operation, &Value::Object(inputs))? {
+    let outputs = super::cpu::run(move || execute(operation, &Value::Object(inputs))).await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -790,6 +870,7 @@ mod definition_tests {
 #[cfg(all(test, feature = "execute"))]
 mod execution_tests {
     use super::*;
+    use geo::HausdorffDistance;
 
     fn point(x: f64, y: f64) -> Value {
         json!({"type":"Point", "coordinates":[x,y]})
@@ -818,7 +899,7 @@ mod execution_tests {
             }),
             "geometry_out",
         );
-        assert_eq!(crossing["coordinates"], json!([[1.0, 1.0], [1.0, 1.0]]));
+        assert_eq!(crossing, point(1.0, 1.0));
 
         let disjoint = result(
             Operation::ShortestLine,
@@ -829,6 +910,113 @@ mod execution_tests {
             "geometry_out",
         );
         assert_eq!(disjoint["coordinates"], json!([[1.0, 0.0], [1.0, 2.0]]));
+    }
+
+    #[tokio::test]
+    async fn parallel_shortest_connections_preserve_ties_and_first_common_positions() {
+        let descending_line = |y: f64| {
+            line(json!(
+                (0..192)
+                    .map(|index| [10.0 - index as f64 / 191.0 * 20.0, y])
+                    .collect::<Vec<_>>()
+            ))
+        };
+        let crossing_lines = |horizontal: bool| {
+            json!({
+                "type":"MultiLineString",
+                "coordinates":(0..128).map(|index| {
+                    let position = 5.0 - index as f64 / 127.0 * 10.0;
+                    if horizontal {
+                        [[10.0,position],[-10.0,position]]
+                    } else {
+                        [[position,10.0],[position,-10.0]]
+                    }
+                }).collect::<Vec<_>>()
+            })
+        };
+        for (inputs, expected) in [
+            (
+                json!({"a":descending_line(0.0),"b":descending_line(2.0)}),
+                line(json!([[-10.0, 0.0], [-10.0, 2.0]])),
+            ),
+            (
+                json!({"a":descending_line(0.0),"b":descending_line(0.0)}),
+                point(10.0, 0.0),
+            ),
+            (
+                json!({"a":crossing_lines(true),"b":crossing_lines(false)}),
+                point(5.0, 5.0),
+            ),
+        ] {
+            let serial = execute(Operation::ShortestLine, &inputs).unwrap();
+            assert_eq!(serial[0].1, expected);
+            let parallel = cpu::run(move || execute(Operation::ShortestLine, &inputs))
+                .await
+                .unwrap();
+            assert_eq!(parallel, serial);
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_hausdorff_matches_geo_vertex_distance_exactly() {
+        let inputs = json!({
+            "a":{
+                "type":"GeometryCollection",
+                "geometries":[
+                    {"type":"MultiPoint","coordinates":(0..192).map(|index| {
+                        [index as f64 / 10.0,(index * 17 % 193) as f64 / 5.0]
+                    }).collect::<Vec<_>>()},
+                    line(json!([[0.0,0.0],[10.0,10.0]]))
+                ]
+            },
+            "b":{
+                "type":"MultiPoint",
+                "coordinates":(0..173).map(|index| {
+                    [index as f64 / 11.0,(index * 29 % 179) as f64 / 7.0]
+                }).collect::<Vec<_>>()
+            }
+        });
+        let a = checked_geometry(&inputs["a"]).unwrap();
+        let b = checked_geometry(&inputs["b"]).unwrap();
+        let expected = a.hausdorff_distance(&b);
+        let serial = execute(Operation::HausdorffDistance, &inputs).unwrap();
+        assert_eq!(serial[0].1, json!(expected));
+        let parallel = cpu::run(move || execute(Operation::HausdorffDistance, &inputs))
+            .await
+            .unwrap();
+        assert_eq!(parallel, serial);
+    }
+
+    #[tokio::test]
+    async fn parallel_distance_operations_preserve_empty_and_budget_errors() {
+        let multipoint = |count: usize, y: f64| {
+            json!({
+                "type":"MultiPoint",
+                "coordinates":(0..count).map(|index| {
+                    [index as f64 / count as f64,y]
+                }).collect::<Vec<_>>()
+            })
+        };
+        for operation in [Operation::ShortestLine, Operation::HausdorffDistance] {
+            for (inputs, message) in [
+                (
+                    json!({"a":multipoint(0,0.0),"b":point(0.0,0.0)}),
+                    "Empty geometries",
+                ),
+                (
+                    json!({"a":multipoint(5_001,0.0),"b":multipoint(5_000,1.0)}),
+                    "exceeding the limit of 25000000",
+                ),
+            ] {
+                let serial = execute(operation, &inputs).unwrap_err().to_string();
+                assert!(serial.contains(message));
+                let parallel = cpu::run(move || execute(operation, &inputs))
+                    .await
+                    .unwrap_err()
+                    .to_string();
+                assert_eq!(parallel, serial);
+            }
+        }
     }
 
     #[test]
@@ -868,6 +1056,25 @@ mod execution_tests {
             .as_f64()
             .unwrap();
         assert!((110_000.0..112_000.0).contains(&meters));
+    }
+
+    #[test]
+    fn geodesic_frechet_rejects_expensive_coordinate_products() {
+        let long_line = |position_count: usize| {
+            line(Value::Array(
+                (0..position_count)
+                    .map(|index| json!([index as f64 / position_count as f64, 0.0]))
+                    .collect(),
+            ))
+        };
+        let error = execute(
+            Operation::GeodesicFrechetDistance,
+            &json!({"a":long_line(1_415),"b":long_line(1_414)}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Geodesic Fréchet Distance"));
+        assert!(error.contains("exceeding the limit of 2000000"));
     }
 
     #[test]

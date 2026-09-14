@@ -22,6 +22,31 @@ head:
 import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
 import { nodesByCategory } from "../../../generated/catalog-nodes";
 
+Both notification nodes accept an optional **Icon** file through a FlowPath. Images
+must be at most 5 MiB and fit the decoder's dimension and memory limits. Flow-Like
+converts them to PNG thumbnails up to 256 pixels wide or tall. The hub stores a
+copy and refreshes its download URL when you load notification history.
+
+The native iOS Inbox widget, in-app notification lists, and notification toasts
+show the custom icon first. If it is missing or cannot load, they use the source
+app's icon from the selected profile, then the Flow Like logo. Notification records
+can also use Lucide icon names or emoji. The iOS widget caches image bytes when
+Flow Like refreshes its content, so already loaded icons remain available offline.
+
+On iOS, the image appears as an attachment beside the notification content. The
+Flow-Like app icon remains visible. If the device cannot download or attach the
+image, it displays the text notification. Local notifications use a cached image
+file, so an offline workflow can also include an image.
+
+**Success** means the notification was stored or emitted locally without a reported
+push error. It becomes false when the notification API or push provider reports a
+failure. A suppressed duplicate also returns false because no new push was attempted
+and the earlier delivery outcome is unknown. A true value does not confirm that a phone displayed the notification;
+push can be disabled or there may be no registered devices. The notification API
+also returns `push_status` to distinguish these cases from provider acceptance.
+**Desktop Notification** controls the local OS alert; remote push follows the
+account's push settings.
+
 <NodeCategoryOverview
 	category={"Notifications"}
 	label="Notifications"

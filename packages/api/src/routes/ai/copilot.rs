@@ -22,13 +22,12 @@ use flow_like::flow::ast::apply_board_commands_to_board;
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, FlowIrDraftStore, NodeMetadata, PinMetadata, PlatformSpecialist,
-    enrich_node_metadata, run_ontology_query_chat, run_specialist_chat_with_access,
-    score_catalog_metadata,
+    BoardCommand, CatalogProvider, FlowIrDraftStore, NodeMetadata, PlatformSpecialist,
+    enrich_node_metadata, pin_to_metadata, run_ontology_query_chat,
+    run_specialist_chat_with_access, score_catalog_metadata,
 };
 use flow_like::flow::node::{Node, NodeLogic};
-use flow_like::flow::pin::{Pin, PinType};
-use flow_like::flow::variable::VariableType;
+use flow_like::flow::pin::PinType;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
@@ -355,33 +354,6 @@ impl ServerCatalogProvider {
     }
 }
 
-fn pin_to_metadata(pin: &Pin) -> PinMetadata {
-    let is_generic = pin.data_type == VariableType::Generic;
-    let enforce_schema = pin
-        .options
-        .as_ref()
-        .and_then(|o| o.enforce_schema)
-        .unwrap_or(false);
-    let valid_values = pin.options.as_ref().and_then(|o| o.valid_values.clone());
-
-    PinMetadata {
-        name: pin.name.clone(),
-        friendly_name: pin.friendly_name.clone(),
-        description: pin.description.clone(),
-        data_type: format!("{:?}", pin.data_type),
-        value_type: format!("{:?}", pin.value_type),
-        default_value: pin
-            .default_value
-            .as_ref()
-            .map(|value| String::from_utf8_lossy(value).to_string())
-            .filter(|value| !value.is_empty() && value != "null"),
-        schema: pin.schema.clone(),
-        is_generic,
-        valid_values,
-        enforce_schema,
-    }
-}
-
 fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
     let category = node
         .name
@@ -680,8 +652,19 @@ async fn persist_response_flow_ir_claim(
 pub async fn copilot_chat(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
-    Json(mut payload): Json<CopilotChatRequest>,
+    Json(raw_payload): Json<serde_json::Value>,
 ) -> Result<axum::response::Response, ApiError> {
+    run_copilot(state, user, raw_payload, None).await
+}
+
+pub(crate) async fn run_copilot(
+    state: AppState,
+    user: AppUser,
+    mut raw_payload: serde_json::Value,
+    reserved: Option<super::global_chat::AssistantUsage>,
+) -> Result<axum::response::Response, ApiError> {
+    let mut payload: CopilotChatRequest = serde_json::from_value(raw_payload.clone())
+        .map_err(|_| ApiError::bad_request("Invalid copilot request"))?;
     let mut sub = user.sub()?;
     validate_copilot_payload(&payload)?;
 
@@ -744,14 +727,98 @@ pub async fn copilot_chat(
         None => None,
     };
 
-    let token = user_access_token(&user);
+    let token = user_access_token(&user).ok_or_else(|| {
+        ApiError::bad_request("FlowPilot in the browser requires an interactive session")
+    })?;
+    let (prepared_profile, access) =
+        super::global_chat::load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
+            .await?
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "A synced profile with hosted or customer-configured model Bits is required",
+                )
+            })?;
+    if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
+        return Err(rejection);
+    }
+    let flow_like_state = master_flow_like_state(&state).await?;
+    let selected = prepared_profile
+        .resolve_completion_model(
+            payload.model_id.as_deref(),
+            &flow_like::bit::BitModelPreference {
+                reasoning_weight: Some(1.0),
+                ..Default::default()
+            },
+            false,
+            FlowLikeState::completion_model_capabilities(&flow_like_state).await,
+            flow_like_state.http_client.clone(),
+        )
+        .await?;
+    let provider = selected.try_to_provider().ok_or_else(|| {
+        ApiError::bad_request("Selected assistant model is not a completion provider")
+    })?;
+    super::global_chat::ensure_metered_or_customer_provider(&provider.provider_name)?;
+    let funding = if flow_like::flow_like_model_provider::provider::is_hosted_provider_name(
+        &provider.provider_name,
+    ) {
+        "hosted"
+    } else {
+        "byok"
+    };
+    payload.model_id = Some(selected.id.clone());
+    raw_payload["model_id"] = serde_json::json!(selected.id);
+    let usage = match reserved {
+        Some(usage) if usage.funding_class == funding => usage,
+        Some(_) => {
+            return Err(ApiError::conflict(
+                "Assistant model funding changed before execution",
+            ));
+        }
+        None => {
+            super::global_chat::reserve_assistant_usage(
+                &state,
+                &sub,
+                &selected.id,
+                &provider.provider_name,
+                funding,
+                attribution_app_id.as_deref(),
+            )
+            .await?
+        }
+    };
+    if crate::routes::chat::hosted_worker::enabled() && !usage.worker {
+        let mut worker_usage = usage.clone();
+        worker_usage.worker = true;
+        return crate::routes::chat::hosted_worker::dispatch(
+            state,
+            crate::routes::chat::hosted_worker::HostedAiJob {
+                operation_id: usage.operation_id.clone(),
+                deadline: usage.deadline,
+                request: crate::routes::chat::hosted_worker::HostedWork::Copilot {
+                    payload: raw_payload,
+                    sub,
+                    token,
+                    usage: worker_usage,
+                    board_format: flow_like::flow::board::format::supported_version(),
+                },
+            },
+        )
+        .await;
+    }
+    if !usage.worker && !crate::quota::mark_started(&state, &usage.operation_id).await? {
+        return Err(ApiError::conflict(
+            "Assistant operation has already started",
+        ));
+    }
+    let usage_started = std::time::Instant::now();
+    let token = Some(token);
 
     // Data Studio, Scout and Home are tool-loop specialists. UnifiedCopilot has no copilot for
     // these scopes.
     // They run the shared platform loop instead, with their tools round-tripped to the browser over
     // this response's own SSE stream.
     if let Some(specialist) = platform_specialist_for_scope(payload.scope) {
-        return specialist_chat(state, sub, specialist, payload, token).await;
+        return specialist_chat(state, sub, specialist, payload, token, usage).await;
     }
 
     let context = if payload.run_context.is_some() || payload.action_context.is_some() {
@@ -764,23 +831,7 @@ pub async fn copilot_chat(
         None
     };
 
-    // Load the user's profile so the client-selected `model_id` (the Bit the FlowPilot picker chose)
-    // resolves against their own Bits instead of the server default. With a hosted Bit + the user's
-    // token, the model call loops through this server's metered `/chat/completions`, so tier
-    // enforcement + usage tracking apply. Falls back to `None` only when the user has no profile.
-    let profile = match ensure_requested_profile(
-        payload.profile_id.as_deref(),
-        super::global_chat::load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
-            .await?,
-    )? {
-        Some((profile, access)) => {
-            if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
-                return Err(rejection);
-            }
-            Some(profile)
-        }
-        None => None,
-    };
+    let profile = Some(prepared_profile);
     let flow_ir_draft_store = payload.board.as_ref().and_then(|board| {
         (!matches!(payload.scope, CopilotScope::Frontend | CopilotScope::Home)).then(|| {
             let app_id = retained_app_id
@@ -810,8 +861,12 @@ pub async fn copilot_chat(
     .with_request_identity_prompt(Some(request_identity_prompt));
 
     if !payload.stream {
-        let response = copilot
-            .chat_with_raw_user_prompt(
+        let remaining = (usage.deadline - chrono::Utc::now())
+            .num_milliseconds()
+            .max(1) as u64;
+        let response = flow_like_types::tokio::time::timeout(
+            Duration::from_millis(remaining),
+            copilot.chat_with_raw_user_prompt(
                 payload.scope,
                 payload.board.as_ref(),
                 &payload.selected_node_ids,
@@ -826,9 +881,26 @@ pub async fn copilot_chat(
                 token,
                 context,
                 None::<fn(String)>,
-            )
-            .await
-            .map_err(|e| ApiError::internal(format!("Copilot failed: {e}")))?;
+            ),
+        )
+        .await
+        .map_err(|_| ApiError::service_unavailable("Cloud assistant runtime allowance reached"))
+        .and_then(|result| {
+            result.map_err(|error| ApiError::internal(format!("Copilot failed: {error}")))
+        });
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                super::global_chat::settle_assistant_usage(
+                    &state,
+                    &usage,
+                    usage_started.elapsed().as_millis() as i64,
+                    false,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
 
         // A review token is not observable until its exact batch is durable on the canonical
         // board. Apply/Dismiss may therefore land on any API replica.
@@ -841,6 +913,13 @@ pub async fn copilot_chat(
         )
         .await?;
 
+        super::global_chat::settle_assistant_usage(
+            &state,
+            &usage,
+            usage_started.elapsed().as_millis() as i64,
+            true,
+        )
+        .await?;
         return Ok(<axum::Json<_> as axum::response::IntoResponse>::into_response(Json(response)));
     }
 
@@ -862,8 +941,12 @@ pub async fn copilot_chat(
     flow_like_types::tokio::spawn(flow_like::flow::board::format::with_supported_version(
         board_format,
         async move {
-            let result = copilot
-                .chat_with_raw_user_prompt(
+            let remaining = (usage.deadline - chrono::Utc::now())
+                .num_milliseconds()
+                .max(1) as u64;
+            let result = flow_like_types::tokio::time::timeout(
+                Duration::from_millis(remaining),
+                copilot.chat_with_raw_user_prompt(
                     payload.scope,
                     payload.board.as_ref(),
                     &payload.selected_node_ids,
@@ -878,9 +961,11 @@ pub async fn copilot_chat(
                     token,
                     context,
                     on_token,
-                )
-                .await
-                .map_err(|e| e.to_string());
+                ),
+            )
+            .await
+            .map_err(|_| "Cloud assistant runtime allowance reached".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()));
             let result = match result {
                 Ok(response) => persist_response_flow_ir_claim(
                     &delivery_state,
@@ -895,6 +980,16 @@ pub async fn copilot_chat(
                 Err(error) => Err(error),
             };
 
+            if let Err(error) = super::global_chat::settle_assistant_usage(
+                &delivery_state,
+                &usage,
+                usage_started.elapsed().as_millis() as i64,
+                result.is_ok(),
+            )
+            .await
+            {
+                tracing::error!(%error, "Copilot usage remains pending");
+            }
             let _ = done_tx.send(result);
             // If the receiver is already dropped, ignore.
         },
@@ -1002,6 +1097,7 @@ async fn specialist_chat(
     specialist: PlatformSpecialist,
     payload: CopilotChatRequest,
     token: Option<String>,
+    usage: super::global_chat::AssistantUsage,
 ) -> Result<axum::response::Response, ApiError> {
     if !payload.stream {
         return Err(ApiError::bad_request(
@@ -1046,53 +1142,74 @@ async fn specialist_chat(
     let scope = payload.scope;
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
     let channel_for_task = channel.clone();
+    let usage_state = state.clone();
+    let usage_started = std::time::Instant::now();
     flow_like_types::tokio::spawn(async move {
         let query_proposal_only =
             payload.read_only && matches!(specialist, PlatformSpecialist::DataStudio);
-        let result = if query_proposal_only {
-            let cancellation_channel = channel_for_task.clone();
-            flow_like_types::tokio::select! {
-                result = run_ontology_query_chat(
-                    flow_like_state,
-                    profile,
-                    payload.user_prompt,
-                    payload.model_id,
-                    token,
-                    bridge,
-                    Some(on_token),
-                ) => result,
-                _ = wait_for_channel_cancellation(
-                    cancellation_channel,
-                    ONTOLOGY_QUERY_CANCEL_POLL_INTERVAL,
-                ) => Err(flow_like_types::anyhow!("Run cancelled")),
-            }
-        } else {
-            run_specialist_chat_with_access(
-                flow_like_state,
-                profile,
-                specialist,
-                payload.read_only,
-                context,
-                payload.user_prompt,
-                payload.model_id,
-                token,
-                bridge,
-                Some(on_token),
-            )
+        let remaining = (usage.deadline - chrono::Utc::now())
+            .num_milliseconds()
+            .max(1) as u64;
+        let result =
+            flow_like_types::tokio::time::timeout(Duration::from_millis(remaining), async {
+                if query_proposal_only {
+                    let cancellation_channel = channel_for_task.clone();
+                    flow_like_types::tokio::select! {
+                        result = run_ontology_query_chat(
+                            flow_like_state,
+                            profile,
+                            payload.user_prompt,
+                            payload.model_id,
+                            token,
+                            bridge,
+                            Some(on_token),
+                        ) => result,
+                        _ = wait_for_channel_cancellation(
+                            cancellation_channel,
+                            ONTOLOGY_QUERY_CANCEL_POLL_INTERVAL,
+                        ) => Err(flow_like_types::anyhow!("Run cancelled")),
+                    }
+                } else {
+                    run_specialist_chat_with_access(
+                        flow_like_state,
+                        profile,
+                        specialist,
+                        payload.read_only,
+                        context,
+                        payload.user_prompt,
+                        payload.model_id,
+                        token,
+                        bridge,
+                        Some(on_token),
+                    )
+                    .await
+                }
+            })
             .await
+            .map_err(|_| "Cloud assistant runtime allowance reached".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+            .map(|message| UnifiedCopilotResponse {
+                message,
+                commands: Vec::new(),
+                components: Vec::new(),
+                canvas_settings: None,
+                root_component_id: None,
+                flowscript_workspace: None,
+                flow_ir_commit: None,
+                suggestions: Vec::new(),
+                active_scope: scope,
+            })
+            .map_err(|error| error.to_string());
+        if let Err(error) = super::global_chat::settle_assistant_usage(
+            &usage_state,
+            &usage,
+            usage_started.elapsed().as_millis() as i64,
+            result.is_ok(),
+        )
+        .await
+        {
+            tracing::error!(%error, "Specialist usage remains pending");
         }
-        .map(|message| UnifiedCopilotResponse {
-            message,
-            commands: Vec::new(),
-            components: Vec::new(),
-            canvas_settings: None,
-            root_component_id: None,
-            flowscript_workspace: None,
-            flow_ir_commit: None,
-            suggestions: Vec::new(),
-            active_scope: scope,
-        })
-        .map_err(|error| error.to_string());
         channel_for_task.close().await;
         let _ = done_tx.send(result);
     });

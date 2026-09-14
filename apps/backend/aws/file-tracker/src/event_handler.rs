@@ -121,8 +121,8 @@ async fn process_s3_event(
     }
     let bucket = bucket.to_owned();
     let key = observation.key.clone();
-    // Sample after acquiring the SQL object write intent, and sample again after an OCC retry.
-    // The call is read-only and bounded so this transaction cannot wait indefinitely on S3.
+    // HEAD runs outside SQL transactions. Accounting checks its object snapshot
+    // before committing and samples again if another event changed that snapshot.
     let s3 = s3.clone();
     accounting::apply_current(db, dialect, observation, move || {
         let s3 = s3.clone();

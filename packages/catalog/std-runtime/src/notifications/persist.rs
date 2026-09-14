@@ -1,7 +1,50 @@
 use flow_like::flow::execution::LOCAL_USER_SUB;
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like_types::reqwest;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct NotificationApiResponse {
+    success: bool,
+    #[serde(default)]
+    persisted: Option<bool>,
+    #[serde(default)]
+    push_status: Option<String>,
+}
+
+fn notification_response_result(
+    response: NotificationApiResponse,
+) -> flow_like_types::Result<bool> {
+    if !response.success
+        || matches!(
+            response.push_status.as_deref(),
+            Some("failed" | "partial" | "deduplicated")
+        )
+    {
+        return Err(flow_like_types::anyhow!(
+            "Notification API reported a failure (persisted={}, push_status={})",
+            response.persisted.unwrap_or(false),
+            response.push_status.as_deref().unwrap_or("unknown"),
+        ));
+    }
+    Ok(true)
+}
+
+fn local_notification_result(
+    target: Option<&str>,
+    executing_sub: Option<&str>,
+) -> flow_like_types::Result<bool> {
+    if let Some(target) = target
+        && !target.is_empty()
+        && target != LOCAL_USER_SUB
+        && Some(target) != executing_sub
+    {
+        return Err(flow_like_types::anyhow!(
+            "Remote notification persistence is required to notify another user"
+        ));
+    }
+    Ok(false)
+}
 
 #[derive(Serialize)]
 struct AppScopedRequest {
@@ -165,18 +208,29 @@ pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String 
 ///    `POST /api/v1/apps/{app_id}/notifications/create` endpoint.
 /// 2. If that returns 403/404 or no app context exists, falls back to the user-scoped
 ///    `POST /api/v1/user/notifications/create` endpoint.
-/// 3. Returns `Ok(false)` if no hub/token is available (purely local).
+/// 3. Returns `Ok(false)` for a local notification to the executing user when no
+///    hub/token is available. API or reported push failures return an error.
 pub async fn persist_notification(
     context: &ExecutionContext,
     params: PersistNotificationParams,
 ) -> flow_like_types::Result<bool> {
     let hub_url = match notification_api_origin(&context.profile.hub, context.profile.secure) {
         Some(url) => url,
-        None => return Ok(false),
+        None => {
+            return local_notification_result(
+                params.target_user_sub.as_deref(),
+                context.user_context().map(|user| user.sub.as_str()),
+            );
+        }
     };
     let token = match &context.token {
         Some(t) if !t.is_empty() => t,
-        _ => return Ok(false),
+        _ => {
+            return local_notification_result(
+                params.target_user_sub.as_deref(),
+                context.user_context().map(|user| user.sub.as_str()),
+            );
+        }
     };
 
     let app_id = context
@@ -225,7 +279,9 @@ pub async fn persist_notification(
             .await;
 
         match response {
-            Ok(resp) if resp.status().is_success() => return Ok(true),
+            Ok(resp) if resp.status().is_success() => {
+                return notification_response_result(resp.json().await?);
+            }
             Ok(resp) if resp.status().as_u16() == 403 || resp.status().as_u16() == 404 => {
                 // Fall through to user-scoped endpoint
             }
@@ -247,7 +303,7 @@ pub async fn persist_notification(
         }
     }
 
-    // For other-user targeting without a valid app, skip (can't verify membership).
+    // Another user's notification requires app scope to verify membership.
     // Targeting the executing user stays allowed — the user-scoped endpoint is
     // bound to their own token, and authenticated local runs report a real sub.
     let executing_sub = context.user_context().map(|user| user.sub.as_str());
@@ -256,7 +312,7 @@ pub async fn persist_notification(
         && !target.is_empty()
         && Some(target.as_str()) != executing_sub
     {
-        return Ok(false);
+        return local_notification_result(Some(target), executing_sub);
     }
 
     // Fallback: user-scoped endpoint (offline projects / no board context)
@@ -288,12 +344,51 @@ pub async fn persist_notification(
         ));
     }
 
-    Ok(true)
+    notification_response_result(response.json().await?)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_notification_link, notification_api_origin};
+    use super::{
+        build_notification_link, local_notification_result, notification_api_origin,
+        notification_response_result,
+    };
+    use flow_like_types::json as serde_json;
+
+    #[test]
+    fn successful_http_response_can_report_failed_push() {
+        let response =
+            serde_json::from_str(r#"{"success":false,"persisted":true,"push_status":"failed"}"#)
+                .unwrap();
+        assert!(notification_response_result(response).is_err());
+        let response = serde_json::from_str(
+            r#"{"success":false,"persisted":true,"push_status":"deduplicated"}"#,
+        )
+        .unwrap();
+        assert!(notification_response_result(response).is_err());
+        let response =
+            serde_json::from_str(r#"{"success":true,"persisted":true,"push_status":"partial"}"#)
+                .unwrap();
+        assert!(notification_response_result(response).is_err());
+    }
+
+    #[test]
+    fn persistence_without_a_push_target_and_legacy_responses_remain_successful() {
+        for body in [
+            r#"{"success":true,"persisted":true,"push_status":"no_targets"}"#,
+            r#"{"success":true}"#,
+        ] {
+            assert!(notification_response_result(serde_json::from_str(body).unwrap()).unwrap());
+        }
+    }
+
+    #[test]
+    fn offline_success_only_applies_to_the_executing_user() {
+        assert!(!local_notification_result(None, None).unwrap());
+        assert!(!local_notification_result(Some("local"), None).unwrap());
+        assert!(!local_notification_result(Some("user-a"), Some("user-a")).unwrap());
+        assert!(local_notification_result(Some("user-b"), Some("user-a")).is_err());
+    }
 
     #[test]
     fn prefixes_reserved_user_query_keys() {

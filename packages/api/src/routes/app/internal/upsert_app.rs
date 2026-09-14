@@ -1,4 +1,3 @@
-use sea_orm::sea_query::ExprTrait;
 use std::{sync::Arc, time::SystemTime};
 
 use crate::{
@@ -22,8 +21,7 @@ use flow_like_types::{anyhow, create_id};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, EntityTrait, IntoActiveModel, JoinType, PaginatorTrait, QueryFilter, QuerySelect,
-    RelationTrait,
+    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -62,7 +60,7 @@ pub async fn upsert_app(
     Json(app_body): Json<AppUpsertBody>,
 ) -> Result<Json<App>, ApiError> {
     let sub = user.sub()?;
-    let tier = user.tier(&state).await?;
+    let (plan, tier) = crate::quota::payer_plan(&state, &sub).await?;
 
     let app = app::Entity::find()
         .filter(app::Column::Id.eq(&app_id))
@@ -151,64 +149,10 @@ pub async fn upsert_app(
         )));
     };
 
-    if tier.max_non_visible_projects == 0 {
-        tracing::warn!("Configuration doesn't allow for the creation of non-visible projects",);
-        return Err(ApiError::payment_required(
-            "Your current plan does not include online projects.",
-        ));
-    }
-
-    if tier.max_non_visible_projects > 0 {
-        let count = membership::Entity::find()
-            .join(JoinType::InnerJoin, membership::Relation::App.def())
-            .join(JoinType::InnerJoin, membership::Relation::Role.def())
-            .filter(
-                app::Column::Visibility
-                    .eq(Visibility::Prototype)
-                    .or(app::Column::Visibility.eq(Visibility::Private)),
-            )
-            // Owner Permission is 1, so we filter out roles that have Owner permission
-            .filter(role::Column::Permissions.eq(1))
-            .filter(membership::Column::UserId.eq(&sub))
-            .count(&state.db)
-            .await?;
-
-        if count >= tier.max_non_visible_projects as u64 {
-            tracing::warn!(
-                "User {} has reached the limit of {} non-visible projects [{}]",
-                sub,
-                tier.max_non_visible_projects,
-                count
-            );
-            return Err(ApiError::payment_required(format!(
-                "You have used {} of {} online projects included in your plan.",
-                count, tier.max_non_visible_projects
-            )));
-        }
-    }
-
+    crate::capacity::check_storage_write(&state, "", &sub, 0).await?;
     let new_id = create_id();
-    let drive_app = {
-        let credentials = state
-            .scoped_credentials(
-                &sub,
-                &new_id,
-                crate::credentials::CredentialsAccess::EditApp,
-            )
-            .await?;
-        let flow_like_state = Arc::new(credentials.to_state(state.clone()).await?);
-        let new_app = App::new(
-            Some(new_id.clone()),
-            metadata.clone(),
-            app_body.bits.clone().unwrap_or_default(),
-            flow_like_state,
-        )
-        .await?;
-        new_app.save().await?;
-        new_app
-    };
 
-    let bits = app_body.bits.unwrap_or_default();
+    let bits = app_body.bits.clone().unwrap_or_default();
     state
         .transaction(|txn| {
             let new_id = new_id.clone();
@@ -216,7 +160,18 @@ pub async fn upsert_app(
             let metadata = metadata.clone();
             let language = language.clone();
             let sub = sub.clone();
+            let plan = plan.clone();
             Box::pin(async move {
+                crate::capacity::admit_project(
+                    txn,
+                    &sub,
+                    &new_id,
+                    &Visibility::Private,
+                    None,
+                    &plan,
+                    i64::from(tier.max_non_visible_projects),
+                )
+                .await?;
                 let app = app::ActiveModel {
                     id: Set(new_id),
                     status: Set(Status::Active),
@@ -308,6 +263,44 @@ pub async fn upsert_app(
             })
         })
         .await?;
+
+    let materialized: Result<App, ApiError> = async {
+        let credentials = state
+            .scoped_credentials(
+                &sub,
+                &new_id,
+                crate::credentials::CredentialsAccess::EditApp,
+            )
+            .await?;
+        let flow_like_state = Arc::new(credentials.to_state(state.clone()).await?);
+        let new_app = App::new(
+            Some(new_id.clone()),
+            metadata.clone(),
+            app_body.bits.clone().unwrap_or_default(),
+            flow_like_state,
+        )
+        .await?;
+        new_app.save().await?;
+        Ok(new_app)
+    }
+    .await;
+    let drive_app = match materialized {
+        Ok(app) => app,
+        Err(error) => {
+            if let Err(cleanup) = crate::deletion::delete_now(
+                &state,
+                crate::deletion::DeletionRoot::App,
+                &new_id,
+                Some(&sub),
+                (),
+            )
+            .await
+            {
+                tracing::error!(%new_id, %cleanup, "Project materialization failed and deletion needs retry");
+            }
+            return Err(error);
+        }
+    };
 
     audit_branch!(
         state,

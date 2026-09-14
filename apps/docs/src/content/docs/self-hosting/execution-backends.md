@@ -81,7 +81,7 @@ warm reserves, time budgets and operational checks.
 | Value | Dispatch behavior | Required configuration |
 | --- | --- | --- |
 | `http` | Posts to a manager or compatible executor's `/execute` or `/execute/sse` endpoint | `EXECUTOR_URL`; manager authentication in `per_run` mode |
-| `lambda_invoke` | Uses the AWS SDK with asynchronous `Event` invocation | `lambda` build feature, `LAMBDA_EXECUTOR_FUNCTION`, AWS region and credentials |
+| `lambda_invoke` | Uses the AWS SDK with asynchronous `Event` invocation | `lambda` build feature, `LAMBDA_ASYNC_EXECUTOR_FUNCTION` for the native worker or `LAMBDA_EXECUTOR_FUNCTION` for the legacy HTTP worker, AWS region and credentials |
 | `lambda_stream` | Uses the AWS SDK response-stream API | `lambda` build feature, function name, region and credentials |
 | `kubernetes_job` | Legacy API Job dispatcher, rejected by the isolated Helm deployment | A separately reviewed deployment and runner contract |
 | `redis` | Publishes a bounded, retained delivery consumed by the queue bridge | `redis` build feature, authenticated `REDIS_URL`, matching v3 queue settings and consumer |
@@ -132,6 +132,92 @@ mode; use its manager and queue bridge.
 The operational and isolation properties are those of the Lambda function and
 AWS account configuration. Confirm concurrency, retry, timeout, networking,
 and downstream callback behavior for the selected mode.
+
+### Executor architecture
+
+The dispatcher selects the function by name. Lambda's architecture setting and
+the container build determine which CPU runs the workflow. The API's platform
+settings select the matching compiled WASM artifacts:
+
+| Architecture | Lambda setting | Docker build platform | WASM platform |
+| --- | --- | --- | --- |
+| ARM64 | `arm64` | `linux/arm64` | `linux-aarch64-wt48` |
+| x86-64 | `x86_64` | `linux/amd64` | `linux-x86_64-wt48` |
+
+Set `EXECUTOR_PLATFORM` on the API for the live executor and
+`LAMBDA_ASYNC_EXECUTOR_PLATFORM` for the dedicated native background executor.
+These settings describe the receiving executor, regardless of the API host's
+own architecture. `wt48` identifies the compiled artifact's Wasmtime version.
+
+Both AWS Lambda executor Dockerfiles support ARM64 and x86-64. Build each Lambda
+image for one architecture. The SaaS dev Terraform root defaults the live
+executor to `executor_architecture = "arm64"` and derives `EXECUTOR_PLATFORM`
+from the function, keeping the build, Lambda and artifact settings together.
+Changing that variable to `"x86_64"` also rebuilds the matching image. ARM
+compiled WASM artifacts must exist for the app's installed packages.
+
+### Native background execution
+
+Use a dedicated function for background workflows so they have their own
+concurrency budget and can use a different CPU architecture from live runs:
+
+```bash
+EXECUTION_BACKEND=lambda_stream
+LAMBDA_EXECUTOR_FUNCTION=flow-executor-fn-dev
+EXECUTOR_PLATFORM=linux-aarch64-wt48
+ASYNC_EXECUTION_BACKEND=lambda_invoke
+LAMBDA_ASYNC_EXECUTOR_FUNCTION=flow-executor-async-fn-dev
+LAMBDA_ASYNC_EXECUTOR_PLATFORM=linux-aarch64-wt48
+LAMBDA_TENANT_ISOLATION=sub
+```
+
+Build `apps/backend/aws/executor-async/Dockerfile` for `linux/arm64` and create
+the function with `architectures = ["arm64"]` and `PER_TENANT` isolation.
+The background platform setting selects matching compiled WASM packages
+without changing the live executor's artifacts.
+
+The API sends one signed workflow payload with `InvocationType=Event` and its
+tenant ID. Lambda buffers the event internally and returns HTTP 202 when it
+accepts delivery. That response does not mean the workflow has started.
+The worker consumes native `DispatchPayloadRef` events and validates the AWS
+tenant against the signed subject before executing the workflow. It does not
+accept SQS batches or API Gateway events.
+
+Events above 256 KiB are staged in the configured object store. Lambda receives
+a presigned reference, keeping both the invocation and its failure record
+within their transport limits. Staged payloads are limited to 64 MiB. Without
+`LAMBDA_ASYNC_EXECUTOR_FUNCTION`, `lambda_invoke` preserves the existing
+API Gateway envelope sent to `LAMBDA_EXECUTOR_FUNCTION`.
+
+The worker requires a durable execution lease and acknowledgement of terminal
+API status. A persisted workflow failure completes delivery; transport,
+authentication and unacknowledged callback failures return a Lambda error.
+Duplicate deliveries still require idempotent external effects, especially
+after a process is killed before it can record completion. Existing callbacks
+continue to carry run events to live observers; queue time delays their start.
+
+The AWS deployment module defaults to a 900-second hard timeout, an
+840-second execution deadline, a 900-second maximum event age and two handler
+retries. Setup counts against the execution deadline. The worker allows
+30 seconds for cleanup, then retires the runtime if work cannot stop.
+Keep queue age plus execution within credential and WASM URL lifetimes.
+Retain the default `STS_SESSION_TTL_SECONDS=3600` for this queue window;
+the API refreshes cached execution grants with less than 31 minutes remaining
+and rejects freshly issued grants that cannot cover that window. WASM URLs
+currently expire after one hour. The configured 25 reserved
+executions cap background concurrency without provisioning warm capacity.
+This cap does not provide scheduling fairness between tenants.
+
+Discarded events and exhausted failures go to an SQS failure destination with
+delivery, event-age and queue alarms. Operators must inspect and reconcile
+these records. The failure destination is not part of normal dispatch.
+Keep the previous ECS queue and Pipe until accepted messages and running tasks
+have drained. Switching the API backend does not migrate queued jobs.
+
+Direct SQS event-source mappings cannot supply the per-message Lambda tenant
+parameter. Using SQS with `PER_TENANT` execution requires a separate trusted
+router that invokes each tenant's work. See the
+[AWS tenant-isolated invocation documentation](https://docs.aws.amazon.com/lambda/latest/dg/tenant-isolation-invoke.html).
 
 ### Tenant isolation
 
@@ -211,7 +297,7 @@ producer and consumer to v3.
 | Untrusted workflows across Kubernetes nodes | Default `per_run` manager and Redis queue bridge | Installed gVisor, Cilium enforcement, Pod termination, warm replacement rate and node resources |
 | Trusted internal workflows | Explicit `trusted_shared` HTTP pool | Shared-process behavior, worker concurrency and integration access |
 | Private streaming Lambda | `lambda_stream` | AWS feature build, response streaming, timeouts, concurrency |
-| AWS asynchronous Lambda | `lambda_invoke` or `sqs` | Retry semantics, DLQ, idempotency, callback reachability |
+| Tenant-isolated AWS background Lambda | `lambda_invoke` with a dedicated native worker | `PER_TENANT`, matching artifact architecture, concurrency, retries, failure destination and callback reachability |
 | Long AWS container task | `sqs_event_bridge` | Staging-store lifetime, signed URL scope, Pipe and ECS task configuration |
 | Existing Kafka platform | `kafka` | REST proxy compatibility, authentication, partitions, consumer contract |
 

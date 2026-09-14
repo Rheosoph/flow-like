@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 use axum::{Extension, Json, extract::State};
-use flow_like::hub::{Contact, ConversionMode, UserTier};
+use flow_like::hub::{Contact, ConversionMode, TierDisplay, UserTier};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -22,6 +22,9 @@ pub struct TierInfo {
     pub product_id: Option<String>,
     pub max_non_visible_projects: i32,
     pub max_remote_executions: i32,
+    pub max_runtime_ms: i64,
+    pub max_ai_cost_micros: i64,
+    pub max_concurrent_executions: i32,
     pub execution_tier: String,
     pub max_total_size: i64,
     pub max_llm_cost: i32,
@@ -29,12 +32,14 @@ pub struct TierInfo {
     pub llm_tiers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<PriceInfo>,
+    pub prices: Vec<PriceInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct PriceInfo {
+    pub id: String,
     pub amount: i64,
     pub currency: String,
     pub interval: Option<String>,
@@ -74,18 +79,47 @@ impl From<(&str, &UserTier)> for TierInfo {
             product_id: tier.product_id.clone(),
             max_non_visible_projects: tier.max_non_visible_projects,
             max_remote_executions: tier.max_remote_executions,
+            max_runtime_ms: tier.max_runtime_ms,
+            max_ai_cost_micros: tier.max_ai_cost_micros,
+            max_concurrent_executions: tier.max_concurrent_executions,
             execution_tier: tier.execution_tier.clone(),
             max_total_size: tier.max_total_size,
             max_llm_cost: tier.max_llm_cost,
             max_llm_calls: tier.max_llm_calls,
             llm_tiers: tier.llm_tiers.clone(),
             price: None,
+            prices: Vec::new(),
             contact_url: None,
         }
     }
 }
 
 const ENTERPRISE_TIER: &str = "ENTERPRISE";
+
+pub(super) fn eligible_price(price: &stripe::Price, display: &TierDisplay, interval: &str) -> bool {
+    let expected_amount = match interval {
+        "month" => display.monthly_price_cents,
+        "year" => display.annual_price_cents,
+        _ => None,
+    };
+    let Some(currency) = display.currency.as_deref() else {
+        return false;
+    };
+    expected_amount.is_some()
+        && price.unit_amount == expected_amount
+        && price.active == Some(true)
+        && price.billing_scheme == Some(stripe::PriceBillingScheme::PerUnit)
+        && price.transform_quantity.is_none()
+        && price.custom_unit_amount.is_none()
+        && price
+            .currency
+            .is_some_and(|value| value.to_string().eq_ignore_ascii_case(currency))
+        && price.recurring.as_ref().is_some_and(|recurring| {
+            recurring.interval_count == 1
+                && recurring.interval.to_string() == interval
+                && recurring.usage_type == stripe::RecurringUsageType::Licensed
+        })
+}
 
 fn contact_link(contact: &Contact) -> String {
     if !contact.email.is_empty() {
@@ -117,6 +151,7 @@ pub async fn get_pricing(
     let current_tier = match db_user.tier {
         crate::entity::sea_orm_active_enums::UserTier::Free => "FREE",
         crate::entity::sea_orm_active_enums::UserTier::Premium => "PREMIUM",
+        crate::entity::sea_orm_active_enums::UserTier::Max => "MAX",
         crate::entity::sea_orm_active_enums::UserTier::Pro => "PRO",
         crate::entity::sea_orm_active_enums::UserTier::Enterprise => "ENTERPRISE",
     };
@@ -156,21 +191,45 @@ pub async fn get_pricing(
                 &stripe::ListPrices {
                     product: Some(stripe::IdOrCreate::Id(product_id)),
                     active: Some(true),
-                    limit: Some(1),
+                    limit: Some(100),
                     ..Default::default()
                 },
             )
             .await
-            && let Some(price) = prices.data.first()
         {
-            tier_info.price = Some(PriceInfo {
-                amount: price.unit_amount.unwrap_or(0),
-                currency: price
-                    .currency
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "usd".to_string()),
-                interval: price.recurring.as_ref().map(|r| r.interval.to_string()),
-            });
+            tier_info.prices = prices
+                .data
+                .iter()
+                .filter(|price| {
+                    conversion
+                        .tier_display
+                        .get(tier_name)
+                        .is_some_and(|display| {
+                            eligible_price(price, display, "month")
+                                || eligible_price(price, display, "year")
+                        })
+                })
+                .map(|price| PriceInfo {
+                    id: price.id.to_string(),
+                    amount: price.unit_amount.unwrap_or(0),
+                    currency: price
+                        .currency
+                        .map(|currency| currency.to_string())
+                        .unwrap_or_else(|| "eur".into()),
+                    interval: price
+                        .recurring
+                        .as_ref()
+                        .map(|recurring| recurring.interval.to_string()),
+                })
+                .collect();
+            tier_info
+                .prices
+                .sort_by(|left, right| left.id.cmp(&right.id));
+            tier_info.price = tier_info
+                .prices
+                .iter()
+                .find(|price| price.interval.as_deref() == Some("month"))
+                .cloned();
         }
 
         tiers.insert(tier_name.clone(), tier_info);

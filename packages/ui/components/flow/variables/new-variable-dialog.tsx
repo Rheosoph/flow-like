@@ -11,11 +11,10 @@ import {
 import { memo, useCallback, useState } from "react";
 import { useBoardFormat } from "../../../hooks/use-board-format";
 import { GEOMETRY_BOARD_FORMAT_VERSION } from "../../../lib/board-format";
-import { defaultValueFromType } from "../../../lib/flow-defaults";
+import { encodedTypeDefault } from "../../../lib/flow-defaults";
 import type { IVariable } from "../../../lib/schema/flow/board";
 import { IVariableType } from "../../../lib/schema/flow/node";
 import { IValueType } from "../../../lib/schema/flow/pin";
-import { convertJsonToUint8Array } from "../../../lib/uint8";
 import { Button } from "../../ui/button";
 import {
 	Dialog,
@@ -140,9 +139,7 @@ const NewVariableDialog = memo(
 					secret: false,
 					editable: true,
 					category: category.trim() || undefined,
-					default_value: convertJsonToUint8Array(
-						defaultValueFromType(valueType, dataType),
-					),
+					default_value: encodedTypeDefault(valueType, dataType),
 					description: "",
 					schema: dataType === IVariableType.Geometry ? geometrySchema : null,
 				};

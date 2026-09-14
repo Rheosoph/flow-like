@@ -1,5 +1,5 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 
@@ -75,6 +75,10 @@ pub struct ExecutorClaims {
     /// Signed digest of the complete dispatch payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_limit_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_receipt_url: Option<String>,
     /// Callback URL for progress reporting
     pub callback_url: String,
     /// Token type
@@ -170,9 +174,9 @@ async fn fetch_public_key_from_api() -> Result<Vec<u8>, ExecutorError> {
     point.extend_from_slice(&y_bytes);
 
     // Convert to PEM format using p256 crate
-    use p256::elliptic_curve::sec1::FromEncodedPoint;
     use p256::EncodedPoint;
     use p256::PublicKey;
+    use p256::elliptic_curve::sec1::FromEncodedPoint;
 
     let encoded_point = EncodedPoint::from_bytes(&point)
         .map_err(|e| ExecutorError::Jwt(format!("Invalid EC point: {}", e)))?;

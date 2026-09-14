@@ -30,6 +30,7 @@ pub enum DeepLinkIntent {
         package_id: Option<String>,
     },
     Join,
+    Native,
     Unknown,
 }
 
@@ -79,6 +80,11 @@ fn dispatch_deep_links(app_handle: &AppHandle, urls: &Vec<Url>, replayed: bool) 
                 );
             }
             DeepLinkIntent::Join => handle_join(app_handle, url, replayed),
+            DeepLinkIntent::Native => emit(
+                app_handle,
+                "native-action",
+                json::json!({"url":url.as_str(),"replayed":replayed}),
+            ),
             DeepLinkIntent::Unknown => handle_unknown(app_handle, url),
         }
     }
@@ -124,6 +130,7 @@ fn classify(url: &Url) -> DeepLinkIntent {
             "logout" | "desktop/logout" => DeepLinkIntent::Logout,
             "thirdparty/callback" => DeepLinkIntent::ThirdParty,
             "join" => DeepLinkIntent::Join,
+            "native" => DeepLinkIntent::Native,
             "store" => classify_store(url, ""),
             _ if path.starts_with("store/") => classify_store(url, &path["store/".len()..]),
             _ if path.starts_with("trigger/") => classify_trigger(&path["trigger/".len()..]),
@@ -139,6 +146,7 @@ fn classify(url: &Url) -> DeepLinkIntent {
             "logout" => DeepLinkIntent::Logout,
             "thirdparty" if rest == "callback" => DeepLinkIntent::ThirdParty,
             "trigger" => classify_trigger(rest),
+            "native" => DeepLinkIntent::Native,
             "store" => classify_store(url, rest),
             "join" => DeepLinkIntent::Join,
             _ => DeepLinkIntent::Unknown,

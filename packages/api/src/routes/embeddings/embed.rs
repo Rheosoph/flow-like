@@ -2,15 +2,20 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::entity::{bit, embedding_usage_tracking, user};
+use crate::entity::{bit, embedding_usage_tracking};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use crate::usage_accounting::{
-    UsageInvocationSettlement, UsageInvocationStart, settle_usage_invocation,
-    start_usage_invocation,
+    HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart, configured_hosted_rate,
+    settle_hosted_usage_invocation, start_usage_invocation,
 };
-use axum::{Extension, Json, extract::State, http::HeaderMap};
+use axum::{
+    Extension, Json,
+    extract::State,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+};
 use flow_like::bit::Bit;
 use flow_like::flow_like_model_provider::provider::{
     EmbeddingModelProvider, RemoteEmbeddingProvider, RemoteExecutionConfig,
@@ -18,12 +23,12 @@ use flow_like::flow_like_model_provider::provider::{
 use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+use sea_orm::{EntityTrait, Set};
 
 const APP_ID_HEADER: &str = "x-flow-like-app-id";
 
-#[derive(Clone, Debug, Default)]
-struct UsageRequestContext {
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct UsageRequestContext {
     app_id: Option<String>,
     user_id: String,
     technical_user_id: Option<String>,
@@ -224,11 +229,11 @@ fn is_internal_hosted_embedding_provider(provider_name: &str) -> bool {
 }
 
 async fn enforce_embedding_tier(
-    user: &AppUser,
+    payer_id: &str,
     state: &AppState,
     provider: &EmbeddingModelProvider,
 ) -> Result<(), ApiError> {
-    let user_tier = user.tier(state).await?;
+    let (plan, user_tier) = crate::quota::payer_plan(state, payer_id).await?;
     let params = provider.provider.params.clone().unwrap_or_default();
     let tier = params
         .get("tier")
@@ -240,10 +245,7 @@ async fn enforce_embedding_tier(
             user_tier,
             tier
         );
-        return Err(ApiError::payment_required(format!(
-            "This embedding model requires the {} tier, which is not included in your plan.",
-            tier
-        )));
+        return Err(ApiError::hosted_model_unavailable(payer_id, &plan, tier));
     }
     Ok(())
 }
@@ -253,23 +255,54 @@ pub async fn embed_text(
     Extension(user): Extension<AppUser>,
     headers: HeaderMap,
     Json(payload): Json<EmbedRequest>,
-) -> Result<Json<EmbedResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     // 1. Fetch bit and validate remote config (CACHED for performance!)
     let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
 
     // 2. Enforce user tier
-    enforce_embedding_tier(&user, &state, &embedding_provider).await?;
     let usage_context = resolve_usage_context(&state, &user, &headers).await?;
+    let payer_id = crate::quota::resolve_payer(
+        &state,
+        Some(&usage_context.user_id),
+        usage_context.app_id.as_deref(),
+    )
+    .await?;
+    enforce_embedding_tier(&payer_id, &state, &embedding_provider).await?;
     let user_id = usage_context.user_id.clone();
 
     // 3. Build upstream request based on implementation
-    let start = Instant::now();
-    let implementation = remote_config
-        .implementation
-        .as_ref()
-        .ok_or_else(|| ApiError::bad_request("Remote execution not configured for this model"))?;
-    let token_count_estimate = payload.input.iter().map(|s| s.len() / 4).sum::<usize>() as i64;
-    let price_estimate = estimate_embedding_price(&payload.model, token_count_estimate);
+    let model_id = remote_config.model_id.as_deref().unwrap_or(&payload.model);
+    let mut rate = configured_hosted_rate("internal", model_id)?
+        .ok_or_else(|| ApiError::internal("Hosted embedding pricing is not configured"))?;
+    crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    let prefix = match payload.embed_type {
+        EmbedType::Query => &embedding_provider.prefix.query,
+        EmbedType::Document => &embedding_provider.prefix.paragraph,
+    };
+    if payload.input.is_empty() || payload.input.len() > INTERNAL_MAX_BATCH_SIZE {
+        return Err(ApiError::bad_request(
+            "Embedding batch must contain between 1 and 2,048 items",
+        ));
+    }
+    if payload
+        .input
+        .iter()
+        .any(|text| text.len().saturating_add(prefix.len()) > INTERNAL_MAX_TEXT_LEN)
+    {
+        return Err(ApiError::bad_request(
+            "Embedding input exceeds the per-item size limit",
+        ));
+    }
+    let token_count_estimate = embedding_input_bytes(&payload.input, prefix);
+    let max_input_bytes = rate
+        .max_input_bytes
+        .ok_or_else(|| ApiError::internal("Internal embedding tariff requires max_input_bytes"))?;
+    if token_count_estimate > max_input_bytes {
+        return Err(ApiError::bad_request(
+            "Embedding batch exceeds the configured input byte limit",
+        ));
+    }
+    let price_estimate = rate.provider_cost_bytes(token_count_estimate)?;
     let invocation_id = start_usage_invocation(
         &state,
         UsageInvocationStart {
@@ -282,24 +315,119 @@ pub async fn embed_text(
             model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
             estimated_tokens: token_count_estimate,
             estimated_cost_micro_dollars: price_estimate,
+            rate: Some(rate.clone()),
         },
     )
     .await?;
 
+    let id = invocation_id
+        .ok_or_else(|| ApiError::internal("Hosted embedding reservation is missing"))?;
+    let timeout = rate.max_request_ms as u64;
+    let job = HostedEmbeddingJob {
+        payload,
+        embedding_provider,
+        remote_config,
+        rate,
+        usage_context,
+        token_count_estimate,
+    };
+    if crate::routes::chat::hosted_worker::enabled() {
+        return crate::routes::chat::hosted_worker::dispatch(
+            state,
+            crate::routes::chat::hosted_worker::HostedAiJob {
+                operation_id: id,
+                request: crate::routes::chat::hosted_worker::HostedWork::Embedding(job),
+                deadline: chrono::Utc::now() + chrono::Duration::milliseconds(timeout as i64),
+            },
+        )
+        .await;
+    }
+    if !crate::quota::mark_started(&state, &id).await? {
+        return Err(ApiError::conflict(
+            "Hosted embedding operation has already started",
+        ));
+    }
+    Ok(execute_hosted_embedding(&state, job, id, timeout)
+        .await?
+        .into_response())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct HostedEmbeddingJob {
+    payload: EmbedRequest,
+    embedding_provider: EmbeddingModelProvider,
+    remote_config: RemoteExecutionConfig,
+    rate: HostedRateSnapshot,
+    usage_context: UsageRequestContext,
+    token_count_estimate: i64,
+}
+
+fn embedding_input_bytes(input: &[String], prefix: &str) -> i64 {
+    input
+        .iter()
+        .map(|text| text.len().saturating_add(prefix.len()) as i64)
+        .sum()
+}
+
+#[cfg(test)]
+mod byte_meter_tests {
+    use super::*;
+    #[test]
+    fn input_meter_counts_utf8_and_prefixes_without_relying_on_words() {
+        assert_eq!(
+            embedding_input_bytes(&["x".repeat(10_000)], "query: "),
+            10_007
+        );
+        assert_eq!(
+            embedding_input_bytes(&["你好".into(), "abc".into()], "p: "),
+            15
+        );
+    }
+}
+
+pub(crate) async fn execute_hosted_embedding(
+    state: &AppState,
+    job: HostedEmbeddingJob,
+    id: String,
+    timeout_ms: u64,
+) -> Result<Json<EmbedResponse>, ApiError> {
+    let HostedEmbeddingJob {
+        payload,
+        embedding_provider,
+        remote_config,
+        rate,
+        usage_context,
+        token_count_estimate,
+    } = job;
+    let user_id = usage_context.user_id.clone();
+    let invocation_id = Some(id);
+    let start = Instant::now();
+    let implementation = remote_config
+        .implementation
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("Remote embedding execution is not configured"))?;
     let result = match implementation {
         RemoteEmbeddingProvider::Internal => {
-            call_internal(&state, &embedding_provider, &remote_config, &payload).await
+            call_internal(
+                &state,
+                &embedding_provider,
+                &remote_config,
+                &payload,
+                timeout_ms,
+            )
+            .await
         }
     };
     let result = match result {
         Ok(result) => result,
         Err(error) => {
-            let _ = settle_usage_invocation(
-                &state.db,
+            let _ = settle_hosted_usage_invocation(
+                &state,
                 invocation_id.as_deref(),
                 UsageInvocationSettlement {
-                    status: crate::usage_accounting::STATUS_FAILED,
+                    status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
                     error: Some(error.to_string()),
+                    latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
                     ..Default::default()
                 },
             )
@@ -309,14 +437,15 @@ pub async fn embed_text(
     };
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-    // 4. Track usage. Prefer upstream usage when provided; otherwise use the
-    // same rough token estimate used for preflight limit checks.
-    let token_count = result
-        .usage
-        .as_ref()
-        .map(|usage| usage.total_tokens)
-        .unwrap_or(token_count_estimate);
-    let price = estimate_embedding_price(&payload.model, token_count);
+    // any-embedding reports whitespace word counts, not tokenizer output. The
+    // admitted byte tariff is explicit and cannot be reduced by removing spaces.
+    let reported_words = result.usage.as_ref().map(|usage| usage.total_tokens);
+    let token_count = token_count_estimate;
+    let price = rate.provider_cost_bytes(token_count_estimate)?;
+    let metering = serde_json::json!({
+        "meteringBasis":"input_bytes", "inputBytes":token_count_estimate,
+        "providerReportedWords":reported_words,"tokenCountEstimated":true,"costEstimated":true,
+    });
 
     // Best-effort usage tracking
     if let Err(e) = track_embedding_usage(
@@ -332,7 +461,8 @@ pub async fn embed_text(
         Some("internal"),
         invocation_id.as_deref(),
         result.provider_request_id.as_deref(),
-        result.raw_usage.clone(),
+        Some(metering),
+        true,
     )
     .await
     {
@@ -352,23 +482,10 @@ pub async fn embed_text(
         embeddings: result.embeddings,
         model: result.model.unwrap_or(payload.model),
         usage: EmbedUsage {
-            prompt_tokens: token_count,
-            total_tokens: token_count,
+            prompt_tokens: reported_words.unwrap_or(token_count),
+            total_tokens: reported_words.unwrap_or(token_count),
         },
     }))
-}
-
-fn estimate_embedding_price(model_id: &str, token_count: i64) -> i64 {
-    // Price in micro-dollars (1M = $1)
-    // Most embedding models are ~$0.02-0.13 per 1M tokens
-    // Default to $0.05 / 1M tokens = 0.00005 per token = 50 micro-dollars per 1K tokens
-    let price_per_1k = match model_id {
-        _ if model_id.contains("bge") || model_id.contains("e5") => 20, // $0.02/1M
-        _ if model_id.contains("voyage") => 130,                        // $0.13/1M for voyage-3
-        _ if model_id.contains("openai") || model_id.contains("text-embedding") => 20, // $0.02/1M
-        _ => 50,                                                        // Default: $0.05/1M
-    };
-    (token_count * price_per_1k) / 1000
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -386,13 +503,16 @@ async fn track_embedding_usage(
     invocation_id: Option<&str>,
     provider_request_id: Option<&str>,
     raw_usage: Option<flow_like_types::Value>,
+    known_usage: bool,
 ) -> Result<(), flow_like_types::Error> {
     use chrono::Utc;
     use embedding_usage_tracking::ActiveModel;
 
     let now = Utc::now().fixed_offset();
     let record = ActiveModel {
-        id: Set(create_id()),
+        id: Set(invocation_id
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(create_id)),
         model_id: Set(model.to_string()),
         provider: Set(provider.map(ToOwned::to_owned)),
         endpoint: Set(endpoint.map(ToOwned::to_owned)),
@@ -409,12 +529,15 @@ async fn track_embedding_usage(
         updated_at: Set(now),
     };
 
-    record.insert(&state.db).await?;
-    settle_usage_invocation(
-        &state.db,
+    settle_hosted_usage_invocation(
+        state,
         invocation_id,
         UsageInvocationSettlement {
-            status: crate::usage_accounting::STATUS_COMPLETED,
+            status: if known_usage {
+                crate::usage_accounting::STATUS_COMPLETED
+            } else {
+                crate::usage_accounting::STATUS_UNKNOWN_USAGE
+            },
             embedding_tokens: token_count,
             cost_micro_dollars: price,
             latency_ms: Some(latency_ms),
@@ -425,14 +548,15 @@ async fn track_embedding_usage(
     )
     .await?;
 
-    if price != 0
-        && let Some(existing) = user::Entity::find_by_id(user_sub).one(&state.db).await?
-    {
-        let total_embedding_price = existing.total_embedding_price.saturating_add(price);
-        let mut active: user::ActiveModel = existing.into();
-        active.total_embedding_price = Set(total_embedding_price);
-        active.updated_at = Set(now);
-        active.update(&state.db).await?;
+    if known_usage {
+        embedding_usage_tracking::Entity::insert(record)
+            .on_conflict(
+                sea_orm::sea_query::OnConflict::column(embedding_usage_tracking::Column::Id)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec_without_returning(&state.db)
+            .await?;
     }
 
     Ok(())
@@ -449,9 +573,8 @@ const INTERNAL_MAX_BATCH_SIZE: usize = 2048;
 const INTERNAL_MAX_TEXT_LEN: usize = 100_000;
 
 /// Internal deployments can take up to 80s to cold-start.
+#[cfg(test)]
 const INTERNAL_REQUEST_TIMEOUT_SECS: u64 = 120;
-const INTERNAL_MAX_RETRIES: u32 = 6;
-const INTERNAL_INITIAL_BACKOFF_MS: u64 = 2000;
 
 #[derive(Debug, Clone)]
 struct InternalEmbeddingResult {
@@ -476,6 +599,7 @@ async fn call_internal(
     provider: &EmbeddingModelProvider,
     config: &RemoteExecutionConfig,
     payload: &EmbedRequest,
+    request_timeout_ms: u64,
 ) -> Result<InternalEmbeddingResult, ApiError> {
     let endpoint = get_secret_string(state, INTERNAL_EMBEDDING_ENDPOINT_SECRET).await?;
     let model_id = config
@@ -521,7 +645,7 @@ async fn call_internal(
 
     let url = format!("{}/v1/embeddings", endpoint.trim_end_matches('/'));
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(INTERNAL_REQUEST_TIMEOUT_SECS))
+        .timeout(Duration::from_millis(request_timeout_ms))
         .build()
         .map_err(|e| ApiError::internal(format!("Failed to create HTTP client: {}", e)))?;
     let body = serde_json::json!({
@@ -529,12 +653,9 @@ async fn call_internal(
         "input": prefixed_input,
     });
 
-    // Retry with exponential backoff for transient errors. The request timeout
-    // is deliberately above the 80s cold-start ceiling, while the backoff budget
-    // handles gateways that return 429/503/5xx before the model is ready.
-
-    let mut attempt = 0;
-    loop {
+    // A timeout or gateway failure may have incurred inference cost. A new
+    // attempt needs a new reservation instead of silently repeating billed work.
+    {
         let response_result = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
@@ -545,18 +666,6 @@ async fn call_internal(
 
         let response = match response_result {
             Ok(response) => response,
-            Err(error) if error.is_timeout() && attempt < INTERNAL_MAX_RETRIES => {
-                attempt += 1;
-                let backoff_ms = INTERNAL_INITIAL_BACKOFF_MS * (1 << (attempt - 1));
-                tracing::info!(
-                    attempt = attempt,
-                    backoff_ms = backoff_ms,
-                    timeout_secs = INTERNAL_REQUEST_TIMEOUT_SECS,
-                    "Internal gateway request timed out, backing off"
-                );
-                flow_like_types::tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                continue;
-            }
             Err(error) => {
                 return Err(ApiError::internal(format!(
                     "Failed to call Internal gateway: {}",
@@ -606,24 +715,6 @@ async fn call_internal(
                 provider_request_id,
                 raw_usage,
             });
-        }
-
-        // Retry on 429 (rate limit) or 503/5xx (transient server errors)
-        let retryable = status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-            || status.is_server_error();
-
-        if retryable && attempt < INTERNAL_MAX_RETRIES {
-            attempt += 1;
-            let backoff_ms = INTERNAL_INITIAL_BACKOFF_MS * (1 << (attempt - 1));
-            tracing::info!(
-                attempt = attempt,
-                backoff_ms = backoff_ms,
-                status = %status,
-                "Internal gateway transient error, backing off"
-            );
-            flow_like_types::tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            continue;
         }
 
         let error = response.text().await.unwrap_or_default();

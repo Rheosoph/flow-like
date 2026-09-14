@@ -152,19 +152,13 @@ pub async fn change_visibility(
     let Some(transition) = transition(&app.visibility, &body.visibility) else {
         return Err(ApiError::FORBIDDEN);
     };
+    crate::capacity::prepare_account(&state, &sub).await?;
+    let (plan, tier) = crate::quota::payer_plan(&state, &sub).await?;
     let target = body.visibility.clone();
     let purge_members = transition == Transition::Toggle && target == Visibility::Private;
     let other_members = Condition::all()
         .add(membership::Column::AppId.eq(app_id.clone()))
         .add(membership::Column::UserId.ne(sub.clone()));
-
-    // Going private removes every other member. The purge runs in bounded
-    // batches around the flip rather than inside it: the fan-out behind one
-    // membership does not fit a transaction that also has to stay atomic with
-    // the visibility change.
-    if purge_members {
-        purge_memberships(&state, &other_members).await?;
-    }
 
     let request_id = create_id();
     let log_id = create_id();
@@ -176,15 +170,35 @@ pub async fn change_visibility(
             let target = target.clone();
             let request_id = request_id.clone();
             let log_id = log_id.clone();
+            let plan = plan.clone();
             Box::pin(async move {
+                flow_like_db::coordination::app_capacity(txn, &app_id).await?;
                 let app = app::Entity::find_by_id(&app_id)
                     .one(txn)
                     .await?
                     .ok_or(ApiError::NOT_FOUND)?;
+                let still_owner = membership::Entity::find()
+                    .filter(membership::Column::AppId.eq(&app_id))
+                    .filter(membership::Column::UserId.eq(&sub))
+                    .filter(membership::Column::RoleId.eq(app.owner_role_id.clone()))
+                    .one(txn)
+                    .await?
+                    .is_some();
+                if !still_owner {
+                    return Err(ApiError::FORBIDDEN);
+                }
                 let now = chrono::Utc::now().fixed_offset();
 
                 match transition {
                     Transition::Toggle | Transition::PublicSwap => {
+                        crate::capacity::set_visibility(
+                            txn,
+                            &app_id,
+                            &target,
+                            &plan,
+                            i64::from(tier.max_non_visible_projects),
+                        )
+                        .await?;
                         let mut app = app.into_active_model();
                         app.visibility = Set(target);
                         app.updated_at = Set(now);
@@ -224,8 +238,8 @@ pub async fn change_visibility(
         })
         .await?;
 
-    // Nobody can join a private app, so this second sweep only has to catch
-    // whoever slipped in between the first one and the flip.
+    // Purge only after quota admission commits. A rejected visibility change
+    // must not remove members from the existing public project.
     if purge_members {
         purge_memberships(&state, &other_members).await?;
     }

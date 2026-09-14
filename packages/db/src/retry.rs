@@ -4,6 +4,7 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, IsolationLevel, Tr
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
+use tracing::Instrument;
 
 /// Exponential backoff with full jitter for conflict retries.
 ///
@@ -115,6 +116,12 @@ pub type TransactionBody<'f, T, E> = dyn for<'c> Fn(&'c DatabaseTransaction) -> 
 ///
 /// The requested isolation level is applied on engines that support it and
 /// silently dropped on DSQL, which only offers snapshot isolation.
+#[tracing::instrument(
+    target = "flow_like::observability",
+    name = "db.transaction",
+    skip_all,
+    fields(db.operation = "transaction", db.system.name = tracing::field::Empty, retry_count = 0u32, error.type = tracing::field::Empty)
+)]
 pub async fn retry_transaction<F, T, E>(
     db: &DatabaseConnection,
     dialect: DbDialect,
@@ -131,12 +138,28 @@ where
     T: Send,
     E: From<DbErr> + AsDbConflict + std::fmt::Display + std::fmt::Debug + Send,
 {
+    let system = match dialect {
+        DbDialect::Postgres => "postgresql",
+        DbDialect::CockroachDb => "cockroachdb",
+        DbDialect::Dsql => "dsql",
+    };
+    tracing::Span::current().record("db.system.name", system);
     let isolation = dialect.effective_isolation(isolation);
     let started = Instant::now();
     let mut attempt = 0u32;
     loop {
         attempt += 1;
-        let txn = match db.begin_with_config(isolation, None).await {
+        tracing::Span::current().record("retry_count", attempt - 1);
+        let txn = match db
+            .begin_with_config(isolation, None)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "db.transaction.begin",
+                db.operation = "begin",
+                db.system.name = system
+            ))
+            .await
+        {
             Ok(txn) => txn,
             Err(err) => {
                 let conflict = classify_db_err(&err);
@@ -146,12 +169,32 @@ where
                         sleep(delay).await;
                         continue;
                     }
-                    None => return Err(E::from(err)),
+                    None => {
+                        tracing::Span::current().record("error.type", "database_error");
+                        return Err(E::from(err));
+                    }
                 }
             }
         };
-        let (error, conflict, phase) = match body(&txn).await {
-            Ok(value) => match txn.commit().await {
+        let (error, conflict, phase) = match body(&txn)
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "db.transaction.body",
+                db.operation = "transaction",
+                db.system.name = system
+            ))
+            .await
+        {
+            Ok(value) => match txn
+                .commit()
+                .instrument(tracing::info_span!(
+                    target: "flow_like::observability",
+                    "db.transaction.commit",
+                    db.operation = "commit",
+                    db.system.name = system
+                ))
+                .await
+            {
                 Ok(()) => return Ok(value),
                 Err(err) => {
                     let conflict = classify_commit_err(&err);
@@ -163,12 +206,21 @@ where
                 }
             },
             Err(err) => {
-                let _ = txn.rollback().await;
+                let _ = txn
+                    .rollback()
+                    .instrument(tracing::info_span!(
+                        target: "flow_like::observability",
+                        "db.transaction.rollback",
+                        db.operation = "rollback",
+                        db.system.name = system
+                    ))
+                    .await;
                 let conflict = err.db_conflict();
                 (err, conflict, "body")
             }
         };
         let Some(delay) = policy.next_delay(attempt, started.elapsed(), conflict) else {
+            tracing::Span::current().record("error.type", "transaction_error");
             return Err(error);
         };
         log_retry(dialect, conflict, attempt, policy, delay, phase);

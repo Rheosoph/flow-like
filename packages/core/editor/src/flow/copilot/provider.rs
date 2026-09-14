@@ -1328,7 +1328,10 @@ pub fn pin_to_metadata(pin: &Pin) -> PinMetadata {
             .default_value
             .as_ref()
             .map(|value| String::from_utf8_lossy(value).to_string())
-            .filter(|value| !value.is_empty() && value != "null"),
+            .filter(|value| !value.is_empty() && value != "null")
+            // Flattened metadata represents optionality with a present default.
+            // JSON null marks an unset optional pin without changing its stored literal.
+            .or_else(|| pin.is_optional().then(|| "null".to_string())),
         schema: pin.schema.clone(),
         is_generic,
         valid_values,
@@ -1504,6 +1507,60 @@ mod tests {
             alias: alias.map(str::to_string),
             receiver: receiver.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn optional_metadata_preserves_unset_geometry_and_legacy_fallbacks() {
+        use crate::flow::pin::PinOptions;
+        use flow_like_types::Value;
+
+        for default in [None, Some(Value::Null)] {
+            let mut node = Node::new("geo_test", "Geometry", "", "Web/Geo");
+            for (name, data_type) in [
+                ("coordinate", VariableType::Struct),
+                ("geometry", VariableType::Geometry),
+            ] {
+                node.add_input_pin(name, name, "", data_type)
+                    .set_options(PinOptions::new().set_optional(true).build())
+                    .set_default_value(default.clone());
+            }
+            node.add_input_pin("required", "Required", "", VariableType::Geometry)
+                .set_default_value(Some(Value::Null));
+
+            let metadata = node_to_metadata(&node);
+            assert_eq!(metadata.required_inputs, vec!["required"]);
+            for input in &metadata.inputs[..2] {
+                assert_eq!(input.default_value.as_deref(), Some("null"));
+            }
+            assert!(metadata.inputs[2].default_value.is_none());
+            let signature = metadata_to_signature(&metadata);
+            assert_eq!(
+                signature
+                    .inputs
+                    .iter()
+                    .map(|input| input.optional)
+                    .collect::<Vec<_>>(),
+                vec![true, true, false],
+            );
+            assert_eq!(
+                node.get_pin_by_name("geometry").unwrap().default_value,
+                default
+                    .as_ref()
+                    .map(|value| flow_like_types::json::to_vec(value).unwrap()),
+            );
+        }
+
+        let mut node = Node::new("geo_literal", "Geometry", "", "Web/Geo");
+        let literal =
+            flow_like_types::json::json!({"type": "Point", "coordinates": [13.405, 52.52]});
+        let pin = node
+            .add_input_pin("geometry", "Geometry", "", VariableType::Geometry)
+            .set_options(PinOptions::new().set_optional(true).build())
+            .set_default_value(Some(literal.clone()));
+        assert_eq!(
+            pin_to_metadata(pin).default_value,
+            Some(flow_like_types::json::to_string(&literal).unwrap()),
+        );
     }
 
     #[test]

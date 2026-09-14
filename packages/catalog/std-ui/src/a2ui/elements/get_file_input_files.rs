@@ -187,7 +187,7 @@ fn sanitize_path_segment(value: &str) -> String {
 /// Decodes a desktop "local file" URL (Tauri `convertFileSrc`: `asset://localhost/…`
 /// or `http://asset.localhost/…`) back to its absolute on-disk path. Returns `None`
 /// for regular http(s) URLs, which are downloaded instead.
-fn decode_local_file_url(url: &str) -> Option<String> {
+pub(crate) fn decode_local_file_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str().unwrap_or("");
     let is_local = parsed.scheme() == "file"

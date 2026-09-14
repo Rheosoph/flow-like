@@ -62,8 +62,8 @@ async fn apply(
     apply_current(db, dialect, observation, move || async move { Ok(size) }).await
 }
 
-/// Read current storage state after acquiring the object write intent. Retried attempts
-/// resample storage, so a later SQL commit cannot carry an earlier S3 observation.
+/// Sample storage without holding an app or account transaction. A changed object
+/// snapshot rejects the sample, so an earlier HEAD cannot overwrite a later event.
 pub async fn apply_current<F, Fut>(
     db: &DatabaseConnection,
     dialect: DbDialect,
@@ -79,37 +79,93 @@ where
     }
     let id = observation.id();
     let read_current_size = std::sync::Arc::new(read_current_size);
-    retry_transaction(db, dialect, None, &RetryPolicy::idempotent(), move |txn| {
+    for _ in 0..8 {
+        let snapshot = db
+            .query_one_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                r#"SELECT "size", "sequencer" FROM "FileAccountingObject" WHERE "id"=$1"#,
+                [id.clone().into()],
+            ))
+            .await?
+            .map(|row| {
+                Ok::<_, DbErr>((
+                    row.try_get::<i64>("", "size")?,
+                    row.try_get::<String>("", "sequencer")?,
+                ))
+            })
+            .transpose()?;
+        if snapshot
+            .as_ref()
+            .is_some_and(|(_, sequencer)| !newer_than(&observation.sequencer, sequencer))
+        {
+            return Ok(());
+        }
+        let size = read_current_size().await?;
+        if size < 0 {
+            return Err(DbErr::Custom("object size must not be negative".into()));
+        }
+        let applied = retry_transaction::<_, bool, DbErr>(db, dialect, None, &RetryPolicy::idempotent(), |txn| {
         let observation = observation.clone();
         let id = id.clone();
-        let read_current_size = read_current_size.clone();
+        let snapshot = snapshot.clone();
         Box::pin(async move {
+            flow_like_db::coordination::app_capacity(txn, &observation.app_id).await?;
             // The legacy row is read-only after cutover. Import its contribution exactly once;
-            // ON CONFLICT plus FOR UPDATE coordinates simultaneous first events on both engines.
-            txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+            // The retained row write coordinates simultaneous first events on both engines.
+            let inserted = txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
                 r#"INSERT INTO "FileAccountingObject" ("id", "bucket", "objectKey", "appId", "userId", "size", "sequencer", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6, '', now()) ON CONFLICT ("id") DO NOTHING"#,
                 [id.clone().into(), observation.bucket.into(), observation.key.into(), observation.app_id.clone().into(), observation.user_id.clone().into(), observation.legacy_size.into()]
-            )).await?;
+            )).await?.rows_affected();
             let row = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-                r#"SELECT "size", "sequencer" FROM "FileAccountingObject" WHERE "id" = $1 FOR UPDATE"#,
+                r#"SELECT "size", "sequencer", "payerId" FROM "FileAccountingObject" WHERE "id" = $1"#,
                 [id.clone().into()]
             )).await?.ok_or_else(|| DbErr::Custom("object accounting row disappeared".into()))?;
             let old_size: i64 = row.try_get("", "size")?;
             let old_sequencer: String = row.try_get("", "sequencer")?;
-            if !newer_than(&observation.sequencer, &old_sequencer) {
-                return Ok(());
-            }
-            let size = read_current_size().await?;
-            if size < 0 {
-                return Err(DbErr::Custom("object size must not be negative".into()));
+            if !newer_than(&observation.sequencer, &old_sequencer) { return Ok(true); }
+            let unchanged = match &snapshot {
+                Some((expected_size, expected_sequencer)) => *expected_size == old_size && expected_sequencer == &old_sequencer,
+                None => inserted == 1,
+            };
+            if !unchanged { return Ok(false); }
+            let payer_snapshot: Option<String> = row.try_get("", "payerId")?;
+            let payer_id = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                r#"SELECT COALESCE((SELECT "payerId" FROM "ProjectCapacity" WHERE "appId" = $1),
+                    (SELECT m."userId" FROM "Membership" m JOIN "App" a ON a."ownerRoleId" = m."roleId" AND a."id" = m."appId" WHERE a."id" = $1 ORDER BY m."userId" LIMIT 1)) AS "payerId""#,
+                [observation.app_id.clone().into()])).await?.map(|row| row.try_get::<Option<String>>("", "payerId")).transpose()?.flatten().or(payer_snapshot);
+            // Lock before changing App.totalSize: initialization reads that total under
+            // the same payer lock and must see either the before or after state.
+            if let Some(payer) = &payer_id {
+                txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                    r#"INSERT INTO "AccountCapacity" ("payerId") VALUES ($1) ON CONFLICT ("payerId") DO UPDATE SET "updatedAt"=now()"#,
+                    [payer.clone().into()])).await?;
             }
             let delta = size.checked_sub(old_size)
                 .ok_or_else(|| DbErr::Custom("object size delta overflow".into()))?;
-            txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-                r#"UPDATE "FileAccountingObject" SET "size" = $2, "sequencer" = $3, "updatedAt" = now() WHERE "id" = $1"#,
-                [id.into(), size.into(), observation.sequencer.into()]
-            )).await?;
+            let updated = txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                r#"UPDATE "FileAccountingObject" SET "size" = $2, "sequencer" = $3, "payerId" = $4, "updatedAt" = now() WHERE "id" = $1 AND "size"=$5 AND "sequencer"=$6"#,
+                [id.clone().into(), size.into(), observation.sequencer.into(), payer_id.clone().into(), old_size.into(), old_sequencer.into()]
+            )).await?.rows_affected();
+            if updated == 0 { return Ok(false); }
+            if let Some(payer) = &payer_id {
+                if let Some(grant) = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                    r#"SELECT "maxBytes", "reservedBytes" FROM "StorageUploadGrant" WHERE "id" = $1"#, [id.clone().into()])).await? {
+                    let max_bytes: i64 = grant.try_get("", "maxBytes")?;
+                    let old_reserved: i64 = grant.try_get("", "reservedBytes")?;
+                    let reserved = max_bytes.saturating_sub(size).max(0);
+                    txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                        r#"UPDATE "StorageUploadGrant" SET "reservedBytes" = $2, "updatedAt" = now() WHERE "id" = $1"#, [id.clone().into(), reserved.into()])).await?;
+                    txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                        r#"UPDATE "AccountCapacity" SET "reservedStorageBytes" = GREATEST(0,"reservedStorageBytes" + $2), "updatedAt" = now() WHERE "payerId" = $1"#,
+                        [payer.clone().into(), (reserved - old_reserved).into()])).await?;
+                }
+            }
             if delta != 0 {
+                if let Some(payer) = payer_id {
+                    txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+                        r#"UPDATE "AccountCapacity" SET "storageBytes" = GREATEST(0,"storageBytes" + $2), "updatedAt" = now() WHERE "payerId" = $1 AND EXISTS(SELECT 1 FROM "ProjectCapacity" p WHERE p."appId"=$3 AND p."payerId"=$1)"#,
+                        [payer.into(), delta.into(),observation.app_id.clone().into()])).await?;
+                }
                 // A late storage event can outlive its app or user. Updating zero rows is valid:
                 // the retained object tombstone still prevents a duplicate event being counted.
                 txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
@@ -123,9 +179,17 @@ where
                     )).await?;
                 }
             }
-            Ok(())
+            Ok(true)
         })
-    }).await
+        }).await?;
+        if applied {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(DbErr::Custom(
+        "Object changed repeatedly while accounting; retry the notification".into(),
+    ))
 }
 
 #[cfg(test)]
@@ -217,15 +281,39 @@ mod tests {
             .try_get("", "n")
             .unwrap()
         }
-        sql(&db, r#"CREATE TABLE "App" (id TEXT PRIMARY KEY, "totalSize" BIGINT NOT NULL, CONSTRAINT fail_overwrite CHECK ("totalSize" <= 100))"#).await;
+        sql(&db, r#"CREATE TABLE "MutationLock" (id BIGINT PRIMARY KEY, "updatedAt" TIMESTAMPTZ DEFAULT now())"#).await;
+        sql(&db, r#"CREATE TABLE "App" (id TEXT PRIMARY KEY, "ownerRoleId" TEXT, "totalSize" BIGINT NOT NULL, CONSTRAINT fail_overwrite CHECK ("totalSize" <= 100))"#).await;
         sql(
             &db,
             r#"CREATE TABLE "User" (id TEXT PRIMARY KEY, "totalSize" BIGINT NOT NULL)"#,
         )
         .await;
-        sql(&db, r#"CREATE TABLE "FileAccountingObject" (id TEXT PRIMARY KEY, bucket TEXT, "objectKey" TEXT, "appId" TEXT, "userId" TEXT, size BIGINT, sequencer TEXT, "updatedAt" TIMESTAMPTZ)"#).await;
-        sql(&db, r#"INSERT INTO "App" VALUES ('app',100)"#).await;
+        sql(&db, r#"CREATE TABLE "FileAccountingObject" (id TEXT PRIMARY KEY, bucket TEXT, "objectKey" TEXT, "appId" TEXT, "userId" TEXT, "payerId" TEXT, size BIGINT, sequencer TEXT, "updatedAt" TIMESTAMPTZ)"#).await;
+        sql(&db, r#"INSERT INTO "App" VALUES ('app','owner-role',100)"#).await;
         sql(&db, r#"INSERT INTO "User" VALUES ('user',100)"#).await;
+        sql(
+            &db,
+            r#"CREATE TABLE "Membership" ("userId" TEXT, "appId" TEXT, "roleId" TEXT)"#,
+        )
+        .await;
+        sql(
+            &db,
+            r#"INSERT INTO "Membership" VALUES ('user','app','owner-role')"#,
+        )
+        .await;
+        sql(
+            &db,
+            r#"CREATE TABLE "ProjectCapacity" ("appId" TEXT PRIMARY KEY, "payerId" TEXT)"#,
+        )
+        .await;
+        sql(&db, r#"CREATE TABLE "AccountCapacity" ("payerId" TEXT PRIMARY KEY, "storageBytes" BIGINT DEFAULT 0, "reservedStorageBytes" BIGINT DEFAULT 0, "initialized" BOOLEAN DEFAULT false, "updatedAt" TIMESTAMPTZ)"#).await;
+        sql(&db, r#"INSERT INTO "AccountCapacity" ("payerId", "storageBytes", "initialized") VALUES ('user',100,true)"#).await;
+        sql(
+            &db,
+            r#"INSERT INTO "ProjectCapacity" VALUES ('app','user')"#,
+        )
+        .await;
+        sql(&db, r#"CREATE TABLE "StorageUploadGrant" ("id" TEXT PRIMARY KEY, "maxBytes" BIGINT, "reservedBytes" BIGINT, "updatedAt" TIMESTAMPTZ)"#).await;
         let observation = Observation {
             bucket: "bucket".into(),
             key: "users/user/apps/app/file".into(),
@@ -323,23 +411,24 @@ mod tests {
             200
         );
 
-        // A second event must not sample S3 before the first transaction releases the object.
-        // Otherwise its earlier sample could overwrite a newer sample when its commit runs last.
+        // A slow HEAD holds no app/account lock. A newer event whose earlier
+        // sample loses a race must resample before committing its larger sequencer.
         use std::sync::{
-            atomic::{AtomicBool, AtomicI64, Ordering},
+            atomic::{AtomicI64, AtomicUsize, Ordering},
             Arc,
         };
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let current_size = Arc::new(AtomicI64::new(200));
-        let second_sampled = Arc::new(AtomicBool::new(false));
+        let samples = Arc::new(AtomicUsize::new(0));
         let first = {
             let db = db.clone();
             let entered = entered.clone();
             let release = release.clone();
             let current_size = current_size.clone();
+            let samples = samples.clone();
             let event = Observation {
-                sequencer: "5".into(),
+                sequencer: "6".into(),
                 ..observation.clone()
             };
             tokio::spawn(async move {
@@ -347,42 +436,61 @@ mod tests {
                     let entered = entered.clone();
                     let release = release.clone();
                     let current_size = current_size.clone();
+                    let samples = samples.clone();
                     async move {
-                        entered.notify_one();
-                        release.notified().await;
-                        Ok(current_size.load(Ordering::SeqCst))
+                        let captured = current_size.load(Ordering::SeqCst);
+                        if samples.fetch_add(1, Ordering::SeqCst) == 0 {
+                            entered.notify_one();
+                            release.notified().await;
+                        }
+                        Ok(captured)
                     }
                 })
                 .await
             })
         };
         entered.notified().await;
-        let second = {
-            let db = db.clone();
-            let sampled = second_sampled.clone();
-            let current_size = current_size.clone();
-            let event = Observation {
-                sequencer: "6".into(),
-                ..observation.clone()
-            };
-            tokio::spawn(async move {
-                apply_current(&db, DbDialect::Postgres, event, move || {
-                    let sampled = sampled.clone();
-                    let current_size = current_size.clone();
-                    async move {
-                        sampled.store(true, Ordering::SeqCst);
-                        Ok(current_size.load(Ordering::SeqCst))
-                    }
-                })
+        // Both coordination locks remain available while the first HEAD waits.
+        use sea_orm::TransactionTrait;
+        let unrelated = db.begin().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            flow_like_db::coordination::app_capacity(&unrelated, "app")
                 .await
-            })
-        };
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        assert!(!second_sampled.load(Ordering::SeqCst));
+                .unwrap();
+            unrelated
+                .execute_raw(Statement::from_string(
+                    DatabaseBackend::Postgres,
+                    r#"UPDATE "AccountCapacity" SET "updatedAt"=now() WHERE "payerId"='user'"#,
+                ))
+                .await
+                .unwrap();
+        })
+        .await
+        .expect("HEAD must not hold broad SQL locks");
+        unrelated.commit().await.unwrap();
         current_size.store(300, Ordering::SeqCst);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            apply(
+                &db,
+                DbDialect::Postgres,
+                Observation {
+                    sequencer: "5".into(),
+                    ..observation.clone()
+                },
+                300,
+            ),
+        )
+        .await
+        .expect("another event can finish during HEAD")
+        .unwrap();
         release.notify_one();
         first.await.unwrap().unwrap();
-        second.await.unwrap().unwrap();
+        assert_eq!(
+            samples.load(Ordering::SeqCst),
+            2,
+            "stale HEAD must be sampled again"
+        );
         assert_eq!(
             value(&db, r#"SELECT "totalSize" AS n FROM "App""#).await,
             300
@@ -406,6 +514,305 @@ mod tests {
         assert_eq!(
             value(&db, r#"SELECT "totalSize" AS n FROM "App""#).await,
             400
+        );
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" AS n FROM "AccountCapacity" WHERE "payerId" = 'user'"#
+            )
+            .await,
+            400
+        );
+        // An object's payer survives deletion of the app and its membership.
+        sql(&db, r#"DELETE FROM "Membership""#).await;
+        sql(&db, r#"DELETE FROM "App""#).await;
+        let late = Observation {
+            bucket: "bucket".into(),
+            key: "users/user/apps/app/file".into(),
+            app_id: "app".into(),
+            user_id: Some("user".into()),
+            sequencer: "8".into(),
+            legacy_size: 0,
+        };
+        apply(&db, DbDialect::Postgres, late.clone(), 0)
+            .await
+            .unwrap();
+        apply(&db, DbDialect::Postgres, late, 0).await.unwrap();
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" AS n FROM "AccountCapacity" WHERE "payerId" = 'user'"#
+            )
+            .await,
+            0
+        );
+        let replayed = Observation {
+            bucket: "bucket".into(),
+            key: "users/user/apps/app/file".into(),
+            app_id: "app".into(),
+            user_id: Some("user".into()),
+            sequencer: "9".into(),
+            legacy_size: 0,
+        };
+        db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"INSERT INTO "StorageUploadGrant" ("id","maxBytes","reservedBytes") VALUES ($1,400,400)"#, [replayed.id().into()])).await.unwrap();
+        sql(
+            &db,
+            r#"UPDATE "AccountCapacity" SET "reservedStorageBytes" = 400"#,
+        )
+        .await;
+        // A retained project already contributes while the account baseline is
+        // incomplete. New events must update that partial total immediately.
+        sql(&db, r#"UPDATE "AccountCapacity" SET initialized=false"#).await;
+        apply(&db, DbDialect::Postgres, replayed.clone(), 400)
+            .await
+            .unwrap();
+        assert_eq!(
+            value(&db, r#"SELECT "storageBytes" AS n FROM "AccountCapacity""#).await,
+            400
+        );
+        sql(&db, r#"UPDATE "AccountCapacity" SET initialized=true"#).await;
+        apply(&db, DbDialect::Postgres, replayed.clone(), 400)
+            .await
+            .unwrap();
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" + "reservedStorageBytes" AS n FROM "AccountCapacity""#
+            )
+            .await,
+            400
+        );
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "reservedStorageBytes" AS n FROM "AccountCapacity""#
+            )
+            .await,
+            0
+        );
+        apply(
+            &db,
+            DbDialect::Postgres,
+            Observation {
+                sequencer: "a".into(),
+                ..replayed.clone()
+            },
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" + "reservedStorageBytes" AS n FROM "AccountCapacity""#
+            )
+            .await,
+            400
+        );
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "reservedStorageBytes" AS n FROM "AccountCapacity""#
+            )
+            .await,
+            400
+        );
+        apply(
+            &db,
+            DbDialect::Postgres,
+            Observation {
+                sequencer: "b".into(),
+                ..replayed
+            },
+            400,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" + "reservedStorageBytes" AS n FROM "AccountCapacity""#
+            )
+            .await,
+            400
+        );
+        // HEAD may run during an ownership transfer, but the SQL commit resolves
+        // the current payer after acquiring the shared app lock.
+        let transfer = db.begin().await.unwrap();
+        flow_like_db::coordination::app_capacity(&transfer, "app")
+            .await
+            .unwrap();
+        let sampled = Arc::new(tokio::sync::Notify::new());
+        let observer = {
+            let db = db.clone();
+            let sampled = sampled.clone();
+            tokio::spawn(async move {
+                apply_current(
+                    &db,
+                    DbDialect::Postgres,
+                    Observation {
+                        bucket: "bucket".into(),
+                        key: "users/user/apps/app/file".into(),
+                        app_id: "app".into(),
+                        user_id: Some("user".into()),
+                        sequencer: "c".into(),
+                        legacy_size: 0,
+                    },
+                    move || {
+                        let sampled = sampled.clone();
+                        async move {
+                            sampled.notify_one();
+                            Ok(450)
+                        }
+                    },
+                )
+                .await
+                .unwrap();
+            })
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(1), sampled.notified())
+            .await
+            .expect("HEAD can finish while ownership transfer holds the app lock");
+        for statement in [
+            r#"DELETE FROM "StorageUploadGrant""#,
+            r#"UPDATE "ProjectCapacity" SET "payerId"='recipient' WHERE "appId"='app'"#,
+            r#"UPDATE "AccountCapacity" SET "storageBytes"=0 WHERE "payerId"='user'"#,
+            r#"INSERT INTO "AccountCapacity" ("payerId","storageBytes",initialized) VALUES ('recipient',400,true)"#,
+        ] {
+            transfer
+                .execute_raw(Statement::from_string(DatabaseBackend::Postgres, statement))
+                .await
+                .unwrap();
+        }
+        transfer.commit().await.unwrap();
+        observer.await.unwrap();
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" AS n FROM "AccountCapacity" WHERE "payerId"='recipient'"#
+            )
+            .await,
+            450
+        );
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" AS n FROM "AccountCapacity" WHERE "payerId"='user'"#
+            )
+            .await,
+            0
+        );
+        // An older delete sampled before a recreation cannot erase the new bytes.
+        let delete_entered = Arc::new(tokio::sync::Notify::new());
+        let delete_release = Arc::new(tokio::sync::Notify::new());
+        let stale_delete = {
+            let db = db.clone();
+            let entered = delete_entered.clone();
+            let release = delete_release.clone();
+            tokio::spawn(async move {
+                apply_current(
+                    &db,
+                    DbDialect::Postgres,
+                    Observation {
+                        bucket: "bucket".into(),
+                        key: "users/user/apps/app/file".into(),
+                        app_id: "app".into(),
+                        user_id: Some("user".into()),
+                        sequencer: "d".into(),
+                        legacy_size: 0,
+                    },
+                    move || {
+                        let entered = entered.clone();
+                        let release = release.clone();
+                        async move {
+                            entered.notify_one();
+                            release.notified().await;
+                            Ok(0)
+                        }
+                    },
+                )
+                .await
+                .unwrap();
+            })
+        };
+        delete_entered.notified().await;
+        apply(
+            &db,
+            DbDialect::Postgres,
+            Observation {
+                bucket: "bucket".into(),
+                key: "users/user/apps/app/file".into(),
+                app_id: "app".into(),
+                user_id: Some("user".into()),
+                sequencer: "e".into(),
+                legacy_size: 0,
+            },
+            500,
+        )
+        .await
+        .unwrap();
+        delete_release.notify_one();
+        stale_delete.await.unwrap();
+        assert_eq!(
+            value(&db, r#"SELECT size AS n FROM "FileAccountingObject""#).await,
+            500
+        );
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT "storageBytes" AS n FROM "AccountCapacity" WHERE "payerId"='recipient'"#
+            )
+            .await,
+            500
+        );
+        let final_event = Observation {
+            bucket: "bucket".into(),
+            key: "users/user/apps/app/file".into(),
+            app_id: "app".into(),
+            user_id: Some("user".into()),
+            sequencer: "e".into(),
+            legacy_size: 0,
+        };
+        apply_current(&db, DbDialect::Postgres, final_event.clone(), || async {
+            Err(DbErr::Custom("duplicate events must not call HEAD".into()))
+        })
+        .await
+        .unwrap();
+        // Continual same-size updates still invalidate old samples through their
+        // sequencer. Stop after a bounded number and leave the notification retryable.
+        let changing_db = db.clone();
+        let sample_count = Arc::new(AtomicUsize::new(0));
+        let observed_samples = sample_count.clone();
+        let changed = apply_current(
+            &db,
+            DbDialect::Postgres,
+            Observation {
+                sequencer: "ff".into(),
+                ..final_event
+            },
+            move || {
+                let db = changing_db.clone();
+                let sample_count = sample_count.clone();
+                async move {
+                    let next = 15 + sample_count.fetch_add(1, Ordering::SeqCst);
+                    db.execute_raw(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        r#"UPDATE "FileAccountingObject" SET sequencer=$1"#,
+                        [format!("{next:x}").into()],
+                    ))
+                    .await?;
+                    Ok(600)
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(changed.to_string().contains("retry the notification"));
+        assert_eq!(observed_samples.load(Ordering::SeqCst), 8);
+        assert_eq!(
+            value(&db, r#"SELECT size AS n FROM "FileAccountingObject""#).await,
+            500
         );
         db.close().await.unwrap();
         admin

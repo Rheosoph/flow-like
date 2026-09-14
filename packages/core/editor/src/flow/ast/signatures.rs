@@ -31,12 +31,12 @@ fn sig_param(pin: &Pin) -> SigParam {
             &pin.value_type,
             pin.schema.as_deref(),
         ),
-        // An input is optional if it carries a default value.
-        optional: pin
-            .default_value
-            .as_ref()
-            .map(|b| !b.is_empty())
-            .unwrap_or(false),
+        optional: pin.is_optional()
+            || pin
+                .default_value
+                .as_ref()
+                .map(|b| !b.is_empty())
+                .unwrap_or(false),
         doc,
         schema: pin.schema.clone(),
     }
@@ -139,4 +139,50 @@ pub fn node_names(node: &Node) -> NodeNames {
 /// The collision-checker view of a catalog node's effective names.
 pub fn node_name_entry(node: &Node) -> NameEntry {
     node_names(node).entry(&node.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::pin::PinOptions;
+
+    #[test]
+    fn signatures_honor_optional_geometry_and_legacy_pins_without_defaults() {
+        let mut node = Node::new("geo_test", "Geometry", "", "Web/Geo");
+        for (name, data_type) in [
+            ("geometry", VariableType::Geometry),
+            ("coordinate", VariableType::Struct),
+        ] {
+            node.add_input_pin(name, name, "", data_type)
+                .set_options(PinOptions::new().set_optional(true).build());
+        }
+        node.add_input_pin("required", "Required", "", VariableType::Geometry);
+
+        let signature = node_to_signature(&node);
+        assert_eq!(
+            signature
+                .inputs
+                .iter()
+                .map(|pin| (pin.name.as_str(), pin.optional))
+                .collect::<Vec<_>>(),
+            vec![
+                ("geometry", true),
+                ("coordinate", true),
+                ("required", false)
+            ],
+        );
+    }
+
+    #[test]
+    fn signatures_preserve_default_based_optionality() {
+        let mut node = Node::new("defaults_test", "Defaults", "", "Test");
+        node.add_input_pin("default", "Default", "", VariableType::String)
+            .set_default_value(Some(flow_like_types::json::json!("")));
+        node.add_input_pin("empty_bytes", "Empty bytes", "", VariableType::String)
+            .default_value = Some(Vec::new());
+
+        let signature = node_to_signature(&node);
+        assert!(signature.inputs[0].optional);
+        assert!(!signature.inputs[1].optional);
+    }
 }

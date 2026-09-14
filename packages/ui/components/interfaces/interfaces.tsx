@@ -60,6 +60,8 @@ export interface ISinkConfig {
 	availability: SinkAvailability;
 	/** Description for users about execution context */
 	description?: string;
+	/** The trigger stays on this device but can invoke a Remote Event. */
+	dispatchesRemoteEvents?: boolean;
 }
 
 /**

@@ -110,6 +110,7 @@ export type {
 	ImageComponent,
 	IconComponent,
 	VideoComponent,
+	CameraViewComponent,
 	MarkdownComponent,
 	DividerComponent,
 	BadgeComponent,

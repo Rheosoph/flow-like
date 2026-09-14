@@ -71,7 +71,10 @@ impl Command for UpsertVariableCommand {
                 &self.variable.value_type,
                 schema,
                 default,
-            )?;
+            )
+            .map_err(|error| {
+                flow_like_types::anyhow!("Variable '{}': {error}", self.variable.name)
+            })?;
         }
 
         if let Some(old_variable) = variables.get(&self.variable.id)
@@ -103,7 +106,10 @@ impl Command for UpsertVariableCommand {
                 &self.variable.value_type,
                 self.variable.schema.as_deref(),
                 self.variable.default_value.as_deref(),
-            )?;
+            )
+            .map_err(|error| {
+                flow_like_types::anyhow!("Variable '{}': {error}", self.variable.name)
+            })?;
         }
 
         // If the variable is a Struct type and has a schema that looks like example JSON,

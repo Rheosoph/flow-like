@@ -74,7 +74,15 @@
 			"hardenedRuntime": true,
 			"minimumSystemVersion": "14.0",
 			"exceptionDomain": "localhost",
-			"entitlements": "./Entitlements.plist"
+			"entitlements": "./Entitlements.plist",
+			"frameworks": [
+				"binaries/apple-native/FlowLikeNative.framework"
+			],
+			"files": {
+				"PlugIns/FlowLikeWidgets.appex": "binaries/apple-native/FlowLikeWidgets.appex",
+				"PlugIns/FlowLikeShare.appex": "binaries/apple-native/FlowLikeShare.appex",
+				"Resources/Metadata.appintents": "binaries/apple-native/Metadata.appintents"
+			}
 		},
 		"linux": {
 			"rpm": {
@@ -107,7 +115,9 @@
 		"deep-link": {
 			"mobile": [
 				{
-					"scheme": ["https"],
+					"scheme": [
+						"https"
+					],
 					"host": "app.flow-like.com",
 					"pathPrefix": [
 						"/callback",
@@ -119,7 +129,9 @@
 					"appLink": true
 				},
 				{
-					"scheme": ["flow-like"],
+					"scheme": [
+						"flow-like"
+					],
 					"appLink": false
 				}
 			],

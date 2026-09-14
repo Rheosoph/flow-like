@@ -36,6 +36,9 @@ import {
 	type IUserTemplateInfo,
 	type IUserUpdate,
 	type IUserWidgetInfo,
+	type QuotaOperationDetail,
+	type QuotaOperationsPage,
+	type QuotaOverview,
 	chunkLookupIds,
 	isLocalUserSub,
 	partitionLookupIds,
@@ -719,6 +722,27 @@ export class WebUserState implements IUserState {
 
 	async deletePAT(id: string): Promise<void> {
 		await apiDelete(`user/pat/${id}`, this.backend.auth);
+	}
+
+	async getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage> {
+		return apiGet<QuotaOperationsPage>(
+			`user/usage/operations?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+			this.backend.auth,
+		);
+	}
+
+	async getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail> {
+		return apiGet<QuotaOperationDetail>(
+			`user/usage/operations/${encodeURIComponent(id)}`,
+			this.backend.auth,
+		);
+	}
+
+	async getQuotaUsage(includeHistory = true): Promise<QuotaOverview> {
+		return apiGet<QuotaOverview>(
+			`user/usage/quotas?includeHistory=${includeHistory}`,
+			this.backend.auth,
+		);
 	}
 
 	async getPricing(): Promise<IPricingResponse> {

@@ -65,6 +65,14 @@ async fn fixture() -> DatabaseConnection {
             execute(&db, statement.replace("INDEX ASYNC", "INDEX")).await;
         }
     }
+    for statement in
+        include_str!("../../prisma/migrations/20260913120007_rolling_usage/migration.sql")
+            .split(';')
+    {
+        if !statement.trim().is_empty() {
+            execute(&db, statement).await;
+        }
+    }
     db
 }
 
@@ -169,6 +177,7 @@ async fn budgets(db: &DatabaseConnection) {
                 model_id: None,
                 estimated_tokens: 60,
                 estimated_cost_micro_dollars: 60,
+                rate: None,
             },
         )
     }))
@@ -263,6 +272,192 @@ async fn budgets(db: &DatabaseConnection) {
     );
 }
 
+async fn rolling_totals(
+    db: &DatabaseConnection,
+    app: &str,
+    user: &str,
+    period: &str,
+) -> Option<crate::usage_limits::UsageLimitTotals> {
+    let app = app.to_owned();
+    let user = user.to_owned();
+    let period = period.to_owned();
+    crate::db::retry_transaction(
+        db,
+        DbDialect::Postgres,
+        None,
+        &crate::db::RetryPolicy::default(),
+        move |txn| {
+            let app = app.clone();
+            let user = user.clone();
+            let period = period.clone();
+            Box::pin(async move {
+                crate::db::coordination::coordinate(txn, "usage-budget", &[&app]).await?;
+                crate::rolling_usage::totals(txn, &app, &user, &period).await
+            })
+        },
+    )
+    .await
+    .unwrap()
+}
+
+async fn rolling_budgets(db: &DatabaseConnection) {
+    execute(db, r#"INSERT INTO "LLMUsageTracking" (id,"modelId","tokenIn","tokenOut",price,"appId","updatedAt") SELECT 'backfill-'||n,'model',2,3,7,'backfill-app',now() FROM generate_series(1,250) n"#).await;
+    assert!(
+        rolling_totals(db, "backfill-app", "", "monthly")
+            .await
+            .is_none()
+    );
+    assert!(
+        rolling_totals(db, "backfill-app", "", "monthly")
+            .await
+            .is_none()
+    );
+    let filled = rolling_totals(db, "backfill-app", "", "monthly")
+        .await
+        .unwrap();
+    assert_eq!(
+        (filled.tokens, filled.cost_micro_dollars, filled.invocations),
+        (1250, 1750, 250)
+    );
+    let again = rolling_totals(db, "backfill-app", "", "monthly")
+        .await
+        .unwrap();
+    assert_eq!(
+        (again.tokens, again.cost_micro_dollars),
+        (1250, 1750),
+        "ready counters do not backfill twice"
+    );
+    execute(
+        db,
+        r#"UPDATE "AppRollingContribution" SET "expiresAt"=0 WHERE "appId"='backfill-app'"#,
+    )
+    .await;
+    assert!(
+        rolling_totals(db, "backfill-app", "", "monthly")
+            .await
+            .is_none()
+    );
+    assert!(
+        rolling_totals(db, "backfill-app", "", "monthly")
+            .await
+            .is_none()
+    );
+    let expired = rolling_totals(db, "backfill-app", "", "monthly")
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            expired.tokens,
+            expired.cost_micro_dollars,
+            expired.invocations
+        ),
+        (0, 0, 0),
+        "expiry drains commit progress without a historical aggregate"
+    );
+
+    execute(db,r#"INSERT INTO "LLMUsageTracking" (id,"modelId","tokenIn","tokenOut",price,"appId","userId","technicalUserId","createdAt","updatedAt") SELECT 'windows-'||days,'model',1,0,1,'windows-app','actor','technical',now()-days*INTERVAL '1 day',now() FROM unnest(ARRAY[0,8,31,366]) days"#).await;
+    for (period, expected) in [("weekly", 1), ("monthly", 2), ("yearly", 3)] {
+        let totals = rolling_totals(db, "windows-app", "", period).await.unwrap();
+        assert_eq!(totals.tokens, expected);
+    }
+    assert_eq!(
+        rolling_totals(db, "windows-app", "actor", "yearly")
+            .await
+            .unwrap()
+            .tokens,
+        3
+    );
+    assert_eq!(
+        rolling_totals(db, "windows-app", "technical", "yearly")
+            .await
+            .unwrap()
+            .tokens,
+        3
+    );
+    assert_eq!(
+        rolling_totals(db, "windows-app", "someone-else", "yearly")
+            .await
+            .unwrap()
+            .tokens,
+        0
+    );
+
+    execute(db,r#"INSERT INTO "AppUsageLimit" (id,"appId",period,"tokenLimit","costMicroDollars","updatedAt") VALUES('pending-budget','pending-app','weekly',1000,1000,now())"#).await;
+    let id = start_usage_invocation_with_db(
+        db,
+        DbDialect::Postgres,
+        UsageInvocationStart {
+            kind: "llm",
+            user_id: Some("user"),
+            technical_user_id: None,
+            app_id: Some("pending-app"),
+            provider: None,
+            endpoint: None,
+            model_id: None,
+            estimated_tokens: 90,
+            estimated_cost_micro_dollars: 80,
+            rate: None,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    settle_usage_invocation(
+        db,
+        Some(&id),
+        UsageInvocationSettlement {
+            status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+            input_tokens: 10,
+            cost_micro_dollars: 5,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let unknown = rolling_totals(db, "pending-app", "", "weekly")
+        .await
+        .unwrap();
+    assert_eq!(
+        (unknown.tokens, unknown.cost_micro_dollars),
+        (90, 80),
+        "missing provider usage retains the conservative app reservation"
+    );
+    settle_usage_invocation(
+        db,
+        Some(&id),
+        UsageInvocationSettlement {
+            status: STATUS_COMPLETED,
+            input_tokens: 20,
+            cost_micro_dollars: 15,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    settle_usage_invocation(
+        db,
+        Some(&id),
+        UsageInvocationSettlement {
+            status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let final_usage = rolling_totals(db, "pending-app", "", "weekly")
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            final_usage.tokens,
+            final_usage.cost_micro_dollars,
+            final_usage.invocations
+        ),
+        (20, 15, 1),
+        "settlement adjusts once and late unknown cannot restore a hold"
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires an empty disposable PostgreSQL database"]
 async fn concurrent_database_operations() {
@@ -270,5 +465,6 @@ async fn concurrent_database_operations() {
     audit_appends(&db).await;
     room_keys(&db).await;
     budgets(&db).await;
+    rolling_budgets(&db).await;
     db.close().await.unwrap();
 }

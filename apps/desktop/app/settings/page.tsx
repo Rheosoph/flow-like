@@ -21,6 +21,7 @@ import {
 	Package,
 	Scroll,
 	ShieldCheck,
+	Smartphone,
 	User,
 	Zap,
 } from "lucide-react";
@@ -49,6 +50,15 @@ function buildSettingsSections(
 		{
 			label: t("personalization", "Personalization"),
 			cards: [
+				{
+					title: t("nativeWidgets", "Native widgets"),
+					description: t(
+						"nativeWidgetsDescription",
+						"Data charts and app pages on your Home Screen",
+					),
+					href: "/settings/widgets",
+					icon: Smartphone,
+				},
 				{
 					title: t("profile", "Profile"),
 					description: t(

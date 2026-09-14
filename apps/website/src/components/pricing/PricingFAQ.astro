@@ -9,14 +9,14 @@ const { lang } = Astro.props;
 const t = (key: string) => tCommon(lang, key);
 
 const faqKeys = [
-  { q: "pricing.faq.q1", a: "pricing.faq.a1" },
-  { q: "pricing.faq.q2", a: "pricing.faq.a2" },
-  { q: "pricing.faq.q3", a: "pricing.faq.a3" },
-  { q: "pricing.faq.q4", a: "pricing.faq.a4" },
-  { q: "pricing.faq.q5", a: "pricing.faq.a5" },
-  { q: "pricing.faq.q6", a: "pricing.faq.a6" },
-  { q: "pricing.faq.q7", a: "pricing.faq.a7" },
-  { q: "pricing.faq.q8", a: "pricing.faq.a8" },
+  { q: "What happens when I approach a plan limit?", a: "Your usage page shows used and reserved capacity. We warn at 75% and 90%. When an allowance is full, new work using that resource pauses until you free capacity, upgrade or the monthly allowance renews. Local execution and your own models remain available." },
+  { q: "What counts as cloud runtime?", a: "Time spent running your cloud workflow, including time waiting for network or model responses. Realtime and async workflows use the same runtime allowance. Your local workflows use none." },
+  { q: "Is this per-seat pricing?", a: "Free, Premium, Pro and Max are account subscriptions. Enterprise capacity and terms are agreed separately." },
+  { q: "How does hosted AI usage work?", a: "Flow-Like-funded model and embedding requests use your hosted AI money and operation allowances. Included AI usage covers inference and serving costs. Your plan's hosted model selection applies. Your own models and local embeddings use neither AI allowance." },
+  { q: "Can I work with larger datasets?", a: "Connect your own storage without using the included Flow-Like storage allowance. Data copied into Flow-Like counts toward hosted storage. Processing capacity depends on the workflow, memory and execution duration." },
+  { q: "Can I use my existing coding assistant?", a: "Studio FlowPilot can use your GitHub Copilot, Codex or Claude Code instance without using Flow-Like hosted AI allowances. Your provider's subscription and usage limits still apply." },
+  { q: "How do annual plans renew usage?", a: "Annual plans are billed once per year. Runtime, cloud starts, hosted AI money and hosted AI operations still renew monthly. Storage and project allowances measure current occupancy and do not reset." },
+  { q: "Do public-project forks use project slots?", a: "No. Forks of public projects, including purchased projects, do not count toward the project limit. Their hosted storage, cloud runtime and hosted AI usage still use your normal plan allowances." },
 ];
 ---
 
@@ -48,10 +48,11 @@ const faqKeys = [
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       {faqKeys.map((faq, index) => (
         <details
+          lang="en"
           class="group rounded-2xl bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/30 transition-all duration-300 overflow-hidden"
         >
           <summary class="flex items-center justify-between p-6 cursor-pointer list-none">
-            <span class="font-semibold pr-4 group-hover:text-primary transition-colors">{t(faq.q)}</span>
+            <span class="font-semibold pr-4 group-hover:text-primary transition-colors">{faq.q}</span>
             <div class="flex-shrink-0 w-8 h-8 rounded-full bg-muted/50 flex items-center justify-center group-hover:bg-primary/10 transition-colors">
               <svg
                 class="w-4 h-4 text-muted-foreground group-hover:text-primary transition-all duration-300 group-open:rotate-180"
@@ -64,7 +65,7 @@ const faqKeys = [
             </div>
           </summary>
           <div class="px-6 pb-6 -mt-2">
-            <p class="text-muted-foreground leading-relaxed">{t(faq.a)}</p>
+            <p class="text-muted-foreground leading-relaxed">{faq.a}</p>
           </div>
         </details>
       ))}

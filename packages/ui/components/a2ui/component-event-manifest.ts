@@ -41,6 +41,33 @@ const exactEvent = (id: string, label: string, description: string) =>
 
 /** Static interaction contracts implemented by the built-in renderers. */
 export const COMPONENT_EVENT_MANIFEST = {
+	cameraView: [
+		exactEvent(
+			"ready",
+			"Camera ready",
+			"The user started a camera session on this screen. Includes session IDs and microphone state.",
+		),
+		exactEvent(
+			"capture",
+			"Image captured",
+			"The user captured a frame. Carries the temporary image, sessionId and frameId.",
+		),
+		exactEvent(
+			"frame",
+			"Interval frame",
+			"Capture at the configured interval while this screen is visible. Skips ticks while the previous Event is running.",
+		),
+		exactEvent(
+			"error",
+			"Camera error",
+			"Camera or microphone permission, capture, or media transfer failed.",
+		),
+		exactEvent(
+			"overlayClick",
+			"Overlay clicked",
+			"An annotation was clicked. Carries the overlay, sessionId and frameId.",
+		),
+	],
 	boundingBoxOverlay: [
 		event("boxClick", "Box clicked", "A bounding box was clicked."),
 	],
@@ -196,6 +223,11 @@ export const COMPONENT_EVENT_MANIFEST = {
 		event("markerDragEnd", "Marker moved", "A draggable marker was moved."),
 		event("routeClick", "Route clicked", "A map route was clicked."),
 		event("locate", "Location found", "The locate control found a location."),
+		exactEvent(
+			"locateError",
+			"Location error",
+			"Location permission or acquisition failed. Carries code and message.",
+		),
 		// Viewport changes have always emitted an A2UI message, but unlike the
 		// events above they did not execute component.actions[0]. Falling back here
 		// would make old maps unexpectedly run a workflow on every pan/zoom frame.

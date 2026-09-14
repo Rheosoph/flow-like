@@ -423,6 +423,10 @@ pub async fn delete_root(pass: &mut Pass<'_>, table: &TableMeta) -> Result<(), A
             table.name
         )));
     }
+    // The retained allocation preserves ownership for late object delete events.
+    if table.name == "App" {
+        crate::capacity::release_project(pass.state, &pass.root_id).await?;
+    }
     let affected = apply_page(
         pass.state,
         table,

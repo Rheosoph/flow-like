@@ -1,10 +1,12 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
-    pin::{PinOptions, ValueType},
+    pin::ValueType,
     variable::VariableType,
 };
-use flow_like_types::{async_trait, json::json};
+use flow_like_types::{async_trait, geometry::GeometryKind, json::json};
+
+use crate::geo::pins::{geometry_input, geometry_output};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,44 @@ impl OsrmNearestNode {
     pub fn new() -> Self {
         Self {}
     }
+
+    #[cfg(feature = "execute")]
+    async fn set_waypoints(
+        context: &mut ExecutionContext,
+        response_waypoints: Vec<OsrmWaypoint>,
+    ) -> flow_like_types::Result<()> {
+        let waypoints: Vec<NearestWaypoint> = response_waypoints
+            .into_iter()
+            .map(|wp| NearestWaypoint {
+                name: wp.name,
+                distance: wp.distance.unwrap_or_default(),
+                coordinate: GeoCoordinate::new(wp.location[1], wp.location[0]),
+                hint: wp.hint,
+            })
+            .collect();
+
+        let nearest = waypoints.first().cloned().unwrap_or_default();
+
+        let waypoint_geometries = waypoints
+            .iter()
+            .map(|waypoint| crate::geo::pins::point_geometry(&waypoint.coordinate))
+            .collect::<flow_like_types::Result<Vec<_>>>()?;
+        if let Some(geometry) = waypoint_geometries.first() {
+            context
+                .set_pin_value("geometry_out", geometry.clone())
+                .await?;
+        } else {
+            crate::geo::pins::clear_output(context, "geometry_out").await?;
+        }
+        context
+            .set_pin_value("waypoint_geometries", json!(waypoint_geometries))
+            .await?;
+
+        context.set_pin_value("nearest", json!(nearest)).await?;
+        context.set_pin_value("waypoints", json!(waypoints)).await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -40,6 +80,7 @@ impl NodeLogic for OsrmNearestNode {
             "Finds the nearest routable point(s) to a coordinate using OSRM.",
             "Web/Geo/Routing",
         );
+        node.set_version(2);
         node.set_flowscript_name("geo", "osrmNearest");
         node.add_icon("/flow/icons/map-pin.svg");
 
@@ -49,14 +90,14 @@ impl NodeLogic for OsrmNearestNode {
             "Initiate the nearest-point lookup",
             VariableType::Execution,
         );
-        node.add_input_pin(
-            "coordinate",
-            "Coordinate",
-            "The coordinate to snap to the road network",
-            VariableType::Struct,
-        )
-        .set_schema::<GeoCoordinate>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        geometry_input(
+            &mut node,
+            "geometry",
+            "Geometry",
+            "Point geometry to snap to the road network",
+            Some(GeometryKind::Point),
+        );
 
         node.add_input_pin(
             "profile",
@@ -113,6 +154,22 @@ impl NodeLogic for OsrmNearestNode {
         .set_schema::<NearestWaypoint>()
         .set_value_type(ValueType::Array);
 
+        geometry_output(
+            &mut node,
+            "geometry_out",
+            "Nearest Geometry",
+            "Closest routable Point geometry. Unset when no point is found.",
+            Some(GeometryKind::Point),
+        );
+        geometry_output(
+            &mut node,
+            "waypoint_geometries",
+            "Waypoint Geometries",
+            "Nearest routable Point geometries in the same order as Waypoints.",
+            Some(GeometryKind::Point),
+        )
+        .set_value_type(ValueType::Array);
+
         node.set_scores(
             NodeScores::new()
                 .set_privacy(7)
@@ -132,8 +189,10 @@ impl NodeLogic for OsrmNearestNode {
 
         context.deactivate_exec_pin("exec_success").await?;
         context.activate_exec_pin("exec_error").await?;
+        crate::geo::pins::clear_output(context, "geometry_out").await?;
+        crate::geo::pins::clear_output(context, "waypoint_geometries").await?;
 
-        let coordinate: GeoCoordinate = context.evaluate_pin("coordinate").await?;
+        let coordinate = crate::geo::pins::coordinate_input(context, "geometry").await?;
         let profile: RouteProfile = context.evaluate_pin("profile").await?;
         let number: i64 = context.evaluate_pin("number").await?;
         let base_url: String = context.evaluate_pin("base_url").await?;
@@ -168,22 +227,7 @@ impl NodeLogic for OsrmNearestNode {
             ));
         }
 
-        let waypoints: Vec<NearestWaypoint> = body
-            .waypoints
-            .unwrap_or_default()
-            .into_iter()
-            .map(|wp| NearestWaypoint {
-                name: wp.name,
-                distance: wp.distance.unwrap_or_default(),
-                coordinate: GeoCoordinate::new(wp.location[1], wp.location[0]),
-                hint: wp.hint,
-            })
-            .collect();
-
-        let nearest = waypoints.first().cloned().unwrap_or_default();
-
-        context.set_pin_value("nearest", json!(nearest)).await?;
-        context.set_pin_value("waypoints", json!(waypoints)).await?;
+        Self::set_waypoints(context, body.waypoints.unwrap_or_default()).await?;
 
         context.deactivate_exec_pin("exec_error").await?;
         context.activate_exec_pin("exec_success").await?;
@@ -211,7 +255,52 @@ struct OsrmNearestResponse {
 #[derive(Deserialize)]
 struct OsrmWaypoint {
     name: String,
-    location: Vec<f64>,
+    location: [f64; 2],
     distance: Option<f64>,
     hint: Option<String>,
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use crate::geo::pins::tests::execution_context;
+    use flow_like_types::Value;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn nearest_service_response_exposes_points_and_empty_results_clear_primary() {
+        let response: OsrmNearestResponse = flow_like_types::json::from_value(json!({
+            "code":"Ok",
+            "waypoints":[
+                {"name":"First Street","location":[13.405,52.52],"distance":2.0,"hint":"first"},
+                {"name":"Second Street","location":[13.41,52.53],"distance":3.0,"hint":"second"}
+            ]
+        }))
+        .unwrap();
+        let mut context = execution_context(Arc::new(OsrmNearestNode::new())).await;
+        OsrmNearestNode::set_waypoints(&mut context, response.waypoints.unwrap())
+            .await
+            .unwrap();
+        let point: Value = context.evaluate_pin("geometry_out").await.unwrap();
+        assert_eq!(point, json!({"type":"Point","coordinates":[13.405,52.52]}));
+        let points: Vec<Value> = context.evaluate_pin("waypoint_geometries").await.unwrap();
+        assert_eq!(
+            points,
+            vec![point, json!({"type":"Point","coordinates":[13.41,52.53]})]
+        );
+        let nearest: NearestWaypoint = context.evaluate_pin("nearest").await.unwrap();
+        assert_eq!(nearest.coordinate.latitude, 52.52);
+        assert_eq!(nearest.name, "First Street");
+        OsrmNearestNode::set_waypoints(&mut context, Vec::new())
+            .await
+            .unwrap();
+        assert!(context.evaluate_pin::<Value>("geometry_out").await.is_err());
+        assert_eq!(
+            context
+                .evaluate_pin::<Value>("waypoint_geometries")
+                .await
+                .unwrap(),
+            json!([])
+        );
+    }
 }

@@ -6,6 +6,7 @@ import {
 } from "../../lib/flowpilot/workspace-evaluation";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { createId } from "@paralleldrive/cuid2";
 import {
 	BotIcon,
 	BrainIcon,
@@ -72,6 +73,12 @@ import { searchAllBitsOfType } from "../../lib/bit/model-listing";
 import { resolveChatPlaceholderTypingMotion } from "../../lib/chat-appearance";
 import { createComposerActivity } from "../../lib/composer-activity";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
+import {
+	type NativeActionRequest,
+	assertNativeActionCurrent,
+	nativeChatOutcome,
+	runNativeAction,
+} from "../../lib/native-action-result";
 import { isTauri } from "../../lib/platform";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import {
@@ -362,9 +369,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	// self-awareness context includes the signed-in user (kept fresh via a ref for the send closure).
 	const auth = useAuth();
 	const authRef = useRef(auth);
-	useEffect(() => {
-		authRef.current = auth;
-	}, [auth]);
+	authRef.current = auth;
 
 	// Embedding models available in the current profile power profile-scoped memory (opt-in).
 	const backend = useBackend();
@@ -380,6 +385,33 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	useEffect(() => {
 		settingsProfileRef.current = settingsProfile.data;
 	}, [settingsProfile.data]);
+	const nativeIdentity = useRef({
+		backend,
+		auth,
+		profile: settingsProfile.data?.hub_profile,
+	});
+	nativeIdentity.current = {
+		backend,
+		auth,
+		profile: settingsProfile.data?.hub_profile,
+	};
+	const getNativeScope = useCallback(() => {
+		const identity = nativeIdentity.current;
+		if (
+			identity.auth.isLoading ||
+			(identity.auth.isAuthenticated && !identity.auth.user?.profile.sub)
+		)
+			return;
+		const profile = identity.backend.profile ?? identity.profile;
+		if (!profile?.id) return;
+		return JSON.stringify([
+			getApiOrigin(profile),
+			profile.id,
+			(identity.auth.isAuthenticated
+				? identity.auth.user?.profile.sub
+				: undefined) ?? "local",
+		]);
+	}, []);
 
 	// Read the profile's INSTALLED bits directly rather than intersecting a remote catalog search
 	// with profile.bits strings — the latter silently misses embeddings whose stored hub prefix
@@ -528,8 +560,33 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		}
 	}, [isAgent, reasoningEffort, selectedAgentModel, setReasoningEffort]);
 
-	const handleSendMessage: ISendMessageFunction = useCallback(
-		async (content, filesAttached) => {
+	const sendMessage = useCallback(
+		async (
+			content: string,
+			filesAttached?: File[],
+			nativeRequest?: NativeActionRequest,
+		): Promise<IMessage | undefined> => {
+			const checkCurrent = () => {
+				if (nativeRequest)
+					assertNativeActionCurrent(nativeRequest, getNativeScope());
+			};
+			const authorizeNativeRequest = async () => {
+				if (!nativeRequest) return;
+				checkCurrent();
+				const profile = await backend.userState.getProfile();
+				checkCurrent();
+				const auth = authRef.current;
+				assertNativeActionCurrent(
+					nativeRequest,
+					JSON.stringify([
+						getApiOrigin(profile),
+						profile.id,
+						(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ??
+							"local",
+					]),
+				);
+			};
+			checkCurrent();
 			const trimmed = content.trim();
 			const state = useGlobalChatStore.getState();
 			// Concurrency is allowed up to the cap; past it the message is queued rather than
@@ -540,6 +597,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					conversationId: state.activeConversationId,
 					content: trimmed,
 					files: filesAttached,
+					nativeRequest,
 				});
 				return;
 			}
@@ -549,6 +607,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				reasoningEffort: state.reasoningEffort,
 			});
 			const launchingProfileId = settingsProfileRef.current?.hub_profile.id;
+			if (nativeRequest) await authorizeNativeRequest();
 
 			// Any file type is accepted: files become local tmp files (Tauri) or presigned tmp
 			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. FlowPilot
@@ -558,7 +617,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			let attachments: Awaited<ReturnType<typeof fileToAttachment>> = [];
 			if (allFiles.length > 0) {
 				try {
-					attachments = await fileToAttachment(allFiles, backend, true);
+					attachments = await fileToAttachment(
+						allFiles,
+						backend,
+						true,
+						nativeRequest ? checkCurrent : undefined,
+					);
+					checkCurrent();
 				} catch (error) {
 					toast.error(
 						t(
@@ -567,6 +632,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							{ val: error instanceof Error ? error.message : String(error) },
 						),
 					);
+					if (nativeRequest) throw error;
 				}
 			}
 			// Only image attachments feed the vision model; other files travel as a name/type
@@ -589,7 +655,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							url: attachment.url,
 						},
 			);
-			if (!trimmed && attachments.length === 0) return;
+			if (!trimmed && attachments.length === 0) {
+				if (nativeRequest)
+					throw new Error("Enter a question or attach a file for FlowPilot.");
+				return;
+			}
 			// Attachment preparation is asynchronous, so re-check capacity: several sends can be
 			// preparing uploads at the same time.
 			if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) {
@@ -597,6 +667,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					conversationId: state.activeConversationId,
 					content: trimmed,
 					files: filesAttached,
+					nativeRequest,
 				});
 				return;
 			}
@@ -613,9 +684,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
 			userMessage.files = attachments;
-			appendMessage(userMessage);
-			void persistGlobalChatMessage(userMessage);
-			void persistGlobalChatSession(sessionId, trimmed || "Image message");
+			if (!nativeRequest) {
+				appendMessage(userMessage);
+				void persistGlobalChatMessage(userMessage);
+				void persistGlobalChatSession(sessionId, trimmed || "Image message");
+			}
 
 			const responseMessage = makeGlobalChatMessage(
 				IRole.Assistant,
@@ -628,7 +701,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			);
 			// Register the run so a reload mid-response can re-attach to the live Rust stream.
 			// driveGlobalChatStream creates the store record itself.
-			setActiveRun(sessionId, responseMessage.id, turnSelection);
+			if (!nativeRequest)
+				setActiveRun(sessionId, responseMessage.id, turnSelection);
 
 			// A turn that failed carries its reason on `error`, not in the text — an assistant entry
 			// with nothing in it teaches the model nothing, so drop it from the history instead.
@@ -658,6 +732,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					const snapshots = await captureWidgetSnapshots(
 						latestWidgets.map((widget) => widget.instance_id),
 					);
+					checkCurrent();
 					for (const dataUrl of snapshots) {
 						const [header, data] = dataUrl.split(",", 2);
 						if (!data) continue;
@@ -669,9 +744,30 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					}
 				}
 			} catch (error) {
+				checkCurrent();
 				console.warn("[GlobalChat] widget snapshot failed:", error);
 			}
 
+			if (nativeRequest) await authorizeNativeRequest();
+			checkCurrent();
+			if (
+				nativeRequest &&
+				isGlobalChatAtRunCapacity(useGlobalChatStore.getState())
+			) {
+				useGlobalChatStore.getState().enqueueMessage({
+					conversationId: state.activeConversationId,
+					content: trimmed,
+					files: filesAttached,
+					nativeRequest,
+				});
+				return;
+			}
+			if (nativeRequest) {
+				appendMessage(userMessage);
+				void persistGlobalChatMessage(userMessage);
+				void persistGlobalChatSession(sessionId, trimmed || "Image message");
+				setActiveRun(sessionId, responseMessage.id, turnSelection);
+			}
 			const authUser = authRef.current?.user;
 			const userContext =
 				authUser?.profile?.name ??
@@ -756,73 +852,116 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				// Desktop drives the run over a Tauri Channel (resumable via the Rust registry); the
 				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
 				// tool bridge via the registry. Both feed the shared parser identically.
-				start: isTauri()
-					? tauriStart("global_chat", {
-							scope: "Frontend",
-							userPrompt: trimmed,
-							attachmentUrls:
-								imageAttachmentUrls.length > 0
-									? imageAttachmentUrls
-									: undefined,
-							attachmentsManifest:
-								attachmentManifest.length > 0 ? attachmentManifest : undefined,
-							history: historyPayload,
-							currentImages: widgetImages.length > 0 ? widgetImages : undefined,
-							modelId: effectiveModelId,
-							reasoningEffort: turnSelection.reasoningEffort || undefined,
-							embeddingModelId: state.embeddingModelId || undefined,
-							token: authUser?.access_token ?? undefined,
-							userContext: userContext ?? undefined,
-							boardContext,
-							dataStudioContext,
-							runId: responseMessage.id,
-						})
-					: webGlobalChatStart({
-							baseUrl: getApiOrigin(),
-							token: authUser?.access_token ?? undefined,
-							profileId: launchingProfileId,
-							// The server mints its own run id; the transport needs ours to tag tool
-							// requests and to register this run's cancel/steer control.
-							clientRunId: responseMessage.id,
-							onToolRequest: runGlobalChatTool,
-							onLifecycle: FLOWPILOT_DEBUG_ENABLED
-								? (event) => {
-										useGlobalChatStore
-											.getState()
-											.recordDebugEvent(responseMessage.id, {
-												...event,
-												id: `${responseMessage.id}:${event.id}`,
-											});
-									}
-								: undefined,
-							body: {
-								scope: "Frontend",
-								user_prompt: trimmed,
-								history: historyPayload,
-								current_images:
-									widgetImages.length > 0 ? widgetImages : undefined,
-								model_id: effectiveModelId,
-								embedding_model_id: state.embeddingModelId || undefined,
-								user_context: userContext ?? undefined,
-								board_context: boardContext,
-								data_studio_context: dataStudioContext,
-								// Signed tmp-upload URLs (from fileToAttachment) for image vision only; the
-								// server fetches them.
-								attachment_urls:
-									imageAttachmentUrls.length > 0
-										? imageAttachmentUrls
+				start: async (onChunk) => {
+					// Lazy transport imports must not open a race after the final identity check.
+					checkCurrent();
+					return (
+						isTauri()
+							? tauriStart(
+									"global_chat",
+									{
+										scope: "Frontend",
+										userPrompt: trimmed,
+										attachmentUrls:
+											imageAttachmentUrls.length > 0
+												? imageAttachmentUrls
+												: undefined,
+										attachmentsManifest:
+											attachmentManifest.length > 0
+												? attachmentManifest
+												: undefined,
+										history: historyPayload,
+										currentImages:
+											widgetImages.length > 0 ? widgetImages : undefined,
+										modelId: effectiveModelId,
+										reasoningEffort: turnSelection.reasoningEffort || undefined,
+										embeddingModelId: state.embeddingModelId || undefined,
+										token: authUser?.access_token ?? undefined,
+										userContext: userContext ?? undefined,
+										boardContext,
+										dataStudioContext,
+										runId: responseMessage.id,
+									},
+									checkCurrent,
+								)
+							: webGlobalChatStart({
+									baseUrl: getApiOrigin(),
+									token: authUser?.access_token ?? undefined,
+									profileId: launchingProfileId,
+									// The server mints its own run id; the transport needs ours to tag tool
+									// requests and to register this run's cancel/steer control.
+									clientRunId: responseMessage.id,
+									onToolRequest: runGlobalChatTool,
+									onLifecycle: FLOWPILOT_DEBUG_ENABLED
+										? (event) => {
+												useGlobalChatStore
+													.getState()
+													.recordDebugEvent(responseMessage.id, {
+														...event,
+														id: `${responseMessage.id}:${event.id}`,
+													});
+											}
 										: undefined,
-								// Every attachment (name/type/size) so the assistant knows what files it
-								// can hand to apps it calls, even non-image files it cannot itself read.
-								attachments_manifest:
-									attachmentManifest.length > 0
-										? attachmentManifest
-										: undefined,
-							},
-						}),
+									body: {
+										scope: "Frontend",
+										user_prompt: trimmed,
+										history: historyPayload,
+										current_images:
+											widgetImages.length > 0 ? widgetImages : undefined,
+										model_id: effectiveModelId,
+										embedding_model_id: state.embeddingModelId || undefined,
+										user_context: userContext ?? undefined,
+										board_context: boardContext,
+										data_studio_context: dataStudioContext,
+										// Signed tmp-upload URLs (from fileToAttachment) for image vision only; the
+										// server fetches them.
+										attachment_urls:
+											imageAttachmentUrls.length > 0
+												? imageAttachmentUrls
+												: undefined,
+										// Every attachment (name/type/size) so the assistant knows what files it
+										// can hand to apps it calls, even non-image files it cannot itself read.
+										attachments_manifest:
+											attachmentManifest.length > 0
+												? attachmentManifest
+												: undefined,
+									},
+								})
+					)(onChunk);
+				},
+			});
+			return responseMessage;
+		},
+		[appendMessage, backend, variant, getNativeScope, t],
+	);
+	const handleSendMessage: ISendMessageFunction = useCallback(
+		async (content, files) => {
+			await sendMessage(content, files);
+		},
+		[sendMessage],
+	);
+	const handleNativeDraft = useCallback(
+		async (draft: {
+			prompt: string;
+			files?: File[];
+			nativeRequest?: NativeActionRequest;
+			nativeScope?: string;
+		}) => {
+			const request =
+				draft.nativeRequest ??
+				(draft.nativeScope
+					? { id: createId(), scope: draft.nativeScope }
+					: undefined);
+			if (!request) return handleSendMessage(draft.prompt, draft.files);
+			await runNativeAction(request, {
+				getCurrentScope: getNativeScope,
+				run: async () => {
+					const message = await sendMessage(draft.prompt, draft.files, request);
+					return message ? nativeChatOutcome(message) : undefined;
+				},
 			});
 		},
-		[appendMessage, backend, variant],
+		[sendMessage, handleSendMessage, getNativeScope],
 	);
 
 	// Rate one assistant turn. The local write is authoritative and happens first: a thumb the user
@@ -935,6 +1074,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	// calls this directly. The effect below covers the other direction: capacity that frees up
 	// while this surface is mounted, e.g. after a cancel.
 	const sendRef = useRef(handleSendMessage);
+	const nativeSendRef = useRef(handleNativeDraft);
+	nativeSendRef.current = handleNativeDraft;
 	useEffect(() => {
 		sendRef.current = handleSendMessage;
 	}, [handleSendMessage]);
@@ -944,7 +1085,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		if (isGlobalChatAtRunCapacity(state)) return;
 		const next = state.takeNextQueuedMessage(conversationId);
 		if (!next) return;
-		void sendRef.current(next.content, next.files);
+		if (next.nativeRequest)
+			void nativeSendRef.current({
+				prompt: next.content,
+				files: next.files,
+				nativeRequest: next.nativeRequest,
+			});
+		else void sendRef.current(next.content, next.files);
 	}, []);
 	useEffect(() => {
 		setGlobalChatQueueDrain(drainQueue);
@@ -1015,6 +1162,19 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 
 	const pendingDraft = useGlobalChatStore((s) => s.draft);
+	const nativeDraftScope = getNativeScope();
+	const [nativeDeadlineTick, setNativeDeadlineTick] = useState(0);
+	useEffect(() => {
+		const deadline = Date.parse(
+			pendingDraft?.nativeRequest?.responseDeadline ?? "",
+		);
+		if (!Number.isFinite(deadline)) return;
+		const timer = setTimeout(
+			() => setNativeDeadlineTick((tick) => tick + 1),
+			Math.max(0, Math.min(2_147_483_647, deadline - Date.now())),
+		);
+		return () => clearTimeout(timer);
+	}, [pendingDraft]);
 	const draftReady =
 		!auth.isLoading &&
 		(isAgent
@@ -1023,15 +1183,30 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				(llmBits.data !== undefined && bitsModels.length === 0));
 	// biome-ignore lint/correctness/useExhaustiveDependencies: send on new drafts / readiness / capacity only, not on every handleSendMessage identity change.
 	useEffect(() => {
-		if (!pendingDraft || !draftReady) return;
+		if (!pendingDraft) return;
+		if (
+			pendingDraft.nativeRequest?.responseDeadline &&
+			!(Date.parse(pendingDraft.nativeRequest.responseDeadline) > Date.now())
+		) {
+			consumeDraft(pendingDraft);
+			return;
+		}
+		if (
+			!draftReady ||
+			((pendingDraft.nativeRequest || pendingDraft.nativeScope) &&
+				!nativeDraftScope)
+		)
+			return;
 		// A draft only waits for actual capacity now — a live turn no longer blocks it.
 		if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) return;
-		const draft = consumeDraft();
+		const draft = consumeDraft(pendingDraft);
 		if (!draft) return;
 		if (draft.modelId) setSelectedModelId(draft.modelId);
-		void handleSendMessage(draft.prompt, draft.files);
+		void handleNativeDraft(draft);
 	}, [
 		pendingDraft,
+		nativeDeadlineTick,
+		nativeDraftScope,
 		draftReady,
 		activeRuns.length,
 		consumeDraft,

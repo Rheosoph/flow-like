@@ -1,3 +1,4 @@
+import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type BoardEditJob,
 	type BoardEditJobDeliveryClaim,
@@ -1682,6 +1683,31 @@ export class BoardState implements IBoardState {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined> {
+		return withDeviceCommandBridge(
+			{ appId, executionTarget: "local" },
+			cb,
+			(bridgeCallback) =>
+				this.executeBoardInternal(
+					appId,
+					boardId,
+					payload,
+					streamState,
+					eventId,
+					bridgeCallback,
+					skipConsentCheck,
+				),
+		);
+	}
+
+	private async executeBoardInternal(
+		appId: string,
+		boardId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		eventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+		skipConsentCheck?: boolean,
+	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
 		let board: IBoard;
@@ -1909,6 +1935,29 @@ export class BoardState implements IBoardState {
 	}
 
 	async executeBoardRemote(
+		appId: string,
+		boardId: string,
+		payload: IRunPayload,
+		streamState?: boolean,
+		eventId?: (id: string) => void,
+		cb?: (event: IIntercomEvent[]) => void,
+	): Promise<ILogMetadata | undefined> {
+		return withDeviceCommandBridge(
+			{ appId, executionTarget: "remote" },
+			cb,
+			(bridgeCallback) =>
+				this.executeBoardRemoteInternal(
+					appId,
+					boardId,
+					payload,
+					streamState,
+					eventId,
+					bridgeCallback,
+				),
+		);
+	}
+
+	private async executeBoardRemoteInternal(
 		appId: string,
 		boardId: string,
 		payload: IRunPayload,

@@ -48,10 +48,12 @@ pub enum ExternalStep {
     /// Staged `ExecutionEvent` payloads of the app's runs, looked up from the
     /// `payloadRef` those rows carry.
     ExecutionEventPayloads,
+    AppQuotaPayloads,
+    UserQuotaPayloads,
 }
 
 impl ExternalStep {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::AppSinkSchedules,
         Self::AppStoragePrefixes,
         Self::AppCacheBackend,
@@ -60,6 +62,8 @@ impl ExternalStep {
         Self::BitCdnArtifact,
         Self::TemplateStorage,
         Self::ExecutionEventPayloads,
+        Self::AppQuotaPayloads,
+        Self::UserQuotaPayloads,
     ];
 
     pub fn describe(self) -> &'static str {
@@ -73,6 +77,10 @@ impl ExternalStep {
             Self::TemplateStorage => "delete the template's board, versions and page payloads",
             Self::ExecutionEventPayloads => {
                 "delete the staged payload objects of the app's execution events"
+            }
+            Self::AppQuotaPayloads => "cancel app operations and remove expired private inputs",
+            Self::UserQuotaPayloads => {
+                "cancel account operations and remove expired private inputs"
             }
         }
     }
@@ -113,6 +121,19 @@ pub async fn run(
         ExternalStep::TemplateStorage => template::delete_storage(state, &root_id, pass).await,
         ExternalStep::ExecutionEventPayloads => {
             app::delete_execution_event_payloads(state, &root_id, pass).await
+        }
+        ExternalStep::AppQuotaPayloads | ExternalStep::UserQuotaPayloads => {
+            let scope = match step {
+                ExternalStep::AppQuotaPayloads => crate::quota_payloads::Scope::App(&root_id),
+                _ => crate::quota_payloads::Scope::Payer(&root_id),
+            };
+            let finished = crate::quota_payloads::request_cancellation(state, scope).await?;
+            crate::quota_payloads::cleanup(state, Some(scope)).await?;
+            Ok(if finished {
+                Flow::Continue
+            } else {
+                Flow::Suspend
+            })
         }
     }
 }

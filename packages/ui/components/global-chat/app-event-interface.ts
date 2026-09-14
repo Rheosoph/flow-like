@@ -1,4 +1,4 @@
-import { isChatEventType } from "../../lib/event-config";
+import { isChatEventType } from "../../lib/event-definitions";
 
 export type EventInterfaceKind = "chat" | "page" | "headless" | "unavailable";
 

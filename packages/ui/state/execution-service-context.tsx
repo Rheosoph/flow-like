@@ -52,6 +52,7 @@ interface PendingExecution {
 	cb?: (event: IIntercomEvent[]) => void;
 	skipConsentCheck?: boolean;
 	pageTrigger?: PageTrigger;
+	beforeDispatch?: () => void;
 	isRemote: boolean;
 	isEvent: boolean;
 	eventIdStr?: string;
@@ -134,6 +135,7 @@ export interface ExecutionServiceContextValue {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	) => Promise<ILogMetadata | undefined>;
 
 	/**
@@ -162,6 +164,7 @@ export interface ExecutionServiceContextValue {
 		cb?: (event: IIntercomEvent[]) => void,
 		skipConsentCheck?: boolean,
 		pageTrigger?: PageTrigger,
+		beforeDispatch?: () => void,
 	) => Promise<ILogMetadata | undefined>;
 }
 
@@ -578,15 +581,18 @@ export function ExecutionServiceProvider({
 			cb: ((event: IIntercomEvent[]) => void) | undefined,
 			skipConsentCheck: boolean | undefined,
 			pageTrigger: PageTrigger | undefined,
+			beforeDispatch: (() => void) | undefined,
 		): Promise<ILogMetadata | undefined> => {
+			beforeDispatch?.();
 			const backendAlwaysRemote = backend.eventState.alwaysRemote === true;
 			const executeEventRemote = backend.eventState.executeEventRemote;
 
 			const dispatch = (
 				isRemote: boolean,
 				runPayload: IRunPayload,
-			): Promise<ILogMetadata | undefined> =>
-				isRemote && executeEventRemote
+			): Promise<ILogMetadata | undefined> => {
+				beforeDispatch?.();
+				return isRemote && executeEventRemote
 					? executeEventRemote.call(
 							backend.eventState,
 							appId,
@@ -596,6 +602,7 @@ export function ExecutionServiceProvider({
 							onEventId,
 							cb,
 							pageTrigger,
+							beforeDispatch,
 						)
 					: backend.eventState.executeEvent(
 							appId,
@@ -606,7 +613,9 @@ export function ExecutionServiceProvider({
 							cb,
 							skipConsentCheck,
 							pageTrigger,
+							beforeDispatch,
 						);
+			};
 
 			// Run WASM consent check first (independent of runtime vars).
 			// Fetch prerun once and reuse the result for runtime vars later.
@@ -645,6 +654,7 @@ export function ExecutionServiceProvider({
 			}
 
 			// If no runtime vars context, execute directly
+			beforeDispatch?.();
 			if (!runtimeVarsContext) {
 				return backend.eventState.executeEvent(
 					appId,
@@ -655,6 +665,7 @@ export function ExecutionServiceProvider({
 					cb,
 					skipConsentCheck,
 					pageTrigger,
+					beforeDispatch,
 				);
 			}
 
@@ -759,6 +770,7 @@ export function ExecutionServiceProvider({
 			// Need to prompt for runtime variables
 			const existingValues = await runtimeVarsContext.getValues(appId);
 
+			beforeDispatch?.();
 			return new Promise((resolve, reject) => {
 				setRuntimeConfiguredVars(varsNeedingValues);
 				setExistingRuntimeVars(existingValues);
@@ -771,6 +783,7 @@ export function ExecutionServiceProvider({
 					cb,
 					skipConsentCheck,
 					pageTrigger,
+					beforeDispatch,
 					isRemote,
 					isEvent: true,
 					eventIdStr,
@@ -868,6 +881,7 @@ export function ExecutionServiceProvider({
 			cb?: (event: IIntercomEvent[]) => void,
 			skipConsentCheck?: boolean,
 			pageTrigger?: PageTrigger,
+			beforeDispatch?: () => void,
 		) =>
 			checkAndExecuteEvent(
 				appId,
@@ -878,6 +892,7 @@ export function ExecutionServiceProvider({
 				cb,
 				skipConsentCheck,
 				pageTrigger,
+				beforeDispatch,
 			),
 		[checkAndExecuteEvent],
 	);
@@ -892,8 +907,10 @@ export function ExecutionServiceProvider({
 			cb?: (event: IIntercomEvent[]) => void,
 			skipConsentCheck?: boolean,
 			pageTrigger?: PageTrigger,
-		) =>
-			backend.eventState.executeEvent(
+			beforeDispatch?: () => void,
+		) => {
+			beforeDispatch?.();
+			return backend.eventState.executeEvent(
 				appId,
 				eventIdStr,
 				payload,
@@ -902,7 +919,9 @@ export function ExecutionServiceProvider({
 				cb,
 				skipConsentCheck,
 				pageTrigger,
-			),
+				beforeDispatch,
+			);
+		},
 		[backend.eventState],
 	);
 
@@ -919,6 +938,7 @@ export function ExecutionServiceProvider({
 				cb,
 				skipConsentCheck,
 				pageTrigger,
+				beforeDispatch,
 				isRemote,
 				isEvent,
 				eventIdStr,
@@ -927,6 +947,7 @@ export function ExecutionServiceProvider({
 			} = pendingExecution;
 
 			try {
+				beforeDispatch?.();
 				// Save the runtime variable values
 				const saveValues = values.map((v) => {
 					const variable = runtimeConfiguredVars.find(
@@ -941,6 +962,7 @@ export function ExecutionServiceProvider({
 				});
 
 				await runtimeVarsContext.saveValues(appId, boardId, saveValues);
+				beforeDispatch?.();
 
 				// Build the runtime variables map from the just-saved values
 				// For remote execution, filter out secrets
@@ -988,6 +1010,7 @@ export function ExecutionServiceProvider({
 							eventId,
 							cb,
 							pageTrigger,
+							beforeDispatch,
 						);
 					} else {
 						result = await backend.eventState.executeEvent(
@@ -999,6 +1022,7 @@ export function ExecutionServiceProvider({
 							cb,
 							skipConsentCheck,
 							pageTrigger,
+							beforeDispatch,
 						);
 					}
 				} else if (isRemote && backend.boardState.executeBoardRemote) {
@@ -1024,6 +1048,8 @@ export function ExecutionServiceProvider({
 
 				resolve(result);
 			} catch (error) {
+				setPromptOpen(false);
+				setPendingExecution(null);
 				reject(error instanceof Error ? error : new Error(String(error)));
 			}
 		},

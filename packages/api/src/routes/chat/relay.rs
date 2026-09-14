@@ -7,15 +7,16 @@
 //! enforcement, streaming passthrough and usage accounting are identical, and
 //! live here so both routes settle invocations the same way.
 
-use crate::entity::{llm_usage_tracking, user};
+use crate::entity::llm_usage_tracking;
 use crate::{
     entity::bit,
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
     usage_accounting::{
-        UsageInvocationSettlement, UsageInvocationStart, estimate_text_tokens,
-        settle_usage_invocation, start_usage_invocation,
+        HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
+        configured_hosted_rate, record_provider_request_id, settle_hosted_usage_invocation,
+        start_usage_invocation,
     },
 };
 use axum::{
@@ -30,14 +31,236 @@ use flow_like_types::anyhow;
 use flow_like_types::create_id;
 use futures_util::StreamExt;
 use sea_orm::EntityTrait;
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::Set;
 use serde_json::Value as JsonValue;
 use std::convert::Infallible;
 
 const APP_ID_HEADER: &str = "x-flow-like-app-id";
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum HostedProvider {
+static HOSTED_RATES: std::sync::LazyLock<moka::sync::Cache<String, HostedRateSnapshot>> =
+    std::sync::LazyLock::new(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(4096)
+            .time_to_live(std::time::Duration::from_secs(300))
+            .build()
+    });
+
+fn rate_from_catalog(model: &JsonValue) -> Result<HostedRateSnapshot, ApiError> {
+    let price = |name: &str| -> Result<i64, ApiError> {
+        let value = model
+            .get("pricing")
+            .and_then(|value| value.get(name))
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .or_else(|| value.as_f64())
+            })
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| {
+                ApiError::internal(format!("Hosted model {name} price is unavailable"))
+            })?;
+        let micros = value
+            * if name == "request" {
+                1_000_000.0
+            } else {
+                1_000_000_000_000.0
+            };
+        if micros >= i64::MAX as f64 {
+            return Err(ApiError::internal("Hosted model price is out of range"));
+        }
+        Ok(micros.ceil() as i64)
+    };
+    let rate = HostedRateSnapshot {
+        version: format!(
+            "openrouter-{}",
+            chrono::Utc::now().format("%Y-%m-%dT%H:%MZ")
+        ),
+        input_micro_usd_per_million_tokens: price("prompt")?,
+        input_micro_usd_per_million_bytes: None,
+        max_input_bytes: None,
+        output_micro_usd_per_million_tokens: price("completion")?,
+        request_micro_usd: price("request")?,
+        context_tokens: model
+            .get("context_length")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0),
+        usd_micro_per_eur: 1_159_200,
+        funding_basis_points: 550,
+        api_micro_usd_per_million_ms: 20_001,
+        serving_request_micro_usd: 1,
+        max_request_ms: 240_000,
+    };
+    rate.validate()?;
+    Ok(rate)
+}
+
+async fn hosted_rate(
+    provider: &HostedProvider,
+    model: &str,
+    api_key: &str,
+) -> Result<HostedRateSnapshot, ApiError> {
+    if let Some(rate) = configured_hosted_rate(provider.label(), model)? {
+        return Ok(rate);
+    }
+    if *provider != HostedProvider::OpenRouter {
+        return Err(ApiError::internal("Hosted model pricing is not configured"));
+    }
+    if let Some(rate) = HOSTED_RATES.get(model) {
+        return Ok(rate);
+    }
+    let response = flow_like_types::reqwest::Client::new()
+        .get("https://openrouter.ai/api/v1/models")
+        .bearer_auth(api_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|_| ApiError::internal("Unable to verify hosted model pricing"))?
+        .error_for_status()
+        .map_err(|_| ApiError::internal("Unable to verify hosted model pricing"))?;
+    let catalog: JsonValue = response
+        .json()
+        .await
+        .map_err(|_| ApiError::internal("Hosted model pricing response is invalid"))?;
+    for entry in catalog
+        .get("data")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let (Some(id), Ok(rate)) = (
+            entry.get("id").and_then(JsonValue::as_str),
+            rate_from_catalog(entry),
+        ) {
+            HOSTED_RATES.insert(id.to_owned(), rate);
+        }
+    }
+    HOSTED_RATES
+        .get(model)
+        .ok_or_else(|| ApiError::internal("Hosted model pricing is unavailable"))
+}
+
+/// Bound the provider work before reserving money. Hidden conversation state and
+/// media inputs reserve the context ceiling because their tokens are not in the
+/// request text. Hosted provider tools require their own tariff before enabling.
+fn bound_hosted_request(
+    body: &mut JsonValue,
+    surface: ModelApiSurface,
+    rate: &HostedRateSnapshot,
+    provider: &HostedProvider,
+) -> Result<(i64, i64), ApiError> {
+    if rate.input_micro_usd_per_million_bytes.is_some() {
+        return Err(ApiError::internal(
+            "Chat models require a token-based provider tariff",
+        ));
+    }
+    let obj = body
+        .as_object_mut()
+        .ok_or_else(|| ApiError::bad_request("Expected a request object"))?;
+    if obj.get("n").is_some_and(|n| n.as_i64() != Some(1))
+        || obj.get("best_of").is_some_and(|n| n.as_i64() != Some(1))
+        || obj.get("background").and_then(JsonValue::as_bool) == Some(true)
+        || obj.get("audio").is_some()
+        || obj.get("web_search_options").is_some()
+        || obj.get("prediction").is_some()
+        || obj
+            .get("service_tier")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|tier| !matches!(tier, "default" | "auto"))
+        || obj
+            .get("modalities")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|modalities| modalities.iter().any(|mode| mode.as_str() != Some("text")))
+        || obj
+            .get("plugins")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|plugins| !plugins.is_empty())
+        || obj
+            .get("tools")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("type")
+                        .and_then(JsonValue::as_str)
+                        .is_some_and(|kind| !matches!(kind, "function" | "custom"))
+                })
+            })
+    {
+        return Err(ApiError::bad_request(
+            "Hosted AI supports one response and client-executed tools. Use your own provider for background generation or provider-billed tools.",
+        ));
+    }
+    let output = obj
+        .get("max_tokens")
+        .or_else(|| obj.get("max_completion_tokens"))
+        .or_else(|| obj.get("max_output_tokens"))
+        .map(|value| {
+            value.as_i64().filter(|value| *value > 0).ok_or_else(|| {
+                ApiError::bad_request("Output token limit must be a positive integer")
+            })
+        })
+        .transpose()?
+        .unwrap_or(4096)
+        .min(rate.context_tokens.saturating_sub(1));
+    if output <= 0 {
+        return Err(ApiError::bad_request(
+            "Model context cannot fit this request",
+        ));
+    }
+    for field in [
+        "max_tokens",
+        "max_completion_tokens",
+        "max_output_tokens",
+        "models",
+        "route",
+    ] {
+        obj.remove(field);
+    }
+    obj.insert(
+        match surface {
+            ModelApiSurface::Responses => "max_output_tokens",
+            _ => "max_completion_tokens",
+        }
+        .into(),
+        serde_json::json!(output),
+    );
+    if *provider == HostedProvider::OpenRouter {
+        let routing = obj
+            .entry("provider")
+            .or_insert_with(|| serde_json::json!({}));
+        if !routing.is_object() {
+            *routing = serde_json::json!({});
+        }
+        routing["max_price"] = serde_json::json!({
+            "prompt": rate.input_micro_usd_per_million_tokens as f64 / 1_000_000.0,
+            "completion": rate.output_micro_usd_per_million_tokens as f64 / 1_000_000.0,
+        });
+    }
+    let serialized =
+        serde_json::to_vec(body).map_err(|_| ApiError::bad_request("Unable to size request"))?;
+    let hidden_input = body.get("previous_response_id").is_some()
+        || body.get("conversation").is_some()
+        || String::from_utf8_lossy(&serialized).contains("image")
+        || String::from_utf8_lossy(&serialized).contains("audio")
+        || String::from_utf8_lossy(&serialized).contains("file");
+    let input = if hidden_input {
+        rate.context_tokens.saturating_sub(output)
+    } else {
+        (serialized.len() as i64).saturating_add(1024)
+    };
+    if input.saturating_add(output) > rate.context_tokens {
+        return Err(ApiError::bad_request(
+            "Request exceeds this hosted model's reserved context capacity. Reduce the input or output token limit.",
+        ));
+    }
+    Ok((
+        input.saturating_add(output),
+        rate.provider_cost(input, output),
+    ))
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum HostedProvider {
     OpenRouter,
     OpenAI,
     Anthropic,
@@ -147,8 +370,8 @@ fn surface_route(surface: ModelApiSurface) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub(super) struct UsageRequestContext {
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct UsageRequestContext {
     pub(super) app_id: Option<String>,
     pub(super) user_id: String,
     pub(super) technical_user_id: Option<String>,
@@ -224,11 +447,11 @@ async fn fetch_provider(
 }
 
 async fn enforce_tier(
-    user: &AppUser,
+    payer_id: &str,
     state: &AppState,
     provider: &ModelProvider,
 ) -> Result<(), ApiError> {
-    let user_tier: flow_like::hub::UserTier = user.tier(state).await?;
+    let (plan, user_tier) = crate::quota::payer_plan(state, payer_id).await?;
     let params = provider.params.clone().unwrap_or_default();
     let tier = params
         .get("tier")
@@ -240,10 +463,7 @@ async fn enforce_tier(
             user_tier,
             tier
         );
-        return Err(ApiError::payment_required(format!(
-            "This model requires the {} tier, which is not included in your plan.",
-            tier
-        )));
+        return Err(ApiError::hosted_model_unavailable(payer_id, &plan, tier));
     }
     Ok(())
 }
@@ -272,7 +492,7 @@ pub(super) fn deduplicate_tools(body: &mut JsonValue) {
     }
 }
 
-async fn build_provider_url(
+pub(super) async fn build_provider_url(
     state: &AppState,
     hosted_provider: &HostedProvider,
     surface: ModelApiSurface,
@@ -317,6 +537,7 @@ struct StreamingAccum {
     cost_micro: Option<i64>,
     provider_request_id: Option<String>,
     raw_usage: Option<JsonValue>,
+    completed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -341,8 +562,9 @@ fn usage_container(v: &JsonValue) -> Option<&JsonValue> {
 }
 
 pub(super) fn extract_usage_and_cost_from_json(v: &JsonValue) -> Option<ProviderUsageSnapshot> {
-    let container = usage_container(v)?;
-    let usage = container.get("usage")?;
+    let container = usage_container(v).unwrap_or_else(|| v.get("response").unwrap_or(v));
+    let empty_usage = JsonValue::Null;
+    let usage = container.get("usage").unwrap_or(&empty_usage);
     let in_tok = usage
         .get("prompt_tokens")
         .or_else(|| usage.get("input_tokens"))
@@ -360,7 +582,8 @@ pub(super) fn extract_usage_and_cost_from_json(v: &JsonValue) -> Option<Provider
                 .get("cost")
                 .or_else(|| usage.get("total_cost"))
                 .and_then(|c| c.as_f64())
-                .map(|f| (f * 1_000_000.0) as i64)
+                .filter(|f| f.is_finite() && *f >= 0.0)
+                .map(|f| (f * 1_000_000.0).ceil().min(i64::MAX as f64) as i64)
         });
     let provider_request_id = container
         .get("id")
@@ -377,14 +600,16 @@ pub(super) fn extract_usage_and_cost_from_json(v: &JsonValue) -> Option<Provider
             out_tok,
             cost_micro,
             provider_request_id,
-            raw_usage: Some(usage.clone()),
+            raw_usage: (!usage.is_null()).then(|| usage.clone()),
         })
     } else {
         None
     }
 }
 
+#[cfg(test)]
 pub(super) fn estimate_payload_tokens(body: &JsonValue) -> i64 {
+    use crate::usage_accounting::estimate_text_tokens;
     fn collect_string_tokens(value: &JsonValue) -> i64 {
         match value {
             JsonValue::String(text) => estimate_text_tokens(text),
@@ -420,16 +645,19 @@ fn update_accum_from_snapshot(
 
 fn process_sse_line(accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>, line: &str) {
     let line = line.trim();
-    if !line.starts_with("data: ") {
+    let Some(data) = line.strip_prefix("data:").map(str::trim_start) else {
         return;
-    }
-    let data = &line[6..];
+    };
     if data == "[DONE]" {
+        accum.lock().unwrap().completed = true;
         return;
     }
     if let Ok(json) = serde_json::from_str::<JsonValue>(data)
         && let Some(snapshot) = extract_usage_and_cost_from_json(&json)
     {
+        if json.get("type").and_then(JsonValue::as_str) == Some("response.completed") {
+            accum.lock().unwrap().completed = true;
+        }
         update_accum_from_snapshot(accum, snapshot);
     }
 }
@@ -459,6 +687,45 @@ fn parse_sse_bytes(
     }
 }
 
+async fn persist_stream_provider_id(
+    state: &AppState,
+    invocation_id: Option<&str>,
+    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
+    saved: &mut Option<String>,
+) {
+    let id = accum.lock().unwrap().provider_request_id.clone();
+    if id != *saved
+        && let Some(id) = id
+    {
+        match record_provider_request_id(state, invocation_id, &id).await {
+            Ok(()) => *saved = Some(id),
+            Err(error) => tracing::warn!(%error, "Unable to persist hosted provider request ID"),
+        }
+    }
+}
+
+async fn resolved_provider_cost(
+    state: &AppState,
+    invocation_id: Option<&str>,
+    input: Option<i64>,
+    output: Option<i64>,
+    reported_cost: Option<i64>,
+) -> Option<i64> {
+    if let Some(cost) = reported_cost.filter(|cost| *cost >= 0) {
+        return Some(cost);
+    }
+    let (Some(input), Some(output), Some(id)) = (input, output, invocation_id) else {
+        return None;
+    };
+    let row = crate::entity::usage_invocation::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .ok()??;
+    let rate: HostedRateSnapshot =
+        serde_json::from_value(row.raw_usage?.get("accounting")?.clone()).ok()?;
+    Some(rate.provider_cost(input, output))
+}
+
 async fn finalize_llm_usage(
     state: &AppState,
     user_sub: &str,
@@ -481,9 +748,15 @@ async fn finalize_llm_usage(
         )
     };
 
-    if in_tok.is_none() && out_tok.is_none() && cost_micro.is_none() {
-        if let Err(e) = settle_usage_invocation(
-            &state.db,
+    let completed = accum.lock().unwrap().completed;
+    let cost_micro = if completed {
+        resolved_provider_cost(state, invocation_id, in_tok, out_tok, cost_micro).await
+    } else {
+        None
+    };
+    if cost_micro.is_none() {
+        if let Err(e) = settle_hosted_usage_invocation(
+            state,
             invocation_id,
             UsageInvocationSettlement {
                 status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
@@ -521,70 +794,7 @@ async fn finalize_llm_usage(
     }
 }
 
-async fn finalize_cancelled_llm_usage(
-    state: &AppState,
-    user_sub: &str,
-    model_id: &str,
-    usage_context: &UsageRequestContext,
-    provider: &str,
-    endpoint: &str,
-    invocation_id: Option<&str>,
-    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
-    latency_ms: f64,
-) {
-    let (in_tok, out_tok, cost_micro, provider_request_id, raw_usage) = {
-        let a = accum.lock().unwrap();
-        (
-            a.in_tok,
-            a.out_tok,
-            a.cost_micro,
-            a.provider_request_id.clone(),
-            a.raw_usage.clone(),
-        )
-    };
-
-    if in_tok.is_none() && out_tok.is_none() && cost_micro.is_none() {
-        if let Err(e) = settle_usage_invocation(
-            &state.db,
-            invocation_id,
-            UsageInvocationSettlement {
-                status: crate::usage_accounting::STATUS_CANCELLED,
-                latency_ms: Some(latency_ms),
-                error: Some("Client disconnected before streaming response completed".to_string()),
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            tracing::warn!(error=%e, "Failed to settle cancelled LLM usage");
-        }
-        return;
-    }
-
-    if let Err(e) = track_llm_usage(
-        state,
-        user_sub,
-        model_id,
-        in_tok.unwrap_or(0),
-        out_tok.unwrap_or(0),
-        cost_micro.unwrap_or(0),
-        latency_ms,
-        usage_context.app_id.as_deref(),
-        usage_context.technical_user_id.as_deref(),
-        Some(provider),
-        Some(endpoint),
-        invocation_id,
-        provider_request_id.as_deref(),
-        raw_usage,
-        crate::usage_accounting::STATUS_CANCELLED,
-    )
-    .await
-    {
-        tracing::warn!(error=%e, "Failed to track cancelled LLM usage");
-    }
-}
-
-async fn handle_streaming(
+pub(super) async fn handle_streaming(
     request_builder: flow_like_types::reqwest::RequestBuilder,
     state: AppState,
     user_sub: String,
@@ -599,12 +809,13 @@ async fn handle_streaming(
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!(error=%e, "Upstream streaming request failed");
-            let _ = settle_usage_invocation(
-                &state.db,
+            let _ = settle_hosted_usage_invocation(
+                &state,
                 invocation_id.as_deref(),
                 UsageInvocationSettlement {
-                    status: crate::usage_accounting::STATUS_FAILED,
+                    status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
                     error: Some(e.to_string()),
+                    latency_ms: Some(started_at.elapsed().as_secs_f64() * 1000.0),
                     ..Default::default()
                 },
             )
@@ -618,12 +829,13 @@ async fn handle_streaming(
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         tracing::error!(status=%status, body=%text, "Upstream error");
-        let _ = settle_usage_invocation(
-            &state.db,
+        let _ = settle_hosted_usage_invocation(
+            &state,
             invocation_id.as_deref(),
             UsageInvocationSettlement {
-                status: crate::usage_accounting::STATUS_FAILED,
+                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
                 error: Some(format!("Upstream error {status}: {text}")),
+                latency_ms: Some(started_at.elapsed().as_secs_f64() * 1000.0),
                 ..Default::default()
             },
         )
@@ -649,15 +861,22 @@ async fn handle_streaming(
         flow_like_types::tokio::spawn(async move {
             let mut upstream = resp.bytes_stream();
             let mut client_disconnected = false;
+            let mut saved_provider_id = None;
             let mut sse_buf: Vec<u8> = Vec::new();
 
             while let Some(chunk) = upstream.next().await {
                 match chunk {
                     Ok(chunk_bytes) => {
                         parse_sse_bytes(&accum_task, &mut sse_buf, &chunk_bytes, false);
-                        if tx.send(Ok(chunk_bytes)).await.is_err() {
+                        persist_stream_provider_id(
+                            &state,
+                            invocation_id_task.as_deref(),
+                            &accum_task,
+                            &mut saved_provider_id,
+                        )
+                        .await;
+                        if !client_disconnected && tx.send(Ok(chunk_bytes)).await.is_err() {
                             client_disconnected = true;
-                            break;
                         }
                     }
                     Err(error) => {
@@ -674,9 +893,7 @@ async fn handle_streaming(
                                 }
                             })
                         );
-                        if tx.send(Ok(Bytes::from(frame))).await.is_err() {
-                            client_disconnected = true;
-                        }
+                        let _ = tx.send(Ok(Bytes::from(frame))).await;
                         break;
                     }
                 }
@@ -684,33 +901,18 @@ async fn handle_streaming(
             parse_sse_bytes(&accum_task, &mut sse_buf, &[], true);
 
             let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-            if client_disconnected {
-                finalize_cancelled_llm_usage(
-                    &state,
-                    &user_sub,
-                    &model_id,
-                    &usage_context,
-                    &provider,
-                    &endpoint,
-                    invocation_id_task.as_deref(),
-                    &accum_task,
-                    latency_ms,
-                )
-                .await;
-            } else {
-                finalize_llm_usage(
-                    &state,
-                    &user_sub,
-                    &model_id,
-                    &usage_context,
-                    &provider,
-                    &endpoint,
-                    invocation_id_task.as_deref(),
-                    &accum_task,
-                    latency_ms,
-                )
-                .await;
-            }
+            finalize_llm_usage(
+                &state,
+                &user_sub,
+                &model_id,
+                &usage_context,
+                &provider,
+                &endpoint,
+                invocation_id_task.as_deref(),
+                &accum_task,
+                latency_ms,
+            )
+            .await;
         });
 
         let body_stream = async_stream::stream! {
@@ -726,11 +928,13 @@ async fn handle_streaming(
     let body_stream = async_stream::stream! {
         let mut upstream = resp.bytes_stream();
         let mut sse_buf: Vec<u8> = Vec::new();
+        let mut saved_provider_id = None;
 
         while let Some(chunk) = upstream.next().await {
             match chunk {
                 Ok(chunk_bytes) => {
                     parse_sse_bytes(&accum_stream, &mut sse_buf, &chunk_bytes, false);
+                    persist_stream_provider_id(&state, invocation_id.as_deref(), &accum_stream, &mut saved_provider_id).await;
                     yield Ok(chunk_bytes);
                 }
                 Err(error) => {
@@ -773,16 +977,10 @@ async fn handle_streaming(
 }
 
 fn llm_stream_background_drain_enabled() -> bool {
-    if cfg!(feature = "lambda") {
-        return false;
-    }
-
-    std::env::var("FLOWLIKE_LLM_STREAM_BACKGROUND_DRAIN")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(true)
+    !super::hosted_worker::enabled()
 }
 
-async fn handle_non_streaming(
+pub(super) async fn handle_non_streaming(
     request_builder: flow_like_types::reqwest::RequestBuilder,
     upstream_model_id: &str,
     state: &AppState,
@@ -797,12 +995,13 @@ async fn handle_non_streaming(
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!(error=%e, "Upstream request failed");
-            let _ = settle_usage_invocation(
-                &state.db,
+            let _ = settle_hosted_usage_invocation(
+                &state,
                 invocation_id,
                 UsageInvocationSettlement {
-                    status: crate::usage_accounting::STATUS_FAILED,
+                    status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
                     error: Some(e.to_string()),
+                    latency_ms: Some(start.elapsed().as_secs_f64() * 1000.0),
                     ..Default::default()
                 },
             )
@@ -821,14 +1020,27 @@ async fn handle_non_streaming(
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
     if status.is_success() {
         tracing::info!(model = %upstream_model_id, bytes = body_bytes.len(), latency_ms = latency_ms, "LLM invoke success (non-stream)");
-        if let Some(usage) = extract_usage_from_body(&body_bytes) {
+        let usage = extract_usage_from_body(&body_bytes);
+        let cost = if let Some(usage) = &usage {
+            resolved_provider_cost(
+                state,
+                invocation_id,
+                usage.in_tok,
+                usage.out_tok,
+                usage.cost_micro,
+            )
+            .await
+        } else {
+            None
+        };
+        if let (Some(usage), Some(cost)) = (usage, cost) {
             if let Err(e) = track_llm_usage(
                 state,
                 user_sub,
                 upstream_model_id,
                 usage.in_tok.unwrap_or(0),
                 usage.out_tok.unwrap_or(0),
-                usage.cost_micro.unwrap_or(0),
+                cost,
                 latency_ms,
                 usage_context.app_id.as_deref(),
                 usage_context.technical_user_id.as_deref(),
@@ -843,8 +1055,8 @@ async fn handle_non_streaming(
             {
                 tracing::warn!(error=%e, "Failed to track LLM usage");
             }
-        } else if let Err(e) = settle_usage_invocation(
-            &state.db,
+        } else if let Err(e) = settle_hosted_usage_invocation(
+            state,
             invocation_id,
             UsageInvocationSettlement {
                 status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
@@ -858,11 +1070,11 @@ async fn handle_non_streaming(
         }
     } else {
         tracing::warn!(status = %status, body = %String::from_utf8_lossy(&body_bytes), "LLM invoke upstream error");
-        let _ = settle_usage_invocation(
-            &state.db,
+        let _ = settle_hosted_usage_invocation(
+            state,
             invocation_id,
             UsageInvocationSettlement {
-                status: crate::usage_accounting::STATUS_FAILED,
+                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
                 error: Some(format!(
                     "Upstream error {status}: {}",
                     String::from_utf8_lossy(&body_bytes)
@@ -919,14 +1131,20 @@ pub(super) async fn relay_request(
         )));
     }
 
-    enforce_tier(&user, &state, &provider).await?;
     let usage_context = resolve_usage_context(&state, &user, &headers).await?;
+    let payer_id = crate::quota::resolve_payer(
+        &state,
+        Some(&usage_context.user_id),
+        usage_context.app_id.as_deref(),
+    )
+    .await?;
+    enforce_tier(&payer_id, &state, &provider).await?;
     let upstream_model_id = provider
         .model_id
         .clone()
         .unwrap_or_else(|| model_field.to_string());
     let tracking_id_opt = user.tracking_id(&state).await.ok().flatten();
-    let (upstream_body, stream) = prepare_upstream_body(
+    let (mut upstream_body, stream) = prepare_upstream_body(
         &payload,
         &upstream_model_id,
         tracking_id_opt.as_deref(),
@@ -935,7 +1153,10 @@ pub(super) async fn relay_request(
     let (url, api_key) = build_provider_url(&state, &hosted_provider, surface).await?;
     let provider_label = hosted_provider.label().to_string();
     let user_sub = usage_context.user_id.clone();
-    let estimated_tokens = estimate_payload_tokens(&upstream_body);
+    let mut rate = hosted_rate(&hosted_provider, &upstream_model_id, &api_key).await?;
+    super::hosted_worker::apply_worker_tariff(&mut rate);
+    let (estimated_tokens, estimated_cost) =
+        bound_hosted_request(&mut upstream_body, surface, &rate, &hosted_provider)?;
     let invocation_id = start_usage_invocation(
         &state,
         UsageInvocationStart {
@@ -947,13 +1168,44 @@ pub(super) async fn relay_request(
             endpoint: Some(&url),
             model_id: Some(&upstream_model_id),
             estimated_tokens,
-            estimated_cost_micro_dollars: 0,
+            estimated_cost_micro_dollars: estimated_cost,
+            rate: Some(rate.clone()),
         },
     )
     .await?;
+    let id = invocation_id
+        .as_deref()
+        .ok_or_else(|| ApiError::internal("Hosted AI reservation is missing"))?;
+    if super::hosted_worker::enabled() {
+        return super::hosted_worker::dispatch(
+            state,
+            super::hosted_worker::HostedAiJob {
+                operation_id: id.to_owned(),
+                request: super::hosted_worker::HostedWork::Chat {
+                    body: upstream_body,
+                    responses_api: surface == ModelApiSurface::Responses,
+                    stream,
+                    provider: hosted_provider,
+                    model_id: upstream_model_id,
+                    context: usage_context,
+                },
+                deadline: chrono::Utc::now() + chrono::Duration::milliseconds(rate.max_request_ms),
+            },
+        )
+        .await;
+    }
+    if !crate::quota::mark_started(&state, id).await? {
+        return Err(ApiError::conflict(
+            "Hosted AI operation has already started",
+        ));
+    }
     let client = flow_like_types::reqwest::Client::new();
 
-    let mut request_builder = client.post(&url).bearer_auth(&api_key).json(&upstream_body);
+    let mut request_builder = client
+        .post(&url)
+        .bearer_auth(&api_key)
+        .json(&upstream_body)
+        .timeout(std::time::Duration::from_millis(rate.max_request_ms as u64));
 
     if hosted_provider == HostedProvider::OpenRouter {
         request_builder = request_builder
@@ -1021,7 +1273,9 @@ async fn track_llm_usage(
     use llm_usage_tracking::ActiveModel;
     let now = Utc::now().fixed_offset();
     let record = ActiveModel {
-        id: Set(create_id()),
+        id: Set(invocation_id
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(create_id)),
         model_id: Set(model.to_string()),
         provider: Set(provider.map(ToOwned::to_owned)),
         endpoint: Set(endpoint.map(ToOwned::to_owned)),
@@ -1038,11 +1292,8 @@ async fn track_llm_usage(
         created_at: Set(now),
         updated_at: Set(now),
     };
-    // Best-effort insert
-    record.insert(&state.db).await?;
-
-    settle_usage_invocation(
-        &state.db,
+    settle_hosted_usage_invocation(
+        state,
         invocation_id,
         UsageInvocationSettlement {
             status: settlement_status,
@@ -1057,15 +1308,14 @@ async fn track_llm_usage(
     )
     .await?;
 
-    if price != 0
-        && let Some(existing) = user::Entity::find_by_id(user_sub).one(&state.db).await?
-    {
-        let total_llm_price = existing.total_llm_price.saturating_add(price);
-        let mut active: user::ActiveModel = existing.into();
-        active.total_llm_price = Set(total_llm_price);
-        active.updated_at = Set(now);
-        active.update(&state.db).await?;
-    }
+    llm_usage_tracking::Entity::insert(record)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(llm_usage_tracking::Column::Id)
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(&state.db)
+        .await?;
 
     Ok(())
 }
@@ -1081,6 +1331,100 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_rate() -> HostedRateSnapshot {
+        rate_from_catalog(&serde_json::json!({
+            "context_length": 32_768,
+            "pricing": {"prompt":"0.000001","completion":"0.000004","request":"0"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn hosted_reservation_locks_model_routing_and_output_work() {
+        let mut body = serde_json::json!({"model":"selected", "messages":[{"role":"user","content":"Hello"}],
+            "models":["expensive-fallback"], "max_tokens":512, "max_output_tokens":999999,
+            "provider":{"max_price":{"prompt":999}}});
+        let (tokens, cost) = bound_hosted_request(
+            &mut body,
+            ModelApiSurface::ChatCompletions,
+            &test_rate(),
+            &HostedProvider::OpenRouter,
+        )
+        .unwrap();
+        assert!(tokens > 512 && cost > 0);
+        assert!(body.get("models").is_none());
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 512);
+        assert_eq!(body["provider"]["max_price"]["prompt"], 1.0);
+    }
+
+    #[test]
+    fn hosted_requests_reject_work_with_unbounded_extra_provider_charges() {
+        for mut body in [
+            serde_json::json!({"n":2}),
+            serde_json::json!({"best_of":2}),
+            serde_json::json!({"background":true}),
+            serde_json::json!({"web_search_options":{}}),
+            serde_json::json!({"prediction":{"content":"predicted tokens"}}),
+            serde_json::json!({"service_tier":"priority"}),
+            serde_json::json!({"tools":[{"type":"web_search"}]}),
+            serde_json::json!({"modalities":["audio"]}),
+        ] {
+            assert!(
+                bound_hosted_request(
+                    &mut body,
+                    ModelApiSurface::Responses,
+                    &test_rate(),
+                    &HostedProvider::OpenRouter
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn provider_receipt_is_available_before_stream_usage_arrives() {
+        let accum = std::sync::Arc::new(std::sync::Mutex::new(StreamingAccum::default()));
+        let mut buffer = Vec::new();
+        parse_sse_bytes(
+            &accum,
+            &mut buffer,
+            b"data:{\"id\":\"gen-receipt\",\"choices\":[]}\n\n",
+            false,
+        );
+        assert_eq!(
+            accum.lock().unwrap().provider_request_id.as_deref(),
+            Some("gen-receipt")
+        );
+        assert!(!accum.lock().unwrap().completed);
+        parse_sse_bytes(&accum, &mut buffer, b"data: [DONE]\n\n", false);
+        assert!(accum.lock().unwrap().completed);
+    }
+
+    #[test]
+    fn split_sse_usage_is_reassembled_and_missing_cost_stays_unknown() {
+        let accum = std::sync::Arc::new(std::sync::Mutex::new(StreamingAccum::default()));
+        let mut buffer = Vec::new();
+        parse_sse_bytes(
+            &accum,
+            &mut buffer,
+            b"data: {\"usage\":{\"prompt_tok",
+            false,
+        );
+        parse_sse_bytes(
+            &accum,
+            &mut buffer,
+            b"ens\":4,\"completion_tokens\":8}}\n",
+            false,
+        );
+        let snapshot = accum.lock().unwrap();
+        assert_eq!(snapshot.in_tok, Some(4));
+        assert_eq!(snapshot.out_tok, Some(8));
+        assert_eq!(snapshot.cost_micro, None);
+        assert!(!snapshot.completed);
+    }
 
     #[test]
     fn test_hosted_provider_completion_urls_match_openai_compatible_endpoints() {

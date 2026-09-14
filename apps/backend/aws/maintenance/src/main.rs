@@ -1,6 +1,8 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod compute_reports;
+
 use std::{env, sync::OnceLock, time::Duration};
 
 use flow_like_types_contracts::maintenance::{
@@ -40,6 +42,7 @@ fn get_http_client() -> Result<&'static reqwest::Client, Error> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| {
             tracing::error!(%error, "Failed to build maintenance HTTP client");
@@ -259,7 +262,11 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
                 batch_size = result.batch_size,
                 batch_full = result.swept >= result.batch_size,
                 "Run sweep maintenance completed"
-            )
+            );
+            if env::var("FLOW_LIKE_COMPUTE_REPORT_RECONCILIATION").as_deref() == Ok("1") {
+                compute_reports::reconcile(get_http_client()?, api_base_url, maintenance_token)
+                    .await?;
+            }
         }
         (MaintenanceJob::StateCleanup, MaintenanceRunResponse::StateCleanup(result)) => {
             tracing::info!(

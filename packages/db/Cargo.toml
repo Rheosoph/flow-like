@@ -5,6 +5,7 @@ edition = "2024"
 description = "Engine portability for the Flow-Like relational store: dialect detection, conflict classification, retried transactions and bounded batch writes on PostgreSQL, CockroachDB and Aurora DSQL"
 
 [dependencies]
+blake3.workspace = true
 sea-orm.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }

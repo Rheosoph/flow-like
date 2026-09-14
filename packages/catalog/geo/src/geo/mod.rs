@@ -3,9 +3,15 @@ use serde::{Deserialize, Serialize};
 
 pub mod geometry;
 pub mod h3;
+pub mod location;
+pub mod location_event;
 pub mod map;
+pub(crate) mod pins;
 pub mod routing;
 pub mod search;
+
+#[cfg(test)]
+mod compatibility_tests;
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Default)]
 pub struct GeoCoordinate {

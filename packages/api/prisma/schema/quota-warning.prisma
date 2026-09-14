@@ -1,0 +1,12 @@
+/// A monthly threshold or storage/project occupancy episode shared by every client.
+model QuotaWarningState {
+  id               String   @id
+  payerId          String
+  resource         String
+  periodKey        String
+  highestThreshold Int      @default(0)
+  episode          BigInt   @default(0)
+  updatedAt        DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([payerId])
+}

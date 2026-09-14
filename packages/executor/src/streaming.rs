@@ -21,10 +21,28 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tokio::sync::{mpsc, OwnedSemaphorePermit};
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
 /// All events are sent as InterComEvent for consistent frontend handling
 pub type StreamEvent = InterComEvent;
+
+async fn execute_until_deadline<T>(
+    execution: impl std::future::Future<Output = T>,
+    cancellation: &flow_like_types::tokio_util::sync::CancellationToken,
+    deadline: tokio::time::Instant,
+) -> Result<T, ()> {
+    let mut execution = Box::pin(execution);
+    tokio::select! {
+        result = &mut execution => Ok(result),
+        _ = tokio::time::sleep_until(deadline) => {
+            cancellation.cancel();
+            // Join engine cleanup before publishing terminal usage. Dropping
+            // the execution future alone can leave spawned node work running.
+            let _ = execution.await;
+            Err(())
+        }
+    }
+}
 
 pub fn event_to_ndjson(event: &StreamEvent) -> String {
     serde_json::to_string(event).unwrap_or_default() + "\n"
@@ -137,10 +155,11 @@ pub async fn execute_streaming_with_permit(
     // Send started event immediately
     let _ = tx.try_send(run_initiated_event(&claims.run_id));
 
-    // Spawn execution task
+    let compute_context = crate::quota::CURRENT_COMPUTE.try_with(Clone::clone).ok();
+    // Preserve the native invocation context across the execution task boundary.
     tokio::spawn(async move {
         let _permit = permit;
-        run_execution(
+        let operation = run_execution(
             request,
             config,
             claims.run_id,
@@ -148,8 +167,14 @@ pub async fn execute_streaming_with_permit(
             claims.sub,
             claims.page_execution.is_some(),
             tx,
-        )
-        .await;
+        );
+        if let Some(context) = compute_context {
+            crate::quota::CURRENT_COMPUTE
+                .scope(context, operation)
+                .await;
+        } else {
+            operation.await;
+        }
     });
 
     Ok(ExecutionStream { rx })
@@ -165,6 +190,9 @@ async fn run_execution(
     tx: mpsc::Sender<StreamEvent>,
 ) {
     let start = Instant::now();
+    if let Ok(claims) = verify_jwt_async(&request.executor_jwt).await {
+        crate::quota::record_compute(&claims, &request.executor_jwt, "started").await;
+    }
 
     let result = execute_inner(
         &request,
@@ -196,8 +224,14 @@ async fn run_execution(
         }
         Err(e) => {
             config.record_completion("error", start.elapsed().as_secs_f64());
+            if let Ok(claims) = verify_jwt_async(&request.executor_jwt).await {
+                crate::quota::reject(&claims, &request.executor_jwt).await;
+            }
             send_fallback_failure(&tx, &run_id, duration_ms, &e, is_page_execution).await;
         }
+    }
+    if let Ok(claims) = verify_jwt_async(&request.executor_jwt).await {
+        crate::quota::record_compute(&claims, &request.executor_jwt, "completed").await;
     }
 }
 
@@ -436,10 +470,36 @@ async fn execute_inner(
         run.set_user_context(user_context);
     }
 
-    let execution_result = tokio::time::timeout(config.execution_timeout(), async {
-        run.execute(state.clone()).await
-    })
-    .await;
+    let quota_claims = verify_jwt_async(&request.executor_jwt).await?;
+    let mut quota_lease = crate::quota::begin(&quota_claims, &request.executor_jwt).await?;
+    let cancellation = config.cancellation().unwrap_or_default();
+    run.set_cancellation_token(cancellation.clone());
+    if let Some(lease) = &mut quota_lease {
+        lease.watch_cancellation(cancellation.clone());
+    }
+    let runtime_timeout = quota_lease
+        .as_ref()
+        .map(|lease| lease.limit.min(config.execution_timeout()))
+        .unwrap_or_else(|| config.execution_timeout());
+    let deadline = config
+        .execution_deadline()
+        .unwrap_or_else(|| tokio::time::Instant::now() + runtime_timeout)
+        .min(tokio::time::Instant::now() + runtime_timeout);
+    let execution_result =
+        execute_until_deadline(run.execute(state.clone()), &cancellation, deadline).await;
+    if let Some(lease) = &quota_lease {
+        let duration_ms = lease.elapsed_ms();
+        let status = if execution_result.is_err() {
+            "timeout".to_owned()
+        } else {
+            format!(
+                "{:?}",
+                ExecutionStatus::from_final_run_status(&run.get_status().await)
+            )
+            .to_lowercase()
+        };
+        lease.finish(duration_ms, &status).await?;
+    }
     channel.close().await;
 
     // Flush any remaining buffered events
@@ -523,6 +583,40 @@ fn emit_event(tx: &mpsc::Sender<StreamEvent>, event_type: &str, payload: serde_j
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn runtime_timeout_joins_cancelled_engine_cleanup_before_settlement() {
+        use flow_like_types::tokio_util::sync::CancellationToken;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cancellation = CancellationToken::new();
+        let cleaned = AtomicBool::new(false);
+        let execution = async {
+            cancellation.cancelled().await;
+            tokio::task::yield_now().await;
+            cleaned.store(true, Ordering::SeqCst);
+        };
+        let result =
+            execute_until_deadline(execution, &cancellation, tokio::time::Instant::now()).await;
+        assert!(result.is_err());
+        assert!(cancellation.is_cancelled());
+        assert!(
+            cleaned.load(Ordering::SeqCst),
+            "terminal quota settlement must wait for cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn normal_execution_keeps_its_result_without_cancellation() {
+        let cancellation = flow_like_types::tokio_util::sync::CancellationToken::new();
+        let result = execute_until_deadline(
+            async { 42 },
+            &cancellation,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(result, Ok(42));
+        assert!(!cancellation.is_cancelled());
+    }
 
     #[test]
     fn page_fallback_error_hides_board_resolution_details() {

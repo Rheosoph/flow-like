@@ -28,19 +28,26 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod cache;
+pub mod capacity;
 pub mod channel;
 pub mod compute_cost;
+pub mod compute_attempts;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
 pub mod db;
-mod db_backfills;
 pub mod deletion;
 pub mod error;
 pub mod mail;
 pub mod model_tier;
+pub mod notification_images;
 pub mod permission;
 pub mod publication;
+pub mod quota;
+pub mod quota_payloads;
+pub mod quota_warnings;
+#[cfg(test)]
+mod quota_integration_tests;
 pub mod push_notifications;
 pub mod realtime_ice;
 mod runtime_config;
@@ -53,6 +60,7 @@ mod storage_queue;
 pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
+pub(crate) mod rolling_usage;
 pub mod user_management;
 pub mod utils;
 
@@ -113,6 +121,7 @@ pub fn construct_router(state: Arc<State>) -> Router {
 /// policy is not acceptable. Keeping CORS inside every nested route layer
 /// prevents an inner wildcard response from bypassing a stricter outer layer.
 pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router {
+    state.dispatcher.set_quota_state(&state);
     // Executors hold no meta-store credential and obtain their board only as
     // the presigned compiled artifact the dispatcher hands them, so the
     // artifact must exist before every dispatch. Installed here because the
@@ -135,6 +144,21 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                 })
             },
         ));
+    }
+
+    {
+        let resolver_state = state.clone();
+        state
+            .dispatcher
+            .set_async_wasm_package_resolver(std::sync::Arc::new(move |app_id, target| {
+                let state = resolver_state.clone();
+                Box::pin(async move {
+                    crate::execution::wasm_resolve::resolve_wasm_packages_for_platform(
+                        &state, &app_id, &target,
+                    )
+                    .await
+                })
+            }));
     }
 
     if state.platform_config.audit.enabled && !audit::sign::is_signing_configured() {
@@ -205,10 +229,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
                 )),
-        )
-        // Outermost, so the server span covers the whole request and every
-        // handler span nests inside the trace the client started.
-        .layer(from_fn(telemetry::trace_context_middleware));
+        );
 
     // Inbound REST/MCP routers. They deliberately bypass the JWT
     // middleware (per-registration auth is enforced inside the handler)
@@ -237,6 +258,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/r", inbound_rest)
         .nest("/m", inbound_mcp)
         .nest("/api/v1", router)
+        // One outer boundary observes API, inbound REST/MCP, OpenAPI and fallbacks.
+        .layer(from_fn(telemetry::trace_context_middleware))
 }
 
 fn openapi_routes(cors: CorsLayer) -> Router {

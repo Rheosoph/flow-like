@@ -19981,6 +19981,85 @@ function fnB() {   //@l:fn-b
     }
 
     #[test]
+    fn geometry_only_geo_calls_require_point_inputs_and_support_point_outputs() {
+        let point_schema =
+            flow_like_types::geometry::marker(flow_like_types::geometry::GeometryKind::Point)
+                .to_string();
+        let mut center = Node::new("h3_cell_to_latlng", "H3 Cell to Lat/Lng", "", "Web/Geo/H3");
+        center.set_flowscript_name("h3", "cellToLatlng");
+        center.set_version(2);
+        center
+            .add_input_pin("cell", "Cell", "", VariableType::String)
+            .set_default_value(Some(flow_like_types::json::json!("")));
+        center
+            .add_output_pin("geometry_out", "Geometry", "", VariableType::Geometry)
+            .schema = Some(point_schema.clone());
+        let mut cell = Node::new("h3_latlng_to_cell", "H3 Lat/Lng to Cell", "", "Web/Geo/H3");
+        cell.set_flowscript_name("h3", "latlngToCell");
+        cell.set_version(2);
+        cell.add_input_pin("geometry", "Geometry", "", VariableType::Geometry)
+            .schema = Some(point_schema);
+        cell.add_input_pin("resolution", "Resolution", "", VariableType::Integer)
+            .set_default_value(Some(flow_like_types::json::json!(9)));
+        cell.add_output_pin("cell", "Cell", "", VariableType::String);
+
+        let mut catalog = flow_path_catalog();
+        catalog.extend([node_to_metadata(&center), node_to_metadata(&cell)]);
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const center = h3::cellToLatlng({ cell: "8928308280fffff" })
+    const cell = h3::latlngToCell({ geometry: center })
+    log({ text: cell })
+}
+"#,
+            &catalog,
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let center_ref = added_node_ref(&result, "h3_cell_to_latlng").unwrap();
+        let cell_ref = added_node_ref(&result, "h3_latlng_to_cell").unwrap();
+        assert!(connected(
+            &result,
+            center_ref,
+            "geometry_out",
+            cell_ref,
+            "geometry"
+        ));
+        assert_eq!(
+            default_node_output_pin(&center).as_deref(),
+            Some("geometry_out")
+        );
+        assert_eq!(
+            default_metadata_output_pin(&node_to_metadata(&center)).as_deref(),
+            Some("geometry_out")
+        );
+
+        let literal = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const cell = h3::latlngToCell({ geometry: {"type":"Point","coordinates":[13.405,52.52]} })
+    log({ text: cell })
+}
+"#,
+            &catalog,
+        );
+        assert!(literal.diagnostics.is_empty(), "{:?}", literal.diagnostics);
+        let missing = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() { h3::latlngToCell({}) }",
+            &catalog,
+        );
+        assert!(
+            missing
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("missing required inputs: geometry")),
+            "{:?}",
+            missing.diagnostics
+        );
+    }
+
+    #[test]
     fn flow_path_member_access_is_rejected_with_accessor_hint() {
         let result = reconcile_text_with_catalog(
             &empty_board(),

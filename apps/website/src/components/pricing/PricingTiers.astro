@@ -1,264 +1,76 @@
 ---
+import config from "../../../../../flow-like.config.json";
+import RuntimeCalculator from "./RuntimeCalculator.astro";
 import { tCommon } from "../../i18n/locales/pages/common";
-
-interface Props {
-  lang: string;
-}
-
+interface Props { lang: string; }
 const { lang } = Astro.props;
 const t = (key: string) => tCommon(lang, key);
-
-const tiers = [
-  {
-    nameKey: "pricing.tier.free",
-    priceKey: "pricing.tier.free.price",
-    periodKey: "pricing.tier.forever",
-    yearlyPriceKey: null,
-    yearlyPeriodKey: null,
-    yearlySavingsKey: null,
-    descriptionKey: "pricing.tier.free.description",
-    highlight: false,
-    gradient: "from-slate-500/20 to-slate-600/20",
-    iconGradient: "from-slate-400 to-slate-600",
-    features: [
-      "pricing.feature.projects.10",
-      "pricing.feature.executions.limited",
-      "pricing.feature.storage.100mb",
-      "pricing.feature.llm.limited",
-      "pricing.feature.support.community",
-      "pricing.feature.coreFeatures",
-      "pricing.feature.visualBuilder",
-      "pricing.feature.localExecution",
-    ],
-    ctaKey: "pricing.cta.download",
-    ctaLink: "/download",
-  },
-  {
-    nameKey: "pricing.tier.premium",
-    priceKey: "pricing.tier.premium.price",
-    periodKey: "pricing.tier.perMonth",
-    yearlyPriceKey: "pricing.tier.premium.yearlyPrice",
-    yearlyPeriodKey: "pricing.tier.perYear",
-    yearlySavingsKey: "pricing.tier.yearlySavings",
-    descriptionKey: "pricing.tier.premium.description",
-    highlight: false,
-    gradient: "from-blue-500/20 to-cyan-500/20",
-    iconGradient: "from-blue-400 to-cyan-500",
-    features: [
-      "pricing.feature.projects.200",
-      "pricing.feature.executions.more",
-      "pricing.feature.storage.1gb",
-      "pricing.feature.llm.more",
-      "pricing.feature.support.email",
-      "pricing.feature.priorityBugFixes",
-      "pricing.feature.advancedIntegrations",
-    ],
-    ctaKey: "pricing.cta.availableInApp",
-    ctaLink: "/download",
-  },
-  {
-    nameKey: "pricing.tier.pro",
-    priceKey: "pricing.tier.pro.price",
-    periodKey: "pricing.tier.perMonth",
-    yearlyPriceKey: "pricing.tier.pro.yearlyPrice",
-    yearlyPeriodKey: "pricing.tier.perYear",
-    yearlySavingsKey: "pricing.tier.yearlySavings",
-    descriptionKey: "pricing.tier.pro.description",
-    highlight: true,
-    popular: true,
-    gradient: "from-violet-500/30 to-fuchsia-500/30",
-    iconGradient: "from-violet-400 to-fuchsia-500",
-    features: [
-      "pricing.feature.projects.unlimited",
-      "pricing.feature.executions.most",
-      "pricing.feature.storage.10gb",
-      "pricing.feature.llm.most",
-      "pricing.feature.support.priority",
-      "pricing.feature.teamCollaboration",
-      "pricing.feature.advancedAnalytics",
-      "pricing.feature.customIntegrations",
-    ],
-    ctaKey: "pricing.cta.availableInApp",
-    ctaLink: "/download",
-  },
-  {
-    nameKey: "pricing.tier.enterprise",
-    priceKey: "pricing.tier.enterprise.price",
-    periodKey: null,
-    yearlyPriceKey: null,
-    yearlyPeriodKey: null,
-    yearlySavingsKey: null,
-    descriptionKey: "pricing.tier.enterprise.description",
-    highlight: false,
-    gradient: "from-amber-500/20 to-orange-500/20",
-    iconGradient: "from-amber-400 to-orange-500",
-    features: [
-      "pricing.feature.projects.unlimited",
-      "pricing.feature.executions.unlimited",
-      "pricing.feature.storage.unlimited",
-      "pricing.feature.llm.unlimited",
-      "pricing.feature.support.dedicated",
-      "pricing.feature.slaGuarantee",
-      "pricing.feature.ssoSaml",
-      "pricing.feature.auditLogs",
-      "pricing.feature.customDeployment",
-      "pricing.feature.onPremise",
-      "pricing.feature.whiteGlove",
-    ],
-    ctaKey: "pricing.cta.contactSales",
-    ctaLink: "mailto:enterprise@flow-like.com?subject=Enterprise%20Inquiry",
-  },
+const tiers = ["FREE", "PREMIUM", "PRO", "MAX"] as const;
+type Plan = (typeof config.tiers)[(typeof tiers)[number]];
+const price = (amount: number) => new Intl.NumberFormat(lang, { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(amount / 100);
+const count = (value: number) => value < 0 ? "Unlimited" : value.toLocaleString(lang);
+const runtime = (ms: number) => ms < 0 ? "Unlimited" : ms < 3_600_000 ? `${count(ms / 60_000)} min` : `${count(ms / 3_600_000)} h`;
+const storage = (bytes: number) => bytes < 0 ? "Unlimited" : `${count(bytes / 1_000_000_000)} GB`;
+const limits: {label: string; value: (tier: Plan) => string}[] = [
+  {label: "Cloud runtime / month", value: tier => runtime(tier.max_runtime_ms)},
+  {label: "Hosted AI allowance / month", value: tier => price(tier.max_ai_cost_micros / 10_000)},
+  {label: "Cloud storage", value: tier => storage(tier.max_total_size)},
+  {label: "Private cloud projects", value: tier => count(tier.max_non_visible_projects)},
+  {label: "Cloud starts / month", value: tier => count(tier.max_remote_executions)},
+  {label: "Hosted AI operations / month", value: tier => count(tier.max_llm_calls)},
+  {label: "Concurrent cloud executions", value: tier => count(tier.max_concurrent_executions)},
+  {label: "Hosted model access", value: tier => tier.llm_tiers.map(name => name.charAt(0) + name.slice(1).toLowerCase()).join(", ")},
 ];
 ---
 
 <section class="py-16 md:py-24 relative">
-  <!-- Subtle background -->
-  <div class="absolute inset-0 -z-10">
-    <div class="absolute top-1/2 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-[150px]"></div>
-    <div class="absolute top-1/3 right-1/4 w-[400px] h-[400px] bg-violet-500/5 rounded-full blur-[150px]"></div>
-  </div>
-
-  <div class="max-w-7xl mx-auto px-4">
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-4">
-      {tiers.map((tier, index) => (
-        <div
-          class={`group relative flex flex-col rounded-3xl p-[1px] transition-all duration-500 hover:scale-[1.02] ${
-            tier.highlight
-              ? "bg-gradient-to-b from-primary via-violet-500 to-fuchsia-500 shadow-2xl shadow-primary/20"
-              : "bg-gradient-to-b from-border/50 via-border/30 to-border/50 hover:from-primary/50 hover:via-violet-500/50 hover:to-fuchsia-500/50"
-          }`}
-          style={`animation-delay: ${index * 100}ms`}
-        >
-          {/* Inner card */}
-          <div class={`relative flex flex-col h-full rounded-[23px] p-6 ${
-            tier.highlight ? "bg-card" : "bg-card/80 backdrop-blur-xl"
-          }`}>
-            {/* Popular badge */}
-            {tier.popular && (
-              <div class="absolute -top-4 left-1/2 -translate-x-1/2 z-10">
-                <span class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-gradient-to-r from-primary to-violet-500 text-primary-foreground text-xs font-bold shadow-lg shadow-primary/25">
-                  <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" />
-                  </svg>
-                  {t("pricing.tier.popular")}
-                </span>
-              </div>
-            )}
-
-            {/* Tier header */}
-            <div class="mb-6 pt-2">
-              <div class={`inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br ${tier.gradient} mb-4 group-hover:scale-110 transition-transform duration-300`}>
-                <div class={`w-6 h-6 rounded-lg bg-gradient-to-br ${tier.iconGradient}`}></div>
-              </div>
-              <h3 class="text-xl font-bold mb-1">{t(tier.nameKey)}</h3>
-              <p class="text-sm text-muted-foreground h-10 line-clamp-2">{t(tier.descriptionKey)}</p>
-            </div>
-
-            {/* Price */}
-            <div class="mb-6">
-              <div class="flex items-baseline gap-1">
-                <span class={`text-4xl font-bold ${tier.highlight ? 'bg-clip-text text-transparent bg-gradient-to-r from-primary to-violet-500' : ''}`}>
-                  {t(tier.priceKey)}
-                </span>
-                {tier.periodKey && (
-                  <span class="text-muted-foreground text-sm">{t(tier.periodKey)}</span>
-                )}
-              </div>
-              {tier.yearlyPriceKey && (
-                <div class="mt-2 flex items-center gap-2">
-                  <span class="text-sm text-muted-foreground">
-                    {t("pricing.tier.or")} {t(tier.yearlyPriceKey)}{t(tier.yearlyPeriodKey!)}
-                  </span>
-                  {tier.yearlySavingsKey && (
-                    <span class="inline-flex px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-semibold">
-                      {t(tier.yearlySavingsKey)}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Features */}
-            <ul class="space-y-3 mb-8 flex-grow">
-              {tier.features.map((featureKey) => (
-                <li class="flex items-start gap-3 text-sm">
-                  <div class={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${
-                    tier.highlight ? 'bg-primary/10' : 'bg-emerald-500/10'
-                  }`}>
-                    <svg
-                      class={`w-3 h-3 ${tier.highlight ? "text-primary" : "text-emerald-500"}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      stroke-width="3"
-                    >
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  <span class="text-muted-foreground group-hover:text-foreground transition-colors">{t(featureKey)}</span>
-                </li>
-              ))}
-            </ul>
-
-            {/* CTA Button */}
-            <a
-              href={tier.ctaLink}
-              class={`relative w-full py-3 px-4 rounded-xl text-center font-semibold transition-all duration-300 overflow-hidden group/btn ${
-                tier.highlight
-                  ? "bg-gradient-to-r from-primary to-violet-500 text-primary-foreground hover:shadow-lg hover:shadow-primary/25 hover:-translate-y-0.5"
-                  : "bg-muted hover:bg-muted/80 border border-border hover:border-primary/50"
-              }`}
-            >
-              <span class="relative z-10">{t(tier.ctaKey)}</span>
-              {tier.highlight && (
-                <div class="absolute inset-0 bg-gradient-to-r from-violet-500 to-fuchsia-500 opacity-0 group-hover/btn:opacity-100 transition-opacity duration-300"></div>
-              )}
-            </a>
-          </div>
-        </div>
-      ))}
+  <div class="max-w-7xl mx-auto px-4 space-y-8">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+      {tiers.map((key) => {
+        const display = config.conversion.tier_display[key];
+        const tier = config.tiers[key];
+        const metrics = [
+          {label: "Cloud runtime", value: runtime(tier.max_runtime_ms), period: "/ month"},
+          {label: "Hosted AI allowance", value: price(tier.max_ai_cost_micros / 10_000), period: "/ month"},
+          {label: "Cloud storage", value: storage(tier.max_total_size), period: "stored"},
+        ];
+        return <article class="flex flex-col rounded-3xl border border-border bg-card p-6 shadow-sm" lang="en">
+          <header><h3 class="text-2xl font-bold">{display.display_name}</h3><p class="mt-2 text-sm leading-relaxed text-muted-foreground min-h-12">{display.tagline}</p></header>
+          <div class="mt-4 min-h-24"><p><span class="text-4xl font-bold">{price(display.monthly_price_cents)}</span><span class="text-muted-foreground"> / month</span></p>{display.annual_price_cents > 0 && <p class="text-sm leading-relaxed text-muted-foreground mt-2">Or {price(display.annual_price_cents)} per year. Save {Math.round((1-display.annual_price_cents/(display.monthly_price_cents*12))*100)}%.</p>}</div>
+          <a href={key === "FREE" ? "/download" : "https://app.flow-like.com/subscription"} class="mt-4 block rounded-xl bg-primary px-4 py-3 text-center font-semibold text-primary-foreground hover:bg-primary/90">{key === "FREE" ? t("pricing.cta.download") : `Choose ${display.display_name}`}</a>
+          <dl class="mt-5 divide-y divide-border">{metrics.map(metric => <div class="flex items-center justify-between gap-3 py-3"><dt class="text-sm text-muted-foreground">{metric.label}</dt><dd class="text-right"><span class="block text-lg font-semibold tabular-nums">{metric.value}</span><span class="block text-xs text-muted-foreground">{metric.period}</span></dd></div>)}</dl>
+        </article>;
+      })}
     </div>
-
-    {/* All plans include */}
-    <div class="mt-20">
-      <div class="text-center mb-8">
-        <h3 class="text-xl font-bold mb-2">{t("pricing.allPlans")}</h3>
-        <div class="w-20 h-1 mx-auto rounded-full bg-gradient-to-r from-primary to-violet-500"></div>
+    <p class="text-sm text-muted-foreground" lang="en">Prices in EUR. Any applicable taxes are shown at checkout.</p>
+    <RuntimeCalculator lang={lang} />
+    <details class="group rounded-2xl border border-border bg-card" lang="en">
+      <summary class="flex cursor-pointer list-none items-center justify-between gap-4 p-5 font-semibold [&::-webkit-details-marker]:hidden">Compare all limits<span class="text-xl transition-transform group-open:rotate-45" aria-hidden="true">+</span></summary>
+      <div class="overflow-x-auto border-t border-border">
+        <table class="w-full min-w-[640px] text-left text-sm">
+          <caption class="sr-only">Plan allowances and included hosted model tiers</caption>
+          <thead><tr class="border-b border-border bg-muted/30"><th scope="col" class="p-4 font-medium">Allowance</th>{tiers.map(key => <th scope="col" class="p-4 font-semibold">{config.conversion.tier_display[key].display_name}</th>)}</tr></thead>
+          <tbody>{limits.map(limit => <tr class="border-b border-border last:border-0"><th scope="row" class="p-4 font-normal text-muted-foreground">{limit.label}</th>{tiers.map(key => <td class="p-4 tabular-nums">{limit.value(config.tiers[key])}</td>)}</tr>)}</tbody>
+        </table>
       </div>
-      <div class="flex flex-wrap justify-center gap-6 text-sm">
-        <div class="group flex items-center gap-3 px-5 py-3 rounded-2xl bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/30 transition-all">
-          <div class="p-2 rounded-xl bg-primary/10 group-hover:bg-primary/20 transition-colors">
-            <svg class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-          </div>
-          <span class="text-muted-foreground group-hover:text-foreground transition-colors">{t("pricing.allPlans.soc2")}</span>
-        </div>
-        <div class="group flex items-center gap-3 px-5 py-3 rounded-2xl bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/30 transition-all">
-          <div class="p-2 rounded-xl bg-primary/10 group-hover:bg-primary/20 transition-colors">
-            <svg class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <span class="text-muted-foreground group-hover:text-foreground transition-colors">{t("pricing.allPlans.sourceCode")}</span>
-        </div>
-        <div class="group flex items-center gap-3 px-5 py-3 rounded-2xl bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/30 transition-all">
-          <div class="p-2 rounded-xl bg-primary/10 group-hover:bg-primary/20 transition-colors">
-            <svg class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </div>
-          <span class="text-muted-foreground group-hover:text-foreground transition-colors">{t("pricing.allPlans.updates")}</span>
-        </div>
-        <div class="group flex items-center gap-3 px-5 py-3 rounded-2xl bg-card/50 backdrop-blur-sm border border-border/50 hover:border-primary/30 transition-all">
-          <div class="p-2 rounded-xl bg-primary/10 group-hover:bg-primary/20 transition-colors">
-            <svg class="w-5 h-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
-            </svg>
-          </div>
-          <span class="text-muted-foreground group-hover:text-foreground transition-colors">{t("pricing.allPlans.deployAnywhere")}</span>
-        </div>
+      <div class="border-t border-border p-5 text-sm leading-relaxed text-muted-foreground space-y-2">
+        <p>Monthly runtime, cloud starts and hosted AI allowances renew monthly, including on annual subscriptions. Both runtime and start limits apply. Both AI money and operation limits apply.</p>
+        <p>Storage and project limits measure current usage. Concurrent execution slots become available when work finishes. Hosted AI usage includes inference and serving costs. Each plan's included hosted model selection applies.</p>
+        <p>Data in your own connected storage uses no Flow-Like storage allowance; data copied into Flow-Like does.</p>
       </div>
+    </details>
+    <div class="rounded-3xl border border-border bg-muted/30 p-6 md:p-8 space-y-4" lang="en">
+      <h3 class="text-xl font-bold">Keep building on every plan</h3>
+      <ul class="grid gap-4 md:grid-cols-2 text-sm">
+        <li><strong>Local execution and embeddings are free.</strong> Run on your own device without using cloud runtime or hosted AI allowances.</li>
+        <li><strong>Bring your own models.</strong> Customer-funded models use no Flow-Like AI budget or AI operations. Your provider may charge separately. Cloud workflows still use cloud runtime.</li>
+        <li><strong>Use your existing coding assistant.</strong> Studio FlowPilot works with your GitHub Copilot, Codex or Claude Code instance. Your provider's subscription and limits apply.</li>
+        <li><strong>Explore public projects.</strong> Public-project forks, including purchases, use no project slots. Their storage, cloud runtime and hosted AI still use your normal allowances.</li>
+      </ul>
+    </div>
+    <div class="rounded-3xl border border-border p-6 md:p-8 flex flex-wrap gap-6 items-center justify-between" lang="en">
+      <div><h3 class="text-xl font-bold">Enterprise</h3><p class="text-muted-foreground">Capacity, deployment, governance and support agreed with your organization.</p></div>
+      <a href="mailto:enterprise@flow-like.com" class="rounded-xl border px-5 py-3 font-semibold hover:bg-muted">{t("pricing.cta.contactSales")}</a>
     </div>
   </div>
 </section>

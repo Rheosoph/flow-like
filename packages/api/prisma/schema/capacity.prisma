@@ -1,0 +1,40 @@
+/// Current occupancy, separate from monthly runtime and AI allowances.
+model AccountCapacity {
+  payerId              String   @id
+  storageBytes         BigInt   @default(0)
+  reservedStorageBytes BigInt   @default(0)
+  projectCount         BigInt   @default(0)
+  initialized          Boolean  @default(false)
+  baselineAppId        String   @default("")
+  updatedAt            DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([initialized, updatedAt, payerId])
+}
+
+/// Server-owned provenance and slot ownership survive source retirement and deletion.
+model ProjectCapacity {
+  appId              String   @id
+  payerId            String
+  counted            Boolean
+  publicForkSourceId String?
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([payerId, active])
+}
+
+/// One outstanding byte bound per object key; repeated grants cannot multiply headroom.
+model StorageUploadGrant {
+  id            String   @id
+  payerId       String
+  appId         String
+  bucket        String
+  objectKey     String
+  maxBytes      BigInt
+  reservedBytes BigInt
+  expiresAt     DateTime @db.Timestamptz(3)
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@index([appId])
+}

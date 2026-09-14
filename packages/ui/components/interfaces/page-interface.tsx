@@ -13,6 +13,12 @@ import {
 import { useAuth } from "react-oidc-context";
 import { useAssetSource } from "../../hooks/use-asset-source";
 import {
+	appQueryContext,
+	readAppQuery,
+	setAppQueryParam,
+} from "../../lib/app-route-url";
+import { nativeWidgetPageQuery } from "../../lib/native-widget-page";
+import {
 	type PageSurfaceIdentity,
 	pageSurfaceCacheKey,
 	pageSurfaceQueryKey,
@@ -53,6 +59,7 @@ import type {
 import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
+import { NativeWidgetPageCaptureBridge } from "./native-widget-page-capture";
 import { pageExecutionIdentity } from "./page-execution-identity";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
 import { shouldRevealProgressively } from "./progressive-page-reveal";
@@ -139,25 +146,20 @@ function PageInterfaceInner({
 	const frontendStateStore = getFrontendStateStore(appId);
 	const router = useRouter();
 	const hostSearch = useSearchParams().toString();
-	const runtimeQueryParams = useMemo(() => {
-		if (providedQueryParams) return { ...providedQueryParams };
-		const result: Record<string, string> = {};
-		new URLSearchParams(hostSearch).forEach((value, key) => {
-			result[key] = value;
-		});
-		return result;
+	const runtimeQueryContext = useMemo(() => {
+		if (providedQueryParams)
+			return { _query_params: { ...providedQueryParams } };
+		return appQueryContext(hostSearch);
 	}, [hostSearch, providedQueryParams]);
 	const search = useMemo(() => {
-		const params = new URLSearchParams();
-		for (const [key, value] of Object.entries(runtimeQueryParams).toSorted(
-			([left], [right]) => left.localeCompare(right),
-		)) {
-			params.set(key, value);
-		}
+		const params = providedQueryParams
+			? new URLSearchParams(providedQueryParams)
+			: readAppQuery(hostSearch);
+		params.sort();
 		return params.toString();
-	}, [runtimeQueryParams]);
-	const runtimeQueryParamsRef = useRef(runtimeQueryParams);
-	runtimeQueryParamsRef.current = runtimeQueryParams;
+	}, [hostSearch, providedQueryParams]);
+	const runtimeQueryContextRef = useRef(runtimeQueryContext);
+	runtimeQueryContextRef.current = runtimeQueryContext;
 	const auth = useAuth();
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
@@ -168,6 +170,9 @@ function PageInterfaceInner({
 		"idle" | "preparing" | "running"
 	>("idle");
 	const [completedLoadEventKey, setCompletedLoadEventKey] = useState<
+		string | null
+	>(null);
+	const [successfulLoadEventKey, setSuccessfulLoadEventKey] = useState<
 		string | null
 	>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
@@ -426,11 +431,7 @@ function PageInterfaceInner({
 				};
 
 				const url = new URL(window.location.href);
-				if (value === undefined || value === "") {
-					url.searchParams.delete(key);
-				} else {
-					url.searchParams.set(key, value);
-				}
+				setAppQueryParam(url, key, value);
 
 				if (replace) {
 					router.replace(url.pathname + url.search);
@@ -470,12 +471,12 @@ function PageInterfaceInner({
 				console.warn(
 					`[PageInterface] Missing governed Page context for ${eventName} event`,
 				);
-				return;
+				return false;
 			}
 
 			try {
 				await frontendStateStore.ensureLoaded(page.id);
-				if (isCurrent && !isCurrent()) return;
+				if (isCurrent && !isCurrent()) return false;
 				const currentSurface = surfaceRef.current;
 				const surfaceElements = currentSurface
 					? await collectRunElements({
@@ -489,7 +490,7 @@ function PageInterfaceInner({
 							storedValues: {},
 						})
 					: {};
-				if (isCurrent && !isCurrent()) return;
+				if (isCurrent && !isCurrent()) return false;
 				const frontendState = frontendStateStore.getSnapshot();
 
 				const payload = {
@@ -498,7 +499,7 @@ function PageInterfaceInner({
 						_elements: surfaceElements,
 						_elements_mode: "demand",
 						_route: pageRoute || "/",
-						_query_params: { ...runtimeQueryParamsRef.current },
+						...runtimeQueryContextRef.current,
 						_page_id: page.id,
 						_global_state: frontendState.globalState,
 						_page_state: frontendState.pageStates[page.id] ?? {},
@@ -530,8 +531,10 @@ function PageInterfaceInner({
 						manifestRevision: pageExecutionRevision,
 					},
 				);
+				return true;
 			} catch {
 				console.error(`[PageInterface] Failed to execute ${eventName} event`);
+				return false;
 			}
 		},
 		[
@@ -553,6 +556,7 @@ function PageInterfaceInner({
 			if (!page.onLoadEventId || !loadEventExecutionKey) {
 				loadEventExecutedRef.current = null;
 				setCompletedLoadEventKey(null);
+				setSuccessfulLoadEventKey(null);
 				setLoadEventPhase("idle");
 				setIsLoadEventRunning(false);
 				return;
@@ -565,11 +569,13 @@ function PageInterfaceInner({
 			loadEventExecutedRef.current = executionKey;
 
 			setCompletedLoadEventKey(null);
+			setSuccessfulLoadEventKey(null);
 			setIsScreenRevealed(false);
 			setLoadEventPhase("preparing");
 			setIsLoadEventRunning(true);
+			let succeeded = false;
 			try {
-				await executePageEvent(
+				succeeded = await executePageEvent(
 					"load",
 					"onLoad",
 					undefined,
@@ -588,6 +594,7 @@ function PageInterfaceInner({
 				// A superseded run must not mark the current page as hydrated or stop its loader.
 				if (loadEventExecutedRef.current === executionKey) {
 					setCompletedLoadEventKey(executionKey);
+					setSuccessfulLoadEventKey(succeeded ? executionKey : null);
 					setLoadEventPhase("idle");
 					setIsLoadEventRunning(false);
 				}
@@ -755,15 +762,50 @@ function PageInterfaceInner({
 						closeDialog={closeDialog}
 						agentBridge={
 							appId ? (
-								<LivePageAgentBridge
-									appId={appId}
-									pageId={activeSurface.id}
-									eventId={event.id}
-									getSurface={() => surfaceRef.current}
-									getContainer={() => pageContainerRef.current}
-									applyServerMessage={handleA2UIMessage}
-									loading={isLoadEventRunning}
-								/>
+								<>
+									<NativeWidgetPageCaptureBridge
+										key={JSON.stringify([
+											appId,
+											page.id,
+											pageRevision ?? page.updatedAt,
+											pageExecutionRevision,
+										])}
+										appId={appId}
+										page={page}
+										surface={activeSurface}
+										path={pageRoute}
+										search={
+											providedQueryParams
+												? search
+												: nativeWidgetPageQuery(hostSearch)
+										}
+										pageRevision={
+											pageSurfaceRevision(
+												pageRevision ?? page.updatedAt,
+												pageExecutionRevision,
+											) ?? page.updatedAt
+										}
+										ready={
+											active &&
+											!auth?.isLoading &&
+											!isLoadEventRunning &&
+											(!page.onLoadEventId ||
+												Boolean(
+													loadEventExecutionKey &&
+														successfulLoadEventKey === loadEventExecutionKey,
+												))
+										}
+									/>
+									<LivePageAgentBridge
+										appId={appId}
+										pageId={activeSurface.id}
+										eventId={event.id}
+										getSurface={() => surfaceRef.current}
+										getContainer={() => pageContainerRef.current}
+										applyServerMessage={handleA2UIMessage}
+										loading={isLoadEventRunning}
+									/>
+								</>
 							) : undefined
 						}
 					/>

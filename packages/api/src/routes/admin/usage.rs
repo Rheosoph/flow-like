@@ -10,7 +10,7 @@ use crate::{
     permission::global_permission::GlobalPermission,
     state::AppState,
     usage_accounting::{
-        UsageReconciliationResult, reconcile_stale_invocations, record_usage_limit_audit,
+        UsageReconciliationResult, reconcile_hosted_invocations, record_usage_limit_audit,
     },
     usage_limits::{
         AppUsageLimits, MONTHLY, get_app_usage_limits, get_app_usage_limits_for_scope,
@@ -774,9 +774,7 @@ pub async fn overview(
 /// the two costs combined; the client re-orders them per ranking.
 fn retain_top_apps_by_either_cost(apps: &mut Vec<AdminAppUsage>, limit: usize) {
     if apps.len() <= limit {
-        apps.sort_by_key(|row| {
-            std::cmp::Reverse(row.totals.total_price + row.totals.compute_cost)
-        });
+        apps.sort_by_key(|row| std::cmp::Reverse(row.totals.total_price + row.totals.compute_cost));
         return;
     }
 
@@ -989,7 +987,7 @@ pub async fn reconcile(
         .await?;
 
     Ok(Json(
-        reconcile_stale_invocations(&state.db, query.older_than_minutes.unwrap_or(30))
+        reconcile_hosted_invocations(&state, query.older_than_minutes.unwrap_or(30))
             .await
             .map_err(|e| ApiError::internal_error(e.into()))?,
     ))

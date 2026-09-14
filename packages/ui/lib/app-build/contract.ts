@@ -201,6 +201,7 @@ export const appEventTypeSchema = z.enum([
 	"api",
 	"cron",
 	"daemon",
+	"geolocation",
 	"deeplink",
 	"rest",
 	"mcp",

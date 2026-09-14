@@ -1,8 +1,11 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { LocationFix } from "../../../lib/location";
 import { cn } from "../../../lib/utils";
+import type { MapLocationError } from "../../ui/map-location";
 import {
 	Map,
 	MapControls,
@@ -13,7 +16,7 @@ import {
 	MarkerContent,
 	MarkerLabel,
 } from "../../ui/map";
-import { useComponentEventTrigger } from "../ActionHandler";
+import { useActionContext, useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -76,8 +79,12 @@ export function A2UIGeoMap({
 	componentId,
 	surfaceId,
 	onAction,
+	appId: propAppId,
 }: ComponentProps<GeoMapComponent>) {
 	const { t } = useTranslation("common");
+	const actionContext = useActionContext();
+	const pathname = usePathname();
+	const appId = actionContext.appId ?? propAppId;
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const rawViewport = useResolved<unknown>(component.viewport);
 	const rawMarkers = useResolved<unknown>(component.markers);
@@ -258,26 +265,41 @@ export function A2UIGeoMap({
 	);
 
 	const handleLocate = useCallback(
-		(coords: { longitude: number; latitude: number }) => {
+		async (fix: LocationFix) => {
+			const context = {
+				coordinate: mapEventCoordinate(fix.longitude, fix.latitude),
+				geometry: fix.geometry,
+				location: fix,
+			};
 			onAction?.({
 				type: "userAction",
 				name: "locate",
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: {
-					coordinate: {
-						latitude: coords.latitude,
-						longitude: coords.longitude,
-					},
-				},
+				context,
 			});
-			void triggerEvent("locate", component, {
+			await triggerEvent("locate", component, {
 				event: "locate",
-				coordinate: {
-					latitude: coords.latitude,
-					longitude: coords.longitude,
-				},
+				...context,
+			});
+		},
+		[component, componentId, onAction, surfaceId, triggerEvent],
+	);
+	const handleLocateError = useCallback(
+		(error: MapLocationError) => {
+			const context = { event: "locateError", ...error, error };
+			onAction?.({
+				type: "userAction",
+				name: "locateError",
+				surfaceId,
+				sourceComponentId: componentId,
+				timestamp: Date.now(),
+				context,
+			});
+			void triggerEvent("locateError", component, context, {
+				legacyFallback: false,
+				wildcardFallback: false,
 			});
 		},
 		[component, componentId, onAction, surfaceId, triggerEvent],
@@ -339,7 +361,16 @@ export function A2UIGeoMap({
 						showCompass={showCompass}
 						showLocate={showLocate}
 						showFullscreen={showFullscreen}
-						onLocate={handleLocate}
+						onLocationFix={handleLocate}
+						onLocateError={handleLocateError}
+						locationAppId={appId}
+						locationScope={JSON.stringify([
+							appId,
+							surfaceId,
+							componentId,
+							pathname,
+						])}
+						locateEnabled={actionContext.isPreviewMode && interactive}
 					/>
 				)}
 

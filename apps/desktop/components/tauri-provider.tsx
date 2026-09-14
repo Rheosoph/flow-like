@@ -57,6 +57,7 @@ import Dexie, { type EntityTable } from "dexie";
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
+import { installNativeDeviceAdapter } from "../lib/device-adapter";
 import { scheduleIDBCleanup } from "../lib/idb-maintenance";
 import { isIOSDevice } from "../lib/platform";
 import {
@@ -730,6 +731,7 @@ export function TauriProvider({
 	const { backend, setBackend } = useBackendStore();
 	const { setDownloadBackend, download } = useDownloadManager();
 	const [isPending, startTransition] = useTransition();
+	useEffect(installNativeDeviceAdapter, []);
 
 	// Safety to avoid state updates after unmount during resume
 	const mountedRef = useRef(true);

@@ -8,7 +8,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import { Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { currentRelativeUrl } from "../../lib/return-url";
@@ -18,7 +18,6 @@ export default function SubscriptionPageWrapper() {
 	const backend = useBackend();
 	const hub = useHub();
 	const auth = useAuth();
-	const [loading, setLoading] = useState(true);
 
 	const isPremiumEnabled = hub.hub?.features?.premium ?? false;
 
@@ -27,13 +26,16 @@ export default function SubscriptionPageWrapper() {
 		backend.userState,
 		[],
 		isPremiumEnabled && auth.isAuthenticated,
+		[auth.user?.profile.sub],
 	);
 
 	const handleUpgrade = useCallback(
-		async (tier: string) => {
+		async (tier: string, priceId?: string, interval?: "month" | "year") => {
 			try {
 				const response = await backend.userState.createSubscription({
 					tier,
+					price_id: priceId,
+					interval,
 					success_url: `${window.location.origin}/subscription?success=true`,
 					cancel_url: `${window.location.origin}/subscription?canceled=true`,
 				});
@@ -84,12 +86,37 @@ export default function SubscriptionPageWrapper() {
 	if (pricing.isLoading) {
 		return (
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
-				<Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+				<div
+					role="status"
+					className="flex items-center gap-2 text-sm text-muted-foreground"
+				>
+					<Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+					Loading subscription settings…
+				</div>
 			</main>
 		);
 	}
 
-	if (!pricing.data) {
+	if (!hub.hub) {
+		return (
+			<main className="flex w-full flex-1 min-h-0 items-center justify-center py-12">
+				<div className="max-w-md space-y-3 px-6 text-center">
+					<h1 className="text-xl font-semibold">
+						Waiting for your instance settings
+					</h1>
+					<p className="text-sm text-muted-foreground">
+						Your instance settings are not available yet. Check your connection
+						and retry if this continues.
+					</p>
+					<Button variant="outline" onClick={() => hub.refetch()}>
+						Retry instance settings
+					</Button>
+				</div>
+			</main>
+		);
+	}
+
+	if (!isPremiumEnabled) {
 		return (
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6">
@@ -107,6 +134,29 @@ export default function SubscriptionPageWrapper() {
 		);
 	}
 
+	if (!pricing.data) {
+		return (
+			<main className="flex w-full flex-1 min-h-0 items-center justify-center py-12">
+				<div className="max-w-md space-y-3 px-6 text-center">
+					<h1 className="text-xl font-semibold">
+						Subscription settings are temporarily unavailable
+					</h1>
+					<p className="text-sm text-muted-foreground">
+						We couldn't load your pricing information. Check your connection and
+						try again.
+					</p>
+					<Button
+						variant="outline"
+						disabled={pricing.isFetching}
+						onClick={() => pricing.refetch()}
+					>
+						{pricing.isFetching ? "Retrying…" : "Try again"}
+					</Button>
+				</div>
+			</main>
+		);
+	}
+
 	return (
 		<main className="flex flex-col w-full flex-1 min-h-0 overflow-auto">
 			{pricing.data && (
@@ -116,21 +166,6 @@ export default function SubscriptionPageWrapper() {
 					onManageBilling={handleManageBilling}
 					isPremiumEnabled={isPremiumEnabled}
 				/>
-			)}
-			{!pricing.data && (
-				<div className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
-					<div className="text-center p-6">
-						<h3 className="text-xl font-semibold mb-2">
-							{t(
-								"failedToLoadPricingInformation",
-								"Failed to load pricing information.",
-							)}
-						</h3>
-						<p className="text-muted-foreground">
-							{t("pleaseTryAgainLater", "Please try again later.")}
-						</p>
-					</div>
-				</div>
 			)}
 		</main>
 	);

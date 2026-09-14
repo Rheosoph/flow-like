@@ -55,6 +55,9 @@ mod tests {
         UserTier {
             max_non_visible_projects: 0,
             max_remote_executions: 0,
+            max_runtime_ms: -1,
+            max_concurrent_executions: -1,
+            max_ai_cost_micros: -1,
             execution_tier: "SHARED".to_string(),
             max_total_size: 0,
             max_llm_cost: 0,

@@ -3,7 +3,9 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    push_notifications::{DispatchNotificationInput, dispatch_notification},
+    push_notifications::{
+        DispatchNotificationInput, PushDispatchStatus, dispatch_notification_with_status,
+    },
     routes::app::events::db::get_event_from_db,
     state::AppState,
 };
@@ -58,7 +60,9 @@ pub struct CreateNotificationParams {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CreateNotificationResponse {
     pub id: String,
+    pub persisted: bool,
     pub success: bool,
+    pub push_status: PushDispatchStatus,
 }
 
 /// POST /apps/{app_id}/notifications/create
@@ -220,7 +224,7 @@ pub async fn create_notification(
         }
     }
 
-    let notification_id = dispatch_notification(
+    let result = dispatch_notification_with_status(
         &state,
         DispatchNotificationInput {
             user_id: target_sub,
@@ -238,7 +242,9 @@ pub async fn create_notification(
     .await?;
 
     Ok(Json(CreateNotificationResponse {
-        id: notification_id,
-        success: true,
+        id: result.id,
+        persisted: true,
+        success: result.push_status.is_success(),
+        push_status: result.push_status,
     }))
 }

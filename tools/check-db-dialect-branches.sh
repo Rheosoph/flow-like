@@ -14,16 +14,14 @@ cd "$ROOT_DIR"
 PATTERN='is_dsql\(|DbDialect::Dsql([^A-Za-z0-9_]|$)'
 
 # The layer itself, the probes that must speak to a specific catalog, the
-# backfills that refuse bounded engines, the mains that build a pool whose
-# engine they already know, and the live-cluster suite that exists to check
-# the predicates against a real DSQL endpoint.
+# mains that build a pool whose engine they already know, and the live-cluster
+# suite that checks the predicates against a real DSQL endpoint.
 ALLOWED=(
     packages/db/src
     packages/api/src/db
     packages/api/tests/dsql_live.rs
     packages/api/src/routes/admin/resources/database.rs
     packages/api/src/cache/postgres.rs
-    packages/api/src/db_backfills.rs
     apps/backend/aws/api/src/main.rs
     apps/backend/aws/file-tracker/src/main.rs
 )

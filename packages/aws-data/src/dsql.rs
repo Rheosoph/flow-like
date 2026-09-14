@@ -17,7 +17,7 @@ use aws_credential_types::{
 };
 use sea_orm::DatabaseConnection;
 use sea_orm::sqlx::{
-    ConnectOptions as _,
+    ConnectOptions as _, Connection as _,
     postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgSslMode},
 };
 use std::{
@@ -26,6 +26,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::Mutex;
+use tracing::Instrument;
 
 /// Public or PrivateLink DSQL cluster endpoint, e.g.
 /// `abc0def1ghi2jkl3.dsql-fnh4.eu-west-1.on.aws`.
@@ -241,6 +242,11 @@ impl TokenRotor {
             .config
             .connect_options(&self.application_name, credentials.clone())?
             .authenticated_pg_options()
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "dsql.token_refresh",
+                cloud.service = "dsql"
+            ))
             .await
             .map_err(|error| DsqlError::Token(error.to_string()))?;
         self.pool.set_connect_options(options);
@@ -301,6 +307,12 @@ pub async fn connect(config: &DsqlConfig) -> Result<DsqlDatabase, DsqlError> {
 /// instance reconnecting at once after a deploy would otherwise burst past
 /// the cluster's connection rate. One ping verifies the token and network
 /// before the process accepts work.
+#[tracing::instrument(
+    target = "flow_like::observability",
+    name = "db.connect",
+    skip_all,
+    fields(db.system.name = "dsql", db.operation = "connect", cloud.service = "dsql")
+)]
 pub async fn connect_as(
     config: &DsqlConfig,
     application_name: &str,
@@ -339,11 +351,28 @@ pub async fn connect_as(
             refresh_at: Instant::now() + delay,
         }),
     });
-    let connection = DatabaseConnection::from(pool);
-    connection
-        .ping()
+    let mut initial_connection = pool
+        .acquire()
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "db.pool.acquire",
+            db.system.name = "dsql",
+            db.operation = "acquire"
+        ))
         .await
         .map_err(|error| DsqlError::Connection(error.to_string()))?;
+    initial_connection
+        .ping()
+        .instrument(tracing::info_span!(
+            target: "flow_like::observability",
+            "db.ping",
+            db.system.name = "dsql",
+            db.operation = "ping"
+        ))
+        .await
+        .map_err(|error| DsqlError::Connection(error.to_string()))?;
+    drop(initial_connection);
+    let connection = DatabaseConnection::from(pool);
     tracing::info!(
         host = %config.host,
         user = %config.user,

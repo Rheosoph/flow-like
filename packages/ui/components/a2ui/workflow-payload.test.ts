@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { appRouteUrl, parseAppRouteTarget } from "../../lib/app-route-url";
 import {
 	buildFrontendContextPayload,
 	compactWorkflowPayload,
@@ -64,6 +65,22 @@ describe("buildFrontendContextPayload", () => {
 			location: { pathname, search },
 		};
 	}
+
+	test("carries isolated native app query data into button and widget Event payloads", () => {
+		const href = appRouteUrl(
+			"app",
+			parseAppRouteTarget("/orders?id=order&tag=a&tag=b", [
+				{ name: "value", value: "é + 50% & #" },
+			]),
+		);
+		stubLocation("/use", new URL(href, "https://app.test").search);
+		expect(buildFrontendContextPayload("orders-page", {}, {})).toMatchObject({
+			_route: "/orders",
+			_query_params: { id: "order", tag: "b", value: "é + 50% & #" },
+			_query_params_format: "app",
+			_query_param_values: { tag: ["a", "b"] },
+		});
+	});
 
 	test("keeps the page id distinct from the route and query params", () => {
 		stubLocation("/use", "?id=app-1&route=%2Fmail&mailid=42");

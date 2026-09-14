@@ -37,7 +37,7 @@ use ipnetwork::IpNetwork;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 use utoipa::ToSchema;
 
 /// Telegram server IP ranges (CIDR notation)
@@ -866,6 +866,9 @@ pub async fn trigger_event(
         }),
         Err(e) => {
             crate::audit::record_execution_dispatch_failure(state, &run_id, "sink").await?;
+            if let crate::execution::DispatchError::Quota(error) = e {
+                return Err(error.into());
+            }
             Ok(TriggerResponse {
                 triggered: false,
                 run_id: Some(run_id),
@@ -1234,15 +1237,7 @@ pub async fn trigger_http(
                     tracing::error!(error = %e, "Failed to dispatch Lambda streaming");
                     crate::audit::record_execution_dispatch_failure(&state, &run_id, "sink:http")
                         .await?;
-                    Ok((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(TriggerResponse {
-                            triggered: false,
-                            run_id: Some(run_id),
-                            message: format!("Dispatch failed: {}", e),
-                        }),
-                    )
-                        .into_response())
+                    Err(ApiError::from(e))
                 }
             }
         }
@@ -1279,15 +1274,7 @@ pub async fn trigger_http(
                     tracing::error!(error = %e, "Failed to dispatch");
                     crate::audit::record_execution_dispatch_failure(&state, &run_id, "sink:http")
                         .await?;
-                    Ok((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(TriggerResponse {
-                            triggered: false,
-                            run_id: Some(run_id),
-                            message: format!("Dispatch failed: {}", e),
-                        }),
-                    )
-                        .into_response())
+                    Err(ApiError::from(e))
                 }
             }
         }
@@ -1596,23 +1583,16 @@ pub async fn trigger_telegram(
     crate::audit::record_execution_dispatch(&state, &run_id, "sink:telegram").await?;
 
     // Dispatch async (fire and forget) - Telegram expects fast response
-    let dispatcher = state.dispatcher.clone();
-    let run_id_for_log = run_id.clone();
-    let audit_state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = dispatcher.dispatch_async(request).await {
-            tracing::error!(run_id = %run_id_for_log, error = %e, "Telegram webhook dispatch failed");
-            if let Err(error) = crate::audit::record_execution_dispatch_failure(
-                &audit_state,
-                &run_id_for_log,
-                "sink:telegram",
-            )
-            .await
-            {
-                tracing::error!(run_id = %run_id_for_log, %error, "Failed to audit webhook dispatch failure");
-            }
+    // Wait only for durable queue acceptance. A Lambda must not return while its
+    // dispatch future exists solely in this request's process.
+    if let Err(error) = state.dispatcher.dispatch_async(request).await {
+        if let Err(audit_error) =
+            crate::audit::record_execution_dispatch_failure(&state, &run_id, "sink:telegram").await
+        {
+            tracing::error!(%run_id, %audit_error, "Failed to audit webhook dispatch rejection");
         }
-    });
+        return Err(ApiError::from(error));
+    }
 
     // Return immediately - Telegram expects fast acknowledgement
     Ok((
@@ -1961,23 +1941,16 @@ pub async fn trigger_discord(
     crate::audit::record_execution_dispatch(&state, &run_id, "sink:discord").await?;
 
     // Dispatch async (fire and forget) - Discord expects response within 3 seconds
-    let dispatcher = state.dispatcher.clone();
-    let run_id_for_log = run_id.clone();
-    let audit_state = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = dispatcher.dispatch_async(request).await {
-            tracing::error!(run_id = %run_id_for_log, error = %e, "Discord webhook dispatch failed");
-            if let Err(error) = crate::audit::record_execution_dispatch_failure(
-                &audit_state,
-                &run_id_for_log,
-                "sink:discord",
-            )
-            .await
-            {
-                tracing::error!(run_id = %run_id_for_log, %error, "Failed to audit webhook dispatch failure");
-            }
+    // Wait only for durable queue acceptance. A Lambda must not return while its
+    // dispatch future exists solely in this request's process.
+    if let Err(error) = state.dispatcher.dispatch_async(request).await {
+        if let Err(audit_error) =
+            crate::audit::record_execution_dispatch_failure(&state, &run_id, "sink:discord").await
+        {
+            tracing::error!(%run_id, %audit_error, "Failed to audit webhook dispatch rejection");
         }
-    });
+        return Err(ApiError::from(error));
+    }
 
     // Discord expects a deferred response for commands (type 5)
     // This tells Discord we're processing and will follow up later
@@ -2492,6 +2465,18 @@ pub async fn trigger_service(
             }
         }
         Err(e) => {
+            if let Some(error) = e.downcast_ref::<ApiError>() {
+                if error.public_code() == "PLAN_LIMIT_EXCEEDED" {
+                    if let (Some(key), IdempotencyClaim::Owned(cache)) = (&idempotency_key, &claim)
+                    {
+                        if let Err(cleanup) = cache.delete(TRIGGER_IDEMPOTENCY_NAMESPACE, key).await
+                        {
+                            tracing::warn!(%cleanup, "Unable to release rejected trigger claim");
+                        }
+                    }
+                    return Err(error.clone());
+                }
+            }
             tracing::error!(error = %e, "Service trigger failed");
             let reason = e.to_string();
             let run_id = record_trigger_rejection(

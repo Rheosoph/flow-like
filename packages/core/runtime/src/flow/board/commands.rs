@@ -245,6 +245,249 @@ mod tests {
 
     use super::*;
     use crate::flow::board::commands::nodes::copy_paste::CopyPasteCommand;
+    use crate::flow::{
+        board::{Layer, LayerType},
+        pin::{PinOptions, ValueType},
+        variable::{Variable, VariableType},
+    };
+    use crate::state::FlowLikeConfig;
+    use crate::utils::http::HTTPClient;
+    use flow_like_storage::{Path, files::store::FlowLikeStore, object_store::memory::InMemory};
+    use flow_like_types::{
+        Value,
+        geometry::{GeometryKind, marker},
+        json::json,
+    };
+
+    fn geometry_command_state() -> Arc<FlowLikeState> {
+        let mut config = FlowLikeConfig::new();
+        config.register_app_meta_store(FlowLikeStore::Other(Arc::new(InMemory::new())));
+        Arc::new(FlowLikeState::new(
+            config,
+            HTTPClient::new_without_refetch(),
+        ))
+    }
+
+    fn geometry_defaults() -> [(ValueType, Value); 4] {
+        let point = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+        [
+            (ValueType::Normal, point.clone()),
+            (ValueType::Array, json!([point.clone()])),
+            (ValueType::HashSet, json!([point.clone()])),
+            (ValueType::HashMap, json!({"location": point})),
+        ]
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn geometry_variable_commands_create_set_clear_undo_and_redo() {
+        use super::variables::upsert_variable::UpsertVariableCommand;
+
+        let state = geometry_command_state();
+        for layer_id in [None, Some("function".to_string())] {
+            for secret in [false, true] {
+                for (value_type, value) in geometry_defaults() {
+                    let mut board = Board::new(None, Path::from("boards"), state.clone());
+                    if let Some(layer_id) = &layer_id {
+                        let layer = Layer::new(
+                            layer_id.clone(),
+                            "Function".to_string(),
+                            LayerType::Function,
+                        );
+                        board.layers.insert(layer.id.clone(), layer);
+                    }
+                    let mut variable =
+                        Variable::new("location", VariableType::Geometry, value_type);
+                    variable.secret = secret;
+                    variable.schema = Some(marker(GeometryKind::Point).to_string());
+                    variable.set_default_value(Value::Null);
+                    let variable_id = variable.id.clone();
+                    let upsert = |variable| {
+                        let mut command = UpsertVariableCommand::new(variable);
+                        command.layer_id = layer_id.clone();
+                        GenericCommand::UpsertVariable(command)
+                    };
+
+                    board
+                        .execute_command(upsert(variable.clone()), state.clone())
+                        .await
+                        .expect("create an unset geometry variable");
+                    variable.set_default_value(value);
+                    board
+                        .execute_command(upsert(variable.clone()), state.clone())
+                        .await
+                        .expect("set a geometry variable");
+                    let populated = variable.default_value.clone();
+                    variable.set_default_value(Value::Null);
+                    let clear = board
+                        .execute_command(upsert(variable.clone()), state.clone())
+                        .await
+                        .expect("clear a geometry variable");
+                    assert_eq!(
+                        board.get_any_variable(&variable_id).unwrap().default_value,
+                        variable.default_value
+                    );
+
+                    board
+                        .undo(vec![clear.clone()], state.clone())
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        board.get_any_variable(&variable_id).unwrap().default_value,
+                        populated
+                    );
+                    board.redo(vec![clear], state.clone()).await.unwrap();
+                    assert_eq!(
+                        board.get_any_variable(&variable_id).unwrap().default_value,
+                        variable.default_value
+                    );
+                    board
+                        .save(None)
+                        .await
+                        .expect("save an unset geometry variable");
+                }
+            }
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn geometry_pin_commands_create_set_and_clear_defaults() {
+        use super::pins::upsert_pin::UpsertPinCommand;
+
+        let state = geometry_command_state();
+        for sensitive in [false, true] {
+            for (value_type, value) in geometry_defaults() {
+                let mut board = Board::new(None, Path::from("boards"), state.clone());
+                let mut node = Node::new("geometry_test", "Geometry", "", "test");
+                let mut pin = node
+                    .add_input_pin("location", "Location", "", VariableType::Geometry)
+                    .clone();
+                pin.value_type = value_type;
+                pin.schema = Some(marker(GeometryKind::Point).to_string());
+                pin.set_options(PinOptions::new().set_sensitive(sensitive).build());
+                pin.set_default_value(Some(Value::Null));
+                node.pins.clear();
+                let node_id = node.id.clone();
+                board.nodes.insert(node_id.clone(), node);
+                let upsert =
+                    |pin| GenericCommand::UpsertPin(UpsertPinCommand::new(node_id.clone(), pin));
+
+                board
+                    .execute_command(upsert(pin.clone()), state.clone())
+                    .await
+                    .expect("create an unset geometry pin");
+                pin.set_default_value(Some(value));
+                board
+                    .execute_command(upsert(pin.clone()), state.clone())
+                    .await
+                    .expect("set a geometry pin");
+                let populated = pin.default_value.clone();
+
+                let mut invalid = pin.clone();
+                invalid
+                    .set_default_value(Some(json!({"type": "Point", "coordinates": ["invalid"]})));
+                assert!(
+                    board
+                        .execute_command(upsert(invalid), state.clone())
+                        .await
+                        .is_err()
+                );
+                assert_eq!(board.nodes[&node_id].pins[&pin.id].default_value, populated);
+
+                pin.set_default_value(Some(Value::Null));
+                let clear = board
+                    .execute_command(upsert(pin.clone()), state.clone())
+                    .await
+                    .expect("clear a geometry pin");
+                assert_eq!(
+                    board.nodes[&node_id].pins[&pin.id].default_value,
+                    pin.default_value
+                );
+                board
+                    .undo(vec![clear.clone()], state.clone())
+                    .await
+                    .unwrap();
+                assert_eq!(board.nodes[&node_id].pins[&pin.id].default_value, populated);
+                board.redo(vec![clear], state.clone()).await.unwrap();
+                assert_eq!(
+                    board.nodes[&node_id].pins[&pin.id].default_value,
+                    pin.default_value
+                );
+                board.save(None).await.expect("save an unset geometry pin");
+            }
+        }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn unrelated_commands_save_and_reload_boards_with_unset_geometry() {
+        use super::nodes::move_node::MoveNodeCommand;
+
+        let state = geometry_command_state();
+        let mut board = Board::new(None, Path::from("boards"), state.clone());
+        let mut node = Node::new("geometry_test", "Geometry", "", "test");
+        let pin_id = node
+            .add_input_pin("location", "Location", "", VariableType::Geometry)
+            .set_default_value(Some(Value::Null))
+            .id
+            .clone();
+        let node_id = node.id.clone();
+        let mut layer = Layer::new(
+            "function".to_string(),
+            "Function".to_string(),
+            LayerType::Function,
+        );
+        let mut interface = Node::new("geometry_interface_test", "Geometry", "", "test");
+        interface
+            .add_input_pin("location", "Location", "", VariableType::Geometry)
+            .set_default_value(Some(Value::Null));
+        layer.pins = interface.pins;
+        let mut nested = Node::new("nested_geometry_test", "Geometry", "", "test");
+        nested
+            .add_input_pin("location", "Location", "", VariableType::Geometry)
+            .set_default_value(Some(Value::Null));
+        layer.nodes.insert(nested.id.clone(), nested);
+        let mut variable = Variable::new("location", VariableType::Geometry, ValueType::Normal);
+        variable.set_default_value(Value::Null);
+        let layer_variable = variable.duplicate();
+        layer
+            .variables
+            .insert(layer_variable.id.clone(), layer_variable);
+        board.variables.insert(variable.id.clone(), variable);
+        board.layers.insert(layer.id.clone(), layer);
+        board.nodes.insert(node_id.clone(), node);
+
+        board
+            .execute_commands(
+                vec![GenericCommand::MoveNode(MoveNodeCommand::new(
+                    node_id.clone(),
+                    (100.0, 200.0, 0.0),
+                    None,
+                ))],
+                state.clone(),
+            )
+            .await
+            .expect("move a node while geometry defaults are unset");
+        board
+            .save(None)
+            .await
+            .expect("save a board with unset geometry");
+        let loaded = Board::load(Path::from("boards"), &board.id, state, None)
+            .await
+            .expect("reload a board with unset geometry");
+        assert_eq!(
+            loaded.nodes[&node_id].coordinates,
+            Some((100.0, 200.0, 0.0))
+        );
+        assert_eq!(
+            loaded.nodes[&node_id].pins[&pin_id]
+                .default_value
+                .as_deref(),
+            Some(b"null".as_slice())
+        );
+        assert_eq!(loaded.variables.len(), 1);
+        assert_eq!(loaded.layers["function"].variables.len(), 1);
+        assert_eq!(loaded.layers["function"].pins.len(), 1);
+        assert_eq!(loaded.layers["function"].nodes.len(), 1);
+    }
 
     fn copy_paste_with_refs(entries: &[(&str, &str)]) -> GenericCommand {
         let mut command =

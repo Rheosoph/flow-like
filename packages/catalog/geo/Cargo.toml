@@ -12,6 +12,7 @@ execute = [
     "dep:geo",
     "dep:geohash",
     "dep:flow-like-geometry",
+    "dep:rayon",
 ]
 
 [dependencies]
@@ -25,7 +26,7 @@ tracing.workspace = true
 schemars.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 uuid.workspace = true
 async-trait.workspace = true
 urlencoding.workspace = true
@@ -36,6 +37,9 @@ h3o = { git = "https://github.com/Rheosoph/h3o", rev = "95255f0", features = ["g
 geo = { version = "=0.31.0", optional = true }
 geohash = { version = "=0.13.1", optional = true }
 flow-like-geometry = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { version = "1.11.0", optional = true }
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

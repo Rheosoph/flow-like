@@ -353,11 +353,16 @@ interface DriveOptions {
  * the Rust command streams over the channel is forwarded to the parser. Returns a `start` function
  * suitable for {@link driveGlobalChatStream}.
  */
-export function tauriStart(command: string, args: Record<string, unknown>) {
+export function tauriStart(
+	command: string,
+	args: Record<string, unknown>,
+	beforeInvoke?: () => void,
+) {
 	return async (onChunk: (chunk: string) => void) => {
 		// Tauri is imported lazily (mirrors use-copilot-sdk) so this module also loads on the web,
 		// where the caller uses `webGlobalChatStart` instead and never reaches this path.
 		const { Channel, invoke } = await import("@tauri-apps/api/core");
+		beforeInvoke?.();
 		const channel = new Channel<string>();
 		channel.onmessage = onChunk;
 		return invoke(command, { ...args, channel });

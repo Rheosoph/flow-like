@@ -57,6 +57,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             before_drain: vec![
                 ExternalStep::AppSinkSchedules,
                 ExternalStep::ExecutionEventPayloads,
+                ExternalStep::AppQuotaPayloads,
             ],
             after_drain: vec![
                 ExternalStep::AppStoragePrefixes,
@@ -68,8 +69,26 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep("UsageAlert", "appId"),
                 sweep("UsageLimitAuditLog", "appId"),
                 sweep("FlowScriptApplyFailure", "appId"),
+                sweep("AppRollingContribution", "appId"),
+                sweep("AppRollingUsage", "appId"),
             ],
             keep: vec![
+                keep(
+                    "ProjectCapacity",
+                    "appId",
+                    "retained fork provenance and storage payer",
+                ),
+                keep(
+                    "StorageUploadGrant",
+                    "appId",
+                    "valid storage grants expire through reconciliation",
+                ),
+                keep(
+                    "QuotaOperation",
+                    "appId",
+                    "billing and in-flight settlement survive deletion",
+                ),
+                keep("QuotaDailyUsage", "appId", "billing history"),
                 keep(
                     "FileAccountingObject",
                     "appId",
@@ -86,11 +105,52 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             restrict_as_cascade: vec![],
         },
         DeletionRoot::User => RootOverrides {
+            before_drain: vec![ExternalStep::UserQuotaPayloads],
+            soft_sweeps: vec![sweep("QuotaWarningState", "payerId")],
             restrict_as_cascade: vec![
                 ("WasmPackageInvitation", "invitedById"),
                 ("WasmPackageInvitation", "inviteeId"),
             ],
             keep: vec![
+                keep(
+                    "AccountCapacity",
+                    "payerId",
+                    "late object events reconcile current storage",
+                ),
+                keep(
+                    "ProjectCapacity",
+                    "payerId",
+                    "retained storage payer and fork provenance",
+                ),
+                keep(
+                    "StorageUploadGrant",
+                    "payerId",
+                    "valid storage grants expire through reconciliation",
+                ),
+                keep(
+                    "FileAccountingObject",
+                    "payerId",
+                    "late object events retain payer identity",
+                ),
+                keep(
+                    "QuotaAccount",
+                    "payerId",
+                    "in-flight settlement survives deletion",
+                ),
+                keep("QuotaPeriod", "payerId", "billing history"),
+                keep(
+                    "QuotaOperation",
+                    "payerId",
+                    "billing and in-flight settlement survive deletion",
+                ),
+                keep("QuotaEvent", "payerId", "billing history"),
+                keep("QuotaDailyUsage", "payerId", "billing history"),
+                keep("ComputeAttempt", "payerId", "infrastructure cost history"),
+                keep(
+                    "CloudDispatchIntent",
+                    "payerId",
+                    "durable dispatch recovery expires outstanding work",
+                ),
                 keep(
                     "FileAccountingObject",
                     "userId",

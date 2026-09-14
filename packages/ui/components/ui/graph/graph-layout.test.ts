@@ -642,6 +642,22 @@ describe("relaxOverlaps label extents", () => {
 });
 
 describe("relaxOverlaps pinned nodes", () => {
+	test("keeps exact pin coordinates through viewport collision mapping", () => {
+		const graph = new Graph();
+		graph.addNode("pinnedNode", { x: -120, y: 40, size: 10, pinned: true });
+		graph.addNode("free", { x: -118, y: 40, size: 10 });
+		relaxOverlaps(graph, graph.nodes(), {
+			iterations: 50,
+			coordinateMapper: {
+				fromGraph: ({ x, y }) => ({ x: x * 2, y: y * 2 }),
+				toGraph: ({ x, y }) => ({ x: x / 2 + 0.00001, y: y / 2 - 0.00001 }),
+			},
+		});
+		expect(graph.getNodeAttribute("pinnedNode", "x")).toBe(-120);
+		expect(graph.getNodeAttribute("pinnedNode", "y")).toBe(40);
+		expect(graph.getNodeAttribute("free", "x")).toBeGreaterThan(-110);
+	});
+
 	test("a pinned node holds its position while the other yields", () => {
 		const graph = new Graph();
 		graph.addNode("pinnedNode", { x: 0, y: 0, size: 10, pinned: true });

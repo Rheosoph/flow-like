@@ -57,6 +57,12 @@ impl InternalPin {
     /// Create a new InternalPin from a Pin definition.
     /// Graph connections (connected_to, depends_on, node) must be set via init_* methods.
     pub fn new(pin: &Pin, layer_pin: bool) -> Self {
+        let default_value = pin
+            .default_value
+            .as_ref()
+            .and_then(|v| flow_like_types::json::from_slice::<Value>(v).ok())
+            .filter(|value| pin.data_type != VariableType::Geometry || !value.is_null())
+            .map(Arc::new);
         Self {
             id: Arc::from(pin.id.as_str()),
             name: Arc::from(pin.name.as_str()),
@@ -64,12 +70,9 @@ impl InternalPin {
             data_type: pin.data_type.clone(),
             value_type: pin.value_type.clone(),
             schema: pin.schema.as_deref().map(Arc::from),
-            has_default: pin.default_value.is_some(),
-            default_value: pin
-                .default_value
-                .as_ref()
-                .and_then(|v| flow_like_types::json::from_slice(v).ok())
-                .map(Arc::new),
+            has_default: pin.default_value.is_some()
+                && (pin.data_type != VariableType::Geometry || default_value.is_some()),
+            default_value,
             layer_pin,
             index: pin.index,
             node: OnceLock::new(),

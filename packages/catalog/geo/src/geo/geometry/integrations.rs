@@ -13,9 +13,17 @@ use flow_like_types::{
 };
 
 #[cfg(feature = "execute")]
+use super::{add_estimated_geometry_positions, check_topology_validation, cpu};
+#[cfg(feature = "execute")]
 use flow_like_geometry::{from_geo, to_geo};
 #[cfg(feature = "execute")]
-use flow_like_types::{Result, Value, anyhow, bail, geometry::canonicalize_geometry, json::Map};
+use flow_like_types::{
+    Result, Value, anyhow, bail,
+    geometry::{MAX_GEOMETRY_POSITIONS, canonicalize_geometry},
+    json::Map,
+};
+#[cfg(feature = "execute")]
+use geo::CoordsIter;
 
 #[derive(Clone, Copy, Debug)]
 enum Operation {
@@ -122,7 +130,7 @@ fn definition(operation: Operation) -> Node {
             "geometry_h3_cell_boundary",
             "h3CellBoundary",
             "H3 Cell Boundary Geometry",
-            "Returns an H3 cell boundary directly as a Polygon Geometry.",
+            "Returns an H3 cell boundary as a Polygon, or as a split MultiPolygon when the cell crosses the antimeridian.",
         ),
         H3CellsToGeometry => (
             "geometry_h3_cells_to_geometry",
@@ -134,7 +142,7 @@ fn definition(operation: Operation) -> Node {
             "geometry_polygon_to_h3_cells",
             "polygonToH3Cells",
             "Polygon to H3 Cells",
-            "Covers a Polygon or MultiPolygon with H3 cells. The containment mode controls whether centroids, complete boundaries or intersections qualify.",
+            "Covers a Polygon or MultiPolygon with H3 cells. Longitude edges use the Geometry contract's direct interpolation, so antimeridian regions must already be split. The containment mode controls whether centroids, complete boundaries or intersections qualify.",
         ),
         EncodeGeohash => (
             "geometry_encode_geohash",
@@ -296,8 +304,8 @@ fn definition(operation: Operation) -> Node {
             geometry_output(
                 &mut node,
                 "geometry_out",
-                "Cell boundary Polygon",
-                Some(GeometryKind::Polygon),
+                "Cell boundary Polygon or antimeridian-split MultiPolygon",
+                None,
             );
         }
         H3CellsToGeometry => {
@@ -340,7 +348,7 @@ fn definition(operation: Operation) -> Node {
             data_input(
                 &mut node,
                 "max_cells",
-                "Maximum cells to emit, from 1 through 1000000",
+                "Maximum cells to emit and basis for the preflight work budget, from 1 through 1000000",
                 VariableType::Integer,
             )
             .set_default_value(Some(json!(100_000)));
@@ -425,12 +433,42 @@ fn object<'a>(value: &'a Value, name: &str) -> Result<&'a Map<String, Value>> {
 
 #[cfg(feature = "execute")]
 fn canonical(value: &Value, kind: Option<GeometryKind>) -> Result<Value> {
-    use geo::Validation;
     let value = canonicalize_geometry(value, kind)?;
-    to_geo(&value)?
-        .check_validation()
-        .map_err(|error| anyhow!("Invalid geometry: {error}"))?;
+    check_topology_validation(&to_geo(&value)?, "Invalid geometry")?;
     Ok(value)
+}
+
+#[cfg(feature = "execute")]
+fn bounded_geometry_values_work(values: &[Value], name: &str) -> Result<usize> {
+    if values.len() > MAX_GEOMETRY_POSITIONS {
+        bail!("{name} cannot contain more than {MAX_GEOMETRY_POSITIONS} members");
+    }
+    let mut positions = 0usize;
+    let mut members = 1usize;
+    for geometry in values {
+        add_estimated_geometry_positions(geometry, &mut positions, &mut members, name)?;
+    }
+    Ok(positions.saturating_add(values.len()))
+}
+
+#[cfg(feature = "execute")]
+fn bounded_feature_work(features: &[Value]) -> Result<usize> {
+    if features.len() > MAX_GEOMETRY_POSITIONS {
+        bail!("FeatureCollection cannot contain more than {MAX_GEOMETRY_POSITIONS} features");
+    }
+    let mut positions = 0usize;
+    let mut members = 1usize;
+    for feature in features {
+        if let Some(geometry) = feature.get("geometry") {
+            add_estimated_geometry_positions(
+                geometry,
+                &mut positions,
+                &mut members,
+                "FeatureCollection geometries",
+            )?;
+        }
+    }
+    Ok(positions.saturating_add(features.len()))
 }
 
 #[cfg(feature = "execute")]
@@ -553,6 +591,169 @@ fn parse_cells(value: &Value) -> Result<Vec<h3o::CellIndex>> {
 }
 
 #[cfg(feature = "execute")]
+fn prepare_polygon_for_h3(polygon: geo::Polygon<f64>) -> geo::Polygon<f64> {
+    fn subdivide(ring: geo::LineString<f64>) -> geo::LineString<f64> {
+        const MAX_LONGITUDE_STEP: f64 = 90.0;
+
+        let mut output = Vec::with_capacity(ring.0.len());
+        if let Some(first) = ring.0.first().copied() {
+            output.push(first);
+        }
+        for edge in ring.0.windows(2) {
+            let start = edge[0];
+            let end = edge[1];
+            let pieces = ((end.x - start.x).abs() / MAX_LONGITUDE_STEP)
+                .ceil()
+                .max(1.0) as usize;
+            for step in 1..=pieces {
+                let ratio = step as f64 / pieces as f64;
+                output.push(geo::Coord {
+                    x: start.x + ratio * (end.x - start.x),
+                    y: start.y + ratio * (end.y - start.y),
+                });
+            }
+        }
+        geo::LineString::new(output)
+    }
+
+    let (exterior, interiors) = polygon.into_inner();
+    geo::Polygon::new(
+        subdivide(exterior),
+        interiors.into_iter().map(subdivide).collect(),
+    )
+}
+
+#[cfg(feature = "execute")]
+fn split_h3_polygon_at_antimeridian(polygon: geo::Polygon<f64>) -> Result<Vec<geo::Polygon<f64>>> {
+    use geo::{BooleanOps, MapCoords};
+
+    let crosses = polygon
+        .exterior()
+        .0
+        .windows(2)
+        .any(|edge| (edge[0].x - edge[1].x).abs() > 180.0);
+    if !crosses {
+        return Ok(vec![polygon]);
+    }
+
+    let shifted = polygon.map_coords(|coordinate| geo::Coord {
+        x: if coordinate.x < 0.0 {
+            coordinate.x + 360.0
+        } else {
+            coordinate.x
+        },
+        y: coordinate.y,
+    });
+    check_topology_validation(&shifted, "Invalid transmeridian H3 dissolve polygon")?;
+    let western_window = geo::Rect::new(
+        geo::Coord { x: 180.0, y: -90.0 },
+        geo::Coord { x: 360.0, y: 90.0 },
+    )
+    .to_polygon();
+    let eastern_window = geo::Rect::new(
+        geo::Coord { x: 0.0, y: -90.0 },
+        geo::Coord { x: 180.0, y: 90.0 },
+    )
+    .to_polygon();
+
+    let mut parts = shifted
+        .intersection(&western_window)
+        .0
+        .into_iter()
+        .map(|part| {
+            part.map_coords(|coordinate| geo::Coord {
+                x: if (coordinate.x - 180.0).abs() <= 1e-6 {
+                    -180.0
+                } else {
+                    (coordinate.x - 360.0).clamp(-180.0, 180.0)
+                },
+                y: coordinate.y.clamp(-90.0, 90.0),
+            })
+        })
+        .collect::<Vec<_>>();
+    parts.extend(
+        shifted
+            .intersection(&eastern_window)
+            .0
+            .into_iter()
+            .map(|part| {
+                part.map_coords(|coordinate| geo::Coord {
+                    x: coordinate.x.clamp(0.0, 180.0),
+                    y: coordinate.y.clamp(-90.0, 90.0),
+                })
+            }),
+    );
+    if parts.is_empty() {
+        bail!("Transmeridian H3 dissolve produced no polygon parts");
+    }
+    Ok(parts)
+}
+
+#[cfg(feature = "execute")]
+fn normalize_h3_dissolve(geometry: geo::MultiPolygon<f64>) -> Result<geo::MultiPolygon<f64>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let work = geometry.coords_count();
+    if work > MAX_GEOMETRY_POSITIONS {
+        bail!("H3 dissolve output exceeds the Geometry position limit of {MAX_GEOMETRY_POSITIONS}");
+    }
+    let emitted_positions = AtomicUsize::new(0);
+    let split = cpu::map_ordered(
+        &geometry.0,
+        work,
+        |_, polygon| -> Result<Vec<geo::Polygon<f64>>> {
+            let parts = split_h3_polygon_at_antimeridian(polygon.clone())?;
+            let positions = parts.iter().fold(0usize, |positions, part| {
+                positions.saturating_add(part.coords_count())
+            });
+            emitted_positions
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
+                emitted.checked_add(positions).filter(|total| *total <= MAX_GEOMETRY_POSITIONS)
+            })
+            .map_err(|_| anyhow!(
+                "Normalized H3 dissolve exceeds the Geometry position limit of {MAX_GEOMETRY_POSITIONS}"
+            ))?;
+            Ok(parts)
+        },
+    );
+    let mut positions = 0usize;
+    let mut polygons = Vec::with_capacity(geometry.0.len());
+    for parts in split {
+        for polygon in parts? {
+            positions = positions.saturating_add(polygon.coords_count());
+            if positions > MAX_GEOMETRY_POSITIONS {
+                bail!(
+                    "Normalized H3 dissolve exceeds the Geometry position limit of {MAX_GEOMETRY_POSITIONS}"
+                );
+            }
+            polygons.push(polygon);
+        }
+    }
+    Ok(geo::MultiPolygon::new(polygons))
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn h3_boundary_geometry(cell: h3o::CellIndex) -> Result<Value> {
+    // h3o splits transmeridian cells so planar edges do not span the world.
+    let mut polygons = geo::MultiPolygon::from(cell);
+    let geometry = if polygons.0.len() == 1 {
+        geo::Geometry::Polygon(polygons.0.remove(0))
+    } else {
+        geo::Geometry::MultiPolygon(polygons)
+    };
+    canonical(&from_geo(&geometry)?, None)
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn h3_multipolygon_geometry(geometry: geo::MultiPolygon<f64>) -> Result<Value> {
+    let geometry = normalize_h3_dissolve(geometry)?;
+    canonical(
+        &from_geo(&geo::Geometry::MultiPolygon(geometry))?,
+        Some(GeometryKind::MultiPolygon),
+    )
+}
+
+#[cfg(feature = "execute")]
 fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Value)>> {
     use Operation::*;
     match operation {
@@ -589,11 +790,14 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .get("features")
                 .and_then(Value::as_array)
                 .ok_or_else(|| anyhow!("FeatureCollection requires a features array"))?;
+            let work = bounded_feature_work(features)?;
+            let parts = cpu::map_ordered(features, work, |index, feature| {
+                feature_parts(feature, &format!("features[{index}]"))
+            });
             let mut geometries = Vec::with_capacity(features.len());
             let mut properties = Vec::with_capacity(features.len());
-            for (index, feature) in features.iter().enumerate() {
-                let (geometry, feature_properties) =
-                    feature_parts(feature, &format!("features[{index}]"))?;
+            for part in parts {
+                let (geometry, feature_properties) = part?;
                 geometries.push(geometry);
                 properties.push(feature_properties);
             }
@@ -620,20 +824,19 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                     geometries.len()
                 );
             }
-            let features = geometries
-                .iter()
-                .enumerate()
-                .map(|(index, geometry)| -> Result<Value> {
-                    let geometry = canonical(geometry, None)?;
-                    let properties = properties.get(index).cloned().unwrap_or_else(|| json!({}));
-                    object(&properties, &format!("properties[{index}]"))?;
-                    Ok(json!({
-                        "type":"Feature",
-                        "geometry":geometry,
-                        "properties":properties
-                    }))
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let work = bounded_geometry_values_work(geometries, "geometries")?;
+            let features = cpu::map_ordered(geometries, work, |index, geometry| -> Result<Value> {
+                let geometry = canonical(geometry, None)?;
+                let properties = properties.get(index).cloned().unwrap_or_else(|| json!({}));
+                object(&properties, &format!("properties[{index}]"))?;
+                Ok(json!({
+                    "type":"Feature",
+                    "geometry":geometry,
+                    "properties":properties
+                }))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
             Ok(vec![(
                 "feature_collection",
                 json!({"type":"FeatureCollection", "features":features}),
@@ -699,18 +902,7 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .ok_or_else(|| anyhow!("cell must be a string"))?;
             let cell = h3o::CellIndex::from_str(cell)
                 .map_err(|error| anyhow!("Invalid H3 cell: {error}"))?;
-            let mut ring = cell
-                .boundary()
-                .iter()
-                .map(|coordinate| json!([coordinate.lng(), coordinate.lat()]))
-                .collect::<Vec<_>>();
-            if let Some(first) = ring.first().cloned() {
-                ring.push(first);
-            }
-            let geometry = canonical(
-                &json!({"type":"Polygon", "coordinates":[ring]}),
-                Some(GeometryKind::Polygon),
-            )?;
+            let geometry = h3_boundary_geometry(cell)?;
             Ok(vec![("geometry_out", geometry)])
         }
         H3CellsToGeometry => {
@@ -725,19 +917,14 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                 .build()
                 .dissolve(cells)
                 .map_err(|error| anyhow!("Failed to dissolve H3 cells: {error}"))?;
-            let geometry = canonical(
-                &from_geo(&geo::Geometry::MultiPolygon(geometry))?,
-                Some(GeometryKind::MultiPolygon),
-            )?;
+            let geometry = h3_multipolygon_geometry(geometry)?;
             Ok(vec![("geometry_out", geometry)])
         }
         PolygonToH3Cells => {
-            use geo::{Geometry, Validation};
+            use geo::Geometry;
             use h3o::geom::{ContainmentMode, TilerBuilder};
+            use std::sync::atomic::{AtomicUsize, Ordering};
             let geometry = to_geo(&canonical(input(inputs, "geometry")?, None)?)?;
-            geometry
-                .check_validation()
-                .map_err(|error| anyhow!("Invalid geometry for H3 coverage: {error}"))?;
             let containment = match input(inputs, "containment")?
                 .as_str()
                 .ok_or_else(|| anyhow!("containment must be a string"))?
@@ -750,29 +937,93 @@ fn execute(operation: Operation, inputs: &Value) -> Result<Vec<(&'static str, Va
                     "Unknown containment mode {value}; expected centroid, contains-boundary, intersects-boundary or covers"
                 ),
             };
-            let mut tiler = TilerBuilder::new(h3_resolution(inputs)?)
-                .containment_mode(containment)
-                .build();
-            match geometry {
-                Geometry::Polygon(polygon) => tiler
-                    .add(polygon)
-                    .map_err(|error| anyhow!("Invalid Polygon for H3 coverage: {error}"))?,
-                Geometry::MultiPolygon(polygons) => tiler
-                    .add_batch(polygons.0)
-                    .map_err(|error| anyhow!("Invalid MultiPolygon for H3 coverage: {error}"))?,
-                _ => bail!("H3 coverage requires Polygon or MultiPolygon"),
-            }
+            let resolution = h3_resolution(inputs)?;
             let maximum = integer(inputs, "max_cells", 1, 1_000_000)? as usize;
-            let mut cells = tiler
-                .into_coverage()
-                .take(maximum + 1)
-                .map(|cell| cell.to_string())
+            let (polygons, geometry_label) = match geometry {
+                Geometry::Polygon(polygon) => (vec![polygon], "Polygon"),
+                Geometry::MultiPolygon(polygons) => (polygons.0, "MultiPolygon"),
+                _ => bail!("H3 coverage requires Polygon or MultiPolygon"),
+            };
+            if polygons.is_empty() {
+                return Ok(vec![("cells", json!([]))]);
+            }
+            let build_tiler = || {
+                TilerBuilder::new(resolution)
+                    .containment_mode(containment)
+                    // Geometry longitude edges interpolate directly. Antimeridian
+                    // regions must already be split before H3 coverage.
+                    .disable_transmeridian_heuristic()
+                    .build()
+            };
+            let tilers = if matches!(containment, ContainmentMode::Covers) {
+                // Covers falls back to the combined geometry's centroid if its
+                // outline search returns no cells. Preserve that collection behavior.
+                let mut tiler = build_tiler();
+                tiler
+                    .add_batch(polygons.into_iter().map(prepare_polygon_for_h3))
+                    .map_err(|error| {
+                        anyhow!("Invalid {geometry_label} for H3 coverage: {error}")
+                    })?;
+                vec![tiler]
+            } else {
+                polygons
+                    .into_iter()
+                    .map(|polygon| {
+                        let mut tiler = build_tiler();
+                        tiler
+                            .add(prepare_polygon_for_h3(polygon))
+                            .map_err(|error| {
+                                anyhow!("Invalid {geometry_label} for H3 coverage: {error}")
+                            })?;
+                        Ok(tiler)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            };
+            // h3o constructs the complete outline and seed sets before its
+            // coverage iterator can honor `take`. Keep that eager phase tied
+            // to the caller's output budget, with modest estimator slack for
+            // tiny polygons and boundary tracing.
+            let estimated_work = tilers.iter().fold(0usize, |work, tiler| {
+                work.saturating_add(tiler.coverage_size_hint())
+            });
+            let preflight_limit = maximum.saturating_mul(2).saturating_add(64);
+            if estimated_work > preflight_limit {
+                bail!(
+                    "Estimated H3 coverage work ({estimated_work} cells) exceeds the preflight limit ({preflight_limit}) derived from max_cells ({maximum})"
+                );
+            }
+            // Bound retained cell indexes across every worker, including duplicates
+            // near neighboring polygon boundaries. Check max_cells after global dedup.
+            let emitted_cells = AtomicUsize::new(0);
+            let coverage = cpu::map_owned(tilers, estimated_work.saturating_mul(7), |_, tiler| {
+                let mut cells = Vec::new();
+                for cell in tiler.into_coverage().take(maximum + 1) {
+                    emitted_cells
+                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |emitted| {
+                            emitted.checked_add(1).filter(|total| *total <= preflight_limit)
+                        })
+                        .map_err(|_| anyhow!(
+                            "H3 coverage exceeds the intermediate work limit ({preflight_limit}) derived from max_cells ({maximum})"
+                        ))?;
+                    cells.push(cell);
+                }
+                if cells.len() > maximum {
+                    bail!("H3 coverage exceeds max_cells ({maximum})");
+                }
+                Ok(cells)
+            });
+            let mut cells = coverage
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
                 .collect::<Vec<_>>();
+            cells.sort_unstable();
+            cells.dedup();
             if cells.len() > maximum {
                 bail!("H3 coverage exceeds max_cells ({maximum})");
             }
-            cells.sort_unstable();
-            cells.dedup();
+            let cells: Vec<_> = cells.into_iter().map(|cell| cell.to_string()).collect();
             Ok(vec![("cells", json!(cells))])
         }
         EncodeGeohash => {
@@ -832,7 +1083,8 @@ async fn run_operation(operation: Operation, context: &mut ExecutionContext) -> 
         let value = context.evaluate_pin::<Value>(&pin.name).await?;
         inputs.insert(pin.name.clone(), value);
     }
-    for (name, value) in execute(operation, &Value::Object(inputs))? {
+    let outputs = super::cpu::run(move || execute(operation, &Value::Object(inputs))).await?;
+    for (name, value) in outputs {
         context.set_pin_value(name, value).await?;
     }
     Ok(())
@@ -951,6 +1203,10 @@ mod definition_tests {
             pin(&feature_collection, "geometry_out").schema.as_deref(),
             Some(marker(GeometryKind::GeometryCollection))
         );
+        assert_eq!(
+            pin(&definition(Operation::H3CellBoundary), "geometry_out").schema,
+            None
+        );
     }
 
     #[test]
@@ -969,6 +1225,7 @@ mod definition_tests {
 #[cfg(all(test, feature = "execute"))]
 mod execution_tests {
     use super::*;
+    use geo::Validation;
 
     fn output(operation: Operation, inputs: Value, name: &str) -> Value {
         execute(operation, &inputs)
@@ -1013,10 +1270,427 @@ mod execution_tests {
         assert_eq!(values[1].1["name"], "Berlin");
     }
 
+    #[tokio::test]
+    async fn parallel_feature_collection_maps_preserve_feature_order() {
+        const FEATURES: usize = 4;
+        const POSITIONS: usize = 4_096;
+        let features = (0..FEATURES)
+            .map(|feature_index| {
+                let coordinates = (0..POSITIONS)
+                    .map(|position| json!([-170.0 + (position % 340) as f64, feature_index as f64]))
+                    .collect::<Vec<_>>();
+                json!({
+                    "type":"Feature",
+                    "geometry":{"type":"LineString", "coordinates":coordinates},
+                    "properties":{"index":feature_index}
+                })
+            })
+            .collect::<Vec<_>>();
+        let rebuilt = super::super::cpu::run(move || -> Result<Value> {
+            let extracted = execute(
+                Operation::FeatureCollectionGeometries,
+                &json!({
+                    "feature_collection":{"type":"FeatureCollection", "features":features}
+                }),
+            )?;
+            let collection = extracted
+                .iter()
+                .find(|(name, _)| *name == "geometry_out")
+                .unwrap()
+                .1
+                .clone();
+            let properties = extracted
+                .iter()
+                .find(|(name, _)| *name == "properties")
+                .unwrap()
+                .1
+                .clone();
+            let made = execute(
+                Operation::MakeFeatureCollection,
+                &json!({
+                    "geometries":collection["geometries"],
+                    "properties":properties
+                }),
+            )?;
+            Ok(made
+                .into_iter()
+                .find(|(name, _)| *name == "feature_collection")
+                .unwrap()
+                .1)
+        })
+        .await
+        .unwrap();
+        let features = rebuilt["features"].as_array().unwrap();
+        assert_eq!(features.len(), FEATURES);
+        for (index, feature) in features.iter().enumerate() {
+            assert_eq!(feature["properties"]["index"], index);
+            assert_eq!(feature["geometry"]["coordinates"][0][1], index as f64);
+        }
+    }
+
     #[test]
     fn geohash_decode_returns_geometry_values() {
         let values = execute(Operation::DecodeGeohash, &json!({"geohash":"u33dc1"})).unwrap();
         assert_eq!(values[0].1["type"], "Point");
         assert_eq!(values[1].1["type"], "Polygon");
+    }
+
+    #[test]
+    fn h3_boundary_splits_transmeridian_cells() {
+        let boundary = output(
+            Operation::H3CellBoundary,
+            json!({"cell":"840d9edffffffff"}),
+            "geometry_out",
+        );
+        assert_eq!(boundary["type"], "MultiPolygon");
+        assert_eq!(boundary["coordinates"].as_array().unwrap().len(), 2);
+        assert!(to_geo(&boundary).unwrap().is_valid());
+
+        for polygon in boundary["coordinates"].as_array().unwrap() {
+            let ring = polygon[0].as_array().unwrap();
+            assert!(ring.windows(2).all(|edge| {
+                let a = edge[0][0].as_f64().unwrap();
+                let b = edge[1][0].as_f64().unwrap();
+                (a - b).abs() <= 180.0
+            }));
+        }
+    }
+
+    #[test]
+    fn h3_dissolve_splits_transmeridian_outlines() {
+        let geometry = output(
+            Operation::H3CellsToGeometry,
+            json!({"cells":["840d9edffffffff"]}),
+            "geometry_out",
+        );
+        assert_eq!(geometry["type"], "MultiPolygon");
+        assert_eq!(geometry["coordinates"].as_array().unwrap().len(), 2);
+        for polygon in geometry["coordinates"].as_array().unwrap() {
+            let ring = polygon[0].as_array().unwrap();
+            assert!(ring.windows(2).all(|edge| {
+                let a = edge[0][0].as_f64().unwrap();
+                let b = edge[1][0].as_f64().unwrap();
+                (a - b).abs() <= 180.0
+            }));
+        }
+    }
+
+    #[test]
+    fn h3_coverage_honors_direct_longitude_edges() {
+        let equator_cell = output(
+            Operation::PointToH3Cell,
+            json!({
+                "geometry":{"type":"Point", "coordinates":[0.0,0.0]},
+                "resolution":2
+            }),
+            "cell",
+        );
+        let cells = output(
+            Operation::PolygonToH3Cells,
+            json!({
+                "geometry":{"type":"Polygon", "coordinates":[[
+                    [-170.0,-10.0], [170.0,-10.0], [170.0,10.0],
+                    [-170.0,10.0], [-170.0,-10.0]
+                ]]},
+                "resolution":2,
+                "containment":"centroid",
+                "max_cells":10_000
+            }),
+            "cells",
+        );
+        assert!(cells.as_array().unwrap().contains(&equator_cell));
+    }
+
+    #[test]
+    fn h3_coverage_rejects_excessive_estimated_work_before_tiling() {
+        let error = execute(
+            Operation::PolygonToH3Cells,
+            &json!({
+                "geometry":{"type":"Polygon", "coordinates":[[
+                    [-179.0,-80.0], [179.0,-80.0], [179.0,80.0],
+                    [-179.0,80.0], [-179.0,-80.0]
+                ]]},
+                "resolution":15,
+                "containment":"centroid",
+                "max_cells":10
+            }),
+        )
+        .expect_err("large coverage must fail its preflight");
+        assert!(error.to_string().contains("preflight limit"), "{error}");
+    }
+
+    #[test]
+    fn h3_coverage_returns_empty_for_an_empty_multipolygon_in_covers_mode() {
+        let cells = output(
+            Operation::PolygonToH3Cells,
+            json!({
+                "geometry":{"type":"MultiPolygon", "coordinates":[]},
+                "resolution":15,
+                "containment":"covers",
+                "max_cells":1
+            }),
+            "cells",
+        );
+        assert_eq!(cells, json!([]));
+    }
+
+    #[tokio::test]
+    async fn parallel_h3_coverage_matches_combined_tiling_and_sorted_output() {
+        use h3o::geom::{ContainmentMode, TilerBuilder};
+
+        let polygons: Vec<_> = [(-40.0, -20.0), (-10.0, 0.0), (20.0, 20.0), (60.0, 40.0)]
+            .into_iter()
+            .map(|(x, y)| {
+                geo::Polygon::new(
+                    geo::LineString::from(vec![
+                        (x, y),
+                        (x + 10.0, y),
+                        (x + 10.0, y + 10.0),
+                        (x, y + 10.0),
+                        (x, y),
+                    ]),
+                    vec![],
+                )
+            })
+            .collect();
+        let geometry = from_geo(&geo::Geometry::MultiPolygon(geo::MultiPolygon::new(
+            polygons.clone(),
+        )))
+        .unwrap();
+        for (mode, containment) in [
+            (ContainmentMode::ContainsCentroid, "centroid"),
+            (ContainmentMode::ContainsBoundary, "contains-boundary"),
+            (ContainmentMode::IntersectsBoundary, "intersects-boundary"),
+            (ContainmentMode::Covers, "covers"),
+        ] {
+            let mut combined = TilerBuilder::new(h3o::Resolution::Four)
+                .containment_mode(mode)
+                .disable_transmeridian_heuristic()
+                .build();
+            combined.add_batch(polygons.clone()).unwrap();
+            assert!(combined.coverage_size_hint().saturating_mul(7) >= 16_384);
+            let mut expected: Vec<_> = combined
+                .into_coverage()
+                .map(|cell| cell.to_string())
+                .collect();
+            expected.sort_unstable();
+            expected.dedup();
+            let inputs = json!({
+                "geometry":geometry, "resolution":4, "containment":containment, "max_cells":100_000
+            });
+            let serial = execute(Operation::PolygonToH3Cells, &inputs).unwrap();
+            assert_eq!(serial[0].1, json!(expected), "{containment}");
+            let parallel = cpu::run(move || execute(Operation::PolygonToH3Cells, &inputs))
+                .await
+                .unwrap();
+            assert_eq!(parallel, serial, "{containment}");
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_h3_normalization_preserves_polygon_order_and_bounds_output() {
+        let polygons = (0..64)
+            .map(|index| {
+                let mut coordinates: Vec<_> = (0..256)
+                    .map(|vertex| {
+                        let angle = std::f64::consts::TAU * vertex as f64 / 256.0;
+                        let longitude = 180.0 + angle.cos();
+                        geo::Coord {
+                            x: if longitude > 180.0 {
+                                longitude - 360.0
+                            } else {
+                                longitude
+                            },
+                            y: -80.0 + index as f64 * 2.5 + angle.sin(),
+                        }
+                    })
+                    .collect();
+                coordinates.push(coordinates[0]);
+                geo::Polygon::new(geo::LineString::new(coordinates), vec![])
+            })
+            .collect();
+        let geometry = geo::MultiPolygon::new(polygons);
+        assert!(geometry.coords_count() >= 16_384);
+        let serial = normalize_h3_dissolve(geometry.clone()).unwrap();
+        let parallel = cpu::run(move || normalize_h3_dissolve(geometry))
+            .await
+            .unwrap();
+        assert_eq!(parallel, serial);
+        assert_eq!(parallel.0.len(), 128);
+
+        let crossing = geo::Polygon::new(
+            geo::LineString::from(vec![
+                (179.0, 0.0),
+                (-179.0, 0.0),
+                (-179.0, 1.0),
+                (179.0, 1.0),
+                (179.0, 0.0),
+            ]),
+            vec![],
+        );
+        let geometry = geo::MultiPolygon::new(vec![crossing; MAX_GEOMETRY_POSITIONS / 5]);
+        let serial_error = normalize_h3_dissolve(geometry.clone())
+            .unwrap_err()
+            .to_string();
+        let parallel_error = cpu::run(move || normalize_h3_dissolve(geometry))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(serial_error.contains("position limit"));
+        assert_eq!(parallel_error, serial_error);
+    }
+
+    #[tokio::test]
+    async fn h3_multipolygon_coverage_preflights_the_aggregate_estimate() {
+        use h3o::geom::TilerBuilder;
+
+        let geometry = json!({"type":"MultiPolygon", "coordinates":[
+                [[[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0],[0.0,0.0]]],
+                [[[20.0,20.0],[21.0,20.0],[21.0,21.0],[20.0,21.0],[20.0,20.0]]]
+        ]});
+        let geo::Geometry::MultiPolygon(polygons) = to_geo(&geometry).unwrap() else {
+            unreachable!()
+        };
+        let estimates: Vec<_> = polygons
+            .0
+            .into_iter()
+            .map(|polygon| {
+                let mut tiler = TilerBuilder::new(h3o::Resolution::Six)
+                    .disable_transmeridian_heuristic()
+                    .build();
+                tiler.add(polygon).unwrap();
+                tiler.coverage_size_hint()
+            })
+            .collect();
+        let maximum = estimates.iter().copied().max().unwrap().div_ceil(2);
+        let limit = maximum * 2 + 64;
+        assert!(estimates.iter().all(|estimate| *estimate <= limit));
+        assert!(estimates.iter().sum::<usize>() > limit);
+        let inputs = json!({
+            "geometry":geometry, "resolution":6, "containment":"centroid", "max_cells":maximum
+        });
+        let serial = execute(Operation::PolygonToH3Cells, &inputs)
+            .unwrap_err()
+            .to_string();
+        let parallel = cpu::run(move || execute(Operation::PolygonToH3Cells, &inputs))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(serial.contains("preflight limit"));
+        assert_eq!(parallel, serial);
+    }
+
+    #[tokio::test]
+    async fn h3_collection_covers_preserves_disconnected_tiny_regions() {
+        use h3o::geom::{ContainmentMode, TilerBuilder};
+
+        let polygons: Vec<_> = [(1.0, 1.0), (20.0, 20.0)]
+            .into_iter()
+            .map(|(x, y)| {
+                geo::Polygon::new(
+                    geo::LineString::from(vec![
+                        (x, y),
+                        (x + 0.000001, y),
+                        (x + 0.000001, y + 0.000001),
+                        (x, y + 0.000001),
+                        (x, y),
+                    ]),
+                    vec![],
+                )
+            })
+            .collect();
+        let mut combined = TilerBuilder::new(h3o::Resolution::One)
+            .containment_mode(ContainmentMode::Covers)
+            .disable_transmeridian_heuristic()
+            .build();
+        combined.add_batch(polygons.clone()).unwrap();
+        let mut expected: Vec<_> = combined
+            .into_coverage()
+            .map(|cell| cell.to_string())
+            .collect();
+        expected.sort_unstable();
+        let mut containing_cells: Vec<_> = [(1.0, 1.0), (20.0, 20.0)]
+            .into_iter()
+            .map(|(longitude, latitude)| {
+                h3o::LatLng::new(latitude + 0.0000005, longitude + 0.0000005)
+                    .unwrap()
+                    .to_cell(h3o::Resolution::One)
+                    .to_string()
+            })
+            .collect();
+        containing_cells.sort_unstable();
+        assert_ne!(containing_cells[0], containing_cells[1]);
+        assert_eq!(expected, containing_cells);
+        let geometry = from_geo(&geo::Geometry::MultiPolygon(geo::MultiPolygon::new(
+            polygons,
+        )))
+        .unwrap();
+        let mut inputs =
+            json!({"geometry":geometry, "resolution":1, "containment":"covers", "max_cells":1});
+        let error = execute(Operation::PolygonToH3Cells, &inputs).unwrap_err();
+        assert!(error.to_string().contains("exceeds max_cells (1)"));
+        inputs["max_cells"] = json!(2);
+        let actual = cpu::run(move || execute(Operation::PolygonToH3Cells, &inputs))
+            .await
+            .unwrap();
+        assert_eq!(actual[0].1, json!(expected));
+    }
+
+    #[tokio::test]
+    async fn h3_collection_coverage_deduplicates_shared_boundary_cells_before_output_limit() {
+        use h3o::geom::{ContainmentMode, TilerBuilder};
+
+        let cell = h3o::LatLng::new(0.0, 0.0)
+            .unwrap()
+            .to_cell(h3o::Resolution::Three);
+        let boundary = cell.boundary();
+        let polygons: Vec<_> = [boundary[0], boundary[2]]
+            .into_iter()
+            .map(|point| {
+                let (x, y) = (point.lng(), point.lat());
+                geo::Polygon::new(
+                    geo::LineString::from(vec![
+                        (x - 0.001, y - 0.001),
+                        (x + 0.001, y - 0.001),
+                        (x + 0.001, y + 0.001),
+                        (x - 0.001, y + 0.001),
+                        (x - 0.001, y - 0.001),
+                    ]),
+                    vec![],
+                )
+            })
+            .collect();
+        let build_tiler = || {
+            TilerBuilder::new(h3o::Resolution::Three)
+                .containment_mode(ContainmentMode::IntersectsBoundary)
+                .disable_transmeridian_heuristic()
+                .build()
+        };
+        let raw_count: usize = polygons
+            .iter()
+            .map(|polygon| {
+                let mut tiler = build_tiler();
+                tiler.add(polygon.clone()).unwrap();
+                tiler.into_coverage().count()
+            })
+            .sum();
+        let mut combined = build_tiler();
+        combined.add_batch(polygons.clone()).unwrap();
+        let mut expected: Vec<_> = combined
+            .into_coverage()
+            .map(|cell| cell.to_string())
+            .collect();
+        expected.sort_unstable();
+        expected.dedup();
+        assert!(raw_count > expected.len());
+        let geometry = from_geo(&geo::Geometry::MultiPolygon(geo::MultiPolygon::new(
+            polygons,
+        )))
+        .unwrap();
+        let inputs = json!({"geometry":geometry, "resolution":3, "containment":"intersects-boundary", "max_cells":expected.len()});
+        let actual = cpu::run(move || execute(Operation::PolygonToH3Cells, &inputs))
+            .await
+            .unwrap();
+        assert_eq!(actual[0].1, json!(expected));
     }
 }

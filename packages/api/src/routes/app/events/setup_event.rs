@@ -529,7 +529,7 @@ pub(crate) async fn run_event_setup(
                         &msg,
                     )
                     .await;
-                    return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
+                    return Err(ApiError::from(e));
                 }
             }
         }
@@ -552,7 +552,7 @@ pub(crate) async fn run_event_setup(
                     &msg,
                 )
                 .await;
-                return Err(ApiError::internal_error(flow_like_types::anyhow!(msg)));
+                return Err(ApiError::from(e));
             }
         },
     };

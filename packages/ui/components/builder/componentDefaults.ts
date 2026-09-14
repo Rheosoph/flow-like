@@ -337,6 +337,17 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		autoStop: bool(false),
 		disabled: bool(false),
 	},
+	cameraView: {
+		label: str("Camera"),
+		facingMode: str("environment"),
+		intervalMs: num(0),
+		maxWidth: num(1280),
+		quality: num(0.85),
+		audioEnabled: bool(false),
+		audioBufferSeconds: num(60),
+		fit: str("contain"),
+		disabled: bool(false),
+	},
 	link: {
 		label: str("Click here"),
 		variant: str("default"),

@@ -1,0 +1,84 @@
+--- a/lambdacomponents/default.go
++++ b/lambdacomponents/default.go
+@@ -18,6 +18,9 @@
+ //github.com/aws-observability/aws-otel-lambda/adot/collector/lambdacomponents
+
+ import (
++	"github.com/open-telemetry/opentelemetry-lambda/collector/processor/decoupleprocessor"
++	"go.opentelemetry.io/collector/processor"
++	"go.opentelemetry.io/collector/processor/memorylimiterprocessor"
+ 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsemfexporter"
+ 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsxrayexporter"
+ 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter"
+@@ -65,7 +68,16 @@
+ 		errs = multierr.Append(errs, err)
+ 	}
+
++	processors, err := otelcol.MakeFactoryMap[processor.Factory](
++		memorylimiterprocessor.NewFactory(),
++		decoupleprocessor.NewFactory(),
++	)
++	if err != nil {
++		errs = multierr.Append(errs, err)
++	}
++
+ 	factories := otelcol.Factories{
++		Processors: processors,
+ 		Extensions: extensions,
+ 		Receivers:  receivers,
+ 		Exporters:  exporters,
+--- a/internal/lifecycle/manager.go
++++ b/internal/lifecycle/manager.go
+@@ -104,7 +104,7 @@
+ 		initType:        initType,
+ 	}
+
+-	factories, _ := lambdacomponents.Components(res.ExtensionID)
++	factories, _ := lambdacomponents.Components()
+ 	lm.collector = collector.NewCollector(logger, factories, version)
+
+ 	return ctx, lm
+--- a/go.mod
++++ b/go.mod
+@@ -1,6 +1,6 @@
+ module github.com/open-telemetry/opentelemetry-lambda/collector
+
+-go 1.26.1
++go 1.26.4
+
+ replace github.com/open-telemetry/opentelemetry-lambda/collector/lambdacomponents => ./lambdacomponents
+
+@@ -64,6 +64,7 @@
+ 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.30 // indirect
+ 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.30 // indirect
+ 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.31 // indirect
++	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.79.0 // indirect
+ 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.13 // indirect
+ 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.23 // indirect
+ 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.30 // indirect
+@@ -74,6 +75,7 @@
+ 	github.com/aws/aws-sdk-go-v2/service/sso v1.32.0 // indirect
+ 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.0 // indirect
+ 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.0 // indirect
++	github.com/aws/aws-sdk-go-v2/service/xray v1.38.0 // indirect
+ 	github.com/aws/smithy-go v1.27.3 // indirect
+ 	github.com/beorn7/perks v1.0.1 // indirect
+ 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+@@ -129,11 +131,17 @@
+ 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+ 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/connector/spanmetricsconnector v0.156.0 // indirect
++	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsemfexporter v0.156.0 // indirect
++	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awsxrayexporter v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/internal/basicauth v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/internal/credentialsfile v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/extension/sigv4authextension v0.156.0 // indirect
++	github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/awsutil v0.156.0 // indirect
++	github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/cwlogs v0.156.0 // indirect
++	github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/metrics v0.156.0 // indirect
++	github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/xray v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter v0.156.0 // indirect
+ 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/pdatautil v0.156.0 // indirect

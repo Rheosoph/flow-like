@@ -12,6 +12,7 @@ pub mod list_files;
 pub mod paths;
 pub mod presign_data_access;
 pub mod upload_files;
+pub mod upload_policy;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
