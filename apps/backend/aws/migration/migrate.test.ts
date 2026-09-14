@@ -21,6 +21,7 @@ import {
 	RECORD_FINISHED_SQL,
 	RECORD_STARTED_SQL,
 	type RunOptions,
+	acceptedOnRetry,
 	applyMigration,
 	asyncIndexName,
 	awaitingJobs,
@@ -34,6 +35,8 @@ import {
 	isAsyncJobStatement,
 	isCreateOrAddStatement,
 	isDdlStatement,
+	isDoesNotExistError,
+	isDropStatement,
 	isTransientError,
 	listLocalMigrations,
 	mayOverlapAsyncJobs,
@@ -370,6 +373,64 @@ SELECT 1`;
 			),
 		).toBe(false);
 		expect(isAlreadyExistsError(null)).toBe(false);
+	});
+
+	test("accepts does-not-exist only for a retried DROP", () => {
+		expect(isDropStatement('DROP INDEX "AppRollingUsage_sweptAt_idx"')).toBe(
+			true,
+		);
+		expect(isDropStatement('ALTER TABLE "t" DROP COLUMN "x"')).toBe(true);
+		expect(isDropStatement('ALTER TABLE "t" DROP CONSTRAINT "c"')).toBe(true);
+		expect(isDropStatement('CREATE INDEX ASYNC "i" ON "t"("c")')).toBe(false);
+		expect(
+			isDropStatement('ALTER TABLE ASYNC "t" VALIDATE CONSTRAINT "c"'),
+		).toBe(false);
+		for (const code of ["42P01", "42704", "42703"]) {
+			expect(
+				isDoesNotExistError(
+					Object.assign(new Error("does not exist"), { code }),
+				),
+			).toBe(true);
+		}
+		expect(isDoesNotExistError(null)).toBe(false);
+
+		const missing = Object.assign(new Error("index does not exist"), {
+			code: "42704",
+		});
+		const duplicate = Object.assign(new Error("already exists"), {
+			code: "42P07",
+		});
+		expect(acceptedOnRetry('DROP INDEX "i"', missing)).toBe(true);
+		expect(acceptedOnRetry('DROP INDEX "i"', duplicate)).toBe(false);
+		expect(
+			acceptedOnRetry('CREATE INDEX ASYNC "i" ON "t"("c")', duplicate),
+		).toBe(true);
+		expect(acceptedOnRetry('CREATE INDEX ASYNC "i" ON "t"("c")', missing)).toBe(
+			false,
+		);
+	});
+
+	test("a DROP that committed but reported OC001 is accepted on the retry", async () => {
+		let attempts = 0;
+		const result = await withRetries(
+			"drop",
+			async () => {
+				attempts++;
+				if (attempts === 1)
+					throw Object.assign(new Error("change conflicts (OC001)"), {
+						code: "40001",
+					});
+				throw Object.assign(new Error("index does not exist"), {
+					code: "42704",
+				});
+			},
+			{
+				acceptOnRetry: (error) => acceptedOnRetry('DROP INDEX "i"', error),
+				pause: async () => undefined,
+			},
+		);
+		expect(result).toBe(ACCEPTED);
+		expect(attempts).toBe(2);
 	});
 
 	test("asyncIndexName spells the index as sys.jobs.object_name does", () => {

@@ -328,6 +328,13 @@ export function isAlreadyExistsError(error: unknown): boolean {
 	return e.code === "42P07" || e.code === "42710" || e.code === "42701";
 }
 
+// undefined_table, undefined_object (indexes, constraints), undefined_column.
+export function isDoesNotExistError(error: unknown): boolean {
+	const e = error as PgError;
+	if (!e) return false;
+	return e.code === "42P01" || e.code === "42704" || e.code === "42703";
+}
+
 export interface RunOptions {
 	readonly maxAttempts?: number;
 	// Consulted on the second and later attempts only: an error the first
@@ -345,7 +352,8 @@ export const ACCEPTED: unique symbol = Symbol("accepted");
 
 // Runs `attempt` until it succeeds. OCC conflicts and connection loss are
 // retried with jittered backoff. DSQL can commit a DDL statement and still
-// report OC001 for it, so a retry may hit "already exists": `acceptOnRetry`
+// report OC001 for it, so a retry may hit "already exists" (or "does not exist"
+// for a DROP): `acceptOnRetry`
 // turns that into ACCEPTED (with a warning) instead of a failure.
 export async function withRetries<T>(
 	label: string,

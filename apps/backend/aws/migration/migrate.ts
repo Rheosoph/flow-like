@@ -27,7 +27,8 @@
 // Observed on a live cluster: while hundreds of index jobs run, a single
 // session still gets `40001 … (OC001)` on a few percent of DDL statements
 // (retried here), a retried statement may find that the failed attempt was
-// committed after all ("already exists" is accepted on the second attempt), and
+// committed after all ("already exists" after CREATE/ADD and "does not exist"
+// after DROP are accepted on the second attempt), and
 // `ADD CONSTRAINT … FOREIGN KEY` fails with "no unique constraint matching
 // given keys" while the referenced unique index is still building - so every
 // statement other than CREATE TABLE / CREATE INDEX ASYNC first waits for the
@@ -54,6 +55,7 @@ import {
 	interruption,
 	invalid,
 	isAlreadyExistsError,
+	isDoesNotExistError,
 	isTransientError,
 	makeLog,
 	parseDsqlTarget,
@@ -72,6 +74,7 @@ export {
 	interruption,
 	isAlreadyExistsError,
 	isConnectionError,
+	isDoesNotExistError,
 	isTransientError,
 	redactDatabaseUrl,
 	redactSecret,
@@ -293,6 +296,21 @@ export function mayOverlapAsyncJobs(statement: string): boolean {
 export function isCreateOrAddStatement(statement: string): boolean {
 	return /^\s*(?:CREATE\b|ALTER\s+TABLE\s+(?!ASYNC\b)[\s\S]*?\bADD\b)/i.test(
 		stripComments(statement),
+	);
+}
+
+// A statement whose "does not exist" on a retry means the failed attempt was
+// committed after all (DROP …, ALTER TABLE … DROP …).
+export function isDropStatement(statement: string): boolean {
+	return /^\s*(?:DROP\b|ALTER\s+TABLE\s+(?!ASYNC\b)[\s\S]*?\bDROP\b)/i.test(
+		stripComments(statement),
+	);
+}
+
+export function acceptedOnRetry(statement: string, error: unknown): boolean {
+	return (
+		(isCreateOrAddStatement(statement) && isAlreadyExistsError(error)) ||
+		(isDropStatement(statement) && isDoesNotExistError(error))
 	);
 }
 
@@ -619,10 +637,7 @@ export async function applyMigration(
 				statement,
 				[],
 				label,
-				{
-					acceptOnRetry: (error) =>
-						isCreateOrAddStatement(statement) && isAlreadyExistsError(error),
-				},
+				{ acceptOnRetry: (error) => acceptedOnRetry(statement, error) },
 			);
 			if (isAsyncJobStatement(statement)) {
 				const returned = result.rows[0]?.job_id;
