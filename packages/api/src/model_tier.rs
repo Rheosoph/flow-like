@@ -1,9 +1,10 @@
 //! Plan-tier gating for hosted models.
 //!
-//! The proxy routes (`/chat/completions`, `/responses`, `/embeddings`) enforce this
-//! per call and answer with `PAYMENT_REQUIRED`. Automatic model selection has to apply
-//! the same rule *before* dispatch, or a caller whose plan excludes the flagship models
-//! still gets pointed at one — and only finds out through a mid-stream 402.
+//! The proxy routes (`/chat/completions`, `/responses`) enforce this per call and
+//! answer with `PAYMENT_REQUIRED`. Automatic model selection has to apply the same
+//! rule *before* dispatch, or a caller whose plan excludes the flagship models still
+//! gets pointed at one — and only finds out through a mid-stream 402. Hosted
+//! embeddings are open to every plan and only limited by metered quota.
 
 use flow_like::{bit::Bit, hub::UserTier};
 use flow_like_types::Value;
@@ -12,9 +13,6 @@ use std::collections::HashMap;
 /// An LLM/VLM without a declared tier is treated as the most restricted one:
 /// unlabeled hosted models must not become free-for-all.
 pub const DEFAULT_LLM_TIER: &str = "ENTERPRISE";
-
-/// Embedding models predate the tier field, so an unlabeled one stays open.
-pub const DEFAULT_EMBEDDING_TIER: &str = "FREE";
 
 /// The tier a provider declares in its params, or `default` when unlabeled.
 pub fn declared_tier(params: Option<&HashMap<String, Value>>, default: &str) -> String {
@@ -29,8 +27,7 @@ pub fn tier_allows(user_tier: &UserTier, tier: &str) -> bool {
     user_tier.llm_tiers.iter().any(|allowed| allowed == tier)
 }
 
-/// Whether the caller's plan covers this bit. Only LLM/VLM bits are judged here —
-/// embeddings, TTS and STT carry their own tiers and are gated by their own routes.
+/// Whether the caller's plan covers this bit. Only LLM/VLM bits are judged here.
 pub fn llm_bit_allowed(bit: &Bit, user_tier: &UserTier) -> bool {
     let provider = bit
         .try_to_llm()
@@ -74,7 +71,6 @@ mod tests {
     #[test]
     fn unlabeled_models_stay_locked_down() {
         assert_eq!(declared_tier(None, DEFAULT_LLM_TIER), "ENTERPRISE");
-        assert_eq!(declared_tier(None, DEFAULT_EMBEDDING_TIER), "FREE");
     }
 
     #[test]
