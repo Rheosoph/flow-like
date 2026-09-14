@@ -61,16 +61,11 @@ async fn baseline_page(
     payer_id: &str,
     batch: usize,
 ) -> Result<(CapacityUsage, bool), ApiError> {
-    txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-        r#"INSERT INTO "AccountCapacity" ("payerId") VALUES ($1) ON CONFLICT ("payerId") DO NOTHING"#,[payer_id.into()])).await?;
-    txn.execute_raw(Statement::from_sql_and_values(
-        txn.get_database_backend(),
-        r#"UPDATE "AccountCapacity" SET "updatedAt" = now() WHERE "payerId" = $1"#,
-        [payer_id.into()],
-    ))
-    .await?;
     let row = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-        r#"SELECT "storageBytes","reservedStorageBytes","projectCount",initialized,"baselineAppId" FROM "AccountCapacity" WHERE "payerId"=$1"#,[payer_id.into()])).await?.ok_or_else(||ApiError::internal("capacity account disappeared"))?;
+        r#"INSERT INTO "AccountCapacity" ("payerId") VALUES ($1)
+        ON CONFLICT ("payerId") DO UPDATE SET "updatedAt"=now()
+        RETURNING "storageBytes","reservedStorageBytes","projectCount",initialized,"baselineAppId""#,
+        [payer_id.into()])).await?.ok_or_else(||ApiError::internal("capacity account disappeared"))?;
     let mut usage = CapacityUsage {
         storage_bytes: row.try_get("", "storageBytes")?,
         reserved_storage_bytes: row.try_get("", "reservedStorageBytes")?,
@@ -89,6 +84,9 @@ async fn baseline_page(
         LEFT JOIN "App" s ON s.id=a."forkedFrom" AND EXISTS(SELECT 1 FROM "ForkJob" j WHERE j."destAppId"=a.id AND j.policy->>'kind'='online_copy')
         ORDER BY m."appId""#,[payer_id.into(),cursor.clone().into(),((batch.clamp(1,BASELINE_PAGE)+1) as i64).into()])).await?;
     let ready = rows.len() <= batch;
+    let mut projects = std::collections::HashMap::new();
+    let mut insert_values = Vec::new();
+    let mut placeholders = Vec::new();
     for row in rows.into_iter().take(batch) {
         cursor = row.try_get("", "appId")?;
         let Some(app_id) = row.try_get::<Option<String>>("", "ownedAppId")? else {
@@ -96,14 +94,35 @@ async fn baseline_page(
         };
         let counted: bool = row.try_get("", "counted")?;
         let source: Option<String> = row.try_get("", "source")?;
-        let inserted=txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-            r#"INSERT INTO "ProjectCapacity" ("appId","payerId",counted,"publicForkSourceId",active) VALUES ($1,$2,$3,$4,true) ON CONFLICT ("appId") DO NOTHING"#,[app_id.into(),payer_id.into(),counted.into(),source.into()])).await?.rows_affected();
-        if inserted == 1 {
-            usage.storage_bytes = usage
-                .storage_bytes
-                .checked_add(row.try_get::<i64>("", "totalSize")?.max(0))
-                .ok_or_else(|| ApiError::internal("storage total overflow"))?;
-            usage.project_count += i64::from(counted);
+        let size = row.try_get::<i64>("", "totalSize")?.max(0);
+        projects.insert(app_id.clone(), (size, counted));
+        let offset = insert_values.len();
+        placeholders.push(format!(
+            "(${},${},${},${},true)",
+            offset + 1,
+            offset + 2,
+            offset + 3,
+            offset + 4
+        ));
+        insert_values.extend([
+            app_id.into(),
+            payer_id.into(),
+            counted.into(),
+            source.into(),
+        ]);
+    }
+    if !placeholders.is_empty() {
+        let inserted = txn.query_all_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+            format!(r#"INSERT INTO "ProjectCapacity" ("appId","payerId",counted,"publicForkSourceId",active) VALUES {} ON CONFLICT ("appId") DO NOTHING RETURNING "appId""#, placeholders.join(",")), insert_values)).await?;
+        for row in inserted {
+            let app_id: String = row.try_get("", "appId")?;
+            if let Some((size, counted)) = projects.get(&app_id) {
+                usage.storage_bytes = usage
+                    .storage_bytes
+                    .checked_add(*size)
+                    .ok_or_else(|| ApiError::internal("storage total overflow"))?;
+                usage.project_count += i64::from(*counted);
+            }
         }
     }
     txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
@@ -112,9 +131,29 @@ async fn baseline_page(
     Ok((usage, ready))
 }
 
+async fn initialized_usage<C: ConnectionTrait>(
+    db: &C,
+    payer_id: &str,
+) -> Result<Option<CapacityUsage>, ApiError> {
+    let row = db.query_one_raw(Statement::from_sql_and_values(db.get_database_backend(),
+        r#"SELECT "storageBytes","reservedStorageBytes","projectCount" FROM "AccountCapacity" WHERE "payerId"=$1 AND initialized=true"#,
+        [payer_id.into()])).await?;
+    row.map(|row| {
+        Ok(CapacityUsage {
+            storage_bytes: row.try_get("", "storageBytes")?,
+            reserved_storage_bytes: row.try_get("", "reservedStorageBytes")?,
+            project_count: row.try_get("", "projectCount")?,
+        })
+    })
+    .transpose()
+}
+
 /// Callers prepare outside their mutation transaction so a pending response does
 /// not roll back baseline progress. Small new accounts initialize immediately.
 pub async fn prepare_account(state: &AppState, payer_id: &str) -> Result<(), ApiError> {
+    if initialized_usage(&state.db, payer_id).await?.is_some() {
+        return Ok(());
+    }
     let ready = state
         .transaction(|txn| {
             let payer = payer_id.to_owned();
@@ -143,12 +182,28 @@ pub async fn lock_account(
 }
 
 pub async fn usage(state: &AppState, payer_id: &str) -> Result<CapacityUsage, ApiError> {
-    let (usage, ready) = state
-        .transaction(|txn| {
+    usage_with_db(&state.db, state.db_dialect, payer_id).await
+}
+
+pub(crate) async fn usage_with_db(
+    db: &sea_orm::DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    payer_id: &str,
+) -> Result<CapacityUsage, ApiError> {
+    if let Some(usage) = initialized_usage(db, payer_id).await? {
+        return Ok(usage);
+    }
+    let (usage, ready) = crate::db::retry_transaction(
+        db,
+        dialect,
+        None,
+        &crate::db::RetryPolicy::default(),
+        |txn| {
             let payer = payer_id.to_owned();
             Box::pin(async move { baseline_page(txn, &payer, BASELINE_PAGE).await })
-        })
-        .await?;
+        },
+    )
+    .await?;
     if ready {
         Ok(usage)
     } else {
@@ -573,50 +628,81 @@ async fn reserve_uploads_in(
     }
     fence_plan(txn, payer_id, plan).await?;
     let usage = lock_account(txn, &payer_id).await?;
-    let mut extra = 0_i64;
+    let mut objects = std::collections::BTreeMap::<String, (String, String, i64)>::new();
     for (bucket, key, bytes) in uploads {
-        let id = object_id(&bucket, &key);
         let bytes =
             i64::try_from(bytes).map_err(|_| ApiError::bad_request("Upload size is too large."))?;
-        let old = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-        r#"SELECT "maxBytes", "reservedBytes", "payerId" FROM "StorageUploadGrant" WHERE "id" = $1"#, [id.clone().into()])).await?;
-        if old
-            .as_ref()
-            .is_some_and(|r| r.try_get::<String>("", "payerId").ok().as_deref() != Some(payer_id))
-        {
-            return Err(ApiError::forbidden(
-                "The storage object belongs to another account.",
-            ));
+        let entry = objects
+            .entry(object_id(&bucket, &key))
+            .or_insert((bucket, key, bytes));
+        entry.2 = entry.2.max(bytes);
+    }
+    let objects: Vec<_> = objects.into_iter().collect();
+    let mut extra = 0_i64;
+    for chunk in objects.chunks(250) {
+        let ids: Vec<sea_orm::Value> = chunk.iter().map(|(id, _)| id.clone().into()).collect();
+        let ids_sql = (1..=ids.len())
+            .map(|index| format!("(${index}::text)"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let rows = txn.query_all_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+            format!(r#"SELECT ids.id,g."maxBytes",g."reservedBytes",g."payerId",COALESCE(f.size,0) AS size
+            FROM (VALUES {ids_sql}) AS ids(id)
+            LEFT JOIN "StorageUploadGrant" g ON g.id=ids.id
+            LEFT JOIN "FileAccountingObject" f ON f.id=ids.id"#), ids)).await?;
+        let mut previous = std::collections::HashMap::new();
+        for row in rows {
+            let id: String = row.try_get("", "id")?;
+            let owner: Option<String> = row.try_get("", "payerId")?;
+            if owner.as_deref().is_some_and(|owner| owner != payer_id) {
+                return Err(ApiError::forbidden(
+                    "The storage object belongs to another account.",
+                ));
+            }
+            previous.insert(
+                id,
+                (
+                    row.try_get::<Option<i64>>("", "maxBytes")?.unwrap_or(0),
+                    row.try_get::<Option<i64>>("", "reservedBytes")?
+                        .unwrap_or(0),
+                    row.try_get::<i64>("", "size")?,
+                ),
+            );
         }
-        let old_max = old
-            .as_ref()
-            .map(|r| r.try_get::<i64>("", "maxBytes"))
-            .transpose()?
-            .unwrap_or(0);
-        let old_reserved = old
-            .as_ref()
-            .map(|r| r.try_get::<i64>("", "reservedBytes"))
-            .transpose()?
-            .unwrap_or(0);
-        let accounted = txn
-            .query_one_raw(Statement::from_sql_and_values(
-                txn.get_database_backend(),
-                r#"SELECT "size" FROM "FileAccountingObject" WHERE "id" = $1"#,
-                [id.clone().into()],
-            ))
-            .await?
-            .map(|r| r.try_get::<i64>("", "size"))
-            .transpose()?
-            .unwrap_or(0);
-        let max_bytes = old_max.max(bytes);
-        let reserved = max_bytes.saturating_sub(accounted).max(0);
-        extra = extra
-            .checked_add(reserved - old_reserved)
-            .ok_or_else(|| ApiError::bad_request("Upload batch is too large."))?;
+        let mut values = Vec::<sea_orm::Value>::new();
+        let mut placeholders = Vec::new();
+        for (id, (bucket, key, bytes)) in chunk {
+            let (old_max, old_reserved, accounted) = previous
+                .get(id)
+                .copied()
+                .ok_or_else(|| ApiError::internal("Upload accounting snapshot is missing"))?;
+            let max_bytes = old_max.max(*bytes);
+            let reserved = max_bytes.saturating_sub(accounted).max(0);
+            extra = extra
+                .checked_add(reserved - old_reserved)
+                .ok_or_else(|| ApiError::bad_request("Upload batch is too large."))?;
+            let offset = values.len();
+            placeholders.push(format!(
+                "({})",
+                (1..=8)
+                    .map(|index| format!("${}", offset + index))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            values.extend([
+                id.clone().into(),
+                payer_id.into(),
+                app_id.into(),
+                bucket.clone().into(),
+                key.clone().into(),
+                max_bytes.into(),
+                reserved.into(),
+                expires_at.into(),
+            ]);
+        }
         txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-        r#"INSERT INTO "StorageUploadGrant" ("id","payerId","appId","bucket","objectKey","maxBytes","reservedBytes","expiresAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT ("id") DO UPDATE SET "maxBytes" = $6, "reservedBytes" = $7, "expiresAt" = GREATEST("StorageUploadGrant"."expiresAt",$8), "updatedAt" = now()"#,
-        [id.into(), payer_id.into(), app_id.into(), bucket.into(), key.into(), max_bytes.into(), reserved.into(), expires_at.into()])).await?;
+            format!(r#"INSERT INTO "StorageUploadGrant" (id,"payerId","appId",bucket,"objectKey","maxBytes","reservedBytes","expiresAt") VALUES {}
+            ON CONFLICT (id) DO UPDATE SET "maxBytes"=EXCLUDED."maxBytes","reservedBytes"=EXCLUDED."reservedBytes","expiresAt"=GREATEST("StorageUploadGrant"."expiresAt",EXCLUDED."expiresAt"),"updatedAt"=now()"#, placeholders.join(",")), values)).await?;
     }
     let occupied = usage
         .storage_bytes
@@ -811,6 +897,18 @@ mod tests {
         assert_eq!(usage.project_count, 2);
         assert_eq!(usage.storage_bytes, 30);
         txn.commit().await.unwrap();
+        let held = db.begin().await.unwrap();
+        lock_account(&held, "payer").await.unwrap();
+        let fast = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            initialized_usage(&db, "payer"),
+        )
+        .await
+        .expect("initialized usage must not wait for the writer lock")
+        .unwrap()
+        .unwrap();
+        assert_eq!((fast.storage_bytes, fast.project_count), (30, 2));
+        held.rollback().await.unwrap();
 
         let results = futures::future::join_all((0..8).map(|i| {
             let db = db.clone();
@@ -1031,6 +1129,80 @@ mod tests {
         txn.rollback().await.unwrap();
 
         for query in [
+            r#"INSERT INTO "User" VALUES ('batch','MAX')"#,
+            r#"INSERT INTO "App" VALUES ('batch-app','batch-owner','PRIVATE',NULL,0)"#,
+            r#"INSERT INTO "Membership" VALUES ('batch','batch-owner','batch-app')"#,
+        ] {
+            db.execute_raw(Statement::from_string(DatabaseBackend::Postgres, query))
+                .await
+                .unwrap();
+        }
+        let txn = db.begin().await.unwrap();
+        lock_account(&txn, "batch").await.unwrap();
+        let mut batch_uploads: Vec<_> = (0..100)
+            .map(|index| ("bucket".to_owned(), format!("batch-{index}"), 10))
+            .collect();
+        batch_uploads.extend([
+            ("bucket".into(), "batch-0".into(), 12),
+            ("bucket".into(), "batch-0".into(), 4),
+        ]);
+        for _ in 0..2 {
+            reserve_uploads_in(
+                &txn,
+                "batch",
+                "batch-app",
+                batch_uploads.clone(),
+                expiry,
+                "MAX",
+                1002,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            lock_account(&txn, "batch")
+                .await
+                .unwrap()
+                .reserved_storage_bytes,
+            1002
+        );
+        let grants = txn
+            .query_one_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                r#"SELECT count(*) AS n FROM "StorageUploadGrant" WHERE "payerId"='batch'"#,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(grants.try_get::<i64>("", "n").unwrap(), 100);
+        txn.commit().await.unwrap();
+        let txn = db.begin().await.unwrap();
+        let denied_batch = reserve_uploads_in(
+            &txn,
+            "batch",
+            "batch-app",
+            vec![
+                ("bucket".into(), "batch-0".into(), 13),
+                ("bucket".into(), "new".into(), 10),
+            ],
+            expiry,
+            "MAX",
+            1002,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied_batch.public_code(), "PLAN_LIMIT_EXCEEDED");
+        txn.rollback().await.unwrap();
+        assert_eq!(
+            initialized_usage(&db, "batch")
+                .await
+                .unwrap()
+                .unwrap()
+                .reserved_storage_bytes,
+            1002
+        );
+
+        for query in [
             r#"INSERT INTO "User" VALUES ('bulk','MAX')"#,
             r#"INSERT INTO "App" (id,"ownerRoleId",visibility,"totalSize") SELECT 'bulk-'||LPAD(n::text,5,'0'),'bulk-owner','PRIVATE',1 FROM generate_series(1,3005) n"#,
             r#"INSERT INTO "Membership" SELECT 'bulk','bulk-owner',id FROM "App" WHERE id LIKE 'bulk-%'"#,
@@ -1044,6 +1216,7 @@ mod tests {
         assert!(!ready);
         assert_eq!((partial.storage_bytes, partial.project_count), (250, 250));
         txn.commit().await.unwrap();
+        assert!(initialized_usage(&db, "bulk").await.unwrap().is_none());
         let txn = db.begin().await.unwrap();
         let pending = admit_project(
             &txn,

@@ -36,11 +36,11 @@ pub mod compute_attempts;
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
 pub mod db;
-mod db_backfills;
 pub mod deletion;
 pub mod error;
 pub mod mail;
 pub mod model_tier;
+pub mod notification_images;
 pub mod permission;
 pub mod publication;
 pub mod quota;
@@ -49,7 +49,6 @@ pub mod quota_warnings;
 #[cfg(test)]
 mod quota_integration_tests;
 pub mod push_notifications;
-pub mod notification_images;
 pub mod realtime_ice;
 mod runtime_config;
 pub mod state;
@@ -230,10 +229,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
                 )),
-        )
-        // Outermost, so the server span covers the whole request and every
-        // handler span nests inside the trace the client started.
-        .layer(from_fn(telemetry::trace_context_middleware));
+        );
 
     // Inbound REST/MCP routers. They deliberately bypass the JWT
     // middleware (per-registration auth is enforced inside the handler)
@@ -262,6 +258,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/r", inbound_rest)
         .nest("/m", inbound_mcp)
         .nest("/api/v1", router)
+        // One outer boundary observes API, inbound REST/MCP, OpenAPI and fallbacks.
+        .layer(from_fn(telemetry::trace_context_middleware))
 }
 
 fn openapi_routes(cors: CorsLayer) -> Router {

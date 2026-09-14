@@ -7,10 +7,12 @@ use serde::Deserialize;
 use serde_json::Value;
 
 #[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageQuery {
     days: Option<i64>,
     cursor: Option<String>,
     limit: Option<u64>,
+    include_history: Option<bool>,
 }
 
 pub async fn get_quotas(
@@ -19,9 +21,14 @@ pub async fn get_quotas(
     Query(query): Query<UsageQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let payer = user.sub()?;
-    crate::quota::summary(&state, &payer, query.days.unwrap_or(30))
-        .await
-        .map(Json)
+    crate::quota::summary(
+        &state,
+        &payer,
+        query.days.unwrap_or(30),
+        query.include_history.unwrap_or(true),
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn get_operations(

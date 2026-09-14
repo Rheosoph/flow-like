@@ -14,9 +14,6 @@ import type {
 import type {
 	IBillingSession,
 	IPricingResponse,
-	QuotaOverview,
-	QuotaOperationsPage,
-	QuotaOperationDetail,
 	IPushTargetStatus,
 	IRegisterPushTargetRequest,
 	IRegisterPushTargetResponse,
@@ -26,6 +23,9 @@ import type {
 	IUserTemplateInfo,
 	IUserUpdate,
 	IUserWidgetInfo,
+	QuotaOperationDetail,
+	QuotaOperationsPage,
+	QuotaOverview,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type {
 	IHomeDefault,
@@ -132,7 +132,7 @@ export class EmptyUserState implements IUserState {
 		throw new Error("Usage is unavailable without an account.");
 	}
 
-	getQuotaUsage(): Promise<QuotaOverview> {
+	getQuotaUsage(_includeHistory?: boolean): Promise<QuotaOverview> {
 		throw new Error("Usage is unavailable without an account.");
 	}
 

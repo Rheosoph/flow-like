@@ -670,7 +670,8 @@ impl State {
         cdn_bucket: Arc<FlowLikeStore>,
         secret_store_config: Option<SecretStoreConfig>,
     ) -> Self {
-        Self::new_inner(catalog, cdn_bucket, secret_store_config, None, None).await
+        let secrets = Self::initialize_secret_store(secret_store_config).await;
+        Self::new_with_secrets(catalog, cdn_bucket, secrets, None, None).await
     }
 
     /// Construct API state around a caller-managed database connection.
@@ -689,36 +690,36 @@ impl State {
         database: DatabaseConnection,
         dialect: Option<DbDialect>,
     ) -> Self {
-        Self::new_inner(
-            catalog,
-            cdn_bucket,
-            secret_store_config,
-            Some(database),
-            dialect,
-        )
-        .await
+        let secrets = Self::initialize_secret_store(secret_store_config).await;
+        Self::new_with_secrets(catalog, cdn_bucket, secrets, Some(database), dialect).await
     }
 
-    async fn new_inner(
+    async fn initialize_secret_store(
+        secret_store_config: Option<SecretStoreConfig>,
+    ) -> Arc<SecretStore> {
+        let config = secret_store_config.unwrap_or_else(|| {
+            let prefix = std::env::var("SECRET_PREFIX").ok();
+            SecretStoreConfig::default()
+                .with_provider(ProviderConfig::Env(EnvProviderConfig { prefix }))
+        });
+        let secrets = Arc::new(SecretStore::new(config).expect("Failed to create secret store"));
+        secrets.warmup().await;
+        secrets
+    }
+
+    /// Reuse a caller-owned secret store and its cache during API initialization.
+    ///
+    /// Warm the store before building services that need secrets. This constructor
+    /// preserves that cache without repeating provider prefetches. A supplied
+    /// database uses the same connection and dialect rules as `new_with_database`;
+    /// otherwise the connection comes from `DATABASE_URL`.
+    pub async fn new_with_secrets(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
         cdn_bucket: Arc<FlowLikeStore>,
-        secret_store_config: Option<SecretStoreConfig>,
+        secrets: Arc<SecretStore>,
         database: Option<DatabaseConnection>,
         dialect: Option<DbDialect>,
     ) -> Self {
-        let secrets = {
-            let config = secret_store_config.unwrap_or_else(|| {
-                let prefix = std::env::var("SECRET_PREFIX").ok();
-                SecretStoreConfig::default()
-                    .with_provider(ProviderConfig::Env(EnvProviderConfig { prefix }))
-            });
-            Arc::new(SecretStore::new(config).expect("Failed to create secret store"))
-        };
-
-        // Batch-fetch all secrets under the prefix (e.g. SSM GetParametersByPath)
-        // so individual get_secret() calls below hit the warm cache.
-        secrets.warmup().await;
-
         // Select a single complete document before initializing any service.
         // Loader errors carry no document, filesystem path, or provider details.
         let effective_config = ConfigSource::from_env()
@@ -889,10 +890,6 @@ impl State {
 
         let db_dialect = DbDialect::resolve(dialect, &db).await;
         tracing::info!(dialect = %db_dialect, "database dialect resolved");
-
-        if let Err(error) = crate::db_backfills::run_startup_backfills(&db, db_dialect).await {
-            tracing::warn!("Failed to run startup database backfills: {error}");
-        }
 
         let stripe_client = if platform_config.features.premium {
             let stripe_key = secrets
@@ -1772,6 +1769,12 @@ fn entra_tenant_from_issuer(issuer: &str) -> Option<uuid::Uuid> {
         .find_map(|segment| uuid::Uuid::parse_str(segment).ok())
 }
 
+#[tracing::instrument(
+    target = "flow_like::observability",
+    name = "auth.jwks.fetch",
+    skip_all,
+    fields(rpc.service = "openid", rpc.method = "GetJwks")
+)]
 async fn fetch_jwks(raw_url: &str) -> Result<JwkSet> {
     let url = validate_jwks_url(raw_url)?;
     let client = reqwest::Client::builder()

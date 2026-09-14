@@ -27,9 +27,6 @@ import type {
 import {
 	type IBillingSession,
 	type IPricingResponse,
-	type QuotaOverview,
-	type QuotaOperationsPage,
-	type QuotaOperationDetail,
 	type IPushTargetStatus,
 	type IRegisterPushTargetRequest,
 	type IRegisterPushTargetResponse,
@@ -39,6 +36,9 @@ import {
 	type IUserTemplateInfo,
 	type IUserUpdate,
 	type IUserWidgetInfo,
+	type QuotaOperationDetail,
+	type QuotaOperationsPage,
+	type QuotaOverview,
 	chunkLookupIds,
 	isLocalUserSub,
 	partitionLookupIds,
@@ -738,8 +738,11 @@ export class WebUserState implements IUserState {
 		);
 	}
 
-	async getQuotaUsage(): Promise<QuotaOverview> {
-		return apiGet<QuotaOverview>("user/usage/quotas", this.backend.auth);
+	async getQuotaUsage(includeHistory = true): Promise<QuotaOverview> {
+		return apiGet<QuotaOverview>(
+			`user/usage/quotas?includeHistory=${includeHistory}`,
+			this.backend.auth,
+		);
 	}
 
 	async getPricing(): Promise<IPricingResponse> {

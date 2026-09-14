@@ -10,13 +10,7 @@ use sea_orm::{DatabaseTransaction, DbErr};
 /// Domain and length prefixes keep distinct resources in separate namespaces.
 /// A hash collision only serializes unrelated operations; it cannot weaken exclusion.
 pub(crate) fn transaction_lock_id(domain: &str, parts: &[&str]) -> i64 {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"flow-like.transaction-lock/v1\0");
-    for part in std::iter::once(domain).chain(parts.iter().copied()) {
-        hasher.update(&(part.len() as u64).to_be_bytes());
-        hasher.update(part.as_bytes());
-    }
-    i64::from_be_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap())
+    flow_like_db::coordination::transaction_lock_id(domain, parts)
 }
 
 pub(crate) async fn coordinate(

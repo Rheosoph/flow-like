@@ -34,11 +34,11 @@
 //!
 //! `AppState` (`Arc<State>`) is built by `State::new_with_database`, which
 //! requires master storage credentials, a Stripe key (the shipped config has
-//! `features.premium = true`), a dispatcher and a compilation dispatcher, and
-//! runs the startup backfills. Nothing in this file constructs one, so the
-//! `&AppState` layer — `deletion::{enqueue, run_pass, run_queue}`,
+//! `features.premium = true`), a dispatcher and a compilation dispatcher.
+//! Nothing in this file constructs one, so the `&AppState` layer, including
+//! `deletion::{enqueue, run_pass, run_queue}`,
 //! `deletion::drain::{drain, apply_page}`, `job::tombstone_root`, the fork job
-//! and `MutationLease` (which is `pub(crate)` on top of that) — is driven here
+//! and `MutationLease` (which is `pub(crate)` on top of that), is driven here
 //! through the public pieces it is built from, with the stand-ins marked at
 //! each site.
 

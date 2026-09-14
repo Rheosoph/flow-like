@@ -257,16 +257,26 @@ pub async fn operation_payer(state: &AppState, id: &str) -> Result<String, ApiEr
         .payer_id)
 }
 
+async fn find_active_period<C: ConnectionTrait>(
+    db: &C,
+    payer: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<PeriodRow>, ApiError> {
+    db.query_one_raw(sql(
+        "SELECT * FROM \"QuotaPeriod\" WHERE \"payerId\" = $1 AND \"periodEnd\" > $2 AND \"periodStart\" <= $2 ORDER BY \"periodStart\" DESC LIMIT 1",
+        vec![payer.into(), now.timestamp_millis().into()],
+    )).await?.map(|row| PeriodRow::from_query_result(&row, "").map_err(ApiError::from)).transpose()
+}
+
 async fn active_period(
     txn: &DatabaseTransaction,
     payer: &str,
     now: DateTime<Utc>,
     anchor: Option<DateTime<Utc>>,
 ) -> Result<PeriodRow, ApiError> {
-    if let Some(row) = txn.query_one_raw(sql(
-        "SELECT * FROM \"QuotaPeriod\" WHERE \"payerId\" = $1 AND \"periodEnd\" > $2 AND \"periodStart\" <= $2 ORDER BY \"periodStart\" DESC LIMIT 1",
-        vec![payer.into(), now.timestamp_millis().into()],
-    )).await? { return Ok(PeriodRow::from_query_result(&row, "")?); }
+    if let Some(row) = find_active_period(txn, payer, now).await? {
+        return Ok(row);
+    }
     let (mut start, end) = monthly_period(now, anchor);
     // A new paid anchor must not reopen time that was already counted on Free.
     if let Some(row) = txn.query_one_raw(sql("SELECT \"periodEnd\" FROM \"QuotaPeriod\" WHERE \"payerId\" = $1 ORDER BY \"periodEnd\" DESC LIMIT 1", vec![payer.into()])).await? {
@@ -336,10 +346,8 @@ pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiE
                     }));
                 }
             }
-            txn.execute_raw(sql("INSERT INTO \"QuotaAccount\" (\"payerId\", active) VALUES ($1,0) ON CONFLICT (\"payerId\") DO NOTHING", vec![request.payer_id.clone().into()])).await?;
             if request.amounts.cloud_starts > 0 {
-                let row = txn.query_one_raw(sql("SELECT active FROM \"QuotaAccount\" WHERE \"payerId\"=$1", vec![request.payer_id.clone().into()])).await?.ok_or_else(|| ApiError::internal("quota account missing"))?;
-                let active: i64 = row.try_get("", "active")?;
+                let active = reserve_cloud_slot(txn, &request.payer_id).await?;
                 if enforce && tier.max_concurrent_executions >= 0 && active >= i64::from(tier.max_concurrent_executions) {
                     return Err(ApiError::quota_exceeded(QuotaLimitDetails {
                         resource: "concurrent_cloud_executions".into(), scope: "account".into(), payer_id: request.payer_id.clone(), plan,
@@ -348,7 +356,6 @@ pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiE
                         actions: vec!["wait".into(), "view_usage".into(), "upgrade".into(), "run_locally".into()],
                     }));
                 }
-                txn.execute_raw(sql("UPDATE \"QuotaAccount\" SET active=active+1 WHERE \"payerId\"=$1", vec![request.payer_id.clone().into()])).await?;
             }
             let amounts = encode(request.amounts);
             let entitlement_version=blake3::hash(&serde_json::to_vec(&tier)?).to_hex().to_string();
@@ -360,6 +367,23 @@ pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiE
             Ok(())
         })
     }).await
+}
+
+// The returned count is the occupancy before this reservation. A rejected
+// admission rolls back the increment with the rest of its transaction.
+pub(crate) async fn reserve_cloud_slot(
+    txn: &DatabaseTransaction,
+    payer: &str,
+) -> Result<i64, ApiError> {
+    let row = txn
+        .query_one_raw(sql(
+            r#"INSERT INTO "QuotaAccount" ("payerId",active) VALUES ($1,1)
+           ON CONFLICT ("payerId") DO UPDATE SET active="QuotaAccount".active+1 RETURNING active"#,
+            vec![payer.into()],
+        ))
+        .await?
+        .ok_or_else(|| ApiError::internal("quota account missing"))?;
+    Ok(row.try_get::<i64>("", "active")? - 1)
 }
 
 pub async fn mark_started(state: &AppState, operation_id: &str) -> Result<bool, ApiError> {
@@ -555,7 +579,16 @@ pub async fn claim_cloud(
     attempt_id: &str,
     limit_ms: u64,
 ) -> Result<bool, ApiError> {
-    let Some(op) = operation(&state.db, run_id).await? else {
+    claim_cloud_with_db(&state.db, run_id, attempt_id, limit_ms).await
+}
+
+pub(crate) async fn claim_cloud_with_db(
+    db: &DatabaseConnection,
+    run_id: &str,
+    attempt_id: &str,
+    limit_ms: u64,
+) -> Result<bool, ApiError> {
+    let Some(op) = operation(db, run_id).await? else {
         return Err(ApiError::forbidden("Execution has no quota reservation"));
     };
     if op.kind != "workflow" || decode(&op.ceiling)?.runtime_ms != limit_ms as i64 {
@@ -563,9 +596,13 @@ pub async fn claim_cloud(
             "Execution quota does not match its signed limit",
         ));
     }
-    state.db.execute_raw(sql("UPDATE \"QuotaOperation\" SET status='running',\"ownerId\"=$2,generation=generation+1,deadline=$3,\"updatedAt\"=$4 WHERE id=$1 AND status='reserved' AND deadline>$4 AND \"cancelRequested\"=FALSE", vec![run_id.into(),attempt_id.into(),(Utc::now().timestamp_millis().saturating_add(limit_ms as i64).saturating_add(120_000)).into(),Utc::now().timestamp_millis().into()])).await?;
-    let row = state
-        .db
+    let now = Utc::now().timestamp_millis();
+    let claimed = db.query_one_raw(sql(r#"UPDATE "QuotaOperation" SET status='running',"ownerId"=$2,generation=generation+1,deadline=$3,"updatedAt"=$4 WHERE id=$1 AND status='reserved' AND deadline>$4 AND "cancelRequested"=FALSE RETURNING id"#,
+        vec![run_id.into(),attempt_id.into(),now.saturating_add(limit_ms as i64).saturating_add(120_000).into(),now.into()])).await?;
+    if claimed.is_some() {
+        return Ok(true);
+    }
+    let row = db
         .query_one_raw(sql(
             "SELECT status,\"ownerId\" FROM \"QuotaOperation\" WHERE id=$1",
             vec![run_id.into()],
@@ -854,35 +891,66 @@ fn resource_usage(
     }
 }
 
-pub async fn summary(state: &AppState, payer_id: &str, days: i64) -> Result<Value, ApiError> {
-    let (plan, tier) = payer_plan(state, payer_id).await?;
-    let payer = user::Entity::find_by_id(payer_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    let anchor = payer.billing_period_anchor.map(|d| d.with_timezone(&Utc));
-    let id = payer_id.to_owned();
-    let row = retry_transaction(
+pub async fn summary(
+    state: &AppState,
+    payer_id: &str,
+    days: i64,
+    include_history: bool,
+) -> Result<Value, ApiError> {
+    summary_with_db(
         &state.db,
         state.db_dialect,
-        None,
-        &RetryPolicy::idempotent(),
-        move |txn| {
-            let id = id.clone();
-            Box::pin(async move {
-                coordinate(txn, "account-quota", &[&id]).await?;
-                active_period(txn, &id, Utc::now(), anchor).await
-            })
-        },
+        &state.platform_config.tiers,
+        payer_id,
+        days,
+        include_history,
     )
-    .await?;
+    .await
+}
+
+pub(crate) async fn summary_with_db(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    tiers: &flow_like::hub::UserTiers,
+    payer_id: &str,
+    days: i64,
+    include_history: bool,
+) -> Result<Value, ApiError> {
+    let account = db.query_one_raw(sql(
+        "SELECT u.tier::text AS plan,u.\"billingPeriodAnchor\",COALESCE(a.active,0) AS active FROM \"User\" u LEFT JOIN \"QuotaAccount\" a ON a.\"payerId\"=u.id WHERE u.id=$1",
+        vec![payer_id.into()],
+    )).await?.ok_or(ApiError::NOT_FOUND)?;
+    let plan = account.try_get::<String>("", "plan")?.to_uppercase();
+    let tier = tiers
+        .get(&plan)
+        .ok_or_else(|| ApiError::internal(format!("missing entitlement for {plan}")))?;
+    let active = account.try_get::<i64>("", "active")?;
+    // Existing periods are immutable in their boundaries. Only first use or a
+    // renewal needs the account fence; ordinary dashboard reads do not write.
+    let row = match find_active_period(db, payer_id, Utc::now()).await? {
+        Some(row) => row,
+        None => {
+            let anchor = account
+                .try_get::<Option<DateTime<chrono::FixedOffset>>>("", "billingPeriodAnchor")?
+                .map(|date| date.with_timezone(&Utc));
+            let id = payer_id.to_owned();
+            retry_transaction(db, dialect, None, &RetryPolicy::idempotent(), move |txn| {
+                let id = id.clone();
+                Box::pin(async move {
+                    coordinate(txn, "account-quota", &[&id]).await?;
+                    active_period(txn, &id, Utc::now(), anchor).await
+                })
+            })
+            .await?
+        }
+    };
     let used = decode(&row.used)?.values();
     let reserved = decode(&row.reserved)?.values();
-    let caps = limits(&tier).values();
+    let caps = limits(tier).values();
     let mut resources: Vec<_> = (0..4)
         .map(|i| resource_usage(RESOURCES[i], used[i], reserved[i], caps[i], UNITS[i]))
         .collect();
-    let capacity = crate::capacity::usage(state, payer_id).await?;
+    let capacity = crate::capacity::usage_with_db(db, dialect, payer_id).await?;
     resources.push(resource_usage(
         "storage_bytes",
         capacity.storage_bytes,
@@ -897,16 +965,6 @@ pub async fn summary(state: &AppState, payer_id: &str, days: i64) -> Result<Valu
         tier.max_non_visible_projects.into(),
         "projects",
     ));
-    let active = state
-        .db
-        .query_one_raw(sql(
-            "SELECT active FROM \"QuotaAccount\" WHERE \"payerId\"=$1",
-            vec![payer_id.into()],
-        ))
-        .await?
-        .map(|r| r.try_get::<i64>("", "active"))
-        .transpose()?
-        .unwrap_or(0);
     resources.push(resource_usage(
         "concurrent_cloud_executions",
         active,
@@ -915,8 +973,8 @@ pub async fn summary(state: &AppState, payer_id: &str, days: i64) -> Result<Valu
         "executions",
     ));
     let warnings = crate::quota_warnings::record_warnings(
-        &state.db,
-        state.db_dialect,
+        db,
+        dialect,
         payer_id,
         &plan,
         &row.id,
@@ -927,7 +985,11 @@ pub async fn summary(state: &AppState, payer_id: &str, days: i64) -> Result<Valu
     let since = (Utc::now() - chrono::Duration::days(days.clamp(1, 90)))
         .format("%Y-%m-%d")
         .to_string();
-    let rows = state.db.query_all_raw(sql("SELECT * FROM \"QuotaDailyUsage\" WHERE \"payerId\"=$1 AND day>=$2 ORDER BY day DESC,id DESC LIMIT 1001", vec![payer_id.into(), since.into()])).await?;
+    let rows = if include_history {
+        db.query_all_raw(sql("SELECT day,\"appId\",\"modelId\",provider,\"fundingClass\",\"executionMode\",used FROM \"QuotaDailyUsage\" WHERE \"payerId\"=$1 AND day>=$2 ORDER BY day DESC,id DESC LIMIT 1001", vec![payer_id.into(), since.into()])).await?
+    } else {
+        Vec::new()
+    };
     let truncated = rows.len() > 1000;
     let mut usage = Vec::new();
     for r in rows.into_iter().take(1000) {

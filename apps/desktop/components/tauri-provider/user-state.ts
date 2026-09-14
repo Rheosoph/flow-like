@@ -26,9 +26,6 @@ import type {
 import {
 	type IBillingSession,
 	type IPricingResponse,
-	type QuotaOverview,
-	type QuotaOperationsPage,
-	type QuotaOperationDetail,
 	type IPushTargetStatus,
 	type IRegisterPushTargetRequest,
 	type IRegisterPushTargetResponse,
@@ -38,6 +35,9 @@ import {
 	type IUserTemplateInfo,
 	type IUserUpdate,
 	type IUserWidgetInfo,
+	type QuotaOperationDetail,
+	type QuotaOperationsPage,
+	type QuotaOverview,
 	chunkLookupIds,
 	isLocalUserSub,
 	partitionLookupIds,
@@ -926,12 +926,12 @@ export class UserState implements IUserState {
 		);
 	}
 
-	async getQuotaUsage(): Promise<QuotaOverview> {
+	async getQuotaUsage(includeHistory = true): Promise<QuotaOverview> {
 		if (!this.backend.profile || !this.backend.auth)
 			throw new Error("Profile or auth context not available");
 		return fetcher<QuotaOverview>(
 			this.backend.profile,
-			"user/usage/quotas",
+			`user/usage/quotas?includeHistory=${includeHistory}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);

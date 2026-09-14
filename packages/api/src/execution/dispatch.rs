@@ -122,6 +122,9 @@
 //! ASYNC_EXECUTION_BACKEND=redis
 //! ```
 
+#[cfg(feature = "lambda")]
+use tracing::Instrument;
+
 use flow_like_storage::Path as StorePath;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::channel::ChannelGrant;
@@ -1181,6 +1184,13 @@ impl Dispatcher {
 
         let response = invoke
             .send()
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "aws.lambda.invoke_async",
+                cloud.service = "lambda",
+                rpc.service = "Lambda",
+                rpc.method = "Invoke"
+            ))
             .await
             .map_err(|e| lambda_dispatch_error(e, tenant_id.is_some()))?;
         if response.status_code() != 202 {
@@ -1360,6 +1370,13 @@ impl Dispatcher {
 
         let response = invoke
             .send()
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "aws.lambda.invoke_stream",
+                cloud.service = "lambda",
+                rpc.service = "Lambda",
+                rpc.method = "InvokeWithResponseStream"
+            ))
             .await
             .map_err(|e| lambda_dispatch_error(e, tenant_id.is_some()))?;
 

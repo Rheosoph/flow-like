@@ -4,6 +4,7 @@ pub mod alerts;
 pub mod flowpilot;
 pub mod llm;
 pub mod notify;
+pub(crate) mod request_metrics;
 pub mod rollup;
 pub mod spans;
 pub mod sweeper;

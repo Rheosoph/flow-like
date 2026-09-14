@@ -65,6 +65,8 @@ export interface QuotaOverview {
 	resources: QuotaResource[];
 	usage: DailyQuotaUsage[];
 	updatedAt: string;
+	/** Client-side timestamp when counters were refreshed without loading history. */
+	countersUpdatedAt?: string;
 	usageTruncated?: boolean;
 	warnings?: {
 		id: string;
@@ -74,6 +76,32 @@ export interface QuotaOverview {
 		title: string;
 		description: string;
 	}[];
+}
+
+/** Keep history and its freshness while applying a newer summary for its owner. */
+export function mergeQuotaCounters(
+	overview: QuotaOverview,
+	summary: QuotaOverview,
+): QuotaOverview {
+	if (overview.payerId !== summary.payerId) return overview;
+	const incoming = Date.parse(summary.updatedAt);
+	const current = Date.parse(overview.countersUpdatedAt ?? overview.updatedAt);
+	if (
+		!Number.isFinite(incoming) ||
+		!Number.isFinite(current) ||
+		incoming < current
+	) {
+		return overview;
+	}
+	return {
+		...overview,
+		plan: summary.plan,
+		periodStart: summary.periodStart,
+		periodEnd: summary.periodEnd,
+		trackingSince: summary.trackingSince,
+		resources: summary.resources,
+		countersUpdatedAt: summary.updatedAt,
+	};
 }
 
 export const quotaLabels: Record<string, string> = {

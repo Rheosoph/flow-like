@@ -16,6 +16,8 @@ use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_string};
 use std::sync::Arc;
+#[cfg(feature = "aws")]
+use tracing::Instrument;
 
 #[cfg(feature = "aws")]
 #[derive(Clone, Serialize, Deserialize)]
@@ -160,9 +162,9 @@ impl AwsRuntimeCredentials {
     }
 
     #[tracing::instrument(
-        name = "AwsRuntimeCredentials::scoped_credentials",
-        skip(self, sub, state),
-        level = "debug"
+        target = "flow_like::observability",
+        name = "credentials.scoped",
+        skip_all
     )]
     pub async fn scoped_credentials(
         &self,
@@ -289,6 +291,13 @@ impl AwsRuntimeCredentials {
             .policy(policy)
             .duration_seconds(sts.duration_seconds)
             .send()
+            .instrument(tracing::info_span!(
+                target: "flow_like::observability",
+                "aws.sts.assume_role",
+                cloud.service = "sts",
+                rpc.service = "STS",
+                rpc.method = "AssumeRole"
+            ))
             .await?;
         let credentials = response
             .credentials()

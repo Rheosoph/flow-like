@@ -16,14 +16,17 @@
 //! [`crate::telemetry::spans`] into a table documented as anonymous.
 
 use axum::{
+    body::Body,
     extract::{MatchedPath, Request},
     http::HeaderMap,
     middleware::Next,
     response::Response,
 };
+use std::time::Instant;
 use tracing::Instrument;
 
-use crate::telemetry::spans::{FIELD_STATUS, truncate};
+use crate::telemetry::request_metrics::{ObservedBody, RequestLifetime, method_label};
+use crate::telemetry::spans::truncate;
 
 pub const TRACEPARENT_HEADER: &str = "traceparent";
 
@@ -36,7 +39,6 @@ const SAMPLED_FLAG: u8 = 0x01;
 const MAX_ROUTE_LEN: usize = 256;
 const MAX_STATIC_SEGMENT_LEN: usize = 32;
 const MIN_OPAQUE_ID_LEN: usize = 12;
-const DYNAMIC_SEGMENT: &str = ":id";
 
 /// Trace context of the caller, continued by this process.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,49 +109,17 @@ fn is_all_zero(value: &str) -> bool {
     value.bytes().all(|byte| byte == b'0')
 }
 
-/// Route label for the server span: the axum route template when routing has
-/// already matched, otherwise the concrete path with every segment that does
-/// not look like a static route word collapsed to `:id`.
-///
-/// Both branches are live. `nest` flattens its routes into the parent, so this
-/// middleware — layered outermost, to cover the whole request — still sees the
-/// full template of a nested route. A request that matches no route at all
-/// carries no [`MatchedPath`], and that is where the fallback earns its keep:
-/// unrouted paths are exactly the ones an attacker or a stray client controls.
-///
-/// The fallback is deliberately stricter than the client-side sanitizer: it
-/// keeps a segment only if it is short, lowercase and free of the characters an
-/// identifier brings with it (`@`, `|`, `%`, …), so an unknown path fails
-/// closed instead of leaking whatever the caller put in it.
-fn route_label(matched: Option<&str>, raw_path: &str) -> String {
+/// Only registered templates become route labels. Unmatched paths have one
+/// fixed label, so arbitrary path text cannot leak or create metric dimensions.
+fn route_label(matched: Option<&str>, _raw_path: &str) -> String {
     match matched {
         Some(template) => truncate(template, MAX_ROUTE_LEN),
-        None => truncate(&sanitize_route_path(raw_path), MAX_ROUTE_LEN),
+        None => "unmatched".to_string(),
     }
 }
 
-fn sanitize_route_path(path: &str) -> String {
-    let sanitized = path
-        .split('/')
-        .map(|segment| {
-            if is_static_segment(segment) {
-                segment
-            } else {
-                DYNAMIC_SEGMENT
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    if sanitized.is_empty() {
-        return "/".to_string();
-    }
-    sanitized
-}
-
-/// A path segment is kept verbatim only when it is unambiguously static.
-/// Everything else collapses, so a caller-controlled segment can never be
-/// persisted. Shared with the performance ingest so both paths sanitize
-/// identically.
+/// Classifies labels accepted by the client performance ingest. Server request
+/// labels use registered route templates or `unmatched` instead.
 pub(crate) fn is_static_segment(segment: &str) -> bool {
     if segment.is_empty() {
         return true;
@@ -174,18 +144,19 @@ pub(crate) fn is_static_segment(segment: &str) -> bool {
 
 /// Server span for one request. The field names are the propagation contract
 /// with the telemetry span layer; they must stay in sync with the `FIELD_*`
-/// constants in [`crate::telemetry::spans`]. `route` is always a template or a
-/// sanitized path — see [`route_label`] — never a concrete URI.
+/// constants in [`crate::telemetry::spans`]. `route` is a registered template
+/// or the fixed unmatched label, never a concrete URI.
 pub(crate) fn server_span(
     context: Option<&TraceContext>,
     method: &str,
     route: &str,
 ) -> tracing::Span {
-    match context {
+    let span = match context {
         Some(context) => {
             let trace_id = context.trace_id.as_str();
             let parent_span_id = context.parent_span_id.as_str();
             tracing::info_span!(
+                target: "flow_like::observability",
                 "http.request",
                 otel.kind = "server",
                 telemetry.trace_id = trace_id,
@@ -194,24 +165,82 @@ pub(crate) fn server_span(
                 http.method = method,
                 http.route = route,
                 http.status_code = tracing::field::Empty,
+                http.response_ready_ms = tracing::field::Empty,
+                http.first_byte_ms = tracing::field::Empty,
+                http.duration_ms = tracing::field::Empty,
+                http.cancelled = tracing::field::Empty,
+                otel.status_code = tracing::field::Empty,
                 telemetry.status = tracing::field::Empty
             )
         }
         None => tracing::info_span!(
+            target: "flow_like::observability",
             "http.request",
             otel.kind = "server",
             http.method = method,
             http.route = route,
             http.status_code = tracing::field::Empty,
+            http.response_ready_ms = tracing::field::Empty,
+            http.first_byte_ms = tracing::field::Empty,
+            http.duration_ms = tracing::field::Empty,
+            http.cancelled = tracing::field::Empty,
+            otel.status_code = tracing::field::Empty,
             telemetry.status = tracing::field::Empty
         ),
+    };
+    #[cfg(feature = "otel")]
+    {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        // Lambda installs its invocation parent before routing. Outside Lambda,
+        // bridge the W3C header only when there is no valid local parent.
+        let local = tracing::Span::current().context();
+        let local = if local.span().span_context().is_valid() {
+            local
+        } else {
+            opentelemetry::Context::current()
+        };
+        if let Some(parent) = parent_context(local, context) {
+            let _ = span.set_parent(parent);
+        }
     }
+    span
+}
+
+#[cfg(feature = "otel")]
+fn parent_context(
+    local: opentelemetry::Context,
+    inbound: Option<&TraceContext>,
+) -> Option<opentelemetry::Context> {
+    use opentelemetry::trace::{
+        SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState,
+    };
+    if local.span().span_context().is_valid() {
+        return Some(local);
+    }
+    let inbound = inbound?;
+    let parent = SpanContext::new(
+        TraceId::from_hex(&inbound.trace_id).ok()?,
+        SpanId::from_hex(&inbound.parent_span_id).ok()?,
+        if inbound.sampled {
+            TraceFlags::SAMPLED
+        } else {
+            TraceFlags::default()
+        },
+        true,
+        TraceState::default(),
+    );
+    parent
+        .is_valid()
+        .then(|| opentelemetry::Context::new().with_remote_span_context(parent))
 }
 
 /// Continues an inbound client trace and records the request as a server span.
 pub async fn trace_context_middleware(mut req: Request, next: Next) -> Response {
+    let started = Instant::now();
     let context = trace_context_from_headers(req.headers());
-    let method = req.method().as_str().to_string();
+    let method = method_label(req.method().as_str()).to_string();
     let route = route_label(
         req.extensions()
             .get::<MatchedPath>()
@@ -224,15 +253,11 @@ pub async fn trace_context_middleware(mut req: Request, next: Next) -> Response 
     }
 
     let span = server_span(context.as_ref(), &method, &route);
-    let response = next.run(req).instrument(span.clone()).await;
-
-    let status = response.status();
-    span.record("http.status_code", u64::from(status.as_u16()));
-    if status.is_server_error() {
-        span.record(FIELD_STATUS, "error");
-    }
-
-    response
+    let mut lifetime = RequestLifetime::new(span.clone(), method, route, started);
+    let response = next.run(req).instrument(span).await;
+    lifetime.response_ready(response.status());
+    let (parts, body) = response.into_parts();
+    Response::from_parts(parts, Body::new(ObservedBody::new(body, lifetime)))
 }
 
 #[cfg(test)]
@@ -368,25 +393,23 @@ mod tests {
     }
 
     #[test]
-    fn the_fallback_collapses_every_identifying_segment() {
-        for (raw, expected) in [
-            ("/user/lookup/auth0|1234", "/user/lookup/:id"),
-            ("/user/search/someone@example.com", "/user/search/:id"),
-            ("/user/lookup/auth0%7C1234", "/user/lookup/:id"),
-            ("/apps/0f1e2d3c4b5a69788796/board", "/apps/:id/board"),
-            ("/apps/f47ac10b-58cc-4372-a567-0e02b2c3d479", "/apps/:id"),
-            ("/apps/12345/flows", "/apps/:id/flows"),
-            (
-                "/user/lookup/QWxhZGRpbjpvcGVuIHNlc2FtZQ",
-                "/user/lookup/:id",
-            ),
+    fn the_fallback_never_uses_caller_controlled_path_text() {
+        for raw in [
+            "/user/lookup/auth0|1234",
+            "/user/search/someone@example.com",
+            "/user/lookup/auth0%7C1234",
+            "/apps/0f1e2d3c4b5a69788796/board",
+            "/apps/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "/apps/12345/flows",
+            "/user/lookup/QWxhZGRpbjpvcGVuIHNlc2FtZQ",
+            "/alice/smith",
         ] {
-            assert_eq!(route_label(None, raw), expected, "raw path '{raw}'");
+            assert_eq!(route_label(None, raw), "unmatched", "raw path '{raw}'");
         }
     }
 
     #[test]
-    fn the_fallback_keeps_static_route_words() {
+    fn unknown_paths_share_a_single_metric_dimension() {
         for path in [
             "/",
             "/api/v1/apps",
@@ -395,9 +418,9 @@ mod tests {
             "/auth/openid",
             "/notifications/subscriptions",
         ] {
-            assert_eq!(route_label(None, path), path);
+            assert_eq!(route_label(None, path), "unmatched");
         }
-        assert_eq!(route_label(None, ""), "/");
+        assert_eq!(route_label(None, ""), "unmatched");
     }
 
     /// Runs `uri` through `router` with a probe layered exactly where
@@ -457,14 +480,103 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unmatched_path_falls_back_to_the_sanitizer() {
+    async fn an_unmatched_path_has_a_fixed_label() {
         let router =
             axum::Router::new().route("/user/lookup/{sub}", axum::routing::get(|| async { "ok" }));
         assert_eq!(
             label_seen_by_middleware(router, "/user/search/someone@example.com").await,
-            Some("/user/search/:id".to_string()),
-            "a request that matches no route has no template and must be sanitized"
+            Some("unmatched".to_string()),
+            "a request that matches no route must never contribute path text"
         );
+    }
+
+    #[tokio::test]
+    async fn the_outer_boundary_observes_each_surface_once_without_path_parameters() {
+        use crate::telemetry::spans::{SpanExportConfig, telemetry_span_layer};
+        use axum::{Router, body::to_bytes, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (layer, mut exporter) = telemetry_span_layer(SpanExportConfig {
+            sample_rate: 1.0,
+            ..SpanExportConfig::default()
+        });
+        let _subscriber =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
+        let surface = || Router::new().route("/items/{id}", get(|| async { "ok" }));
+        let router = Router::new()
+            .nest("/api/v1", surface())
+            .nest("/r", surface())
+            .nest("/m", surface())
+            .route("/api-doc/openapi.json", get(|| async { "ok" }))
+            .layer(from_fn(trace_context_middleware));
+
+        for (path, expected) in [
+            ("/api/v1/items/alice@example.com", "/api/v1/items/{id}"),
+            ("/r/items/alice@example.com", "/r/items/{id}"),
+            ("/m/items/alice@example.com", "/m/items/{id}"),
+            ("/api-doc/openapi.json", "/api-doc/openapi.json"),
+            ("/alice/smith", "unmatched"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert!(
+                exporter.drain().is_empty(),
+                "response headers must not close the span"
+            );
+            to_bytes(response.into_body(), 1024).await.unwrap();
+            let spans = exporter.drain();
+            assert_eq!(spans.len(), 1, "exactly one server span for {path}");
+            assert_eq!(spans[0].name, "http.request");
+            assert_eq!(
+                spans[0].attributes.as_ref().unwrap()["http.route"],
+                expected
+            );
+            assert!(!format!("{spans:?}").contains("alice"));
+        }
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn otel_inherits_the_local_invocation_instead_of_an_untrusted_header() {
+        use opentelemetry::{Context, trace::TraceContextExt};
+        let invocation = TraceContext {
+            trace_id: "11111111111111111111111111111111".into(),
+            parent_span_id: "2222222222222222".into(),
+            sampled: false,
+        };
+        let inbound = parse_traceparent(&format!("00-{TRACE_ID}-{SPAN_ID}-01")).unwrap();
+        let local = parent_context(Context::new(), Some(&invocation)).unwrap();
+        let parent = parent_context(local, Some(&inbound)).unwrap();
+        assert_eq!(
+            parent.span().span_context().trace_id().to_string(),
+            invocation.trace_id
+        );
+        assert!(!parent.span().span_context().is_sampled());
+    }
+
+    #[cfg(feature = "otel")]
+    #[test]
+    fn otel_bridges_w3c_context_and_its_sampling_decision_without_a_local_parent() {
+        use opentelemetry::{Context, trace::TraceContextExt};
+        for sampled in [false, true] {
+            let inbound = TraceContext {
+                trace_id: TRACE_ID.into(),
+                parent_span_id: SPAN_ID.into(),
+                sampled,
+            };
+            let parent = parent_context(Context::new(), Some(&inbound)).unwrap();
+            let parent_span = parent.span();
+            let context = parent_span.span_context();
+            assert_eq!(context.trace_id().to_string(), TRACE_ID);
+            assert_eq!(context.span_id().to_string(), SPAN_ID);
+            assert_eq!(context.is_sampled(), sampled);
+            assert!(context.is_remote());
+        }
+        assert!(parent_context(Context::new(), None).is_none());
     }
 
     #[test]

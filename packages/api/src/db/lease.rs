@@ -30,8 +30,6 @@ pub(crate) const ENSURE_LOCK_ROW_SQL: &str =
 pub(crate) const CLAIM_LEASE_SQL: &str = r#"UPDATE "MutationLock" SET "owner" = $2, "expiresAt" = now() + interval '30 seconds', "updatedAt" = now() WHERE "id" = $1 AND ("owner" IS NULL OR "expiresAt" IS NULL OR "expiresAt" < now() OR "owner" = $2)"#;
 pub(crate) const EXTEND_LEASE_SQL: &str = r#"UPDATE "MutationLock" SET "expiresAt" = now() + interval '30 seconds', "updatedAt" = now() WHERE "id" = $1 AND "owner" = $2"#;
 pub(crate) const RELEASE_LEASE_SQL: &str = r#"UPDATE "MutationLock" SET "owner" = NULL, "expiresAt" = NULL, "updatedAt" = now() WHERE "id" = $1 AND "owner" = $2"#;
-pub(crate) const TOUCH_LOCK_ROW_SQL: &str =
-    r#"UPDATE "MutationLock" SET "updatedAt" = now() WHERE "id" = $1"#;
 
 fn statement<C: ConnectionTrait>(
     connection: &C,
@@ -62,16 +60,7 @@ pub(crate) async fn touch_lock_row<C: ConnectionTrait>(
     connection: &C,
     lock_id: i64,
 ) -> Result<(), DbErr> {
-    ensure_lock_row(connection, lock_id).await?;
-    let result = connection
-        .execute_raw(statement(connection, TOUCH_LOCK_ROW_SQL, [lock_id.into()]))
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(DbErr::RecordNotFound(format!(
-            "mutation lock row {lock_id} disappeared before it was written"
-        )));
-    }
-    Ok(())
+    flow_like_db::coordination::touch_lock_row(connection, lock_id).await
 }
 
 pub(crate) fn new_owner_id() -> String {
@@ -386,14 +375,14 @@ mod tests {
             CLAIM_LEASE_SQL,
             EXTEND_LEASE_SQL,
             RELEASE_LEASE_SQL,
-            TOUCH_LOCK_ROW_SQL,
+            flow_like_db::coordination::TOUCH_LOCK_ROW_SQL,
         ] {
             assert!(!sql.contains("pg_advisory"), "{sql}");
             assert!(!sql.contains("FOR UPDATE"), "{sql}");
         }
         assert!(ENSURE_LOCK_ROW_SQL.contains("ON CONFLICT"));
         assert!(CLAIM_LEASE_SQL.starts_with("UPDATE"));
-        assert!(TOUCH_LOCK_ROW_SQL.starts_with("UPDATE"));
+        assert!(flow_like_db::coordination::TOUCH_LOCK_ROW_SQL.starts_with("INSERT"));
     }
 
     #[test]

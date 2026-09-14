@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowRight,
 	Building2,
@@ -25,11 +26,12 @@ import { isTauri } from "../../lib/platform";
 import {
 	formatQuota,
 	formatQuotaDate,
+	mergeQuotaCounters,
 	quotaBelongsToAnotherPayer,
 	quotaLabels,
 	supportsHostedModel,
 } from "../../lib/quota";
-import type { QuotaDetail } from "../../lib/quota";
+import type { QuotaDetail, QuotaOverview } from "../../lib/quota";
 import { useBackend } from "../../state/backend-state";
 import type {
 	IConversionInfo,
@@ -626,6 +628,7 @@ export function GlobalUpgradeDialog() {
 	}, []);
 	const backend = useBackend();
 	const auth = useAuth();
+	const queryClient = useQueryClient();
 	const hub = useHub();
 	const features = useFeatures();
 	const isAuthenticated = auth?.isAuthenticated ?? false;
@@ -640,11 +643,30 @@ export function GlobalUpgradeDialog() {
 	const quota = useInvoke(
 		backend.userState.getQuotaUsage,
 		backend.userState,
-		[],
+		[false],
 		isAuthenticated &&
 			(features.data?.premium ?? hub.hub?.features?.premium ?? false),
 		[auth.user?.profile.sub],
 	);
+	useEffect(() => {
+		const userId = auth.user?.profile.sub;
+		const summary = quota.data;
+		if (!userId || !summary || summary.payerId !== userId) return;
+		const key = [backend.userState.getQuotaUsage.name || "backendFn", userId];
+		const full = queryClient.getQueryState<QuotaOverview>(key);
+		if (!full?.data) return;
+		queryClient.setQueryData<QuotaOverview>(
+			key,
+			(previous) => previous && mergeQuotaCounters(previous, summary),
+			// A counter-only poll must not keep stale history fresh indefinitely.
+			{ updatedAt: full.dataUpdatedAt },
+		);
+	}, [
+		quota.data,
+		auth.user?.profile.sub,
+		backend.userState.getQuotaUsage.name,
+		queryClient,
+	]);
 	useEffect(() => {
 		if (
 			!isAuthenticated ||

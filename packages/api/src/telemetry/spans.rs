@@ -544,7 +544,7 @@ impl TelemetrySpanExporter {
     }
 
     #[cfg(test)]
-    fn drain(&mut self) -> Vec<FinishedSpan> {
+    pub(crate) fn drain(&mut self) -> Vec<FinishedSpan> {
         let mut spans = Vec::new();
         while let Ok(span) = self.rx.try_recv() {
             spans.push(span);

@@ -6,6 +6,7 @@ use flow_like_types::tokio;
 use futures::future::join_all;
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+    TransactionTrait,
 };
 use serde_json::json;
 
@@ -468,6 +469,37 @@ async fn warning_regressions(db: &DatabaseConnection) {
         2,
         "one monthly and one occupancy warning across concurrent clients"
     );
+    // Unchanged warnings must remain readable while admission holds both fences.
+    let held = db.begin().await.unwrap();
+    crate::db::coordination::coordinate(&held, "account-quota", &["warnings"])
+        .await
+        .unwrap();
+    held.execute_raw(Statement::from_string(
+        DatabaseBackend::Postgres,
+        r#"UPDATE "AccountCapacity" SET "updatedAt"=now() WHERE "payerId"='warnings'"#,
+    ))
+    .await
+    .unwrap();
+    let unchanged = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        record_warnings(
+            db,
+            DbDialect::Postgres,
+            "warnings",
+            "FREE",
+            "warnings",
+            "2026-10-01",
+            &resources,
+        ),
+    )
+    .await;
+    held.rollback().await.unwrap();
+    assert!(
+        unchanged
+            .expect("unchanged warning reads waited for a write fence")
+            .unwrap()
+            .is_empty()
+    );
     execute(
         db,
         r#"UPDATE "AccountCapacity" SET "storageBytes"=20 WHERE "payerId"='warnings'"#,
@@ -507,4 +539,274 @@ async fn warning_regressions(db: &DatabaseConnection) {
     assert_eq!(notices[0].resource, "storage_bytes");
     assert_eq!(notices[0].episode, 1);
     assert_eq!(notices[0].threshold, 90);
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn concurrent_slots_keep_the_limit_and_rollback_rejections() {
+    use crate::db::{RetryPolicy, coordination::coordinate, retry_transaction};
+    let db = fixture().await;
+    let policy = RetryPolicy::idempotent();
+    let results = join_all((0..16).map(|_| {
+        retry_transaction(&db, DbDialect::Postgres, None, &policy, |txn| {
+            Box::pin(async move {
+                coordinate(txn, "account-quota", &["slots"]).await?;
+                let previous = crate::quota::reserve_cloud_slot(txn, "slots").await?;
+                if previous >= 4 {
+                    return Err(crate::error::ApiError::forbidden("No slots remaining"));
+                }
+                Ok::<_, crate::error::ApiError>(previous)
+            })
+        })
+    }))
+    .await;
+    let mut admitted = results
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    admitted.sort_unstable();
+    assert_eq!(admitted, vec![0, 1, 2, 3]);
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT active FROM "QuotaAccount" WHERE "payerId"='slots'"#,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<i64>("", "active").unwrap(), 4);
+    // A failed first reservation must also roll back creation of its account row.
+    let txn = db.begin().await.unwrap();
+    assert_eq!(
+        crate::quota::reserve_cloud_slot(&txn, "rejected-first")
+            .await
+            .unwrap(),
+        0
+    );
+    txn.rollback().await.unwrap();
+    assert!(
+        db.query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT active FROM "QuotaAccount" WHERE "payerId"='rejected-first'"#
+        ))
+        .await
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn worker_claims_keep_one_owner_and_honor_cancellation() {
+    use crate::quota::claim_cloud_with_db;
+    let db = fixture().await;
+    seed(&db, "expired-claim", "reserved").await;
+    assert!(
+        !claim_cloud_with_db(&db, "expired-claim", "worker", 1000)
+            .await
+            .unwrap()
+    );
+    for id in ["claim", "cancelled-claim", "wrong-limit"] {
+        seed(&db, id, "reserved").await;
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            r#"UPDATE "QuotaOperation" SET deadline=$2 WHERE id=$1"#,
+            [
+                id.into(),
+                (chrono::Utc::now().timestamp_millis() + 60_000).into(),
+            ],
+        ))
+        .await
+        .unwrap();
+    }
+    let attempts = (0..16).map(|i| format!("worker-{i}")).collect::<Vec<_>>();
+    let results = join_all(
+        attempts
+            .iter()
+            .map(|attempt| claim_cloud_with_db(&db, "claim", attempt, 1000)),
+    )
+    .await;
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Ok(true)))
+            .count(),
+        1
+    );
+    let winner = results
+        .iter()
+        .position(|result| matches!(result, Ok(true)))
+        .unwrap();
+    assert!(
+        claim_cloud_with_db(&db, "claim", &attempts[winner], 1000)
+            .await
+            .unwrap()
+    );
+    execute(
+        &db,
+        r#"UPDATE "QuotaOperation" SET "cancelRequested"=true WHERE id='cancelled-claim'"#,
+    )
+    .await;
+    assert!(
+        !claim_cloud_with_db(&db, "cancelled-claim", "worker", 1000)
+            .await
+            .unwrap()
+    );
+    assert!(
+        claim_cloud_with_db(&db, "wrong-limit", "worker", 2000)
+            .await
+            .is_err()
+    );
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT status,"ownerId" FROM "QuotaOperation" WHERE id='wrong-limit'"#,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<String>("", "status").unwrap(), "reserved");
+    assert_eq!(row.try_get::<Option<String>>("", "ownerId").unwrap(), None);
+}
+
+fn overview_tiers() -> flow_like::hub::UserTiers {
+    serde_json::from_value(json!({"FREE": {
+        "max_non_visible_projects": 10, "max_remote_executions": 100,
+        "max_runtime_ms": 10000, "max_concurrent_executions": 10,
+        "max_ai_cost_micros": 10000, "execution_tier": "micro",
+        "max_total_size": 10000, "max_llm_cost": 1,
+        "max_llm_calls": 100, "llm_tiers": ["FREE"]
+    }}))
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn initialized_overview_is_read_only_and_skips_history_when_requested() {
+    use sea_orm::sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+    use std::str::FromStr;
+    let db = fixture().await;
+    seed(&db, "overview", "running").await;
+    execute(
+        &db,
+        r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,tier TEXT,"billingPeriodAnchor" TIMESTAMPTZ)"#,
+    )
+    .await;
+    execute(&db, r#"INSERT INTO "User" VALUES ('overview','FREE',NULL)"#).await;
+    execute(
+        &db,
+        r#"INSERT INTO "AccountCapacity" ("payerId") VALUES ('overview')"#,
+    )
+    .await;
+    let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    for payer in ["overview", "other-payer"] {
+        db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"INSERT INTO "QuotaDailyUsage" (id,"payerId",day,"fundingClass","executionMode",used,"updatedAt") VALUES ($1,$1,$2,'cloud','async','{"runtimeMs":1}',0)"#,
+            [payer.into(),day.clone().into()])).await.unwrap();
+    }
+    let schema = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT current_schema() AS name",
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<String>("", "name")
+        .unwrap();
+    let options =
+        PgConnectOptions::from_str(&std::env::var("FLOW_LIKE_QUOTA_TEST_DATABASE_URL").unwrap())
+            .unwrap()
+            .options([
+                ("search_path", schema.as_str()),
+                ("default_transaction_read_only", "on"),
+            ]);
+    let readonly = DatabaseConnection::from(
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .unwrap(),
+    );
+    let tiers = overview_tiers();
+    let held = db.begin().await.unwrap();
+    held.execute_raw(Statement::from_string(
+        DatabaseBackend::Postgres,
+        r#"LOCK TABLE "QuotaDailyUsage" IN ACCESS EXCLUSIVE MODE"#,
+    ))
+    .await
+    .unwrap();
+    let summary = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        crate::quota::summary_with_db(
+            &readonly,
+            DbDialect::Postgres,
+            &tiers,
+            "overview",
+            30,
+            false,
+        ),
+    )
+    .await;
+    held.rollback().await.unwrap();
+    let summary = summary
+        .expect("counter polling queried the locked history table")
+        .unwrap();
+    assert_eq!(summary["usage"], json!([]));
+    assert_eq!(summary["resources"].as_array().unwrap().len(), 7);
+    assert_eq!(summary["plan"], "FREE");
+    let full =
+        crate::quota::summary_with_db(&readonly, DbDialect::Postgres, &tiers, "overview", 30, true)
+            .await
+            .unwrap();
+    assert_eq!(
+        full["usage"].as_array().unwrap().len(),
+        1,
+        "history remains payer scoped"
+    );
+    assert_eq!(full["usage"][0]["runtimeMs"], 1);
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn overview_first_use_and_renewal_create_one_period_under_concurrency() {
+    let db = fixture().await;
+    execute(
+        &db,
+        r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,tier TEXT,"billingPeriodAnchor" TIMESTAMPTZ)"#,
+    )
+    .await;
+    execute(
+        &db,
+        r#"INSERT INTO "User" VALUES ('first-use','FREE',NULL),('renewal','FREE',NULL)"#,
+    )
+    .await;
+    execute(
+        &db,
+        r#"INSERT INTO "AccountCapacity" ("payerId") VALUES ('first-use'),('renewal')"#,
+    )
+    .await;
+    execute(&db, r#"INSERT INTO "QuotaPeriod" (id,"payerId","periodStart","periodEnd",used,reserved,"updatedAt") VALUES ('old-period','renewal',0,1,'{}','{}',0)"#).await;
+    let tiers = overview_tiers();
+    for payer in ["first-use", "renewal"] {
+        let results = join_all((0..16).map(|_| {
+            crate::quota::summary_with_db(&db, DbDialect::Postgres, &tiers, payer, 30, false)
+        }))
+        .await;
+        assert!(
+            results.iter().all(Result::is_ok),
+            "concurrent overview failed: {results:?}"
+        );
+        let first = &results[0].as_ref().unwrap()["periodStart"];
+        assert!(
+            results
+                .iter()
+                .all(|result| &result.as_ref().unwrap()["periodStart"] == first)
+        );
+        let row = db.query_one_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"SELECT COUNT(*) AS total FROM "QuotaPeriod" WHERE "payerId"=$1 AND "periodEnd">$2"#,
+            [payer.into(),chrono::Utc::now().timestamp_millis().into()])).await.unwrap().unwrap();
+        assert_eq!(row.try_get::<i64>("", "total").unwrap(), 1);
+    }
 }

@@ -144,11 +144,14 @@ pub async fn record(
     retry_transaction(db,dialect,None,&RetryPolicy::idempotent(),move|txn|{let id=id.clone();let report=report.clone();let payload=payload.clone();Box::pin(async move{
         coordinate(txn,"compute-attempt",&[&id]).await?;
         let revision_id=format!("{id}:{}",report.revision);
-        if let Some(old)=txn.query_one_raw(sql("SELECT payload FROM \"ComputeAttemptRevision\" WHERE id=$1",vec![revision_id.clone().into()])).await?{
+        // New evidence needs no read-before-insert. The revision and attempt commit
+        // together; a duplicate checks its immutable payload before returning.
+        let inserted=txn.execute_raw(sql("INSERT INTO \"ComputeAttemptRevision\" (id,\"attemptId\",evidence,payload) VALUES ($1,$2,$3,$4) ON CONFLICT (id) DO NOTHING",vec![revision_id.clone().into(),id.clone().into(),report.evidence.clone().into(),payload.clone().into()])).await?;
+        if inserted.rows_affected()==0{
+            let old=txn.query_one_raw(sql("SELECT payload FROM \"ComputeAttemptRevision\" WHERE id=$1",vec![revision_id.into()])).await?.ok_or_else(||ApiError::conflict("Compute revision disappeared before verification"))?;
             if old.try_get::<String>("","payload")?!=payload{return Err(ApiError::conflict("Compute revision already has different evidence"));}return Ok(());
         }
         txn.execute_raw(sql("INSERT INTO \"ComputeAttempt\" (id,\"functionName\",\"requestId\",\"operationId\",\"payerId\",role,\"costClass\",\"memoryMb\",architecture,region,\"measuredDurationMs\",\"billedDurationMs\",\"costMicroUsd\",\"evidenceRank\",evidence,\"rateVersion\",status,\"startedAt\",\"updatedAt\") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now()) ON CONFLICT (id) DO UPDATE SET \"operationId\"=COALESCE(\"ComputeAttempt\".\"operationId\",EXCLUDED.\"operationId\"),\"payerId\"=COALESCE(\"ComputeAttempt\".\"payerId\",EXCLUDED.\"payerId\"),\"measuredDurationMs\"=COALESCE(EXCLUDED.\"measuredDurationMs\",\"ComputeAttempt\".\"measuredDurationMs\"),\"billedDurationMs\"=COALESCE(EXCLUDED.\"billedDurationMs\",\"ComputeAttempt\".\"billedDurationMs\"),\"costMicroUsd\"=EXCLUDED.\"costMicroUsd\",\"evidenceRank\"=EXCLUDED.\"evidenceRank\",evidence=EXCLUDED.evidence,\"rateVersion\"=EXCLUDED.\"rateVersion\",status=EXCLUDED.status,\"updatedAt\"=now() WHERE \"ComputeAttempt\".\"evidenceRank\"<=EXCLUDED.\"evidenceRank\"",vec![id.clone().into(),report.function_name.into(),report.request_id.into(),report.operation_id.into(),report.payer_id.into(),report.role.into(),report.cost_class.into(),report.memory_mb.into(),report.architecture.into(),report.region.into(),report.measured_duration_ms.into(),report.billed_duration_ms.into(),cost.into(),rank.into(),report.evidence.clone().into(),report.rate_version.into(),report.status.into(),report.started_at.fixed_offset().into()])).await?;
-        txn.execute_raw(sql("INSERT INTO \"ComputeAttemptRevision\" (id,\"attemptId\",evidence,payload) VALUES ($1,$2,$3,$4)",vec![revision_id.into(),id.into(),report.evidence.into(),payload.into()])).await?;
         Ok(())
     })}).await?;
     Ok(result_id)
@@ -219,6 +222,112 @@ pub async fn pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::future::join_all;
+    use sea_orm::{ConnectOptions, Database};
+
+    async fn execute(db: &DatabaseConnection, query: &str) {
+        db.execute_raw(sql(query, vec![])).await.unwrap();
+    }
+
+    #[flow_like_types::tokio::test]
+    #[ignore = "requires FLOW_LIKE_COMPUTE_TEST_DATABASE_URL pointing to an empty disposable PostgreSQL database"]
+    async fn revisions_are_atomic_idempotent_and_preserve_billed_evidence() {
+        let url = std::env::var("FLOW_LIKE_COMPUTE_TEST_DATABASE_URL").unwrap();
+        let mut options = ConnectOptions::new(url);
+        options.max_connections(8).min_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        execute(&db, r#"CREATE TABLE "MutationLock" (id BIGINT PRIMARY KEY, owner TEXT, "expiresAt" TIMESTAMPTZ(3), "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT now())"#).await;
+        for query in
+            include_str!("../prisma/migrations/20260913120005_compute_attempts/migration.sql")
+                .split(';')
+                .filter(|query| !query.trim().is_empty())
+        {
+            execute(&db, query).await;
+        }
+        let report = AttemptReport {
+            function_name: "compute-regression".into(),
+            request_id: "request".into(),
+            operation_id: Some("operation".into()),
+            payer_id: Some("payer".into()),
+            role: "workflow_api".into(),
+            cost_class: "workflow_compute".into(),
+            memory_mb: 2048,
+            architecture: "x86_64".into(),
+            region: "eu-central-1".into(),
+            measured_duration_ms: Some(1_000),
+            billed_duration_ms: None,
+            cost_micro_usd: None,
+            evidence: "measured_estimate".into(),
+            rate_version: RATE_VERSION.into(),
+            status: "completed".into(),
+            started_at: Utc::now(),
+            revision: "measured".into(),
+        };
+        let id = attempt_id(&report.function_name, &report.request_id);
+        let results =
+            join_all((0..8).map(|_| record(&db, DbDialect::Postgres, report.clone()))).await;
+        assert!(
+            results
+                .iter()
+                .all(|result| result.as_ref().is_ok_and(|stored| stored == &id)),
+            "{results:?}"
+        );
+        let count = db
+            .query_one_raw(sql(
+                r#"SELECT COUNT(*) AS count FROM "ComputeAttemptRevision""#,
+                vec![],
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(count.try_get::<i64>("", "count").unwrap(), 1);
+
+        let mut billed = report.clone();
+        billed.billed_duration_ms = Some(1_100);
+        billed.evidence = "aws_report_estimate".into();
+        billed.revision = "billed".into();
+        record(&db, DbDialect::Postgres, billed.clone())
+            .await
+            .unwrap();
+        let mut invoice = billed;
+        invoice.evidence = "invoice_reconciled".into();
+        invoice.cost_micro_usd = Some(22);
+        invoice.revision = "invoice".into();
+        record(&db, DbDialect::Postgres, invoice.clone())
+            .await
+            .unwrap();
+        let results = join_all((0..8).map(|number| {
+            let mut late = report.clone();
+            late.revision = format!("late-{number}");
+            late.measured_duration_ms = Some(500);
+            record(&db, DbDialect::Postgres, late)
+        }))
+        .await;
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        invoice.cost_micro_usd = Some(999);
+        assert!(record(&db, DbDialect::Postgres, invoice).await.is_err());
+        let row = db.query_one_raw(sql(r#"SELECT "evidenceRank", "costMicroUsd", "billedDurationMs" FROM "ComputeAttempt" WHERE id=$1"#, vec![id.into()])).await.unwrap().unwrap();
+        assert_eq!(row.try_get::<i32>("", "evidenceRank").unwrap(), 2);
+        assert_eq!(row.try_get::<i64>("", "costMicroUsd").unwrap(), 22);
+        assert_eq!(row.try_get::<i64>("", "billedDurationMs").unwrap(), 1_100);
+
+        // An attempt-row failure must roll back the revision inserted before it.
+        execute(&db, r#"ALTER TABLE "ComputeAttempt" ADD CONSTRAINT test_attempt_failure CHECK ("requestId" <> 'rejected')"#).await;
+        let mut rejected = report;
+        rejected.request_id = "rejected".into();
+        let rejected_id = attempt_id(&rejected.function_name, &rejected.request_id);
+        assert!(record(&db, DbDialect::Postgres, rejected).await.is_err());
+        assert!(
+            db.query_one_raw(sql(
+                r#"SELECT id FROM "ComputeAttemptRevision" WHERE "attemptId"=$1"#,
+                vec![rejected_id.into()]
+            ))
+            .await
+            .unwrap()
+            .is_none()
+        );
+        db.close().await.unwrap();
+    }
     #[test]
     fn lambda_legs_have_separate_reference_estimates() {
         assert_eq!(estimate_cost_micro_usd(1000, 2048, "x86_64").unwrap(), 34);

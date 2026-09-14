@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { apiResponseError, isUpgradeRequiredError } from "./api-error";
 import {
+	type QuotaOverview,
+	type QuotaResource,
 	formatQuota,
+	mergeQuotaCounters,
 	quotaBelongsToAnotherPayer,
 	quotaWarningKey,
 	supportsHostedModel,
-	type QuotaOverview,
-	type QuotaResource,
 } from "./quota";
 
 describe("plan quota UI contract", () => {
@@ -62,7 +63,12 @@ describe("plan quota UI contract", () => {
 	test("a marketplace purchase does not suggest upgrading a subscription", () => {
 		const error = apiResponseError(
 			{ status: 402, headers: new Headers(), statusText: "Payment Required" },
-			JSON.stringify({error: {code: "PURCHASE_REQUIRED", message: "Purchase required to download this package"}}),
+			JSON.stringify({
+				error: {
+					code: "PURCHASE_REQUIRED",
+					message: "Purchase required to download this package",
+				},
+			}),
 		);
 		expect(isUpgradeRequiredError(error)).toBe(false);
 	});
@@ -81,6 +87,87 @@ describe("plan quota UI contract", () => {
 		expect(quotaWarningKey(overview, resource, 75)).not.toBe(
 			quotaWarningKey(overview, resource, 90),
 		);
+	});
+});
+
+describe("counter-only quota refresh", () => {
+	const overview: QuotaOverview = {
+		plan: "FREE",
+		payerId: "payer-a",
+		periodStart: "2026-09-01",
+		periodEnd: "2026-10-01",
+		updatedAt: "2026-09-14T10:00:00Z",
+		usageTruncated: true,
+		resources: [
+			{
+				resource: "cloud_runtime_ms",
+				used: 1000,
+				reserved: 0,
+				limit: 10_000,
+				remaining: 9000,
+				unit: "milliseconds",
+				threshold: 0,
+			},
+		],
+		usage: [
+			{
+				day: "2026-09-14",
+				appId: "app-a",
+				modelId: "model-a",
+				provider: "provider",
+				fundingClass: "hosted",
+				runtimeMs: 1000,
+				aiCostMicros: 200,
+				aiCalls: 1,
+				cloudStarts: 1,
+			},
+		],
+	};
+	const summary: QuotaOverview = {
+		...overview,
+		plan: "PREMIUM",
+		periodStart: "2026-10-01",
+		periodEnd: "2026-11-01",
+		trackingSince: "2026-09-01",
+		updatedAt: "2026-09-14T10:01:00Z",
+		usageTruncated: false,
+		usage: [],
+		resources: [{ ...overview.resources[0], used: 3000, remaining: 7000 }],
+	};
+
+	test("refreshes counters and periods without clearing or refreshing history", () => {
+		const merged = mergeQuotaCounters(overview, summary);
+		expect(merged.resources).toBe(summary.resources);
+		expect(merged.plan).toBe("PREMIUM");
+		expect(merged.periodStart).toBe(summary.periodStart);
+		expect(merged.periodEnd).toBe(summary.periodEnd);
+		expect(merged.trackingSince).toBe(summary.trackingSince);
+		expect(merged.usage).toBe(overview.usage);
+		expect(merged.usageTruncated).toBe(true);
+		expect(merged.updatedAt).toBe(overview.updatedAt);
+		expect(merged.countersUpdatedAt).toBe(summary.updatedAt);
+	});
+
+	test("rejects another payer and older or invalid snapshots", () => {
+		expect(
+			mergeQuotaCounters(overview, { ...summary, payerId: "payer-b" }),
+		).toBe(overview);
+		expect(
+			mergeQuotaCounters(overview, {
+				...summary,
+				updatedAt: "2026-09-14T09:59:00Z",
+			}),
+		).toBe(overview);
+		expect(
+			mergeQuotaCounters(overview, { ...summary, updatedAt: "invalid" }),
+		).toBe(overview);
+		const merged = mergeQuotaCounters(overview, summary);
+		expect(
+			mergeQuotaCounters(merged, {
+				...summary,
+				updatedAt: "2026-09-14T10:00:30Z",
+			}),
+		).toBe(merged);
 	});
 });
 

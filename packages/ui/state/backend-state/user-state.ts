@@ -1,5 +1,13 @@
-import type { QuotaOverview, QuotaOperationsPage, QuotaOperationDetail } from "../../lib/quota";
-export type { QuotaOverview, QuotaOperationsPage, QuotaOperationDetail } from "../../lib/quota";
+import type {
+	QuotaOperationDetail,
+	QuotaOperationsPage,
+	QuotaOverview,
+} from "../../lib/quota";
+export type {
+	QuotaOverview,
+	QuotaOperationsPage,
+	QuotaOperationDetail,
+} from "../../lib/quota";
 import type {
 	IHomeDefault,
 	IHomeDefaults,
@@ -373,7 +381,7 @@ export interface IUserState {
 	>;
 	deletePAT(id: string): Promise<void>;
 	getPricing(): Promise<IPricingResponse>;
-	getQuotaUsage(): Promise<QuotaOverview>;
+	getQuotaUsage(includeHistory?: boolean): Promise<QuotaOverview>;
 	getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail>;
 	getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage>;
 	createSubscription(request: ISubscribeRequest): Promise<ISubscribeResponse>;

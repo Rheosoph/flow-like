@@ -2424,7 +2424,7 @@ model AppRollingUsage {
   sweptAt        BigInt   @default(0)
 
   @@unique([appId, userId, period], map: "AppRollingUsage_scope_key")
-  @@index([sweptAt])
+  @@index([sweptAt, id])
 }
 
 model AppRollingContribution {
@@ -2437,7 +2437,7 @@ model AppRollingContribution {
   tokens    BigInt
   calls     BigInt
 
-  @@index([counterId, expiresAt])
+  @@index([counterId, expiresAt, id])
   @@index([appId])
 }
 

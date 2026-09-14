@@ -3,10 +3,14 @@
 //! expiry work are bounded; a warming counter cannot admit new provider work.
 use crate::{entity::usage_invocation, usage_limits::UsageLimitTotals};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, FromQueryResult, Statement};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 const ADMISSION_BATCH: usize = 100;
-const MAINTENANCE_BATCH: usize = 500;
+const MAINTENANCE_BATCH: usize = 250;
+const MAINTENANCE_COUNTERS: usize = 20;
+const MAINTENANCE_SECONDS: u64 = 20;
 
 fn statement(sql: impl Into<String>, values: Vec<sea_orm::Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Postgres, sql, values)
@@ -50,6 +54,8 @@ struct Counter {
     cursor_at: DateTime<FixedOffset>,
     #[sea_orm(from_alias = "cursorId")]
     cursor_id: String,
+    #[sea_orm(from_alias = "sweptAt")]
+    swept_at: i64,
 }
 
 #[derive(FromQueryResult)]
@@ -60,7 +66,7 @@ struct Contribution {
     calls: i64,
 }
 
-#[derive(FromQueryResult)]
+#[derive(Clone, FromQueryResult)]
 struct Source {
     source_id: String,
     occurred_at: DateTime<FixedOffset>,
@@ -69,172 +75,345 @@ struct Source {
     calls: i64,
 }
 
-async fn adjust<C: ConnectionTrait>(
-    db: &C,
-    counter: &str,
+#[derive(FromQueryResult)]
+struct RawSource {
+    source_id: String,
+    occurred_at: DateTime<FixedOffset>,
     cost: i64,
     tokens: i64,
     calls: i64,
-) -> Result<(), DbErr> {
-    db.execute_raw(statement(
-        r#"UPDATE "AppRollingUsage" SET cost=cost+$2,tokens=tokens+$3,calls=calls+$4 WHERE id=$1"#,
-        vec![counter.into(), cost.into(), tokens.into(), calls.into()],
-    ))
-    .await?;
+    user_id: Option<String>,
+    technical_user_id: Option<String>,
+    invocation_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct Delta {
+    cost: i64,
+    tokens: i64,
+    calls: i64,
+}
+
+impl Delta {
+    fn add(&mut self, cost: i64, tokens: i64, calls: i64) -> Result<(), DbErr> {
+        let overflow = || DbErr::Custom("App usage total exceeds the supported range".into());
+        self.cost = self.cost.checked_add(cost).ok_or_else(overflow)?;
+        self.tokens = self.tokens.checked_add(tokens).ok_or_else(overflow)?;
+        self.calls = self.calls.checked_add(calls).ok_or_else(overflow)?;
+        Ok(())
+    }
+    fn is_zero(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+fn placeholders(start: usize, count: usize) -> String {
+    (start..start + count)
+        .map(|n| format!("${n}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn apply_local(counter: &mut Counter, delta: Delta) -> Result<(), DbErr> {
+    let mut totals = Delta {
+        cost: counter.cost,
+        tokens: counter.tokens,
+        calls: counter.calls,
+    };
+    totals.add(delta.cost, delta.tokens, delta.calls)?;
+    counter.cost = totals.cost;
+    counter.tokens = totals.tokens;
+    counter.calls = totals.calls;
     Ok(())
 }
 
-async fn contribute<C: ConnectionTrait>(
+async fn apply_deltas<C: ConnectionTrait>(
     db: &C,
-    counter: &Counter,
-    source: &Source,
-    replace: bool,
+    deltas: &BTreeMap<String, Delta>,
 ) -> Result<(), DbErr> {
-    let expiry = source
-        .occurred_at
-        .timestamp_millis()
-        .saturating_add(window_ms(&counter.period).unwrap_or(0));
-    let id = key(&[&counter.id, &source.source_id]);
-    let previous = Contribution::find_by_statement(statement(
-        r#"SELECT id,cost,tokens,calls FROM "AppRollingContribution" WHERE id=$1"#,
-        vec![id.clone().into()],
-    ))
-    .one(db)
-    .await?;
-    if previous.is_some() && !replace {
+    let entries = deltas
+        .iter()
+        .filter(|(_, delta)| !delta.is_zero())
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
         return Ok(());
     }
-    let active = expiry >= Utc::now().timestamp_millis();
-    let (cost, tokens, calls) = if active {
-        (
-            source.cost.max(0),
-            source.tokens.max(0),
-            source.calls.max(0),
-        )
-    } else {
-        (0, 0, 0)
-    };
-    if let Some(previous) = previous {
-        if active {
-            db.execute_raw(statement(r#"UPDATE "AppRollingContribution" SET cost=$2,tokens=$3,calls=$4,"expiresAt"=$5 WHERE id=$1"#,
-                vec![id.into(),cost.into(),tokens.into(),calls.into(),expiry.into()])).await?;
-        } else {
-            db.execute_raw(statement(
-                r#"DELETE FROM "AppRollingContribution" WHERE id=$1"#,
-                vec![id.into()],
-            ))
-            .await?;
+    let mut values = Vec::with_capacity(entries.len() * 4);
+    let mut ids = Vec::new();
+    let mut cases = [String::new(), String::new(), String::new()];
+    for (id, delta) in entries {
+        let n = values.len() + 1;
+        ids.push(format!("${n}"));
+        values.extend([
+            id.clone().into(),
+            delta.cost.into(),
+            delta.tokens.into(),
+            delta.calls.into(),
+        ]);
+        for (offset, case) in cases.iter_mut().enumerate() {
+            case.push_str(&format!(" WHEN ${n} THEN ${}::BIGINT", n + offset + 1));
         }
-        adjust(
-            db,
-            &counter.id,
-            cost - previous.cost,
-            tokens - previous.tokens,
-            calls - previous.calls,
-        )
-        .await?;
-    } else if active {
-        db.execute_raw(statement(r#"INSERT INTO "AppRollingContribution" (id,"counterId","appId","sourceId","expiresAt",cost,tokens,calls) VALUES($1,$2,$3,$4,$5,$6,$7,$8)"#,
-            vec![id.into(),counter.id.clone().into(),counter.app_id.clone().into(),source.source_id.clone().into(),expiry.into(),cost.into(),tokens.into(),calls.into()])).await?;
-        adjust(db, &counter.id, cost, tokens, calls).await?;
     }
+    db.execute_raw(statement(format!(r#"UPDATE "AppRollingUsage" SET cost=cost+CASE id {} ELSE 0 END,tokens=tokens+CASE id {} ELSE 0 END,calls=calls+CASE id {} ELSE 0 END WHERE id IN ({})"#, cases[0],cases[1],cases[2],ids.join(",")), values)).await?;
     Ok(())
+}
+
+struct Target<'a> {
+    counter: &'a Counter,
+    source: &'a Source,
+}
+
+/// Callers hold the app coordination row. Read each prior contribution once,
+/// then write all changed contributions and counter deltas in bounded batches.
+async fn contribute_batch<C: ConnectionTrait>(
+    db: &C,
+    targets: &[Target<'_>],
+    replace: bool,
+) -> Result<BTreeMap<String, Delta>, DbErr> {
+    if targets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let targets = targets
+        .iter()
+        .map(|target| (key(&[&target.counter.id, &target.source.source_id]), target))
+        .collect::<BTreeMap<_, _>>();
+    let previous = Contribution::find_by_statement(statement(
+        format!(
+            r#"SELECT id,cost,tokens,calls FROM "AppRollingContribution" WHERE id IN ({})"#,
+            placeholders(1, targets.len())
+        ),
+        targets.keys().cloned().map(Into::into).collect(),
+    ))
+    .all(db)
+    .await?
+    .into_iter()
+    .map(|row| (row.id.clone(), row))
+    .collect::<HashMap<_, _>>();
+    let now = Utc::now().timestamp_millis();
+    let mut inserts = Vec::new();
+    let mut insert_values = Vec::new();
+    let mut deletes: Vec<sea_orm::Value> = Vec::new();
+    let mut deltas: BTreeMap<String, Delta> = BTreeMap::new();
+    for (id, target) in targets {
+        let old = previous.get(&id);
+        if old.is_some() && !replace {
+            continue;
+        }
+        let expiry = target
+            .source
+            .occurred_at
+            .timestamp_millis()
+            .saturating_add(window_ms(&target.counter.period).unwrap_or(0));
+        let active = expiry >= now;
+        let (cost, tokens, calls) = if active {
+            (
+                target.source.cost.max(0),
+                target.source.tokens.max(0),
+                target.source.calls.max(0),
+            )
+        } else {
+            (0, 0, 0)
+        };
+        let (old_cost, old_tokens, old_calls) = old
+            .map(|row| (row.cost, row.tokens, row.calls))
+            .unwrap_or_default();
+        if active {
+            if old.is_some() && (cost, tokens, calls) == (old_cost, old_tokens, old_calls) {
+                continue;
+            }
+            inserts.push(format!("({})", placeholders(insert_values.len() + 1, 8)));
+            insert_values.extend([
+                id.into(),
+                target.counter.id.clone().into(),
+                target.counter.app_id.clone().into(),
+                target.source.source_id.clone().into(),
+                expiry.into(),
+                cost.into(),
+                tokens.into(),
+                calls.into(),
+            ]);
+        } else if old.is_some() {
+            deletes.push(id.into());
+        } else {
+            continue;
+        }
+        deltas.entry(target.counter.id.clone()).or_default().add(
+            cost - old_cost,
+            tokens - old_tokens,
+            calls - old_calls,
+        )?;
+    }
+    if !inserts.is_empty() {
+        db.execute_raw(statement(format!(r#"INSERT INTO "AppRollingContribution" (id,"counterId","appId","sourceId","expiresAt",cost,tokens,calls) VALUES {} ON CONFLICT(id) DO UPDATE SET cost=EXCLUDED.cost,tokens=EXCLUDED.tokens,calls=EXCLUDED.calls,"expiresAt"=EXCLUDED."expiresAt""#,inserts.join(",")),insert_values)).await?;
+    }
+    if !deletes.is_empty() {
+        db.execute_raw(statement(
+            format!(
+                r#"DELETE FROM "AppRollingContribution" WHERE id IN ({})"#,
+                placeholders(1, deletes.len())
+            ),
+            deletes,
+        ))
+        .await?;
+    }
+    apply_deltas(db, &deltas).await?;
+    Ok(deltas)
 }
 
 async fn expire<C: ConnectionTrait>(
     db: &C,
-    counter: &Counter,
+    counter: &mut Counter,
     batch: usize,
 ) -> Result<bool, DbErr> {
     let rows = Contribution::find_by_statement(statement(format!(r#"SELECT id,cost,tokens,calls FROM "AppRollingContribution" WHERE "counterId"=$1 AND "expiresAt"<$2 ORDER BY "expiresAt",id LIMIT {}"#,batch+1),
         vec![counter.id.clone().into(),Utc::now().timestamp_millis().into()])).all(db).await?;
     let ready = rows.len() <= batch;
-    let mut cost = 0i64;
-    let mut tokens = 0i64;
-    let mut calls = 0i64;
+    let mut delta = Delta::default();
+    let mut ids: Vec<sea_orm::Value> = Vec::new();
     for row in rows.into_iter().take(batch) {
+        ids.push(row.id.into());
+        delta.add(-row.cost, -row.tokens, -row.calls)?;
+    }
+    if !ids.is_empty() {
         db.execute_raw(statement(
-            r#"DELETE FROM "AppRollingContribution" WHERE id=$1"#,
-            vec![row.id.into()],
+            format!(
+                r#"DELETE FROM "AppRollingContribution" WHERE id IN ({})"#,
+                placeholders(1, ids.len())
+            ),
+            ids,
         ))
         .await?;
-        cost = cost.saturating_add(row.cost);
-        tokens = tokens.saturating_add(row.tokens);
-        calls = calls.saturating_add(row.calls);
-    }
-    if cost != 0 || tokens != 0 || calls != 0 {
-        adjust(db, &counter.id, -cost, -tokens, -calls).await?;
+        apply_deltas(db, &BTreeMap::from([(counter.id.clone(), delta)])).await?;
+        apply_local(counter, delta)?;
     }
     Ok(ready)
 }
 
+// Each source uses the app/time/id index to read a raw page. Scope filters and
+// canonical-ID checks happen afterwards, so rejected rows still advance the cursor.
+fn source_cursor(column: &str, prefix: &str, cursor: &str) -> String {
+    match prefix.cmp(cursor.get(..2).unwrap_or("")) {
+        std::cmp::Ordering::Less => format!(r#"{column}>$3"#),
+        std::cmp::Ordering::Equal => format!(r#"({column},id)>($3,$4)"#),
+        std::cmp::Ordering::Greater => format!(r#"{column}>=$3"#),
+    }
+}
+
 async fn backfill<C: ConnectionTrait>(
     db: &C,
-    counter: &Counter,
+    counter: &mut Counter,
     batch: usize,
 ) -> Result<bool, DbErr> {
     if counter.ready {
         return Ok(true);
     }
-    // Invocation IDs are the canonical key, even after a linked legacy tracking
-    // row arrives. Started-at attribution stays fixed across late settlement.
     let page = batch + 1;
-    // Limit each indexed source before merging; a backfill page never sorts an
-    // app's entire retained history just to return its next hundred entries.
+    let invocation_cursor = source_cursor(r#""startedAt""#, "i:", &counter.cursor_id);
+    let llm_cursor = source_cursor(r#""createdAt""#, "l:", &counter.cursor_id);
+    let embedding_cursor = source_cursor(r#""createdAt""#, "e:", &counter.cursor_id);
     let sources = format!(
         r#"
 (SELECT 'i:'||id AS source_id,"startedAt" AS occurred_at,
         CASE WHEN status IN ('pending','unknown_usage','cancelled') THEN GREATEST("estimatedCostMicroDollars","costMicroDollars") ELSE "costMicroDollars" END AS cost,
         CASE WHEN status IN ('pending','unknown_usage','cancelled') THEN GREATEST("estimatedTokens","inputTokens"+"outputTokens"+"embeddingTokens") ELSE "inputTokens"+"outputTokens"+"embeddingTokens" END AS tokens,
-        CASE WHEN status='failed' AND "costMicroDollars"=0 AND "inputTokens"+"outputTokens"+"embeddingTokens"=0 THEN 0 ELSE 1 END::BIGINT AS calls
-      FROM "UsageInvocation" WHERE "appId"=$1 AND ($2='' OR "userId"=$2 OR "technicalUserId"=$2) AND "startedAt"<=$3 AND ("startedAt">$4 OR ("startedAt"=$4 AND ('i:' > LEFT($5,2) OR ('i:' = LEFT($5,2) AND id > SUBSTRING($5 FROM 3))))) ORDER BY "startedAt",id LIMIT {page})
+        CASE WHEN status='failed' AND "costMicroDollars"=0 AND "inputTokens"+"outputTokens"+"embeddingTokens"=0 THEN 0 ELSE 1 END::BIGINT AS calls,
+        "userId" AS user_id,"technicalUserId" AS technical_user_id,NULL::TEXT AS invocation_id
+      FROM "UsageInvocation" WHERE "appId"=$1 AND "startedAt"<=$2 AND {invocation_cursor} ORDER BY "startedAt",id LIMIT {page})
 UNION ALL
-(SELECT 'l:'||t.id,t."createdAt",t.price,t."tokenIn"+t."tokenOut",1::BIGINT FROM "LLMUsageTracking" t
-      WHERE t."appId"=$1 AND ($2='' OR t."userId"=$2 OR t."technicalUserId"=$2)
-        AND NOT EXISTS(SELECT 1 FROM "UsageInvocation" i WHERE i.id=t."invocationId") AND t."createdAt"<=$3 AND (t."createdAt">$4 OR (t."createdAt"=$4 AND ('l:' > LEFT($5,2) OR ('l:' = LEFT($5,2) AND t.id > SUBSTRING($5 FROM 3))))) ORDER BY t."createdAt",t.id LIMIT {page})
+(SELECT 'l:'||id,"createdAt",price,"tokenIn"+"tokenOut",1::BIGINT,"userId","technicalUserId","invocationId" FROM "LLMUsageTracking"
+      WHERE "appId"=$1 AND "createdAt"<=$2 AND {llm_cursor} ORDER BY "createdAt",id LIMIT {page})
 UNION ALL
-(SELECT 'e:'||t.id,t."createdAt",t.price,t."tokenCount",1::BIGINT FROM "EmbeddingUsageTracking" t
-      WHERE t."appId"=$1 AND ($2='' OR t."userId"=$2 OR t."technicalUserId"=$2)
-        AND NOT EXISTS(SELECT 1 FROM "UsageInvocation" i WHERE i.id=t."invocationId") AND t."createdAt"<=$3 AND (t."createdAt">$4 OR (t."createdAt"=$4 AND ('e:' > LEFT($5,2) OR ('e:' = LEFT($5,2) AND t.id > SUBSTRING($5 FROM 3))))) ORDER BY t."createdAt",t.id LIMIT {page})
+(SELECT 'e:'||id,"createdAt",price,"tokenCount",1::BIGINT,"userId","technicalUserId","invocationId" FROM "EmbeddingUsageTracking"
+      WHERE "appId"=$1 AND "createdAt"<=$2 AND {embedding_cursor} ORDER BY "createdAt",id LIMIT {page})
 "#
     );
-    let rows = Source::find_by_statement(statement(
+    let mut values = vec![
+        counter.app_id.clone().into(),
+        counter.cutoff.into(),
+        counter.cursor_at.into(),
+    ];
+    if sources.contains("$4") {
+        values.push(counter.cursor_id.get(2..).unwrap_or("").to_owned().into());
+    }
+    let rows = RawSource::find_by_statement(statement(
         format!(
             r#"SELECT * FROM ({sources}) AS source ORDER BY occurred_at,source_id LIMIT {page}"#
         ),
-        vec![
-            counter.app_id.clone().into(),
-            counter.user_id.clone().into(),
-            counter.cutoff.into(),
-            counter.cursor_at.into(),
-            counter.cursor_id.clone().into(),
-        ],
+        values,
     ))
     .all(db)
     .await?;
     let ready = rows.len() <= batch;
-    let mut cursor_at = counter.cursor_at;
-    let mut cursor_id = counter.cursor_id.clone();
-    for row in rows.into_iter().take(batch) {
-        contribute(db, counter, &row, false).await?;
-        cursor_at = row.occurred_at;
-        cursor_id = row.source_id;
+    let rows = rows.into_iter().take(batch).collect::<Vec<_>>();
+    let in_scope = |row: &RawSource| {
+        counter.user_id.is_empty()
+            || row.user_id.as_deref() == Some(counter.user_id.as_str())
+            || row.technical_user_id.as_deref() == Some(counter.user_id.as_str())
+    };
+    let canonical_ids = rows
+        .iter()
+        .filter(|row| in_scope(row))
+        .filter_map(|row| row.invocation_id.clone())
+        .collect::<HashSet<_>>();
+    let mut canonical = HashSet::new();
+    if !canonical_ids.is_empty() {
+        for row in db
+            .query_all_raw(statement(
+                format!(
+                    r#"SELECT id FROM "UsageInvocation" WHERE id IN ({})"#,
+                    placeholders(1, canonical_ids.len())
+                ),
+                canonical_ids.into_iter().map(Into::into).collect(),
+            ))
+            .await?
+        {
+            canonical.insert(row.try_get::<String>("", "id")?);
+        }
     }
+    let sources = rows
+        .iter()
+        .filter(|row| {
+            in_scope(row)
+                && !row
+                    .invocation_id
+                    .as_ref()
+                    .is_some_and(|id| canonical.contains(id))
+        })
+        .map(|row| Source {
+            source_id: row.source_id.clone(),
+            occurred_at: row.occurred_at,
+            cost: row.cost,
+            tokens: row.tokens,
+            calls: row.calls,
+        })
+        .collect::<Vec<_>>();
+    let targets = sources
+        .iter()
+        .map(|source| Target { counter, source })
+        .collect::<Vec<_>>();
+    let deltas = contribute_batch(db, &targets, false).await?;
+    let delta = deltas.get(&counter.id).copied().unwrap_or_default();
+    apply_local(counter, delta)?;
+    if let Some(last) = rows.last() {
+        counter.cursor_at = last.occurred_at;
+        counter.cursor_id = last.source_id.clone();
+    }
+    counter.ready = ready;
     db.execute_raw(statement(
         r#"UPDATE "AppRollingUsage" SET ready=$2,"cursorAt"=$3,"cursorId"=$4 WHERE id=$1"#,
         vec![
             counter.id.clone().into(),
             ready.into(),
-            cursor_at.into(),
-            cursor_id.into(),
+            counter.cursor_at.into(),
+            counter.cursor_id.clone().into(),
         ],
     ))
     .await?;
     Ok(ready)
 }
 
-/// The caller holds the app's usage-budget coordination row. A None result must
-/// be committed, then returned as temporary unavailability so backfill progresses.
+/// A warming counter commits cursor progress before returning temporary unavailability.
+/// The caller holds the app's usage-budget coordination row throughout this call.
 pub(crate) async fn totals<C: ConnectionTrait>(
     db: &C,
     app: &str,
@@ -245,32 +424,43 @@ pub(crate) async fn totals<C: ConnectionTrait>(
         return Ok(Some(UsageLimitTotals::default()));
     };
     let id = key(&[app, user, period]);
-    let now = Utc::now().fixed_offset();
-    db.execute_raw(statement(r#"INSERT INTO "AppRollingUsage" (id,"appId","userId",period,"backfillCutoff","cursorAt") VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO NOTHING"#,
-        vec![id.clone().into(),app.into(),user.into(),period.into(),now.into(),(now-Duration::milliseconds(window)).into()])).await?;
-    let counter = Counter::find_by_statement(statement(
+    let mut counter = if let Some(counter) = Counter::find_by_statement(statement(
         r#"SELECT * FROM "AppRollingUsage" WHERE id=$1"#,
         vec![id.clone().into()],
     ))
     .one(db)
     .await?
-    .ok_or_else(|| DbErr::Custom("App usage counter is missing".into()))?;
-    let expired = expire(db, &counter, ADMISSION_BATCH).await?;
-    let filled = backfill(db, &counter, ADMISSION_BATCH).await?;
+    {
+        counter
+    } else {
+        let now = Utc::now().fixed_offset();
+        let cursor_at = now - Duration::milliseconds(window);
+        db.execute_raw(statement(r#"INSERT INTO "AppRollingUsage" (id,"appId","userId",period,"backfillCutoff","cursorAt") VALUES($1,$2,$3,$4,$5,$6)"#,
+            vec![id.clone().into(),app.into(),user.into(),period.into(),now.into(),cursor_at.into()])).await?;
+        Counter {
+            id,
+            app_id: app.into(),
+            user_id: user.into(),
+            period: period.into(),
+            cost: 0,
+            tokens: 0,
+            calls: 0,
+            ready: false,
+            cutoff: now,
+            cursor_at,
+            cursor_id: String::new(),
+            swept_at: 0,
+        }
+    };
+    let expired = expire(db, &mut counter, ADMISSION_BATCH).await?;
+    let filled = backfill(db, &mut counter, ADMISSION_BATCH).await?;
     if !expired || !filled {
         return Ok(None);
     }
-    let current = Counter::find_by_statement(statement(
-        r#"SELECT * FROM "AppRollingUsage" WHERE id=$1"#,
-        vec![id.into()],
-    ))
-    .one(db)
-    .await?
-    .unwrap();
     Ok(Some(UsageLimitTotals {
-        cost_micro_dollars: current.cost,
-        tokens: current.tokens,
-        invocations: current.calls,
+        cost_micro_dollars: counter.cost,
+        tokens: counter.tokens,
+        invocations: counter.calls,
     }))
 }
 
@@ -313,55 +503,121 @@ pub(crate) async fn sync_invocation<C: ConnectionTrait>(
             1
         },
     };
-    for counter in counters {
-        contribute(db, &counter, &source, true).await?;
-    }
+    let targets = counters
+        .iter()
+        .map(|counter| Target {
+            counter,
+            source: &source,
+        })
+        .collect::<Vec<_>>();
+    contribute_batch(db, &targets, true).await?;
     Ok(())
 }
 
 pub(crate) async fn maintain(state: &crate::state::AppState) -> Result<(), crate::error::ApiError> {
-    let rows = Counter::find_by_statement(statement(
-        r#"SELECT * FROM "AppRollingUsage" ORDER BY "sweptAt",id LIMIT 20"#,
-        vec![],
-    ))
-    .all(&state.db)
-    .await?;
-    for counter in rows {
-        crate::db::retry_transaction(
-            &state.db,
-            state.db_dialect,
-            None,
-            &crate::db::RetryPolicy::default(),
-            move |txn| {
-                let counter = counter.clone();
-                Box::pin(async move {
-                    crate::db::coordination::coordinate(txn, "usage-budget", &[&counter.app_id])
-                        .await?;
-                    // Reload after coordination so another maintenance worker cannot
-                    // restore an older cursor after this worker waited for the lock.
-                    let Some(current) = Counter::find_by_statement(statement(
-                        r#"SELECT * FROM "AppRollingUsage" WHERE id=$1"#,
-                        vec![counter.id.clone().into()],
-                    ))
-                    .one(txn)
-                    .await?
-                    else {
-                        return Ok::<_, DbErr>(());
-                    };
-                    expire(txn, &current, MAINTENANCE_BATCH).await?;
-                    backfill(txn, &current, MAINTENANCE_BATCH).await?;
-                    txn.execute_raw(statement(
-                        r#"UPDATE "AppRollingUsage" SET "sweptAt"=$2 WHERE id=$1"#,
-                        vec![current.id.into(), Utc::now().timestamp_millis().into()],
+    maintain_with_db(&state.db, state.db_dialect).await?;
+    Ok(())
+}
+
+async fn maintain_with_db(
+    db: &sea_orm::DatabaseConnection,
+    dialect: crate::db::DbDialect,
+) -> Result<(), DbErr> {
+    maintain_batch_with_db(
+        db,
+        dialect,
+        std::time::Duration::from_secs(MAINTENANCE_SECONDS),
+        std::time::Duration::from_secs(3),
+    )
+    .await
+}
+
+async fn maintain_batch_with_db(
+    db: &sea_orm::DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    budget: std::time::Duration,
+    per_counter: std::time::Duration,
+) -> Result<(), DbErr> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let work = async {
+        let rows = Counter::find_by_statement(statement(format!(r#"SELECT * FROM "AppRollingUsage" ORDER BY "sweptAt",id LIMIT {MAINTENANCE_COUNTERS}"#),vec![])).all(db).await?;
+        let mut queue = VecDeque::from(rows);
+        for _ in 0..MAINTENANCE_COUNTERS {
+            let Some(counter) = queue.pop_front() else {
+                break;
+            };
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            // Rotate before attempting work. A busy app, error or timed-out transaction
+            // must not keep the same counter at the front of the global queue.
+            let work = async {
+                let claimed = db
+                    .execute_raw(statement(
+                        r#"UPDATE "AppRollingUsage" SET "sweptAt"=$2 WHERE id=$1 AND "sweptAt"=$3"#,
+                        vec![
+                            counter.id.clone().into(),
+                            Utc::now()
+                                .timestamp_millis()
+                                .max(counter.swept_at.saturating_add(1))
+                                .into(),
+                            counter.swept_at.into(),
+                        ],
                     ))
                     .await?;
-                    Ok::<_, DbErr>(())
-                })
-            },
-        )
-        .await?;
+                if claimed.rows_affected() == 0 {
+                    return Ok::<_, DbErr>(None);
+                }
+                crate::db::retry_transaction(
+                    db,
+                    dialect,
+                    None,
+                    &crate::db::RetryPolicy::default(),
+                    move |txn| {
+                        let id = counter.id.clone();
+                        let app = counter.app_id.clone();
+                        Box::pin(async move {
+                            crate::db::coordination::coordinate(txn, "usage-budget", &[&app])
+                                .await?;
+                            if let Some(mut current) = Counter::find_by_statement(statement(
+                                r#"SELECT * FROM "AppRollingUsage" WHERE id=$1"#,
+                                vec![id.into()],
+                            ))
+                            .one(txn)
+                            .await?
+                            {
+                                let expired = expire(txn, &mut current, MAINTENANCE_BATCH).await?;
+                                let filled = backfill(txn, &mut current, MAINTENANCE_BATCH).await?;
+                                if !expired || !filled {
+                                    return Ok(Some(current));
+                                }
+                            }
+                            Ok::<_, DbErr>(None)
+                        })
+                    },
+                )
+                .await
+            };
+            match tokio::time::timeout_at(
+                deadline.min(tokio::time::Instant::now() + per_counter),
+                work,
+            )
+            .await
+            {
+                Ok(Ok(Some(counter))) => queue.push_back(counter),
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error,"Rolling usage maintenance will retry this counter")
+                }
+                Err(_) => tracing::warn!("Rolling usage maintenance yielded a busy counter"),
+            }
+        }
+        Ok::<_, DbErr>(())
+    };
+    match tokio::time::timeout_at(deadline, work).await {
+        Ok(result) => result,
+        Err(_) => Ok(()),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -380,3 +636,7 @@ mod tests {
         assert_ne!(key(&["app", "", "weekly"]), key(&["app", "user", "weekly"]));
     }
 }
+
+#[cfg(test)]
+#[path = "rolling_usage_tests.rs"]
+mod integration_tests;
