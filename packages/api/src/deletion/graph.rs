@@ -1,10 +1,9 @@
-//! Foreign-key metadata lifted from the generated sea-orm entities.
+//! Foreign keys from SeaORM entities and table metadata used by deletion.
 //!
-//! Every `belongs_to` relation of every entity in [`crate::entity::prelude`]
-//! becomes one [`FkEdge`]. The set is pinned by `edges.snapshot.txt`: an
-//! entity regeneration that adds a table, drops an edge or changes a
-//! referential action fails `snapshot_edges` instead of silently changing what
-//! the deleter drains.
+//! Every `belongs_to` relation of a registered entity becomes one [`FkEdge`].
+//! The edges are pinned by `edges.snapshot.txt`. Tables accessed through raw
+//! SQL without entities declare their deletion keys and reference columns in
+//! [`SQL_TABLES`].
 
 use sea_orm::sea_query::{ColumnType, DynIden, ForeignKeyAction, TableRef};
 use sea_orm::{ColumnTrait, EntityTrait, IdenStatic, Iterable, PrimaryKeyToColumn, RelationTrait};
@@ -216,6 +215,24 @@ macro_rules! register_entities {
     };
 }
 
+// These tables have no foreign keys or SeaORM entities. Register only the
+// primary key and reference columns used by cleanup and retention overrides.
+const SQL_TABLES: &[(&str, &str, &[&str])] = &[
+    ("AccountCapacity", "payerId", &[]),
+    ("AppRollingContribution", "id", &["appId"]),
+    ("AppRollingUsage", "id", &["appId"]),
+    ("CloudDispatchIntent", "id", &["payerId"]),
+    ("ComputeAttempt", "id", &["payerId"]),
+    ("ProjectCapacity", "appId", &["payerId"]),
+    ("QuotaAccount", "payerId", &[]),
+    ("QuotaDailyUsage", "id", &["appId", "payerId"]),
+    ("QuotaEvent", "id", &["payerId"]),
+    ("QuotaOperation", "id", &["appId", "payerId"]),
+    ("QuotaPeriod", "id", &["payerId"]),
+    ("QuotaWarningState", "id", &["payerId"]),
+    ("StorageUploadGrant", "id", &["appId", "payerId"]),
+];
+
 fn build() -> FkGraph {
     let mut graph = FkGraph::default();
     register_entities!(
@@ -264,6 +281,7 @@ fn build() -> FkGraph {
             ExecutionRunCallerApp,
             ExecutionUsageTracking,
             Feedback,
+            FileAccountingObject,
             FlowScriptApplyFailure,
             ForkJob,
             Invitation,
@@ -341,6 +359,22 @@ fn build() -> FkGraph {
             Widget,
         ]
     );
+    for &(name, primary_key, columns) in SQL_TABLES {
+        graph.tables.insert(
+            name.to_owned(),
+            TableMeta {
+                name: name.to_owned(),
+                primary_key: vec![PkColumn {
+                    name: primary_key.to_owned(),
+                    kind: Some(PkKind::Text),
+                }],
+                columns: std::iter::once(primary_key)
+                    .chain(columns.iter().copied())
+                    .map(str::to_owned)
+                    .collect(),
+            },
+        );
+    }
     graph.edges.sort_by(|a, b| {
         (&a.child, &a.column, &a.parent, &a.parent_column).cmp(&(
             &b.child,
@@ -367,6 +401,55 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/src/deletion/edges.snapshot.txt"
     );
+
+    #[test]
+    fn sql_table_metadata_matches_prisma() {
+        let schemas = [
+            include_str!("../../prisma/schema/capacity.prisma"),
+            include_str!("../../prisma/schema/compute-attempt.prisma"),
+            include_str!("../../prisma/schema/dispatch-intent.prisma"),
+            include_str!("../../prisma/schema/quota.prisma"),
+            include_str!("../../prisma/schema/quota-warning.prisma"),
+            include_str!("../../prisma/schema/rolling-usage.prisma"),
+        ]
+        .join("\n");
+        for &(name, _, _) in SQL_TABLES {
+            let header = format!("model {name} {{");
+            let body = schemas
+                .split_once(&header)
+                .and_then(|(_, rest)| rest.split_once('}'))
+                .map(|(body, _)| body)
+                .unwrap_or_else(|| panic!("{name} is missing from the Prisma schema"));
+            assert!(
+                !body.contains("@relation"),
+                "{name} needs foreign-key metadata"
+            );
+            let fields: Vec<Vec<&str>> = body
+                .lines()
+                .map(|line| line.split_whitespace().collect())
+                .filter(|parts: &Vec<&str>| parts.len() >= 2 && !parts[0].starts_with('/'))
+                .collect();
+            let table = fk_graph().table(name).expect(name);
+            let keys: Vec<PkColumn> = fields
+                .iter()
+                .filter(|field| field.contains(&"@id"))
+                .map(|field| {
+                    assert_eq!(field[1], "String", "{name}.{} must be a text key", field[0]);
+                    PkColumn {
+                        name: field[0].to_owned(),
+                        kind: Some(PkKind::Text),
+                    }
+                })
+                .collect();
+            assert_eq!(table.primary_key, keys, "{name}");
+            for column in &table.columns {
+                assert!(
+                    fields.iter().any(|field| field[0] == column),
+                    "{name}.{column} is missing from the Prisma schema"
+                );
+            }
+        }
+    }
 
     #[test]
     fn snapshot_edges() {

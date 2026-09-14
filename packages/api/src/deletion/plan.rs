@@ -869,6 +869,15 @@ mod tests {
             .unwrap();
         assert!(payloads < drain_index(&plan, "ExecutionEvent"));
         assert!(payloads < drain_index(&plan, "ExecutionRun"));
+        let quota_payloads = plan
+            .position(&Step::External(ExternalStep::AppQuotaPayloads))
+            .unwrap();
+        let first_drain = plan
+            .steps
+            .iter()
+            .position(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
+            .unwrap();
+        assert!(quota_payloads < first_drain);
         let storage = plan
             .position(&Step::External(ExternalStep::AppStoragePrefixes))
             .unwrap();
@@ -880,15 +889,35 @@ mod tests {
             .iter()
             .rposition(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
             .unwrap();
-        let sweeps: Vec<usize> = plan
+        let sweeps: Vec<_> = plan
             .steps
             .iter()
             .enumerate()
-            .filter(|(_, step)| matches!(step, Step::SweepSoft { .. }))
-            .map(|(i, _)| i)
+            .filter_map(|(i, step)| match step {
+                Step::SweepSoft { table, column } => Some((i, table.as_str(), column.as_str())),
+                _ => None,
+            })
             .collect();
-        assert_eq!(sweeps.len(), 5);
-        assert!(sweeps.iter().all(|i| *i > last_drain && *i < storage));
+        assert_eq!(
+            sweeps
+                .iter()
+                .map(|(_, table, column)| (*table, *column))
+                .collect::<Vec<_>>(),
+            [
+                ("AppCacheEntry", "appId"),
+                ("UsageInvocation", "appId"),
+                ("UsageAlert", "appId"),
+                ("UsageLimitAuditLog", "appId"),
+                ("FlowScriptApplyFailure", "appId"),
+                ("AppRollingContribution", "appId"),
+                ("AppRollingUsage", "appId"),
+            ]
+        );
+        assert!(
+            sweeps
+                .iter()
+                .all(|(i, _, _)| *i > last_drain && *i < storage)
+        );
         assert!(storage < cache && cache + 1 == plan.steps.len() - 1);
         assert_eq!(plan.steps.last(), Some(&Step::DeleteRoot));
     }
@@ -948,6 +977,61 @@ mod tests {
             unreachable!()
         };
         assert_eq!(predicates.len(), 2);
+    }
+
+    #[test]
+    fn user_plan_cleans_quota_state_before_deleting_the_user() {
+        let plan = plan_for(DeletionRoot::User).unwrap();
+        let payloads = plan
+            .position(&Step::External(ExternalStep::UserQuotaPayloads))
+            .unwrap();
+        assert_eq!(payloads, 1);
+        let first_drain = plan
+            .steps
+            .iter()
+            .position(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
+            .unwrap();
+        assert!(payloads < first_drain);
+        let last_drain = plan
+            .steps
+            .iter()
+            .rposition(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
+            .unwrap();
+        let warnings = plan
+            .position(&Step::SweepSoft {
+                table: "QuotaWarningState".into(),
+                column: "payerId".into(),
+            })
+            .unwrap();
+        assert!(last_drain < warnings);
+        assert_eq!(warnings + 1, plan.steps.len() - 1);
+        assert_eq!(plan.steps.last(), Some(&Step::DeleteRoot));
+    }
+
+    #[test]
+    fn app_and_user_deletion_preserve_quota_and_billing_rows() {
+        for root in [DeletionRoot::App, DeletionRoot::User] {
+            let plan = plan_for(root).unwrap();
+            for table in [
+                "AccountCapacity",
+                "ProjectCapacity",
+                "StorageUploadGrant",
+                "FileAccountingObject",
+                "QuotaAccount",
+                "QuotaPeriod",
+                "QuotaOperation",
+                "QuotaEvent",
+                "QuotaDailyUsage",
+                "ComputeAttempt",
+                "CloudDispatchIntent",
+            ] {
+                assert!(
+                    plan.steps.iter().all(|step| step.table() != Some(table)),
+                    "{root:?} deletion must preserve {table}:\n{}",
+                    render(&plan)
+                );
+            }
+        }
     }
 
     #[test]
