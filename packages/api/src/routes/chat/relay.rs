@@ -47,9 +47,12 @@ static HOSTED_RATES: std::sync::LazyLock<moka::sync::Cache<String, HostedRateSna
 
 fn rate_from_catalog(model: &JsonValue) -> Result<HostedRateSnapshot, ApiError> {
     let price = |name: &str| -> Result<i64, ApiError> {
-        let value = model
-            .get("pricing")
-            .and_then(|value| value.get(name))
+        let entry = model.get("pricing").and_then(|value| value.get(name));
+        // OpenRouter omits `request` for models without a per-request fee.
+        if entry.is_none() && name == "request" {
+            return Ok(0);
+        }
+        let value = entry
             .and_then(|value| {
                 value
                     .as_str()
@@ -1338,6 +1341,25 @@ mod tests {
             "pricing": {"prompt":"0.000001","completion":"0.000004","request":"0"}
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn catalog_rate_accepts_models_without_request_fee() {
+        let rate = rate_from_catalog(&serde_json::json!({
+            "context_length": 131_072,
+            "pricing": {"prompt":"0.00000003","completion":"0.00000015","input_cache_read":"0.00000003"}
+        }))
+        .unwrap();
+        assert_eq!(rate.request_micro_usd, 0);
+        assert_eq!(rate.input_micro_usd_per_million_tokens, 30_000);
+        assert_eq!(rate.output_micro_usd_per_million_tokens, 150_000);
+        assert!(
+            rate_from_catalog(&serde_json::json!({
+                "context_length": 131_072,
+                "pricing": {"completion":"0.00000015"}
+            }))
+            .is_err()
+        );
     }
 
     #[test]
