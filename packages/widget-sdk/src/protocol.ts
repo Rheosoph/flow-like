@@ -1,3 +1,14 @@
+import type {
+	MediaPlayPayload,
+	MediaResultPayload,
+	WidgetMediaState,
+} from "./media";
+import type {
+	AudioRequestPayload,
+	MicrophoneResultPayload,
+	RequestIdPayload,
+} from "./microphone";
+
 export const FLW_PROTOCOL = "flw/1";
 
 export type ThemeMode = "light" | "dark";
@@ -9,6 +20,9 @@ export interface ThemeState {
 
 export interface InitCapabilities {
 	preview?: boolean;
+	microphone?: boolean;
+	media?: boolean;
+	mediaIds?: string[];
 }
 
 export interface InitPayload {
@@ -56,6 +70,16 @@ export interface ValueChangedPayload {
 }
 
 export interface FlwPayloadMap {
+	"media:play": MediaPlayPayload;
+	"media:pause": Record<string, never>;
+	"media:stop": Record<string, never>;
+	"media:result": MediaResultPayload;
+	"media:state": WidgetMediaState;
+	"microphone:request": AudioRequestPayload;
+	"microphone:result": MicrophoneResultPayload;
+	"microphone:stop": RequestIdPayload;
+	"microphone:cancel": RequestIdPayload;
+	"capabilities:update": InitCapabilities;
 	init: InitPayload;
 	"props:update": PropsUpdatePayload;
 	"theme:change": ThemeState;
@@ -69,12 +93,22 @@ export interface FlwPayloadMap {
 }
 
 export type HostToWidgetMessageType =
+	| "media:result"
+	| "media:state"
+	| "microphone:result"
+	| "capabilities:update"
 	| "init"
 	| "props:update"
 	| "theme:change"
 	| "query";
 
 export type WidgetToHostMessageType =
+	| "media:play"
+	| "media:pause"
+	| "media:stop"
+	| "microphone:request"
+	| "microphone:stop"
+	| "microphone:cancel"
 	| "hello"
 	| "ready"
 	| "event"
@@ -93,6 +127,16 @@ export interface FlwEnvelope<T extends FlwMessageType = FlwMessageType> {
 }
 
 const FLW_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+	"media:play",
+	"media:pause",
+	"media:stop",
+	"media:result",
+	"media:state",
+	"microphone:request",
+	"microphone:result",
+	"microphone:stop",
+	"microphone:cancel",
+	"capabilities:update",
 	"init",
 	"props:update",
 	"theme:change",

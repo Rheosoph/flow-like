@@ -8,20 +8,20 @@ The Rust source of truth for the emitted formats is `packages/wasm/schema/src/wi
 
 ```bash
 # Pack all framework groups of a project into widgets.flwb
-bunx flow-like-widgets pack --project . --out widgets.flwb \
+bunx @flow-like/widget-bundler pack --project . --out widgets.flwb \
   [--serving-prefix flow-widget://pkg@hash/] [--connect https://api.example.com ...] \
   [--created-at 2026-07-21T12:00:00Z]
 
 # Mock-host dev harness (design §8.4 Layer 1): starts every framework group's
 # own dev script and serves a browser page that is a real flw/1 host
-bunx flow-like-widgets dev [--project .] [--port 4700]
+bunx @flow-like/widget-bundler dev [--project .] [--port 4700]
 
 # Validate widget contracts of a project, or a built bundle
-bunx flow-like-widgets validate .
-bunx flow-like-widgets validate widgets.flwb
+bunx @flow-like/widget-bundler validate .
+bunx @flow-like/widget-bundler validate widgets.flwb
 
 # Scaffold a new widget inside a framework group
-bunx flow-like-widgets add kpi-card --group widgets/react
+bunx @flow-like/widget-bundler add kpi-card --group widgets/react
 ```
 
 `dev` spawns `bun run dev -- --port <n> --strictPort` per framework group (ports assigned from the harness port upward; the child's `Local:` stdout line overrides the assignment if the dev script ignores the flags) and serves the harness on `http://localhost:4700/`: every widget in a sandboxed iframe speaking `flw/1`, with a contract-generated props panel, `dev.fixtures` presets, event log with contract validation, query invoker, theme toggle + token editor, viewport/preview controls, and a raw protocol trace. Contracts are re-extracted per request, cached by `widget.config.ts` mtime (`GET /api/contract/<group>/<id>`).
@@ -69,7 +69,51 @@ export default defineWidget<Inputs, Events, Queries>({
 });
 ```
 
-Contracts are derived statically (TypeScript compiler API + `ts-json-schema-generator`): JSDoc `@default` / `@minimum` / `@maximum` become pin defaults and bounds, string unions become enum choices, `void` payloads become `null` schemas, and all `$ref`s are inlined (recursive types are rejected). Non-optional inputs without a `@default` produce a warning — they break standalone dev and pin defaults.
+Contracts are derived statically (TypeScript compiler API + `ts-json-schema-generator`): JSDoc `@default` / `@minimum` / `@maximum` become pin defaults and bounds, string unions become enum choices, and `void` payloads become `null` schemas. Geometry annotations select the shared geometry validator; other schemas have their `$ref`s inlined and cannot be recursive. Non-optional inputs without a `@default` produce a warning because standalone dev and generated pins have no initial value.
+
+Geometry types from `@flow-like/widget-sdk` produce native Geometry pins while
+keeping the same TypeScript contract for widget props, events, and queries:
+
+```ts
+import {
+	defineWidget,
+	type GeoPoint,
+	type GeoPolygon,
+	type GeoPosition,
+} from "@flow-like/widget-sdk";
+
+/** @geometry Point */
+type SearchCenter = {
+	type: "Point";
+	coordinates: GeoPosition;
+};
+
+interface Inputs {
+	center?: SearchCenter;
+	/** @default [] */
+	stops: GeoPoint[];
+	/** @uniqueItems true @default [] */
+	visited: GeoPoint[];
+	areas?: Record<string, GeoPolygon>;
+}
+```
+
+The generated contract represents a point input as
+`{"type":"json","schema":{"type":"object","x-flow-like-type":"geometry","x-geometry":"Point"}}`.
+`Any` omits `x-geometry`. The host converts that metadata into the Geometry
+pins used by Instantiate Widget and Update Widget Inputs.
+
+The SDK also exports `GeoLineString`, `GeoMultiPoint`,
+`GeoMultiLineString`, `GeoMultiPolygon`, `GeoGeometryCollection`, and
+`GeoGeometry`. Custom scalar geometry types can use `@geometry` with one of
+those concrete GeoJSON kinds or `Any`. Put the annotation on the element type
+for arrays, sets, and maps. The annotation replaces the structural schema with
+the geometry profile and retains descriptions and defaults. Extraction rejects
+incompatible type annotations and invalid geometry defaults.
+Geometry is two-dimensional WGS 84 GeoJSON with
+positions in `[longitude, latitude]` order. Feature wrappers are unsupported.
+An explicit nullable union stays JSON-shaped and does not produce a native
+Geometry pin.
 
 ## Mise integration (design §8.2)
 

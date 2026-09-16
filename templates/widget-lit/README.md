@@ -28,7 +28,7 @@ invokable from devtools via `window.__flw.query("getCount")`.
 ## Adding a widget
 
 ```bash
-bunx flow-like-widgets add my-widget --group .
+bunx @flow-like/widget-bundler add my-widget --group .
 ```
 
 Each widget is a folder containing `widget.config.ts` (the typed contract via
@@ -37,6 +37,10 @@ module. Style with the host theme tokens (`var(--primary)`,
 `var(--background)`, `var(--foreground)`, `var(--radius)`, ...) so light/dark
 host themes apply — no hardcoded colors.
 
+Geometry inputs use types such as `GeoPoint` and `GeoPolygon` from
+`@flow-like/widget-sdk`. The bundler turns them into Geometry pins. Geometry
+values use `[longitude, latitude]` coordinate order.
+
 ## Building & packing
 
 `mise run build` emits `dist/` with one thin document per widget plus shared
@@ -44,5 +48,5 @@ chunks. The root package project packs every framework group into the
 publishable `widgets.flwb` artifact:
 
 ```bash
-bunx flow-like-widgets pack --project . --out widgets.flwb
+bunx @flow-like/widget-bundler pack --project . --out widgets.flwb
 ```

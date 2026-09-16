@@ -30,12 +30,22 @@ export interface ContractQuery {
 	argsSchema?: JsonSchema | null;
 	resultSchema?: JsonSchema | null;
 	description?: string;
+	/** Mutations change widget state and require a live acknowledgement. */
+	mutation?: boolean;
 }
 
 export interface WidgetSizing {
 	defaultHeight?: number;
 	resizable?: boolean;
 	maxHeight?: number;
+}
+
+export interface WidgetCapabilities {
+	workers?: boolean;
+	media?: boolean;
+	microphone?: boolean;
+	wasm?: boolean;
+	downloads?: boolean;
 }
 
 export interface WidgetContract {
@@ -45,6 +55,7 @@ export interface WidgetContract {
 	events?: Record<string, ContractEvent>;
 	queries?: Record<string, ContractQuery>;
 	sizing?: WidgetSizing;
+	capabilities?: WidgetCapabilities;
 }
 
 export function contractDefaults(

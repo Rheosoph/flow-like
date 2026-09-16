@@ -1,9 +1,13 @@
 {
 	"name": "@flow-like/widget-bundler",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"type": "module",
 	"description": "Flow-Like widget bundler: extracts typed contracts from TS widgets and packs framework builds into .flwb bundles.",
 	"license": "MIT",
+	"files": ["src"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"bin": {
 		"flow-like-widgets": "./src/cli.ts"
 	},

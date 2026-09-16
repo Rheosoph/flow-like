@@ -42,6 +42,8 @@
 	"capabilities": "기능",
 	"capabilityA2ui": "",
 	"capabilityCache": "",
+	"capabilityDatabaseRead": "",
+	"capabilityDatabaseWrite": "",
 	"capabilityModels": "",
 	"capabilityNetDns": "",
 	"capabilityNetHttp": "",

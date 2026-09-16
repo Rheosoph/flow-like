@@ -2,7 +2,10 @@
 // @flow-like/widget-sdk ships the consumer-side (loose) mirror. The
 // assignability assertion at the bottom keeps the two from drifting.
 
-import type { WidgetContract as SdkWidgetContract } from "@flow-like/widget-sdk";
+import type {
+	WidgetCapabilities,
+	WidgetContract as SdkWidgetContract,
+} from "@flow-like/widget-sdk";
 
 export type JsonValue =
 	| string
@@ -45,6 +48,7 @@ export interface ContractQuery {
 	argsSchema: JsonObject | null;
 	resultSchema: JsonObject | null;
 	description?: string;
+	mutation?: boolean;
 }
 
 export interface WidgetSizing {
@@ -60,6 +64,7 @@ export interface WidgetContract {
 	events: Record<string, ContractEvent>;
 	queries: Record<string, ContractQuery>;
 	sizing: WidgetSizing;
+	capabilities?: WidgetCapabilities;
 }
 
 export function isValidWidgetId(id: string): boolean {
@@ -204,6 +209,7 @@ export function canonicalizeContract(contract: WidgetContract): WidgetContract {
 			...(query.description !== undefined && {
 				description: query.description,
 			}),
+			...(query.mutation === true && { mutation: true }),
 		};
 	}
 
@@ -220,6 +226,13 @@ export function canonicalizeContract(contract: WidgetContract): WidgetContract {
 				maxHeight: contract.sizing.maxHeight,
 			}),
 		},
+		...(contract.capabilities && {
+			capabilities: Object.fromEntries(
+				(["workers", "media", "microphone", "wasm", "downloads"] as const)
+					.filter((key) => contract.capabilities?.[key] !== undefined)
+					.map((key) => [key, contract.capabilities![key]]),
+			),
+		}),
 	};
 }
 

@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import type { WidgetCapabilities } from "@flow-like/widget-sdk";
+import { validateInputValue } from "@flow-like/widget-sdk/validate";
 import {
 	type CompletedConfig,
 	DEFAULT_CONFIG,
@@ -32,6 +34,7 @@ export interface ExtractedWidgetConfig {
 	name: string;
 	description: string;
 	sizing?: WidgetSizingConfig;
+	capabilities?: WidgetCapabilities;
 	fixtures?: Record<string, JsonValue>;
 }
 
@@ -63,11 +66,15 @@ export function extractContract(widgetConfigPath: string): ExtractResult {
 		throw new Error(`Widget config not found: ${absPath}`);
 	}
 
+	// Package exports, path aliases and ESM resolution must match the widget build.
+	const tsconfig = ts.findConfigFile(dirname(absPath), ts.sys.fileExists);
 	const generatorConfig: CompletedConfig = {
 		...DEFAULT_CONFIG,
 		path: absPath,
+		...(tsconfig && { tsconfig }),
 		skipTypeCheck: true,
 		jsDoc: "extended",
+		extraTags: ["geometry", "mutation"],
 		topRef: false,
 		expose: "all",
 		additionalProperties: true,
@@ -137,6 +144,7 @@ export function extractContract(widgetConfigPath: string): ExtractResult {
 	const contract: WidgetContract = {
 		contractVersion: CONTRACT_VERSION,
 		id: config.id,
+		...(config.capabilities && { capabilities: config.capabilities }),
 		inputs,
 		events,
 		queries,
@@ -318,6 +326,10 @@ function memberDescription(member: ts.PropertySignature): string | undefined {
 	return undefined;
 }
 
+function memberHasTag(member: ts.PropertySignature, tagName: string): boolean {
+	return ts.getJSDocTags(member).some((tag) => tag.tagName.text === tagName);
+}
+
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -346,6 +358,186 @@ function schemaRequired(schema: JsonObject): Set<string> {
 	);
 }
 
+const GEOMETRY_KINDS = new Set([
+	"Point",
+	"LineString",
+	"Polygon",
+	"MultiPoint",
+	"MultiLineString",
+	"MultiPolygon",
+	"GeometryCollection",
+]);
+
+/** Geometry annotations select the shared geometry validator, including collections. */
+function geometrySchema(
+	schema: JsonObject,
+	definitions: Record<string, JsonValue>,
+	context: string,
+): JsonObject {
+	const kind = schema.geometry;
+	if (
+		typeof kind !== "string" ||
+		(kind !== "Any" && !GEOMETRY_KINDS.has(kind))
+	) {
+		throw new Error(
+			`Invalid @geometry '${String(kind)}' for ${context}; expected Any or ${[...GEOMETRY_KINDS].join(", ")}`,
+		);
+	}
+
+	const objectShape = (
+		value: JsonObject,
+		visited = new Set<string>(),
+		expectedKind = kind,
+	): JsonObject => {
+		let shape = value;
+		while (typeof shape.$ref === "string" && !visited.has(shape.$ref)) {
+			visited.add(shape.$ref);
+			const definition = resolveDefinition(shape.$ref, definitions, context);
+			if (!isJsonObject(definition)) break;
+			const { $ref: _ref, ...rest } = shape;
+			shape = { ...definition, ...rest };
+		}
+		if (typeof shape.$ref === "string" && visited.has(shape.$ref)) return shape;
+		if (shape.type !== undefined && shape.type !== "object") {
+			throw new Error(
+				`@geometry ${kind} for ${context} must annotate a geometry object type; annotate the element type for arrays and maps`,
+			);
+		}
+		let hasBranches = false;
+		for (const key of ["anyOf", "oneOf", "allOf"]) {
+			const branches = shape[key];
+			if (Array.isArray(branches) && branches.length > 0) {
+				hasBranches = true;
+				for (const branch of branches) {
+					if (isJsonObject(branch))
+						objectShape(branch, new Set(visited), expectedKind);
+				}
+			}
+		}
+		if (!hasBranches) {
+			const properties = schemaProperties(shape);
+			const type = properties.type;
+			const declaredKind = isJsonObject(type)
+				? (type.const ??
+					(Array.isArray(type.enum) && type.enum.length === 1
+						? type.enum[0]
+						: undefined))
+				: undefined;
+			if (
+				typeof declaredKind !== "string" ||
+				!GEOMETRY_KINDS.has(declaredKind) ||
+				(expectedKind !== "Any" && declaredKind !== expectedKind) ||
+				properties[
+					declaredKind === "GeometryCollection" ? "geometries" : "coordinates"
+				] === undefined
+			) {
+				throw new Error(
+					`@geometry ${kind} for ${context} must describe a compatible GeoJSON geometry object; check its type discriminant and coordinates or geometries, and annotate the element type for maps`,
+				);
+			}
+			const checkCoordinates = (
+				value: JsonValue | undefined,
+				depth: number,
+			): void => {
+				let field = value;
+				const refs = new Set<string>();
+				while (
+					isJsonObject(field) &&
+					typeof field.$ref === "string" &&
+					!refs.has(field.$ref)
+				) {
+					refs.add(field.$ref);
+					field = resolveDefinition(field.$ref, definitions, context);
+				}
+				const expected = depth > 0 ? "array" : "number";
+				if (
+					!isJsonObject(field) ||
+					(field.type !== expected &&
+						!(depth === 0 && field.type === "integer"))
+				) {
+					throw new Error(
+						`@geometry ${kind} for ${context} has incompatible coordinates or geometries; expected ${expected}`,
+					);
+				}
+				if (depth === 0) return;
+				const items = Array.isArray(field.items) ? field.items : [field.items];
+				if (items.length === 0)
+					throw new Error(
+						`@geometry ${kind} for ${context} requires an element type`,
+					);
+				for (const item of items) {
+					if (declaredKind === "GeometryCollection") {
+						if (!isJsonObject(item))
+							throw new Error(
+								`@geometry ${kind} for ${context} requires geometry elements`,
+							);
+						objectShape(item, new Set(visited), "Any");
+					} else {
+						checkCoordinates(item, depth - 1);
+					}
+				}
+			};
+			const dimensions: Record<string, number> = {
+				Point: 1,
+				LineString: 2,
+				Polygon: 3,
+				MultiPoint: 2,
+				MultiLineString: 3,
+				MultiPolygon: 4,
+				GeometryCollection: 1,
+			};
+			checkCoordinates(
+				properties[
+					declaredKind === "GeometryCollection" ? "geometries" : "coordinates"
+				],
+				dimensions[declaredKind] ?? 1,
+			);
+		}
+		return shape;
+	};
+	const shape = objectShape(schema);
+
+	// The contract carries a schema extension; the host converts it into the
+	// compact flow:geometry pin marker. The SDK validates the geometry profile.
+	const result: JsonObject = {
+		type: "object",
+		"x-flow-like-type": "geometry",
+	};
+	if (kind !== "Any") result["x-geometry"] = kind;
+	for (const key of [
+		"title",
+		"description",
+		"default",
+		"examples",
+		"deprecated",
+	]) {
+		if (shape[key] !== undefined) result[key] = shape[key];
+	}
+	return result;
+}
+
+function resolveDefinition(
+	ref: string,
+	definitions: Record<string, JsonValue>,
+	context: string,
+): JsonValue {
+	const prefix = "#/definitions/";
+	if (!ref.startsWith(prefix)) {
+		throw new Error(
+			`Unsupported $ref '${ref}' while inlining the schema for ${context}`,
+		);
+	}
+	const encoded = ref.slice(prefix.length);
+	const definition =
+		definitions[decodeURIComponent(encoded)] ?? definitions[encoded];
+	if (definition === undefined) {
+		throw new Error(
+			`Unresolvable $ref '${ref}' while inlining the schema for ${context}`,
+		);
+	}
+	return definition;
+}
+
 /**
  * Recursively resolve `#/definitions/...` refs so every emitted schema is
  * standalone (the runtime validator does not support `$ref`). Fails on
@@ -356,11 +548,23 @@ function inlineRefs(
 	definitions: Record<string, JsonValue>,
 	stack: string[],
 	context: string,
+	schemaMap = false,
 ): JsonValue {
 	if (Array.isArray(value)) {
 		return value.map((item) => inlineRefs(item, definitions, stack, context));
 	}
 	if (!isJsonObject(value)) return value;
+	if (schemaMap) {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [
+				key,
+				inlineRefs(entry, definitions, stack, context),
+			]),
+		);
+	}
+	if (value.geometry !== undefined) {
+		return geometrySchema(value, definitions, context);
+	}
 
 	const { $ref, $schema, definitions: _nested, ...rest } = value;
 	void $schema;
@@ -368,25 +572,24 @@ function inlineRefs(
 
 	const inlinedRest: JsonObject = {};
 	for (const [key, entry] of Object.entries(rest)) {
-		inlinedRest[key] = inlineRefs(entry, definitions, stack, context);
+		// Annotation values are data, so a default containing "geometry" or
+		// "$ref" must not be interpreted as a schema.
+		inlinedRest[key] = ["default", "examples", "enum", "const"].includes(key)
+			? entry
+			: inlineRefs(
+					entry,
+					definitions,
+					stack,
+					context,
+					["properties", "patternProperties", "dependentSchemas"].includes(key),
+				);
 	}
 
 	if (typeof $ref !== "string") return inlinedRest;
 
-	const prefix = "#/definitions/";
-	if (!$ref.startsWith(prefix)) {
-		throw new Error(
-			`Unsupported $ref '${$ref}' while inlining the schema for ${context}`,
-		);
-	}
-	const encoded = $ref.slice(prefix.length);
+	const definition = resolveDefinition($ref, definitions, context);
+	const encoded = $ref.slice("#/definitions/".length);
 	const key = decodeURIComponent(encoded);
-	const definition = definitions[key] ?? definitions[encoded];
-	if (definition === undefined) {
-		throw new Error(
-			`Unresolvable $ref '${$ref}' while inlining the schema for ${context}`,
-		);
-	}
 	if (stack.includes(key)) {
 		throw new Error(
 			`Recursive type detected while inlining the schema for ${context} (cycle: ${[...stack, key].join(" -> ")}); widget contract schemas must be non-recursive`,
@@ -440,6 +643,14 @@ function extractInputs(
 			isJsonObject(inlined) ? inlined : {},
 			optional,
 		);
+		if (input.default !== undefined && containsGeometrySchema(input.schema)) {
+			const result = validateInputValue(input, input.default);
+			if (!result.valid) {
+				throw new Error(
+					`Invalid @default for geometry input '${member.name}' of widget '${widgetId}': ${result.errors.join("; ")}`,
+				);
+			}
+		}
 		if (!optional && input.default === undefined) {
 			warnings.push(
 				`Input '${member.name}' of widget '${widgetId}' has no @default and is not optional; standalone dev and generated pin defaults will have no value`,
@@ -448,6 +659,17 @@ function extractInputs(
 		inputs[member.name] = input;
 	}
 	return inputs;
+}
+
+function containsGeometrySchema(value: JsonValue | undefined): boolean {
+	if (Array.isArray(value)) return value.some(containsGeometrySchema);
+	if (!isJsonObject(value)) return false;
+	if (value["x-flow-like-type"] === "geometry") return true;
+	return Object.entries(value).some(
+		([key, entry]) =>
+			!["default", "examples", "enum", "const"].includes(key) &&
+			containsGeometrySchema(entry),
+	);
 }
 
 function mapInputSchema(schema: JsonObject, optional: boolean): ContractInput {
@@ -559,6 +781,7 @@ function extractQueries(
 	for (const member of members) {
 		const shape = queryShape(member, checker);
 		const description = memberDescription(member.node);
+		const mutation = memberHasTag(member.node, "mutation");
 		const inlined = inlineRefs(
 			properties[member.name] ?? {},
 			definitions,
@@ -593,6 +816,7 @@ function extractQueries(
 					? null
 					: requireSchemaObject(resultSchema, `query '${member.name}' result`),
 			...(description !== undefined && { description }),
+			...(mutation && { mutation: true }),
 		};
 	}
 	return queries;
@@ -760,6 +984,24 @@ function readWidgetConfig(
 		}
 	}
 
+	let capabilities: WidgetCapabilities | undefined;
+	if (cfg.capabilities !== undefined) {
+		if (!isJsonObject(cfg.capabilities))
+			throw new Error(`Widget capabilities in ${path} must be an object`);
+		capabilities = {};
+		for (const [key, value] of Object.entries(cfg.capabilities)) {
+			if (
+				!["workers", "media", "microphone", "downloads", "wasm"].includes(
+					key,
+				) ||
+				typeof value !== "boolean"
+			) {
+				throw new Error(`Invalid widget capability '${key}' in ${path}`);
+			}
+			capabilities[key as keyof WidgetCapabilities] = value;
+		}
+	}
+
 	let fixtures: Record<string, JsonValue> | undefined;
 	if (isJsonObject(cfg.dev) && cfg.dev.fixtures !== undefined) {
 		if (!isJsonObject(cfg.dev.fixtures)) {
@@ -775,6 +1017,7 @@ function readWidgetConfig(
 		name,
 		description,
 		...(sizing !== undefined && { sizing }),
+		...(capabilities !== undefined && { capabilities }),
 		...(fixtures !== undefined && { fixtures }),
 	};
 }

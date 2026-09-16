@@ -1,4 +1,5 @@
 import type { ContractInput, JsonSchema } from "./contract";
+import { checkGeometrySchema } from "./geometry";
 
 export interface ValidationResult {
 	valid: boolean;
@@ -180,6 +181,15 @@ function validateAt(
 	path: string,
 	errors: string[],
 ): void {
+	try {
+		checkGeometrySchema(schema, value);
+	} catch (error) {
+		errors.push(
+			`${path}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return;
+	}
+
 	// Schemas are pre-inlined by the bundler; a leftover $ref cannot be
 	// resolved here, so it is treated as passing.
 	if ("$ref" in schema) return;

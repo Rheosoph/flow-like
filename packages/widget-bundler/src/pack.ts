@@ -233,7 +233,6 @@ export async function pack(
 		);
 	}
 
-	const csp = buildCsp(opts.servingPrefix ?? null, opts.connectHosts ?? []);
 	const warnings: string[] = [];
 	const widgets: PackedWidget[] = [];
 	const shared = new Map<string, Uint8Array>();
@@ -254,6 +253,11 @@ export async function pack(
 				"widget.config.ts",
 			);
 			const extracted = extractContract(configPath);
+			const csp = buildCsp(
+				opts.servingPrefix ?? null,
+				opts.connectHosts ?? [],
+				extracted.contract.capabilities,
+			);
 			warnings.push(...extracted.warnings);
 			if (extracted.config.id !== widgetId) {
 				throw new Error(

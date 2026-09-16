@@ -187,11 +187,12 @@ declare namespace ai {
      * @param schema — JSON Schema (or example JSON) describing the structure to extract
      * @param text — Raw text that should be structured via the schema
      * @param hint (optional) — Optional hint to guide the extraction (e.g. 'only extract individual line items, not totals')
+     * @param maxTokens (optional) — Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool
      * @returns response — Structured JSON value that matches the schema
      * @returns stats — Token usage, cost, and model statistics
      * @impure has side effects / drives control flow
      */
-    function extract({ model: Struct, schema: string, text: string, hint?: string }): { response: any, stats: Struct };
+    function extract({ model: Struct, schema: string, text: string, hint?: string, maxTokens?: int }): { response: any, stats: Struct };
 
     /**
      * Extracts structured data by replaying an entire chat history through an LLM
@@ -213,11 +214,12 @@ declare namespace ai {
      * @param structShape — A reference struct whose schema defines the extracted data. Its value is never evaluated
      * @param text — Raw text that should be structured via the reference schema
      * @param hint (optional) — Optional hint to guide the extraction, such as selecting line items instead of totals
+     * @param maxTokens (optional) — Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool
      * @returns response — Structured JSON value that matches the reference schema
      * @returns stats — Token usage, cost, and model statistics
      * @impure has side effects / drives control flow
      */
-    function extractWithStructSchema({ model: Struct, structShape: Struct, text: string, hint?: string }): { response: Struct, stats: Struct };
+    function extractWithStructSchema({ model: Struct, structShape: Struct, text: string, hint?: string, maxTokens?: int }): { response: Struct, stats: Struct };
 
     /**
      * Finds the best model based on certain selection criteria

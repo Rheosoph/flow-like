@@ -1,3 +1,4 @@
+import type { WidgetCapabilities } from "@flow-like/widget-sdk";
 import { escapeHtmlAttr, insertAtHeadStart } from "./html";
 
 /**
@@ -9,6 +10,7 @@ import { escapeHtmlAttr, insertAtHeadStart } from "./html";
 export function buildCsp(
 	servingPrefix: string | null,
 	connectHosts: string[],
+	capabilities: WidgetCapabilities = {},
 ): string {
 	// The bundle hash is a hash of the finished archive, so pack cannot embed a
 	// hash-specific serving URL without making the archive self-referential.
@@ -20,14 +22,30 @@ export function buildCsp(
 		"http://flow-widget.localhost",
 		...(servingPrefix ? [servingPrefix] : []),
 	].join(" ");
-	const connect = connectHosts.length > 0 ? connectHosts.join(" ") : "'none'";
+	for (const source of [
+		...connectHosts,
+		...(servingPrefix ? [servingPrefix] : []),
+	]) {
+		if (
+			/[\s;"'<>]/.test(source) ||
+			!/^(?:https?:\/\/|flow-widget:)/.test(source)
+		) {
+			throw new Error("Invalid widget CSP source");
+		}
+	}
+	const connectSources = [...connectHosts];
+	if (capabilities.workers) connectSources.push(assetSources, "blob:");
+	const connect =
+		connectSources.length > 0 ? connectSources.join(" ") : "'none'";
 	return [
 		"default-src 'none'",
-		`script-src 'unsafe-inline' ${assetSources}`,
+		`script-src 'unsafe-inline' ${capabilities.wasm ? "'wasm-unsafe-eval' " : ""}${assetSources}`,
 		`style-src 'unsafe-inline' ${assetSources}`,
 		`img-src data: blob: ${assetSources}`,
 		`font-src data: ${assetSources}`,
 		`connect-src ${connect}`,
+		`worker-src ${capabilities.workers ? `blob: ${assetSources}` : "'none'"}`,
+		`media-src ${capabilities.media ? `blob: ${assetSources}` : "'none'"}`,
 	].join("; ");
 }
 

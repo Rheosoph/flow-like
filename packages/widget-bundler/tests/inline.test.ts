@@ -25,13 +25,13 @@ describe("buildCsp", () => {
 				"style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"img-src data: blob: 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"font-src data: 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
-				"connect-src https://api.example.com",
+				"connect-src https://api.example.com; worker-src 'none'; media-src 'none'",
 		);
 	});
 
 	test("null prefix permits only supported bundle asset origins", () => {
 		expect(buildCsp(null, [])).toBe(
-			"default-src 'none'; script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; img-src data: blob: 'self' flow-widget: http://flow-widget.localhost; font-src data: 'self' flow-widget: http://flow-widget.localhost; connect-src 'none'",
+			"default-src 'none'; script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; img-src data: blob: 'self' flow-widget: http://flow-widget.localhost; font-src data: 'self' flow-widget: http://flow-widget.localhost; connect-src 'none'; worker-src 'none'; media-src 'none'",
 		);
 	});
 });

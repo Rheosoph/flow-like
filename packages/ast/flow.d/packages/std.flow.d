@@ -3312,7 +3312,7 @@ declare namespace notify {
      * @param description (optional) — Notification description (optional)
      * @param icon — FlowPath to a notification icon image (optional)
      * @param link (optional) — Relative path for the notification link (e.g. /dashboard or /store?item=abc)
-     * @returns success — Whether the notification was sent successfully
+     * @returns success — Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.
      * @impure has side effects / drives control flow
      */
     function projectUser({ flowUserSub?: string, title?: string, description?: string, icon: Struct, link?: string }): bool;
@@ -3325,7 +3325,7 @@ declare namespace notify {
      * @param icon — FlowPath to a notification icon image (optional)
      * @param link (optional) — Relative path for the notification link (e.g. /dashboard or /store?item=abc)
      * @param showDesktop (optional) — Show desktop notification if available
-     * @returns success — Whether the notification was sent successfully
+     * @returns success — Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.
      * @impure has side effects / drives control flow
      */
     function user({ title?: string, description?: string, icon: Struct, link?: string, showDesktop?: bool }): bool;
@@ -4600,7 +4600,7 @@ declare namespace ui {
     function widgetGetElement({ elementRef: Struct, elementId: string }): { element: Struct, exists: bool };
 
     /**
-     * Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.
+     * Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.
      * @node a2ui_widget_query @alias a2uiWidgetQuery
      * @param elementRef — Package widget reference from Instantiate Widget, or a visual-builder widget from Get Element
      * @param query — Contract query to run on the widget instance
@@ -4621,9 +4621,9 @@ declare namespace ui {
     function widgetSetText({ elementRef: Struct, elementId: string, text?: string }): Struct;
 
     /**
-     * Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.
+     * Sends a typed input patch to a package widget instance. Select a Page widget, or connect Element Ref from Instantiate Widget or Element from Get Element, to generate one optional pin per contract input. Only set pins are included in the patch.
      * @node a2ui_widget_update_inputs @alias a2uiWidgetUpdateInputs
-     * @param elementRef — Element reference of a package widget instance (from Instantiate Widget)
+     * @param elementRef — Select a Page widget, or connect its reference from Instantiate Widget or Get Element
      * @impure has side effects / drives control flow
      */
     function widgetUpdateInputs({ elementRef: Struct }): void;

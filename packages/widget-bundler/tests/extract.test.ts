@@ -131,6 +131,36 @@ describe("extractContract", () => {
 		expect(json).not.toContain("$ref");
 	}, 30000);
 
+	test("extracts @mutation on query members and omits false defaults", () => {
+		const path =
+			writeTmpWidget(`import { defineWidget } from "@flow-like/widget-sdk";
+
+interface Queries {
+	/** Change the map source.
+	 * @mutation
+	 */
+	setMapSource: { args: { sourceId: string }; returns: { accepted: boolean } };
+	/** Read the current map source. */
+	getMapSource: { args: {}; returns: { sourceId: string } };
+}
+
+export default defineWidget<{}, {}, Queries>({
+	id: "map-widget",
+	name: "Map Widget",
+});
+	`);
+		const { contract } = extractContract(path);
+		expect(contract.queries.setMapSource?.mutation).toBeTrue();
+		expect(contract.queries.setMapSource?.description).toBe(
+			"Change the map source.",
+		);
+		expect(contract.queries.getMapSource?.mutation).toBeUndefined();
+
+		const serialized = JSON.parse(contractToJson(contract));
+		expect(serialized.queries.setMapSource.mutation).toBeTrue();
+		expect(serialized.queries.getMapSource).not.toHaveProperty("mutation");
+	}, 30000);
+
 	test("rejects non-empty inline type literals", () => {
 		const path =
 			writeTmpWidget(`import { defineWidget } from "@flow-like/widget-sdk";

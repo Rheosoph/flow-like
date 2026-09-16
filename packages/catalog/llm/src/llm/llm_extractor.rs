@@ -12,20 +12,23 @@ use flow_like::{
     },
 };
 #[cfg(feature = "execute")]
-use flow_like_model_provider::response::{LLMUsageStats, Usage};
+use flow_like_model_provider::response::{LLMUsageStats, ModelCallEntry, Usage};
 use flow_like_types::json;
 #[cfg(feature = "execute")]
 use flow_like_types::json::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
 use flow_like_types::{Value, anyhow};
 #[cfg(feature = "execute")]
-use rig::completion::{Completion, ToolDefinition};
+use rig::completion::{Completion, CompletionError, ToolDefinition};
 #[cfg(feature = "execute")]
 use rig::message::{AssistantContent, ToolCall, ToolChoice, ToolFunction};
 #[cfg(feature = "execute")]
 use rig::tool::Tool;
 #[cfg(feature = "execute")]
-use std::{fmt, time::Instant};
+use std::{
+    fmt,
+    time::{Duration, Instant},
+};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -75,7 +78,9 @@ impl Tool for DynamicSubmitTool {
     }
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        jsonschema::validate(&self.output_schema, &args)
+        compile_validator(&self.output_schema)
+            .map_err(|e| SubmitError(format!("{}", e)))?
+            .validate(&args)
             .map_err(|e| SubmitError(format!("{}", e)))?;
         Ok(args)
     }
@@ -87,17 +92,17 @@ impl Tool for DynamicSubmitTool {
 
 #[cfg(feature = "execute")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ExtractionMode {
+pub(super) enum ExtractionMode {
     Direct,
     Wrapped,
 }
 
 #[cfg(feature = "execute")]
 pub(super) struct PreparedSchema {
-    tool_parameters: Value,
-    output_schema: Value,
-    mode: ExtractionMode,
-    was_inferred: bool,
+    pub(super) tool_parameters: Value,
+    pub(super) output_schema: Value,
+    pub(super) mode: ExtractionMode,
+    pub(super) was_inferred: bool,
 }
 
 #[cfg(feature = "execute")]
@@ -132,6 +137,18 @@ fn looks_like_schema(value: &Value) -> bool {
         .is_some_and(|obj| SCHEMA_KEYWORDS.iter().any(|kw| obj.contains_key(*kw)))
 }
 
+/// Compiles a schema up front so a malformed `pattern`, a remote `$ref`, or an unknown
+/// dialect surfaces as an error instead of panicking inside `jsonschema`. This runs at board
+/// load (`on_update`) as well as at run time, so a `$ref` is never fetched: the schema is
+/// authored by whoever edits the board, and the process compiling it may be the API server.
+#[cfg(feature = "execute")]
+pub(super) fn compile_validator(schema: &Value) -> flow_like_types::Result<jsonschema::Validator> {
+    jsonschema::options()
+        .with_retriever(flow_like_catalog_core::RejectExternalSchemaReferences)
+        .build(schema)
+        .map_err(|error| anyhow!("Schema is not a usable JSON Schema: {error}"))
+}
+
 #[cfg(feature = "execute")]
 pub(super) fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
     let trimmed = raw.trim();
@@ -145,7 +162,14 @@ pub(super) fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchem
         )
     })?;
 
-    let is_schema = looks_like_schema(&user_json) && jsonschema::meta::is_valid(&user_json);
+    let is_schema = if looks_like_schema(&user_json) {
+        jsonschema::meta::try_is_valid(&user_json).map_err(|error| {
+            anyhow!("Schema declares a $schema dialect that cannot be resolved: {error}")
+        })?
+    } else {
+        false
+    };
+
     let (inferred, was_inferred) = if is_schema {
         (user_json, false)
     } else {
@@ -153,6 +177,8 @@ pub(super) fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchem
         let string = json::to_string_pretty(&schema)?;
         (json::from_str(&string)?, true)
     };
+
+    compile_validator(&inferred)?;
 
     let mode = match inferred.get("type").and_then(|t| t.as_str()) {
         Some("object") => ExtractionMode::Direct,
@@ -188,14 +214,15 @@ pub(super) fn prepare_reference_schema(raw: &str) -> flow_like_types::Result<Pre
     let schema = json::from_str::<Value>(trimmed)
         .map_err(|e| anyhow!("Reference struct schema must be valid JSON: {e}"))?;
 
-    if schema.get("type").and_then(Value::as_str) != Some("object")
-        || !looks_like_schema(&schema)
-        || !jsonschema::meta::is_valid(&schema)
-    {
+    let meta_valid =
+        looks_like_schema(&schema) && jsonschema::meta::try_is_valid(&schema).unwrap_or(false);
+    if schema.get("type").and_then(Value::as_str) != Some("object") || !meta_valid {
         return Err(anyhow!(
             "Reference struct must carry a valid object JSON Schema"
         ));
     }
+
+    compile_validator(&schema)?;
 
     Ok(PreparedSchema {
         tool_parameters: schema.clone(),
@@ -206,7 +233,7 @@ pub(super) fn prepare_reference_schema(raw: &str) -> flow_like_types::Result<Pre
 }
 
 #[cfg(feature = "execute")]
-fn validate_extracted_value(
+pub(super) fn validate_extracted_value(
     prepared_schema: &PreparedSchema,
     args: Value,
 ) -> flow_like_types::Result<Value> {
@@ -218,9 +245,68 @@ fn validate_extracted_value(
             .ok_or_else(|| anyhow!("Tool call missing 'value' field in wrapped mode"))?,
     };
 
-    jsonschema::validate(&prepared_schema.output_schema, &extracted)
+    compile_validator(&prepared_schema.output_schema)?
+        .validate(&extracted)
         .map_err(|error| anyhow!("Extracted data does not match the schema: {error}"))?;
     Ok(extracted)
+}
+
+#[cfg(feature = "execute")]
+const MAX_EXTRACTION_ATTEMPTS: u32 = 3;
+#[cfg(feature = "execute")]
+const EXTRACTION_BACKOFF_MS: u64 = 250;
+
+/// A failed call is worth repeating only when the failure is transport- or provider-side.
+/// Malformed requests and serialization bugs repeat identically, so they fail fast.
+#[cfg(feature = "execute")]
+fn is_transient(error: &CompletionError) -> bool {
+    match error {
+        CompletionError::HttpError(_) | CompletionError::ResponseError(_) => true,
+        CompletionError::ProviderError(message) => {
+            let message = message.to_ascii_lowercase();
+            [
+                "429",
+                "500",
+                "502",
+                "503",
+                "504",
+                "overload",
+                "rate limit",
+                "rate_limit",
+                "timeout",
+                "timed out",
+                "temporarily",
+                "unavailable",
+            ]
+            .iter()
+            .any(|needle| message.contains(needle))
+        }
+        _ => false,
+    }
+}
+
+/// Last resort when a model answers in prose instead of calling `submit`: pull the first
+/// balanced JSON document out of the reply, unwrapping a Markdown fence if there is one.
+#[cfg(feature = "execute")]
+fn salvage_json(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    let body = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|rest| rest.rsplit_once("```").map(|(body, _)| body))
+        .unwrap_or(trimmed)
+        .trim();
+
+    if let Ok(value) = json::from_str::<Value>(body) {
+        return Some(value);
+    }
+
+    let start = body.find(['{', '['])?;
+    let end = body.rfind(['}', ']'])?;
+    if end <= start {
+        return None;
+    }
+    json::from_str::<Value>(&body[start..=end]).ok()
 }
 
 #[cfg(feature = "execute")]
@@ -231,13 +317,14 @@ pub(super) async fn run_text_extraction(
     let model_bit = context.evaluate_pin::<Bit>("model").await?;
     let text: String = context.evaluate_pin::<String>("text").await?;
     let hint: String = context.evaluate_pin("hint").await.unwrap_or_default();
+    let max_tokens: i64 = context.evaluate_pin("max_tokens").await.unwrap_or_default();
 
     context.log_message(
         &format!("Using extraction mode: {:?}", prepared_schema.mode),
         LogLevel::Debug,
     );
 
-    let llm_input = if hint.trim().is_empty() {
+    let base_input = if hint.trim().is_empty() {
         format!(
             "Extract structured data from the following text according to the schema.\n\nText:\n{}",
             text
@@ -250,65 +337,183 @@ pub(super) async fn run_text_extraction(
     };
 
     let preamble = "You are a knowledge extraction assistant. Extract data by calling the 'submit' tool with structured data matching the provided schema.";
-
-    let agent_builder = model_bit
-        .agent(context, &None)
-        .await?
-        .preamble(preamble)
-        .tool(DynamicSubmitTool {
-            parameters: prepared_schema.tool_parameters.clone(),
-            output_schema: prepared_schema.output_schema.clone(),
-        })
-        .tool_choice(ToolChoice::Required);
-
-    let agent = agent_builder.build();
+    let model_name = model_bit.meta.get("en").map(|m| m.name.clone());
 
     let start = Instant::now();
-    let response = agent
-        .completion(llm_input, Vec::<rig::completion::Message>::new())
-        .await
-        .map_err(|e| anyhow!("Model completion failed: {}", e))?
-        .send()
-        .await
-        .map_err(|e| anyhow!("Failed to send completion request: {}", e))?;
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let mut usage = Usage::default();
+    let mut calls: Vec<ModelCallEntry> = Vec::new();
+    let mut correction: Option<String> = None;
+    let mut last_error: Option<flow_like_types::Error> = None;
 
-    let stats = LLMUsageStats {
-        usage: Usage::from_rig(response.usage),
-        model: model_bit.meta.get("en").map(|m| m.name.clone()),
-        duration_ms: Some(duration_ms),
-        iterations: None,
-        calls: vec![],
-    };
+    for attempt in 1..=MAX_EXTRACTION_ATTEMPTS {
+        if attempt > 1 {
+            let backoff = EXTRACTION_BACKOFF_MS * (1 << (attempt - 2));
+            flow_like_types::tokio::time::sleep(Duration::from_millis(backoff)).await;
+        }
 
-    let mut last_args: Option<Value> = None;
-    for content in response.choice {
-        if let AssistantContent::ToolCall(ToolCall {
-            function: ToolFunction {
-                name, arguments, ..
-            },
-            ..
-        }) = content
-            && name == "submit"
+        let input = match &correction {
+            Some(correction) => format!("{base_input}\n\n{correction}"),
+            None => base_input.clone(),
+        };
+
+        let mut agent_builder = model_bit
+            .agent(context, &None)
+            .await?
+            .preamble(preamble)
+            .tool(DynamicSubmitTool {
+                parameters: prepared_schema.tool_parameters.clone(),
+                output_schema: prepared_schema.output_schema.clone(),
+            })
+            .tool_choice(ToolChoice::Required);
+
+        if max_tokens > 0 {
+            agent_builder = agent_builder.max_tokens(max_tokens as u64);
+        }
+
+        let agent = agent_builder.build();
+        let attempt_start = Instant::now();
+        let outcome = match agent
+            .completion(input, Vec::<rig::completion::Message>::new())
+            .await
         {
-            last_args = Some(arguments);
+            Ok(request) => request.send().await,
+            Err(error) => Err(error),
+        };
+
+        let response = match outcome {
+            Ok(response) => response,
+            Err(error) => {
+                let transient = is_transient(&error);
+                context.log_message(
+                    &format!(
+                        "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} failed: {error}"
+                    ),
+                    LogLevel::Warn,
+                );
+                last_error = Some(anyhow!("Extraction request failed: {error}"));
+                if transient {
+                    continue;
+                }
+                break;
+            }
+        };
+
+        let attempt_usage = Usage::from_rig(response.usage);
+        usage.prompt_tokens = usage
+            .prompt_tokens
+            .saturating_add(attempt_usage.prompt_tokens);
+        usage.completion_tokens = usage
+            .completion_tokens
+            .saturating_add(attempt_usage.completion_tokens);
+        usage.total_tokens = usage
+            .total_tokens
+            .saturating_add(attempt_usage.total_tokens);
+        calls.push(ModelCallEntry {
+            model: model_name.clone().unwrap_or_default(),
+            usage: attempt_usage.clone(),
+            duration_ms: Some(attempt_start.elapsed().as_millis() as u64),
+        });
+
+        let mut submitted: Option<Value> = None;
+        let mut spoken = String::new();
+        let mut returned: Vec<&'static str> = Vec::new();
+        for content in response.choice {
+            match content {
+                AssistantContent::ToolCall(ToolCall {
+                    function:
+                        ToolFunction {
+                            name, arguments, ..
+                        },
+                    ..
+                }) => {
+                    if name == "submit" {
+                        submitted = Some(arguments);
+                        returned.push("submit tool call");
+                    } else {
+                        returned.push("unexpected tool call");
+                    }
+                }
+                AssistantContent::Text(text) => {
+                    spoken.push_str(&text.text);
+                    returned.push("text");
+                }
+                AssistantContent::Reasoning(_) => returned.push("reasoning"),
+                _ => returned.push("unsupported content"),
+            }
+        }
+
+        let candidate = match submitted {
+            Some(arguments) => Some(arguments),
+            None => salvage_json(&spoken).map(|value| match prepared_schema.mode {
+                ExtractionMode::Direct => value,
+                ExtractionMode::Wrapped => json::json!({ "value": value }),
+            }),
+        };
+
+        let Some(candidate) = candidate else {
+            returned.sort_unstable();
+            returned.dedup();
+            let observed = if returned.is_empty() {
+                "nothing".to_string()
+            } else {
+                returned.join(", ")
+            };
+            let truncated =
+                max_tokens > 0 && i64::from(attempt_usage.completion_tokens) >= max_tokens;
+            context.log_message(
+                &format!(
+                    "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} returned no submit tool call (returned: {observed})"
+                ),
+                LogLevel::Warn,
+            );
+            last_error = Some(anyhow!(
+                "Model returned no 'submit' tool call and its reply held no usable JSON (returned: {observed}; {} completion tokens){}",
+                attempt_usage.completion_tokens,
+                if truncated {
+                    ". The reply hit the Max Tokens limit, raise it"
+                } else {
+                    ""
+                }
+            ));
+            correction = Some(
+                "Your previous reply did not call the 'submit' tool. Call 'submit' exactly once with the structured data and return no prose."
+                    .to_string(),
+            );
+            continue;
+        };
+
+        match validate_extracted_value(&prepared_schema, candidate) {
+            Ok(extracted) => {
+                context.log_message("Successfully extracted structured data", LogLevel::Debug);
+                let stats = LLMUsageStats {
+                    usage,
+                    model: model_name,
+                    duration_ms: Some(start.elapsed().as_millis() as u64),
+                    iterations: Some(attempt),
+                    calls,
+                };
+                context.set_pin_value("response", extracted).await?;
+                context.set_pin_value("stats", json::json!(stats)).await?;
+                context.activate_exec_pin("exec_out").await?;
+                return Ok(());
+            }
+            Err(error) => {
+                context.log_message(
+                    &format!(
+                        "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} did not match the schema: {error}"
+                    ),
+                    LogLevel::Warn,
+                );
+                correction = Some(format!(
+                    "Your previous reply did not match the schema: {error}. Fix exactly that problem and call 'submit' again."
+                ));
+                last_error = Some(error);
+            }
         }
     }
 
-    let args = last_args.ok_or_else(|| {
-        anyhow!(
-            "Model did not return a 'submit' tool call. Ensure the model supports function calling."
-        )
-    })?;
-
-    let extracted = validate_extracted_value(&prepared_schema, args)?;
-
-    context.log_message("Successfully extracted structured data", LogLevel::Debug);
-
-    context.set_pin_value("response", extracted).await?;
-    context.set_pin_value("stats", json::json!(stats)).await?;
-    context.activate_exec_pin("exec_out").await?;
-    Ok(())
+    Err(last_error
+        .unwrap_or_else(|| anyhow!("Extraction failed after {MAX_EXTRACTION_ATTEMPTS} attempts")))
 }
 
 #[cfg(all(test, feature = "execute"))]
@@ -333,6 +538,80 @@ mod extraction_tests {
         assert!(validate_extracted_value(&prepared, json::json!({"value": [3, 4]})).is_ok());
         assert!(validate_extracted_value(&prepared, json::json!({"value": ["wrong"]})).is_err());
     }
+
+    #[test]
+    fn unusable_schemas_are_rejected_instead_of_panicking() {
+        for raw in [
+            r#"{"type":"string","pattern":"("}"#,
+            r#"{"$schema":"not-a-known-dialect","type":"string"}"#,
+            r#"{"type":"object","properties":{"a":{"$ref":"https://example.invalid/x.json"}}}"#,
+        ] {
+            assert!(
+                prepare_schema(raw).is_err(),
+                "expected a rejection rather than a panic for {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn external_references_are_refused_without_being_fetched() {
+        for reference in [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://example.invalid/x.json",
+            "file:///etc/hostname",
+            "file:///proc/self/environ",
+        ] {
+            let error = compile_validator(&json::json!({
+                "type": "object",
+                "properties": { "a": { "$ref": reference } }
+            }))
+            .expect_err(reference)
+            .to_string();
+            assert!(
+                error.contains("is not allowed"),
+                "{reference} should be refused by policy, got: {error}"
+            );
+        }
+        assert!(
+            compile_validator(&json::json!({
+                "$defs": { "a": { "type": "string" } },
+                "type": "object",
+                "properties": { "a": { "$ref": "#/$defs/a" } }
+            }))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn prose_replies_are_salvaged_into_json() {
+        assert_eq!(
+            salvage_json("```json\n{\"name\": \"Ada\"}\n```"),
+            Some(json::json!({"name": "Ada"}))
+        );
+        assert_eq!(
+            salvage_json("  {\"name\": \"Ada\"}  "),
+            Some(json::json!({"name": "Ada"}))
+        );
+        assert_eq!(
+            salvage_json("Sure! Here is the data: {\"name\": \"Ada\"} -- let me know."),
+            Some(json::json!({"name": "Ada"}))
+        );
+        assert_eq!(salvage_json("I cannot help with that."), None);
+        assert_eq!(salvage_json(""), None);
+    }
+
+    #[test]
+    fn only_upstream_failures_are_retried() {
+        for message in ["error code: 502", "Rate limit reached", "upstream timeout"] {
+            assert!(is_transient(&CompletionError::ProviderError(
+                message.to_string()
+            )));
+        }
+
+        assert!(!is_transient(&CompletionError::ProviderError(
+            "invalid api key".to_string()
+        )));
+    }
 }
 
 #[async_trait]
@@ -346,7 +625,7 @@ impl NodeLogic for LLMExtractNode {
         );
         node.set_flowscript_name("ai", "extract");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.set_scores(
             NodeScores::new()
@@ -354,7 +633,7 @@ impl NodeLogic for LLMExtractNode {
                 .set_security(4)
                 .set_performance(6)
                 .set_governance(5)
-                .set_reliability(6)
+                .set_reliability(8)
                 .set_cost(4)
                 .build(),
         );
@@ -395,6 +674,14 @@ impl NodeLogic for LLMExtractNode {
             "Optional hint to guide the extraction (e.g. 'only extract individual line items, not totals')",
             VariableType::String,
         ).set_default_value(Some(json::json!("")));
+
+        node.add_input_pin(
+            "max_tokens",
+            "Max Tokens",
+            "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json::json!(0)));
 
         node.add_output_pin(
             "exec_out",

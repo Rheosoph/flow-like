@@ -1,3 +1,4 @@
+import { createWidgetMediaClient, type WidgetMediaState } from "./media";
 import { type MapStore, type ReadableAtom, atom, map } from "nanostores";
 import {
 	CONTRACT_VERSION,
@@ -17,6 +18,7 @@ import {
 	type FlwMessageType,
 	type FlwPayloadMap,
 	type InitPayload,
+	type InitCapabilities,
 	type PropsUpdatePayload,
 	type QueryPayload,
 	type ThemeState,
@@ -31,6 +33,13 @@ import {
 } from "./standalone";
 import { applyTheme } from "./theme";
 import { validateInputValue, validateSchema } from "./validate";
+
+import {
+	createWidgetMicrophoneClient,
+	type WidgetAudioOptions,
+	type WidgetAudioResult,
+} from "./microphone";
+import { dispatchWidgetQuery } from "./query";
 
 export const INIT_TIMEOUT_MS = 300;
 
@@ -53,6 +62,13 @@ export interface WidgetBridge<
 	readonly $props: MapStore<I>;
 	readonly $theme: ReadableAtom<ThemeState>;
 	readonly $mode: ReadableAtom<BridgeMode>;
+	readonly $capabilities: ReadableAtom<InitCapabilities>;
+	captureAudio(options?: WidgetAudioOptions): Promise<WidgetAudioResult>;
+	stopAudioCapture(): void;
+	readonly $media: ReadableAtom<WidgetMediaState>;
+	playMedia(id: string): Promise<void>;
+	pauseMedia(): void;
+	stopMedia(): void;
 	emit<Name extends keyof E & string>(
 		name: Name,
 		...args: EmitPayloadArgs<E, Name>
@@ -93,7 +109,11 @@ export function mergeInitProps(
 	contract: WidgetContract | null | undefined,
 	initProps: Record<string, unknown>,
 ): Record<string, unknown> {
-	return { ...contractDefaults(contract), ...initProps };
+	const { publicMediaGrants: _mediaGrants, ...props } = {
+		...contractDefaults(contract),
+		...initProps,
+	};
+	return props;
 }
 
 export interface RejectedPatchEntry {
@@ -108,9 +128,11 @@ export function filterPropsPatch(
 	const accepted: Record<string, unknown> = {};
 	const rejected: RejectedPatchEntry[] = [];
 	if (!contract) {
-		return { accepted: { ...patch }, rejected };
+		const { publicMediaGrants: _mediaGrants, ...publicPatch } = patch;
+		return { accepted: publicPatch, rejected };
 	}
 	for (const [key, value] of Object.entries(patch)) {
+		if (key === "publicMediaGrants") continue;
 		const input = contract.inputs?.[key];
 		if (!input) {
 			rejected.push({ key, errors: ["not declared in the contract"] });
@@ -140,9 +162,10 @@ export function mountFlowWidget<
 	const flwGlobals = globalThis as FlwGlobals;
 	const contract = flwGlobals.__FLW_CONTRACT__;
 
-	const $props = map<I>(contractDefaults(contract) as I);
+	const $props = map<I>(mergeInitProps(contract, {}) as I);
 	const $theme = atom<ThemeState>(themeForMode("light"));
 	const $mode = atom<BridgeMode>("connecting");
+	const $capabilities = atom<InitCapabilities>({});
 
 	let nonce: string | null = null;
 	let instanceId = "";
@@ -164,6 +187,9 @@ export function mountFlowWidget<
 			"*",
 		);
 	};
+
+	const microphone = createWidgetMicrophoneClient(post, $capabilities.get);
+	const media = createWidgetMediaClient(post, $capabilities.get);
 
 	const setAndApplyTheme = (theme: ThemeState) => {
 		$theme.set(theme);
@@ -197,6 +223,9 @@ export function mountFlowWidget<
 			standaloneTimer = null;
 		}
 		cleanupStandalone();
+		microphone.reset();
+		media.reset();
+		$capabilities.set(payload.capabilities ?? {});
 		nonce = envelope.nonce;
 		instanceId = payload.instanceId || envelope.instanceId;
 		preview = payload.capabilities?.preview === true;
@@ -226,25 +255,10 @@ export function mountFlowWidget<
 	};
 
 	const handleQuery = async (payload: QueryPayload) => {
-		const handler = queryHandlers.get(payload.name);
-		if (!handler) {
-			post("query:result", {
-				queryId: payload.queryId,
-				ok: false,
-				error: `Unknown query "${payload.name}"`,
-			});
-			return;
-		}
-		try {
-			const value = await handler(payload.args);
-			post("query:result", { queryId: payload.queryId, ok: true, value });
-		} catch (error) {
-			post("query:result", {
-				queryId: payload.queryId,
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+		post(
+			"query:result",
+			await dispatchWidgetQuery(contract, queryHandlers, payload),
+		);
 	};
 
 	const onMessage = (event: MessageEvent) => {
@@ -255,7 +269,13 @@ export function mountFlowWidget<
 			event.source === window.parent,
 		);
 		if (!envelope) return;
+		if (instanceId && envelope.instanceId !== instanceId) return;
+		microphone.handle(envelope);
+		media.handle(envelope);
 		switch (envelope.type) {
+			case "capabilities:update":
+				$capabilities.set(envelope.payload as InitCapabilities);
+				break;
 			case "init":
 				handleInit(envelope as FlwEnvelope<"init">);
 				break;
@@ -329,6 +349,8 @@ export function mountFlowWidget<
 	const dispose = () => {
 		if (disposed) return;
 		disposed = true;
+		microphone.dispose();
+		media.dispose();
 		window.removeEventListener("message", onMessage);
 		if (standaloneTimer !== null) {
 			clearTimeout(standaloneTimer);
@@ -348,6 +370,13 @@ export function mountFlowWidget<
 		$props,
 		$theme,
 		$mode,
+		$capabilities,
+		captureAudio: microphone.captureAudio,
+		stopAudioCapture: microphone.stopAudioCapture,
+		$media: media.$media,
+		playMedia: media.playMedia,
+		pauseMedia: media.pauseMedia,
+		stopMedia: media.stopMedia,
 		emit,
 		onQuery,
 		setValues,
@@ -357,7 +386,7 @@ export function mountFlowWidget<
 	const bootStandalone = () => {
 		if (disposed || $mode.get() !== "connecting") return;
 		standaloneTimer = null;
-		$props.set(contractDefaults(contract) as I);
+		$props.set(mergeInitProps(contract, {}) as I);
 		setAndApplyTheme(themeForMode(detectColorScheme()));
 		const unwatch = watchColorScheme((mode) => {
 			setAndApplyTheme(themeForMode(mode));
@@ -365,11 +394,15 @@ export function mountFlowWidget<
 		const removeBadge = renderStandaloneBadge();
 		const standaloneGlobal: FlwStandaloneGlobal = {
 			query: async (name, args) => {
-				const handler = queryHandlers.get(name);
-				if (!handler) {
-					throw new Error(`No handler registered for query "${name}"`);
+				const result = await dispatchWidgetQuery(contract, queryHandlers, {
+					queryId: "standalone",
+					name,
+					args,
+				});
+				if (!result.ok) {
+					throw new Error(result.error ?? `Query "${name}" failed`);
 				}
-				return await handler(args);
+				return result.value;
 			},
 			bridge: bridge as unknown as WidgetBridge,
 		};

@@ -49,6 +49,7 @@ message Node {
     optional string namespace = 26;
     optional string alias = 27;
     optional string receiver = 28;
+    optional bool pins_collapsed = 29;
 }
 
 message NodeWasm {

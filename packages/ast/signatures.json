@@ -4093,7 +4093,7 @@
         }
       ],
       "impure": true,
-      "doc": "Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.",
+      "doc": "Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.",
       "namespace": "ui",
       "alias": "widgetQuery"
     },
@@ -4162,13 +4162,13 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Element reference of a package widget instance (from Instantiate Widget)",
+          "doc": "Select a Page widget, or connect its reference from Instantiate Widget or Get Element",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ElementRef\",\"description\":\"The handle every a2ui node passes around to say \\\"this element, on this\\nsurface\\\". Producers fill in what they know: a widget instantiation carries the\\nwidget and surface it belongs to, while a plain element only carries its id.\\nConsumers read `instance_id` and fall back to `id`.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Identifier of the element or widget instance.\",\"type\":\"string\"},\"instanceId\":{\"description\":\"Instance the element lives in. Absent for elements addressed directly.\",\"type\":[\"string\",\"null\"]},\"widgetId\":{\"description\":\"Widget this instance was created from.\",\"type\":[\"string\",\"null\"]},\"surfaceId\":{\"description\":\"Surface the element is rendered on.\",\"type\":[\"string\",\"null\"]},\"component\":{\"description\":\"The component itself, whose props are defined by the component type.\"}},\"required\":[\"id\"]}"
         }
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.",
+      "doc": "Sends a typed input patch to a package widget instance. Select a Page widget, or connect Element Ref from Instantiate Widget or Element from Get Element, to generate one optional pin per contract input. Only set pins are included in the patch.",
       "namespace": "ui",
       "alias": "widgetUpdateInputs"
     },
@@ -74670,6 +74670,15 @@
           },
           "optional": true,
           "doc": "Optional hint to guide the extraction (e.g. 'only extract individual line items, not totals')"
+        },
+        {
+          "name": "max_tokens",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool"
         }
       ],
       "outputs": [
@@ -74812,6 +74821,15 @@
           },
           "optional": true,
           "doc": "Optional hint to guide the extraction, such as selecting line items instead of totals"
+        },
+        {
+          "name": "max_tokens",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool"
         }
       ],
       "outputs": [
@@ -78953,7 +78971,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Whether the notification was sent successfully"
+          "doc": "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery."
         }
       ],
       "impure": true,
@@ -79022,7 +79040,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Whether the notification was sent successfully"
+          "doc": "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery."
         }
       ],
       "impure": true,

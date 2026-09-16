@@ -13,6 +13,7 @@ members = [
     "apps/backend/local/runtime",
     "apps/schema-gen",
     "apps/backend/aws/api",
+    "apps/backend/aws/api-ecs",
     "apps/backend/aws/executor",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
@@ -262,7 +263,9 @@ rumqttc = "0.25.1"
 copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
 async-trait = "0.1.89"
 sqlparser = "0.59.0"
-jsonschema = "0.33.0"
+# No `resolve-http`/`resolve-file`: schemas are user data and must never make the
+# server fetch a `$ref` from the network or the filesystem.
+jsonschema = { version = "0.33.0", default-features = false }
 rmcp = { version = "=1.7.0", features = ["auth", "client", "client-side-sse", "macros", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
@@ -381,3 +384,8 @@ strip = "symbols"
 inherits = "dist"
 codegen-units = 1
 strip = "none"
+
+# Long-running container APIs (ECS). Lambda's code generation, including its
+# unwind semantics: one panicking handler must not end every in-flight request.
+[profile.server]
+inherits = "lambda"

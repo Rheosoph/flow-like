@@ -42,6 +42,8 @@
 	"capabilities": "Capabilities",
 	"capabilityA2ui": "Renders interface elements",
 	"capabilityCache": "Uses the execution cache",
+	"capabilityDatabaseRead": "Reads connected databases",
+	"capabilityDatabaseWrite": "Writes connected databases",
 	"capabilityModels": "Calls language models",
 	"capabilityNetDns": "Resolves DNS names",
 	"capabilityNetHttp": "Makes HTTP requests",
