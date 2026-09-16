@@ -14,8 +14,9 @@ asynchronous index builds, and no enums or array columns. The Prisma schema in
 `packages/api/prisma/schema/` stays the schema of record for every target;
 DSQL gets its own apply pipeline.
 
-Two binaries talk to the database at runtime, both Lambdas: the API
-(`apps/backend/aws/api`) and the file tracker
+Two components talk to the database at runtime: the API
+(`apps/backend/aws/api` on Lambda, or `apps/backend/aws/api-ecs` on
+[ECS](/self-hosting/aws/ecs-api/)) and the file tracker Lambda
 (`apps/backend/aws/file-tracker`). A third component, the migration job
 (`apps/backend/aws/migration`), is a one-off ECS Fargate task that applies the
 committed migrations and grants the runtime role.
@@ -33,7 +34,7 @@ before. All three components share the same validation
 | `DSQL_REGION` | optional, must match the endpoint | optional, must match the endpoint |
 | `DSQL_USER` | database role, default `admin`; production uses `flow_like_api` | always `admin` |
 | `DSQL_TOKEN_DURATION_SECS` | token lifetime, default `3600` (1800–604800) | fixed `900`, minted per connection |
-| `DSQL_MAX_CONNECTIONS` | pool size, default `4` | n/a |
+| `DSQL_MAX_CONNECTIONS` | pool size, default `4` (`32` for the ECS API) | n/a |
 | `DSQL_RUNTIME_ROLE_ARN` | n/a | optional, the Lambdas' IAM role ARN; unset skips the grant step with a warning |
 | `DSQL_RUNTIME_DB_ROLE` | n/a | optional, default `flow_like_api` |
 | `DSQL_MIGRATIONS_DIR` | n/a | optional, default `prisma/migrations-dsql` (what the image ships) |

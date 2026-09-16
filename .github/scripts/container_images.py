@@ -15,6 +15,7 @@ CLOUDS = ("all", "aws", "gcp", "azure", "docker-compose", "kubernetes", "self-ho
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SELF_HOSTED_CLOUDS = ("docker-compose", "kubernetes")
 KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init"}
+API_WORKLOADS = {"api", "api-ecs"}
 CHANNEL_BRANCHES = ("dev", "main", "alpha")
 SEMVER = re.compile(
     r"(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
@@ -68,6 +69,8 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
 # Publication records identify the fallback separately from the runtime contract.
 TARGETS = tuple(sorted([
     target("aws", "api", "linux/arm64"),
+    # The optional ECS API runs on whichever capacity a self-hosting account has.
+    *[target("aws", "api-ecs", f"linux/{architecture}", architecture_id=True) for architecture in ("amd64", "arm64")],
     target("aws", "executor", "linux/arm64"),
     target("aws", "executor-async", recipe="apps/backend/aws/executor-ecs/Dockerfile"),
     target("aws", "executor-lambda-async", "linux/arm64", recipe="apps/backend/aws/executor-async/Dockerfile"),
@@ -135,9 +138,10 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
     build_inputs = {
         "dockerfile_sha256": hashlib.sha256((REPOSITORY_ROOT / entry["dockerfile"]).read_bytes()).hexdigest(),
     }
-    if entry["workload"] == "api":
+    api = entry["workload"] in API_WORKLOADS
+    if api:
         build_inputs["runtime_config"] = "full-document-v1"
-    if entry["workload"] == "api" and entry["cloud"] not in SELF_HOSTED_CLOUDS:
+    if api and entry["cloud"] not in SELF_HOSTED_CLOUDS:
         build_inputs["flow_like_config_sha256"] = hashlib.sha256((REPOSITORY_ROOT / "flow-like.config.json").read_bytes()).hexdigest()
         build_inputs["variant"] = "runtime-config-public-default"
     if entry["cloud"] in SELF_HOSTED_CLOUDS and entry["workload"] == "api":
@@ -146,7 +150,7 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
         build_inputs["variant"] = "runtime-config-self-hosted-default"
     if entry["cloud"] in SELF_HOSTED_CLOUDS and entry["workload"] == "web":
         build_inputs["variant"] = "runtime-public-config"
-    if target_id in ("aws-api", "aws-file-tracker"):
+    if entry["cloud"] == "aws" and (api or entry["workload"] == "file-tracker"):
         build_inputs["database_tls"] = "dsql-no-custom-ca"
     return {
         "schema_version": SCHEMA_VERSION,

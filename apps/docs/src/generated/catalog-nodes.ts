@@ -1617,7 +1617,7 @@ export const catalogNodes: CatalogNode[] = [
       "security": 4,
       "performance": 6,
       "governance": 5,
-      "reliability": 6,
+      "reliability": 8,
       "cost": 4
     },
     "pins": [
@@ -1672,6 +1672,16 @@ export const catalogNodes: CatalogNode[] = [
         "index": 5
       },
       {
+        "name": "max_tokens",
+        "friendlyName": "Max Tokens",
+        "description": "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 6
+      },
+      {
         "name": "exec_out",
         "friendlyName": "Execution Output",
         "description": "Executes after extraction succeeds",
@@ -1703,12 +1713,12 @@ export const catalogNodes: CatalogNode[] = [
         }
       }
     ],
-    "inputCount": 5,
+    "inputCount": 6,
     "outputCount": 3,
     "flags": [
       "Long running"
     ],
-    "version": 4,
+    "version": 5,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -1908,6 +1918,16 @@ export const catalogNodes: CatalogNode[] = [
         "index": 5
       },
       {
+        "name": "max_tokens",
+        "friendlyName": "Max Tokens",
+        "description": "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 6
+      },
+      {
         "name": "exec_out",
         "friendlyName": "Execution Output",
         "description": "Executes after extraction succeeds",
@@ -1940,12 +1960,12 @@ export const catalogNodes: CatalogNode[] = [
         }
       }
     ],
-    "inputCount": 5,
+    "inputCount": 6,
     "outputCount": 3,
     "flags": [
       "Long running"
     ],
-    "version": 1,
+    "version": 2,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -115488,7 +115508,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "success",
         "friendlyName": "Success",
-        "description": "Whether the notification was sent successfully",
+        "description": "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.",
         "pinType": "Output",
         "dataType": "Boolean",
         "valueType": "Normal",
@@ -115589,7 +115609,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "success",
         "friendlyName": "Success",
-        "description": "Whether the notification was sent successfully",
+        "description": "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.",
         "pinType": "Output",
         "dataType": "Boolean",
         "valueType": "Normal",
@@ -118855,7 +118875,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "std",
     "name": "a2ui_widget_query",
     "friendlyName": "Query Widget",
-    "description": "Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.",
+    "description": "Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.",
     "category": "UI/Container",
     "categoryPath": [
       "UI",
@@ -119084,7 +119104,7 @@ export const catalogNodes: CatalogNode[] = [
     "packageName": "std",
     "name": "a2ui_widget_update_inputs",
     "friendlyName": "Update Widget Inputs",
-    "description": "Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.",
+    "description": "Sends a typed input patch to a package widget instance. Select a Page widget, or connect Element Ref from Instantiate Widget or Element from Get Element, to generate one optional pin per contract input. Only set pins are included in the patch.",
     "category": "UI/Container",
     "categoryPath": [
       "UI",
@@ -119113,7 +119133,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "element_ref",
         "friendlyName": "Element Ref",
-        "description": "Element reference of a package widget instance (from Instantiate Widget)",
+        "description": "Select a Page widget, or connect its reference from Instantiate Widget or Get Element",
         "pinType": "Input",
         "dataType": "Struct",
         "valueType": "Normal",

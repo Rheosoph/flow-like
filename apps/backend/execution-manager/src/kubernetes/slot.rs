@@ -3,7 +3,10 @@
 //! This adapter shares the tenant sandbox. The external manager and gateway
 //! enforce cancellation, lifetime and egress even if the adapter is compromised.
 use super::read_line;
-use crate::{Dispatch, Error, MAX_EVENT, MAX_INPUT, MAX_OUTPUT, Mode, Result, config::positive};
+use crate::{
+    Dispatch, EVENT_STALL_TIMEOUT, Error, MAX_EVENT, MAX_INPUT, MAX_OUTPUT, Mode, Result,
+    config::positive,
+};
 use axum::{
     Router,
     body::{Body, Bytes, to_bytes},
@@ -137,7 +140,7 @@ async fn send(
 ) {
     if let Some(channel) = sender.as_ref()
         && !matches!(
-            tokio::time::timeout(Duration::from_secs(1), channel.send(Ok(bytes))).await,
+            tokio::time::timeout(EVENT_STALL_TIMEOUT, channel.send(Ok(bytes))).await,
             Ok(Ok(()))
         )
     {

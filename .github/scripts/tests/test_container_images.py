@@ -38,9 +38,9 @@ def merge(records, cloud="all"):
 class MatrixTests(unittest.TestCase):
     def test_matrix_covers_portable_targets_and_real_recipes(self):
         entries = containers.matrix("all")["include"]
-        self.assertEqual(len(entries), 56)
-        self.assertEqual(len({entry["id"] for entry in entries}), 56)
-        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [11, 7, 8])
+        self.assertEqual(len(entries), 58)
+        self.assertEqual(len({entry["id"] for entry in entries}), 58)
+        self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("aws", "gcp", "azure")], [13, 7, 8])
         self.assertIn("gcp-api", {entry["id"] for entry in entries})
         self.assertIn("azure-api", {entry["id"] for entry in entries})
         self.assertEqual({entry["cloud"] for entry in entries if entry["workload"] == "web"}, {"docker-compose", "kubernetes"})
@@ -94,6 +94,13 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(entries["azure-otel-collector"]["context"], ".")
         self.assertEqual(entries["aws-executor"]["platform"], "linux/arm64")
         self.assertEqual(entries["aws-api"]["platform"], "linux/arm64")
+
+    def test_ecs_api_publishes_one_multi_architecture_repository(self):
+        entries = [entry for entry in containers.matrix("aws")["include"] if entry["workload"] == "api-ecs"]
+        self.assertEqual({entry["id"]: entry["platform"] for entry in entries},
+                         {"aws-api-ecs-amd64": "linux/amd64", "aws-api-ecs-arm64": "linux/arm64"})
+        self.assertEqual({entry["image_suffix"] for entry in entries}, {"flow-like-aws-api-ecs"})
+        self.assertEqual({entry["dockerfile"] for entry in entries}, {"apps/backend/aws/api-ecs/Dockerfile"})
 
     def test_self_hosted_selectors_cover_both_native_architectures(self):
         self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("self-hosted", "docker-compose", "kubernetes")], [30, 18, 20])
@@ -219,13 +226,14 @@ class ManifestTests(unittest.TestCase):
             recipe = containers.REPOSITORY_ROOT / entry["dockerfile"]
             self.assertEqual(entry["build_inputs"]["dockerfile_sha256"], hashlib.sha256(recipe.read_bytes()).hexdigest())
         config = containers.REPOSITORY_ROOT / "flow-like.config.json"
-        for cloud in ("aws", "gcp", "azure"):
-            inputs = entries[f"{cloud}-api"]["build_inputs"]
+        for target_id in ("aws-api", "aws-api-ecs-amd64", "aws-api-ecs-arm64", "gcp-api", "azure-api"):
+            inputs = entries[target_id]["build_inputs"]
             self.assertEqual(inputs["flow_like_config_sha256"], hashlib.sha256(config.read_bytes()).hexdigest())
             self.assertEqual(inputs["runtime_config"], "full-document-v1")
             self.assertEqual(inputs["variant"], "runtime-config-public-default")
-        for target_id in ("aws-api", "aws-file-tracker"):
+        for target_id in ("aws-api", "aws-api-ecs-amd64", "aws-api-ecs-arm64", "aws-file-tracker"):
             self.assertEqual(entries[target_id]["build_inputs"]["database_tls"], "dsql-no-custom-ca")
+        self.assertNotIn("database_tls", entries["aws-executor"]["build_inputs"])
         self.assertNotIn("database_tls", entries["gcp-executor"]["build_inputs"])
         self.assertNotIn("flow_like_config_sha256", entries["aws-file-tracker"]["build_inputs"])
 
@@ -542,16 +550,21 @@ class PublishTests(unittest.TestCase):
     def test_cloud_repositories_are_carbon_copied_without_annotations(self):
         release = release_manifest("aws")
         document, run, _ = self.publish(release, "refs/heads/main")
-        self.assertEqual(len(document["images"]), 11)
+        self.assertEqual(len(document["images"]), 12)
+        ecs_api = self.repository("aws-api-ecs")
         records = {entry["repository"]: entry for entry in release["images"]}
         for image in document["images"]:
+            self.assertEqual(image["tags"][1:], ["main"])
+            if image["repository"] == ecs_api:
+                continue
             self.assertEqual(image["kind"], "manifest")
             self.assertEqual(image["digest"], records[image["repository"]]["digest"])
             self.assertEqual(image["platforms"], [records[image["repository"]]["platform"]])
-            self.assertEqual(image["tags"][1:], ["main"])
             self.assertNotIn("manifests", run.references[f"{image['repository']}:main"]["manifest"])
+        ecs = next(image for image in document["images"] if image["repository"] == ecs_api)
+        self.assertEqual((ecs["kind"], ecs["platforms"]), ("index", ["linux/amd64", "linux/arm64"]))
         for command in run.commands:
-            if command[3] == "create":
+            if command[3] == "create" and not any(argument.startswith(f"{ecs_api}@") for argument in command):
                 self.assertIn("--prefer-index=false", command)
                 self.assertNotIn("--annotation", command)
 
@@ -617,7 +630,7 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(containers.validate_indexes(document, release), document)
         _, _, errors = self.publish(release, "refs/tags/v1.2.3")
         self.assertNotIn("Docker manifest list", errors)
-        _, _, errors = self.publish(release_manifest("aws"), "refs/tags/v1.2.3", docker_media_types=True)
+        _, _, errors = self.publish(release_manifest("gcp"), "refs/tags/v1.2.3", docker_media_types=True)
         self.assertNotIn("Docker manifest list", errors)
 
     def test_unreleased_refs_only_get_the_immutable_tag(self):

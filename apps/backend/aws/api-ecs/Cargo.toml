@@ -1,0 +1,29 @@
+[package]
+name = "aws-api-ecs"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like AWS API as a long-running ECS service, alongside the Lambda API"
+
+[dependencies]
+flow-like = { workspace = true, features = ["app-runtime"] }
+# Same data plane as the Lambda API, so either can serve one deployment.
+flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "secrets-aws", "dynamodb", "s3", "channel-aws", "otel"] }
+flow-like-aws-data = { workspace = true }
+flow-like-secrets = { workspace = true, features = ["aws"] }
+flow-like-types.workspace = true
+flow-like-storage.workspace = true
+flow-like-catalog = { workspace = true, features = ["server-local-metadata"] }
+mimalloc.workspace = true
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+url = "2"
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tracing-opentelemetry.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

@@ -548,7 +548,7 @@ impl CachedEmbeddingModel {
 // NodeDBConnection — handle to a vector database
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct NodeDBConnection {
     pub cache_key: String,
 }
@@ -605,7 +605,7 @@ impl NodeDBConnection {
     }
 
     pub fn schema() -> String {
-        crate::host::get_type_schema("NodeDBConnection").unwrap_or_default()
+        serde_json::to_string(&schemars::schema_for!(Self)).unwrap_or_default()
     }
 }
 
@@ -1263,5 +1263,47 @@ mod tests {
 
         let doc = ContentPart::document("https://example.com/d.pdf", "application/pdf");
         assert!(matches!(doc, ContentPart::Document { .. }));
+    }
+}
+
+/// A SQL session passed through a typed pin. The host approves access per invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct DataFusionSession {
+    pub cache_key: String,
+}
+
+impl DataFusionSession {
+    pub fn schema() -> String {
+        serde_json::to_string(&schemars::schema_for!(Self)).unwrap_or_default()
+    }
+
+    pub fn query(&self, ctx: &Context, sql: &str, max_rows: u64) -> Option<Vec<serde_json::Value>> {
+        ctx.df_query(self, sql, max_rows)
+    }
+
+    pub fn register_lance(
+        &self,
+        ctx: &Context,
+        database: &NodeDBConnection,
+        table_name: &str,
+    ) -> bool {
+        ctx.df_register_lance(self, database, table_name)
+    }
+}
+
+#[cfg(test)]
+mod database_handle_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_schemas_are_available_without_host_permissions() {
+        let database: serde_json::Value =
+            serde_json::from_str(&NodeDBConnection::schema()).unwrap();
+        let session: serde_json::Value =
+            serde_json::from_str(&DataFusionSession::schema()).unwrap();
+        assert_eq!(database["title"], "NodeDBConnection");
+        assert_eq!(session["title"], "DataFusionSession");
+        assert_eq!(database["required"], serde_json::json!(["cache_key"]));
+        assert_eq!(session["required"], serde_json::json!(["cache_key"]));
     }
 }

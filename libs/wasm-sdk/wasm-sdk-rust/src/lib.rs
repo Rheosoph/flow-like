@@ -98,7 +98,7 @@ mod types;
 pub use context::*;
 pub use interop::{
     AudioData, Bit, CachedEmbeddingModel, ChatContent, ChatMessage, ContentPart, DocumentData,
-    FlowPath, FtsSearchQuery, HybridSearchQuery, ImageData, NodeDBConnection, NodeImage,
+    DataFusionSession, FlowPath, FtsSearchQuery, HybridSearchQuery, ImageData, NodeDBConnection, NodeImage,
     ReasoningData, ToolCallData, ToolResultData, VectorSearchQuery, VideoData,
 };
 pub use mock::*;

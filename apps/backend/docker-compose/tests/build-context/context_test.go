@@ -47,6 +47,8 @@ func TestRequiredWorkspaceInputsRemainInContext(t *testing.T) {
 		"Cargo.toml", "Cargo.lock", ".cargo/config.toml", "package.json", "bun.lock", "LICENSE",
 		"flow-like.config.json", "assets/mcp-inspector.html",
 		"apps/backend/aws/api/Dockerfile", "apps/backend/aws/api/Cargo.toml",
+		"apps/backend/aws/api-ecs/Dockerfile", "apps/backend/aws/api-ecs/Cargo.toml",
+		"apps/backend/aws/shared/api_bootstrap.rs", "apps/backend/aws/shared/span_export.rs",
 		"apps/backend/aws/executor/Dockerfile", "apps/backend/aws/executor/Cargo.toml",
 		"apps/backend/aws/executor-ecs/Dockerfile", "apps/backend/aws/executor-ecs/Cargo.toml",
 		"apps/backend/aws/compiler-ecs/Dockerfile", "apps/backend/aws/compiler-ecs/Cargo.toml",

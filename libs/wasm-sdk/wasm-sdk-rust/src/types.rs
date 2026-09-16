@@ -31,6 +31,12 @@ pub enum NodePermission {
     /// Write to node/user storage
     #[serde(rename = "storage:write")]
     StorageWrite,
+    /// Read from wired database and SQL session pins.
+    #[serde(rename = "database:read")]
+    DatabaseRead,
+    /// Modify rows through wired database pins.
+    #[serde(rename = "database:write")]
+    DatabaseWrite,
     /// Access flow variables
     #[serde(rename = "variables")]
     Variables,
