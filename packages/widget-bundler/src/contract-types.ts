@@ -3,9 +3,16 @@
 // assignability assertion at the bottom keeps the two from drifting.
 
 import type {
-	WidgetCapabilities,
 	WidgetContract as SdkWidgetContract,
+	WidgetCapabilities,
+	WidgetCsp,
 } from "@flow-like/widget-sdk";
+import {
+	CSP_DIRECTIVES,
+	canonicalCspSources,
+	isCspEmpty,
+	validateCspDeclaration,
+} from "./csp-source";
 
 export type JsonValue =
 	| string
@@ -17,7 +24,10 @@ export type JsonValue =
 
 export type JsonObject = { [key: string]: JsonValue };
 
-export const CONTRACT_VERSION = 1;
+/** Current contract version; contracts declaring `csp` must use it */
+export const CONTRACT_VERSION = 2;
+/** Version of contracts without `csp`, readable by hosts that predate `csp` */
+export const BASE_CONTRACT_VERSION = 1;
 export const WIDGET_PROTOCOL = "flw/1";
 
 export type ContractInputType =
@@ -65,6 +75,13 @@ export interface WidgetContract {
 	queries: Record<string, ContractQuery>;
 	sizing: WidgetSizing;
 	capabilities?: WidgetCapabilities;
+	/** Present only with `contractVersion` 2 */
+	csp?: WidgetCsp;
+}
+
+/** Mirrors `is_valid_package_id` in packages/wasm/schema/src/widget_frame.rs */
+export function isValidPackageId(id: string): boolean {
+	return id !== "." && id !== ".." && /^[A-Za-z0-9._-]+$/.test(id);
 }
 
 export function isValidWidgetId(id: string): boolean {
@@ -101,13 +118,34 @@ function defaultMatchesType(value: JsonValue, input: ContractInput): boolean {
 export function validateContract(contract: WidgetContract): string[] {
 	const errors: string[] = [];
 
-	if (
-		contract.contractVersion === 0 ||
-		contract.contractVersion > CONTRACT_VERSION
+	const hasCsp = contract.csp !== undefined && contract.csp !== null;
+	if (contract.contractVersion === CONTRACT_VERSION && !hasCsp) {
+		errors.push(
+			`Widget '${contract.id}' uses contractVersion ${CONTRACT_VERSION} without csp; contracts without csp must use contractVersion ${BASE_CONTRACT_VERSION}`,
+		);
+	} else if (contract.contractVersion === BASE_CONTRACT_VERSION && hasCsp) {
+		errors.push(
+			`Widget '${contract.id}' declares csp and must use contractVersion ${CONTRACT_VERSION}`,
+		);
+	} else if (
+		contract.contractVersion !== CONTRACT_VERSION &&
+		contract.contractVersion !== BASE_CONTRACT_VERSION
 	) {
 		errors.push(
-			`Unsupported contract version ${contract.contractVersion} for widget '${contract.id}' (supported: 1..=${CONTRACT_VERSION})`,
+			`Unsupported contractVersion ${contract.contractVersion} for widget '${contract.id}' (supported: ${BASE_CONTRACT_VERSION}, or ${CONTRACT_VERSION} with csp)`,
 		);
+	}
+
+	if (hasCsp) {
+		const csp = contract.csp as WidgetCsp;
+		if (typeof csp === "object" && !Array.isArray(csp) && isCspEmpty(csp)) {
+			errors.push(
+				`Widget '${contract.id}' declares an empty csp; omit csp when it grants no sources`,
+			);
+		}
+		for (const error of validateCspDeclaration(csp)) {
+			errors.push(`Widget '${contract.id}': ${error}`);
+		}
 	}
 
 	if (!isValidWidgetId(contract.id)) {
@@ -169,12 +207,25 @@ function sortedEntries<T>(map: Record<string, T>): [string, T][] {
 	return Object.entries(map).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+function canonicalCsp(csp: WidgetCsp | undefined): WidgetCsp | undefined {
+	if (!csp) return undefined;
+	const canonical: WidgetCsp = {};
+	for (const directive of CSP_DIRECTIVES) {
+		const sources = canonicalCspSources(csp[directive] ?? []);
+		if (sources.length > 0) canonical[directive] = sources;
+	}
+	return isCspEmpty(canonical) ? undefined : canonical;
+}
+
 /**
  * Rebuild the contract with serde field order, BTreeMap-sorted keys, and the
  * same skip-serializing semantics as the Rust types, so the emitted JSON
- * matches what `serde_json` would produce.
+ * matches what `serde_json` would produce. `csp` lists are sorted and
+ * deduplicated, empty ones are dropped, and `contractVersion` follows from
+ * whether any `csp` remains.
  */
 export function canonicalizeContract(contract: WidgetContract): WidgetContract {
+	const csp = canonicalCsp(contract.csp);
 	const inputs: Record<string, ContractInput> = {};
 	for (const [key, input] of sortedEntries(contract.inputs)) {
 		inputs[key] = {
@@ -214,7 +265,7 @@ export function canonicalizeContract(contract: WidgetContract): WidgetContract {
 	}
 
 	return {
-		contractVersion: contract.contractVersion,
+		contractVersion: csp ? CONTRACT_VERSION : BASE_CONTRACT_VERSION,
 		id: contract.id,
 		inputs,
 		events,
@@ -230,9 +281,10 @@ export function canonicalizeContract(contract: WidgetContract): WidgetContract {
 			capabilities: Object.fromEntries(
 				(["workers", "media", "microphone", "wasm", "downloads"] as const)
 					.filter((key) => contract.capabilities?.[key] !== undefined)
-					.map((key) => [key, contract.capabilities![key]]),
+					.map((key) => [key, contract.capabilities?.[key]]),
 			),
 		}),
+		...(csp && { csp }),
 	};
 }
 

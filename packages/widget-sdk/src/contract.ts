@@ -48,6 +48,19 @@ export interface WidgetCapabilities {
 	downloads?: boolean;
 }
 
+/**
+ * Network sources a widget asks the viewer to approve, per CSP fetch
+ * directive. Each entry is `scheme://host` (`https`, plus `wss` for
+ * `connectSrc`) without port, path or wildcard.
+ */
+export interface WidgetCsp {
+	connectSrc?: string[];
+	imgSrc?: string[];
+	fontSrc?: string[];
+	mediaSrc?: string[];
+	styleSrc?: string[];
+}
+
 export interface WidgetContract {
 	contractVersion: number;
 	id: string;
@@ -56,6 +69,8 @@ export interface WidgetContract {
 	queries?: Record<string, ContractQuery>;
 	sizing?: WidgetSizing;
 	capabilities?: WidgetCapabilities;
+	/** Present only with `contractVersion` 2 */
+	csp?: WidgetCsp;
 }
 
 export function contractDefaults(

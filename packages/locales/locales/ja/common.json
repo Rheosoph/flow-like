@@ -2634,7 +2634,6 @@
 	"widenTheFocusToTwoHops": "",
 	"widgetActionActionidFailed": "ウィジェットアクション '{{actionId}}' が失敗しました",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "ウィジェットアクション '{{actionId}}' はワークフロー以外のバインディングを持ち、ここでは実行できません。",
-	"widgetActionActionidIsNotBoundToAWorkflowval": "ウィジェットアクション '{{actionId}}' はワークフローにバインドされていません{{val}}",
 	"widgetActionCannotRunMissingAppOrBoardContext": "ウィジェットアクションを実行できません: アプリまたはボードのコンテキストがありません。",
 	"widgetCapabilityAllowForProject": "",
 	"widgetCapabilityAllowOnce": "",

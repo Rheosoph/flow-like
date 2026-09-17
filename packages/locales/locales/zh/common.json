@@ -2634,7 +2634,6 @@
 	"widenTheFocusToTwoHops": "",
 	"widgetActionActionidFailed": "组件操作 '{{actionId}}' 失败",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "组件操作 '{{actionId}}' 绑定的不是工作流,无法在此运行。",
-	"widgetActionActionidIsNotBoundToAWorkflowval": "组件操作 '{{actionId}}' 未绑定到工作流{{val}}",
 	"widgetActionCannotRunMissingAppOrBoardContext": "组件操作无法运行:缺少应用或画布上下文。",
 	"widgetCapabilityAllowForProject": "",
 	"widgetCapabilityAllowOnce": "",

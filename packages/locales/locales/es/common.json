@@ -2680,7 +2680,6 @@
 	"widenTheFocusToTwoHops": "",
 	"widgetActionActionidFailed": "La acción del componente '{{actionId}}' falló",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "La acción del componente '{{actionId}}' tiene un enlace que no es de flujo de trabajo y no puede ejecutarse aquí.",
-	"widgetActionActionidIsNotBoundToAWorkflowval": "La acción del componente '{{actionId}}' no está vinculada a un flujo de trabajo{{val}}",
 	"widgetActionCannotRunMissingAppOrBoardContext": "La acción del componente no puede ejecutarse: falta el contexto de la aplicación o el tablero.",
 	"widgetCapabilityAllowForProject": "",
 	"widgetCapabilityAllowOnce": "",

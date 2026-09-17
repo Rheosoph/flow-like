@@ -2640,7 +2640,6 @@
 	"widenTheFocusToTwoHops": "",
 	"widgetActionActionidFailed": "Widget-Aktion '{{actionId}}' fehlgeschlagen",
 	"widgetActionActionidHasANonworkflowBindingAndCannotRunHere": "Widget-Aktion '{{actionId}}' hat eine Nicht-Workflow-Bindung und kann hier nicht ausgeführt werden.",
-	"widgetActionActionidIsNotBoundToAWorkflowval": "Widget-Aktion '{{actionId}}' ist nicht an einen Workflow gebunden{{val}}",
 	"widgetActionCannotRunMissingAppOrBoardContext": "Widget-Aktion kann nicht ausgeführt werden: App- oder Board-Kontext fehlt.",
 	"widgetCapabilityAllowForProject": "",
 	"widgetCapabilityAllowOnce": "",

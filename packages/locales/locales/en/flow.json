@@ -708,6 +708,7 @@
 	"historyEntrySkippedAfterRepeatedFailure": "{{action}} failed again for the same change, so it was skipped: {{message}}",
 	"historyEntryUnreadableSkipped": "{{action}}: one recorded change was unreadable and was skipped",
 	"home": "Home",
+	"homeWidgetClassesHint": "Applied to the widget surface. Target inner elements with variants like [&_h2]:text-lg. The layout keeps control of position, width and height.",
 	"horizontal": "Horizontal",
 	"hoursAgoRangeCountRunsFailed_one": "{{hoursAgo}}–{{rangeEnd}} h ago: {{count}} run, {{failed}} failed",
 	"hoursAgoRangeCountRunsFailed_other": "{{hoursAgo}}–{{rangeEnd}} h ago: {{count}} runs, {{failed}} failed",

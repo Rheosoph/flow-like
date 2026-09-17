@@ -15,6 +15,18 @@ import type {
 	QueryColumn,
 } from "../../packages/ui/state/backend-state/query-state";
 
+const DAY = 86_400_000;
+const ownerSubs = [
+	"3f9c2a71-8d4e-4b6a-9c1f-5e2d7a8b0c14",
+	"b2e8d4f6-1a3c-4e5b-8d7f-9a0b1c2d3e4f",
+	"e7a1c3d5-2b4f-4a6c-8e0d-1f3a5b7c9d2e",
+];
+/** The last sub stays unknown to the directory, so its id is what a cell shows. */
+const people = new Map([
+	[ownerSubs[0], "Mara Lindqvist"],
+	[ownerSubs[1], "Jonas Weber"],
+]);
+const firstSeenDays = [0, 0, 1, 3, 3, 4, 6, 6, 8, 9];
 const sourceRows = [
 	["Sales", "Succeeded", 120, "2026-09-01", 12],
 	["Sales", "Failed", 30, "2026-09-01", 36],
@@ -26,21 +38,42 @@ const sourceRows = [
 	["Finance", "Failed", 40, "2026-09-04", 60],
 	["Finance", "Succeeded", 100, "2026-09-05", 20],
 	["Sales", "Succeeded", 110, "2026-09-05", 16],
-].map(([department, status, amount, date, latency], index) => ({
-	order_id: `order-${index}`,
-	name: `Invoice ${index + 1}`,
-	department,
-	status,
-	amount,
-	date,
-	latency,
-	owner: index < 8 ? "fixture-user" : "other-user",
-}));
+].map(([department, status, amount, date, latency], index) => {
+	const lastSuccess = 1789584356974 - index * 61_234_567;
+	return {
+		order_id: `order-${index}`,
+		name: `Invoice ${index + 1}`,
+		department,
+		status,
+		amount,
+		date,
+		latency,
+		owner: index < 8 ? "fixture-user" : "other-user",
+		owner_sub: ownerSubs[index % ownerSubs.length],
+		first_seen_at:
+			Date.UTC(2026, 7, 28) +
+			firstSeenDays[index] * DAY +
+			(7 + index) * 3_600_000,
+		started_at: lastSuccess - 5_667 - index * 1_250,
+		last_success_at: lastSuccess,
+		net_amount: Number(amount) * 0.81,
+		relevance_score: Number((0.94 - index * 0.061).toFixed(3)),
+	};
+});
+const columnTypes: Record<string, string> = {
+	amount: "Float64",
+	latency: "Float64",
+	net_amount: "Float64",
+	relevance_score: "Float64",
+	started_at: "Int64",
+	last_success_at: "Int64",
+	first_seen_at: 'Timestamp(ms, "UTC")',
+};
 const columns: QueryColumn[] = Object.keys(sourceRows[0]).map(
 	(name, position) => ({
 		name,
 		position,
-		type_name: ["amount", "latency"].includes(name) ? "Float64" : "Utf8",
+		type_name: columnTypes[name] ?? "Utf8",
 	}),
 );
 const schema = {
@@ -130,6 +163,34 @@ const samples = [
 		xField: "date",
 		fields: ["name", "date", "amount"],
 	}),
+	widget("runs", "list", {
+		mode: "records",
+		fields: ["name", "last_success_at", "owner_sub", "relevance_score"],
+	}),
+	widget("run", "record", {
+		mode: "records",
+		fields: [
+			"name",
+			"started_at",
+			"last_success_at",
+			"owner_sub",
+			"net_amount",
+		],
+	}),
+	widget("activity", "area", {
+		groupBy: "first_seen_at",
+		timeBucket: "day",
+		sortBy: "group",
+		sortDirection: "asc",
+		measures: [{ aggregation: "sum", field: "net_amount", label: "" }],
+	}),
+	widget("successes", "line", {
+		groupBy: "last_success_at",
+		timeBucket: "day",
+		sortBy: "group",
+		sortDirection: "asc",
+		measures: [{ aggregation: "count", field: "", label: "" }],
+	}),
 ];
 
 const allSamples = [
@@ -140,6 +201,7 @@ const allSamples = [
 			{ aggregation: "sum", field: "amount", label: "Revenue" },
 			{ aggregation: "count", field: "", label: "Orders" },
 			{ aggregation: "avg", field: "latency", label: "Latency" },
+			{ aggregation: "max", field: "last_success_at", label: "" },
 		],
 	}),
 	...(["progress", "gauge", "bullet"] as const).map((view) =>
@@ -211,36 +273,53 @@ function aggregateFixture(payload: ExecuteSqlPayload) {
 	}
 	const histogram = /FLOOR/.test(payload.sql);
 	const binWidth = Number(payload.params?.__home_bin_width ?? 10);
-	const group =
-		/"([^"]+)" AS "__group"/.exec(payload.sql)?.[1] ??
-		(/DATE_TRUNC/.test(payload.sql) ? "date" : histogram ? "latency" : "");
+	const truncation = /DATE_TRUNC\('(\w+)',\s*(.+?)\) AS "__group"/s.exec(
+		payload.sql,
+	);
+	const group = truncation
+		? (/"([^"]+)"/.exec(truncation[2])?.[1] ?? "")
+		: (/"([^"]+)" AS "__group"/.exec(payload.sql)?.[1] ??
+			(histogram ? "latency" : ""));
+	// DataFusion truncates a cast column to nanoseconds and the epoch CASE to microseconds.
+	const [groupType, groupScale] = !truncation
+		? [histogram ? "Float64" : (columnTypes[group] ?? "Utf8"), 1]
+		: /to_timestamp_micros/.test(truncation[2])
+			? ["Timestamp(µs)", 1_000]
+			: ["Timestamp(ns)", 1_000_000];
+	const groupValue = (row: Record<string, unknown>) => {
+		if (!group) return null;
+		if (histogram) return Math.floor(Number(row[group]) / binWidth) * binWidth;
+		if (!truncation) return row[group];
+		const bucket = truncateFixtureInstant(row[group], truncation[1]);
+		return bucket === null ? null : bucket * groupScale;
+	};
 	const series = /"([^"]+)" AS "__series"/.exec(payload.sql)?.[1] ?? "";
 	const grouped = new Map<string, Record<string, unknown>[]>();
 	for (const row of rows) {
-		const key = JSON.stringify([
-			group
-				? histogram
-					? Math.floor(Number(row[group]) / binWidth) * binWidth
-					: row[group]
-				: null,
-			series ? row[series] : null,
-		]);
+		const key = JSON.stringify([groupValue(row), series ? row[series] : null]);
 		const list = grouped.get(key) ?? [];
 		list.push(row);
 		grouped.set(key, list);
 	}
+	const matches = [
+		...payload.sql.matchAll(
+			/(SUM|COUNT|AVG|MIN|MAX|MEDIAN)\((?:DISTINCT )?(?:"([^"]+)"|\*)\) AS "__measure_([0-9]+)"/g,
+		),
+	];
+	const measureTypes = new Map(
+		matches.map(([, aggregation, field, index]) => [
+			`__measure_${index}`,
+			aggregation === "COUNT"
+				? "Int64"
+				: ["MIN", "MAX"].includes(aggregation) && field
+					? (columnTypes[field] ?? "Utf8")
+					: "Float64",
+		]),
+	);
 	const result = [...grouped.values()].map((items) => {
 		const row: Record<string, unknown> = {};
-		if (group)
-			row.__group = histogram
-				? Math.floor(Number(items[0][group]) / binWidth) * binWidth
-				: items[0][group];
+		if (group) row.__group = groupValue(items[0]);
 		if (series) row.__series = items[0][series];
-		const matches = [
-			...payload.sql.matchAll(
-				/(SUM|COUNT|AVG|MIN|MAX|MEDIAN)\((?:DISTINCT )?(?:"([^"]+)"|\*)\) AS "__measure_([0-9]+)"/g,
-			),
-		];
 		for (const [, aggregation, field, index] of matches) {
 			const values = items
 				.map((item) => Number(item[field]))
@@ -280,7 +359,9 @@ function aggregateFixture(payload: ExecuteSqlPayload) {
 					.reduce((sum, item) => sum + Number(item.__measure_0), 0);
 	result.sort((a, b) =>
 		payload.sql.includes('ORDER BY "__group" ASC')
-			? String(a.__group).localeCompare(String(b.__group))
+			? typeof a.__group === "number" && typeof b.__group === "number"
+				? a.__group - b.__group
+				: String(a.__group).localeCompare(String(b.__group))
 			: Number(b.__measure_0) - Number(a.__measure_0),
 	);
 	return {
@@ -288,9 +369,28 @@ function aggregateFixture(payload: ExecuteSqlPayload) {
 		columns: Object.keys(result[0] ?? {}).map((name, position) => ({
 			name,
 			position,
-			type_name: name === "__group" || name === "__series" ? "Utf8" : "Float64",
+			type_name:
+				name === "__group"
+					? groupType
+					: name === "__series"
+						? (columnTypes[series] ?? "Utf8")
+						: (measureTypes.get(name) ?? "Float64"),
 		})),
 	};
+}
+
+/** Epoch milliseconds of the UTC bucket start, as DATE_TRUNC would place it. */
+function truncateFixtureInstant(value: unknown, bucket: string): number | null {
+	const time = typeof value === "number" ? value : Date.parse(String(value));
+	if (!Number.isFinite(time)) return null;
+	const date = new Date(time);
+	const year = date.getUTCFullYear();
+	const month = date.getUTCMonth();
+	if (bucket === "year") return Date.UTC(year, 0, 1);
+	if (bucket === "quarter") return Date.UTC(year, month - (month % 3), 1);
+	if (bucket === "month") return Date.UTC(year, month, 1);
+	const day = Date.UTC(year, month, date.getUTCDate());
+	return bucket === "week" ? day - ((date.getUTCDay() + 6) % 7) * DAY : day;
 }
 
 export default function DataFixture() {
@@ -339,6 +439,21 @@ export default function DataFixture() {
 				listTables: async () => ["orders"],
 				listTablesUser: async () => ["orders"],
 				getSchema: async () => schema,
+			},
+			userState: {
+				...original.userState,
+				lookupUser: async (id: string) => {
+					const name = people.get(id);
+					if (!name) throw new Error(`No fixture account has the id ${id}.`);
+					return { id, name, created_at: "2026-01-01T00:00:00Z" };
+				},
+				lookupUsers: async (ids: string[]) =>
+					ids.flatMap((id) => {
+						const name = people.get(id);
+						return name
+							? [{ id, name, created_at: "2026-01-01T00:00:00Z" }]
+							: [];
+					}),
 			},
 			graphState: {
 				...original.graphState,

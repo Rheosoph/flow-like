@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { WidgetCapabilities } from "@flow-like/widget-sdk";
+import type { WidgetCapabilities, WidgetCsp } from "@flow-like/widget-sdk";
+import { isLlmKind } from "@flow-like/widget-sdk/llm";
 import { validateInputValue } from "@flow-like/widget-sdk/validate";
 import {
 	type CompletedConfig,
@@ -12,6 +13,7 @@ import {
 } from "ts-json-schema-generator";
 import ts from "typescript";
 import {
+	BASE_CONTRACT_VERSION,
 	CONTRACT_VERSION,
 	type ContractEvent,
 	type ContractInput,
@@ -20,6 +22,17 @@ import {
 	type WidgetContract,
 	validateContract,
 } from "./contract-types";
+import {
+	CSP_DIRECTIVES,
+	CSP_SOURCE_REJECTION_MESSAGES,
+	MAX_WIDGET_CSP_SOURCES,
+	cspSourceCount,
+	isCspDirective,
+	isCspEmpty,
+	normalizeCspDeclaration,
+	normalizeCspSource,
+	validateCspSource,
+} from "./csp-source";
 
 type JsonObject = { [key: string]: JsonValue };
 
@@ -35,6 +48,8 @@ export interface ExtractedWidgetConfig {
 	description: string;
 	sizing?: WidgetSizingConfig;
 	capabilities?: WidgetCapabilities;
+	/** Normalized declaration; absent when it names no sources */
+	csp?: WidgetCsp;
 	fixtures?: Record<string, JsonValue>;
 }
 
@@ -74,7 +89,7 @@ export function extractContract(widgetConfigPath: string): ExtractResult {
 		...(tsconfig && { tsconfig }),
 		skipTypeCheck: true,
 		jsDoc: "extended",
-		extraTags: ["geometry", "mutation"],
+		extraTags: ["geometry", "llm", "mutation"],
 		topRef: false,
 		expose: "all",
 		additionalProperties: true,
@@ -142,9 +157,10 @@ export function extractContract(widgetConfigPath: string): ExtractResult {
 		: {};
 
 	const contract: WidgetContract = {
-		contractVersion: CONTRACT_VERSION,
+		contractVersion: config.csp ? CONTRACT_VERSION : BASE_CONTRACT_VERSION,
 		id: config.id,
 		...(config.capabilities && { capabilities: config.capabilities }),
+		...(config.csp && { csp: config.csp }),
 		inputs,
 		events,
 		queries,
@@ -516,6 +532,41 @@ function geometrySchema(
 	return result;
 }
 
+/**
+ * `@llm History`, `Response` or `ResponseChunk` selects a native Flow-Like
+ * model type. The contract keeps only the marker: Query Widget gives the pin
+ * the native schema, so model node outputs connect, and the SDK validates
+ * values against that schema.
+ */
+function llmSchema(schema: JsonObject, context: string): JsonObject {
+	const kind = schema.llm;
+	if (!isLlmKind(kind)) {
+		throw new Error(
+			`Invalid @llm '${String(kind)}' for ${context}; expected History, Response or ResponseChunk`,
+		);
+	}
+	if (schema.type !== undefined && schema.type !== "object") {
+		throw new Error(
+			`@llm ${kind} for ${context} must annotate an object type; annotate the element type for arrays and maps`,
+		);
+	}
+	const result: JsonObject = {
+		type: "object",
+		"x-flow-like-type": "llm",
+		"x-llm": kind,
+	};
+	for (const key of [
+		"title",
+		"description",
+		"default",
+		"examples",
+		"deprecated",
+	]) {
+		if (schema[key] !== undefined) result[key] = schema[key];
+	}
+	return result;
+}
+
 function resolveDefinition(
 	ref: string,
 	definitions: Record<string, JsonValue>,
@@ -564,6 +615,9 @@ function inlineRefs(
 	}
 	if (value.geometry !== undefined) {
 		return geometrySchema(value, definitions, context);
+	}
+	if (value.llm !== undefined) {
+		return llmSchema(value, context);
 	}
 
 	const { $ref, $schema, definitions: _nested, ...rest } = value;
@@ -1002,6 +1056,9 @@ function readWidgetConfig(
 		}
 	}
 
+	const csp =
+		cfg.csp === undefined ? undefined : readWidgetCsp(cfg.csp, id, path);
+
 	let fixtures: Record<string, JsonValue> | undefined;
 	if (isJsonObject(cfg.dev) && cfg.dev.fixtures !== undefined) {
 		if (!isJsonObject(cfg.dev.fixtures)) {
@@ -1018,6 +1075,72 @@ function readWidgetConfig(
 		description,
 		...(sizing !== undefined && { sizing }),
 		...(capabilities !== undefined && { capabilities }),
+		...(csp !== undefined && { csp }),
 		...(fixtures !== undefined && { fixtures }),
 	};
+}
+
+function invalidCspSource(
+	source: JsonValue,
+	directive: string,
+	id: string,
+	reason: string,
+): Error {
+	return new Error(
+		`Invalid widget csp source ${JSON.stringify(source)} in ${directive} for widget ${id}: ${reason}`,
+	);
+}
+
+/**
+ * Reads `csp` as string-literal arrays under the five known directives,
+ * normalizes them (lowercase, punycode, sort, dedupe) and checks each source
+ * against the grammar shared with the Rust schema.
+ */
+function readWidgetCsp(
+	value: JsonValue,
+	id: string,
+	path: string,
+): WidgetCsp | undefined {
+	if (!isJsonObject(value)) {
+		throw new Error(`Widget csp for widget ${id} in ${path} must be an object`);
+	}
+	const declared: WidgetCsp = {};
+	for (const [directive, sources] of Object.entries(value)) {
+		if (!isCspDirective(directive)) {
+			throw new Error(
+				`Invalid widget csp directive "${directive}" for widget ${id}: only ${CSP_DIRECTIVES.join(", ")} can be extended`,
+			);
+		}
+		if (!Array.isArray(sources)) {
+			throw new Error(
+				`Widget csp ${directive} for widget ${id} in ${path} must be an array of string literals`,
+			);
+		}
+		declared[directive] = sources.map((source) => {
+			if (typeof source !== "string") {
+				throw invalidCspSource(source, directive, id, "must be a string");
+			}
+			const rejection = validateCspSource(
+				directive,
+				normalizeCspSource(source),
+			);
+			if (rejection !== null) {
+				throw invalidCspSource(
+					source,
+					directive,
+					id,
+					CSP_SOURCE_REJECTION_MESSAGES[rejection],
+				);
+			}
+			return source;
+		});
+	}
+	const csp = normalizeCspDeclaration(declared);
+	const count = cspSourceCount(csp);
+	if (count > MAX_WIDGET_CSP_SOURCES) {
+		throw new Error(
+			`Widget csp for widget ${id} declares ${count} sources; at most ${MAX_WIDGET_CSP_SOURCES} are allowed`,
+		);
+	}
+	return isCspEmpty(csp) ? undefined : csp;
 }

@@ -34,6 +34,9 @@ await page.route("**/*", (route) => {
 	blocked.push(url.origin);
 	return route.abort();
 });
+const WIDGET_COUNT = 36;
+/** A raw epoch as the widgets used to print it: bare digits or with separators. */
+const RAW_EPOCH = /\b1[5-9]\d{11,}\b|\b1[5-9]\d{0,2}(,\d{3}){3,}\b/;
 const chart = (id) => page.getByTestId(`data-${id}`);
 const waitVisual = (id) =>
 	page.waitForFunction(
@@ -98,6 +101,26 @@ try {
 	);
 	passed.push(
 		"Desktop renders real stat, bar, stacked, donut, pivot, calendar, Sankey, boxplot, percent-stacked and record calendar; truncation shown",
+	);
+	await chart("runs").getByText("Mara Lindqvist").first().waitFor();
+	for (const id of ["activity", "successes"]) await waitVisual(id);
+	const readable = {};
+	for (const id of ["runs", "run", "activity", "successes"])
+		readable[id] = await chart(id).innerText();
+	for (const [id, text] of Object.entries(readable))
+		assert.ok(!RAW_EPOCH.test(text), `${id} shows a raw epoch: ${text}`);
+	assert.ok(readable.runs.includes("Last success"), readable.runs);
+	assert.ok(/\bago\b|yesterday/.test(readable.runs), readable.runs);
+	assert.ok(!readable.runs.includes("owner_sub"), readable.runs);
+	assert.ok(readable.run.includes("Started"), readable.run);
+	for (const id of ["activity", "successes"])
+		assert.ok(
+			/\b(Aug|Sep) \d{1,2}\b/.test(readable[id]),
+			`${id} axis has no month-day ticks: ${readable[id]}`,
+		);
+	assert.ok(readable.activity.includes("by first seen"), readable.activity);
+	passed.push(
+		"Epoch-millis, µs/ns time buckets and account subs read as relative times, month-day ticks and names",
 	);
 	await page.screenshot({
 		path: "/private/tmp/home-data-qa-desktop.png",
@@ -233,18 +256,18 @@ try {
 		waitUntil: "domcontentloaded",
 	});
 	await page.waitForFunction(
-		() => {
+		(count) => {
 			const cards = [
 				...document.querySelectorAll('section[data-testid^="data-"]'),
 			];
 			return (
-				cards.length === 32 &&
+				cards.length === count &&
 				cards.every((card) =>
 					card.querySelector('[data-home-data-state="ready"]'),
 				)
 			);
 		},
-		undefined,
+		WIDGET_COUNT,
 		{ timeout: 60_000 },
 	);
 	for (const id of ["sankey", "heatmap", "treemap", "funnel", "graph"])
@@ -264,7 +287,7 @@ try {
 		0,
 	);
 	await page.screenshot({
-		path: "/private/tmp/home-data-polished-all32-desktop.png",
+		path: "/private/tmp/home-data-polished-all-desktop.png",
 		fullPage: true,
 	});
 	for (const width of [390, 768]) {
@@ -319,17 +342,17 @@ try {
 		path: "/private/tmp/home-data-polished-empty-390.png",
 	});
 	passed.push(
-		"All 32 data presentations render at desktop, tablet, and narrow widths; empty cards remain below 220px",
+		`All ${WIDGET_COUNT} data presentations render at desktop, tablet, and narrow widths; empty cards remain below 220px`,
 	);
 	await page.goto("http://127.0.0.1:4318/data-fixture?editor=1", {
 		waitUntil: "domcontentloaded",
 	});
 	await page.waitForFunction(
-		() =>
+		(count) =>
 			document.querySelectorAll(
 				'[data-home-widget] [data-home-data-state="ready"]',
-			).length === 32,
-		undefined,
+			).length === count,
+		WIDGET_COUNT,
 		{ timeout: 60_000 },
 	);
 	for (const width of [1480, 768, 390]) {
@@ -361,10 +384,11 @@ try {
 	}
 	await page.getByLabel("Scenario", { exact: true }).selectOption("empty");
 	await page.waitForFunction(
-		() =>
+		(count) =>
 			document.querySelectorAll(
 				'[data-home-widget] [data-home-data-state="empty"]',
-			).length === 32,
+			).length === count,
+		WIDGET_COUNT,
 	);
 	await page.waitForFunction(() =>
 		[...document.querySelectorAll("[data-home-widget]")].every(
@@ -384,7 +408,7 @@ try {
 				.height > 280,
 	);
 	passed.push(
-		"Production HomeEditor automatically sizes all 32 real data widgets at three widths; empty frames contract and populated charts regain their plot area without clipped content",
+		`Production HomeEditor automatically sizes all ${WIDGET_COUNT} real data widgets at three widths; empty frames contract and populated charts regain their plot area without clipped content`,
 	);
 	for (const id of ["calendar", "metricstrip", "sankey"]) {
 		await page
@@ -400,10 +424,11 @@ try {
 		.getByLabel("Scenario", { exact: true })
 		.selectOption("unconfigured");
 	await page.waitForFunction(
-		() =>
+		(count) =>
 			document.querySelectorAll(
 				'[data-home-widget] [data-home-data-state="unconfigured"]',
-			).length === 32,
+			).length === count,
+		WIDGET_COUNT,
 	);
 	await page.waitForFunction(() =>
 		[...document.querySelectorAll("[data-home-widget]")].every(
@@ -412,14 +437,14 @@ try {
 	);
 	assert.equal(
 		await page.getByText("Connect your data", { exact: true }).count(),
-		32,
+		WIDGET_COUNT,
 	);
 	await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
 	await page.screenshot({
 		path: "/private/tmp/home-data-production-unconfigured-390.png",
 	});
 	passed.push(
-		"All 32 unconfigured production widgets show a compact source-selection hint",
+		`All ${WIDGET_COUNT} unconfigured production widgets show a compact source-selection hint`,
 	);
 	assert.deepEqual(errors, []);
 	assert.deepEqual(blocked, []);

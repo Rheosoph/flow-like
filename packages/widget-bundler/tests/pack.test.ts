@@ -2,10 +2,39 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
-import { entryHash, pack, readPackageInfo, sha256Hex } from "../src/pack";
-import { type ProjectFixture, makeProjectFixture, tmpDir } from "./helpers";
+import {
+	CONNECT_HOSTS_REMOVED,
+	archiveNameCollisions,
+	entryHash,
+	pack,
+	readPackageInfo,
+	sha256Hex,
+} from "../src/pack";
+import {
+	HELLO_WIDGET_CONFIG,
+	type ProjectFixture,
+	makeProjectFixture,
+	tmpDir,
+} from "./helpers";
 
 const DECODER = new TextDecoder();
+
+const CLI_PATH = join(import.meta.dir, "..", "src", "cli.ts");
+
+const CSP_HOSTS = [
+	"api.maptiler.com",
+	"live.example.com",
+	"tile.openstreetmap.org",
+	"fonts.gstatic.com",
+	"fonts.googleapis.com",
+];
+
+function metaCsp(html: string): string {
+	const match =
+		/<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html);
+	if (!match?.[1]) throw new Error("packed document has no CSP meta");
+	return match[1];
+}
 
 describe("readPackageInfo", () => {
 	test("reads top-level id/version", () => {
@@ -54,7 +83,6 @@ describe("pack", () => {
 		const result = await pack(fixture.projectDir, {
 			out: join(fixture.projectDir, "widgets.flwb"),
 			servingPrefix: "flow-widget://com.example.demo@hash/",
-			connectHosts: ["https://api.example.com"],
 			quiet: true,
 		});
 
@@ -105,7 +133,7 @@ describe("pack", () => {
 		);
 		expect(html).toContain('http-equiv="Content-Security-Policy"');
 		expect(html).toContain("flow-widget://com.example.demo@hash/");
-		expect(html).toContain("connect-src https://api.example.com");
+		expect(html).toContain("connect-src 'none'");
 		expect(html).toContain('src="../../shared/react-abc123.js"');
 		expect(html).toContain("hello entry");
 		expect(html).toContain("<style>#root { color: red; }");
@@ -176,4 +204,135 @@ describe("pack", () => {
 			/bun run build/,
 		);
 	}, 60000);
+
+	test("packs csp into a v2 contract but never into the meta CSP", async () => {
+		const project = makeProjectFixture();
+		writeFileSync(
+			project.widgetConfigPath,
+			HELLO_WIDGET_CONFIG.replace(
+				'id: "hello-widget",',
+				`id: "hello-widget",
+	capabilities: { workers: true, media: true },
+	csp: {
+		connectSrc: ["wss://live.example.com", "https://API.maptiler.com"],
+		imgSrc: ["https://a.tile.openstreetmap.org"],
+		fontSrc: ["https://fonts.gstatic.com"],
+		mediaSrc: ["https://media.maptiler.com"],
+		styleSrc: ["https://fonts.googleapis.com"],
+	},`,
+			),
+		);
+		const result = await pack(project.projectDir, {
+			out: join(tmpDir("flwb-out"), "csp.flwb"),
+			quiet: true,
+		});
+		const entries = unzipSync(result.bytes);
+		const contract = JSON.parse(
+			DECODER.decode(
+				entries["widgets/hello-widget/contract.json"] as Uint8Array,
+			),
+		);
+		expect(contract.contractVersion).toBe(2);
+		expect(contract.csp).toEqual({
+			connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
+			imgSrc: ["https://a.tile.openstreetmap.org"],
+			fontSrc: ["https://fonts.gstatic.com"],
+			mediaSrc: ["https://media.maptiler.com"],
+			styleSrc: ["https://fonts.googleapis.com"],
+		});
+
+		const html = DECODER.decode(
+			entries["widgets/hello-widget/index.html"] as Uint8Array,
+		);
+		const csp = metaCsp(html);
+		for (const host of [...CSP_HOSTS, "media.maptiler.com", "https:", "wss:"]) {
+			expect(csp).not.toContain(host);
+		}
+		expect(csp).toContain(
+			"connect-src 'self' flow-widget: http://flow-widget.localhost blob:",
+		);
+		expect(csp).toContain(
+			"media-src blob: 'self' flow-widget: http://flow-widget.localhost",
+		);
+	}, 60000);
+
+	test("rejects the removed connectHosts option", async () => {
+		const project = makeProjectFixture();
+		await expect(
+			pack(project.projectDir, {
+				quiet: true,
+				connectHosts: ["https://api.example.com"],
+			} as never),
+		).rejects.toThrow(CONNECT_HOSTS_REMOVED);
+	});
+
+	test("rejects package ids the hub would refuse", async () => {
+		const dir = tmpDir("flwb-toml");
+		writeFileSync(
+			join(dir, "flow-like.toml"),
+			'id = "com.example; script-src *"\nversion = "1.0.0"\n',
+		);
+		expect(() => readPackageInfo(dir)).toThrow(
+			/Invalid package id "com\.example; script-src \*"/,
+		);
+	});
+});
+
+describe("archiveNameCollisions", () => {
+	test("flags names that alias on case-insensitive filesystems", () => {
+		expect(
+			archiveNameCollisions([
+				"bundle.json",
+				"widgets/x/contract.json",
+				"widgets/x/CONTRACT.json",
+				"shared/a.js.",
+				"shared/A.js",
+				"shared/dir/",
+				"shared/Dir",
+				"shared/dir/chunk.js",
+				"shared/ ./x.js",
+			]),
+		).toEqual([
+			"Widget bundle entry 'shared/ ./x.js' has a path segment made only of dots or spaces",
+			"Widget bundle entries 'widgets/x/contract.json' and 'widgets/x/CONTRACT.json' collide on case-insensitive filesystems",
+			"Widget bundle entries 'shared/a.js.' and 'shared/A.js' collide on case-insensitive filesystems",
+			"Widget bundle entry 'shared/Dir' collides with directory of 'shared/dir/chunk.js' on case-insensitive filesystems",
+		]);
+	});
+
+	test("folds Unicode case like Rust", () => {
+		expect(archiveNameCollisions(["shared/K.js", "shared/k.js"])).toHaveLength(
+			1,
+		);
+		expect(
+			archiveNameCollisions([
+				"bundle.json",
+				"shared/a.js",
+				"widgets/a/index.html",
+			]),
+		).toEqual([]);
+	});
+});
+
+describe("cli", () => {
+	test("--connect exits non-zero with the migration error", () => {
+		for (const args of [
+			["--connect", "https://api.example.com"],
+			["--connect=https://api.example.com"],
+			["--connect"],
+		]) {
+			const result = Bun.spawnSync([
+				process.execPath,
+				CLI_PATH,
+				"pack",
+				"--project",
+				tmpDir("flwb-cli"),
+				...args,
+			]);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.stderr.toString()).toContain(
+				'The --connect flag was removed: declare network sources per widget in widget.config.ts "csp"',
+			);
+		}
+	});
 });

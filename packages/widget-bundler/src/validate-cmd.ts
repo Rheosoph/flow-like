@@ -10,10 +10,12 @@ import {
 import {
 	WIDGET_PROTOCOL,
 	type WidgetContract,
+	isValidPackageId,
 	validateContract,
 } from "./contract-types";
 import { extractContract } from "./extract";
 import {
+	archiveNameCollisions,
 	discoverGroupWidgets,
 	discoverGroups,
 	entryHash,
@@ -93,8 +95,9 @@ export interface BundleValidation {
 }
 
 /**
- * Validate a built `.flwb`: manifest shape, per-entry hashes, contract
- * validity, entry paths. Mirrors `WidgetBundleReader::validate` in
+ * Validate a built `.flwb`: manifest shape, archive name collisions,
+ * per-entry hashes, contract validity (including the `csp` grammar and the
+ * v1/v2 rule), exact entry paths. Mirrors `WidgetBundleReader::validate` in
  * packages/wasm/schema/src/widget_bundle.rs.
  */
 export function validateBundle(flwbPath: string): BundleValidation {
@@ -156,10 +159,15 @@ export function validateBundle(flwbPath: string): BundleValidation {
 	}
 	if (!manifest.packageId) {
 		errors.push("Bundle manifest is missing packageId");
+	} else if (!isValidPackageId(manifest.packageId)) {
+		errors.push(
+			`Invalid bundle packageId ${JSON.stringify(manifest.packageId)}: use only letters, digits, '.', '_' and '-'`,
+		);
 	}
 	if (!manifest.widgets || manifest.widgets.length === 0) {
 		errors.push("Bundle contains no widgets");
 	}
+	errors.push(...archiveNameCollisions(Object.keys(entries)));
 
 	const sharedPaths = new Set<string>();
 	for (const shared of manifest.shared ?? []) {
@@ -187,18 +195,16 @@ export function validateBundle(flwbPath: string): BundleValidation {
 			errors.push(`Duplicate widget id in bundle: ${widget.id}`);
 		}
 		seenIds.add(widget.id);
-		const prefix = `widgets/${widget.id}/`;
-		if (!widget.entry.startsWith(prefix) || !isSafeEntryPath(widget.entry)) {
+		const expectedEntry = `widgets/${widget.id}/index.html`;
+		if (widget.entry !== expectedEntry) {
 			errors.push(
-				`Widget '${widget.id}' entry path '${widget.entry}' must live under ${prefix}`,
+				`Widget '${widget.id}' entry path '${widget.entry}' must be '${expectedEntry}'`,
 			);
 		}
-		if (
-			!widget.contract.startsWith(prefix) ||
-			!isSafeEntryPath(widget.contract)
-		) {
+		const expectedContract = `widgets/${widget.id}/contract.json`;
+		if (widget.contract !== expectedContract) {
 			errors.push(
-				`Widget '${widget.id}' contract path '${widget.contract}' must live under ${prefix}`,
+				`Widget '${widget.id}' contract path '${widget.contract}' must be '${expectedContract}'`,
 			);
 		}
 

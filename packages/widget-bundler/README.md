@@ -9,8 +9,7 @@ The Rust source of truth for the emitted formats is `packages/wasm/schema/src/wi
 ```bash
 # Pack all framework groups of a project into widgets.flwb
 bunx @flow-like/widget-bundler pack --project . --out widgets.flwb \
-  [--serving-prefix flow-widget://pkg@hash/] [--connect https://api.example.com ...] \
-  [--created-at 2026-07-21T12:00:00Z]
+  [--serving-prefix flow-widget://pkg@hash/] [--created-at 2026-07-21T12:00:00Z]
 
 # Mock-host dev harness (design §8.4 Layer 1): starts every framework group's
 # own dev script and serves a browser page that is a real flw/1 host
@@ -28,9 +27,16 @@ bunx @flow-like/widget-bundler add kpi-card --group widgets/react
 
 `pack` requires each framework group (`widgets/<group>/`) to be built first (`bun run build` producing `dist/`). `createdAt` is omitted from `bundle.json` unless `--created-at` or `SOURCE_DATE_EPOCH` is set, keeping builds byte-for-byte deterministic. Every file under a group's `dist/shared/` is packed (chunks can import each other); each widget's `assets` lists the chunks its document references directly.
 
-Packed documents allow bundle assets from their own web origin and Flow-Like's
-desktop widget protocol by default. `--serving-prefix` adds another asset source;
-`--connect` remains required for every network host a widget may contact.
+Packed documents carry a `<meta>` CSP built from the widget's `capabilities`
+only. It allows bundle assets from their own web origin and Flow-Like's desktop
+widget protocol, and `--serving-prefix` adds another asset source. It never
+lists network hosts. Declare those per widget in `csp` (see
+[Network access](#network-access)).
+
+The `--connect` flag was removed. `pack --connect` now fails with
+`The --connect flag was removed: declare network sources per widget in widget.config.ts "csp"`,
+and the programmatic `connectHosts` pack option fails the same way. Move each
+host into the `csp` of the widgets that need it.
 
 ## Vite plugin
 
@@ -114,6 +120,72 @@ Geometry is two-dimensional WGS 84 GeoJSON with
 positions in `[longitude, latitude]` order. Feature wrappers are unsupported.
 An explicit nullable union stays JSON-shaped and does not produce a native
 Geometry pin.
+
+## Network access
+
+A widget runs with no network access by default. To reach other sites, declare
+them in `csp`. The viewer is asked to approve them before the widget mounts:
+
+```ts
+export default defineWidget<Inputs, Events, Queries>({
+	id: "live-map",
+	name: "Live map",
+	capabilities: { workers: true },
+	csp: {
+		connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
+		imgSrc: ["https://a.tile.openstreetmap.org", "https://b.tile.openstreetmap.org"],
+		styleSrc: ["https://fonts.googleapis.com"],
+		fontSrc: ["https://fonts.gstatic.com"],
+	},
+});
+```
+
+| Key | Directive | Allowed schemes | Used for |
+| --- | --- | --- | --- |
+| `connectSrc` | `connect-src` | `https`, `wss` | `fetch`, `XMLHttpRequest`, WebSocket, EventSource |
+| `imgSrc` | `img-src` | `https` | images |
+| `fontSrc` | `font-src` | `https` | web fonts |
+| `mediaSrc` | `media-src` | `https` | audio and video |
+| `styleSrc` | `style-src` | `https` | stylesheets |
+
+No other key can be extended. Scripts, frames and workers always stay limited to
+the bundle.
+
+`csp` is read statically: each directive must be an array of string literals.
+Each source is an exact origin of the form `scheme://host`. Extraction lowercases
+sources, converts internationalized hosts to punycode, sorts and deduplicates
+each list, and then checks the grammar shared with the Rust schema
+(`packages/wasm/schema/src/widget_policy.rs`). A source is rejected, and the
+build fails with `Invalid widget csp source "<src>" in <directive> for widget <id>: <reason>`,
+when it has any of the following:
+
+- a wildcard (`*`, `https://*.example.com`);
+- a port (including `:443`), a path, a query, a fragment or userinfo;
+- a keyword, nonce or hash (`'self'`, `'unsafe-inline'`, `'nonce-…'`);
+- only a scheme (`https:`, `data:`), or `http://` or `ws://`;
+- an IP literal;
+- a host equal to or ending in `localhost`, `local`, `internal`, `lan`,
+  `home.arpa`, `test`, `example`, `invalid` or `onion`.
+
+A widget can declare at most 16 sources across all directives. Hosts can also
+reject a source that points at their own domain. In that case the widget runs
+without its permissions and the viewer sees a notice.
+
+A widget that declares `csp` gets `contractVersion: 2` in `contract.json`.
+Widgets without it stay at version 1. Hosts and hubs released before `csp`
+support reject version 2 bundles instead of silently dropping the declaration.
+Older bundler releases do drop `csp`, and the widget then has no network access.
+
+The pack-time `<meta>` CSP is not a security control. The host sends the
+enforced policy with the document, including the approved sources and the
+granted capabilities, and replaces the packed meta. The meta never contains
+`csp` sources, so a server that sends no header still keeps the widget away
+from the declared sites. Store previews never get `csp` sources. The dev harness
+does not enforce CSP either, so requests that work under `dev` can still be
+blocked in Flow-Like until a source is declared and approved.
+
+`validate` checks the `csp` grammar and the version rule, for a project and for
+a built `.flwb`.
 
 ## Mise integration (design §8.2)
 

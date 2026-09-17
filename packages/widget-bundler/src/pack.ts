@@ -18,15 +18,22 @@ import {
 	type WidgetBundleManifest,
 	manifestToJson,
 } from "./bundle-format";
-import { WIDGET_PROTOCOL, contractToJson } from "./contract-types";
+import {
+	WIDGET_PROTOCOL,
+	contractToJson,
+	isValidPackageId,
+} from "./contract-types";
 import { buildCsp, injectCspMeta } from "./csp";
 import { extractContract } from "./extract";
 import { injectContractScript, inlineHtml } from "./inline";
 
+export const CONNECT_HOSTS_REMOVED =
+	'The connectHosts pack option was removed: declare network sources per widget in widget.config.ts "csp"';
+
 export interface PackOptions {
 	out?: string;
+	/** Extra bundle asset source for the pack-time meta CSP */
 	servingPrefix?: string | null;
-	connectHosts?: string[];
 	createdAt?: string;
 	quiet?: boolean;
 }
@@ -81,12 +88,79 @@ export function readPackageInfo(projectDir: string): PackageInfo {
 			`${tomlPath} is missing the package 'id' (top-level or [package].id)`,
 		);
 	}
+	if (!isValidPackageId(id)) {
+		throw new Error(
+			`Invalid package id ${JSON.stringify(id)} in ${tomlPath}: use only letters, digits, '.', '_' and '-'`,
+		);
+	}
 	if (typeof version !== "string" || version.length === 0) {
 		throw new Error(
 			`${tomlPath} is missing the package 'version' (top-level or [package].version)`,
 		);
 	}
 	return { id, version };
+}
+
+/** Archive path as case-insensitive filesystems that strip trailing dots and spaces resolve it */
+function foldedArchivePath(path: string): string | null {
+	const segments: string[] = [];
+	for (const segment of path.split("/")) {
+		const folded = segment
+			.toUpperCase()
+			.toLowerCase()
+			.replace(/[. ]+$/, "");
+		if (folded.length === 0) return null;
+		segments.push(folded);
+	}
+	return segments.join("/");
+}
+
+/**
+ * Archive names that would overwrite each other when unpacked. Mirrors
+ * `archive_name_collisions` in packages/wasm/schema/src/widget_bundle.rs.
+ */
+export function archiveNameCollisions(names: readonly string[]): string[] {
+	const errors: string[] = [];
+	const entries: [string, string][] = [];
+	for (const name of names) {
+		if (name.endsWith("/")) continue;
+		const folded = foldedArchivePath(name);
+		if (folded === null) {
+			errors.push(
+				`Widget bundle entry '${name}' has a path segment made only of dots or spaces`,
+			);
+			continue;
+		}
+		entries.push([name, folded]);
+	}
+	const files = new Map<string, string>();
+	const directories = new Map<string, string>();
+	for (const [name, folded] of entries) {
+		const existing = files.get(folded);
+		if (existing !== undefined) {
+			errors.push(
+				`Widget bundle entries '${existing}' and '${name}' collide on case-insensitive filesystems`,
+			);
+		}
+		files.set(folded, name);
+		for (
+			let cut = folded.lastIndexOf("/");
+			cut !== -1;
+			cut = folded.lastIndexOf("/", cut - 1)
+		) {
+			const parent = folded.slice(0, cut);
+			if (!directories.has(parent)) directories.set(parent, name);
+		}
+	}
+	for (const [name, folded] of entries) {
+		const other = directories.get(folded);
+		if (other !== undefined) {
+			errors.push(
+				`Widget bundle entry '${name}' collides with directory of '${other}' on case-insensitive filesystems`,
+			);
+		}
+	}
+	return errors;
 }
 
 export interface FrameworkGroup {
@@ -224,6 +298,9 @@ export async function pack(
 	projectDir: string,
 	opts: PackOptions = {},
 ): Promise<PackResult> {
+	if ("connectHosts" in opts) {
+		throw new Error(CONNECT_HOSTS_REMOVED);
+	}
 	const project = resolve(projectDir);
 	const info = readPackageInfo(project);
 	const groups = discoverGroups(project);
@@ -255,7 +332,6 @@ export async function pack(
 			const extracted = extractContract(configPath);
 			const csp = buildCsp(
 				opts.servingPrefix ?? null,
-				opts.connectHosts ?? [],
 				extracted.contract.capabilities,
 			);
 			warnings.push(...extracted.warnings);
@@ -375,6 +451,10 @@ export async function pack(
 	for (const widget of widgets) {
 		entries.set(`widgets/${widget.id}/index.html`, widget.html);
 		entries.set(`widgets/${widget.id}/contract.json`, widget.contractJson);
+	}
+	const collisions = archiveNameCollisions([...entries.keys()]);
+	if (collisions.length > 0) {
+		throw new Error(collisions.join("; "));
 	}
 
 	const zipOptions: ZipOptions = {

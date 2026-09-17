@@ -2,6 +2,7 @@ export * from "./contract-types";
 export * from "./bundle-format";
 export * from "./extract";
 export * from "./csp";
+export * from "./csp-source";
 export * from "./html";
 export * from "./inline";
 export * from "./pack";

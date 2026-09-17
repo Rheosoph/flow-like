@@ -1,0 +1,31 @@
+[tasks."build:widgets"]
+description = "Build every framework group via its own package.json build script"
+run = """
+for w in widgets/*/; do
+  echo "=== Building group $w ==="
+  (cd "$w" && bun install && bun run build)
+done
+"""
+
+[tasks."bundle:widgets"]
+description = "Pack all widget dist outputs into the root widgets.flwb artifact"
+depends = ["build:widgets"]
+run = "bunx flow-like-widgets pack --project . --out widgets.flwb"
+
+[tasks.build]
+description = "Build the publishable widgets.flwb"
+depends = ["bundle:widgets"]
+
+[tasks.validate]
+description = "Validate widget contracts and the packed bundle"
+run = """
+bunx flow-like-widgets validate .
+[ -f widgets.flwb ] && bunx flow-like-widgets validate widgets.flwb
+"""
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = """
+rm -f widgets.flwb
+rm -rf widgets/*/dist
+"""

@@ -13,6 +13,28 @@ export type {
 	GeoGeometryCollection,
 	GeoGeometry,
 } from "./geometry";
+export type {
+	LlmAnnotation,
+	LlmContent,
+	LlmDelta,
+	LlmDeltaFunctionCall,
+	LlmFunctionCall,
+	LlmHistory,
+	LlmHistoryMessage,
+	LlmImageUrl,
+	LlmKind,
+	LlmLogProbs,
+	LlmResponse,
+	LlmResponseChunk,
+	LlmResponseMessage,
+	LlmRole,
+	LlmTokenLogProbs,
+	LlmToolCall,
+	LlmTopLogProbs,
+	LlmUrlCitation,
+	LlmUsage,
+} from "./llm";
+export { isLlmKind, llmSchema } from "./llm";
 export * from "./mount";
 export * from "./protocol";
 export * from "./microphone";

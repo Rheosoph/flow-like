@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { contractToJson } from "../src/contract-types";
 import { buildCsp } from "../src/csp";
 import { extractContract } from "../src/extract";
-import { contractToJson } from "../src/contract-types";
 import { HELLO_WIDGET_CONFIG, tmpDir } from "./helpers";
 
 describe("widget capabilities", () => {
 	test("workers enable bundled fetches, never remote provider access", () => {
-		const csp = buildCsp(null, [], {
+		const csp = buildCsp(null, {
 			workers: true,
 			media: true,
 			wasm: true,
@@ -37,7 +37,7 @@ describe("widget capabilities", () => {
 			media: true,
 			microphone: false,
 		});
-		expect(buildCsp(null, [])).toContain("worker-src 'none'; media-src 'none'");
+		expect(buildCsp(null)).toContain("worker-src 'none'; media-src 'none'");
 	});
 	test("rejects the removed resources capability", () => {
 		const path = join(tmpDir("widget-caps-resources"), "widget.config.ts");
@@ -49,7 +49,7 @@ describe("widget capabilities", () => {
 			),
 		);
 		expect(() => extractContract(path)).toThrow(/Invalid widget capability/);
-		expect(buildCsp(null, [], { resources: true } as never)).toContain(
+		expect(buildCsp(null, { resources: true } as never)).toContain(
 			"connect-src 'none'",
 		);
 	});
@@ -63,13 +63,16 @@ describe("widget capabilities", () => {
 			),
 		);
 		expect(() => extractContract(path)).toThrow("Invalid widget capability");
-		for (const source of [
-			"https://safe.test; script-src *",
-			"https://safe.test 'unsafe-eval'",
+		for (const prefix of [
+			"https://safe.example.org/; script-src *",
+			"https://safe.example.org/ 'unsafe-eval'",
 			"data:",
 		])
-			expect(() => buildCsp(null, [source])).toThrow(
-				"Invalid widget CSP source",
-			);
+			expect(() => buildCsp(prefix)).toThrow("Invalid widget CSP source");
+	});
+	test("host lists passed where capabilities belong grant nothing", () => {
+		const csp = buildCsp(null, ["https://api.example.com"] as never);
+		expect(csp).toContain("connect-src 'none'");
+		expect(csp).not.toContain("api.example.com");
 	});
 });

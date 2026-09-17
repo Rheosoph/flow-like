@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { contractToJson } from "../src/contract-types";
+import {
+	BASE_CONTRACT_VERSION,
+	CONTRACT_VERSION,
+	type WidgetContract,
+	canonicalizeContract,
+	contractToJson,
+	validateContract,
+} from "../src/contract-types";
 import { extractContract } from "../src/extract";
-import { tmpDir } from "./helpers";
+import { HELLO_WIDGET_CONFIG, tmpDir } from "./helpers";
 
 const FIXTURE = join(
 	import.meta.dir,
@@ -245,4 +252,287 @@ export default defineWidget<{}, {}, {}>({
 `);
 		expect(() => extractContract(path)).toThrow(/Invalid widget id/);
 	}, 30000);
+});
+
+const RUST_CSP_CONTRACT_JSON = `{
+  "contractVersion": 2,
+  "id": "hello-widget",
+  "inputs": {
+    "greeting": {
+      "type": "string",
+      "description": "Greeting text",
+      "default": "Hello"
+    }
+  },
+  "events": {
+    "dismissed": {
+      "payloadSchema": null
+    }
+  },
+  "queries": {
+    "getGreeting": {
+      "argsSchema": null,
+      "resultSchema": {
+        "type": "string"
+      }
+    }
+  },
+  "sizing": {
+    "defaultHeight": 200,
+    "resizable": false,
+    "maxHeight": 600
+  },
+  "capabilities": {
+    "workers": true
+  },
+  "csp": {
+    "connectSrc": [
+      "https://api.maptiler.com",
+      "https://xn--bcher-kva.de",
+      "wss://live.example.com"
+    ],
+    "imgSrc": [
+      "https://a.tile.openstreetmap.org",
+      "https://b.tile.openstreetmap.org"
+    ],
+    "fontSrc": [
+      "https://fonts.gstatic.com"
+    ],
+    "styleSrc": [
+      "https://fonts.googleapis.com"
+    ]
+  }
+}`;
+
+const RUST_PLAIN_CONTRACT_JSON = `{
+  "contractVersion": 1,
+  "id": "plain-widget",
+  "inputs": {},
+  "events": {},
+  "queries": {},
+  "sizing": {
+    "defaultHeight": 320,
+    "resizable": true
+  },
+  "capabilities": {
+    "media": false,
+    "wasm": true
+  }
+}`;
+
+function writeCspWidget(declaration: string): string {
+	return writeTmpWidget(
+		HELLO_WIDGET_CONFIG.replace(
+			'id: "hello-widget",',
+			`id: "hello-widget",\n\t${declaration},`,
+		),
+	);
+}
+
+describe("csp declarations", () => {
+	test("normalize into a v2 contract whose bytes match the Rust WidgetBundleBuilder", () => {
+		const path = writeCspWidget(`capabilities: { workers: true },
+	csp: {
+		styleSrc: ["https://fonts.googleapis.com"],
+		mediaSrc: [],
+		imgSrc: [
+			"https://B.tile.openstreetmap.org",
+			"https://a.tile.openstreetmap.org",
+			"https://b.tile.openstreetmap.org",
+		],
+		fontSrc: ['https://fonts.gstatic.com'],
+		connectSrc: ["wss://live.example.com", "HTTPS://API.maptiler.com", "https://bücher.de"] as const,
+	}`);
+		const { contract, config } = extractContract(path);
+		expect(contract.contractVersion).toBe(CONTRACT_VERSION);
+		expect(config.csp).toEqual(contract.csp);
+		expect(validateContract(contract)).toEqual([]);
+		expect(contractToJson(contract)).toBe(RUST_CSP_CONTRACT_JSON);
+	}, 30000);
+
+	test("an empty declaration stays a v1 contract without csp", () => {
+		const path = writeCspWidget("csp: { connectSrc: [], imgSrc: [] }");
+		const { contract, config } = extractContract(path);
+		expect(contract.contractVersion).toBe(BASE_CONTRACT_VERSION);
+		expect(contract).not.toHaveProperty("csp");
+		expect(config).not.toHaveProperty("csp");
+		expect(JSON.parse(contractToJson(contract))).not.toHaveProperty("csp");
+	}, 30000);
+
+	test("rejects directives outside the extendable set", () => {
+		for (const directive of ["scriptSrc", "frameSrc", "workerSrc"]) {
+			const path = writeCspWidget(
+				`csp: { ${directive}: ["https://cdn.example.org"] }`,
+			);
+			expect(() => extractContract(path)).toThrow(
+				`Invalid widget csp directive "${directive}" for widget hello-widget`,
+			);
+		}
+	}, 60000);
+
+	test("names the widget, directive, source and reason for rejected sources", () => {
+		const cases: [string, string][] = [
+			[
+				'csp: { connectSrc: ["https://*.maptiler.com"] }',
+				'Invalid widget csp source "https://*.maptiler.com" in connectSrc for widget hello-widget: wildcards are not allowed',
+			],
+			[
+				'csp: { imgSrc: ["https://tiles.example.org:443"] }',
+				'Invalid widget csp source "https://tiles.example.org:443" in imgSrc for widget hello-widget: ports are not allowed',
+			],
+			[
+				'csp: { connectSrc: ["http://api.example.org"] }',
+				'Invalid widget csp source "http://api.example.org" in connectSrc for widget hello-widget: scheme is not allowed for this directive',
+			],
+			[
+				"csp: { fontSrc: [\"'self'\"] }",
+				"Invalid widget csp source \"'self'\" in fontSrc for widget hello-widget: keywords, nonces and hashes are not allowed",
+			],
+			[
+				"csp: { mediaSrc: [42] }",
+				"Invalid widget csp source 42 in mediaSrc for widget hello-widget: must be a string",
+			],
+		];
+		for (const [declaration, message] of cases) {
+			const path = writeCspWidget(declaration);
+			expect(() => extractContract(path)).toThrow(message);
+		}
+	}, 90000);
+
+	test("rejects non-literal and malformed declarations", () => {
+		const computed = writeTmpWidget(
+			`const HOST = "https://api.example.org";\n${HELLO_WIDGET_CONFIG.replace(
+				'id: "hello-widget",',
+				'id: "hello-widget", csp: { connectSrc: [HOST] },',
+			)}`,
+		);
+		expect(() => extractContract(computed)).toThrow(
+			"'csp.connectSrc[0]' must be a literal",
+		);
+		expect(() =>
+			extractContract(writeCspWidget('csp: ["https://api.example.org"]')),
+		).toThrow("Widget csp for widget hello-widget");
+		expect(() =>
+			extractContract(
+				writeCspWidget('csp: { connectSrc: "https://api.example.org" }'),
+			),
+		).toThrow("must be an array of string literals");
+	}, 90000);
+
+	test("caps sources after deduplication", () => {
+		const hosts = (count: number) =>
+			Array.from(
+				{ length: count },
+				(_, index) => `"https://h${index}.example.org"`,
+			).join(", ");
+		const atCap = writeCspWidget(
+			`csp: { connectSrc: [${hosts(16)}, "https://H0.example.org"] }`,
+		);
+		expect(extractContract(atCap).contract.csp?.connectSrc).toHaveLength(16);
+		const overCap = writeCspWidget(
+			`csp: { connectSrc: [${hosts(12)}], imgSrc: [${hosts(5)}] }`,
+		);
+		expect(() => extractContract(overCap)).toThrow(
+			"Widget csp for widget hello-widget declares 17 sources; at most 16 are allowed",
+		);
+	}, 60000);
+});
+
+describe("contract version rule", () => {
+	const base: WidgetContract = {
+		contractVersion: BASE_CONTRACT_VERSION,
+		id: "live-map",
+		inputs: {},
+		events: {},
+		queries: {},
+		sizing: { defaultHeight: 320, resizable: true },
+	};
+	const csp = { connectSrc: ["https://api.maptiler.com"] };
+
+	test("v1 without csp and v2 with csp are valid", () => {
+		expect(validateContract(base)).toEqual([]);
+		expect(
+			validateContract({ ...base, contractVersion: CONTRACT_VERSION, csp }),
+		).toEqual([]);
+	});
+
+	test("mirrors the Rust errors in both directions", () => {
+		expect(validateContract({ ...base, csp })).toEqual([
+			"Widget 'live-map' declares csp and must use contractVersion 2",
+		]);
+		expect(
+			validateContract({ ...base, contractVersion: CONTRACT_VERSION }),
+		).toEqual([
+			"Widget 'live-map' uses contractVersion 2 without csp; contracts without csp must use contractVersion 1",
+		]);
+		for (const contractVersion of [0, 3, 99]) {
+			expect(validateContract({ ...base, contractVersion, csp })).toEqual([
+				`Unsupported contractVersion ${contractVersion} for widget 'live-map' (supported: 1, or 2 with csp)`,
+			]);
+		}
+	});
+
+	test("rejects empty, unknown and non-canonical csp", () => {
+		expect(
+			validateContract({ ...base, contractVersion: CONTRACT_VERSION, csp: {} }),
+		).toEqual([
+			"Widget 'live-map' declares an empty csp; omit csp when it grants no sources",
+		]);
+		expect(
+			validateContract({
+				...base,
+				contractVersion: CONTRACT_VERSION,
+				csp: {
+					connectSrc: ["https://b.example.org", "http://a.example.org"],
+				},
+			}),
+		).toEqual([
+			"Widget 'live-map': Invalid csp source \"http://a.example.org\" in connectSrc: scheme is not allowed for this directive",
+			"Widget 'live-map': csp connectSrc must be sorted ascending without duplicates",
+		]);
+		const parsed = JSON.parse(
+			'{"contractVersion":2,"id":"live-map","inputs":{},"events":{},"queries":{},"csp":{"scriptSrc":["https://cdn.example.org"]}}',
+		) as WidgetContract;
+		expect(validateContract(parsed)).toContain(
+			"Widget 'live-map': csp declares unknown directive \"scriptSrc\" (allowed: connectSrc, imgSrc, fontSrc, mediaSrc, styleSrc)",
+		);
+	});
+
+	test("canonicalization derives the version from csp and matches Rust bytes", () => {
+		const plain: WidgetContract = {
+			...base,
+			id: "plain-widget",
+			contractVersion: CONTRACT_VERSION,
+			capabilities: { wasm: true, media: false },
+			csp: { connectSrc: [], imgSrc: [] },
+		};
+		expect(contractToJson(plain)).toBe(RUST_PLAIN_CONTRACT_JSON);
+
+		const canonical = canonicalizeContract({
+			...base,
+			csp: {
+				styleSrc: ["https://fonts.googleapis.com"],
+				connectSrc: [
+					"wss://live.example.com",
+					"https://api.maptiler.com",
+					"wss://live.example.com",
+				],
+			},
+		});
+		expect(canonical.contractVersion).toBe(CONTRACT_VERSION);
+		expect(Object.keys(canonical)).toEqual([
+			"contractVersion",
+			"id",
+			"inputs",
+			"events",
+			"queries",
+			"sizing",
+			"csp",
+		]);
+		expect(canonical.csp).toEqual({
+			connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
+			styleSrc: ["https://fonts.googleapis.com"],
+		});
+		expect(validateContract(canonical)).toEqual([]);
+	});
 });

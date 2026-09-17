@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>CSP Probe</title>
+		<style>
+			body {
+				margin: 0;
+				background: var(--background);
+				color: var(--foreground);
+				font-family: var(--font-sans, system-ui, sans-serif);
+				font-size: 0.875rem;
+			}
+
+			main {
+				display: grid;
+				gap: 0.75rem;
+				padding: 1rem;
+			}
+
+			h1 {
+				margin: 0;
+				font-size: 1.125rem;
+			}
+
+			.meta,
+			.hint {
+				margin: 0;
+				color: var(--muted-foreground);
+			}
+
+			.controls {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				align-items: center;
+			}
+
+			button,
+			select {
+				font: inherit;
+				border-radius: var(--radius);
+				padding: 0.4rem 0.8rem;
+				border: 1px solid var(--border);
+				background: var(--background);
+				color: var(--foreground);
+			}
+
+			button {
+				cursor: pointer;
+			}
+
+			button.primary {
+				background: var(--primary);
+				color: var(--primary-foreground);
+				border-color: var(--primary);
+			}
+
+			button.danger {
+				background: var(--destructive);
+				color: var(--destructive-foreground);
+				border-color: var(--destructive);
+			}
+
+			button:disabled {
+				opacity: 0.6;
+				cursor: progress;
+			}
+
+			.banner {
+				margin: 0;
+				padding: 0.75rem;
+				border-radius: var(--radius);
+				background: var(--destructive);
+				color: var(--destructive-foreground);
+				font-weight: 600;
+			}
+
+			.summary {
+				margin: 0;
+				font-weight: 600;
+			}
+
+			.results {
+				width: 100%;
+				border-collapse: collapse;
+			}
+
+			.results th,
+			.results td {
+				text-align: left;
+				vertical-align: top;
+				padding: 0.35rem 0.5rem;
+				border-bottom: 1px solid var(--border);
+				overflow-wrap: anywhere;
+			}
+
+			.results th {
+				color: var(--muted-foreground);
+				font-weight: 500;
+			}
+
+			.mono {
+				font-family: var(--font-mono, ui-monospace, monospace);
+				white-space: nowrap;
+			}
+
+			.status {
+				font-weight: 600;
+				text-transform: uppercase;
+			}
+
+			.status-pass {
+				color: var(--primary);
+			}
+
+			.status-fail {
+				color: var(--destructive);
+			}
+
+			.status-review {
+				color: var(--accent-foreground);
+				background: var(--accent);
+			}
+
+			.status-skip {
+				color: var(--muted-foreground);
+			}
+
+			.frame-slot iframe {
+				width: 100%;
+				height: 120px;
+				border: 1px dashed var(--border);
+				border-radius: var(--radius);
+			}
+		</style>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="./index.ts"></script>
+	</body>
+</html>

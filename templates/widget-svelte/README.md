@@ -39,6 +39,35 @@ Geometry inputs use types such as `GeoPoint` and `GeoPolygon` from
 `@flow-like/widget-sdk`. The bundler turns them into Geometry pins. Geometry
 values use `[longitude, latitude]` coordinate order.
 
+## Network access (CSP)
+
+Widgets run sandboxed with no network access. To call an external service,
+declare its origin in `widget.config.ts`. `src/widgets/weather-widget/` is a
+working example:
+
+```ts
+export default defineWidget<Inputs, Events>({
+	id: "weather-widget",
+	// …
+	csp: {
+		connectSrc: ["https://api.open-meteo.com"],
+	},
+});
+```
+
+- `connectSrc` covers `fetch`, `EventSource` and WebSockets (`https://` or
+  `wss://`). `imgSrc`, `fontSrc`, `mediaSrc` and `styleSrc` take `https://`
+  origins.
+- Exact origins only: no paths, ports, wildcards, IP addresses or `localhost`,
+  and at most 16 per widget. Values must be string literals, because the
+  bundler reads the config statically and rejects anything invalid.
+- A widget that declares `csp` is published with `contractVersion: 2`. Before
+  it loads, Flow-Like shows the viewer the listed sites and asks for approval.
+  If the viewer runs it without approval, and in store previews, requests fail,
+  so show a useful error.
+- Every listed site can receive anything the widget sees. List only what the
+  widget needs.
+
 ## Building & packing
 
 `mise run build` emits `dist/` with one thin document per widget plus shared

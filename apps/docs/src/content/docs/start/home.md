@@ -80,3 +80,33 @@ Embedded Apps keep their own page navigation and query parameters. Their
 preview pauses while you edit Home. Account activity widgets report the
 available account execution records; an unavailable data source should be
 retried rather than interpreted as zero activity.
+
+## Style a widget with Tailwind classes
+
+To go beyond the built-in surfaces and accents, select a widget and enter
+Tailwind CSS utility classes in **Tailwind classes**, below **Accent** in its
+settings. Separate classes with spaces. In **Customize → Layout options → Edit
+JSON**, the same value is the widget's `appearance.className`.
+
+The classes apply to the widget's surface after its surface and accent style,
+so your background, border, radius, shadow, and text color replace the
+built-in ones. Home compiles the classes at runtime, so arbitrary values such as
+`p-[18px]` work, and scopes them to that widget. The layout still controls the
+widget's position, width, height, and alignment; classes for those have no
+effect. The value can be up to 1024 bytes.
+
+For example:
+
+- Highlighted KPI card: `rounded-3xl border-primary/40 bg-primary/10`
+- Gradient hero: `bg-linear-to-br from-primary/20 to-transparent`
+- Larger title on a **Borderless** surface: `[&_h2]:text-2xl`
+
+Some tips:
+
+- Style elements inside the widget with arbitrary variants, such as
+  `[&_h2]:text-lg`.
+- Use Tailwind CSS v4 class names, for example `bg-linear-to-br` rather than
+  `bg-gradient-to-br`.
+- Prefer theme tokens such as `bg-card`, `text-primary`, and
+  `border-primary/30` over fixed colors so the widget still looks right in
+  light and dark mode.

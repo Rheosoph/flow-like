@@ -117,6 +117,50 @@ FeatureCollection wrappers are outside this contract. Geometry values cannot
 be `null`; an explicit nullable union remains JSON-shaped rather than
 producing a native Geometry pin.
 
+## LLM contracts
+
+Use `LlmHistory`, `LlmResponse` and `LlmResponseChunk` when a widget exchanges
+chat history or model output with model and agent nodes. They follow the
+serialization of Flow-Like's `History`, `Response` and `ResponseChunk`.
+
+```ts
+import {
+	defineWidget,
+	type LlmHistory,
+	type LlmResponse,
+	type LlmResponseChunk,
+} from "@flow-like/widget-sdk";
+
+interface Events {
+	asked: { requestId: string; history: LlmHistory };
+}
+
+interface Queries {
+	/** @mutation */
+	pushChunk: { args: { requestId: string; chunk: LlmResponseChunk }; returns: void };
+	/** @mutation */
+	pushResponse: { args: { requestId: string; response: LlmResponse }; returns: void };
+}
+
+export default defineWidget<{}, Events, Queries>({ id: "chat", name: "Chat" });
+```
+
+The bundler writes these types into the contract as
+`{"type":"object","x-flow-like-type":"llm","x-llm":"Response"}`. A Query
+Widget or Update Widget Inputs pin for that marker carries exactly the schema
+of the native Rust type, so outputs of model and agent nodes connect directly.
+Query Widget enforces that schema on its argument and result pins. A widget
+action payload is a single struct: read a `history` field with **Get Field**
+and connect it to a History input.
+
+`validateSchema` checks marked values against the native schemas in
+`src/llm-schemas.ts`, which are copies of `packages/schema/llm`. After
+`cargo run -p schema-gen` changes those files, copy them again; a test fails
+until they match. Annotate your own object type with `@llm History`,
+`Response` or `ResponseChunk` only if it serializes exactly like that type.
+Like geometry, a nullable union stays JSON-shaped instead of producing a
+native pin.
+
 ## Mount (hosted)
 
 `mountFlowWidget` registers the message listener, performs the `flw/1`
@@ -174,7 +218,8 @@ usage.
 pins `ajv` too old to use here). Supported keywords: `type` (incl. `integer`
 and type arrays), `enum`, `const`, `properties` / `required` /
 `additionalProperties`, `items`, numeric bounds, string and array length,
-`pattern`, `anyOf` / `oneOf` / `allOf`, and the Flow-Like geometry markers.
+`pattern`, `anyOf` / `oneOf` / `allOf`, and the Flow-Like geometry and LLM
+markers.
 Schemas must be pre-inlined by the bundler. `$ref` cannot be resolved at
 runtime and is treated as valid.
 
