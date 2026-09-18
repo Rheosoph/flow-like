@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "flow-like.labels" . | nindent 4 }}
   annotations:
-    {{- $annotations := mergeOverwrite (dict "nginx.ingress.kubernetes.io/proxy-read-timeout" "3660" "nginx.ingress.kubernetes.io/proxy-send-timeout" "3660" "nginx.ingress.kubernetes.io/proxy-buffering" "off" "nginx.ingress.kubernetes.io/proxy-next-upstream" "off" "nginx.ingress.kubernetes.io/enable-access-log" "false") .Values.ingress.annotations }}
+    {{- $annotations := mergeOverwrite (dict "nginx.ingress.kubernetes.io/proxy-read-timeout" "3660" "nginx.ingress.kubernetes.io/proxy-send-timeout" "3660" "nginx.ingress.kubernetes.io/proxy-buffering" "off" "nginx.ingress.kubernetes.io/proxy-buffer-size" "16k" "nginx.ingress.kubernetes.io/proxy-next-upstream" "off" "nginx.ingress.kubernetes.io/enable-access-log" "false") .Values.ingress.annotations }}
     {{- toYaml $annotations | nindent 4 }}
 spec:
   {{- if .Values.ingress.className }}
