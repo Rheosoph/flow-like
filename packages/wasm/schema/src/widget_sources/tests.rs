@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use super::index::SourceIndex;
 use super::network::describe_network_with;
 use super::rules::psl_version_unix_secs;
-use super::text::{has_mixed_script, has_only_allowed_characters};
 use super::*;
+use crate::widget_policy::{has_mixed_script_word, reason_characters_allowed};
 
 const FIXTURE: &str = include_str!("../../tests/fixtures/widget_source_classification.json");
 const DAY: i64 = 86_400;
@@ -847,21 +847,23 @@ fn stale_data_raises_subdomain_kinds_to_broad() {
 
 #[test]
 fn name_character_rules() {
-    assert!(has_only_allowed_characters("Amazon S3"));
-    assert!(has_only_allowed_characters(
+    assert!(reason_characters_allowed("Amazon S3"));
+    assert!(reason_characters_allowed(
         "Cesium ion (assets), maps & tiles/imagery: A-Z; it's"
     ));
-    assert!(has_only_allowed_characters("नमस्ते"));
-    assert!(!has_only_allowed_characters("Tiles 🚀"));
-    assert!(!has_only_allowed_characters("\"Quoted\""));
-    assert!(!has_only_allowed_characters("Tab\there"));
-    assert!(!has_only_allowed_characters("e\u{301}\u{301}\u{301}"));
-    assert!(has_only_allowed_characters("e\u{301}\u{301}"));
-    assert!(!has_only_allowed_characters("a\u{200D}b"));
-    assert!(has_only_allowed_characters("क\u{200D}ष"));
+    assert!(reason_characters_allowed("नमस्ते"));
+    assert!(!reason_characters_allowed("Tiles 🚀"));
+    assert!(!reason_characters_allowed("\"Quoted\""));
+    assert!(!reason_characters_allowed("Tab\there"));
+    assert!(!reason_characters_allowed("e\u{301}\u{301}\u{301}"));
+    assert!(reason_characters_allowed("e\u{301}\u{301}"));
+    assert!(!reason_characters_allowed("a\u{200D}b"));
+    assert!(reason_characters_allowed("क\u{200D}ष"));
+    assert!(!reason_characters_allowed("Git\u{034F}Hub"));
+    assert!(!reason_characters_allowed("GitHub\u{3164}"));
 
-    assert!(has_mixed_script("Flοw-Like"));
-    assert!(has_mixed_script("cesium.cοm"));
-    assert!(!has_mixed_script("Café Zürich"));
-    assert!(!has_mixed_script("Москва tiles"));
+    assert!(has_mixed_script_word("Flοw-Like"));
+    assert!(has_mixed_script_word("cesium.cοm"));
+    assert!(!has_mixed_script_word("Café Zürich"));
+    assert!(!has_mixed_script_word("Москва tiles"));
 }

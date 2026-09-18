@@ -3,6 +3,7 @@ import {
 	type WidgetConsentChip,
 	buildWidgetConsentView,
 	partitionWidgetChips,
+	widgetConsentViewSignature,
 } from "./micro-widget-consent-view";
 import type {
 	WidgetNetworkSource,
@@ -284,5 +285,31 @@ describe("consent view", () => {
 		expect(view.cards[0].declared).toEqual([]);
 		expect(view.cards[0].runtime.map((entry) => entry.isNew)).toEqual([true]);
 		expect(view.capabilities).toEqual([]);
+	});
+
+	test("the inert-window signature follows what is shown, not the viewer's runtime box", () => {
+		const calm = {
+			reason: "Loads map tiles given to it at runtime",
+			sources: [
+				source("https://api.maps.example", "external"),
+				source("https://tiles.maps.example", "external", {
+					origin: "runtime",
+					slot: "tileUrl",
+				}),
+			],
+		};
+		const signature = (prompt: MicroWidgetConsentPrompt) =>
+			widgetConsentViewSignature(prompt, buildWidgetConsentView(prompt));
+		const shown = promptFor([calm]);
+		const covered = promptFor([calm], {
+			declared: { ...shown.declared, covered: true },
+		});
+		expect(buildWidgetConsentView(covered).tone).toBe(
+			buildWidgetConsentView(shown).tone,
+		);
+		expect(signature(covered)).not.toBe(signature(shown));
+		expect(signature(promptFor([calm], { includeRuntime: false }))).toBe(
+			signature(shown),
+		);
 	});
 });

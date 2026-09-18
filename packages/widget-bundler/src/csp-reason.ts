@@ -50,6 +50,7 @@ export function cspReasonProblem(rejection: WidgetCspReasonRejection): string {
 
 const MIN_CHARS = 8;
 const MAX_CHARS = 120;
+const MAX_UTF16_UNITS = MAX_CHARS * 2;
 const MIN_LETTERS = 3;
 const MAX_MARK_RUN = 2;
 const PUNCTUATION = new Set([",", ".", ":", ";", "(", ")", "-", "'", "/", "&"]);
@@ -86,10 +87,37 @@ const ALPHABETIC = /^\p{Alphabetic}$/u;
 const MARK = /^\p{M}$/u;
 const NUMERIC = /^\p{N}$/u;
 const LONE_SURROGATE = /\p{Cs}/u;
+// Default_Ignorable_Code_Point of Unicode 15.1, the ranges of
+// `is_default_ignorable` in widget_policy.rs.
+const DEFAULT_IGNORABLE_RANGES: readonly (readonly [number, number])[] = [
+	[0x00ad, 0x00ad],
+	[0x034f, 0x034f],
+	[0x061c, 0x061c],
+	[0x115f, 0x1160],
+	[0x17b4, 0x17b5],
+	[0x180b, 0x180f],
+	[0x200b, 0x200f],
+	[0x202a, 0x202e],
+	[0x2060, 0x206f],
+	[0x3164, 0x3164],
+	[0xfe00, 0xfe0f],
+	[0xfeff, 0xfeff],
+	[0xffa0, 0xffa0],
+	[0xfff0, 0xfff8],
+	[0x1bca0, 0x1bca3],
+	[0x1d173, 0x1d17a],
+	[0xe0000, 0xe0fff],
+];
 
 const isAlphabetic = (c: string) => ALPHABETIC.test(c);
 const isMark = (c: string) => MARK.test(c);
 const isNumeric = (c: string) => NUMERIC.test(c);
+export const isDefaultIgnorable = (c: string) => {
+	const code = c.codePointAt(0) ?? 0;
+	return DEFAULT_IGNORABLE_RANGES.some(
+		([first, last]) => code >= first && code <= last,
+	);
+};
 const isAscii = (c: string) => (c.codePointAt(0) ?? 0) < 0x80;
 const isAsciiAlphanumeric = (c: string | undefined) =>
 	c !== undefined && /^[A-Za-z0-9]$/.test(c);
@@ -106,33 +134,34 @@ function isJoinable(c: string | undefined): boolean {
 function charactersAllowed(chars: readonly string[]): boolean {
 	let markRun = 0;
 	for (const [position, c] of chars.entries()) {
+		const joiner =
+			(c === "\u200c" || c === "\u200d") &&
+			position > 0 &&
+			isJoinable(chars[position - 1]) &&
+			isJoinable(chars[position + 1]);
+		if (joiner) {
+			markRun = 0;
+			continue;
+		}
+		if (isDefaultIgnorable(c)) return false;
 		if (isMark(c)) {
 			markRun += 1;
 			if (markRun > MAX_MARK_RUN) return false;
 			continue;
 		}
 		markRun = 0;
-		const joiner =
-			(c === "\u200c" || c === "\u200d") &&
-			position > 0 &&
-			isJoinable(chars[position - 1]) &&
-			isJoinable(chars[position + 1]);
-		if (
-			!(
-				isAlphabetic(c) ||
-				isNumeric(c) ||
-				c === " " ||
-				PUNCTUATION.has(c) ||
-				joiner
-			)
-		) {
+		if (!(isAlphabetic(c) || isNumeric(c) || c === " " || PUNCTUATION.has(c))) {
 			return false;
 		}
 	}
 	return true;
 }
 
-/** Reason rule 3: the character allowlist (TS also rejects lone surrogates). */
+/**
+ * Reason rule 3: the character allowlist. Default-ignorable code points are
+ * refused, except U+200C/U+200D between non-ASCII letters or marks. TS also
+ * rejects lone surrogates.
+ */
 export function reasonCharactersAllowed(reason: string): boolean {
 	return !LONE_SURROGATE.test(reason) && charactersAllowed(Array.from(reason));
 }
@@ -169,13 +198,27 @@ function replaceIdeographicStops(chars: readonly string[]): string[] {
 }
 
 /**
- * `f` of spec §14.2.4 as `fold_widget_csp_reason`: NFKC, U+3002 between ASCII
- * alphanumerics read as `.`, then lowercase.
+ * The form rules 9–12 of spec §14.2.4 compare, as `fold_widget_csp_reason`:
+ * `f` (NFKC, U+3002 between ASCII alphanumerics read as `.`, lowercase),
+ * decomposed with NFKD and stripped of marks and default-ignorable code
+ * points.
  */
 export function foldWidgetCspReason(reason: string): string {
-	return replaceIdeographicStops(Array.from(reason.normalize("NFKC")))
+	const folded = replaceIdeographicStops(Array.from(reason.normalize("NFKC")))
 		.join("")
-		.toLowerCase();
+		.toLowerCase()
+		.normalize("NFKD");
+	return Array.from(folded)
+		.filter((c) => !isMark(c) && !isDefaultIgnorable(c))
+		.join("");
+}
+
+/** Whether a reason has more than 120 scalars, without walking a long one. */
+function exceedsMaxLength(reason: string): boolean {
+	if (reason.length > MAX_UTF16_UNITS) return true;
+	let scalars = 0;
+	for (const _ of reason) scalars += 1;
+	return scalars > MAX_CHARS;
 }
 
 function reasonWords(folded: string): string[] {
@@ -189,33 +232,33 @@ function reasonWords(folded: string): string[] {
 
 /**
  * Reason rules 1–7 and 9–11 of §14.2.4, in order; the first failure is the
- * code. Rule 8 ({@link reasonContainsAddress}) and rule 12 (duplicates across
- * purposes) run separately.
+ * code. A reason over 120 scalars fails with `reason-length` before any other
+ * rule looks at it. Rule 8 ({@link reasonContainsAddress}) and rule 12
+ * (duplicates across purposes) run separately.
  */
 export function validateWidgetCspReason(
 	reason: string,
 	hasInputs: boolean,
 ): WidgetCspReasonRejection | null {
 	if (reason.length === 0) return "reason-empty";
+	if (exceedsMaxLength(reason)) return "reason-length";
 	if (reason.normalize("NFC") !== reason) return "reason-not-nfc";
 	if (!reasonCharactersAllowed(reason)) return "reason-forbidden-character";
 	if (reason.startsWith(" ") || reason.endsWith(" ") || reason.includes("  ")) {
 		return "reason-whitespace";
 	}
 	const chars = Array.from(reason);
-	if (chars.length < MIN_CHARS || chars.length > MAX_CHARS) {
-		return "reason-length";
-	}
+	if (chars.length < MIN_CHARS) return "reason-length";
 	if (chars.filter(isAlphabetic).length < MIN_LETTERS) {
 		return "reason-too-few-letters";
 	}
 	if (reasonHasMixedScript(reason)) return "reason-mixed-script";
-	const folded = foldWidgetCspReason(reason);
-	const lettersAndNumbers = Array.from(folded)
+	const skeleton = foldWidgetCspReason(reason);
+	const lettersAndNumbers = Array.from(skeleton)
 		.filter((c) => isAlphabetic(c) || isNumeric(c))
 		.join("");
 	if (lettersAndNumbers.includes(PRODUCT)) return "reason-mentions-product";
-	const words = reasonWords(folded);
+	const words = reasonWords(skeleton);
 	if (words.some((word) => ASSURANCE_WORDS.has(word))) {
 		return "reason-claims-assurance";
 	}

@@ -35,9 +35,9 @@ export interface WidgetSourceCatalog {
 }
 
 export const WIDGET_SOURCE_CATALOG: WidgetSourceCatalog = {
-	catalogVersion: 1,
+	catalogVersion: 2,
 	providersSha256:
-		"f14a9984088e11c062f80059a23282d59dd159daaf4e0a536bfff3f367f7ea01",
+		"46d0fd5c2f5ceb0afcf8dabe0749b7499d1261f5589ace2ff2e741ea900db565",
 	publicSuffixRules: {
 		pslVersion: "2026-09-15_10-18-26_UTC",
 		sha256: "afeace59e72df2f85cc239fed5f8f90a3996e330d2c57d6b317bd7e552ecafca",
@@ -242,20 +242,33 @@ export const WIDGET_SOURCE_CATALOG: WidgetSourceCatalog = {
 			docs: [
 				"https://developers.google.com/maps/documentation/tile",
 				"https://developers.google.com/maps/documentation/tile/policies",
-				"https://developers.google.com/maps/documentation/javascript/overview",
 			],
 			match: [
 				{
 					type: "service-host",
 					domain: "tile.googleapis.com",
 				},
+			],
+			receives: false,
+			userContent: false,
+		},
+		{
+			id: "google-maps-apis",
+			name: "Google Maps Platform",
+			aboutKey: "widgetSourceAboutMapTiles",
+			docs: [
+				"https://developers.google.com/maps/documentation/javascript/overview",
+				"https://developers.google.com/maps/documentation/maps-static/start",
+				"https://developers.google.com/maps/documentation/javascript/kmllayer",
+			],
+			match: [
 				{
 					type: "service-host",
 					domain: "maps.googleapis.com",
 				},
 			],
-			receives: false,
-			userContent: false,
+			receives: true,
+			userContent: true,
 		},
 		{
 			id: "google-fonts",
@@ -287,32 +300,26 @@ export const WIDGET_SOURCE_CATALOG: WidgetSourceCatalog = {
 			],
 			match: [
 				{
-					type: "shared-suffix",
+					type: "shared-subtree",
 					domain: "githubusercontent.com",
-				},
-				{
-					type: "shared-host",
-					domain: "raw.githubusercontent.com",
-				},
-				{
-					type: "shared-host",
-					domain: "gist.githubusercontent.com",
-				},
-				{
-					type: "shared-host",
-					domain: "objects.githubusercontent.com",
-				},
-				{
-					type: "shared-host",
-					domain: "user-images.githubusercontent.com",
-				},
-				{
-					type: "shared-host",
-					domain: "avatars.githubusercontent.com",
 				},
 			],
 			receives: false,
 			userContent: true,
+		},
+		{
+			id: "github-camo",
+			name: "GitHub image proxy",
+			docs: [
+				"https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-anonymized-urls",
+			],
+			match: [
+				{
+					type: "shared-host",
+					domain: "camo.githubusercontent.com",
+				},
+			],
+			receives: true,
 		},
 		{
 			id: "github-pages",
@@ -750,6 +757,7 @@ export const WIDGET_SOURCE_CATALOG: WidgetSourceCatalog = {
 				"https://pastebin.com/doc_api",
 				"https://api.slack.com/messaging/webhooks",
 				"https://discord.com/developers/docs/resources/webhook",
+				"https://discord.com/developers/docs/reference",
 				"https://core.telegram.org/bots/api",
 			],
 			match: [
@@ -782,8 +790,12 @@ export const WIDGET_SOURCE_CATALOG: WidgetSourceCatalog = {
 					domain: "hooks.slack.com",
 				},
 				{
-					type: "shared-host",
+					type: "shared-subtree",
 					domain: "discord.com",
+				},
+				{
+					type: "shared-subtree",
+					domain: "discordapp.com",
 				},
 				{
 					type: "shared-host",

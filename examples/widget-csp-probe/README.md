@@ -225,13 +225,14 @@ The probe cannot observe channels that CSP does not govern, such as WebRTC, dns-
 | `local.fetchData`, `local.fetchBlob`, `local.imgBlob`, `local.mediaData`, `local.mediaBlob` | nothing: local bytes being refused is a functional bug, not a leak |
 | Anything else: declared hosts, foreign `blob:` reads, navigation, isolation, IPC | `declaredSources` and `runtimeSources`, which keeps network sources off on that target |
 
-Two hypothetical rows, one for the macOS desktop webview and one for Safari:
+Hypothetical rows, one for the macOS desktop webview and two for Safari (the `ios` copy covers iPhone and the iPad in mobile mode, the `macos` copy covers Mac Safari and the iPad in desktop mode):
 
 ```json
 {
   "rows": [
     { "engine": "webkit", "platform": "macos", "minVersion": [20621, 0], "maxVersion": [20621, 999], "deny": ["localMedia"] },
-    { "engine": "webkit", "platform": "macos", "minVersion": [17, 0], "maxVersion": [17, 6], "deny": ["wildcardSources"] }
+    { "engine": "webkit", "platform": "macos", "minVersion": [17, 0], "maxVersion": [17, 6], "deny": ["wildcardSources"] },
+    { "engine": "webkit", "platform": "ios", "minVersion": [17, 0], "maxVersion": [17, 6], "deny": ["wildcardSources"] }
   ]
 }
 ```
@@ -254,6 +255,8 @@ Two hypothetical rows, one for the macOS desktop webview and one for Safari:
 
 Rows therefore have to be platform-aware and bounded on both sides:
 
+- A row whose engine and platform match also matches when the version is unknown (a `User-Agent` without a parsable version, or a webview that reports none). The deny then applies: a known engine that hides its version is treated as affected.
+- iPadOS Safari, and other iPad browsers in desktop mode, send a macOS `User-Agent` (`Macintosh`, `Version/17.4`), so the web gate sees `webkit` / `macos` on the Safari version scale. Write every web WebKit row twice, once with `platform: "ios"` and once with `platform: "macos"`, with the same bounds.
 - A `webkit` row without `platform` matches every desktop WebKit (macOS, iOS, Linux) as well as Safari.
 - A `webkit` / `macos` row with only `minVersion: [17, 0]` also matches the desktop app, whose `20621` is above it. A `webkit` / `linux` row with only `maxVersion: [18, 0]` also matches WebKitGTK `2.46`. Set both `minVersion` and `maxVersion`.
 - Chromium versions are on the same scale on desktop and web. A `chromium` / `windows` row gates WebView2 and Chrome on Windows of the same versions together.

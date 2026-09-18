@@ -5,7 +5,8 @@ use super::catalog::{
     MAX_PROVIDER_NAME_CHARS, MAX_PROVIDERS, domain_shape_error, is_about_key_shape, is_kebab_case,
 };
 use super::index::SourceIndex;
-use super::text::{contains_address, has_mixed_script, has_only_allowed_characters};
+use super::text::contains_address;
+use crate::widget_policy::{has_mixed_script_word, reason_characters_allowed};
 
 /// §14.3.2 catalog invariants over one loaded data set.
 pub(super) fn check(index: &SourceIndex) -> Result<(), Vec<String>> {
@@ -53,12 +54,12 @@ pub(super) fn check(index: &SourceIndex) -> Result<(), Vec<String>> {
                 "provider {id}: name has {name_chars} characters (1-{MAX_PROVIDER_NAME_CHARS})"
             ));
         }
-        if !has_only_allowed_characters(&provider.name) {
+        if !reason_characters_allowed(&provider.name) {
             errors.push(format!(
                 "provider {id}: name contains a forbidden character"
             ));
         }
-        if has_mixed_script(&provider.name) {
+        if has_mixed_script_word(&provider.name) {
             errors.push(format!("provider {id}: name mixes scripts"));
         }
         if contains_address(&provider.name, |label| index.is_icann_tld(label)) {

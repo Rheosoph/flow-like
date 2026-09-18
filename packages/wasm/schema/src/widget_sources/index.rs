@@ -187,6 +187,20 @@ impl SourceIndex {
         })
     }
 
+    /// Highest level of the catalog services a wildcard over `host` covers.
+    pub fn service_below(&self, host: &str) -> Option<WidgetSourceLevel> {
+        let host_labels = label_count(host);
+        self.entries
+            .iter()
+            .filter(|entry| {
+                entry.kind.is_service()
+                    && label_count(&entry.domain) > host_labels
+                    && pattern_matches_tail(&entry.domain, host)
+            })
+            .map(service_level)
+            .max()
+    }
+
     pub fn shared_suffix_of(&self, host: &str) -> Option<SuffixMatch> {
         let host_labels = label_count(host);
         let catalog = self
@@ -286,6 +300,9 @@ impl SourceIndex {
             .map(|(_, subtree, index)| (index, subtree))
     }
 
+    /// §14.3.3. A wildcard takes its kind from the first branch that applies
+    /// and its level from every branch that applies, including the catalog
+    /// services under its base.
     pub fn classify(
         &self,
         host: &str,
@@ -305,54 +322,64 @@ impl SourceIndex {
         let registrable = || self.icann_registrable(base).unwrap_or(base);
         let tenant = |suffix: SuffixMatch| last_labels(base, suffix.labels + 1);
         let path_level = |path: PathMatch| shared_level(self.entries[path.entry].receives);
-        let service_level = |entry: usize| {
-            let entry = &self.entries[entry];
-            let mut level = Level::Known;
-            if entry.receives {
-                level = level.max(Level::External);
-            }
-            if entry.user_content {
-                level = level.max(Level::Shared);
-            }
-            level
-        };
+        let service_level_of = |entry: usize| service_level(&self.entries[entry]);
         let suffix_at_base = suffix.filter(|suffix| suffix.labels == base_labels);
         let (kind, level, emphasis, entry) = if wildcard {
-            if let Some(path) = path.filter(|path| path.subtree) {
-                (
+            let branches = [
+                path.filter(|path| path.subtree).map(|path| {
+                    (
+                        Kind::SharedWildcard,
+                        path_level(path),
+                        base,
+                        Some(path.entry),
+                    )
+                }),
+                suffix_at_base.map(|suffix| {
+                    (
+                        Kind::SharedWildcard,
+                        shared_level(suffix.receives),
+                        base,
+                        suffix.entry,
+                    )
+                }),
+                self.shared_below(base)
+                    .map(|below| (Kind::SharedWildcard, below.level, base, below.entry)),
+                suffix.map(|suffix| {
+                    (
+                        Kind::TenantSubdomains,
+                        Level::External,
+                        tenant(suffix),
+                        suffix.entry,
+                    )
+                }),
+                service.map(|service| {
+                    (
+                        Kind::Service,
+                        service_level_of(service),
+                        registrable(),
+                        Some(service),
+                    )
+                }),
+                attribution_receives.then_some((
                     Kind::SharedWildcard,
-                    path_level(path),
+                    Level::Broad,
                     base,
-                    Some(path.entry),
-                )
-            } else if let Some(suffix) = suffix_at_base {
-                (
-                    Kind::SharedWildcard,
-                    shared_level(suffix.receives),
-                    base,
-                    suffix.entry,
-                )
-            } else if let Some(below) = self.shared_below(base) {
-                (Kind::SharedWildcard, below.level, base, below.entry)
-            } else if let Some(suffix) = suffix {
-                (
-                    Kind::TenantSubdomains,
-                    Level::External,
-                    tenant(suffix),
-                    suffix.entry,
-                )
-            } else if let Some(service) = service {
-                (
-                    Kind::Service,
-                    service_level(service),
-                    registrable(),
-                    Some(service),
-                )
-            } else if attribution_receives {
-                (Kind::SharedWildcard, Level::Broad, base, attribution)
-            } else {
-                (Kind::Subdomains, Level::External, registrable(), None)
-            }
+                    attribution,
+                )),
+            ];
+            let (kind, first_level, emphasis, entry) = branches
+                .iter()
+                .flatten()
+                .copied()
+                .next()
+                .unwrap_or((Kind::Subdomains, Level::External, registrable(), None));
+            let level = branches
+                .iter()
+                .flatten()
+                .map(|branch| branch.1)
+                .chain(self.service_below(base))
+                .fold(first_level, Level::max);
+            (kind, level, emphasis, entry)
         } else if let Some(path) =
             path.filter(|path| path.labels >= suffix.map_or(0, |suffix| suffix.labels))
         {
@@ -367,7 +394,7 @@ impl SourceIndex {
         } else if let Some(service) = service {
             (
                 Kind::Service,
-                service_level(service),
+                service_level_of(service),
                 registrable(),
                 Some(service),
             )
@@ -415,6 +442,17 @@ fn catalog_entries(providers: &[Provider]) -> Vec<CatalogEntry> {
             })
         })
         .collect()
+}
+
+fn service_level(entry: &CatalogEntry) -> WidgetSourceLevel {
+    let mut level = WidgetSourceLevel::Known;
+    if entry.receives {
+        level = level.max(WidgetSourceLevel::External);
+    }
+    if entry.user_content {
+        level = level.max(WidgetSourceLevel::Shared);
+    }
+    level
 }
 
 fn shared_level(receives: bool) -> WidgetSourceLevel {

@@ -1190,6 +1190,64 @@ describe("micro widget runtime sources", () => {
 		expect(calls.mint[0].runtimeSources).toBeUndefined();
 	});
 
+	test("an unchecked runtime box answers for every instance sharing the dialog", async () => {
+		const calls = stubRuntimeRegistry();
+		await renderWidget(
+			[
+				component({ props: tiles(TILE_A) }),
+				component({ id: "copy", instanceId: "copy", props: tiles(TILE_A) }),
+			],
+			{ router: {}, appId: "app-1" },
+		);
+		expect(dialogs()).toBe(1);
+		expect(bodyText()).not.toContain("1 of 2");
+
+		await act(async () => {
+			(
+				window.document.body.querySelector(
+					"[data-widget-runtime-checkbox]",
+				) as unknown as HTMLElement
+			).click();
+		});
+		await click("Allow this time");
+		expect(dialogs()).toBe(0);
+		expect(host.querySelectorAll("iframe")).toHaveLength(2);
+		expect(calls.mint.map((call) => call.runtimeSources)).toEqual([
+			undefined,
+			undefined,
+		]);
+	});
+
+	test("Always allow on a runtime review stores only the addresses it listed", async () => {
+		const items = installLocalStorage();
+		stubRuntimeRegistry();
+		await renderWidget(component({ props: tiles(TILE_A) }), {
+			router: {},
+			appId: "app-1",
+		});
+		await click("Allow this time");
+		expect([...items.keys()]).toEqual([]);
+
+		await renderWidget(component({ props: tiles(TILE_A, TILE_B) }), {
+			router: {},
+			appId: "app-1",
+		});
+		await waitForDebounce();
+		await click("Review");
+		expect(bodyText()).toContain("Already allowed: 2 sites");
+		await click("Always allow for this project");
+		expect(frameSrc()).toEndWith(GRANT_B);
+		const [stored, ...rest] = [...items.values()].map((value) =>
+			JSON.parse(value),
+		);
+		expect(rest).toEqual([]);
+		expect(stored.policy).toEqual({});
+		expect(stored.levels).toEqual({});
+		expect(stored.runtime.map((entry: { s: string }) => entry.s)).toEqual([
+			TILE_B,
+		]);
+	});
+
 	test("newer addresses never swap in silently; Show them does", async () => {
 		stubRuntimeRegistry();
 		await renderWidget(component({ props: tiles(TILE_A) }), {

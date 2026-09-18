@@ -1088,9 +1088,7 @@ describe("grants of what a dialog showed", () => {
 		grantMicroWidgetConsent(target, onlyNew, "app", storage);
 		const { runtime: added, ...kept } = storedRecord();
 		expect(kept).toEqual(before);
-		expect(added.map((entry: { s: string }) => entry.s)).toEqual([
-			OTHER_TILES,
-		]);
+		expect(added.map((entry: { s: string }) => entry.s)).toEqual([OTHER_TILES]);
 		expect(evaluateMicroWidgetConsent(target, wider, storage).status).toBe(
 			"granted",
 		);

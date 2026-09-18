@@ -638,6 +638,24 @@ describe("contract version rule", () => {
 		}
 	});
 
+	test("invalid reasons are not compared for duplicates", () => {
+		expect(
+			validateContract({
+				...base,
+				contractVersion: CONTRACT_VERSION,
+				csp: [
+					{ reason: "Loads tiles!", connectSrc: ["https://a.example.org"] },
+					{ reason: "Loads tiles!", connectSrc: ["https://b.example.org"] },
+				],
+			}),
+		).toEqual(
+			[0, 1].map(
+				(index) =>
+					`Widget 'live-map': csp purpose ${index}: reason may only contain letters, marks (at most 2 in a row), numbers, spaces and , . : ; ( ) - ' / & (reason-forbidden-character)`,
+			),
+		);
+	});
+
 	test("rejects empty, unknown and non-canonical csp", () => {
 		expect(
 			validateContract({ ...base, contractVersion: CONTRACT_VERSION, csp: [] }),

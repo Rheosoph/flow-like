@@ -143,7 +143,7 @@ describe("WidgetPermissionsList markup", () => {
 			);
 			expect(markup.match(/data-widget-permission=/g)).toHaveLength(2);
 			expect(markup).toContain("Maps");
-			expect(markup).toContain(">charts ·");
+			expect(markup).toContain(">charts</bdi>");
 			expect(markup).toContain("Registry hub.flow-like.com");
 			expect(markup).toContain("Always allowed for this project");
 			expect(markup).toContain("Allowed for this session");
@@ -152,6 +152,41 @@ describe("WidgetPermissionsList markup", () => {
 			expect(markup).toContain("https://api.maptiler.com");
 			expect(markup).toContain("Load images");
 			expect(markup.match(/>Revoke</g)).toHaveLength(2);
+		},
+		COLD_IMPORT_TIMEOUT_MS,
+	);
+
+	test(
+		"a long right-to-left package name can neither hide nor reorder the origin",
+		async () => {
+			const { act } = await import("react");
+			const { grantMicroWidgetConsent } = await import(
+				"../a2ui/micro-widget-capability-consent"
+			);
+			const { WidgetPermissionsList, listWidgetConsentEntries } = await import(
+				"./widget-permissions"
+			);
+			grantMicroWidgetConsent(target("app-1", "live-map"), MAP_POLICY, "app");
+			const name = `${"חבילת מפות רשמית ".repeat(12)}‮`;
+
+			await act(async () =>
+				root.render(
+					<WidgetPermissionsList
+						entries={listWidgetConsentEntries({ appId: "app-1" })}
+						packageNames={new Map([["maps", name]])}
+						onRevoke={() => {}}
+					/>,
+				),
+			);
+
+			const origin = host.querySelector("[data-widget-permission-origin]");
+			expect(origin?.textContent).toBe("Registry hub.flow-like.com");
+			expect(origin?.className).not.toContain("truncate");
+			expect(origin?.closest(".truncate")).toBe(null);
+			const isolated = origin?.parentElement?.querySelector("bdi");
+			expect(isolated?.textContent).toBe(name);
+			expect(isolated?.className).toContain("truncate");
+			expect(isolated?.contains(origin ?? null)).toBe(false);
 		},
 		COLD_IMPORT_TIMEOUT_MS,
 	);

@@ -392,15 +392,21 @@ pub fn declared_grant_matches(
 
 /// Whether a descriptor re-derived from a URL runtime component is exactly
 /// what a version 2 grant approved: accepted without rejections, with the
-/// runtime and effective digests the grant carries.
+/// runtime and effective digests the grant carries, and derived from a
+/// component that lists exactly the accepted sources (no extra entries that
+/// derivation dropped as already declared).
 pub fn runtime_grant_matches(
     claims: &WidgetGrantClaims,
     declared: &WidgetPolicyDescriptor,
     derived: &WidgetPolicyDescriptor,
+    component: &str,
 ) -> bool {
     let Some(runtime) = derived.runtime.as_ref() else {
         return false;
     };
+    let exact_component = derived.runtime_sources().is_some_and(|accepted| {
+        decode_runtime_component(component).is_ok_and(|slots| slots == accepted.slots)
+    });
     claims.approves_runtime()
         && derived.is_ok()
         && runtime.status == WidgetRuntimeStatus::Ok
@@ -409,6 +415,7 @@ pub fn runtime_grant_matches(
         && runtime.runtime_digest == claims.runtime_digest
         && runtime.declared_digest == declared.policy_digest
         && derived.policy_digest == claims.policy_digest
+        && exact_component
 }
 
 /// The document policy a verified grant unlocks, narrowed for the engine:
@@ -427,8 +434,9 @@ pub fn document_grant_policy(
         return None;
     }
     let runtime = derived
-        .filter(|derived| runtime_grant_matches(claims, declared, derived))
-        .map(|derived| narrow_policy_for_engine(&derived.policy, &declared.policy, gate))
+        .zip(runtime_component)
+        .filter(|(derived, component)| runtime_grant_matches(claims, declared, derived, component))
+        .map(|(derived, _)| narrow_policy_for_engine(&derived.policy, &declared.policy, gate))
         .filter(|effective| {
             widget_document_csp(bundle_sources, effective, gate.local_media, true).len()
                 <= MAX_WIDGET_DOCUMENT_CSP_BYTES
@@ -1559,6 +1567,53 @@ mod tests {
             long_origin.document(&contract, &claims, Some(&component)),
             Some(declared.policy.clone()),
             "an effective header over budget on this request's origins serves the declared policy"
+        );
+    }
+
+    #[test]
+    fn widget_sandbox_version_two_document_needs_the_exact_runtime_component() {
+        let declared_host = "https://tiles.example-maps.com";
+        let contract = runtime_contract(&[]);
+        let mut purposes = contract.csp.clone().unwrap();
+        purposes.insert(
+            0,
+            WidgetCspPurpose {
+                reason: "Loads vector map tiles".into(),
+                connect_src: vec![declared_host.into()],
+                img_src: vec![declared_host.into()],
+                ..Default::default()
+            },
+        );
+        let contract = contract.with_csp(purposes);
+        let request = Request::new(&["api.flow-like.com"]);
+        let declared = request.derive(&contract, &[], None);
+        let approved = request.derive(&contract, &tile_request(&[TILE_HOST]), Some(APP));
+        let (claims, component) = mint(&approved);
+        let component = component.unwrap();
+        assert_eq!(
+            request.document(&contract, &claims, Some(&component)),
+            Some(approved.policy.clone())
+        );
+
+        let padded_slots = BTreeMap::from([(
+            "tileUrl".to_string(),
+            vec![TILE_HOST.to_string(), declared_host.to_string()],
+        )]);
+        let padded = encode_runtime_component(&padded_slots).unwrap();
+        let rederived = request.derive(
+            &contract,
+            &WidgetRuntimeSourceRequest::from_slots(&padded_slots),
+            Some(APP),
+        );
+        assert_eq!(
+            rederived.runtime.as_ref().unwrap().runtime_digest,
+            approved.runtime.as_ref().unwrap().runtime_digest,
+            "derivation drops the source every directive already declares"
+        );
+        assert_eq!(
+            request.document(&contract, &claims, Some(&padded)),
+            Some(declared.policy.clone()),
+            "a component with extra declared sources is not the approved one"
         );
     }
 

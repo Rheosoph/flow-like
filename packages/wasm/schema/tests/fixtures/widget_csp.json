@@ -249,6 +249,8 @@
     {"reason": "Loads x́̂ marked tiles", "hasInputs": false},
     {"reason": "Loads the owner's tiles: ids 1/2", "hasInputs": false},
     {"reason": "Streams live vehicle positions", "hasInputs": true},
+    {"reason": "Charge les tuiles du café et de l'été", "hasInputs": true},
+    {"reason": "क्\u200dष नक्शा टाइल", "hasInputs": false},
     {"reason": "Loads map tiles from a tile server used by this widget for base layers and labels in every zoom level we show and bounds", "hasInputs": false}
   ],
   "rejectedReasons": [
@@ -261,7 +263,7 @@
     {"reason": "Loads tiles at 50% zoom", "hasInputs": false, "code": "reason-forbidden-character"},
     {"reason": "Loads tiles_now", "hasInputs": false, "code": "reason-forbidden-character"},
     {"reason": "Loads map tiles​now", "hasInputs": false, "code": "reason-forbidden-character"},
-    {"reason": "Loads map‍tiles", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map\u200dtiles", "hasInputs": false, "code": "reason-forbidden-character"},
     {"reason": "Loads map tiles‮gnp.lave", "hasInputs": false, "code": "reason-forbidden-character"},
     {"reason": "Loads map\ttiles", "hasInputs": false, "code": "reason-forbidden-character"},
     {"reason": "Loads map tiles", "hasInputs": false, "code": "reason-forbidden-character"},
@@ -292,12 +294,33 @@
     {"reason": "Loads tiles chosen by the app admin", "hasInputs": true, "code": "reason-claims-attribution"},
     {"reason": "Loads tiles for your organisation", "hasInputs": true, "code": "reason-claims-attribution"},
     {"reason": "Loads tiles from the project owner", "hasInputs": true, "code": "reason-claims-attribution"},
-    {"reason": "Loads the Workspace tiles", "hasInputs": true, "code": "reason-claims-attribution"}
+    {"reason": "Loads the Workspace tiles", "hasInputs": true, "code": "reason-claims-attribution"},
+    {"reason": "Loads ver\u034fified map tiles", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map tiles\ufe0f", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map tiles\udb40\udd00", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads saf\u180be map tiles", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map\u17b4 tiles", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map tiles\u3164", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map tiles\u115f", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map tiles\u1160", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads map tiles\uffa0", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "نقشه\u034fها از سرور", "hasInputs": false, "code": "reason-forbidden-character"},
+    {"reason": "Loads vérified map tiles", "hasInputs": false, "code": "reason-claims-assurance"},
+    {"reason": "Loads tiles chosen in the ápp", "hasInputs": true, "code": "reason-claims-attribution"},
+    {"reason": "Loads Flöw-Like map tiles", "hasInputs": false, "code": "reason-mentions-product"},
+    {"reason": "Loads tiles now! and more map tiles and more map tiles and more map tiles and more map tiles and more map tiles and more map tiles", "hasInputs": false, "code": "reason-length"},
+    {"reason": "Cafe\u0301 map tiles from every tile server from every tile server from every tile server from every tile server from every tile server", "hasInputs": false, "code": "reason-length"},
+    {"reason": "地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図地図!", "hasInputs": false, "code": "reason-length"}
   ],
   "duplicateReasons": [
     {"reasons": ["Loads map tiles", "LOADS MAP TILES"], "duplicate": true},
     {"reasons": ["Loads map tiles", "Loads ｍａｐ tiles"], "duplicate": true},
-    {"reasons": ["Loads map tiles", "Loads map tiles again"], "duplicate": false}
+    {"reasons": ["Loads map tiles", "Loads map tiles again"], "duplicate": false},
+    {"reasons": ["Loads map tiles", "Loads map tiles\u3164"], "duplicate": true},
+    {"reasons": ["Loads map tiles", "Loads map tiles\uffa0"], "duplicate": true},
+    {"reasons": ["Loads map tiles", "Loads ma\u034fp tiles"], "duplicate": true},
+    {"reasons": ["Loads map tiles", "Loads máp tiles"], "duplicate": true},
+    {"reasons": ["Loads map tiles", "Loads map titles"], "duplicate": false}
   ],
   "groupedContracts": [
     {

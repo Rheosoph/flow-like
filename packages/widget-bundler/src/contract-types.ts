@@ -11,6 +11,7 @@ import type {
 	WidgetUrlTemplate,
 } from "@flow-like/widget-sdk";
 import {
+	type WidgetCspReasonRejection,
 	cspReasonProblem,
 	foldWidgetCspReason,
 	normalizeCspReason,
@@ -615,17 +616,25 @@ function networkInputProblems(
 	return problems;
 }
 
+function purposeReasonRejection(
+	purpose: WidgetCspPurpose,
+): WidgetCspReasonRejection | null {
+	return validateWidgetCspReason(
+		purpose.reason,
+		(purpose.inputs?.length ?? 0) > 0,
+	);
+}
+
 function purposeProblems(
 	purpose: WidgetCspPurpose,
 	inputs: Readonly<Record<string, CspContractInput>>,
+	reasonRejection: WidgetCspReasonRejection | null,
 ): string[] {
 	const problems: string[] = [];
 	const networkInputs = purpose.inputs ?? [];
-	const rejection = validateWidgetCspReason(
-		purpose.reason,
-		networkInputs.length > 0,
-	);
-	if (rejection !== null) problems.push(cspReasonProblem(rejection));
+	if (reasonRejection !== null) {
+		problems.push(cspReasonProblem(reasonRejection));
+	}
 	if (cspSourceCount(purpose) === 0 && networkInputs.length === 0) {
 		problems.push("declares no sources and no inputs");
 	}
@@ -685,7 +694,8 @@ export function validateCspPurposes(
 	const inputOwners = new Map<string, number>();
 	const reasonOwners = new Map<string, number>();
 	purposes.forEach((purpose, index) => {
-		for (const problem of purposeProblems(purpose, inputs)) {
+		const reasonRejection = purposeReasonRejection(purpose);
+		for (const problem of purposeProblems(purpose, inputs, reasonRejection)) {
 			errors.push(`Widget '${widgetId}': csp purpose ${index}: ${problem}`);
 		}
 		for (const source of purposeSources(purpose)) {
@@ -707,7 +717,7 @@ export function validateCspPurposes(
 					`Widget '${widgetId}': csp input "${path}" is declared in purposes ${first} and ${index}`,
 				);
 		}
-		if (purpose.reason.length > 0) {
+		if (reasonRejection === null) {
 			const folded = foldWidgetCspReason(purpose.reason);
 			const first = reasonOwners.get(folded);
 			if (first === undefined) reasonOwners.set(folded, index);

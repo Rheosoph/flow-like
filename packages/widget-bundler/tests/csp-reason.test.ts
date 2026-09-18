@@ -5,6 +5,7 @@ import {
 	CSP_REASON_REJECTION_MESSAGES,
 	type WidgetCspReasonRejection,
 	foldWidgetCspReason,
+	isDefaultIgnorable,
 	normalizeCspReason,
 	reasonContainsAddress,
 	validateWidgetCspReason,
@@ -109,6 +110,49 @@ describe("foldWidgetCspReason", () => {
 		expect(foldWidgetCspReason("\u5730\u56f3\u3002com")).toBe(
 			"\u5730\u56f3\u3002com",
 		);
+	});
+
+	test("drops marks and default-ignorable code points like Rust", () => {
+		expect(
+			foldWidgetCspReason("V\u00c9r\u034fified\ufe0f Caf\u00e9\u3164"),
+		).toBe("verified cafe");
+		expect(foldWidgetCspReason("\uffa0\u115f\u1160")).toBe("");
+		expect(
+			foldWidgetCspReason(
+				"\uff2c\uff4f\uff41\uff44\uff53\u{e0100} \uff4d\u00e1p",
+			),
+		).toBe(foldWidgetCspReason("loads map"));
+	});
+
+	test("the default-ignorable ranges equal the engine's Unicode property", () => {
+		const property = /^\p{Default_Ignorable_Code_Point}$/u;
+		const mismatches: string[] = [];
+		for (let code = 0; code <= 0x10ffff; code++) {
+			if (code >= 0xd800 && code <= 0xdfff) continue;
+			const c = String.fromCodePoint(code);
+			if (isDefaultIgnorable(c) !== property.test(c)) {
+				mismatches.push(code.toString(16));
+			}
+		}
+		expect(mismatches).toEqual([]);
+	});
+
+	test("over-long reasons fail on length before other rules", () => {
+		const cases = [
+			"\u{1f680}".repeat(121),
+			`Loads tiles! ${"a".repeat(120)}`,
+			`Cafe\u0301 ${"b".repeat(120)}`,
+			`Loads ${"\ud800".repeat(115)}`,
+		];
+		for (const reason of cases) {
+			expect([reason, validateWidgetCspReason(reason, false)]).toEqual([
+				reason,
+				"reason-length",
+			]);
+		}
+		expect(
+			validateWidgetCspReason(`Loads ${"a".repeat(114)}`, false),
+		).toBeNull();
 	});
 
 	test("joiners are allowed only between non-ASCII letters", () => {

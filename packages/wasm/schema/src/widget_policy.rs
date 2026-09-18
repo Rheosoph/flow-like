@@ -102,6 +102,7 @@ const RESERVED_NAME_SUFFIXES: &[&str] = &[
 
 const REASON_MIN_CHARS: usize = 8;
 const REASON_MAX_CHARS: usize = 120;
+const REASON_MAX_BYTES: usize = REASON_MAX_CHARS * 4;
 const REASON_MIN_LETTERS: usize = 3;
 const REASON_MAX_MARK_RUN: usize = 2;
 const REASON_PUNCTUATION: &[char] = &[',', '.', ':', ';', '(', ')', '-', '\'', '/', '&'];
@@ -927,9 +928,6 @@ impl WidgetCspPurpose {
 
     fn problems(&self, inputs: &BTreeMap<String, ContractInput>) -> Vec<String> {
         let mut problems = Vec::new();
-        if let Err(rejection) = validate_widget_csp_reason(&self.reason, !self.inputs.is_empty()) {
-            problems.push(format!("{rejection} ({})", rejection.code()));
-        }
         if self.source_count() == 0 && self.inputs.is_empty() {
             problems.push("declares no sources and no inputs".into());
         }
@@ -1001,10 +999,14 @@ pub(crate) fn validate_csp_purposes(
     let mut input_owners: BTreeMap<&str, usize> = BTreeMap::new();
     let mut reason_owners: BTreeMap<String, usize> = BTreeMap::new();
     for (index, purpose) in purposes.iter().enumerate() {
+        let reason = validate_widget_csp_reason(&purpose.reason, !purpose.inputs.is_empty());
+        let reason_problem = reason
+            .err()
+            .map(|rejection| format!("{rejection} ({})", rejection.code()));
         errors.extend(
-            purpose
-                .problems(inputs)
+            reason_problem
                 .into_iter()
+                .chain(purpose.problems(inputs))
                 .map(|problem| format!("Widget '{widget_id}': csp purpose {index}: {problem}")),
         );
         let own_sources: BTreeSet<&str> = purpose.entries().map(|(_, source)| source).collect();
@@ -1033,7 +1035,7 @@ pub(crate) fn validate_csp_purposes(
                 }
             }
         }
-        if !purpose.reason.is_empty() {
+        if reason.is_ok() {
             let folded = fold_widget_csp_reason(&purpose.reason);
             match reason_owners.get(&folded) {
                 Some(first) => errors.push(format!(
@@ -1139,14 +1141,18 @@ impl fmt::Display for WidgetCspReasonRejection {
 impl std::error::Error for WidgetCspReasonRejection {}
 
 /// Reason rules 1–7 and 9–11 of §14.2.4, in order; the first failure is the
-/// code. Rule 12 compares purposes ([`fold_widget_csp_reason`]) and rule 8 is
-/// PSL-bound, so neither runs here.
+/// code. A reason over 120 scalars fails with `reason-length` before any
+/// other rule looks at it. Rule 12 compares purposes
+/// ([`fold_widget_csp_reason`]) and rule 8 is PSL-bound, so neither runs here.
 pub fn validate_widget_csp_reason(
     reason: &str,
     has_inputs: bool,
 ) -> Result<(), WidgetCspReasonRejection> {
     if reason.is_empty() {
         return Err(WidgetCspReasonRejection::Empty);
+    }
+    if reason.len() > REASON_MAX_BYTES || reason.chars().count() > REASON_MAX_CHARS {
+        return Err(WidgetCspReasonRejection::Length);
     }
     if !unicode_normalization::is_nfc(reason) {
         return Err(WidgetCspReasonRejection::NotNfc);
@@ -1157,7 +1163,7 @@ pub fn validate_widget_csp_reason(
     if reason.starts_with(' ') || reason.ends_with(' ') || reason.contains("  ") {
         return Err(WidgetCspReasonRejection::Whitespace);
     }
-    if !(REASON_MIN_CHARS..=REASON_MAX_CHARS).contains(&reason.chars().count()) {
+    if reason.chars().count() < REASON_MIN_CHARS {
         return Err(WidgetCspReasonRejection::Length);
     }
     if reason.chars().filter(|c| c.is_alphabetic()).count() < REASON_MIN_LETTERS {
@@ -1166,25 +1172,27 @@ pub fn validate_widget_csp_reason(
     if has_mixed_script_word(reason) {
         return Err(WidgetCspReasonRejection::MixedScript);
     }
-    let folded = fold_widget_csp_reason(reason);
-    let letters_and_numbers: String = folded
+    let skeleton = fold_widget_csp_reason(reason);
+    let letters_and_numbers: String = skeleton
         .chars()
         .filter(|c| c.is_alphabetic() || c.is_numeric())
         .collect();
     if letters_and_numbers.contains(REASON_PRODUCT) {
         return Err(WidgetCspReasonRejection::MentionsProduct);
     }
-    if reason_words(&folded).any(|word| REASON_ASSURANCE_WORDS.contains(&word)) {
+    if reason_words(&skeleton).any(|word| REASON_ASSURANCE_WORDS.contains(&word)) {
         return Err(WidgetCspReasonRejection::ClaimsAssurance);
     }
-    if has_inputs && reason_words(&folded).any(|word| REASON_ATTRIBUTION_WORDS.contains(&word)) {
+    if has_inputs && reason_words(&skeleton).any(|word| REASON_ATTRIBUTION_WORDS.contains(&word)) {
         return Err(WidgetCspReasonRejection::ClaimsAttribution);
     }
     Ok(())
 }
 
-/// `f` of §14.2.4: NFKC, U+3002 between ASCII alphanumerics replaced by `.`,
-/// then lowercase.
+/// The form rules 9–12 of §14.2.4 compare: `f` (NFKC, U+3002 between ASCII
+/// alphanumerics replaced by `.`, lowercase), decomposed with NFKD and
+/// stripped of marks and default-ignorable code points, so accents and
+/// invisible characters neither split words nor tell two reasons apart.
 pub fn fold_widget_csp_reason(reason: &str) -> String {
     let normalized: Vec<char> = reason.nfkc().collect();
     let replaced: String = normalized
@@ -1200,13 +1208,31 @@ pub fn fold_widget_csp_reason(reason: &str) -> String {
             if between_alphanumerics { '.' } else { c }
         })
         .collect();
-    replaced.to_lowercase()
+    replaced
+        .to_lowercase()
+        .nfkd()
+        .filter(|&c| !is_combining_mark(c) && !is_default_ignorable(c))
+        .collect()
 }
 
-fn reason_characters_allowed(reason: &str) -> bool {
+/// Reason rule 3 (§14.2.4): the character allowlist. Default-ignorable code
+/// points are refused, except U+200C/U+200D between non-ASCII letters or
+/// marks.
+pub(crate) fn reason_characters_allowed(reason: &str) -> bool {
     let chars: Vec<char> = reason.chars().collect();
     let mut mark_run = 0;
     for (index, &c) in chars.iter().enumerate() {
+        let joiner = matches!(c, '\u{200C}' | '\u{200D}')
+            && index > 0
+            && is_joinable(chars[index - 1])
+            && chars.get(index + 1).is_some_and(|next| is_joinable(*next));
+        if joiner {
+            mark_run = 0;
+            continue;
+        }
+        if is_default_ignorable(c) {
+            return false;
+        }
         if is_combining_mark(c) {
             mark_run += 1;
             if mark_run > REASON_MAX_MARK_RUN {
@@ -1215,16 +1241,7 @@ fn reason_characters_allowed(reason: &str) -> bool {
             continue;
         }
         mark_run = 0;
-        let joiner = matches!(c, '\u{200C}' | '\u{200D}')
-            && index > 0
-            && is_joinable(chars[index - 1])
-            && chars.get(index + 1).is_some_and(|next| is_joinable(*next));
-        if !(c.is_alphabetic()
-            || c.is_numeric()
-            || c == ' '
-            || REASON_PUNCTUATION.contains(&c)
-            || joiner)
-        {
+        if !(c.is_alphabetic() || c.is_numeric() || c == ' ' || REASON_PUNCTUATION.contains(&c)) {
             return false;
         }
     }
@@ -1235,7 +1252,33 @@ fn is_joinable(c: char) -> bool {
     !c.is_ascii() && (c.is_alphabetic() || is_combining_mark(c))
 }
 
-fn has_mixed_script_word(reason: &str) -> bool {
+/// `Default_Ignorable_Code_Point` of Unicode 15.1 (DerivedCoreProperties.txt).
+/// `csp-reason.ts` carries the same ranges.
+fn is_default_ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
+}
+
+/// Reason rule 7 (§14.2.4): a letter run mixing ASCII and non-Latin letters.
+pub(crate) fn has_mixed_script_word(reason: &str) -> bool {
     reason
         .split(|c: char| !(c.is_alphabetic() || is_combining_mark(c)))
         .any(|word| {
@@ -1576,6 +1619,10 @@ impl Default for EngineGate {
     }
 }
 
+/// A probe failure. A row matches its engine when the platform matches and
+/// the version is within the bounds or unknown: a known engine that hides its
+/// version gets the denial. iPadOS Safari reports itself as macOS, so a web
+/// WebKit row needs a copy for `ios` and one for `macos`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EngineGateRow {
@@ -1598,10 +1645,10 @@ impl EngineGateRow {
                 .is_none_or(|platform| id.platform.as_deref() == Some(platform))
             && self
                 .min_version
-                .is_none_or(|min| id.version.is_some_and(|version| version >= min))
+                .is_none_or(|min| id.version.is_none_or(|version| version >= min))
             && self
                 .max_version
-                .is_none_or(|max| id.version.is_some_and(|version| version <= max))
+                .is_none_or(|max| id.version.is_none_or(|version| version <= max))
     }
 }
 
@@ -1770,6 +1817,179 @@ impl PlatformStorageScope {
             .is_ok()
             .then_some(source)
     }
+
+    /// Whether an exact origin on `host` reaches this scope's bucket or
+    /// storage account without the app path: the origin's own host or any
+    /// other hostname the provider serves the same bucket under.
+    pub fn reaches_bucket(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        self.host().as_deref() == Some(host.as_str())
+            || self.bucket_hosts().is_some_and(|hosts| {
+                hosts.shared.contains(&host) || hosts.exclusive.contains(&host)
+            })
+    }
+
+    /// Whether `host` serves only this scope's bucket or storage account, so
+    /// no source on it can be meant for anything but Flow-Like storage.
+    pub fn is_exclusive_host(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        self.bucket_hosts()
+            .is_some_and(|hosts| hosts.exclusive.contains(&host))
+    }
+
+    fn bucket_hosts(&self) -> Option<BucketHosts> {
+        let host = self.host()?;
+        let path_bucket = self
+            .path_prefix
+            .trim_start_matches('/')
+            .split('/')
+            .next()
+            .filter(|bucket| !bucket.is_empty())
+            .map(str::to_ascii_lowercase);
+        let path_bucket = path_bucket.as_deref();
+        s3_bucket_hosts(&host, path_bucket)
+            .or_else(|| gcs_bucket_hosts(&host, path_bucket))
+            .or_else(|| azure_account_hosts(&host))
+            .or_else(|| r2_bucket_hosts(&host, path_bucket))
+    }
+}
+
+/// Hostnames of one storage bucket: `shared` endpoints address other
+/// customers' buckets by path, `exclusive` hosts serve only this bucket or
+/// storage account.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct BucketHosts {
+    shared: Vec<String>,
+    exclusive: Vec<String>,
+}
+
+const S3_REGIONAL_ENDPOINTS: &[&str] = &["s3", "s3.dualstack", "s3-fips", "s3-fips.dualstack"];
+const S3_GLOBAL_ENDPOINTS: &[&str] = &["s3", "s3-accelerate", "s3-accelerate.dualstack"];
+
+/// Amazon S3 path-style (`s3[.dualstack].{region}.amazonaws.com` +
+/// `/{bucket}/…`) and virtual-hosted (`{bucket}.s3[.dualstack].{region}…`,
+/// `{bucket}.s3.amazonaws.com`) origins.
+fn s3_bucket_hosts(host: &str, path_bucket: Option<&str>) -> Option<BucketHosts> {
+    let rest = host.strip_suffix(".amazonaws.com")?;
+    let (bucket, region) = match s3_endpoint_region(rest) {
+        Some(region) => (path_bucket?, region),
+        None => rest.match_indices('.').find_map(|(dot, _)| {
+            s3_endpoint_region(&rest[dot + 1..]).map(|region| (&rest[..dot], region))
+        })?,
+    };
+    let mut hosts = BucketHosts::default();
+    for endpoint in S3_GLOBAL_ENDPOINTS {
+        hosts
+            .exclusive
+            .push(format!("{bucket}.{endpoint}.amazonaws.com"));
+    }
+    match region {
+        Some(region) => {
+            for endpoint in S3_REGIONAL_ENDPOINTS {
+                hosts
+                    .shared
+                    .push(format!("{endpoint}.{region}.amazonaws.com"));
+                hosts
+                    .exclusive
+                    .push(format!("{bucket}.{endpoint}.{region}.amazonaws.com"));
+            }
+            hosts.shared.push(format!("s3-{region}.amazonaws.com"));
+            hosts
+                .exclusive
+                .push(format!("{bucket}.s3-{region}.amazonaws.com"));
+            if region == "us-east-1" {
+                hosts.shared.push("s3.amazonaws.com".into());
+            }
+        }
+        None => hosts.shared.push("s3.amazonaws.com".into()),
+    }
+    Some(hosts)
+}
+
+/// The region of an S3 endpoint label sequence (`Some(None)` for a global
+/// endpoint), or `None` when `endpoint` is not one.
+fn s3_endpoint_region(endpoint: &str) -> Option<Option<&str>> {
+    if S3_GLOBAL_ENDPOINTS.contains(&endpoint) {
+        return Some(None);
+    }
+    S3_REGIONAL_ENDPOINTS.iter().find_map(|prefix| {
+        endpoint
+            .strip_prefix(prefix)?
+            .strip_prefix('.')
+            .filter(|region| {
+                region.ends_with(|c: char| c.is_ascii_digit())
+                    && region
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            })
+            .map(Some)
+    })
+}
+
+/// Google Cloud Storage `storage.googleapis.com` + `/{bucket}/…` and
+/// `{bucket}.storage.googleapis.com`.
+fn gcs_bucket_hosts(host: &str, path_bucket: Option<&str>) -> Option<BucketHosts> {
+    const ENDPOINT: &str = "storage.googleapis.com";
+    let bucket = match host.strip_suffix(ENDPOINT)? {
+        "" => path_bucket?,
+        prefix => prefix
+            .strip_suffix('.')
+            .filter(|bucket| !bucket.is_empty())?,
+    };
+    Some(BucketHosts {
+        shared: vec![ENDPOINT.into()],
+        exclusive: vec![format!("{bucket}.{ENDPOINT}")],
+    })
+}
+
+/// Azure Storage `{account}[-secondary].{blob|dfs}.core.windows.net`: every
+/// endpoint of the account reaches its containers.
+fn azure_account_hosts(host: &str) -> Option<BucketHosts> {
+    let rest = host.strip_suffix(".core.windows.net")?;
+    let account = rest
+        .strip_suffix(".blob")
+        .or_else(|| rest.strip_suffix(".dfs"))?;
+    let account = account.strip_suffix("-secondary").unwrap_or(account);
+    if account.is_empty() || account.contains('.') {
+        return None;
+    }
+    let exclusive = ["", "-secondary"]
+        .iter()
+        .flat_map(|replica| {
+            ["blob", "dfs"]
+                .iter()
+                .map(move |service| format!("{account}{replica}.{service}.core.windows.net"))
+        })
+        .collect();
+    Some(BucketHosts {
+        shared: Vec::new(),
+        exclusive,
+    })
+}
+
+/// Cloudflare R2 `{account}[.{jurisdiction}].r2.cloudflarestorage.com` +
+/// `/{bucket}/…` and its virtual-hosted `{bucket}.{account}…` form.
+fn r2_bucket_hosts(host: &str, path_bucket: Option<&str>) -> Option<BucketHosts> {
+    let rest = host.strip_suffix(".r2.cloudflarestorage.com")?;
+    let (front, jurisdiction) = ["eu", "fedramp"]
+        .iter()
+        .find_map(|jurisdiction| {
+            rest.strip_suffix(&format!(".{jurisdiction}"))
+                .map(|front| (front, format!(".{jurisdiction}")))
+        })
+        .unwrap_or((rest, String::new()));
+    let (bucket, account) = match front.rsplit_once('.') {
+        Some((bucket, account)) => (bucket, account),
+        None => (path_bucket?, front),
+    };
+    if bucket.is_empty() || account.is_empty() {
+        return None;
+    }
+    let account_host = format!("{account}{jurisdiction}.r2.cloudflarestorage.com");
+    Some(BucketHosts {
+        shared: Vec::new(),
+        exclusive: vec![format!("{bucket}.{account_host}"), account_host],
+    })
 }
 
 /// App ids that may name a platform-storage scope: `[A-Za-z0-9_-]{1,64}`.
@@ -1984,7 +2204,8 @@ impl WidgetPolicyDescriptor {
     }
 
     /// Derives the descriptor for describe, mint and document serving
-    /// (§14.4.5). An invalid contract, a widget id mismatch, a reserved host
+    /// (§14.4.5). An invalid contract, a widget id mismatch, a reserved host,
+    /// a declared source on a host that serves only a platform-storage bucket
     /// or a declared policy over the document CSP budget yields `invalid` with
     /// the baseline policy. Runtime sources are derived only for valid,
     /// non-preview descriptors.
@@ -2005,6 +2226,10 @@ impl WidgetPolicyDescriptor {
         if let Err(policy_errors) = declared.validate(context.reserved_hosts) {
             errors.extend(policy_errors);
         }
+        errors.extend(declared_platform_storage_errors(
+            &declared.csp,
+            context.platform_storage,
+        ));
         if let Err(wildcard_errors) = crate::widget_sources::validate_wildcard_bases(
             declared.csp.entries().map(|(_, source)| source),
         ) {
@@ -2316,11 +2541,33 @@ fn runtime_source_host<'s>(
     if context
         .platform_storage
         .iter()
-        .any(|scope| scope.host().as_deref() == Some(host))
+        .any(|scope| scope.reaches_bucket(host))
     {
         return Err(RUNTIME_REJECTION_PLATFORM_STORAGE);
     }
     Ok(host)
+}
+
+/// Declared exact sources on a host that serves only a platform-storage
+/// bucket or account. Declared sources hold for every app, so they would
+/// reach every app's files.
+fn declared_platform_storage_errors(
+    csp: &WidgetCsp,
+    scopes: &[PlatformStorageScope],
+) -> Vec<String> {
+    csp.entries()
+        .filter_map(|(directive, source)| {
+            let host = csp_source_host(source)?;
+            scopes
+                .iter()
+                .any(|scope| scope.is_exclusive_host(host))
+                .then(|| {
+                    format!(
+                        "csp source \"{source}\" in {directive} targets Flow-Like content storage at \"{host}\""
+                    )
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2982,6 +3229,65 @@ mod tests {
         assert_eq!(
             validate_widget_csp_reason("\u{200C}نقشه‌ها از سرور", false),
             Err(WidgetCspReasonRejection::ForbiddenCharacter)
+        );
+    }
+
+    #[test]
+    fn reason_skeleton_drops_marks_and_default_ignorables() {
+        assert_eq!(
+            fold_widget_csp_reason("V\u{00C9}r\u{034F}ified\u{FE0F} Caf\u{E9}\u{3164}"),
+            "verified cafe"
+        );
+        assert_eq!(fold_widget_csp_reason("\u{FFA0}\u{115F}\u{1160}"), "");
+        assert_eq!(
+            fold_widget_csp_reason("Ｌｏａｄｓ\u{E0100} ｍáp"),
+            fold_widget_csp_reason("loads map")
+        );
+    }
+
+    #[test]
+    fn over_long_reasons_fail_on_length_before_other_rules() {
+        let multibyte = "\u{1F680}".repeat(REASON_MAX_CHARS + 1);
+        assert!(multibyte.len() > REASON_MAX_BYTES);
+        let ascii = format!("Loads tiles! {}", "a".repeat(REASON_MAX_CHARS));
+        let not_nfc = format!("Cafe\u{0301} {}", "b".repeat(REASON_MAX_CHARS));
+        for reason in [multibyte.as_str(), ascii.as_str(), not_nfc.as_str()] {
+            assert_eq!(
+                validate_widget_csp_reason(reason, false),
+                Err(WidgetCspReasonRejection::Length),
+                "{reason}"
+            );
+        }
+        let at_limit = format!("Loads {}", "a".repeat(REASON_MAX_CHARS - 6));
+        assert_eq!(validate_widget_csp_reason(&at_limit, false), Ok(()));
+    }
+
+    #[test]
+    fn invalid_reasons_are_not_compared_for_duplicates() {
+        let purposes = vec![
+            sourced_purpose("Loads map tiles", &["https://a.example.com"], &[]),
+            sourced_purpose("Loads map tiles\u{3164}", &["https://b.example.com"], &[]),
+            sourced_purpose("Loads map tiles\u{FFA0}", &["https://c.example.com"], &[]),
+        ];
+        let errors = validate_csp_purposes("live-map", &purposes, &BTreeMap::new());
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.ends_with("(reason-forbidden-character)")),
+            "{errors:?}"
+        );
+        assert!(errors[0].starts_with("Widget 'live-map': csp purpose 1: "));
+
+        let valid_twins = vec![
+            sourced_purpose("Loads map tiles", &["https://a.example.com"], &[]),
+            sourced_purpose("Loads m\u{E1}p tiles", &["https://b.example.com"], &[]),
+        ];
+        assert_eq!(
+            validate_csp_purposes("live-map", &valid_twins, &BTreeMap::new()),
+            [
+                "Widget 'live-map': csp purposes 0 and 1: reasons of two purposes must differ (reason-duplicate)"
+            ]
         );
     }
 
@@ -3698,6 +4004,162 @@ mod tests {
         assert_eq!(rejections(&invalid_app)[0].2, "platform-storage");
     }
 
+    fn storage_scope(origin: &str, path_prefix: &str) -> PlatformStorageScope {
+        PlatformStorageScope {
+            origin: origin.into(),
+            path_prefix: path_prefix.into(),
+        }
+    }
+
+    #[test]
+    fn platform_storage_scopes_know_every_hostname_of_their_bucket() {
+        let path_style = storage_scope(
+            "https://s3.eu-central-1.amazonaws.com",
+            "/flow-like-content/apps/",
+        );
+        let virtual_hosted = storage_scope(
+            "https://flow-like-content.s3.eu-central-1.amazonaws.com",
+            "/apps/",
+        );
+        for s3 in [&path_style, &virtual_hosted] {
+            for host in [
+                "s3.eu-central-1.amazonaws.com",
+                "s3.dualstack.eu-central-1.amazonaws.com",
+                "flow-like-content.s3.eu-central-1.amazonaws.com",
+                "flow-like-content.s3.dualstack.eu-central-1.amazonaws.com",
+                "flow-like-content.s3.amazonaws.com",
+                "flow-like-content.s3-eu-central-1.amazonaws.com",
+                "Flow-Like-Content.S3.eu-central-1.amazonaws.com",
+            ] {
+                assert!(s3.reaches_bucket(host), "{} must refuse {host}", s3.origin);
+            }
+            for host in [
+                "other.s3.eu-central-1.amazonaws.com",
+                "flow-like-content.s3.eu-west-1.amazonaws.com",
+                "s3.eu-west-1.amazonaws.com",
+                "s3.amazonaws.com",
+                "api.cesium.com",
+            ] {
+                assert!(!s3.reaches_bucket(host), "{} must allow {host}", s3.origin);
+            }
+            assert!(
+                s3.is_exclusive_host("flow-like-content.s3.dualstack.eu-central-1.amazonaws.com")
+            );
+            assert!(s3.is_exclusive_host("flow-like-content.s3.amazonaws.com"));
+            assert!(!s3.is_exclusive_host("s3.eu-central-1.amazonaws.com"));
+        }
+        let dotted = storage_scope(
+            "https://my.bucket.s3.dualstack.us-east-1.amazonaws.com",
+            "/apps/",
+        );
+        assert!(dotted.reaches_bucket("s3.amazonaws.com"));
+        assert!(dotted.is_exclusive_host("my.bucket.s3.us-east-1.amazonaws.com"));
+        let global = storage_scope("https://s3.amazonaws.com", "/content/apps/");
+        assert!(global.is_exclusive_host("content.s3.amazonaws.com"));
+        assert!(!global.reaches_bucket("s3.eu-central-1.amazonaws.com"));
+
+        let gcs = storage_scope("https://storage.googleapis.com", "/flow-like-content/apps/");
+        assert!(gcs.reaches_bucket("flow-like-content.storage.googleapis.com"));
+        assert!(gcs.is_exclusive_host("flow-like-content.storage.googleapis.com"));
+        assert!(gcs.reaches_bucket("storage.googleapis.com"));
+        assert!(!gcs.is_exclusive_host("storage.googleapis.com"));
+        assert!(!gcs.reaches_bucket("other.storage.googleapis.com"));
+
+        let azure = storage_scope(
+            "https://flowlikeprod.blob.core.windows.net",
+            "/flow-like-content/apps/",
+        );
+        for host in [
+            "flowlikeprod.blob.core.windows.net",
+            "flowlikeprod.dfs.core.windows.net",
+            "flowlikeprod-secondary.blob.core.windows.net",
+            "flowlikeprod-secondary.dfs.core.windows.net",
+        ] {
+            assert!(
+                azure.reaches_bucket(host) && azure.is_exclusive_host(host),
+                "{host}"
+            );
+        }
+        assert!(!azure.reaches_bucket("other.blob.core.windows.net"));
+
+        let r2 = storage_scope(
+            "https://acc.eu.r2.cloudflarestorage.com",
+            "/flow-like-content/apps/",
+        );
+        assert!(r2.is_exclusive_host("flow-like-content.acc.eu.r2.cloudflarestorage.com"));
+        assert!(r2.is_exclusive_host("acc.eu.r2.cloudflarestorage.com"));
+        assert!(!r2.reaches_bucket("other.eu.r2.cloudflarestorage.com"));
+
+        let custom = storage_scope("https://storage.example.com", "/flow-like-content/apps/");
+        assert!(custom.reaches_bucket("storage.example.com"));
+        assert!(!custom.is_exclusive_host("storage.example.com"));
+        assert!(!custom.reaches_bucket("flow-like-content.storage.example.com"));
+    }
+
+    #[test]
+    fn platform_storage_alternate_hosts_are_refused_at_runtime_and_when_declared() {
+        let contract = runtime_contract();
+        let storage = scopes();
+        let alternates = [
+            "https://flow-like-content.s3.eu-central-1.amazonaws.com",
+            "https://flow-like-content.s3.dualstack.eu-central-1.amazonaws.com",
+            "https://flow-like-content.s3.amazonaws.com",
+            "https://s3.dualstack.eu-central-1.amazonaws.com",
+        ];
+        let descriptor = WidgetPolicyDescriptor::describe_with_runtime(
+            web_subject(),
+            &contract,
+            &request(&[("tileUrl", &alternates)]),
+            &context(&[], &storage, Some("app_1"), &[]),
+        );
+        let mut expected: Vec<(String, String, String)> = alternates
+            .iter()
+            .map(|source| {
+                (
+                    "tileUrl".to_string(),
+                    source.to_string(),
+                    RUNTIME_REJECTION_PLATFORM_STORAGE.to_string(),
+                )
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(rejections(&descriptor), expected);
+        assert_eq!(descriptor.runtime_sources(), None);
+
+        let declaring = |source: &str| {
+            let contract = runtime_contract();
+            let mut purposes = contract.csp.clone().unwrap();
+            purposes[0].connect_src.push(source.to_string());
+            contract.with_csp(purposes)
+        };
+        let describe = |contract: &WidgetContract, storage: &[PlatformStorageScope]| {
+            WidgetPolicyDescriptor::describe_with_runtime(
+                web_subject(),
+                contract,
+                &[],
+                &context(&[], storage, Some("app_1"), &[]),
+            )
+        };
+        let bucket = declaring("https://flow-like-content.s3.dualstack.eu-central-1.amazonaws.com");
+        let invalid = describe(&bucket, &storage);
+        assert_eq!(invalid.status, WidgetPolicyStatus::Invalid);
+        assert!(
+            invalid.invalid_reason.as_deref().is_some_and(|reason| reason.contains(
+                "targets Flow-Like content storage at \"flow-like-content.s3.dualstack.eu-central-1.amazonaws.com\""
+            )),
+            "{:?}",
+            invalid.invalid_reason
+        );
+        assert!(describe(&bucket, &[]).is_ok());
+        for shared in [
+            "https://s3.eu-central-1.amazonaws.com",
+            "https://*.s3.eu-central-1.amazonaws.com",
+            "https://other.s3.eu-central-1.amazonaws.com",
+        ] {
+            assert!(describe(&declaring(shared), &storage).is_ok(), "{shared}");
+        }
+    }
+
     #[test]
     fn runtime_caps_leave_the_policy_declared_only() {
         let contract = runtime_contract();
@@ -4403,6 +4865,22 @@ mod tests {
         );
         assert_eq!(
             gate(id(Engine::WebKit, Some("linux"), None)),
+            EngineGate {
+                local_media: false,
+                wildcard_sources: false,
+                ..EngineGate::OPEN
+            },
+            "a known engine without a version gets the denial"
+        );
+        assert_eq!(
+            gate(id(Engine::WebKit, Some("ios"), None)),
+            EngineGate {
+                wildcard_sources: false,
+                ..EngineGate::OPEN
+            }
+        );
+        assert_eq!(
+            gate(id(Engine::Gecko, Some("linux"), None)),
             EngineGate::OPEN
         );
         assert_eq!(
@@ -4440,6 +4918,33 @@ mod tests {
             assert!(parse_engine_gate_rows(invalid).is_err(), "{invalid}");
         }
         assert!(!EngineGate::CLOSED.support().runtime_sources);
+    }
+
+    #[test]
+    fn web_webkit_rows_cover_ipados_reporting_macos() {
+        let rows = parse_engine_gate_rows(
+            r#"{"rows": [
+                {"engine": "webkit", "platform": "ios", "minVersion": [17, 0], "maxVersion": [17, 6], "deny": ["runtimeSources"]},
+                {"engine": "webkit", "platform": "macos", "minVersion": [17, 0], "maxVersion": [17, 6], "deny": ["runtimeSources"]}
+            ]}"#,
+        )
+        .unwrap();
+        let denied = EngineGate {
+            runtime_sources: false,
+            ..EngineGate::OPEN
+        };
+        for user_agent in [
+            "Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+        ] {
+            let id = engine_from_user_agent(user_agent);
+            assert_eq!(gate_from_rows(&rows, &id), denied, "{user_agent}: {id:?}");
+        }
+        let newer = engine_from_user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+        );
+        assert_eq!(gate_from_rows(&rows, &newer), EngineGate::OPEN);
     }
 
     #[test]

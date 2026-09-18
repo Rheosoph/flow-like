@@ -26,6 +26,9 @@ pub const BUNDLE_MANIFEST_PATH: &str = "bundle.json";
 pub const WIDGET_BUNDLE_EXTENSION: &str = "flwb";
 /// Media type of the bundle artifact
 pub const WIDGET_BUNDLE_MEDIA_TYPE: &str = "application/vnd.flow-like.widget-bundle";
+/// Largest uncompressed archive entry a reader accepts. The size a ZIP
+/// declares for an entry only bounds preallocation, never the read.
+pub const MAX_WIDGET_BUNDLE_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A shared content-hashed chunk referenced by one or more widgets
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +270,33 @@ fn archive_name_collisions(names: &[String]) -> Vec<String> {
     errors
 }
 
+/// Reads one archive entry of at most `limit` bytes. The declared size is
+/// checked up front and caps the preallocation; the read itself stops one
+/// byte past the limit, whatever the archive claims.
+fn read_bounded_entry(
+    entry: impl Read,
+    declared_size: u64,
+    limit: u64,
+    path: &str,
+) -> Result<Vec<u8>> {
+    let too_large = || {
+        anyhow!(
+            "Widget bundle entry {} is larger than {} bytes",
+            path,
+            limit
+        )
+    };
+    if declared_size > limit {
+        return Err(too_large());
+    }
+    let mut data = Vec::with_capacity(usize::try_from(declared_size).unwrap_or(0));
+    entry.take(limit + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > limit {
+        return Err(too_large());
+    }
+    Ok(data)
+}
+
 /// Reader over a `.flwb` archive with manifest parsing and entry verification
 pub struct WidgetBundleReader<R: Read + Seek> {
     archive: ZipArchive<R>,
@@ -291,12 +321,17 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut archive = ZipArchive::new(reader).context("Failed to read widget bundle ZIP")?;
         let manifest = {
-            let mut entry = archive
+            let entry = archive
                 .by_name(BUNDLE_MANIFEST_PATH)
                 .with_context(|| format!("Widget bundle is missing {}", BUNDLE_MANIFEST_PATH))?;
-            let mut content = String::new();
-            entry.read_to_string(&mut content)?;
-            serde_json::from_str::<WidgetBundleManifest>(&content)
+            let declared_size = entry.size();
+            let content = read_bounded_entry(
+                entry,
+                declared_size,
+                MAX_WIDGET_BUNDLE_ENTRY_BYTES,
+                BUNDLE_MANIFEST_PATH,
+            )?;
+            serde_json::from_slice::<WidgetBundleManifest>(&content)
                 .context("Failed to parse bundle.json")?
         };
         Ok(Self { archive, manifest })
@@ -311,13 +346,12 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
         if !is_safe_entry_path(path) {
             bail!("Unsafe widget bundle entry path: {}", path);
         }
-        let mut entry = self
+        let entry = self
             .archive
             .by_name(path)
             .with_context(|| format!("Widget bundle entry not found: {}", path))?;
-        let mut data = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut data)?;
-        Ok(data)
+        let declared_size = entry.size();
+        read_bounded_entry(entry, declared_size, MAX_WIDGET_BUNDLE_ENTRY_BYTES, path)
     }
 
     /// Read an entry and verify it against its `bundle.json` hash (if listed)
@@ -826,6 +860,64 @@ mod tests {
             .add_widget(sample_widget("kpi-card"))
             .build()
             .unwrap()
+    }
+
+    fn with_claimed_size(mut bytes: Vec<u8>, name: &str, size: u32) -> Vec<u8> {
+        let signature = 0x0201_4b50u32.to_le_bytes();
+        let mut offset = 0;
+        while let Some(found) = bytes[offset..].windows(4).position(|w| w == signature) {
+            let header = offset + found;
+            let name_len = u16::from_le_bytes([bytes[header + 28], bytes[header + 29]]) as usize;
+            if &bytes[header + 46..header + 46 + name_len] == name.as_bytes() {
+                bytes[header + 24..header + 28].copy_from_slice(&size.to_le_bytes());
+                return bytes;
+            }
+            offset = header + 4;
+        }
+        panic!("{name} has no central directory entry");
+    }
+
+    #[test]
+    fn bounded_reads_stop_at_the_limit_whatever_the_archive_claims() {
+        let bytes = [7u8; 33];
+        assert_eq!(
+            read_bounded_entry(&bytes[..32], 32, 32, "a").unwrap().len(),
+            32
+        );
+        for (data, claimed) in [(&bytes[..], 0), (&bytes[..1], u64::MAX)] {
+            let error = read_bounded_entry(data, claimed, 32, "a").unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Widget bundle entry a is larger than 32 bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn claimed_entry_sizes_never_drive_allocation() {
+        let entry = "widgets/kpi-card/index.html";
+        let (bytes, _) = sample_bundle();
+        let mut reader =
+            WidgetBundleReader::from_bytes(with_claimed_size(bytes, entry, 0xFFFF_FFF0)).unwrap();
+        let error = reader.read_entry_raw(entry).unwrap_err();
+        assert!(error.to_string().contains("is larger than"), "{error}");
+        let errors = reader.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains(&format!("{entry} is larger than"))),
+            "{errors:?}"
+        );
+
+        let (bytes, _) = sample_bundle();
+        let manifest = with_claimed_size(bytes, BUNDLE_MANIFEST_PATH, 0xFFFF_FFF0);
+        let error = WidgetBundleReader::from_bytes(manifest)
+            .err()
+            .expect("an oversized manifest is refused");
+        assert!(
+            error.to_string().contains("bundle.json is larger than"),
+            "{error}"
+        );
     }
 
     #[test]
