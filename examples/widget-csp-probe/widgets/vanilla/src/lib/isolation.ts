@@ -1,5 +1,6 @@
 import { GRANTED_HOST } from "./hosts";
 import { type ViolationWatch, probeFetch } from "./network";
+import { cspMetas, directiveSources } from "./policy";
 import {
 	type ProbeCheck,
 	type ProbeExpectation,
@@ -60,33 +61,33 @@ export function checkNoReferrer(): ProbeCheck {
 		: check("fail", expected, `referrer is ${document.referrer}`);
 }
 
-function directiveSources(policy: string, directive: string): string[] | null {
-	for (const part of policy.split(";")) {
-		const [name, ...sources] = part.trim().split(/\s+/);
-		if (name === directive) return sources;
-	}
-	return null;
-}
+const LOCAL_SCHEMES = ["data:", "blob:"];
 
 /** The server replaces every packed CSP meta with one copy of the header policy */
 export function checkCspMeta(expectation: ProbeExpectation): ProbeCheck {
-	const metas = [...document.querySelectorAll("meta[http-equiv]")].filter(
-		(meta) =>
-			meta.getAttribute("http-equiv")?.toLowerCase() ===
-			"content-security-policy",
-	);
+	const metas = cspMetas();
 	const wantsHost = expectation === "granted";
-	const expected = `one CSP meta without 'self', connect-src ${wantsHost ? "lists" : "omits"} ${GRANTED_HOST.origin}`;
+	const expected = `one CSP meta without 'self', connect-src and media-src start with data: blob:, connect-src ${wantsHost ? "lists" : "omits"} ${GRANTED_HOST.origin}`;
 	if (metas.length !== 1) {
 		return check("fail", expected, `${metas.length} CSP meta tags`);
 	}
 	const policy = metas[0]?.getAttribute("content") ?? "";
 	const problems: string[] = [];
 	if (policy.includes("'self'")) problems.push("policy contains 'self'");
-	const connect = directiveSources(policy, "connect-src");
-	if (connect === null) {
-		problems.push("no connect-src directive");
-	} else if (connect.includes(GRANTED_HOST.origin) !== wantsHost) {
+	for (const directive of ["connect-src", "media-src"]) {
+		const sources = directiveSources(policy, directive);
+		if (sources === null) {
+			problems.push(`no ${directive} directive`);
+		} else if (
+			LOCAL_SCHEMES.some((scheme, index) => sources[index] !== scheme)
+		) {
+			problems.push(
+				`${directive} is ${sources.join(" ")}; an engine gated off localMedia drops them from media-src only`,
+			);
+		}
+	}
+	const connect = directiveSources(policy, "connect-src") ?? [];
+	if (connect.includes(GRANTED_HOST.origin) !== wantsHost) {
 		problems.push(`connect-src is ${connect.join(" ")}`);
 	}
 	return problems.length === 0

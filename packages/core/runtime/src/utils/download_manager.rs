@@ -76,12 +76,12 @@ impl DownloadManager {
             Ok(data) => match flow_like_types::json::from_str::<DownloadManager>(&data) {
                 Ok(dl_manager) => dl_manager,
                 Err(e) => {
-                    println!("Error loading download manager: {:?}", e);
+                    tracing::warn!(error = ?e, "Error loading download manager");
                     return HashMap::new();
                 }
             },
             Err(e) => {
-                println!("Error loading download manager: {:?}", e);
+                tracing::warn!(error = ?e, "Error loading download manager");
                 return HashMap::new();
             }
         };
@@ -121,7 +121,7 @@ impl DownloadManager {
         let data = match flow_like_types::json::to_string(self) {
             Ok(v) => v,
             Err(e) => {
-                println!("Error serializing download manager: {:?}", e);
+                tracing::error!(error = ?e, "Error serializing download manager");
                 return;
             }
         };
@@ -131,7 +131,7 @@ impl DownloadManager {
                 let _ = std::fs::create_dir_all(parent);
             }
             if let Err(e) = std::fs::write(&dir, data) {
-                println!("Error saving download manager: {:?}", e);
+                tracing::error!(error = ?e, "Error saving download manager");
             }
         }));
     }

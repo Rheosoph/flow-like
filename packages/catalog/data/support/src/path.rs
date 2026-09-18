@@ -76,7 +76,7 @@ impl FlowPath {
         })?;
         let etag = get_results.meta.e_tag.clone();
 
-        println!("Etag: {:?}, dirty: {:?}", etag, dirty);
+        tracing::debug!(?etag, dirty, "Fetched FlowPath contents");
 
         let bytes = get_results.bytes().await?;
 
@@ -283,10 +283,7 @@ impl FlowPath {
         let cache_layer = self.to_cache_layer(context).await?;
 
         if cache_layer.is_none() {
-            println!(
-                "No cache layer available for path: {}, not dirty",
-                self.path
-            );
+            tracing::debug!(path = %self.path, "No cache layer available, not dirty");
             let file = self.get_file(&self.to_store(context).await?).await?;
             return Ok((file, false));
         }
@@ -302,25 +299,16 @@ impl FlowPath {
         }
 
         if dirty.unwrap_or(true) {
-            println!(
-                "Cache is dirty for path: {}, fetching from store",
-                self.path
-            );
+            tracing::debug!(path = %self.path, "Cache is dirty, fetching from store");
             let file = self.get_file(&self.to_store(context).await?).await?;
             return Ok((file, true));
         }
 
-        println!(
-            "Cache is clean for path: {}, retrieving from cache",
-            self.path
-        );
+        tracing::debug!(path = %self.path, "Cache is clean, retrieving from cache");
         match cache_layer.as_generic().get(&self.object_path()).await {
             Ok(data) => Ok((Some(data), false)),
             Err(_) => {
-                println!(
-                    "File not found in cache for path: {}, fetching from store",
-                    self.path
-                );
+                tracing::debug!(path = %self.path, "File not found in cache, fetching from store");
                 let file = self.get_file(&self.to_store(context).await?).await?;
                 Ok((file, true))
             }
@@ -389,7 +377,7 @@ impl FlowPath {
         let store = store_getter(&exec_context).ok_or(anyhow!("Failed to get Store"))?;
 
         if let Some(credentials) = &context.credentials {
-            println!("Using credentials for store: {}", store_hash);
+            tracing::debug!(store = %store_hash, "Using credentials for store");
             let cacheable_store: Arc<dyn Cacheable> = Arc::new(store);
             context.set_cache(&cache_layer_hash, cacheable_store).await;
 

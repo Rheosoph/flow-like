@@ -1,5 +1,8 @@
 import { mountFlowWidget } from "@flow-like/widget-sdk";
+import { type CanarySetup, canarySetup } from "../../lib/canary";
+import { runLocalSuite } from "../../lib/local";
 import {
+	decodeRuntimeComponent,
 	isHistoryBackStep,
 	navigationMarker,
 	readDocumentInfo,
@@ -12,6 +15,7 @@ import {
 	NAVIGATION_WAIT_MS,
 	type NavigationCaseId,
 	historyBackStayed,
+	navigationExpectation,
 	startNavigation,
 } from "../../lib/navigation";
 import { watchViolations } from "../../lib/network";
@@ -38,13 +42,21 @@ const currentExpectation = () =>
 		bridge.$capabilities.get().preview === true,
 	);
 
-const buildReport = (phase: ProbePhase, checks: ProbeChecks): ProbeReport =>
+const currentCanary = (): CanarySetup =>
+	canarySetup(bridge.$props.get().canaryUrl);
+
+const buildReport = (
+	phase: ProbePhase,
+	checks: ProbeChecks,
+	canary?: CanarySetup,
+): ProbeReport =>
 	createReport({
 		widgetId: widget.id,
 		phase,
 		expectation: currentExpectation(),
 		document: info.label,
 		checks,
+		...(canary?.kind === "ready" && { canary: canary.run.prefix }),
 	});
 
 let lastReport = buildReport("suite", {});
@@ -65,6 +77,14 @@ if (root) {
 	runButton.className = "primary";
 	runButton.textContent = "Run checks";
 
+	const localButton = document.createElement("button");
+	localButton.type = "button";
+	localButton.textContent = "Run local-scheme checks";
+	const localHint = document.createElement("p");
+	localHint.className = "hint";
+	localHint.textContent =
+		"Local-scheme checks play a quiet tone for 6 seconds and aim every absolute URL at canaryUrl. Afterwards, the canary server log must show no request under the reported prefix.";
+
 	const caseSelect = document.createElement("select");
 	caseSelect.setAttribute("aria-label", "Navigation case");
 	for (const navigationCase of NAVIGATION_CASES) {
@@ -80,7 +100,7 @@ if (root) {
 
 	const runControls = document.createElement("div");
 	runControls.className = "controls";
-	runControls.append(runButton);
+	runControls.append(runButton, localButton);
 	const navigationControls = document.createElement("div");
 	navigationControls.className = "controls";
 	navigationControls.append(caseSelect, navigateButton);
@@ -92,16 +112,20 @@ if (root) {
 	const table = new ResultsTable();
 	const frameSlot = document.createElement("div");
 	frameSlot.className = "frame-slot";
+	const mediaSlot = document.createElement("div");
+	mediaSlot.className = "media-slot";
 
 	main.append(
 		title,
 		meta,
 		runControls,
+		localHint,
 		summary,
 		navigationControls,
 		navigationHint,
 		table.root,
 		frameSlot,
+		mediaSlot,
 	);
 	root.append(main);
 
@@ -117,15 +141,20 @@ if (root) {
 		summary.textContent = summaryText(report);
 		bridge.emit("result", report);
 	};
-	const publishNavigation = (id: string, result: ProbeCheck) => {
+	const publishNavigation = (
+		id: string,
+		result: ProbeCheck,
+		canary?: CanarySetup,
+	) => {
 		table.set(id, result);
-		publish(buildReport("navigation", { [id]: result }));
+		publish(buildReport("navigation", { [id]: result }, canary));
 	};
 
 	let busy = false;
 	const setBusy = (next: boolean) => {
 		busy = next;
 		runButton.disabled = next;
+		localButton.disabled = next;
 		navigateButton.disabled = next;
 	};
 
@@ -134,11 +163,20 @@ if (root) {
 		setBusy(true);
 		table.clear();
 		summary.textContent = "Running…";
+		const props = bridge.$props.get();
 		const violations = watchViolations(document);
 		try {
 			const checks = await runSuite({
 				csp: widget.csp,
 				expectation: currentExpectation(),
+				runtimeUrls: {
+					runtimeApprovedUrl: props.runtimeApprovedUrl,
+					runtimeRefusedUrl: props.runtimeRefusedUrl,
+				},
+				document: {
+					web: info.web,
+					runtime: decodeRuntimeComponent(info.runtime),
+				},
 				frameSlot,
 				violations,
 				onCheck: (id, result) => table.set(id, result),
@@ -150,31 +188,53 @@ if (root) {
 		}
 	};
 
+	const runLocalChecks = async () => {
+		if (busy) return;
+		setBusy(true);
+		table.clear();
+		summary.textContent = "Running local-scheme checks…";
+		const canary = currentCanary();
+		try {
+			const checks = await runLocalSuite({
+				canary,
+				foreignBlobUrls: bridge.$props.get().foreignBlobUrls,
+				slot: mediaSlot,
+				onCheck: (id, result) => table.set(id, result),
+			});
+			publish(buildReport("local", checks, canary));
+		} finally {
+			setBusy(false);
+		}
+	};
+
 	const attemptNavigation = (caseId: NavigationCaseId) => {
 		if (busy) return;
 		setBusy(true);
-		const start = startNavigation(caseId, info, (action) =>
+		const canary = currentCanary();
+		const start = startNavigation(caseId, info, canary, (action) =>
 			publishNavigation(
 				caseId,
 				check(
 					"review",
-					BLOCKED_EXPECTATION,
+					navigationExpectation(caseId),
 					`${action}; a follow-up report or an engine error page in this frame decides the result`,
 				),
+				canary,
 			),
 		);
 		if (start.kind === "resolved") {
-			publishNavigation(caseId, start.check);
+			publishNavigation(caseId, start.check, canary);
 			setBusy(false);
 			return;
 		}
 		setTimeout(() => {
-			publishNavigation(caseId, start.stayed);
+			publishNavigation(caseId, start.stayed, canary);
 			setBusy(false);
 		}, NAVIGATION_WAIT_MS);
 	};
 
 	runButton.addEventListener("click", () => void runChecks());
+	localButton.addEventListener("click", () => void runLocalChecks());
 	navigateButton.addEventListener("click", () =>
 		attemptNavigation(caseSelect.value as NavigationCaseId),
 	);
