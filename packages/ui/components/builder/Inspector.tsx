@@ -100,6 +100,7 @@ import { WidgetConsentStatus } from "../store/widget-permissions";
 import { WidgetSchemaListEditor } from "../widget-contract/WidgetSchemaListEditor";
 import { AssetPicker, type AssetPickerProps } from "./AssetPicker";
 import { useBuilder } from "./BuilderContext";
+import { MicroWidgetReloadNotice } from "./MicroWidgetReloadNotice";
 import { getDefaultProps } from "./componentDefaults";
 import { getComponentSchema } from "./componentSchema";
 import {
@@ -943,6 +944,8 @@ function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
 					widgetId={micro.widgetId}
 				/>
 			</div>
+
+			<MicroWidgetReloadNotice componentId={component.id} micro={micro} />
 
 			<div className={INSPECTOR_FIELD_CLASS}>
 				<Label className="text-xs">{t("componentId", "Component ID")}</Label>

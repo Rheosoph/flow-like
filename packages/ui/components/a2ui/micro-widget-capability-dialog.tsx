@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	RefreshCwIcon,
 	ServerCrashIcon,
 	ShieldEllipsisIcon,
 	ShieldOffIcon,
@@ -139,15 +140,44 @@ export function MicroWidgetQueuedCard({
 	);
 }
 
+/** Editors offer this on a failed widget when a different build of it is installed. */
+export function MicroWidgetReloadAction({
+	onReload,
+}: { onReload: () => void }) {
+	const { t } = useTranslation("common");
+	return (
+		<div className="mt-1 flex flex-col items-start gap-2">
+			<p className="text-muted-foreground">
+				{t(
+					"aDifferentBuildOfThisWidgetIsInstalledReloadingKeepsItsActionsAndCarriesOverItsSettings",
+					"A different build of this widget is installed. Reloading keeps its actions and carries over its settings.",
+				)}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant="outline"
+				data-builder-interactive=""
+				onClick={onReload}
+			>
+				<RefreshCwIcon aria-hidden="true" />
+				{t("reloadWidget", "Reload widget")}
+			</Button>
+		</div>
+	);
+}
+
 /** The backend cannot describe the widget, and its page contract declares more than a v1 contract can. */
 export function MicroWidgetUnsupportedCard({
 	elementRef,
 	widgetId,
 	detail,
+	onReload,
 }: {
 	widgetId: string;
 	detail: string | null;
 	elementRef?: ComponentProps["elementRef"];
+	onReload?: () => void;
 }) {
 	const { t } = useTranslation("common");
 	return (
@@ -180,6 +210,7 @@ export function MicroWidgetUnsupportedCard({
 							{detail}
 						</p>
 					)}
+					{onReload && <MicroWidgetReloadAction onReload={onReload} />}
 				</div>
 			</CardContent>
 		</Card>

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
-import { Fragment, act, createElement } from "react";
+import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
+import type { AppPackageWidget } from "../../../lib/package-widgets";
 import type { FlwEnvelope } from "../micro-widget-host";
 import {
 	type WidgetGrantRequest,
@@ -10,6 +11,7 @@ import {
 	type WidgetPolicyDescriptor,
 	type WidgetPolicyRequest,
 } from "../micro-widget-policy";
+import type { MicroWidgetReloader } from "../micro-widget-reload";
 import type { MicroWidgetInstanceComponent } from "../types";
 
 let window: Window;
@@ -191,10 +193,14 @@ async function settle() {
 	}
 }
 
-/** Without `page` the widget mounts outside a page, where actions never run. */
+/**
+ * Without `page` the widget mounts outside a page, where actions never run.
+ * A `reloader` stands in for the page builder.
+ */
 async function renderWidget(
 	widgets: MicroWidgetInstanceComponent | MicroWidgetInstanceComponent[],
 	page?: { router: Record<string, unknown>; appId?: string },
+	reloader?: MicroWidgetReloader,
 ) {
 	const [
 		{ A2UIMicroWidget },
@@ -202,12 +208,14 @@ async function renderWidget(
 		{ useBackendStore },
 		{ QueryClient, QueryClientProvider },
 		{ AppRouterContext },
+		{ MicroWidgetReloadContext },
 	] = await Promise.all([
 		import("./A2UIMicroWidget"),
 		import("../ActionHandler"),
 		import("../../../state/backend-state"),
 		import("@tanstack/react-query"),
 		import("next/dist/shared/lib/app-router-context.shared-runtime"),
+		import("../micro-widget-reload"),
 	]);
 	if (!client) {
 		client = new QueryClient();
@@ -223,8 +231,8 @@ async function renderWidget(
 	}
 	const list = Array.isArray(widgets) ? widgets : [widgets];
 	const widgetElement = createElement(
-		Fragment,
-		null,
+		MicroWidgetReloadContext.Provider,
+		{ value: reloader ?? null },
 		...list.map((widget, index) =>
 			createElement(A2UIMicroWidget, {
 				key: widget.id,
@@ -445,6 +453,109 @@ describe("micro widget bundle refresh", () => {
 
 		await renderWidget(component({ props: { title: "Updated sales" } }));
 		expect(frame()).toBe(mounted);
+	});
+});
+
+describe("micro widget reload in the page builder", () => {
+	const CSP_CONTRACT = {
+		contractVersion: 2,
+		id: "chart",
+		csp: [{ reason: "Loads map tiles", connectSrc: [MAP_HOST] }],
+	} as unknown as MicroWidgetInstanceComponent["contract"];
+
+	/** Desktop after a local rebuild: the placed bundle was pruned from the widget store. */
+	function stubPrunedRegistry() {
+		registryState = {
+			describeWidgetPolicy: async (request: WidgetPolicyRequest) => {
+				throw new Error(
+					`Widget bundle ${request.bundleHash} of package '${request.packageId}' is not installed`,
+				);
+			},
+		};
+	}
+
+	function stubReloader(installedHash: string) {
+		const calls = { reload: [] as string[], refresh: 0 };
+		const reloader: MicroWidgetReloader = {
+			updateFor: (placed) =>
+				placed.bundleHash === installedHash
+					? null
+					: ({
+							packageId: placed.packageId,
+							packageName: "Sales",
+							packageVersion: placed.packageVersion,
+							bundleHash: installedHash,
+							widget: {
+								id: placed.widgetId,
+								name: "Chart",
+								description: "",
+								icon: null,
+								thumbnail: null,
+								contract: { contractVersion: 1, id: "chart" },
+								keywords: [],
+							},
+						} satisfies AppPackageWidget),
+			reload: async (componentId) => {
+				calls.reload.push(componentId);
+			},
+			refresh: () => {
+				calls.refresh++;
+			},
+		};
+		return { reloader, calls };
+	}
+
+	test("a pruned bundle offers the installed build and looks for newer builds", async () => {
+		stubPrunedRegistry();
+		const { reloader, calls } = stubReloader("rebuilt-bundle");
+		await renderWidget(
+			component({ bundleHash: "pruned-bundle", contract: CSP_CONTRACT }),
+			{ router: {} },
+			reloader,
+		);
+		expect(host.textContent).toContain("is not installed");
+		expect(calls.refresh).toBeGreaterThan(0);
+		const button = findButton("Reload widget");
+		expect(button?.hasAttribute("data-builder-interactive")).toBe(true);
+
+		await act(async () => {
+			button?.click();
+		});
+		expect(calls.reload).toEqual(["sales-chart"]);
+	});
+
+	test("a widget that never becomes ready offers the installed build", async () => {
+		stubRegistry();
+		const { reloader } = stubReloader("rebuilt-bundle");
+		await renderWidget(
+			component({ bundleHash: "pruned-bundle" }),
+			undefined,
+			reloader,
+		);
+		expect(findButton("Reload widget")).toBeNull();
+
+		await act(() => readyTimeout?.());
+		expect(host.textContent).toContain("did not become ready");
+		expect(findButton("Reload widget")).not.toBeNull();
+	});
+
+	test("viewers and current builds get no reload control", async () => {
+		stubPrunedRegistry();
+		const broken = component({
+			bundleHash: "pruned-bundle",
+			contract: CSP_CONTRACT,
+		});
+		await renderWidget(broken, { router: {} });
+		expect(host.textContent).toContain("is not installed");
+		expect(findButton("Reload widget")).toBeNull();
+
+		await renderWidget(
+			broken,
+			{ router: {} },
+			stubReloader("pruned-bundle").reloader,
+		);
+		expect(host.textContent).toContain("is not installed");
+		expect(findButton("Reload widget")).toBeNull();
 	});
 });
 

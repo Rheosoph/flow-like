@@ -1,5 +1,4 @@
 import { useTranslation } from "@flow-like/locales";
-import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import {
 	Select,
@@ -9,10 +8,8 @@ import {
 	SelectLabel,
 } from "../../../../components/ui/select";
 import { useInvoke } from "../../../../hooks";
-import {
-	encodePackageWidgetRef,
-	listAppPackageWidgets,
-} from "../../../../lib/package-widgets";
+import { useAppPackageWidgets } from "../../../../hooks/use-app-package-widgets";
+import { encodePackageWidgetRef } from "../../../../lib/package-widgets";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
@@ -50,21 +47,8 @@ export function WidgetVariable({
 		enabled,
 	);
 
-	// Widgets of the packages added to the app (§6.1) — same list the builder
-	// palette shows; empty on hosts without per-app package listing.
-	const { data: packageWidgets } = useQuery({
-		queryKey: ["app-package-widgets", appId],
-		queryFn: () =>
-			listAppPackageWidgets(
-				{
-					listPackages: backend.appState.listPackages?.bind(backend.appState),
-					getPackage: (packageId) =>
-						backend.registryState.getPackage(packageId),
-				},
-				appId,
-			),
-		enabled,
-	});
+	// Same list the builder palette shows.
+	const { data: packageWidgets } = useAppPackageWidgets(appId);
 
 	const selectedValue = parseUint8ArrayToJson(value);
 	const selectedSelector =

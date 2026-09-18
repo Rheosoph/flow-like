@@ -38,6 +38,7 @@ import { resolveEventActions } from "../event-handlers";
 import {
 	MicroWidgetBlockedCard,
 	MicroWidgetQueuedCard,
+	MicroWidgetReloadAction,
 	MicroWidgetUnsupportedCard,
 } from "../micro-widget-capability-dialog";
 import { MicroWidgetConsentDialog } from "../micro-widget-consent-dialog";
@@ -70,6 +71,7 @@ import {
 } from "../micro-widget-host";
 import { createMicroWidgetMicrophone } from "../micro-widget-microphone";
 import { policyHostCount } from "../micro-widget-policy";
+import { useMicroWidgetReloader } from "../micro-widget-reload";
 import { MicroWidgetNoticeSlot } from "../micro-widget-runtime-banner";
 import type {
 	Action,
@@ -271,17 +273,20 @@ function MicroWidgetErrorCard({
 	elementRef,
 	widgetId,
 	message,
+	onReload,
 }: {
 	widgetId: string;
 	message: string;
 	elementRef?: ComponentProps["elementRef"];
+	/** Offered by editors when a different build of the widget is installed. */
+	onReload?: () => void;
 }) {
 	const { t } = useTranslation("common");
 	return (
 		<Card ref={elementRef} className="border-destructive/40 bg-destructive/5">
 			<CardContent className="flex items-start gap-2 p-4 text-sm">
 				<TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-				<div className="min-w-0">
+				<div className="flex min-w-0 flex-col gap-1">
 					<p className="font-medium text-destructive">
 						{t(
 							"widgetQuotwidgetidquotFailedToLoad",
@@ -290,6 +295,7 @@ function MicroWidgetErrorCard({
 						)}
 					</p>
 					<p className="text-muted-foreground break-words">{message}</p>
+					{onReload && <MicroWidgetReloadAction onReload={onReload} />}
 				</div>
 			</CardContent>
 		</Card>
@@ -721,6 +727,23 @@ function MicroWidgetFrame({
 		setPhase("error");
 	}, [t]);
 
+	// A rebuilt local package prunes the placed bundle, so a failure is the cue to look for the new one.
+	const reloader = useMicroWidgetReloader();
+	const refreshInstalled = reloader?.refresh;
+	const failed =
+		(desktop && !bundleHash) ||
+		grantState.status === "error" ||
+		grantState.status === "unsupported" ||
+		frameSource.error !== undefined ||
+		phase === "error";
+	useEffect(() => {
+		if (failed) refreshInstalled?.();
+	}, [failed, refreshInstalled]);
+	const onReload =
+		reloader?.updateFor(component) != null
+			? () => void reloader.reload(componentId)
+			: undefined;
+
 	if (desktop && !bundleHash) {
 		return (
 			<MicroWidgetErrorCard
@@ -730,6 +753,7 @@ function MicroWidgetFrame({
 					"widgetBundleHashMissing",
 					"The widget bundle hash is missing, so the local bundle cannot be resolved.",
 				)}
+				onReload={onReload}
 			/>
 		);
 	}
@@ -740,6 +764,7 @@ function MicroWidgetFrame({
 				elementRef={elementRef}
 				widgetId={widgetId}
 				detail={grantState.detail}
+				onReload={onReload}
 			/>
 		);
 	}
@@ -775,6 +800,7 @@ function MicroWidgetFrame({
 				elementRef={elementRef}
 				widgetId={widgetId}
 				message={failure}
+				onReload={onReload}
 			/>
 		);
 	}

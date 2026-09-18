@@ -33,6 +33,7 @@ import {
 } from "../a2ui/ComponentRegistry";
 import { DataProvider, DataScopeProvider } from "../a2ui/DataContext";
 import { WidgetRefsProvider } from "../a2ui/WidgetRefsContext";
+import { MicroWidgetReloadContext } from "../a2ui/micro-widget-reload";
 import type {
 	A2UIClientMessage,
 	Children,
@@ -61,6 +62,7 @@ import {
 	getCanvasViewport,
 	placeElementToolbar,
 } from "./element-geometry";
+import { useMicroWidgetReload } from "./use-micro-widget-reload";
 
 interface BuilderRendererProps {
 	surface: Surface;
@@ -360,6 +362,8 @@ function BuilderComponent({
 		const handleClick = (event: MouseEvent) => {
 			const target = event.target as Element | null;
 			if (target?.closest?.("[data-builder-component]") !== element) return;
+			// Editor controls a component renders for the builder, such as reloading a widget.
+			if (target.closest("[data-builder-interactive]")) return;
 			event.preventDefault();
 			event.stopPropagation();
 			selectComponent(
@@ -551,6 +555,7 @@ function CanvasDropIndicator() {
 export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 	const { t } = useTranslation("flow");
 	const { actionContext, widgetRefs } = useBuilder();
+	const microWidgetReload = useMicroWidgetReload();
 	const canvasRef = useRef<HTMLDivElement>(null);
 	useRuntimeTailwindStyles(canvasRef);
 	const allComponents = useMemo(
@@ -605,15 +610,17 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					isPreviewMode={false}
 				>
 					<CanvasElementContext.Provider value={canvasRef}>
-						<div
-							ref={canvasRef}
-							className={cn(
-								"isolate min-h-full w-full [&_iframe]:pointer-events-none",
-								className,
-							)}
-						>
-							{renderChild(surface.rootComponentId)}
-						</div>
+						<MicroWidgetReloadContext.Provider value={microWidgetReload}>
+							<div
+								ref={canvasRef}
+								className={cn(
+									"isolate min-h-full w-full [&_iframe]:pointer-events-none",
+									className,
+								)}
+							>
+								{renderChild(surface.rootComponentId)}
+							</div>
+						</MicroWidgetReloadContext.Provider>
 						<CanvasDropIndicator />
 					</CanvasElementContext.Provider>
 				</ActionProvider>
