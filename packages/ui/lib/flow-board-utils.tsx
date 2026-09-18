@@ -19,6 +19,7 @@ import { translateImport } from "./importer/translate";
 import { toastSuccess } from "./messages";
 import { isWebkitLite } from "./platform";
 import type { IGenericCommand, IValueType, IVariable } from "./schema";
+import { parseSchemaText, schemaCovers } from "./schema-coverage";
 import {
 	type IBoard,
 	type IComment,
@@ -419,19 +420,15 @@ const OPEN_OBJECT_SCHEMA_KEYS = new Set(["type", "additionalProperties"]);
  */
 export function isOpenObjectSchema(schema: string): boolean {
 	if (!schema.includes("additionalProperties")) return false;
-	try {
-		const parsed = JSON.parse(schema);
-		return (
-			parsed !== null &&
-			typeof parsed === "object" &&
-			!Array.isArray(parsed) &&
-			parsed.type === "object" &&
-			parsed.additionalProperties === true &&
-			Object.keys(parsed).every((key) => OPEN_OBJECT_SCHEMA_KEYS.has(key))
-		);
-	} catch {
-		return false;
-	}
+	const parsed = parseSchemaText(schema) as Record<string, unknown> | undefined;
+	return (
+		parsed !== null &&
+		typeof parsed === "object" &&
+		!Array.isArray(parsed) &&
+		parsed.type === "object" &&
+		parsed.additionalProperties === true &&
+		Object.keys(parsed).every((key) => OPEN_OBJECT_SCHEMA_KEYS.has(key))
+	);
 }
 
 const pinSchemaCache = new WeakMap<
@@ -516,15 +513,19 @@ export function doPinsMatch(
 	// resolves to "no schema" for every comparison below.
 	const schemaSource = resolvePinSchema(sourcePin, refs);
 	const schemaTarget = resolvePinSchema(targetPin, refs);
+	const [schemaOutput, schemaInput] =
+		sourcePin.pin_type === IPinType.Output
+			? [schemaSource, schemaTarget]
+			: [schemaTarget, schemaSource];
 
-	if (schemaSource && schemaTarget) {
-		if (
-			schemaSource !== schemaTarget &&
-			sourcePin.options?.enforce_schema !== false &&
-			targetPin.options?.enforce_schema !== false
-		)
-			return false;
-	}
+	if (
+		schemaOutput &&
+		schemaInput &&
+		sourcePin.options?.enforce_schema !== false &&
+		targetPin.options?.enforce_schema !== false &&
+		!schemaCovers(schemaOutput, schemaInput)
+	)
+		return false;
 
 	if (targetPin.value_type !== sourcePin.value_type) {
 		const sourceEnforces =
@@ -569,8 +570,8 @@ export function doPinsMatch(
 		sourcePin.data_type !== "Generic" &&
 		targetPin.data_type !== "Generic"
 	) {
-		if (!schemaSource || !schemaTarget) return false;
-		if (schemaSource !== schemaTarget) return false;
+		if (!schemaOutput || !schemaInput) return false;
+		if (!schemaCovers(schemaOutput, schemaInput)) return false;
 	}
 
 	if (sourcePin.value_type !== targetPin.value_type) return false;

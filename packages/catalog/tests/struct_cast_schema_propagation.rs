@@ -4,9 +4,9 @@
 //!
 //! Two failure modes are worth guarding. A cast that never stamps anything leaves every consumer
 //! blind — the node looks wired but produces an open marker. A cast that stamps and then *keeps*
-//! the stamp after its source is gone is worse: `schemas_are_compatible` rejects two differing
-//! concrete schemas, so the pin becomes a contract for a shape nothing is producing and the user
-//! can never re-point it.
+//! the stamp after its source is gone is worse: `schemas_are_compatible` rejects every schema that
+//! does not cover the stamp, so the pin becomes a contract for a shape nothing is producing and the
+//! user can never re-point it.
 
 use std::collections::HashMap;
 use std::sync::Arc;

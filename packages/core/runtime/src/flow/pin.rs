@@ -6,6 +6,10 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, sync::Arc};
 
+mod schema_coverage;
+
+pub use schema_coverage::schema_covers;
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub enum PinType {
     Input,
@@ -155,11 +159,12 @@ pub fn is_open_object_schema(schema: &str) -> bool {
         && fields.get("additionalProperties").and_then(Value::as_bool) == Some(true)
 }
 
-/// Whether two declared pin schemas can coexist on a connection.
+/// Whether a value declared by the `output` pin schema may flow into a pin declaring `input`.
 ///
 /// Only two concrete schemas can contradict one another: an absent schema declares nothing, and an
-/// open-object schema declares that the shape is open. See [`is_open_object_schema`].
-pub fn schemas_are_compatible(left: Option<&str>, right: Option<&str>) -> bool {
+/// open-object schema declares that the shape is open. See [`is_open_object_schema`]. Two concrete
+/// schemas agree when the output covers the input, see [`schema_covers`].
+pub fn schemas_are_compatible(output: Option<&str>, input: Option<&str>) -> bool {
     let marker_kind = |schema: Option<&str>| {
         schema.and_then(|schema| {
             flow_like_types::geometry::kind_from_schema(schema)
@@ -167,16 +172,18 @@ pub fn schemas_are_compatible(left: Option<&str>, right: Option<&str>) -> bool {
                 .flatten()
         })
     };
-    let left_kind = marker_kind(left);
-    let right_kind = marker_kind(right);
-    if left_kind.is_some() || right_kind.is_some() {
-        return (left.is_none() || left_kind.is_some())
-            && (right.is_none() || right_kind.is_some())
-            && flow_like_types::geometry::compatible(left_kind, right_kind);
+    let output_kind = marker_kind(output);
+    let input_kind = marker_kind(input);
+    if output_kind.is_some() || input_kind.is_some() {
+        return (output.is_none() || output_kind.is_some())
+            && (input.is_none() || input_kind.is_some())
+            && flow_like_types::geometry::compatible(output_kind, input_kind);
     }
-    match (left, right) {
-        (Some(left), Some(right)) => {
-            left == right || is_open_object_schema(left) || is_open_object_schema(right)
+    match (output, input) {
+        (Some(output), Some(input)) => {
+            is_open_object_schema(output)
+                || is_open_object_schema(input)
+                || schema_covers(output, input)
         }
         _ => true,
     }
@@ -523,8 +530,8 @@ mod tests {
 
     #[test]
     fn only_two_concrete_schemas_can_contradict_each_other() {
-        let real = r#"{"title":"UserExecutionContext"}"#;
-        let other = r#"{"title":"Bit"}"#;
+        let real = r#"{"title":"UserExecutionContext","type":"object","properties":{"sub":{"type":"string"}},"required":["sub"]}"#;
+        let other = r#"{"title":"Bit","type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#;
 
         assert!(super::schemas_are_compatible(Some(real), Some(real)));
         assert!(super::schemas_are_compatible(Some(real), None));
@@ -538,6 +545,16 @@ mod tests {
             Some(real)
         ));
         assert!(!super::schemas_are_compatible(Some(real), Some(other)));
+    }
+
+    #[test]
+    fn a_wider_output_schema_is_compatible_with_a_narrower_input_only() {
+        let wide = r#"{"type":"object","properties":{"sub":{"type":"string"},"name":{"type":"string"}},"required":["sub","name"]}"#;
+        let narrow =
+            r#"{"type":"object","properties":{"sub":{"type":"string"}},"required":["sub"]}"#;
+
+        assert!(super::schemas_are_compatible(Some(wide), Some(narrow)));
+        assert!(!super::schemas_are_compatible(Some(narrow), Some(wide)));
     }
 
     #[tokio::test]

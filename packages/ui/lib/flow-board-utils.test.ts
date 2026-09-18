@@ -570,6 +570,66 @@ describe("doPinsMatch treats an open-object schema as no schema", () => {
 	});
 });
 
+describe("doPinsMatch accepts an output schema that covers the input schema", () => {
+	const NARROW =
+		'{"title":"Contact","type":"object","properties":{"sub":{"type":"string"}},"required":["sub"]}';
+	const WIDE =
+		'{"title":"UserContext","type":"object","properties":{"sub":{"type":"string"},"name":{"type":"string"}},"required":["sub","name"]}';
+
+	for (const enforce_schema of [undefined, true]) {
+		test(`a wider output feeds a narrower input (enforce_schema: ${enforce_schema})`, () => {
+			const output = structPin("user", {
+				schema: WIDE,
+				options: { enforce_schema },
+			});
+			const input = structPin("contact", {
+				pin_type: IPinType.Input,
+				schema: NARROW,
+				options: { enforce_schema },
+			});
+			expect(doPinsMatch(output, input, {})).toBe(true);
+			expect(doPinsMatch(input, output, {})).toBe(true);
+		});
+
+		test(`a narrower output cannot feed a wider input (enforce_schema: ${enforce_schema})`, () => {
+			const output = structPin("contact", {
+				schema: NARROW,
+				options: { enforce_schema },
+			});
+			const input = structPin("user", {
+				pin_type: IPinType.Input,
+				schema: WIDE,
+				options: { enforce_schema },
+			});
+			expect(doPinsMatch(output, input, {})).toBe(false);
+			expect(doPinsMatch(input, output, {})).toBe(false);
+		});
+	}
+
+	test("coverage is read through board refs", () => {
+		expect(
+			doPinsMatch(
+				structPin("user", { schema: "wide_ref" }),
+				structPin("contact", {
+					pin_type: IPinType.Input,
+					schema: "narrow_ref",
+				}),
+				{ wide_ref: WIDE, narrow_ref: NARROW },
+			),
+		).toBe(true);
+	});
+
+	test("a covering schema still needs a matching value type", () => {
+		expect(
+			doPinsMatch(
+				structPin("user", { schema: WIDE, value_type: IValueType.Array }),
+				structPin("contact", { pin_type: IPinType.Input, schema: NARROW }),
+				{},
+			),
+		).toBe(false);
+	});
+});
+
 describe("doPinsMatch schema classification cache", () => {
 	test("parses a dragged large schema once while scanning fresh candidate pins", () => {
 		const schema = JSON.stringify({
