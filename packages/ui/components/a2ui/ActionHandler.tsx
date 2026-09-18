@@ -172,7 +172,12 @@ interface ActionContextValue {
 	isGovernedPage: boolean;
 	/** Page elements a governed Page's board reads, from its bootstrap. */
 	elementDemand?: RunElementDemand;
-	components?: Record<string, SurfaceComponent>;
+	/**
+	 * The surface's current components, read when an action fires. A getter
+	 * rather than the record itself so surface updates leave this value — and
+	 * every interactive node that consumes it — untouched.
+	 */
+	getComponents: () => Record<string, SurfaceComponent> | undefined;
 	globalState: Record<string, unknown>;
 	pageState: Record<string, unknown>;
 	setGlobalState: (key: string, value: unknown) => void;
@@ -266,6 +271,9 @@ export function ActionProvider({
 		() => JSON.stringify(elementValueScopeIds(components, surfaceId)),
 		[components, surfaceId],
 	);
+	const componentsRef = useRef(components);
+	componentsRef.current = components;
+	const getComponents = useCallback(() => componentsRef.current, []);
 
 	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
 		if (!isSafeStateKey(elementId)) return false;
@@ -457,37 +465,65 @@ export function ActionProvider({
 		[onA2UIMessage, frontendState],
 	);
 
+	// Memoized so a surface update (which re-renders this provider) does not
+	// re-render every consumer; the value only changes with its inputs.
+	const value = useMemo<ActionContextValue>(
+		() => ({
+			onAction: wrappedOnAction,
+			onA2UIMessage: handleA2UIMessage,
+			surfaceId,
+			appId,
+			boardId,
+			boardVersion,
+			eventId,
+			isGovernedPage: governedPage,
+			elementDemand,
+			getComponents,
+			globalState,
+			pageState,
+			setGlobalState,
+			setPageState,
+			clearPageState,
+			isPreviewMode,
+			openDialog,
+			closeDialog,
+			onNavigationMessage,
+			getElementValues,
+			setElementValue,
+			resolveTemporaryUploadTarget,
+			triggeringComponents,
+			markComponentTriggering,
+		}),
+		[
+			wrappedOnAction,
+			handleA2UIMessage,
+			surfaceId,
+			appId,
+			boardId,
+			boardVersion,
+			eventId,
+			governedPage,
+			elementDemand,
+			getComponents,
+			globalState,
+			pageState,
+			setGlobalState,
+			setPageState,
+			clearPageState,
+			isPreviewMode,
+			openDialog,
+			closeDialog,
+			onNavigationMessage,
+			getElementValues,
+			setElementValue,
+			resolveTemporaryUploadTarget,
+			triggeringComponents,
+			markComponentTriggering,
+		],
+	);
+
 	return (
-		<ActionContext.Provider
-			value={{
-				onAction: wrappedOnAction,
-				onA2UIMessage: handleA2UIMessage,
-				surfaceId,
-				appId,
-				boardId,
-				boardVersion,
-				eventId,
-				isGovernedPage: governedPage,
-				elementDemand,
-				components,
-				globalState,
-				pageState,
-				setGlobalState,
-				setPageState,
-				clearPageState,
-				isPreviewMode,
-				openDialog,
-				closeDialog,
-				onNavigationMessage,
-				getElementValues,
-				setElementValue,
-				resolveTemporaryUploadTarget,
-				triggeringComponents,
-				markComponentTriggering,
-			}}
-		>
-			{children}
-		</ActionContext.Provider>
+		<ActionContext.Provider value={value}>{children}</ActionContext.Provider>
 	);
 }
 
@@ -549,7 +585,7 @@ export function useAgentActionAccess() {
 	const context = useContext(ActionContext);
 	return {
 		surfaceId: context?.surfaceId,
-		components: context?.components,
+		getComponents: context?.getComponents,
 		getElementValues: context?.getElementValues,
 		setElementValue: context?.setElementValue,
 	};
@@ -562,12 +598,13 @@ export function useAgentActionAccess() {
 export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 	const context = useContext(ActionContext);
 	const getElementValues = context?.getElementValues;
-	const components = context?.components;
+	const getComponents = context?.getComponents;
 	const surfaceId = context?.surfaceId;
 	const widgetInstanceId = widgetScope?.instanceId;
 	const widgetComponents = widgetScope?.components;
 
 	const collectInputValues = useCallback((): Record<string, unknown> => {
+		const components = getComponents?.();
 		if (!getElementValues || !components || !surfaceId) return {};
 		const storedValues = getElementValues();
 		if (!widgetInstanceId) {
@@ -590,7 +627,7 @@ export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 		);
 	}, [
 		getElementValues,
-		components,
+		getComponents,
 		surfaceId,
 		widgetInstanceId,
 		widgetComponents,
@@ -632,7 +669,7 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 	const boardVersion = context?.boardVersion;
 	const elementDemand = context?.elementDemand;
 	const surfaceId = context?.surfaceId;
-	const components = context?.components;
+	const getComponents = context?.getComponents;
 	const getElementValues = context?.getElementValues;
 	const widgetInstanceId = widgetScope?.instanceId;
 	const widgetComponents = widgetScope?.components;
@@ -646,7 +683,7 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 				boardVersion,
 				demand: elementDemand,
 				surfaceId: surfaceId ?? "",
-				components,
+				components: getComponents?.(),
 				storedValues: getElementValues?.() ?? {},
 				widgetScope: widgetInstanceId
 					? { instanceId: widgetInstanceId, components: widgetComponents }
@@ -658,7 +695,7 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 			boardVersion,
 			elementDemand,
 			surfaceId,
-			components,
+			getComponents,
 			getElementValues,
 			backend,
 			widgetInstanceId,
@@ -773,7 +810,7 @@ export function useExecuteAction() {
 		eventId,
 		isGovernedPage: governedPage,
 		elementDemand,
-		components,
+		getComponents,
 		globalState,
 		pageState,
 		isPreviewMode,
@@ -790,7 +827,7 @@ export function useExecuteAction() {
 			? null
 			: {
 					surfaceId,
-					components,
+					components: getComponents?.(),
 					storedValues: getElementValues?.() ?? {},
 					widgetScope: widgetInstance?.instanceId
 						? {
@@ -1276,6 +1313,7 @@ export function useExecuteAction() {
 							(pageAction || effectiveBoardId)
 						) {
 							try {
+								const components = getComponents?.();
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
 										? {
@@ -1589,6 +1627,7 @@ export function useExecuteAction() {
 
 						if (effectiveAppId && (pageAction || effectiveBoardId)) {
 							try {
+								const components = getComponents?.();
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
 										? {
@@ -1772,7 +1811,7 @@ export function useExecuteAction() {
 			eventId,
 			governedPage,
 			elementDemand,
-			components,
+			getComponents,
 			globalState,
 			pageState,
 			handleA2UIEvents,
