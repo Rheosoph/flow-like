@@ -6,6 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use sea_orm::sea_query::Expr;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -208,17 +209,12 @@ pub async fn update_route(
 }
 
 async fn clear_default_flag(state: &AppState, app_id: &str) -> Result<(), ApiError> {
-    let defaults = event::Entity::find()
+    event::Entity::update_many()
         .filter(event::Column::AppId.eq(app_id))
         .filter(event::Column::IsDefault.eq(true))
-        .all(&state.db)
+        .col_expr(event::Column::IsDefault, Expr::value(false))
+        .exec(&state.db)
         .await?;
-
-    for model in defaults {
-        let mut active: event::ActiveModel = model.into();
-        active.is_default = Set(false);
-        active.update(&state.db).await?;
-    }
 
     Ok(())
 }

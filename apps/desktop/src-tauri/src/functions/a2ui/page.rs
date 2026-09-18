@@ -3,7 +3,9 @@ use crate::{
     state::{TauriFlowLikeState, TauriSettingsState},
 };
 use flow_like::{
-    a2ui::{page_targets::retarget_page_workflow_actions, widget::Page},
+    a2ui::{
+        ElementDemand, element_demand, page_targets::retarget_page_workflow_actions, widget::Page,
+    },
     app::App,
     bit::Metadata,
     flow::{
@@ -66,6 +68,8 @@ pub struct LocalPageBootstrap {
     /// client injection path serves offline apps.
     pub app_custom_css: Option<String>,
     pub execution_revision: Option<String>,
+    /// Page elements the Event's board reads, mirroring the cloud bootstrap field.
+    pub element_demand: Option<ElementDemand>,
     pub canonical_route: Option<String>,
     pub route_miss: bool,
 }
@@ -196,6 +200,7 @@ pub async fn get_local_page_bootstrap(
             revision: None,
             app_custom_css,
             execution_revision: None,
+            element_demand: None,
             canonical_route,
             route_miss,
         });
@@ -255,6 +260,7 @@ pub async fn get_local_page_bootstrap(
         revision: Some(revision),
         app_custom_css,
         execution_revision: Some(execution_revision),
+        element_demand: Some(element_demand(&board)),
         canonical_route,
         route_miss,
     })

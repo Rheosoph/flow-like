@@ -117,25 +117,17 @@ fn default_logs_dir() -> PathBuf {
 /// Append-only log file for this run.
 ///
 /// A release build has no console on Windows, so without a file on disk an
-/// incident leaves no trace a support request could be built from. Rotated once
-/// per open so a long-lived install cannot grow the file without bound.
+/// incident leaves no trace a support request could be built from. Rotated to
+/// `flow-like.log.1` whenever it reaches the cap, at startup and while running,
+/// so neither a long-lived install nor a single session grows it without bound.
 #[cfg(all(not(debug_assertions), not(target_os = "ios")))]
-pub(crate) fn open_log_file() -> Option<std::fs::File> {
-    const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) fn open_log_file() -> Option<crate::logging::log_file::RotatingLogFile> {
+    const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024;
 
     let dir = default_logs_dir();
     std::fs::create_dir_all(&dir).ok()?;
 
-    let path = dir.join("flow-like.log");
-    if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > MAX_LOG_BYTES) {
-        let _ = std::fs::rename(&path, dir.join("flow-like.log.1"));
-    }
-
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()
+    crate::logging::log_file::RotatingLogFile::open(dir.join("flow-like.log"), MAX_LOG_BYTES)
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]

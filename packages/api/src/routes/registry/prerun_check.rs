@@ -1,11 +1,13 @@
+use crate::entity::json_types::StringList;
 use crate::entity::sea_orm_active_enums::{WasmCompilationStatus, WasmPackageVisibility};
-use crate::entity::{wasm_package, wasm_package_version};
+use crate::entity::{wasm_package, wasm_package_user, wasm_package_version};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
+use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -54,21 +56,62 @@ fn unavailable_info(package_id: &str) -> PackageAccessInfo {
     }
 }
 
-async fn check_user_access(
+/// The columns of a pinned version row this check reads.
+struct PinnedVersion {
+    yanked: bool,
+    compilation_status: WasmCompilationStatus,
+    compiled_platforms: Option<StringList>,
+}
+
+/// Whether the user holds any permission on each package, keyed by package id.
+/// Answers come from the permission cache; the misses share one query and
+/// fill the cache the same way `check_wasm_access!` does.
+async fn load_user_access(
     state: &AppState,
-    package_id: &str,
     user_id: &str,
-    is_public: bool,
-) -> Result<bool, ApiError> {
-    if is_public {
-        return Ok(true);
+    package_ids: Vec<String>,
+) -> Result<HashMap<String, bool>, ApiError> {
+    let mut access = HashMap::with_capacity(package_ids.len());
+    let mut uncached = Vec::new();
+    for package_id in package_ids {
+        match state.check_wasm_permission(user_id, &package_id) {
+            Some(permission) => {
+                access.insert(package_id, !permission.is_empty());
+            }
+            None => uncached.push(package_id),
+        }
     }
-    let access = crate::check_wasm_access!(state, user_id, package_id);
-    Ok(access.is_some())
+    if uncached.is_empty() {
+        return Ok(access);
+    }
+
+    let granted: HashMap<String, i64> = wasm_package_user::Entity::find()
+        .select_only()
+        .column(wasm_package_user::Column::PackageId)
+        .column(wasm_package_user::Column::Permission)
+        .filter(wasm_package_user::Column::UserId.eq(user_id))
+        .filter(wasm_package_user::Column::PackageId.is_in(uncached.clone()))
+        .into_tuple::<(String, i64)>()
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        .into_iter()
+        .collect();
+
+    for package_id in uncached {
+        let permission = granted
+            .get(&package_id)
+            .map(|bits| WasmPackagePermission::from_bits_truncate(*bits))
+            .unwrap_or(WasmPackagePermission::empty());
+        state.put_wasm_permission(user_id, &package_id, permission);
+        access.insert(package_id, !permission.is_empty());
+    }
+
+    Ok(access)
 }
 
 fn resolve_compilation(
-    version_record: Option<&wasm_package_version::Model>,
+    version_record: Option<&PinnedVersion>,
     platform_key: &str,
 ) -> (Option<String>, bool) {
     match version_record {
@@ -93,7 +136,7 @@ fn resolve_compilation(
 }
 
 fn resolve_status(
-    version_record: Option<&wasm_package_version::Model>,
+    version_record: Option<&PinnedVersion>,
     has_user_access: bool,
 ) -> PackageAccessStatus {
     let is_unavailable = version_record.is_none() || version_record.is_some_and(|v| v.yanked);
@@ -140,37 +183,79 @@ pub async fn prerun_check(
     let package_ids: Vec<String> = request.packages.keys().cloned().collect();
 
     // One round-trip for all packages instead of N.
-    let pkg_rows = wasm_package::Entity::find()
-        .filter(wasm_package::Column::Id.is_in(package_ids.clone()))
+    let pkg_by_id: HashMap<String, (String, WasmPackageVisibility)> = wasm_package::Entity::find()
+        .select_only()
+        .column(wasm_package::Column::Id)
+        .column(wasm_package::Column::Name)
+        .column(wasm_package::Column::Visibility)
+        .filter(wasm_package::Column::Id.is_in(package_ids))
+        .into_tuple::<(String, String, WasmPackageVisibility)>()
         .all(&state.db)
         .await
-        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?;
-    let pkg_by_id: HashMap<String, wasm_package::Model> =
-        pkg_rows.into_iter().map(|p| (p.id.clone(), p)).collect();
+        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?
+        .into_iter()
+        .map(|(id, name, visibility)| (id, (name, visibility)))
+        .collect();
 
-    // One round-trip for all versions. SeaORM doesn't support tuple IN
-    // portably, so we over-fetch by package_id and pair locally — still
-    // O(1) DB calls instead of N.
-    let version_rows = wasm_package_version::Entity::find()
-        .filter(wasm_package_version::Column::PackageId.is_in(package_ids))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?;
-    let mut version_by_pair: HashMap<(String, String), wasm_package_version::Model> =
-        HashMap::with_capacity(version_rows.len());
-    for v in version_rows {
-        version_by_pair.insert((v.package_id.clone(), v.version.clone()), v);
+    // One round-trip for exactly the pinned (package, version) pairs.
+    let mut pinned = Condition::any();
+    for (package_id, version) in &request.packages {
+        pinned = pinned.add(
+            Condition::all()
+                .add(wasm_package_version::Column::PackageId.eq(package_id))
+                .add(wasm_package_version::Column::Version.eq(version)),
+        );
     }
+    let version_by_pair: HashMap<(String, String), PinnedVersion> =
+        wasm_package_version::Entity::find()
+            .select_only()
+            .column(wasm_package_version::Column::PackageId)
+            .column(wasm_package_version::Column::Version)
+            .column(wasm_package_version::Column::Yanked)
+            .column(wasm_package_version::Column::CompilationStatus)
+            .column(wasm_package_version::Column::CompiledPlatforms)
+            .filter(pinned)
+            .into_tuple::<(
+                String,
+                String,
+                bool,
+                WasmCompilationStatus,
+                Option<StringList>,
+            )>()
+            .all(&state.db)
+            .await
+            .map_err(|e| ApiError::bad_request(format!("DB error: {}", e)))?
+            .into_iter()
+            .map(
+                |(package_id, version, yanked, compilation_status, compiled_platforms)| {
+                    (
+                        (package_id, version),
+                        PinnedVersion {
+                            yanked,
+                            compilation_status,
+                            compiled_platforms,
+                        },
+                    )
+                },
+            )
+            .collect();
+
+    let restricted_ids: Vec<String> = pkg_by_id
+        .iter()
+        .filter(|(_, (_, visibility))| *visibility != WasmPackageVisibility::Public)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let user_access = load_user_access(&state, &sub, restricted_ids).await?;
 
     let mut results = Vec::with_capacity(request.packages.len());
     for (package_id, version) in &request.packages {
-        let Some(pkg) = pkg_by_id.get(package_id) else {
+        let Some((package_name, visibility)) = pkg_by_id.get(package_id) else {
             results.push(unavailable_info(package_id));
             continue;
         };
 
-        let is_public = pkg.visibility == WasmPackageVisibility::Public;
-        let has_user_access = check_user_access(&state, package_id, &sub, is_public).await?;
+        let is_public = *visibility == WasmPackageVisibility::Public;
+        let has_user_access = is_public || user_access.get(package_id).copied().unwrap_or(false);
 
         let version_record = version_by_pair.get(&(package_id.clone(), version.clone()));
         let (compilation_status, server_compiled) =
@@ -179,7 +264,7 @@ pub async fn prerun_check(
 
         results.push(PackageAccessInfo {
             package_id: package_id.clone(),
-            package_name: Some(pkg.name.clone()),
+            package_name: Some(package_name.clone()),
             status,
             has_user_access,
             is_public,

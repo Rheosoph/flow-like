@@ -82,22 +82,23 @@ pub async fn download(
         }
     }
 
-    let (download_url, manifest, version) = registry
-        .get_wasm_url_as_viewer(
-            &request.package_id,
-            request.version.as_deref(),
-            sub.as_deref(),
-        )
+    let can_manage = super::viewer_can_manage(&state, sub.as_deref(), &request.package_id).await?;
+    let package_id = package.id.clone();
+
+    let (download_url, manifest, version, has_widget_bundle) = registry
+        .get_wasm_url_as_viewer(package, request.version.as_deref(), can_manage)
         .await?;
 
-    let package_id = package.id.clone();
-    let _ = registry.increment_downloads(&state, &package_id).await;
-
-    // Fetch metadata (icon, thumbnail, localized name) for the package
-    let mut metadata = meta::Entity::find()
-        .filter(meta::Column::WasmPackageId.eq(&package_id))
-        .all(&state.db)
-        .await
+    // The counter write overlaps the metadata read (icon, thumbnail, localized
+    // name) but stays inside the request: on Lambda a detached task is frozen
+    // with the invocation, mid-transaction.
+    let (_, metas) = flow_like_types::tokio::join!(
+        registry.increment_downloads(&state, &package_id),
+        meta::Entity::find()
+            .filter(meta::Column::WasmPackageId.eq(&package_id))
+            .all(&state.db),
+    );
+    let mut metadata = metas
         .ok()
         .and_then(|metas| MetaSummary::pick_best(&metas, "en").map(MetaSummary::from_model));
 
@@ -133,7 +134,7 @@ pub async fn download(
 
     // Presign the widget bundle when the version ships widgets
     let widget_bundle_download_url = match registry
-        .sign_widget_bundle_url(&request.package_id, &version)
+        .sign_widget_bundle_url(&request.package_id, &version, has_widget_bundle)
         .await
     {
         Ok(url) => url,

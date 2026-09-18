@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod cache;
+pub mod database;
 pub mod http;
 pub mod linker;
 pub mod logging;
@@ -258,6 +259,8 @@ pub struct HostState {
     pub storage_context: Option<StorageContext>,
     /// Model context for server-side model access
     pub model_context: Option<ModelContext>,
+    /// Resolved, invocation-local grants from wired database/session pins.
+    pub database_context: Option<Arc<database::DatabaseContext>>,
     /// Usage attribution forwarded to hosted model APIs. Offline app runs keep
     /// the app ID unset while retaining their run ID.
     pub model_usage_context: Option<flow_like::models::llm::ModelUsageContext>,
@@ -333,6 +336,7 @@ impl HostState {
             stream_events: RwLock::new(Vec::new()),
             storage_context: None,
             model_context: None,
+            database_context: None,
             model_usage_context: None,
             websocket: Arc::new(WebSocketResources::default()),
             execution_environment: Default::default(),

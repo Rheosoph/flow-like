@@ -849,6 +849,9 @@ export function UsePageContent({
 	const pageExecutionRevision = bootstrapPageData
 		? (validatedBootstrap?.executionRevision ?? undefined)
 		: undefined;
+	const pageElementDemand = bootstrapPageData
+		? (validatedBootstrap?.elementDemand ?? undefined)
+		: undefined;
 	const pageExecutionAuthorityUnavailable = Boolean(
 		pageEvent &&
 			!bootstrapPending &&
@@ -1304,6 +1307,7 @@ export function UsePageContent({
 							page={resolvedPageData}
 							pageRevision={pageContentRevision}
 							pageExecutionRevision={pageExecutionRevision}
+							pageElementDemand={pageElementDemand}
 							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
 							active={active}
 							onNavigationMessage={

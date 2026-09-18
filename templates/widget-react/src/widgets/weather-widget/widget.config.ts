@@ -20,7 +20,10 @@ export default defineWidget<Inputs, Events>({
 	description:
 		"React widget that calls an external API: current temperature from Open-Meteo.",
 	sizing: { defaultHeight: 200, resizable: true },
-	csp: {
-		connectSrc: ["https://api.open-meteo.com"],
-	},
+	csp: [
+		{
+			reason: "Fetches the current temperature from Open-Meteo",
+			connectSrc: ["https://api.open-meteo.com"],
+		},
+	],
 });

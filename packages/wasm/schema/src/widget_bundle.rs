@@ -8,13 +8,14 @@
 //! per-entry sha256 in `bundle.json` for serving entries individually.
 
 use crate::manifest::PackageWidgetEntry;
-use crate::widget::{WIDGET_PROTOCOL, WidgetContract};
+use crate::widget::{WIDGET_PROTOCOL, WidgetContract, is_valid_widget_id};
+use crate::widget_frame::is_valid_package_id;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use zip::{ZipArchive, ZipWriter};
 
 /// Current bundle format version (`bundle.json` -> `formatVersion`)
@@ -115,13 +116,155 @@ pub fn widget_store_dir(
     cache_dir.join("widgets").join(package_id).join(bundle_hash)
 }
 
+/// Archive path of a widget's entry document
+pub fn widget_entry_path(widget_id: &str) -> String {
+    format!("widgets/{widget_id}/index.html")
+}
+
+/// Archive path of a widget's contract
+pub fn widget_contract_path(widget_id: &str) -> String {
+    format!("widgets/{widget_id}/contract.json")
+}
+
+/// Reads and validates the contract of an unpacked widget from `bundle.json`
+/// and the contract path it declares, exactly as install validated it.
+pub fn read_unpacked_widget_contract(store_dir: &Path, widget_id: &str) -> Result<WidgetContract> {
+    if !is_valid_widget_id(widget_id) {
+        bail!("Invalid widget id {:?}", widget_id);
+    }
+    let manifest_path = store_dir.join(BUNDLE_MANIFEST_PATH);
+    let manifest_bytes = std::fs::read(&manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+    let manifest: WidgetBundleManifest = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+    let widget = manifest
+        .widgets
+        .iter()
+        .find(|widget| widget.id == widget_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "Widget '{}' not found in {}",
+                widget_id,
+                manifest_path.display()
+            )
+        })?;
+    let expected = widget_contract_path(widget_id);
+    if widget.contract != expected {
+        bail!(
+            "Widget '{}' declares contract path '{}' instead of '{}'",
+            widget_id,
+            widget.contract,
+            expected
+        );
+    }
+    let contract_path = store_dir.join(&expected);
+    let bytes = std::fs::read(&contract_path)
+        .with_context(|| format!("Failed to read {}", contract_path.display()))?;
+    let contract: WidgetContract = serde_json::from_slice(&bytes)
+        .with_context(|| format!("Failed to parse {}", contract_path.display()))?;
+    if contract.id != widget_id {
+        bail!(
+            "Contract id '{}' does not match widget id '{}'",
+            contract.id,
+            widget_id
+        );
+    }
+    contract.validate().map_err(|errors| {
+        anyhow!(
+            "Invalid contract for widget '{}': {}",
+            widget_id,
+            errors.join("; ")
+        )
+    })?;
+    Ok(contract)
+}
+
+/// Checked as a string so a Linux hub rejects what only Windows resolves as
+/// a path prefix (`C:x`, `C:/x`) or an alternate data stream (`a.html:x`).
 fn is_safe_entry_path(path: &str) -> bool {
     !path.is_empty()
         && !path.starts_with('/')
-        && !path.contains('\\')
+        && !path.contains(['\\', ':', '\0'])
         && !path
             .split('/')
             .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+}
+
+fn is_safe_archive_name(name: &str) -> bool {
+    is_safe_entry_path(name.strip_suffix('/').unwrap_or(name))
+}
+
+fn staged_entry_target(staging: &Path, name: &str) -> Result<PathBuf> {
+    let relative = Path::new(name);
+    let target = staging.join(relative);
+    if !relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+        || !target.starts_with(staging)
+    {
+        bail!(
+            "Widget bundle entry {} resolves outside the unpack directory {}",
+            name,
+            staging.display()
+        );
+    }
+    Ok(target)
+}
+
+/// Path as case-insensitive filesystems that strip trailing dots and spaces
+/// (macOS, Windows) resolve it; `None` when a segment resolves to nothing.
+fn folded_archive_path(path: &str) -> Option<String> {
+    path.split('/')
+        .map(|segment| {
+            let folded = segment.to_uppercase().to_lowercase();
+            let trimmed = folded.trim_end_matches(['.', ' ']);
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|segments| segments.join("/"))
+}
+
+/// Archive names that would overwrite each other when unpacked.
+fn archive_name_collisions(names: &[String]) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut files: HashMap<String, &str> = HashMap::new();
+    let mut directories: HashMap<String, &str> = HashMap::new();
+    let entries: Vec<(&str, String)> = names
+        .iter()
+        .filter(|name| !name.ends_with('/'))
+        .filter_map(|name| match folded_archive_path(name) {
+            Some(folded) => Some((name.as_str(), folded)),
+            None => {
+                errors.push(format!(
+                    "Widget bundle entry '{}' has a path segment made only of dots or spaces",
+                    name
+                ));
+                None
+            }
+        })
+        .collect();
+    for (name, folded) in &entries {
+        if let Some(existing) = files.insert(folded.clone(), name) {
+            errors.push(format!(
+                "Widget bundle entries '{}' and '{}' collide on case-insensitive filesystems",
+                existing, name
+            ));
+        }
+        let mut prefix = folded.as_str();
+        while let Some((parent, _)) = prefix.rsplit_once('/') {
+            directories.entry(parent.to_string()).or_insert(name);
+            prefix = parent;
+        }
+    }
+    for (name, folded) in &entries {
+        if let Some(other) = directories.get(folded) {
+            errors.push(format!(
+                "Widget bundle entry '{}' collides with directory of '{}' on case-insensitive filesystems",
+                name, other
+            ));
+        }
+    }
+    errors
 }
 
 /// Reader over a `.flwb` archive with manifest parsing and entry verification
@@ -252,6 +395,7 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
                     thumbnail: declared.and_then(|d| d.thumbnail.clone()),
                     contract,
                     keywords: declared.map(|d| d.keywords.clone()).unwrap_or_default(),
+                    network: None,
                 })
             })
             .collect()
@@ -277,10 +421,24 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
         }
         if manifest.package_id.is_empty() {
             errors.push("Bundle manifest is missing packageId".to_string());
+        } else if !is_valid_package_id(&manifest.package_id) {
+            errors.push(format!(
+                "Invalid bundle packageId {:?}: use only letters, digits, '.', '_' and '-'",
+                manifest.package_id
+            ));
         }
         if manifest.widgets.is_empty() {
             errors.push("Bundle contains no widgets".to_string());
         }
+
+        let names: Vec<String> = self.archive.file_names().map(str::to_string).collect();
+        errors.extend(
+            names
+                .iter()
+                .filter(|name| !is_safe_archive_name(name))
+                .map(|name| format!("Unsafe widget bundle entry path: {}", name)),
+        );
+        errors.extend(archive_name_collisions(&names));
 
         let mut seen_ids = HashSet::new();
         let shared_paths: HashSet<&str> = manifest.shared.iter().map(|s| s.path.as_str()).collect();
@@ -308,17 +466,18 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
             if !seen_ids.insert(widget.id.clone()) {
                 errors.push(format!("Duplicate widget id in bundle: {}", widget.id));
             }
-            let prefix = format!("widgets/{}/", widget.id);
-            if !widget.entry.starts_with(&prefix) || !is_safe_entry_path(&widget.entry) {
+            let expected_entry = widget_entry_path(&widget.id);
+            if widget.entry != expected_entry {
                 errors.push(format!(
-                    "Widget '{}' entry path '{}' must live under {}",
-                    widget.id, widget.entry, prefix
+                    "Widget '{}' entry path '{}' must be '{}'",
+                    widget.id, widget.entry, expected_entry
                 ));
             }
-            if !widget.contract.starts_with(&prefix) || !is_safe_entry_path(&widget.contract) {
+            let expected_contract = widget_contract_path(&widget.id);
+            if widget.contract != expected_contract {
                 errors.push(format!(
-                    "Widget '{}' contract path '{}' must live under {}",
-                    widget.id, widget.contract, prefix
+                    "Widget '{}' contract path '{}' must be '{}'",
+                    widget.id, widget.contract, expected_contract
                 ));
             }
 
@@ -418,6 +577,21 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
 
     fn unpack_into(&mut self, staging: &Path) -> Result<()> {
         let names: Vec<String> = self.archive.file_names().map(|n| n.to_string()).collect();
+        let declared: HashSet<String> = std::iter::once(BUNDLE_MANIFEST_PATH.to_string())
+            .chain(
+                self.manifest
+                    .shared
+                    .iter()
+                    .map(|shared| shared.path.clone()),
+            )
+            .chain(
+                self.manifest
+                    .widgets
+                    .iter()
+                    .flat_map(|widget| [widget.entry.clone(), widget.contract.clone()]),
+            )
+            .collect();
+        let mut written = Vec::new();
         for name in names {
             if name.ends_with('/') {
                 continue;
@@ -425,12 +599,24 @@ impl<R: Read + Seek> WidgetBundleReader<R> {
             if !is_safe_entry_path(&name) {
                 bail!("Unsafe widget bundle entry path: {}", name);
             }
+            let target = staged_entry_target(staging, &name)?;
             let data = self.read_entry(&name)?;
-            let target = staging.join(&name);
             if let Some(dir) = target.parent() {
                 std::fs::create_dir_all(dir)?;
             }
+            if declared.contains(&name) {
+                written.push((target.clone(), entry_hash(&data)));
+            }
             std::fs::write(&target, data)?;
+        }
+        for (target, expected) in written {
+            let actual = entry_hash(&std::fs::read(&target)?);
+            if actual != expected {
+                bail!(
+                    "Widget bundle entry {} was overwritten during unpack by an entry with an aliasing name",
+                    target.display()
+                );
+            }
         }
         Ok(())
     }
@@ -546,8 +732,8 @@ impl WidgetBundleBuilder {
                 }
             }
 
-            let entry_path = format!("widgets/{}/index.html", widget.id);
-            let contract_path = format!("widgets/{}/contract.json", widget.id);
+            let entry_path = widget_entry_path(&widget.id);
+            let contract_path = widget_contract_path(&widget.id);
             let contract_json = serde_json::to_vec_pretty(&widget.contract)?;
 
             manifest.widgets.push(BundleWidgetEntry {
@@ -742,6 +928,366 @@ mod tests {
     fn test_missing_widget_rejected() {
         let result = WidgetBundleBuilder::new("com.example.empty", "1.0.0").build();
         assert!(result.is_err());
+    }
+
+    fn archive_entries(bytes: Vec<u8>) -> Vec<(String, Vec<u8>)> {
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+        names
+            .into_iter()
+            .map(|name| {
+                let mut data = Vec::new();
+                archive
+                    .by_name(&name)
+                    .unwrap()
+                    .read_to_end(&mut data)
+                    .unwrap();
+                (name, data)
+            })
+            .collect()
+    }
+
+    fn write_archive(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut cursor);
+            let options = zip::write::FileOptions::<zip::write::ExtendedFileOptions>::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for (name, data) in entries {
+                writer.start_file(name, options.clone()).unwrap();
+                writer.write_all(data).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        cursor.into_inner()
+    }
+
+    fn with_extra_entry(name: &str, data: &[u8]) -> Vec<u8> {
+        let (bytes, _) = sample_bundle();
+        let mut entries = archive_entries(bytes);
+        entries.push((name.to_string(), data.to_vec()));
+        write_archive(&entries)
+    }
+
+    fn with_manifest(edit: impl FnOnce(&mut WidgetBundleManifest)) -> Vec<u8> {
+        let (bytes, _) = sample_bundle();
+        let mut entries = archive_entries(bytes);
+        let (_, manifest_bytes) = entries
+            .iter_mut()
+            .find(|(name, _)| name == BUNDLE_MANIFEST_PATH)
+            .unwrap();
+        let mut manifest: WidgetBundleManifest = serde_json::from_slice(manifest_bytes).unwrap();
+        edit(&mut manifest);
+        *manifest_bytes = serde_json::to_vec_pretty(&manifest).unwrap();
+        write_archive(&entries)
+    }
+
+    #[test]
+    fn archive_names_colliding_after_folding_are_rejected() {
+        for alias in [
+            "widgets/sales-chart/CONTRACT.json",
+            "Widgets/sales-chart/contract.json",
+            "widgets/sales-chart/contract.json.",
+            "widgets/sales-chart/contract.json ",
+            "widgets/sales-chart. /index.html",
+            "BUNDLE.JSON",
+            "bundle.json...",
+            "widgets/sales-chart/contract.j\u{17f}on",
+            "shared/REACT-ABC123.js",
+        ] {
+            let mut reader =
+                WidgetBundleReader::from_bytes(with_extra_entry(alias, b"{}")).unwrap();
+            let errors = reader.validate().unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.contains("collide")),
+                "{alias:?} must collide: {errors:?}"
+            );
+            let temp = tempfile::tempdir().unwrap();
+            assert!(reader.unpack(&temp.path().join("store")).is_err());
+        }
+
+        let (bytes, _) = sample_bundle();
+        let mut entries = archive_entries(bytes);
+        entries.push(("widgets/sales-chart/kpi.svg".into(), b"<svg/>".to_vec()));
+        entries.push((
+            "widgets/sales-chart/\u{212a}pi.svg".into(),
+            b"<svg/>".to_vec(),
+        ));
+        let mut kelvin = WidgetBundleReader::from_bytes(write_archive(&entries)).unwrap();
+        assert!(
+            kelvin
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("collide"))
+        );
+
+        let mut file_over_directory =
+            WidgetBundleReader::from_bytes(with_extra_entry("WIDGETS/Sales-Chart", b"x")).unwrap();
+        assert!(
+            file_over_directory
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("collides with directory"))
+        );
+
+        let mut dots_only =
+            WidgetBundleReader::from_bytes(with_extra_entry("widgets/.../x.svg", b"x")).unwrap();
+        assert!(
+            dots_only
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("only of dots or spaces"))
+        );
+
+        let mut distinct = WidgetBundleReader::from_bytes(with_extra_entry(
+            "widgets/sales-chart/logo.svg",
+            b"<svg/>",
+        ))
+        .unwrap();
+        assert!(distinct.validate().is_ok());
+    }
+
+    #[test]
+    fn drive_prefixed_stream_and_nul_entry_names_are_rejected_on_every_os() {
+        for name in [
+            "C:/x.txt",
+            "C:x.txt",
+            "c:/ProgramData/Microsoft/Windows/Start Menu/Programs/StartUp/x.bat",
+            "widgets/sales-chart/index.html:ads",
+            "widgets/sales-chart/index.html::$DATA",
+            "shared/react\0.js",
+        ] {
+            let mut reader = WidgetBundleReader::from_bytes(with_extra_entry(name, b"x")).unwrap();
+            let expected = format!("Unsafe widget bundle entry path: {}", name);
+            let errors = reader.validate().unwrap_err();
+            assert!(errors.contains(&expected), "{name:?}: {errors:?}");
+
+            let temp = tempfile::tempdir().unwrap();
+            let dest = temp.path().join("store");
+            let error = reader.unpack(&dest).unwrap_err().to_string();
+            assert!(error.contains(&expected), "{name:?}: {error}");
+            assert!(!dest.exists());
+
+            let staging = temp.path().join("staging");
+            std::fs::create_dir_all(&staging).unwrap();
+            let error = reader.unpack_into(&staging).unwrap_err().to_string();
+            assert!(error.contains(&expected), "{name:?}: {error}");
+            assert_eq!(
+                std::fs::read_dir(temp.path()).unwrap().count(),
+                1,
+                "{name:?} must not write next to the staging directory"
+            );
+        }
+
+        let mut unsafe_directory =
+            WidgetBundleReader::from_bytes(with_extra_entry("C:/", b"")).unwrap();
+        assert!(
+            unsafe_directory
+                .validate()
+                .unwrap_err()
+                .contains(&"Unsafe widget bundle entry path: C:/".to_string())
+        );
+    }
+
+    #[test]
+    fn directory_entries_with_safe_names_stay_valid() {
+        let (bytes, _) = sample_bundle();
+        let entries = archive_entries(bytes);
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut cursor);
+            let options = zip::write::FileOptions::<zip::write::ExtendedFileOptions>::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for directory in ["shared/", "widgets/", "widgets/sales-chart/"] {
+                writer.add_directory(directory, options.clone()).unwrap();
+            }
+            for (name, data) in &entries {
+                writer.start_file(name, options.clone()).unwrap();
+                writer.write_all(data).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        let mut reader = WidgetBundleReader::from_bytes(cursor.into_inner()).unwrap();
+        assert!(reader.validate().is_ok());
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("store");
+        reader.unpack(&dest).unwrap();
+        assert!(dest.join("widgets/sales-chart/index.html").exists());
+    }
+
+    #[test]
+    fn staged_entry_targets_stay_inside_the_staging_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let staging = temp.path().join("staging");
+        assert_eq!(
+            staged_entry_target(&staging, "widgets/sales-chart/index.html").unwrap(),
+            staging
+                .join("widgets")
+                .join("sales-chart")
+                .join("index.html")
+        );
+        let mut escaping = vec!["../x.txt", "widgets/../../x.txt", "/x.txt", "./x.txt"];
+        if cfg!(windows) {
+            escaping.extend([
+                "C:x.txt",
+                "C:/x.txt",
+                "C:\\x.txt",
+                "\\\\server\\share\\x.txt",
+            ]);
+        }
+        for name in escaping {
+            let error = staged_entry_target(&staging, name).unwrap_err().to_string();
+            assert!(
+                error.contains("resolves outside the unpack directory"),
+                "{name:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unpack_detects_declared_entries_overwritten_by_aliases() {
+        let (bytes, _) = sample_bundle();
+        let mut entries = archive_entries(bytes);
+        entries.push((
+            "widgets/sales-chart/CONTRACT.json".to_string(),
+            br#"{"contractVersion":1,"id":"sales-chart","capabilities":{"workers":true}}"#.to_vec(),
+        ));
+        let mut reader = WidgetBundleReader::from_bytes(write_archive(&entries)).unwrap();
+
+        let temp = tempfile::tempdir().unwrap();
+        let probe = temp.path().join("probe");
+        std::fs::write(&probe, b"x").unwrap();
+        let case_insensitive = temp.path().join("PROBE").exists();
+
+        let staging = temp.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let result = reader.unpack_into(&staging);
+        if case_insensitive {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("overwritten during unpack")
+            );
+        } else {
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn entry_and_contract_paths_must_be_exact() {
+        let bytes = with_manifest(|manifest| {
+            manifest.widgets[0].contract = "widgets/kpi-card/../kpi-card/contract.json".into();
+            manifest.widgets[1].entry = "widgets/sales-chart/main.html".into();
+        });
+        let mut reader = WidgetBundleReader::from_bytes(bytes).unwrap();
+        let errors = reader.validate().unwrap_err();
+        assert!(errors.iter().any(|error| error.contains(
+            "contract path 'widgets/kpi-card/../kpi-card/contract.json' must be 'widgets/kpi-card/contract.json'"
+        )));
+        assert!(errors.iter().any(|error| error.contains(
+            "entry path 'widgets/sales-chart/main.html' must be 'widgets/sales-chart/index.html'"
+        )));
+    }
+
+    #[test]
+    fn bundle_package_id_must_be_valid() {
+        for package_id in ["com example", "com;example", "com\"example", ".."] {
+            let (bytes, _) = WidgetBundleBuilder::new(package_id, "1.0.0")
+                .add_shared_chunk("react-abc123.js", b"console.log('react runtime')".to_vec())
+                .add_widget(sample_widget("sales-chart"))
+                .build()
+                .unwrap();
+            let mut reader = WidgetBundleReader::from_bytes(bytes).unwrap();
+            assert!(
+                reader
+                    .validate()
+                    .unwrap_err()
+                    .iter()
+                    .any(|error| error.contains("Invalid bundle packageId")),
+                "{package_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn read_unpacked_widget_contract_follows_the_declared_contract() {
+        let mut widget = sample_widget("live-map");
+        widget.contract = widget
+            .contract
+            .with_csp(vec![crate::widget_policy::WidgetCspPurpose {
+                reason: "Loads vector map tiles".into(),
+                connect_src: vec!["https://api.maptiler.com".into()],
+                ..Default::default()
+            }]);
+        let (bytes, _) = WidgetBundleBuilder::new("com.example.maps", "1.0.0")
+            .add_shared_chunk("react-abc123.js", b"console.log('react runtime')".to_vec())
+            .add_widget(widget)
+            .add_widget(sample_widget("kpi-card"))
+            .build()
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        WidgetBundleReader::from_bytes(bytes)
+            .unwrap()
+            .unpack(&store)
+            .unwrap();
+
+        let contract = read_unpacked_widget_contract(&store, "live-map").unwrap();
+        assert_eq!(contract.contract_version, crate::widget::CONTRACT_VERSION);
+        assert_eq!(
+            contract.declared_csp().connect_src,
+            vec!["https://api.maptiler.com"]
+        );
+        assert!(read_unpacked_widget_contract(&store, "kpi-card").is_ok());
+
+        for widget_id in ["", "../live-map", "Live-Map", "missing"] {
+            assert!(
+                read_unpacked_widget_contract(&store, widget_id).is_err(),
+                "{widget_id:?}"
+            );
+        }
+
+        let manifest_path = store.join(BUNDLE_MANIFEST_PATH);
+        let original = std::fs::read(&manifest_path).unwrap();
+        let mut manifest: WidgetBundleManifest = serde_json::from_slice(&original).unwrap();
+        let live_map = manifest
+            .widgets
+            .iter_mut()
+            .find(|widget| widget.id == "live-map")
+            .unwrap();
+        live_map.contract = "widgets/kpi-card/contract.json".into();
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(
+            read_unpacked_widget_contract(&store, "live-map")
+                .unwrap_err()
+                .to_string()
+                .contains("declares contract path")
+        );
+        std::fs::write(&manifest_path, &original).unwrap();
+
+        let contract_path = store.join("widgets/live-map/contract.json");
+        std::fs::write(
+            &contract_path,
+            br#"{"contractVersion":1,"id":"live-map","csp":[{"reason":"Loads vector map tiles","connectSrc":["https://api.maptiler.com"]}]}"#,
+        )
+        .unwrap();
+        assert!(
+            read_unpacked_widget_contract(&store, "live-map")
+                .unwrap_err()
+                .to_string()
+                .contains("contractVersion")
+        );
+        std::fs::write(&contract_path, br#"{"contractVersion":1,"id":"kpi-card"}"#).unwrap();
+        assert!(
+            read_unpacked_widget_contract(&store, "live-map")
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
     }
 
     /// Cross-language interop: validates a bundle produced by

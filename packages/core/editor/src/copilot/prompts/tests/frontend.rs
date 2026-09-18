@@ -3,7 +3,10 @@ use super::*;
 #[test]
 fn frontend_prompts_defer_new_page_persistence_until_host_apply() {
     let docs = crate::a2ui::copilot::get_full_documentation();
-    for prompt in [frontend_system_prompt("{}", &docs), frontend_sdk_system_prompt()] {
+    for prompt in [
+        frontend_system_prompt("{}", &docs),
+        frontend_sdk_system_prompt(),
+    ] {
         assert!(prompt.contains("host creates or updates the target page only after you return"));
         assert!(prompt.contains("Do not inspect a newly emitted page"));
         assert!(prompt.contains("host can apply it and report authoritative persistence evidence"));
@@ -20,7 +23,8 @@ fn frontend_prompts_demand_design_reflection_and_true_styling_channels() {
     for prompt in prompts {
         assert!(prompt.contains("## DESIGN CONTRACT (run this before every emit_ui)"));
         assert!(prompt.contains("## Design Reflection (BEFORE emitting)"));
-        assert!(prompt.contains("no runtime Tailwind engine"));
+        assert!(prompt.contains("compiled at runtime against this theme"));
+        assert!(!prompt.to_lowercase().contains("no runtime tailwind engine"));
         assert!(prompt.contains("responsiveOverrides"));
         assert!(prompt.contains("canvasSettings.customCss"));
         assert!(prompt.contains("NEVER `:root`"));

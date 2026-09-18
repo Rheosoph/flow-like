@@ -10,12 +10,19 @@
 //! database snapshot.
 
 use crate::entity::{
-    app_package, sea_orm_active_enums::WasmCompilationStatus, wasm_package_version,
+    app_package,
+    sea_orm_active_enums::{WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility},
+    wasm_package, wasm_package_version,
 };
-use crate::routes::registry::server::executor_target_platform;
+use crate::routes::registry::server::{ServerRegistry, executor_target_platform};
 use crate::state::AppState;
-use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
+use flow_like_types::dispatch::WasmPackageRef;
+use futures::{StreamExt, stream};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter, QuerySelect};
 use std::collections::HashMap;
+
+/// Packages signed at once. Each one costs two presigns and a checksum read.
+const SIGN_CONCURRENCY: usize = 8;
 
 /// Resolve all WASM packages for an app, returning presigned download URLs.
 ///
@@ -56,17 +63,32 @@ pub async fn resolve_wasm_packages_for_platform(
                 .add(wasm_package_version::Column::Version.eq(&pkg.version)),
         )
     });
-    let mut version_records: HashMap<(String, String), wasm_package_version::Model> =
+    let package_ids: Vec<String> = packages.iter().map(|pkg| pkg.package_id.clone()).collect();
+
+    // The package and version status rules of `ServerRegistry::get_wasm_url`,
+    // answered for every pin by two queries instead of five per package.
+    let (version_rows, active_package_rows) = flow_like_types::tokio::join!(
         wasm_package_version::Entity::find()
             .filter(version_filter)
-            .all(&state.db)
-            .await
-            .ok()?
-            .into_iter()
-            .map(|record| ((record.package_id.clone(), record.version.clone()), record))
-            .collect();
+            .all(&state.db),
+        wasm_package::Entity::find()
+            .select_only()
+            .column(wasm_package::Column::Id)
+            .column(wasm_package::Column::Visibility)
+            .filter(wasm_package::Column::Id.is_in(package_ids))
+            .filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active))
+            .into_tuple::<(String, WasmPackageVisibility)>()
+            .all(&state.db),
+    );
+    let mut version_records: HashMap<(String, String), wasm_package_version::Model> = version_rows
+        .ok()?
+        .into_iter()
+        .map(|record| ((record.package_id.clone(), record.version.clone()), record))
+        .collect();
+    let active_packages: HashMap<String, WasmPackageVisibility> =
+        active_package_rows.ok()?.into_iter().collect();
 
-    let mut result: HashMap<String, flow_like_types::dispatch::WasmPackageRef> = HashMap::new();
+    let mut candidates = Vec::with_capacity(packages.len());
     let mut had_errors = false;
 
     for pkg in &packages {
@@ -108,48 +130,43 @@ pub async fn resolve_wasm_packages_for_platform(
             continue;
         }
 
-        let wasm_url = match registry
-            .get_wasm_url(&pkg.package_id, Some(&pkg.version))
-            .await
-        {
-            Ok((download_url, _, _)) => download_url,
-            Err(e) => {
-                had_errors = true;
-                tracing::warn!(
-                    package_id = %pkg.package_id,
-                    version = %pkg.version,
-                    error = %e,
-                    "Failed to generate raw WASM download URL — skipping"
-                );
-                continue;
+        // A private package runs any of its versions; every other package
+        // only the approved ones.
+        let unavailable = match active_packages.get(&pkg.package_id) {
+            None => Some("Package not found"),
+            Some(visibility)
+                if *visibility != WasmPackageVisibility::Private
+                    && version_record.status != WasmPackageStatus::Active =>
+            {
+                Some("Version not found")
             }
+            Some(_) => None,
         };
-
-        match registry
-            .sign_cwasm_url(&pkg.package_id, &pkg.version, target)
-            .await
-        {
-            Ok((cwasm_url, cwasm_checksum)) => {
-                let resolved = flow_like_types::dispatch::WasmPackageRef {
-                    version: pkg.version.clone(),
-                    wasm_hash: version_record.wasm_hash.clone(),
-                    wasm_url,
-                    cwasm_url,
-                    cwasm_checksum,
-                };
-                result.insert(pkg.package_id.clone(), resolved);
-            }
-            Err(e) => {
-                had_errors = true;
-                tracing::warn!(
-                    package_id = %pkg.package_id,
-                    version = %pkg.version,
-                    error = %e,
-                    "Failed to generate presigned URLs — skipping"
-                );
-            }
+        if let Some(reason) = unavailable {
+            had_errors = true;
+            tracing::warn!(
+                package_id = %pkg.package_id,
+                version = %pkg.version,
+                error = reason,
+                "Failed to generate raw WASM download URL — skipping"
+            );
+            continue;
         }
+
+        candidates.push(version_record);
     }
+
+    let attempted = candidates.len();
+    let signed: Vec<Option<(String, WasmPackageRef)>> = stream::iter(
+        candidates
+            .into_iter()
+            .map(|record| sign_package(registry, target, record)),
+    )
+    .buffer_unordered(SIGN_CONCURRENCY)
+    .collect()
+    .await;
+    let result: HashMap<String, WasmPackageRef> = signed.into_iter().flatten().collect();
+    had_errors |= result.len() < attempted;
 
     if result.is_empty() {
         None
@@ -163,5 +180,51 @@ pub async fn resolve_wasm_packages_for_platform(
             );
         }
         Some(result)
+    }
+}
+
+/// Fresh transport credentials for one pinned version whose status the caller
+/// already checked. `None` means the package is skipped, and says why.
+async fn sign_package(
+    registry: &ServerRegistry,
+    target: &str,
+    record: wasm_package_version::Model,
+) -> Option<(String, WasmPackageRef)> {
+    let wasm_url = match registry.sign_wasm_path(&record.wasm_path).await {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::warn!(
+                package_id = %record.package_id,
+                version = %record.version,
+                error = %e,
+                "Failed to generate raw WASM download URL — skipping"
+            );
+            return None;
+        }
+    };
+
+    match registry
+        .sign_cwasm_url(&record.package_id, &record.version, target)
+        .await
+    {
+        Ok((cwasm_url, cwasm_checksum)) => Some((
+            record.package_id,
+            WasmPackageRef {
+                version: record.version,
+                wasm_hash: record.wasm_hash,
+                wasm_url,
+                cwasm_url,
+                cwasm_checksum,
+            },
+        )),
+        Err(e) => {
+            tracing::warn!(
+                package_id = %record.package_id,
+                version = %record.version,
+                error = %e,
+                "Failed to generate presigned URLs — skipping"
+            );
+            None
+        }
     }
 }

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { FlowSelectorDataRef } from "../components/flow/flow-selector-data";
 import { InnerLayerNodeType } from "../components/flow/layer-inner-node";
 import { typeToColor } from "../components/flow/utils";
+import { collectBoardRefs } from "./board-refs";
 import {
 	copyPasteCommand,
 	removeLayerCommand,
@@ -168,11 +169,13 @@ interface ISerializedPin {
 	index: number;
 	schema?: string | null;
 	options?: IPinOptions | null;
+	description?: string;
 }
 interface ISerializedNode {
 	id: string;
 	name: string;
 	friendly_name: string;
+	description?: string;
 	comment?: string;
 	coordinates?: number[];
 	pins: {
@@ -202,6 +205,7 @@ function serializeNode(node: INode): ISerializedNode {
 			index: pin.index,
 			schema: pin.schema ?? undefined,
 			options: pin.options ?? undefined,
+			description: pin.description,
 		};
 	}
 
@@ -209,6 +213,7 @@ function serializeNode(node: INode): ISerializedNode {
 		id: node.id,
 		name: node.name,
 		friendly_name: node.friendly_name,
+		description: node.description,
 		comment: node.comment ?? undefined,
 		coordinates: node.coordinates ?? undefined,
 		pins: pins,
@@ -235,7 +240,7 @@ function deserializeNode(node: ISerializedNode): INode {
 			connected_to: pin.connected_to,
 			default_value: pin.default_value ?? undefined,
 			index: pin.index,
-			description: "",
+			description: pin.description ?? "",
 			schema: pin.schema || undefined,
 			options: pin.options ?? undefined,
 		};
@@ -245,7 +250,7 @@ function deserializeNode(node: ISerializedNode): INode {
 		id: node.id,
 		category: "",
 		name: node.name,
-		description: "",
+		description: node.description ?? "",
 		friendly_name: node.friendly_name,
 		coordinates: node.coordinates ?? [0, 0, 0],
 		comment: node.comment ?? "",
@@ -1274,20 +1279,27 @@ export function handleCopy(
 		referencedVarIds.has(v.id),
 	);
 
-	// Collect board refs used by variables and pins so schemas survive paste
-	const referencedRefs: Record<string, string> = {};
-	for (const v of selectedVariables) {
-		if (v.schema && board.refs[v.schema]) {
-			referencedRefs[v.schema] = board.refs[v.schema];
-		}
-	}
-	for (const node of selectedNodes) {
-		for (const pin of Object.values(node.pins)) {
-			if (pin.schema && board.refs[pin.schema]) {
-				referencedRefs[pin.schema] = board.refs[pin.schema];
-			}
-		}
-	}
+	// Descriptions and schemas are keys into this board's refs; without them a paste into another
+	// board (or after the originals were deleted) turns them into hash digits.
+	const referencedRefs = collectBoardRefs(
+		[
+			...selectedVariables.map((v) => v.schema),
+			...selectedNodes.flatMap((node) => [
+				node.description,
+				...Object.values(node.pins).flatMap((pin) => [
+					pin.description,
+					pin.schema,
+				]),
+			]),
+			...[...foundLayer.values()].flatMap((layer) =>
+				Object.values(layer.pins ?? {}).flatMap((pin) => [
+					pin.description,
+					pin.schema,
+				]),
+			),
+		],
+		board.refs,
+	);
 
 	try {
 		navigator.clipboard.writeText(

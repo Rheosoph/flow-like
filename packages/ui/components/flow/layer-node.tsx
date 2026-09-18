@@ -26,7 +26,7 @@ import PuffLoader from "react-spinners/PuffLoader";
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../hooks";
 import type { PeerUserInfo } from "../../hooks/use-peer-users";
-import type { IBoard, INode } from "../../lib";
+import type { IBoard, INode, IPin } from "../../lib";
 import {
 	CALL_FUNCTION_NODE_NAME,
 	layerToFunctionErrorMessage,
@@ -49,6 +49,7 @@ import { useUndoRedo } from "./flow-history";
 import type { RemoteSelectionParticipant } from "./flow-node";
 import { FlowNodeQualityBadge } from "./flow-node/flow-node-quality-badge";
 import { FlowPin } from "./flow-pin";
+import { planPinLabelCaps } from "./flow-pin/pin-label-caps";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
 import { LayerEditMenu } from "./layer-editing-menu";
@@ -184,6 +185,16 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 
 		return [false, severity];
 	}, [childNodeIds, currentMetadata]);
+
+	const pinLabelCaps = useMemo(() => {
+		const pins = Object.values(props.data.layer.pins);
+		return planPinLabelCaps(
+			pins.filter((pin) => pin.pin_type === IPinType.Input),
+			pins.filter((pin) => pin.pin_type === IPinType.Output),
+			{},
+			(pin: IPin) => (props.data.pinLookup[pin.id] ?? props.data.layer).name,
+		);
+	}, [props.data.layer, props.data.pinLookup]);
 
 	useEffect(() => {
 		const height = Math.max(
@@ -442,6 +453,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}
+								labelMaxWidth={pinLabelCaps[pin.id]}
 								onPinRemove={async () => {}}
 								selectorDataRef={props.data.selectorDataRef}
 								selectorDataVersion={props.data.selectorDataVersion}
@@ -460,6 +472,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}
+								labelMaxWidth={pinLabelCaps[pin.id]}
 								onPinRemove={async () => {}}
 								selectorDataRef={props.data.selectorDataRef}
 								selectorDataVersion={props.data.selectorDataVersion}

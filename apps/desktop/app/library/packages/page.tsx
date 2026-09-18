@@ -22,6 +22,7 @@ import {
 	useQueryClient,
 	useSearch,
 } from "@flow-like/flow-like-ui";
+import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
@@ -276,7 +277,11 @@ export default function InstalledPackagesPage() {
 	const uninstallMutation = useMutation({
 		mutationFn: async (packageId: string) => {
 			setUninstallingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_uninstall_package", { packageId });
+			try {
+				await invoke("registry_uninstall_package", { packageId });
+			} finally {
+				forgetMicroWidgetGrants(packageId);
+			}
 		},
 		onSuccess: (_: void, packageId: string) => {
 			toast.success("Package uninstalled");

@@ -1,19 +1,22 @@
 //! Persistence for triggers that never reached the flow graph.
 //!
 //! A normal run writes its log messages into a per-run LanceDB table named
-//! after the run id and, once finished, a summary row into the board-level
-//! `runs` table. A trigger that is rejected up front — an invoke whose payload
-//! does not match the event contract, a cron fire whose sink is gone, a board
-//! that cannot be resolved — used to produce neither, so the attempt vanished.
+//! after the run id and, once finished, a summary row into the host's
+//! [`RunIndex`](super::run_index::RunIndex). A trigger that is rejected up
+//! front — an invoke whose payload does not match the event contract, a cron
+//! fire whose sink is gone, a board that cannot be resolved — used to produce
+//! neither, so the attempt vanished.
 //!
-//! [`RejectedRun`] writes exactly the same two artifacts for those attempts:
-//! a per-run table holding one `Fatal` log message with the rejection reason,
-//! and a `runs` row with a zero-length duration and no visited nodes. Readers
+//! [`RejectedRun`] writes exactly the same artifacts for those attempts: a
+//! per-run table holding one `Fatal` log message with the rejection reason,
+//! and a summary row with a zero-length duration and no visited nodes. Readers
 //! (`list_runs`, `query_run`, `GET .../runs`, `GET .../logs`) need no changes.
 
 use flow_like_storage::Path;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_array::{RecordBatchIterator, RecordBatchReader};
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::Connection;
 #[cfg(feature = "flow-runtime")]
@@ -27,7 +30,12 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::log::LogMessage;
+use super::run_index::runs_base_path;
+#[cfg(feature = "flow-runtime")]
+use super::run_index::{self, RunIndex};
 use super::{LogLevel, LogMeta};
+#[cfg(feature = "flow-runtime")]
+use std::sync::Arc;
 
 /// What stopped the trigger before the first node ran.
 #[derive(Serialize, Deserialize, JsonSchema, Copy, Clone, Debug, PartialEq, Eq)]
@@ -222,13 +230,16 @@ impl RejectedRun {
         Ok(runs_base_path(&self.app_id, &self.board_id))
     }
 
-    /// Write both artifacts into the board's log database. The connection must
-    /// already point at `runs/{app_id}/{board_id}`.
+    /// Write the per-run log table into the board's log database (the
+    /// connection must already point at `runs/{app_id}/{board_id}`), then the
+    /// payload sidecar and the summary row exactly as a finished run does.
     #[cfg(feature = "flow-runtime")]
     pub async fn write(
         &self,
         db: Connection,
         write_options: Option<&WriteOptions>,
+        log_store: Option<&FlowLikeStore>,
+        run_index: Option<&Arc<dyn RunIndex>>,
     ) -> flow_like_types::Result<LogMeta> {
         let batch = LogMessage::into_arrow(vec![self.log_message()])?;
         let schema = batch.schema();
@@ -257,14 +268,9 @@ impl RejectedRun {
         }
 
         let meta = self.log_meta();
-        meta.flush(db, write_options).await?;
+        run_index::record_run(&meta, log_store, run_index).await?;
         Ok(meta)
     }
-}
-
-/// Board-level log database path used by every run artifact.
-pub fn runs_base_path(app_id: &str, board_id: &str) -> Path {
-    Path::from("runs").join(app_id).join(board_id)
 }
 
 /// Convenience for callers that hold a log-database builder rather than an
@@ -274,9 +280,13 @@ pub async fn record_rejection(
     db_fn: &(dyn Fn(Path) -> ConnectBuilder + Send + Sync),
     rejection: &RejectedRun,
     write_options: Option<&WriteOptions>,
+    log_store: Option<&FlowLikeStore>,
+    run_index: Option<&Arc<dyn RunIndex>>,
 ) -> flow_like_types::Result<LogMeta> {
     let db = db_fn(rejection.base_path()?).execute().await?;
-    rejection.write(db, write_options).await
+    rejection
+        .write(db, write_options, log_store, run_index)
+        .await
 }
 
 #[cfg(test)]
@@ -328,13 +338,13 @@ mod tests {
     }
 
     /// The whole point is that readers written for real runs find these without
-    /// knowing they exist: a `runs` summary row plus a table named after the
-    /// run id, exactly as `InternalRun` leaves behind.
+    /// knowing they exist: an index row, a payload sidecar and a table named
+    /// after the run id, exactly as `InternalRun` leaves behind.
     #[tokio::test]
     #[cfg(feature = "flow-runtime")]
     async fn a_rejection_writes_the_same_artifacts_a_run_does() {
         use crate::flow::execution::log::StoredLogMessage;
-        use flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
+        use flow_like_storage::lancedb::query::ExecutableQuery;
         use flow_like_storage::serde_arrow;
         use futures::TryStreamExt;
 
@@ -351,17 +361,33 @@ mod tests {
             RejectionStage::Trigger,
             "No active sink found for event evt_1",
         )
-        .with_event("evt_1", Some("1.0.0".to_string()));
+        .with_event("evt_1", Some("1.0.0".to_string()))
+        .with_payload(Some(&flow_like_types::json::json!({ "count": "12" })));
 
+        let recording = Arc::new(run_index::RecordingRunIndex::default());
+        let index: Arc<dyn RunIndex> = recording.clone();
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
         let meta = rejection
-            .write(db.clone(), None)
+            .write(db.clone(), None, Some(&store), Some(&index))
             .await
             .expect("write the rejection");
         assert_eq!(meta.run_id, rejection.run_id);
 
         let tables = db.table_names().execute().await.expect("list tables");
-        assert!(tables.contains(&"runs".to_string()));
+        assert!(!tables.contains(&"runs".to_string()));
         assert!(tables.contains(&rejection.run_id));
+
+        let rows = recording.rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_id, rejection.run_id);
+        assert_eq!(rows[0].log_level, LogLevel::Fatal.to_u8());
+        let sidecar = run_index::read_run_payload(&store, "app", "board", &rejection.run_id)
+            .await
+            .expect("read the sidecar")
+            .expect("sidecar written");
+        assert_eq!(sidecar, rejection.payload);
 
         let batches = db
             .open_table(&rejection.run_id)

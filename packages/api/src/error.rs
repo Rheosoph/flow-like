@@ -357,6 +357,16 @@ impl ApiError {
         )
     }
 
+    /// A 504 for a request that ran out of its route deadline; the caller logs it.
+    pub(crate) fn request_deadline_exceeded(msg: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "GATEWAY_TIMEOUT",
+            Some(msg.into()),
+            ReportPolicy::Ignore,
+        )
+    }
+
     pub fn not_implemented(msg: impl Into<String>) -> Self {
         let msg = msg.into();
         tracing::warn!("Not implemented: {}", msg);

@@ -7,7 +7,7 @@
 use std::{collections::HashSet, future::Future};
 
 use flow_like::{
-    a2ui::Page,
+    a2ui::{ElementDemand, Page},
     flow::{
         board::Board,
         compiled::prerun::{
@@ -123,6 +123,8 @@ pub struct ResolvedPageContract {
     pub prerun: PrerunPayload,
     pub entry_node_ids: HashSet<String>,
     pub entry_authority_revision: Option<String>,
+    /// Page elements the board reads, so Page runs ship those without Board read access.
+    pub element_demand: ElementDemand,
 }
 
 /// Compile the user-independent contract for one Event-bound Page.
@@ -284,9 +286,14 @@ async fn resolve_page_contract_inner(
             (manifest, entry_node_ids, entry_authority_revision)
         }
         None => {
-            ensure_draft_board_snapshot(state, app_id, &event.board_id, &cached).await?;
-            let authority =
-                ensure_draft_prerun_manifest(state, app_id, &event.board_id, &cached).await?;
+            // Storage stays the authority for both artifacts; their checks
+            // only overlap. The snapshot error still wins, as it did in series.
+            let (snapshot, authority) = flow_like_types::tokio::join!(
+                ensure_draft_board_snapshot(state, app_id, &event.board_id, &cached),
+                ensure_draft_prerun_manifest(state, app_id, &event.board_id, &cached),
+            );
+            snapshot?;
+            let authority = authority?;
             let entry_node_ids = authority
                 .entry_node_ids
                 .iter()
@@ -329,6 +336,10 @@ async fn resolve_page_contract_inner(
     })?;
     let mut prerun = PrerunPayload::from(&*manifest);
     prerun.signature = manifest_revision.clone();
+    let element_demand = ElementDemand {
+        selectors: manifest.element_selectors.clone(),
+        dynamic: manifest.element_reads_dynamic,
+    };
     Ok(ResolvedPageContract {
         board_etag,
         page,
@@ -337,6 +348,7 @@ async fn resolve_page_contract_inner(
         prerun,
         entry_node_ids,
         entry_authority_revision,
+        element_demand,
     })
 }
 
@@ -1088,6 +1100,7 @@ mod tests {
             prerun,
             entry_node_ids: HashSet::new(),
             entry_authority_revision: None,
+            element_demand: ElementDemand::default(),
         }
     }
 

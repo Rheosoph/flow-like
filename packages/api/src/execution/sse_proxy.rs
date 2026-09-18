@@ -8,8 +8,10 @@ use crate::entity::sea_orm_active_enums::{AuditActorType, ExecutionStatus, RunSt
 use crate::entity::{execution_run, execution_usage_tracking, prelude::*};
 use crate::execution::dispatch::ByteStream;
 use crate::execution::page_action_sealer::{PageActionSealingContext, PageActionSealingReport};
+use crate::execution::run_summary::{RunSummary, apply_run_summary, without_nodes};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use eventsource_stream::Eventsource;
+use flow_like::flow::execution::rejection::REJECTION_OPERATION_PREFIX;
 use flow_like_types::create_id;
 use futures_util::{Stream, StreamExt};
 use sea_orm::{
@@ -28,6 +30,77 @@ pub(crate) fn completed_run_status(status: Option<&str>) -> RunStatus {
         Some("failed") => RunStatus::Failed,
         Some(_) | None => RunStatus::Failed,
     }
+}
+
+/// The bookkeeping an executor's `completed` event carries for the run row.
+pub(crate) struct CompletedPayload {
+    pub status: RunStatus,
+    pub log_level: i32,
+    pub summary: RunSummary,
+    /// `rejected:<stage>` when the executor refused the run before it started.
+    pub rejection_step: Option<String>,
+}
+
+/// Reads the `payload` of a parsed `completed` envelope
+/// (`{"event_type": "completed", "payload": {…}}`). Every reader of an
+/// executor stream goes through here, so the payload shape lives in one place.
+pub(crate) fn parse_completed_payload(envelope: &serde_json::Value) -> CompletedPayload {
+    let payload = envelope.get("payload");
+    let log_level = payload
+        .and_then(|p| p.get("log_level"))
+        .and_then(|l| l.as_i64())
+        .unwrap_or(0) as i32;
+    let status = completed_run_status(
+        payload
+            .and_then(|p| p.get("status"))
+            .and_then(|s| s.as_str()),
+    );
+    let summary = payload
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
+    let rejection_step = payload
+        .and_then(|p| p.get("current_step"))
+        .and_then(|s| s.as_str())
+        .filter(|step| step.starts_with(REJECTION_OPERATION_PREFIX))
+        .map(str::to_string);
+    CompletedPayload {
+        status,
+        log_level,
+        summary,
+        rejection_step,
+    }
+}
+
+pub(crate) fn is_completed_event(envelope: &serde_json::Value) -> bool {
+    envelope.get("event_type").and_then(|v| v.as_str()) == Some("completed")
+}
+
+/// Records a `completed` executor event on the run row.
+pub(crate) async fn update_run_on_completed_event(
+    context: &ExecutionAuditContext,
+    run_id: &str,
+    completed: CompletedPayload,
+) -> Result<(), sea_orm::DbErr> {
+    update_run_on_completion_with_runtime(
+        context,
+        run_id,
+        completed.status,
+        completed.log_level,
+        None,
+        &completed.summary,
+    )
+    .await?;
+    if let Some(step) = completed.rejection_step {
+        ExecutionRun::update_many()
+            .col_expr(
+                execution_run::Column::CurrentStep,
+                sea_orm::sea_query::Expr::value(step),
+            )
+            .filter(execution_run::Column::Id.eq(run_id))
+            .exec(context.db.as_ref())
+            .await?;
+    }
+    Ok(())
 }
 
 /// Create an SSE stream from an executor HTTP response
@@ -117,25 +190,13 @@ fn create_sse_stream(
                         }
                     }
 
-                    // Check if this is a completed event and update the database
                     if let Some(db) = &db
                         && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                            && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
-                                && event_type == "completed" {
-                                    let log_level = parsed.get("payload")
-                                        .and_then(|p| p.get("log_level"))
-                                        .and_then(|l| l.as_i64())
-                                        .unwrap_or(0) as i32;
-                                    let status = parsed.get("payload")
-                                        .and_then(|p| p.get("status"))
-                                        .and_then(|s| s.as_str());
-
-                                    let run_status = completed_run_status(status);
-
-                                    if let Err(e) = update_run_on_completion(db, &run_id, run_status, log_level).await {
-                                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
-                                    }
-                                }
+                        && is_completed_event(&parsed)
+                        && let Err(e) = update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed)).await
+                    {
+                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                    }
 
                     let event = Event::default()
                         .event(&sse_event.event)
@@ -276,22 +337,12 @@ pub async fn collect_generic_result(
             }
 
             if event_type == "completed" {
-                if let Some(db) = &db {
-                    let log_level = parsed
-                        .get("payload")
-                        .and_then(|p| p.get("log_level"))
-                        .and_then(|l| l.as_i64())
-                        .unwrap_or(0) as i32;
-                    let status = parsed
-                        .get("payload")
-                        .and_then(|p| p.get("status"))
-                        .and_then(|s| s.as_str());
-                    let run_status = completed_run_status(status);
-                    if let Err(e) =
-                        update_run_on_completion(db, &run_id, run_status, log_level).await
-                    {
-                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
-                    }
+                if let Some(db) = &db
+                    && let Err(e) =
+                        update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed))
+                            .await
+                {
+                    tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                 }
                 // `completed` is the terminator — we can stop reading.
                 break;
@@ -350,22 +401,12 @@ pub async fn collect_generic_result_bytes(
             }
 
             if event_type == "completed" {
-                if let Some(db) = &db {
-                    let log_level = parsed
-                        .get("payload")
-                        .and_then(|p| p.get("log_level"))
-                        .and_then(|l| l.as_i64())
-                        .unwrap_or(0) as i32;
-                    let status = parsed
-                        .get("payload")
-                        .and_then(|p| p.get("status"))
-                        .and_then(|s| s.as_str());
-                    let run_status = completed_run_status(status);
-                    if let Err(e) =
-                        update_run_on_completion(db, &run_id, run_status, log_level).await
-                    {
-                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
-                    }
+                if let Some(db) = &db
+                    && let Err(e) =
+                        update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed))
+                            .await
+                {
+                    tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
                 }
                 break;
             }
@@ -398,7 +439,15 @@ pub async fn update_run_on_completion(
     status: RunStatus,
     log_level: i32,
 ) -> Result<(), sea_orm::DbErr> {
-    update_run_on_completion_with_runtime(context, run_id, status, log_level, None).await
+    update_run_on_completion_with_runtime(
+        context,
+        run_id,
+        status,
+        log_level,
+        None,
+        &RunSummary::default(),
+    )
+    .await
 }
 
 pub async fn update_run_on_completion_with_runtime(
@@ -407,10 +456,15 @@ pub async fn update_run_on_completion_with_runtime(
     status: RunStatus,
     log_level: i32,
     runtime_ms: Option<u64>,
+    summary: &RunSummary,
 ) -> Result<(), sea_orm::DbErr> {
     let db = context.db.as_ref();
-    if let Some(existing) = ExecutionRun::find_by_id(run_id).one(db).await? {
+    if let Some(existing) = without_nodes(ExecutionRun::find_by_id(run_id))
+        .one(db)
+        .await?
+    {
         if !matches!(existing.status, RunStatus::Pending | RunStatus::Running) {
+            apply_run_summary(db, run_id, &existing.app_id, summary).await?;
             record_execution_result(context, &existing, run_id, AuditActorType::Executor)
                 .await
                 .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
@@ -444,22 +498,36 @@ pub async fn update_run_on_completion_with_runtime(
         };
         model.status = Set(status);
         model.log_level = Set(log_level);
+        summary.apply_to(&mut model);
         if started_at.is_none() {
             model.started_at = Set(Some(created_at));
         }
         model.completed_at = Set(Some(now));
         model.updated_at = Set(now);
-        let changed = completion_update(run_id, model).exec(db).await?;
-        let persisted = ExecutionRun::find_by_id(run_id)
-            .one(db)
+        let completed = completion_update(run_id, model)
+            .exec_with_returning(db)
             .await?
-            .ok_or_else(|| {
-                sea_orm::DbErr::Custom(format!("Run disappeared after completion: {run_id}"))
-            })?;
+            .into_iter()
+            .next();
+        let changed = completed.is_some();
+        let persisted = match completed {
+            Some(persisted) => persisted,
+            None => {
+                apply_run_summary(db, run_id, &tracking_app_id, summary).await?;
+                without_nodes(ExecutionRun::find_by_id(run_id))
+                    .one(db)
+                    .await?
+                    .ok_or_else(|| {
+                        sea_orm::DbErr::Custom(format!(
+                            "Run disappeared after completion: {run_id}"
+                        ))
+                    })?
+            }
+        };
         record_execution_result(context, &persisted, run_id, AuditActorType::Executor)
             .await
             .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
-        if changed.rows_affected == 0 {
+        if !changed {
             return Ok(());
         }
         track_execution_usage_from_run(
@@ -569,6 +637,28 @@ mod tests {
             RunStatus::Failed
         ));
         assert!(matches!(completed_run_status(None), RunStatus::Failed));
+    }
+
+    #[test]
+    fn completed_payload_keeps_only_a_rejection_step() {
+        let completed = parse_completed_payload(&serde_json::json!({
+            "event_type": "completed",
+            "payload": {
+                "status": "failed",
+                "log_level": 4,
+                "nodes": [],
+                "logs": 1,
+                "current_step": "rejected:setup"
+            }
+        }));
+        assert_eq!(completed.rejection_step.as_deref(), Some("rejected:setup"));
+        assert_eq!(completed.summary.nodes, Some(Vec::new()));
+
+        let completed = parse_completed_payload(&serde_json::json!({
+            "event_type": "completed",
+            "payload": { "status": "failed", "current_step": "node:abc" }
+        }));
+        assert_eq!(completed.rejection_step, None);
     }
 
     #[test]

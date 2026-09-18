@@ -174,6 +174,7 @@ async function fetchAgentEvents(
 	apiState: IApiState,
 	profile: IProfile,
 	name: string,
+	hours: number,
 	sinceMs: number,
 ): Promise<ITelemetryEventRow[]> {
 	const collected: ITelemetryEventRow[] = [];
@@ -181,6 +182,8 @@ async function fetchAgentEvents(
 	for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
 		const params = new URLSearchParams({
 			name,
+			// One hour of slack for clock skew; rows are still cut at `sinceMs` below.
+			hours: String(Math.ceil(hours) + 1),
 			page: String(page),
 			page_size: String(EVENT_PAGE_SIZE),
 		});
@@ -295,7 +298,7 @@ export function AgentBackendsCard({
 			const sinceMs = Date.now() - hours * 3_600_000;
 			const batches = await Promise.all(
 				[AGENT_START_EVENT, AGENT_ERROR_EVENT].map((name) =>
-					fetchAgentEvents(backend.apiState, profile, name, sinceMs),
+					fetchAgentEvents(backend.apiState, profile, name, hours, sinceMs),
 				),
 			);
 			return batches.flat();

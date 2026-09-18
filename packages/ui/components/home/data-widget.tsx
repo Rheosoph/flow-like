@@ -8,7 +8,15 @@ import {
 	RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import {
+	Suspense,
+	lazy,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	Area,
 	AreaChart,
@@ -28,11 +36,24 @@ import {
 	YAxis,
 } from "recharts";
 import { getNivoChartTheme } from "../../lib/chart-theme";
+import {
+	formatAbsoluteDateTime,
+	formatCalendarDate,
+	formatRelativeTime,
+	toDateInputValue,
+} from "../../lib/date";
 import type {
 	ExecuteSqlResult,
 	QueryColumn,
 } from "../../state/backend-state/query-state";
-import { QueryResultTable } from "../settings/data-studio/query-workbench/query-result-table";
+import {
+	type ColumnKind,
+	isNullish,
+} from "../settings/data-studio/query-workbench/column-types";
+import {
+	QueryResultTable,
+	type ResultTablePresentation,
+} from "../settings/data-studio/query-workbench/query-result-table";
 import { Button } from "../ui/button";
 import {
 	EXTENDED_HOME_DATA_VIEWS,
@@ -61,6 +82,19 @@ import {
 	homeDataMeasureTitle,
 	normalizeHomeDataConfig,
 } from "./home-data-query";
+import { homeDataFieldLabel, homeDataInlineFieldLabel } from "./home-data-text";
+import {
+	type HomeDataLabels,
+	HomeDataTitle,
+	HomeDataValue,
+	homeDataValueTitle,
+	useHomeDataLabels,
+} from "./home-data-value";
+import {
+	type HomeDataLabelFormat,
+	homeDataDateLabel,
+	homeDataTemporalValue,
+} from "./home-data-values";
 import type { IHomeWidget } from "./types";
 import { useHomeData } from "./use-home-data";
 
@@ -83,43 +117,104 @@ const tooltipStyle = {
 	boxShadow: "0 8px 24px rgb(0 0 0 / 0.12)",
 };
 
+/** Measure titles and other names with spaces were already written for people. */
+function recordFieldLabel(name: string, format: HomeDataLabelFormat): string {
+	return format.measure || /\s/.test(name)
+		? name
+		: homeDataFieldLabel(name, format.kind);
+}
+/** Kinds the table cannot read from a renamed column alone: its name is a title. */
+const SOURCE_NAMED_KINDS = new Set<ColumnKind>(["temporal", "file", "user"]);
+
+/** Labels that stay distinct per raw value, so values reading alike never share a key. */
+function distinctHomeDataLabels<T>(label: (value: T) => string) {
+	const byValue = new Map<string, string>();
+	const used = new Set<string>();
+	return (value: T) => {
+		const id = JSON.stringify(value ?? null);
+		const known = byValue.get(id);
+		if (known !== undefined) return known;
+		const base = label(value);
+		let unique = base;
+		for (let suffix = 2; used.has(unique); suffix++)
+			unique = `${base} (${suffix})`;
+		used.add(unique);
+		byValue.set(id, unique);
+		return unique;
+	};
+}
+
+function homeDataPlotValue(
+	value: unknown,
+	format: HomeDataLabelFormat,
+): number | null {
+	if (format.kind !== "temporal") return homeDataNumber(value);
+	return homeDataTemporalValue(value, format.typeName)?.getTime() ?? null;
+}
+
+function homeDataPlotTick(format: HomeDataLabelFormat) {
+	return format.kind === "temporal"
+		? (value: number) => homeDataDateLabel(new Date(value), format)
+		: undefined;
+}
+
 function RecordCard({
 	row,
 	columns,
 	config,
+	formatOf,
 	compact = false,
 }: {
 	row: Record<string, unknown>;
 	columns: QueryColumn[];
 	config: HomeDataConfig;
+	formatOf: (name: string) => HomeDataLabelFormat;
 	compact?: boolean;
 }) {
 	const [first, ...rest] = columns;
+	const firstFormat = first ? formatOf(first.name) : undefined;
 	return (
 		<div
 			className={`min-w-0 rounded-lg ${compact ? "border-b border-border/60 px-1 py-3 last:border-b-0" : "border border-border/60 bg-muted/15 p-3"}`}
 		>
-			{first && (
-				<p
+			{first && firstFormat && (
+				<div
 					className="truncate text-sm font-semibold"
-					title={homeDataText(row[first.name])}
+					title={homeDataValueTitle(row[first.name], firstFormat.kind)}
 				>
-					{homeDataText(row[first.name])}
-				</p>
+					<HomeDataTitle
+						value={row[first.name]}
+						format={firstFormat}
+						config={config}
+					/>
+				</div>
 			)}
 			<dl
 				className={`mt-1.5 grid gap-x-3 gap-y-1.5 text-xs ${compact ? "grid-cols-2" : "grid-cols-[repeat(auto-fit,minmax(min(100%,100px),1fr))]"}`}
 			>
-				{rest.slice(0, compact ? 3 : 8).map((column) => (
-					<div className="min-w-0" key={column.name}>
-						<dt className="truncate text-muted-foreground">{column.name}</dt>
-						<dd className="truncate" title={homeDataText(row[column.name])}>
-							{typeof row[column.name] === "number"
-								? formatHomeDataValue(row[column.name], config)
-								: homeDataText(row[column.name])}
-						</dd>
-					</div>
-				))}
+				{rest.slice(0, compact ? 3 : 8).map((column) => {
+					const format = formatOf(column.name);
+					return (
+						<div className="min-w-0" key={column.name}>
+							<dt
+								className="truncate text-muted-foreground"
+								title={column.name}
+							>
+								{recordFieldLabel(column.name, format)}
+							</dt>
+							<dd
+								className="truncate"
+								title={homeDataValueTitle(row[column.name], format.kind)}
+							>
+								<HomeDataValue
+									value={row[column.name]}
+									format={format}
+									config={config}
+								/>
+							</dd>
+						</div>
+					);
+				})}
 			</dl>
 		</div>
 	);
@@ -127,7 +222,32 @@ function RecordCard({
 function HomeDataRecords({
 	result,
 	config,
-}: { result: ExecuteSqlResult; config: HomeDataConfig }) {
+	labels,
+	sources,
+}: {
+	result: ExecuteSqlResult;
+	config: HomeDataConfig;
+	labels: HomeDataLabels;
+	/** Result column names the aggregate records views renamed, mapped back to their aliases. */
+	sources: ReadonlyMap<string, string>;
+}) {
+	const formatOf = useCallback(
+		(name: string) => labels.format(sources.get(name) ?? name),
+		[labels, sources],
+	);
+	const presentation = useMemo<ResultTablePresentation>(
+		() => ({
+			label: (name) => recordFieldLabel(name, formatOf(name)),
+			kind: (column) => formatOf(column.name).kind,
+			cell: (name, value) => {
+				const format = formatOf(name);
+				return SOURCE_NAMED_KINDS.has(format.kind) && !isNullish(value) ? (
+					<HomeDataValue value={value} format={format} config={config} />
+				) : undefined;
+			},
+		}),
+		[formatOf, config],
+	);
 	const columns =
 		config.fields.length && config.mode === "records"
 			? config.fields.flatMap(
@@ -140,23 +260,34 @@ function HomeDataRecords({
 				columns={result.columns}
 				rows={result.rows}
 				appId={config.appId}
+				presentation={presentation}
 			/>
 		);
 	if (config.visualization === "record") {
 		const row = result.rows[0];
 		return (
 			<dl className="grid content-start gap-3 overflow-auto">
-				{columns.map((column) => (
-					<div
-						key={column.name}
-						className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 border-b border-border/50 pb-2 last:border-0"
-					>
-						<dt className="text-xs text-muted-foreground">{column.name}</dt>
-						<dd className="break-words text-sm">
-							{homeDataText(row[column.name])}
-						</dd>
-					</div>
-				))}
+				{columns.map((column) => {
+					const format = formatOf(column.name);
+					return (
+						<div
+							key={column.name}
+							className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3 border-b border-border/50 pb-2 last:border-0"
+						>
+							<dt className="text-xs text-muted-foreground" title={column.name}>
+								{recordFieldLabel(column.name, format)}
+							</dt>
+							<dd className="break-words text-sm">
+								<HomeDataValue
+									value={row[column.name]}
+									format={format}
+									config={config}
+									detail
+								/>
+							</dd>
+						</div>
+					);
+				})}
 				{result.rows.length > 1 && (
 					<p className="text-xs text-muted-foreground">
 						Showing the first of {result.rows.length} returned records. Set a
@@ -179,6 +310,7 @@ function HomeDataRecords({
 			if (!groups.has(label)) groups.set(label, []);
 			groups.get(label)?.push(row);
 		}
+		const groupFormat = formatOf(config.groupBy);
 		return (
 			<div className="flex h-full min-h-0 items-start gap-3 overflow-auto">
 				{[...groups].map(([label, rows]) => (
@@ -187,7 +319,13 @@ function HomeDataRecords({
 						key={label}
 					>
 						<div className="flex justify-between gap-2 px-1 text-xs font-medium">
-							<span className="truncate">{label}</span>
+							<span className="min-w-0 truncate">
+								<HomeDataTitle
+									value={rows[0]?.[config.groupBy]}
+									format={groupFormat}
+									config={config}
+								/>
+							</span>
 							<span className="text-muted-foreground">{rows.length}</span>
 						</div>
 						{keyHomeDataRows(rows).map(({ row, key }) => (
@@ -196,6 +334,7 @@ function HomeDataRecords({
 								row={row}
 								columns={columns}
 								config={config}
+								formatOf={formatOf}
 								compact
 							/>
 						))}
@@ -218,6 +357,7 @@ function HomeDataRecords({
 					row={row}
 					columns={columns}
 					config={config}
+					formatOf={formatOf}
 					compact={config.visualization === "list"}
 				/>
 			))}
@@ -228,11 +368,17 @@ function HomeDataRecords({
 function HomeDataChart({
 	result,
 	config,
+	labels,
 	width = 360,
-}: { result: ExecuteSqlResult; config: HomeDataConfig; width?: number }) {
+}: {
+	result: ExecuteSqlResult;
+	config: HomeDataConfig;
+	labels: HomeDataLabels;
+	width?: number;
+}) {
 	const { points, series } = useMemo(
-		() => homeDataChartSeries(result.rows, config),
-		[result.rows, config],
+		() => homeDataChartSeries(result.rows, config, labels),
+		[result.rows, config, labels],
 	);
 	const nivoTheme = useMemo(() => getNivoChartTheme(), []);
 	const format = (value: unknown) =>
@@ -259,7 +405,12 @@ function HomeDataChart({
 		);
 	if (EXTENDED_HOME_DATA_VIEWS.has(visualization))
 		return (
-			<HomeDataExtendedView result={result} config={config} width={width} />
+			<HomeDataExtendedView
+				result={result}
+				config={config}
+				width={width}
+				labels={labels}
+			/>
 		);
 	if (visualization === "stat" || visualization === "metricstrip") {
 		const row = result.rows[0];
@@ -273,7 +424,13 @@ function HomeDataChart({
 				}}
 			>
 				{measures.map((measure, index) => {
-					const value = homeDataNumber(row[`__measure_${index}`]);
+					const name = `__measure_${index}`;
+					const value = homeDataNumber(row[name]);
+					const measureFormat = labels.format(name);
+					const temporal = measureFormat.kind === "temporal";
+					const date = temporal
+						? homeDataTemporalValue(row[name], measureFormat.typeName)
+						: null;
 					return (
 						<div className="min-w-0 space-y-1.5" key={measure.id}>
 							<p className="text-xs text-muted-foreground">
@@ -282,15 +439,26 @@ function HomeDataChart({
 							<p
 								className={`${visualization === "stat" ? "text-[clamp(1.65rem,4cqw,2.4rem)]" : "text-[clamp(1.3rem,3.4cqw,1.8rem)]"} break-words font-semibold leading-tight tracking-tight tabular-nums`}
 							>
-								{format(row[`__measure_${index}`])}
+								{date
+									? formatRelativeTime(date)
+									: measureFormat.kind === "number"
+										? format(row[name])
+										: labels.label(name, row[name])}
 							</p>
-							{config.groupBy && (
+							{date && (
 								<p className="text-xs text-muted-foreground">
-									{homeDataText(row.__group)}
-									{config.seriesBy ? ` · ${homeDataText(row.__series)}` : ""}
+									{measureFormat.dateOnly
+										? formatCalendarDate(date, "full")
+										: formatAbsoluteDateTime(date)}
 								</p>
 							)}
-							{config.target !== null && (
+							{config.groupBy && (
+								<p className="text-xs text-muted-foreground">
+									{labels.group(row.__group)}
+									{config.seriesBy ? ` · ${labels.series(row.__series)}` : ""}
+								</p>
+							)}
+							{config.target !== null && measureFormat.kind === "number" && (
 								<>
 									<p className="text-xs text-muted-foreground">
 										Target: {format(config.target)}
@@ -357,6 +525,16 @@ function HomeDataChart({
 						linkDistance={60}
 						centeringStrength={0.4}
 						repulsivity={8}
+						nodeTooltip={({ node }) => {
+							const source = labels.label(config.xField, node.id);
+							return (
+								<div className="rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-lg">
+									{source === node.id
+										? labels.label(config.yField, node.id)
+										: source}
+								</div>
+							);
+						}}
 						animate={false}
 					/>
 				</div>
@@ -373,9 +551,11 @@ function HomeDataChart({
 					Choose numeric X and Y fields in widget settings.
 				</HomeDataMessage>
 			);
+		const xFormat = labels.format(config.xField);
+		const yFormat = labels.format(config.yField);
 		const data = result.rows.flatMap((row) => {
-			const x = homeDataNumber(row[config.xField]);
-			const y = homeDataNumber(row[config.yField]);
+			const x = homeDataPlotValue(row[config.xField], xFormat);
+			const y = homeDataPlotValue(row[config.yField], yFormat);
 			return x === null || y === null ? [] : [{ x, y }];
 		});
 		if (!data.length)
@@ -400,7 +580,11 @@ function HomeDataChart({
 					<XAxis
 						type="number"
 						dataKey="x"
-						name={config.xField}
+						name={homeDataFieldLabel(config.xField, xFormat.kind)}
+						domain={
+							xFormat.kind === "temporal" ? ["dataMin", "dataMax"] : undefined
+						}
+						tickFormatter={homeDataPlotTick(xFormat)}
 						tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
 						tickLine={false}
 						axisLine={false}
@@ -408,13 +592,29 @@ function HomeDataChart({
 					<YAxis
 						type="number"
 						dataKey="y"
-						name={config.yField}
+						name={homeDataFieldLabel(config.yField, yFormat.kind)}
+						domain={
+							yFormat.kind === "temporal" ? ["dataMin", "dataMax"] : undefined
+						}
+						tickFormatter={homeDataPlotTick(yFormat)}
 						tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
 						tickLine={false}
 						axisLine={false}
-						width={45}
+						width={yFormat.kind === "temporal" ? 64 : 45}
 					/>
-					<Tooltip contentStyle={tooltipStyle} />
+					<Tooltip
+						contentStyle={tooltipStyle}
+						formatter={
+							xFormat.kind === "temporal" || yFormat.kind === "temporal"
+								? (value, _name, item) => {
+										const axis = item.dataKey === "y" ? yFormat : xFormat;
+										return axis.kind === "temporal"
+											? homeDataDateLabel(new Date(Number(value)), axis)
+											: homeDataText(value);
+									}
+								: undefined
+						}
+					/>
 					<Scatter data={data} fill={COLORS[0]} isAnimationActive={false} />
 				</ScatterChart>
 			</ResponsiveContainer>
@@ -428,10 +628,13 @@ function HomeDataChart({
 				</HomeDataMessage>
 			);
 		const data = result.rows.flatMap((row) => {
-			const date = homeDataText(row.__group).slice(0, 10);
+			const date = homeDataTemporalValue(
+				row.__group,
+				labels.format("__group").typeName,
+			);
 			const value = homeDataNumber(row.__measure_0);
-			return /^\d{4}-\d{2}-\d{2}$/.test(date) && value !== null
-				? [{ day: date, value }]
+			return date && value !== null
+				? [{ day: toDateInputValue(date), value }]
 				: [];
 		});
 		if (!data.length)
@@ -453,11 +656,13 @@ function HomeDataChart({
 			string,
 			{ id: string; data: { x: string; y: number | null }[] }
 		>();
+		const seriesName = distinctHomeDataLabels(labels.series);
+		const groupName = distinctHomeDataLabels(labels.group);
 		for (const row of result.rows) {
-			const label = homeDataText(row.__series);
+			const label = seriesName(row.__series);
 			if (!grouped.has(label)) grouped.set(label, { id: label, data: [] });
 			grouped.get(label)?.data.push({
-				x: homeDataText(row.__group),
+				x: groupName(row.__group),
 				y: homeDataNumber(row.__measure_0),
 			});
 		}
@@ -499,7 +704,7 @@ function HomeDataChart({
 				? [
 						{
 							id: String(index),
-							label: `${config.groupBy ? homeDataText(row.__group) : "Total"}${config.seriesBy ? ` · ${homeDataText(row.__series)}` : ""}`,
+							label: `${config.groupBy ? labels.group(row.__group) : "Total"}${config.seriesBy ? ` · ${labels.series(row.__series)}` : ""}`,
 							value,
 						},
 					]
@@ -545,10 +750,15 @@ function HomeDataChart({
 			</HomeDataMessage>
 		);
 	if (visualization === "donut" || visualization === "pie") {
+		const sliceName = distinctHomeDataLabels(
+			([group, series]: [unknown, unknown]) =>
+				`${config.groupBy ? labels.group(group) : "Total"}${config.seriesBy ? ` · ${labels.series(series)}` : ""}`,
+		);
 		const data = result.rows.flatMap((row) => {
 			const value = homeDataNumber(row.__measure_0);
-			const name = `${config.groupBy ? homeDataText(row.__group) : "Total"}${config.seriesBy ? ` · ${homeDataText(row.__series)}` : ""}`;
-			return value !== null && value > 0 ? [{ name, value }] : [];
+			return value !== null && value > 0
+				? [{ name: sliceName([row.__group, row.__series]), value }]
+				: [];
 		});
 		if (!data.length)
 			return (
@@ -786,8 +996,10 @@ export function HomeDataWidget({
 	const records = ["table", "list", "cards", "kanban", "record"].includes(
 		config.visualization,
 	);
-	const displayResult = useMemo(() => {
-		if (!result || config.mode !== "aggregate" || !records) return result;
+	const display = useMemo(() => {
+		const sources = new Map<string, string>();
+		if (!result || config.mode !== "aggregate" || !records)
+			return { result, sources };
 		const names = new Map<string, string>([
 			["__group", config.groupBy],
 			["__series", config.seriesBy],
@@ -804,23 +1016,28 @@ export function HomeDataWidget({
 			while (used.has(label)) label = `${original} (${suffix++})`;
 			used.add(label);
 			names.set(column.name, label);
+			sources.set(label, column.name);
 		}
 		return {
-			...result,
-			columns: result.columns.map((column) => ({
-				...column,
-				name: names.get(column.name) || column.name,
-			})),
-			rows: result.rows.map((row) =>
-				Object.fromEntries(
-					Object.entries(row).map(([key, value]) => [
-						names.get(key) || key,
-						value,
-					]),
+			sources,
+			result: {
+				...result,
+				columns: result.columns.map((column) => ({
+					...column,
+					name: names.get(column.name) || column.name,
+				})),
+				rows: result.rows.map((row) =>
+					Object.fromEntries(
+						Object.entries(row).map(([key, value]) => [
+							names.get(key) || key,
+							value,
+						]),
+					),
 				),
-			),
+			},
 		};
 	}, [result, config, records]);
+	const labels = useHomeDataLabels(result, config);
 	const state =
 		!ready || requirement
 			? "unconfigured"
@@ -923,14 +1140,18 @@ export function HomeDataWidget({
 								<div className="flex shrink-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
 									<span className="truncate">
 										{config.visualization === "scatter"
-											? `${config.xField} · ${config.yField}`
+											? `${homeDataFieldLabel(config.xField, labels.kind(config.xField))} · ${homeDataFieldLabel(config.yField, labels.kind(config.yField))}`
 											: config.visualization === "boxplot"
-												? config.yField
+												? homeDataFieldLabel(config.yField)
 												: homeDataMeasureTitle(config.measures[0])}
 									</span>
 									{config.groupBy && (
 										<span className="truncate text-right">
-											by {config.groupBy}
+											by{" "}
+											{homeDataInlineFieldLabel(
+												config.groupBy,
+												labels.kind("__group"),
+											)}
 										</span>
 									)}
 								</div>
@@ -938,10 +1159,20 @@ export function HomeDataWidget({
 						<div
 							className={`min-h-0 min-w-0 flex-1 ${records ? "flex flex-col overflow-auto" : ""}`}
 						>
-							{records && displayResult ? (
-								<HomeDataRecords result={displayResult} config={config} />
+							{records && display.result ? (
+								<HomeDataRecords
+									result={display.result}
+									config={config}
+									labels={labels}
+									sources={display.sources}
+								/>
 							) : (
-								<HomeDataChart result={result} config={config} width={width} />
+								<HomeDataChart
+									result={result}
+									config={config}
+									labels={labels}
+									width={width}
+								/>
 							)}
 						</div>
 					</Suspense>

@@ -244,7 +244,7 @@ describe("Home runtime reference parity", () => {
 		const config = { ...recordsConfig, visualization: "table", fields: ["id"] };
 		expect(() =>
 			buildHomeDataQuery(normalizeHomeDataConfig(config), {
-				columns: [{ name: "id", type_name: "Utf8" }],
+				columns: [{ name: "id", type_name: "Utf8", position: 0 }],
 			}),
 		).toThrow("removed_group");
 		const issues = await validateHomeLayoutReferences(

@@ -905,5 +905,8 @@
 	"worstErrorRate": "最も高いエラー率",
 	"worstFirst": "、最も低い順。",
 	"worstScore": "最も低いスコア",
-	"yes": "はい"
+	"yes": "はい",
+	"auditNoEntries": "",
+	"auditSignedNotChecked": "",
+	"auditUnsignedNotChecked": ""
 }

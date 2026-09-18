@@ -6,14 +6,16 @@ import {
 	BUNDLE_MANIFEST_PATH,
 	type WidgetBundleManifest,
 	isSafeEntryPath,
+	unsafeArchiveEntryPaths,
 } from "./bundle-format";
 import {
 	WIDGET_PROTOCOL,
 	type WidgetContract,
 	isValidPackageId,
 	validateContract,
+	validatePublishedCsp,
 } from "./contract-types";
-import { extractContract } from "./extract";
+import { extractContract, networkInputSchemaErrors } from "./extract";
 import {
 	archiveNameCollisions,
 	discoverGroupWidgets,
@@ -95,10 +97,12 @@ export interface BundleValidation {
 }
 
 /**
- * Validate a built `.flwb`: manifest shape, archive name collisions,
- * per-entry hashes, contract validity (including the `csp` grammar and the
- * v1/v2 rule), exact entry paths. Mirrors `WidgetBundleReader::validate` in
- * packages/wasm/schema/src/widget_bundle.rs.
+ * Validate a built `.flwb`: manifest shape, unsafe and colliding archive
+ * names, per-entry hashes, contract validity (including the `csp` purpose
+ * rules and the v1/v2 rule), exact entry paths. Mirrors
+ * `WidgetBundleReader::validate` in packages/wasm/schema/src/widget_bundle.rs,
+ * plus the checks only the hub publish and the bundler run: wildcard bases,
+ * address-like reasons and network input schema reachability.
  */
 export function validateBundle(flwbPath: string): BundleValidation {
 	const errors: string[] = [];
@@ -167,7 +171,9 @@ export function validateBundle(flwbPath: string): BundleValidation {
 	if (!manifest.widgets || manifest.widgets.length === 0) {
 		errors.push("Bundle contains no widgets");
 	}
-	errors.push(...archiveNameCollisions(Object.keys(entries)));
+	const names = Object.keys(entries);
+	errors.push(...unsafeArchiveEntryPaths(names));
+	errors.push(...archiveNameCollisions(names));
 
 	const sharedPaths = new Set<string>();
 	for (const shared of manifest.shared ?? []) {
@@ -233,7 +239,15 @@ export function validateBundle(flwbPath: string): BundleValidation {
 						`Contract id '${contract.id}' does not match widget id '${widget.id}'`,
 					);
 				}
-				errors.push(...validateContract(contract));
+				const contractErrors = validateContract(contract);
+				errors.push(
+					...(contractErrors.length > 0
+						? contractErrors
+						: [
+								...validatePublishedCsp(contract),
+								...networkInputSchemaErrors(contract),
+							]),
+				);
 			} catch (e) {
 				errors.push(
 					`Failed to parse contract for widget '${widget.id}': ${e instanceof Error ? e.message : e}`,

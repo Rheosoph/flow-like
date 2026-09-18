@@ -7,6 +7,7 @@ use axum::{
 };
 use error::InternalError;
 use flow_like_types::Value;
+use middleware::deadline::deadline_middleware;
 use middleware::error_reporting::error_reporting_middleware;
 use middleware::jwt::jwt_middleware;
 use state::{AppState, State};
@@ -217,6 +218,10 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
             state.clone(),
             error_reporting_middleware,
         ))
+        // Inside audit so a deadline 504 still gets its outcome record, inside
+        // CORS so it carries the CORS headers, inside compression so a cut body
+        // still ends with a valid encoder trailer.
+        .layer(from_fn(deadline_middleware))
         .layer(from_fn_with_state(
             state.clone(),
             middleware::audit::audit_middleware,
@@ -225,7 +230,6 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .layer(cors.clone())
         .layer(
             ServiceBuilder::new()
-                // .layer(TimeoutLayer::new(Duration::from_secs(15 * 60)))
                 .layer(RequestDecompressionLayer::new())
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
@@ -247,11 +251,15 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
             DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
         ));
 
+    // Router::layer keeps the deadline innermost: past decompression (whose body
+    // type from_fn cannot accept inside a ServiceBuilder) and inside compression.
     let inbound_rest = routes::inbound::rest_routes()
         .with_state(state.clone())
+        .layer(from_fn(deadline_middleware))
         .layer(inbound_layers.clone());
     let inbound_mcp = routes::inbound::mcp_routes()
         .with_state(state.clone())
+        .layer(from_fn(deadline_middleware))
         .layer(inbound_layers);
 
     Router::new()
@@ -267,6 +275,7 @@ fn openapi_routes(cors: CorsLayer) -> Router {
     Router::from(
         SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
     )
+    .layer(from_fn(deadline_middleware))
     .layer(cors)
 }
 

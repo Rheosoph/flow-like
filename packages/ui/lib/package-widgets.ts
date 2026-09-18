@@ -59,6 +59,7 @@ export function readManifestWidgets(manifest: unknown): PackageWidgetEntry[] {
 			keywords: Array.isArray(item.keywords)
 				? item.keywords.filter((k): k is string => typeof k === "string")
 				: [],
+			...(item.network === undefined ? {} : { network: item.network }),
 		});
 	}
 	return entries;

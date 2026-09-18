@@ -844,12 +844,9 @@ mod apple {
             let (port, server) = start_proxy(proxy_state).await?;
             let runtime = Arc::new(MlxRuntime { server, transport });
 
-            let mut provider = bit.try_to_provider().ok_or_else(|| {
+            let mut provider = bit.try_to_served_provider().ok_or_else(|| {
                 flow_like_types::anyhow!("Failed to read the MLX provider configuration")
             })?;
-            if provider.model_id.as_deref().is_none_or(str::is_empty) {
-                provider.model_id = Some(bit.id.clone());
-            }
             provider
                 .params
                 .get_or_insert_default()

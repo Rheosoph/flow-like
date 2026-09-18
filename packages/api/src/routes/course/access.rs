@@ -158,7 +158,7 @@ pub async fn ensure_challenge_course_readable(
     state: &AppState,
     user: &AppUser,
     challenge_id: &str,
-) -> Result<challenge::Model, ApiError> {
+) -> Result<(challenge::Model, course_module::Model), ApiError> {
     let challenge = challenge::Entity::find_by_id(challenge_id)
         .one(&state.db)
         .await?
@@ -172,7 +172,7 @@ pub async fn ensure_challenge_course_readable(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
     ensure_course_readable(state, user, &module.course_id).await?;
-    Ok(challenge)
+    Ok((challenge, module))
 }
 
 pub async fn ensure_lesson_course_readable(

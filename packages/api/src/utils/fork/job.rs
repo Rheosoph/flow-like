@@ -16,6 +16,8 @@ use super::{
     plan_package_rows, plan_page_rows, plan_roles, plan_template_meta_rows, plan_template_rows,
     plan_widget_meta_rows, plan_widget_rows, policy,
 };
+use crate::audit::service::AuditEntryInput;
+use crate::entity::sea_orm_active_enums::AuditActorType;
 use crate::{
     db::{DEFAULT_WRITE_CHUNK, RetryPolicy, insert_in_chunks, retry_transaction},
     deletion::{self, Deleted, DeletionRoot},
@@ -330,58 +332,69 @@ pub fn fits_sync(rows: u64, bytes: u64) -> bool {
 /// The DB rows a fork of `src_app_id` writes, for [`fits_sync`].
 pub async fn count_source_rows(state: &AppState, src_app_id: &str) -> Result<u64, ApiError> {
     let db = &state.db;
-    let widget_ids: Vec<String> = widget::Entity::find()
-        .filter(widget::Column::AppId.eq(src_app_id))
-        .select_only()
-        .column(widget::Column::Id)
-        .into_tuple()
-        .all(db)
-        .await?;
-    let template_ids: Vec<String> = template::Entity::find()
-        .filter(template::Column::AppId.eq(src_app_id))
-        .select_only()
-        .column(template::Column::Id)
-        .into_tuple()
-        .all(db)
-        .await?;
-    let mut rows = widget_ids.len() as u64 + template_ids.len() as u64;
-    rows += meta::Entity::find()
-        .filter(meta::Column::AppId.eq(src_app_id))
-        .count(db)
-        .await?;
-    rows += role::Entity::find()
-        .filter(role::Column::AppId.eq(src_app_id))
-        .count(db)
-        .await?;
-    rows += app_package::Entity::find()
-        .filter(app_package::Column::AppId.eq(src_app_id))
-        .count(db)
-        .await?;
-    rows += event::Entity::find()
-        .filter(event::Column::AppId.eq(src_app_id))
-        .count(db)
-        .await?;
-    rows += page::Entity::find()
-        .filter(page::Column::AppId.eq(src_app_id))
-        .count(db)
-        .await?;
-    rows += event_sink::Entity::find()
-        .filter(event_sink::Column::AppId.eq(src_app_id))
-        .count(db)
-        .await?;
-    if !widget_ids.is_empty() {
-        rows += meta::Entity::find()
-            .filter(meta::Column::WidgetId.is_in(widget_ids))
-            .count(db)
-            .await?;
+    let (widget_ids, template_ids, meta_rows, role_rows) = flow_like_types::tokio::try_join!(
+        widget::Entity::find()
+            .filter(widget::Column::AppId.eq(src_app_id))
+            .select_only()
+            .column(widget::Column::Id)
+            .into_tuple::<String>()
+            .all(db),
+        template::Entity::find()
+            .filter(template::Column::AppId.eq(src_app_id))
+            .select_only()
+            .column(template::Column::Id)
+            .into_tuple::<String>()
+            .all(db),
+        meta::Entity::find()
+            .filter(meta::Column::AppId.eq(src_app_id))
+            .count(db),
+        role::Entity::find()
+            .filter(role::Column::AppId.eq(src_app_id))
+            .count(db),
+    )?;
+    let (package_rows, event_rows, page_rows, sink_rows) = flow_like_types::tokio::try_join!(
+        app_package::Entity::find()
+            .filter(app_package::Column::AppId.eq(src_app_id))
+            .count(db),
+        event::Entity::find()
+            .filter(event::Column::AppId.eq(src_app_id))
+            .count(db),
+        page::Entity::find()
+            .filter(page::Column::AppId.eq(src_app_id))
+            .count(db),
+        event_sink::Entity::find()
+            .filter(event_sink::Column::AppId.eq(src_app_id))
+            .count(db),
+    )?;
+    let artifact_rows = widget_ids.len() as u64 + template_ids.len() as u64;
+    let (widget_meta_rows, template_meta_rows) = flow_like_types::tokio::try_join!(
+        count_meta_referencing(db, meta::Column::WidgetId, widget_ids),
+        count_meta_referencing(db, meta::Column::TemplateId, template_ids),
+    )?;
+    Ok(artifact_rows
+        + meta_rows
+        + role_rows
+        + package_rows
+        + event_rows
+        + page_rows
+        + sink_rows
+        + widget_meta_rows
+        + template_meta_rows
+        + 5)
+}
+
+async fn count_meta_referencing(
+    db: &sea_orm::DatabaseConnection,
+    column: meta::Column,
+    ids: Vec<String>,
+) -> Result<u64, sea_orm::DbErr> {
+    if ids.is_empty() {
+        return Ok(0);
     }
-    if !template_ids.is_empty() {
-        rows += meta::Entity::find()
-            .filter(meta::Column::TemplateId.is_in(template_ids))
-            .count(db)
-            .await?;
-    }
-    Ok(rows + 5)
+    meta::Entity::find()
+        .filter(column.is_in(ids))
+        .count(db)
+        .await
 }
 
 /// Create the job row. Nothing else exists yet; `allocate` is the first
@@ -402,17 +415,9 @@ pub async fn enqueue(
             .map_err(|_| ApiError::bad_request("The fork is too large."))?;
         crate::capacity::check_storage_write(state, "", user_sub, bytes).await?;
     }
-    // The stored source row decides exemption. Offline manifests cannot grant it.
-    let mut public_source = if spec.public_fork_source_id.is_some() {
-        spec.public_fork_source_id.clone()
-    } else if spec.kind == ForkJobKind::OnlineCopy {
-        app::Entity::find_by_id(source_app_id)
-            .one(&state.db)
-            .await?
-            .and_then(|source| crate::capacity::public_fork_source(&source.visibility, &source.id))
-    } else {
-        None
-    };
+    // The stored source row decides exemption: `ForkJobSpec::online_copy` derives it
+    // from the row the caller loaded. Offline manifests cannot grant it.
+    let mut public_source = spec.public_fork_source_id.clone();
     if public_source.is_none() && spec.kind == ForkJobKind::OnlineCopy {
         use sea_orm::{ConnectionTrait, Statement};
         if state.db.query_one_raw(Statement::from_sql_and_values(state.db.get_database_backend(),
@@ -944,7 +949,7 @@ async fn finalize(
     let dest_app_id = job.dest_app_id.clone();
     let job_id = job.id.clone();
     let visibility = ctx.dst_visibility.clone();
-    state
+    let finished = state
         .transaction(|txn| {
             let dest_app_id = dest_app_id.clone();
             let job_id = job_id.clone();
@@ -975,7 +980,29 @@ async fn finalize(
                 Ok::<_, ApiError>(updated)
             })
         })
-        .await
+        .await?;
+    record_fork_audit(state, job, ctx).await;
+    Ok(finished)
+}
+
+/// A fork is the one creation path that never passes `upsert_app`, so the new
+/// chain would otherwise start without its origin.
+async fn record_fork_audit(state: &AppState, job: &fork_job::Model, ctx: &ForkContext) {
+    let input = AuditEntryInput {
+        actor_id: format!("fork:{}:{}", job.user_id, job.id),
+        actor_type: AuditActorType::User,
+        actor_ip: None,
+        action: "app.create".to_string(),
+        resource_type: "App".to_string(),
+        resource_id: job.dest_app_id.clone(),
+        chain_id: Some(job.dest_app_id.clone()),
+        summary: "Application forked".to_string(),
+        details: Some(serde_json::json!({
+            "source_app_id": ctx.src_app_id,
+            "fork_job_id": job.id,
+        })),
+    };
+    crate::audit::record_entry(state, input).await;
 }
 
 /// Called by `POST /apps/{id}/fork/online/finalize` once the desktop has

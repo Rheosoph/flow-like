@@ -905,5 +905,8 @@
 	"worstErrorRate": "最差错误率",
 	"worstFirst": ", 最差优先.",
 	"worstScore": "最差分数",
-	"yes": "是"
+	"yes": "是",
+	"auditNoEntries": "",
+	"auditSignedNotChecked": "",
+	"auditUnsignedNotChecked": ""
 }

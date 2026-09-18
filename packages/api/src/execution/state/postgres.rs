@@ -260,6 +260,18 @@ impl PostgresStateStore {
         }
     }
 
+    /// [`Self::resolve_payload`] tagged with the record position, so a page of
+    /// staged payloads can be read concurrently and written back in order.
+    async fn resolve_payload_at(
+        &self,
+        index: usize,
+        event_id: String,
+        reference: String,
+    ) -> Result<(usize, serde_json::Value), StateStoreError> {
+        let payload = self.resolve_payload(&event_id, &reference).await?;
+        Ok((index, payload))
+    }
+
     /// Delete the staged objects of the events matched by `condition`, then the
     /// rows that referenced them, one bounded page at a time.
     ///
@@ -463,6 +475,39 @@ fn run_mirror_model(run: &ExecutionRunRecord) -> execution_run::ActiveModel {
         updated_at: Set(ts_to_datetime(run.updated_at)),
         ..Default::default()
     }
+}
+
+/// Only the fields the progress callback carries are written; everything else
+/// stays `NotSet` and is left out of the UPDATE.
+fn run_progress_model(input: UpdateRunInput) -> execution_run::ActiveModel {
+    let mut model = execution_run::ActiveModel {
+        updated_at: Set(chrono::Utc::now().fixed_offset()),
+        ..Default::default()
+    };
+
+    if let Some(progress) = input.progress {
+        model.progress = Set(progress);
+    }
+    if let Some(current_step) = input.current_step {
+        model.current_step = Set(Some(current_step));
+    }
+    if let Some(status) = input.status {
+        model.status = Set(type_run_status_to_entity(status));
+    }
+    if let Some(output_payload_len) = input.output_payload_len {
+        model.output_payload_len = Set(output_payload_len);
+    }
+    if let Some(error_message) = input.error_message {
+        model.error_message = Set(Some(error_message));
+    }
+    if let Some(started_at) = input.started_at {
+        model.started_at = Set(Some(ts_to_datetime(started_at)));
+    }
+    if let Some(completed_at) = input.completed_at {
+        model.completed_at = Set(Some(ts_to_datetime(completed_at)));
+    }
+
+    model
 }
 
 fn mutable_run_update(
@@ -853,6 +898,9 @@ impl ExecutionStateStore for PostgresStateStore {
             app_id: Set(input.app_id),
             created_at: Set(now),
             updated_at: Set(now),
+            event_version: Set(None),
+            nodes: Set(None),
+            logs_count: Set(None),
         };
 
         let result = model
@@ -891,73 +939,34 @@ impl ExecutionStateStore for PostgresStateStore {
         run_id: &str,
         input: UpdateRunInput,
     ) -> Result<ExecutionRunRecord, StateStoreError> {
-        let existing = execution_run::Entity::find_by_id(run_id)
+        // The status guard in `mutable_run_update` is the terminal check; only
+        // a rejected transition reads the row to say why.
+        let updated = mutable_run_update(run_id, run_progress_model(input))
+            .exec_with_returning(self.db.as_ref())
+            .await
+            .map_err(|e| StateStoreError::Database(e.to_string()))?;
+
+        if let Some(model) = updated.into_iter().next() {
+            return Ok(run_model_to_record(model));
+        }
+
+        let current = execution_run::Entity::find_by_id(run_id)
             .one(self.db.as_ref())
             .await
             .map_err(|e| StateStoreError::Database(e.to_string()))?
             .ok_or(StateStoreError::NotFound)?;
-
         if matches!(
-            existing.status,
+            current.status,
             EntityRunStatus::Completed
                 | EntityRunStatus::Failed
                 | EntityRunStatus::Cancelled
                 | EntityRunStatus::Timeout
         ) {
-            return Ok(run_model_to_record(existing));
+            return Ok(run_model_to_record(current));
         }
-
-        let mut model: execution_run::ActiveModel = existing.into();
-        model.updated_at = Set(chrono::Utc::now().fixed_offset());
-
-        if let Some(progress) = input.progress {
-            model.progress = Set(progress);
-        }
-        if let Some(current_step) = input.current_step {
-            model.current_step = Set(Some(current_step));
-        }
-        if let Some(status) = input.status {
-            model.status = Set(type_run_status_to_entity(status));
-        }
-        if let Some(output_payload_len) = input.output_payload_len {
-            model.output_payload_len = Set(output_payload_len);
-        }
-        if let Some(error_message) = input.error_message {
-            model.error_message = Set(Some(error_message));
-        }
-        if let Some(started_at) = input.started_at {
-            model.started_at = Set(Some(ts_to_datetime(started_at)));
-        }
-        if let Some(completed_at) = input.completed_at {
-            model.completed_at = Set(Some(ts_to_datetime(completed_at)));
-        }
-
-        let result = mutable_run_update(run_id, model)
-            .exec(self.db.as_ref())
-            .await
-            .map_err(|e| StateStoreError::Database(e.to_string()))?;
-
-        if result.rows_affected == 0 {
-            let current = execution_run::Entity::find_by_id(run_id)
-                .one(self.db.as_ref())
-                .await
-                .map_err(|e| StateStoreError::Database(e.to_string()))?
-                .ok_or(StateStoreError::NotFound)?;
-            if matches!(
-                current.status,
-                EntityRunStatus::Completed
-                    | EntityRunStatus::Failed
-                    | EntityRunStatus::Cancelled
-                    | EntityRunStatus::Timeout
-            ) {
-                return Ok(run_model_to_record(current));
-            }
-            return Err(StateStoreError::Database(format!(
-                "execution run '{run_id}' changed while applying progress"
-            )));
-        }
-
-        self.get_run(run_id).await?.ok_or(StateStoreError::NotFound)
+        Err(StateStoreError::Database(format!(
+            "execution run '{run_id}' changed while applying progress"
+        )))
     }
 
     async fn list_runs_for_app(
@@ -1117,27 +1126,45 @@ impl ExecutionStateStore for PostgresStateStore {
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
         let mut records = Vec::with_capacity(results.len());
-        for model in results {
-            let (mut record, payload_ref) = event_model_to_record(model);
+        let mut staged = Vec::new();
+        for (index, model) in results.into_iter().enumerate() {
+            let (record, payload_ref) = event_model_to_record(model);
             if let Some(reference) = payload_ref {
-                record.payload = self.resolve_payload(&record.id, &reference).await?;
+                staged.push((index, record.id.clone(), reference));
             }
             records.push(record);
+        }
+
+        if staged.is_empty() {
+            return Ok(records);
+        }
+
+        let payloads = stream::iter(staged.into_iter().map(|(index, event_id, reference)| {
+            self.resolve_payload_at(index, event_id, reference)
+        }))
+        .buffer_unordered(STAGED_DELETE_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
+        for (index, payload) in payloads {
+            records[index].payload = payload;
         }
 
         Ok(records)
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {
-        let result = execution_event::Entity::find()
+        let result: Option<i32> = execution_event::Entity::find()
+            .select_only()
+            .column(execution_event::Column::Sequence)
             .filter(execution_event::Column::RunId.eq(run_id))
             .order_by_desc(execution_event::Column::Sequence)
             .limit(1)
+            .into_tuple()
             .one(self.db.as_ref())
             .await
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
-        Ok(result.map(|m| m.sequence).unwrap_or(0))
+        Ok(result.unwrap_or(0))
     }
 
     async fn mark_events_delivered(

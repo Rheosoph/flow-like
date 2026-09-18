@@ -7,13 +7,12 @@ use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
 use crate::execute::validate_executor_request_claims;
 use crate::jwt::verify_jwt_async;
-use crate::types::{ExecutionRequest, ExecutionStatus};
+use crate::types::{ExecutionRequest, ExecutionStatus, RunSummary};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::RejectionStage;
-use flow_like::flow::execution::{InternalRun, RunPayload};
+use flow_like::flow::execution::{InternalRun, LogLevel, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::profile::Profile;
-use flow_like_storage::Path;
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use futures_util::Stream;
 use std::collections::{BTreeSet, HashMap};
@@ -57,21 +56,26 @@ pub fn run_initiated_event(run_id: &str) -> StreamEvent {
     InterComEvent::with_type("run_initiated", serde_json::json!({ "run_id": run_id }))
 }
 
+/// The terminal stream event. `log_level` is always present (0 when unknown);
+/// the other summary fields appear only when the run reported them.
 pub fn completed_event(
     run_id: &str,
     status: ExecutionStatus,
     duration_ms: u64,
-    log_level: Option<u8>,
+    summary: &RunSummary,
 ) -> StreamEvent {
-    InterComEvent::with_type(
-        "completed",
-        serde_json::json!({
-            "run_id": run_id,
-            "status": status,
-            "duration_ms": duration_ms,
-            "log_level": log_level.unwrap_or(0)
-        }),
-    )
+    let mut payload = serde_json::Map::new();
+    if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(summary) {
+        payload.extend(fields);
+    }
+    payload.insert("run_id".into(), serde_json::json!(run_id));
+    payload.insert("status".into(), serde_json::json!(status));
+    payload.insert("duration_ms".into(), serde_json::json!(duration_ms));
+    payload.insert(
+        "log_level".into(),
+        serde_json::json!(summary.log_level.unwrap_or(0)),
+    );
+    InterComEvent::with_type("completed", serde_json::Value::Object(payload))
 }
 
 pub fn error_event(message: &str) -> StreamEvent {
@@ -92,27 +96,58 @@ async fn send_fallback_failure(
     tx: &mpsc::Sender<StreamEvent>,
     run_id: &str,
     duration_ms: u64,
-    error: &ExecutorError,
+    failure: StreamFailure,
     is_page_execution: bool,
 ) {
     tracing::error!(
         run_id,
-        error = %error,
+        error = %failure.error,
         is_page_execution,
         "Streaming execution failed before the workflow could report a result"
     );
-    let message = fallback_error_message(error, is_page_execution);
+    let message = fallback_error_message(&failure.error, is_page_execution);
     let _ = tx.try_send(error_event(&message));
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tx.send(completed_event(
-            run_id,
-            ExecutionStatus::Failed,
-            duration_ms,
-            Some(4),
-        )),
-    )
-    .await;
+    let summary = RunSummary {
+        log_level: Some(LogLevel::Fatal.to_u8()),
+        ..failure.summary
+    };
+    let mut event = completed_event(run_id, ExecutionStatus::Failed, duration_ms, &summary);
+    if let (Some(stage), Some(fields)) = (failure.rejection, event.payload.as_object_mut()) {
+        fields.insert(
+            "current_step".into(),
+            serde_json::json!(stage.operation_id()),
+        );
+    }
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), tx.send(event)).await;
+}
+
+/// An execution that ended without a workflow result. A rejection that was
+/// recorded as a run carries its stage and that run's summary so the terminal
+/// event can report both; every other error carries neither.
+struct StreamFailure {
+    error: ExecutorError,
+    rejection: Option<RejectionStage>,
+    summary: RunSummary,
+}
+
+impl StreamFailure {
+    fn rejected(error: ExecutorError, stage: RejectionStage, summary: Option<RunSummary>) -> Self {
+        StreamFailure {
+            error,
+            rejection: Some(stage),
+            summary: summary.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<ExecutorError> for StreamFailure {
+    fn from(error: ExecutorError) -> Self {
+        StreamFailure {
+            error,
+            rejection: None,
+            summary: RunSummary::default(),
+        }
+    }
 }
 
 /// Stream of execution events
@@ -207,7 +242,7 @@ async fn run_execution(
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match result {
-        Ok((status, log_level, _output, _error)) => {
+        Ok((status, summary, _output, _error)) => {
             config.record_completion(
                 match status {
                     ExecutionStatus::Completed => "completed",
@@ -218,16 +253,16 @@ async fn run_execution(
             );
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                tx.send(completed_event(&run_id, status, duration_ms, log_level)),
+                tx.send(completed_event(&run_id, status, duration_ms, &summary)),
             )
             .await;
         }
-        Err(e) => {
+        Err(failure) => {
             config.record_completion("error", start.elapsed().as_secs_f64());
             if let Ok(claims) = verify_jwt_async(&request.executor_jwt).await {
                 crate::quota::reject(&claims, &request.executor_jwt).await;
             }
-            send_fallback_failure(&tx, &run_id, duration_ms, &e, is_page_execution).await;
+            send_fallback_failure(&tx, &run_id, duration_ms, failure, is_page_execution).await;
         }
     }
     if let Ok(claims) = verify_jwt_async(&request.executor_jwt).await {
@@ -245,11 +280,11 @@ async fn execute_inner(
 ) -> Result<
     (
         ExecutionStatus,
-        Option<u8>,
+        RunSummary,
         Option<serde_json::Value>,
         Option<String>,
     ),
-    ExecutorError,
+    StreamFailure,
 > {
     let state = crate::execute::build_flow_state(
         &request.credentials,
@@ -284,7 +319,7 @@ async fn execute_inner(
                     wasm_nodes = report.nodes;
                 }
                 Err(e) => {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         }
@@ -311,7 +346,7 @@ async fn execute_inner(
         }) {
         Ok(template) => template,
         Err(error) => {
-            crate::execute::record_executor_rejection(
+            let summary = crate::execute::record_executor_rejection(
                 &state,
                 request,
                 run_id,
@@ -319,7 +354,11 @@ async fn execute_inner(
                 error.to_string(),
             )
             .await;
-            return Err(error);
+            return Err(StreamFailure::rejected(
+                error,
+                RejectionStage::Resolution,
+                summary,
+            ));
         }
     };
     let unavailable_wasm_packages = crate::wasm_loader::unavailable_board_wasm_packages(
@@ -333,7 +372,7 @@ async fn execute_inner(
             board_id,
             unavailable_wasm_packages.join(", ")
         ));
-        crate::execute::record_executor_rejection(
+        let summary = crate::execute::record_executor_rejection(
             &state,
             request,
             run_id,
@@ -341,7 +380,11 @@ async fn execute_inner(
             error.to_string(),
         )
         .await;
-        return Err(error);
+        return Err(StreamFailure::rejected(
+            error,
+            RejectionStage::Setup,
+            summary,
+        ));
     }
 
     emit_event(
@@ -509,39 +552,7 @@ async fn execute_inner(
 
     match execution_result {
         Ok(log_meta) => {
-            let log_level = log_meta.as_ref().map(|m| m.log_level);
-
-            // Flush logs to database if we have metadata
-            if let Some(meta) = &log_meta {
-                let (db_fn, write_options) = {
-                    let guard = state.config.read().await;
-                    (
-                        guard.callbacks.build_logs_database.clone(),
-                        guard.callbacks.lance_write_options.clone(),
-                    )
-                };
-                if let Some(db_fn) = db_fn.as_ref() {
-                    let base_path = Path::from("runs")
-                        .join(request.app_id.as_str())
-                        .join(request.board_id.as_str());
-                    match state
-                        .with_lance_session(db_fn(base_path.clone()))
-                        .execute()
-                        .await
-                    {
-                        Ok(db) => {
-                            if let Err(e) = meta.flush(db, write_options.as_ref()).await {
-                                tracing::error!(error = %e, "Failed to flush run logs");
-                            } else {
-                                tracing::info!("Successfully flushed run logs to {}", base_path);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, path = %base_path, "Failed to open log database");
-                        }
-                    }
-                }
-            }
+            let summary = log_meta.as_ref().map(RunSummary::from).unwrap_or_default();
 
             let status = ExecutionStatus::from_final_run_status(&run.get_status().await);
             let (event_type, message, error) = match &status {
@@ -558,7 +569,7 @@ async fn execute_inner(
                 ),
             };
             emit_event(tx, event_type, serde_json::json!({ "message": message }));
-            Ok((status, log_level, None, error))
+            Ok((status, summary, None, error))
         }
         Err(_) => {
             emit_event(
@@ -568,7 +579,10 @@ async fn execute_inner(
             );
             Ok((
                 ExecutionStatus::Failed,
-                Some(4), // Fatal log level for timeout
+                RunSummary {
+                    log_level: Some(LogLevel::Fatal.to_u8()),
+                    ..RunSummary::default()
+                },
                 None,
                 Some("Execution timeout".to_string()),
             ))
@@ -646,9 +660,9 @@ mod tests {
     #[tokio::test]
     async fn fallback_failure_always_finishes_the_stream_with_terminal_status() {
         let (tx, mut rx) = mpsc::channel(256);
-        let error = ExecutorError::BoardLoad("resolver failed".to_string());
+        let failure = StreamFailure::from(ExecutorError::BoardLoad("resolver failed".to_string()));
 
-        send_fallback_failure(&tx, "run-1", 42, &error, true).await;
+        send_fallback_failure(&tx, "run-1", 42, failure, true).await;
 
         let error_event = rx.try_recv().expect("error event");
         assert_eq!(error_event.event_type, "error");
@@ -669,6 +683,94 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("failed")
         );
+        assert_eq!(
+            completed.payload.get("log_level"),
+            Some(&serde_json::json!(4))
+        );
+        assert!(completed.payload.get("event_version").is_none());
+        assert!(completed.payload.get("nodes").is_none());
+        assert!(completed.payload.get("logs").is_none());
+        assert!(completed.payload.get("current_step").is_none());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn completed_event_carries_the_run_summary_as_flat_keys() {
+        let summary = RunSummary {
+            log_level: Some(3),
+            event_version: Some("1.0.3".to_string()),
+            nodes: Some(vec![("n1".to_string(), 1), ("n2".to_string(), 3)]),
+            logs: Some(7),
+        };
+
+        let event = completed_event("run-1", ExecutionStatus::Failed, 42, &summary);
+
+        assert_eq!(event.event_type, "completed");
+        assert_eq!(
+            event.payload,
+            serde_json::json!({
+                "run_id": "run-1",
+                "status": "failed",
+                "duration_ms": 42,
+                "log_level": 3,
+                "event_version": "1.0.3",
+                "nodes": [["n1", 1], ["n2", 3]],
+                "logs": 7
+            })
+        );
+    }
+
+    #[test]
+    fn completed_event_omits_unknown_summary_fields_but_keeps_log_level() {
+        let event = completed_event(
+            "run-1",
+            ExecutionStatus::Completed,
+            5,
+            &RunSummary::default(),
+        );
+
+        assert_eq!(
+            event.payload,
+            serde_json::json!({
+                "run_id": "run-1",
+                "status": "completed",
+                "duration_ms": 5,
+                "log_level": 0
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_run_summary_reaches_the_fallback_completed_event() {
+        let (tx, mut rx) = mpsc::channel(256);
+        let failure = StreamFailure::rejected(
+            ExecutorError::BoardLoad("resolver failed".to_string()),
+            RejectionStage::Resolution,
+            Some(RunSummary {
+                log_level: Some(4),
+                event_version: Some("2.0.0".to_string()),
+                nodes: Some(Vec::new()),
+                logs: Some(1),
+            }),
+        );
+
+        send_fallback_failure(&tx, "run-1", 42, failure, false).await;
+
+        let _error_event = rx.try_recv().expect("error event");
+        let completed = rx.try_recv().expect("completed event");
+        assert_eq!(
+            completed.payload.get("log_level"),
+            Some(&serde_json::json!(4))
+        );
+        assert_eq!(
+            completed.payload.get("event_version"),
+            Some(&serde_json::json!("2.0.0"))
+        );
+        assert_eq!(completed.payload.get("nodes"), Some(&serde_json::json!([])));
+        assert_eq!(completed.payload.get("logs"), Some(&serde_json::json!(1)));
+        assert_eq!(
+            completed.payload.get("current_step"),
+            Some(&serde_json::json!("rejected:resolution"))
+        );
     }
 }

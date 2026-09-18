@@ -216,6 +216,9 @@ pub fn validate_slug(slug: &str) -> Result<(), ApiError> {
 pub struct ResolvedAlias {
     pub event_id: String,
     pub app_id: String,
+    /// The event row, when resolution went through the event table. Alias
+    /// hits never load it.
+    pub event: Option<event::Model>,
 }
 
 fn resolved_from_alias_model(
@@ -234,6 +237,7 @@ fn resolved_from_alias_model(
     Ok(ResolvedAlias {
         event_id: model.event_id,
         app_id: model.app_id,
+        event: None,
     })
 }
 
@@ -267,19 +271,16 @@ pub async fn resolve(
         storage_slug_for_event_type("rest", slug_or_id),
         storage_slug_for_event_type("mcp", slug_or_id),
     ];
-    let mut matches = Vec::new();
-
-    for storage_slug in candidate_storage_slugs {
-        if let Some(model) = event_alias::Entity::find_by_id(storage_slug)
-            .one(db)
-            .await
-            .map_err(|e| {
-                ApiError::internal_error(flow_like_types::anyhow!("alias resolve db error: {e}"))
-            })?
-        {
-            matches.push(resolved_from_alias_model(model, slug_or_id, app_hint)?);
-        }
-    }
+    let mut matches = event_alias::Entity::find()
+        .filter(event_alias::Column::Slug.is_in(candidate_storage_slugs))
+        .all(db)
+        .await
+        .map_err(|e| {
+            ApiError::internal_error(flow_like_types::anyhow!("alias resolve db error: {e}"))
+        })?
+        .into_iter()
+        .map(|model| resolved_from_alias_model(model, slug_or_id, app_hint))
+        .collect::<Result<Vec<_>, _>>()?;
 
     if matches.len() > 1 {
         return Err(ApiError::conflict(format!(
@@ -338,7 +339,8 @@ async fn resolve_event_id(
         })?
         .ok_or_else(|| ApiError::not_found(format!("alias or event '{event_id}' not found")))?;
     Ok(ResolvedAlias {
-        event_id: model.id,
-        app_id: model.app_id,
+        event_id: model.id.clone(),
+        app_id: model.app_id.clone(),
+        event: Some(model),
     })
 }

@@ -1900,6 +1900,12 @@ export interface Surface {
 	dataModel?: DataEntry[];
 	canvasSettings?: CanvasSettings;
 	catalogId?: string;
+	/**
+	 * Components a run detached (`clearChildren`, `removeChildAt`, `removeElement`) and no
+	 * longer referenced, keyed by the element id the run addressed. Runtime-only state for
+	 * `pruneDetached`; never part of a Page.
+	 */
+	detachedChildren?: Record<string, string[]>;
 }
 
 // Messages
@@ -1986,6 +1992,11 @@ export type A2UIServerMessage =
 			type: "removeElement";
 			surfaceId: string;
 			elementId: string;
+	  }
+	| {
+			/** Sent once when a run ends: delete what it detached from these elements and nothing re-attached. */
+			type: "pruneDetached";
+			element_ids: string[];
 	  }
 	| {
 			type: "setGlobalState";

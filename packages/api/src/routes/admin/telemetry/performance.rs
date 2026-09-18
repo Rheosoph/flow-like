@@ -25,6 +25,7 @@ use crate::{db::DbDialect, telemetry::percentiles_in_sql};
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
     QuerySelect, Select, Statement,
@@ -515,13 +516,6 @@ async fn perf_from_sql<C: ConnectionTrait>(
            GROUP BY "metric"
            ORDER BY "metric" ASC"#
     );
-    let summaries = SummaryRow::find_by_statement(Statement::from_sql_and_values(
-        backend,
-        summary_sql,
-        values.clone(),
-    ))
-    .all(db)
-    .await?;
 
     let trend_sql = format!(
         r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
@@ -532,13 +526,18 @@ async fn perf_from_sql<C: ConnectionTrait>(
            GROUP BY bucket, "metric"
            ORDER BY bucket ASC, "metric" ASC"#
     );
-    let trend_rows = TrendRow::find_by_statement(Statement::from_sql_and_values(
-        backend,
-        trend_sql,
-        values.clone(),
-    ))
-    .all(db)
-    .await?;
+
+    let summary_stmt = Statement::from_sql_and_values(backend, summary_sql, values.clone());
+    let trend_stmt = Statement::from_sql_and_values(backend, trend_sql, values);
+    let aggregates = async {
+        try_join!(
+            SummaryRow::find_by_statement(summary_stmt).all(db),
+            TrendRow::find_by_statement(trend_stmt).all(db),
+        )
+        .map_err(ApiError::from)
+    };
+    let ((summaries, trend_rows), by_path) =
+        try_join!(aggregates, perf_paths_from_sql(db, filters))?;
 
     Ok(PerfFold {
         metrics: summaries
@@ -560,7 +559,7 @@ async fn perf_from_sql<C: ConnectionTrait>(
                 p75: round3(row.p75),
             })
             .collect(),
-        by_path: perf_paths_from_sql(db, filters).await?,
+        by_path,
     })
 }
 

@@ -11,9 +11,10 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_types::tokio::try_join;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -64,27 +65,31 @@ pub async fn get_notifications(
 ) -> Result<Json<NotificationOverview>, ApiError> {
     let sub = user.sub()?;
 
-    let invites_count = invitation::Entity::find()
-        .filter(invitation::Column::UserId.eq(sub.clone()))
-        .count(&state.db)
-        .await?;
+    Ok(Json(notification_overview(&state.db, &sub).await?))
+}
 
-    let notifications_count = notification::Entity::find()
-        .filter(notification::Column::UserId.eq(sub.clone()))
-        .count(&state.db)
-        .await?;
+pub async fn notification_overview(
+    db: &DatabaseConnection,
+    sub: &str,
+) -> Result<NotificationOverview, sea_orm::DbErr> {
+    let (invites_count, notifications_count, unread_count) = try_join!(
+        invitation::Entity::find()
+            .filter(invitation::Column::UserId.eq(sub))
+            .count(db),
+        notification::Entity::find()
+            .filter(notification::Column::UserId.eq(sub))
+            .count(db),
+        notification::Entity::find()
+            .filter(notification::Column::UserId.eq(sub))
+            .filter(notification::Column::Read.eq(false))
+            .count(db),
+    )?;
 
-    let unread_count = notification::Entity::find()
-        .filter(notification::Column::UserId.eq(sub))
-        .filter(notification::Column::Read.eq(false))
-        .count(&state.db)
-        .await?;
-
-    Ok(Json(NotificationOverview {
+    Ok(NotificationOverview {
         invites_count,
         notifications_count,
         unread_count,
-    }))
+    })
 }
 
 #[utoipa::path(

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import MiniSearch from "minisearch";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { resolveBoardRef } from "../../lib/board-refs";
 import type { IBoard, ILayer, INode, IPin } from "../../lib/schema/flow/board";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { cn } from "../../lib/utils";
@@ -106,12 +107,13 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 
 	const processNode = (node: INode, layerId?: string, layerPath?: string[]) => {
 		const nodeName = node.friendly_name || node.name;
+		const nodeDescription = resolveBoardRef(node.description, board.refs);
 
 		// Index the node itself with all searchable fields
 		const nodeSearchText = [
 			node.friendly_name,
 			node.name,
-			node.description,
+			nodeDescription,
 			node.category,
 			node.comment,
 			node.docs,
@@ -119,7 +121,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 			...Object.values(node.pins).flatMap((pin) => [
 				pin.friendly_name,
 				pin.name,
-				pin.description,
+				resolveBoardRef(pin.description, board.refs),
 			]),
 		]
 			.filter(Boolean)
@@ -133,7 +135,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 			layerPath,
 			name: nodeName,
 			nodeName,
-			description: node.description || "",
+			description: nodeDescription,
 			matchedField: "node",
 			matchedValue: nodeName,
 			category: node.category,
@@ -151,7 +153,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 				layerPath,
 				name: nodeName,
 				nodeName,
-				description: node.description || "",
+				description: nodeDescription,
 				matchedField: "comment",
 				matchedValue: node.comment,
 				category: node.category,
@@ -166,6 +168,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 			if (pin.data_type === "Execution") continue;
 
 			const pinDisplayName = pin.friendly_name || pin.name;
+			const pinDescription = resolveBoardRef(pin.description, board.refs);
 			const decodedValue = decodeDefaultValue(pin);
 
 			// Index pin by name/friendly_name
@@ -177,7 +180,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 				layerPath,
 				name: `${nodeName} → ${pinDisplayName}`,
 				nodeName,
-				description: pin.description || "",
+				description: pinDescription,
 				matchedField: "pin",
 				matchedValue: pinDisplayName,
 				pinName: pinDisplayName,
@@ -185,7 +188,7 @@ function buildSearchDocuments(board: IBoard | undefined): SearchResult[] {
 				dataType: pin.data_type,
 				category: node.category,
 				icon: node.icon,
-				searchText: `${nodeName} ${pinDisplayName} ${pin.name} ${pin.description || ""} ${pin.data_type || ""}`,
+				searchText: `${nodeName} ${pinDisplayName} ${pin.name} ${pinDescription} ${pin.data_type || ""}`,
 			});
 
 			// Index pin default value if exists

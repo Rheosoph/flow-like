@@ -10,9 +10,25 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like_types::tokio::try_join;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+type CreatorRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+struct CreatorProfile {
+    name: Option<String>,
+    preferred_username: Option<String>,
+    username: Option<String>,
+    email: Option<String>,
+}
 
 #[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ApiKeyInfo {
@@ -70,35 +86,61 @@ pub async fn get_api_keys(
         .filter_map(|tu| tu.role_id.clone())
         .collect();
 
-    let roles: std::collections::HashMap<String, role::Model> = if !role_ids.is_empty() {
-        role::Entity::find()
-            .filter(role::Column::Id.is_in(role_ids))
-            .all(&state.db)
-            .await?
-            .into_iter()
-            .map(|r| (r.id.clone(), r))
-            .collect()
-    } else {
-        std::collections::HashMap::new()
-    };
-
     let creator_user_ids: Vec<String> = technical_users
         .iter()
         .filter_map(|tu| tu.creator_user_id.clone())
         .collect();
 
-    let creators: std::collections::HashMap<String, user_entity::Model> =
-        if !creator_user_ids.is_empty() {
+    let roles_query = async {
+        if role_ids.is_empty() {
+            Ok(Vec::new())
+        } else {
+            role::Entity::find()
+                .filter(role::Column::Id.is_in(role_ids))
+                .all(&state.db)
+                .await
+        }
+    };
+
+    let creators_query = async {
+        if creator_user_ids.is_empty() {
+            Ok(Vec::new())
+        } else {
             user_entity::Entity::find()
                 .filter(user_entity::Column::Id.is_in(creator_user_ids))
+                .select_only()
+                .columns([
+                    user_entity::Column::Id,
+                    user_entity::Column::Name,
+                    user_entity::Column::PreferredUsername,
+                    user_entity::Column::Username,
+                    user_entity::Column::Email,
+                ])
+                .into_tuple::<CreatorRow>()
                 .all(&state.db)
-                .await?
-                .into_iter()
-                .map(|u| (u.id.clone(), u))
-                .collect()
-        } else {
-            std::collections::HashMap::new()
-        };
+                .await
+        }
+    };
+
+    let (role_rows, creator_rows) = try_join!(roles_query, creators_query)?;
+
+    let roles: std::collections::HashMap<String, role::Model> =
+        role_rows.into_iter().map(|r| (r.id.clone(), r)).collect();
+
+    let creators: std::collections::HashMap<String, CreatorProfile> = creator_rows
+        .into_iter()
+        .map(|(id, name, preferred_username, username, email)| {
+            (
+                id,
+                CreatorProfile {
+                    name,
+                    preferred_username,
+                    username,
+                    email,
+                },
+            )
+        })
+        .collect();
 
     let api_keys = technical_users
         .into_iter()

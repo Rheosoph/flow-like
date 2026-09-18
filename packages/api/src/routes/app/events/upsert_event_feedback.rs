@@ -8,7 +8,8 @@ use axum::{
 };
 use flow_like_types::Value;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    ActiveModelTrait, EntityTrait,
+    sea_query::{Expr, ExprTrait, OnConflict},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -84,27 +85,17 @@ pub async fn upsert_event_feedback(
             let context = context.clone();
             let comment = comment.clone();
             Box::pin(async move {
-                let existing_feedback = feedback::Entity::find()
-                    .filter(feedback::Column::AppId.eq(app_id.clone()))
-                    .filter(feedback::Column::EventId.eq(event_id.clone()))
-                    .filter(feedback::Column::Id.eq(feedback_id.clone()))
-                    .one(txn)
-                    .await?;
-
-                if let Some(existing) = existing_feedback {
-                    if existing.user_id.as_ref() != Some(&sub) {
-                        return Err(ApiError::FORBIDDEN);
-                    }
-
-                    let mut feedback = existing.into_active_model();
-                    feedback.context = Set(context);
-                    feedback.comment = Set(comment);
-                    feedback.rating = Set(rating);
-                    feedback.updated_at = Set(chrono::Utc::now().fixed_offset());
-                    feedback.update(txn).await?;
-                    return Ok(());
-                }
-
+                // The DO UPDATE guard reads the stored row: only its author may
+                // overwrite it, and only under the same app and event. A
+                // refused overwrite writes no row.
+                let stored_row_is_callers = Expr::col((feedback::Entity, feedback::Column::UserId))
+                    .eq(sub.clone())
+                    .and(Expr::col((feedback::Entity, feedback::Column::AppId)).eq(app_id.clone()))
+                    .and(
+                        Expr::col((feedback::Entity, feedback::Column::EventId))
+                            .eq(event_id.clone()),
+                    );
+                let now = chrono::Utc::now().fixed_offset();
                 let feedback = feedback::Model {
                     id: feedback_id,
                     app_id: Some(app_id),
@@ -114,14 +105,28 @@ pub async fn upsert_event_feedback(
                     comment,
                     rating,
                     template_id: None,
-                    created_at: chrono::Utc::now().fixed_offset(),
-                    updated_at: chrono::Utc::now().fixed_offset(),
+                    created_at: now,
+                    updated_at: now,
                 };
 
-                feedback::ActiveModel::from(feedback)
-                    .reset_all()
-                    .insert(txn)
-                    .await?;
+                let written =
+                    feedback::Entity::insert(feedback::ActiveModel::from(feedback).reset_all())
+                        .on_conflict(
+                            OnConflict::column(feedback::Column::Id)
+                                .update_columns([
+                                    feedback::Column::Context,
+                                    feedback::Column::Comment,
+                                    feedback::Column::Rating,
+                                    feedback::Column::UpdatedAt,
+                                ])
+                                .action_and_where(stored_row_is_callers)
+                                .to_owned(),
+                        )
+                        .exec_without_returning(txn)
+                        .await?;
+                if written == 0 {
+                    return Err(ApiError::FORBIDDEN);
+                }
                 Ok::<_, ApiError>(())
             })
         })

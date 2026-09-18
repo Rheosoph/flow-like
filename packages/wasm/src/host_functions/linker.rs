@@ -7,8 +7,8 @@ use crate::host_functions::HostState;
 use crate::limits::WasmCapabilities;
 use crate::llm_message::sdk_message_content;
 use crate::memory::WasmAllocator;
-use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::object_store::path::Path;
+use flow_like_storage::object_store::ObjectStoreExt;
 use std::sync::Arc;
 use wasmtime::{Caller, Linker, Memory, Ref, Val};
 
@@ -202,13 +202,18 @@ fn register_env_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
 }
 
 fn register_logging_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
+    use super::logging::LogLevel;
+
     linker
         .func_wrap(
             "flowlike_log",
             "trace",
             |caller: Caller<'_, StoreData>, msg_ptr: u32, msg_len: u32| {
                 if let Ok(message) = read_string_from_caller(&caller, msg_ptr, msg_len) {
-                    caller.data().host_state.log(0, message, None);
+                    caller
+                        .data()
+                        .host_state
+                        .log(LogLevel::Debug as u8, message, None);
                 }
             },
         )
@@ -220,7 +225,10 @@ fn register_logging_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             "debug",
             |caller: Caller<'_, StoreData>, msg_ptr: u32, msg_len: u32| {
                 if let Ok(message) = read_string_from_caller(&caller, msg_ptr, msg_len) {
-                    caller.data().host_state.log(1, message, None);
+                    caller
+                        .data()
+                        .host_state
+                        .log(LogLevel::Debug as u8, message, None);
                 }
             },
         )
@@ -232,7 +240,10 @@ fn register_logging_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             "info",
             |caller: Caller<'_, StoreData>, msg_ptr: u32, msg_len: u32| {
                 if let Ok(message) = read_string_from_caller(&caller, msg_ptr, msg_len) {
-                    caller.data().host_state.log(2, message, None);
+                    caller
+                        .data()
+                        .host_state
+                        .log(LogLevel::Info as u8, message, None);
                 }
             },
         )
@@ -244,7 +255,10 @@ fn register_logging_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             "warn",
             |caller: Caller<'_, StoreData>, msg_ptr: u32, msg_len: u32| {
                 if let Ok(message) = read_string_from_caller(&caller, msg_ptr, msg_len) {
-                    caller.data().host_state.log(3, message, None);
+                    caller
+                        .data()
+                        .host_state
+                        .log(LogLevel::Warn as u8, message, None);
                 }
             },
         )
@@ -256,7 +270,10 @@ fn register_logging_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
             "error",
             |caller: Caller<'_, StoreData>, msg_ptr: u32, msg_len: u32| {
                 if let Ok(message) = read_string_from_caller(&caller, msg_ptr, msg_len) {
-                    caller.data().host_state.log(4, message, None);
+                    caller
+                        .data()
+                        .host_state
+                        .log(LogLevel::Error as u8, message, None);
                 }
             },
         )
@@ -992,7 +1009,11 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         &write_id,
                         &data,
                     );
-                    if ok { 0 } else { -1 }
+                    if ok {
+                        0
+                    } else {
+                        -1
+                    }
                 })
             },
         )
@@ -1750,52 +1771,22 @@ fn register_image_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
 }
 
 fn register_db_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
-    // query — unified DB operation dispatch
-    // op: 1=vector_search, 2=fts_search, 3=hybrid_search, 4=insert, 5=upsert, 6=delete, 7=list, 8=count
-    linker
-        .func_wrap_async(
-            "flowlike_db",
-            "query",
-            |caller: Caller<'_, StoreData>,
-             (op, conn_ptr, conn_len, payload_ptr, payload_len): (
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-            )| {
-                Box::new(async move {
-                    if !caller
-                        .data()
-                        .host_state
-                        .has_capability(WasmCapabilities::MODELS)
-                    {
-                        return 0u64;
+    linker.func_wrap_async(
+        "flowlike_db", "query",
+        |caller: Caller<'_, StoreData>, (op, conn_ptr, conn_len, payload_ptr, payload_len): (u32, u32, u32, u32, u32)| {
+            Box::new(async move {
+                let connection = match read_string_from_caller(&caller, conn_ptr, conn_len) { Ok(value) => value, Err(_) => return 0u64 };
+                let payload = match read_string_from_caller(&caller, payload_ptr, payload_len) { Ok(value) => value, Err(_) => return 0u64 };
+                match super::database::query(&caller.data().host_state, op, &connection, &payload).await {
+                    Some(result) => {
+                        let (ptr, len) = caller.data().host_state.store_result(result.as_bytes());
+                        pack_ptr_len(ptr, len)
                     }
-
-                    let _conn_json =
-                        match read_string_from_caller(&caller, conn_ptr, conn_len) {
-                            Ok(s) => s,
-                            Err(_) => return 0,
-                        };
-
-                    let _payload_json =
-                        match read_string_from_caller(&caller, payload_ptr, payload_len) {
-                            Ok(s) => s,
-                            Err(_) => return 0,
-                        };
-
-                    // Stub — DB operations require host-side LanceDB connection.
-                    // op determines which method to call on the resolved CachedDB.
-                    let _ = op;
-                    0u64
-                })
-            },
-        )
-        .map_err(|e| {
-            WasmError::Initialization(format!("Failed to register db.query: {}", e))
-        })?;
-
+                    None => 0u64,
+                }
+            })
+        },
+    ).map_err(|e| WasmError::Initialization(format!("Failed to register db.query: {e}")))?;
     Ok(())
 }
 
@@ -1980,14 +1971,14 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         .host_state
                         .has_capability(WasmCapabilities::MODELS)
                     {
-                        println!("llm_prompt: MODELS capability not granted");
+                        tracing::warn!("llm_prompt: MODELS capability not granted");
                         return 0u64;
                     }
 
                     let bit_json = match read_string_from_caller(&caller, bit_ptr, bit_len) {
                         Ok(s) => s,
                         Err(_) => {
-                            println!("llm_prompt: failed to read bit from WASM memory");
+                            tracing::warn!("llm_prompt: failed to read bit from WASM memory");
                             return 0u64;
                         }
                     };
@@ -1996,7 +1987,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         match read_string_from_caller(&caller, messages_ptr, messages_len) {
                             Ok(s) => s,
                             Err(_) => {
-                                println!("llm_prompt: failed to read messages from WASM memory");
+                                tracing::warn!("llm_prompt: failed to read messages from WASM memory");
                                 return 0u64;
                             }
                         };
@@ -2004,7 +1995,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
                         Ok(b) => b,
                         Err(e) => {
-                            println!("llm_prompt: failed to parse bit JSON");
+                            tracing::warn!(error = %e, "llm_prompt: failed to parse bit JSON");
                             let err = serde_json::json!({"error": format!("Failed to parse model descriptor: {e}")}).to_string();
                             let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                             return pack_ptr_len(ptr, len);
@@ -2014,7 +2005,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let model_ctx = match &caller.data().host_state.model_context {
                         Some(c) => c,
                         None => {
-                            println!("llm_prompt: model_context is None");
+                            tracing::warn!("llm_prompt: model_context is None");
                             let err = serde_json::json!({"error": "Model context not available — ensure the node has Models permission"}).to_string();
                             let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                             return pack_ptr_len(ptr, len);
@@ -2051,7 +2042,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                                 ) {
                                     Ok(msgs) => (msgs, None, None, None, None, None, None),
                                     Err(e) => {
-                                        println!("llm_prompt: failed to parse messages JSON");
+                                        tracing::warn!(error = %e, "llm_prompt: failed to parse messages JSON");
                                         let err = serde_json::json!({"error": format!("Failed to parse messages: {e}")}).to_string();
                                         let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                                         return pack_ptr_len(ptr, len);
@@ -2060,9 +2051,10 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             }
                         };
 
-                    println!("llm_prompt: received {} messages, tools={}",
-                        raw_messages.len(),
-                        raw_tools.as_ref().map(|t| t.len()).unwrap_or(0)
+                    tracing::debug!(
+                        messages = raw_messages.len(),
+                        tools = raw_tools.as_ref().map_or(0, |t| t.len()),
+                        "llm_prompt: received request"
                     );
 
                     // Convert WASM SDK messages → native HistoryMessage
@@ -2163,7 +2155,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             let name = match t.get("name").and_then(|n| n.as_str()) {
                                 Some(n) => n.to_string(),
                                 None => {
-                                    println!("llm_prompt: tool[{i}] missing 'name' field");
+                                    tracing::warn!("llm_prompt: tool[{i}] missing 'name' field");
                                     continue;
                                 }
                             };
@@ -2181,7 +2173,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                                     });
                                 }
                                 Err(_) => {
-                                    println!("llm_prompt: tool[{i}] parameter deserialization failed");
+                                    tracing::warn!("llm_prompt: tool[{i}] parameter deserialization failed");
                                 }
                             }
                         }
@@ -2204,7 +2196,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                         {
                             Ok(m) => m,
                             Err(e) => {
-                                println!("llm_prompt: failed to build model");
+                                tracing::warn!(error = %e, "llm_prompt: failed to build model");
                                 let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();
                                 let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                                 return pack_ptr_len(ptr, len);
@@ -2238,7 +2230,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let response = match model.invoke(&history, callback).await {
                         Ok(r) => r,
                         Err(e) => {
-                            println!("llm_prompt: model invoke failed");
+                            tracing::warn!(error = %e, "llm_prompt: model invoke failed");
                             let err = serde_json::json!({"error": format!("Model invocation failed: {e}")}).to_string();
                             let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                             return pack_ptr_len(ptr, len);
@@ -2255,7 +2247,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let resp_msg = match response.last_message() {
                         Some(m) => m,
                         None => {
-                            println!("llm_prompt: model returned empty response (no messages)");
+                            tracing::warn!("llm_prompt: model returned empty response (no messages)");
                             let err = serde_json::json!({"error": "Model returned empty response"}).to_string();
                             let (ptr, len) = caller.data().host_state.store_result(err.as_bytes());
                             return pack_ptr_len(ptr, len);
@@ -2591,15 +2583,39 @@ fn pack_ptr_len(ptr: u32, len: u32) -> u64 {
     ((ptr as u64) << 32) | (len as u64)
 }
 
-fn write_wasi_u32(caller: &mut Caller<'_, StoreData>, ptr: i32, value: u32) -> Result<(), ()> {
+const WASI_ERRNO_FAULT: i32 = 21;
+
+fn wasi_memory(caller: &mut Caller<'_, StoreData>, ptr: i32) -> Result<(Memory, usize), ()> {
     let offset = usize::try_from(ptr).map_err(|_| ())?;
     let memory = caller
         .get_export("memory")
         .and_then(|export| export.into_memory())
         .ok_or(())?;
-    memory
-        .write(caller, offset, &value.to_le_bytes())
-        .map_err(|_| ())
+    Ok((memory, offset))
+}
+
+fn write_wasi_bytes(caller: &mut Caller<'_, StoreData>, ptr: i32, bytes: &[u8]) -> Result<(), ()> {
+    let (memory, offset) = wasi_memory(caller, ptr)?;
+    memory.write(caller, offset, bytes).map_err(|_| ())
+}
+
+fn write_wasi_u32(caller: &mut Caller<'_, StoreData>, ptr: i32, value: u32) -> Result<(), ()> {
+    write_wasi_bytes(caller, ptr, &value.to_le_bytes())
+}
+
+fn read_wasi_u32(caller: &mut Caller<'_, StoreData>, ptr: i32) -> Result<u32, ()> {
+    let (memory, offset) = wasi_memory(caller, ptr)?;
+    let mut bytes = [0; 4];
+    memory.read(&*caller, offset, &mut bytes).map_err(|_| ())?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+/// Guests get no arguments and no environment, so both counts are zero.
+fn write_empty_list_sizes(caller: &mut Caller<'_, StoreData>, count: i32, buf_size: i32) -> i32 {
+    if write_wasi_u32(caller, count, 0).is_err() || write_wasi_u32(caller, buf_size, 0).is_err() {
+        return WASI_ERRNO_FAULT;
+    }
+    0
 }
 
 /// Register WASI snapshot_preview1 stubs for TinyGo/Go WASM modules
@@ -2618,12 +2634,32 @@ fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .func_wrap(
             "wasi_snapshot_preview1",
             "fd_write",
-            |_caller: Caller<'_, StoreData>,
+            |mut caller: Caller<'_, StoreData>,
              _fd: i32,
-             _iovs: i32,
-             _iovs_len: i32,
-             _nwritten: i32|
-             -> i32 { 0 },
+             iovs: i32,
+             iovs_len: i32,
+             nwritten: i32|
+             -> i32 {
+                // Output is discarded; reporting it as written lets guest stdio loops finish.
+                let mut written = 0u32;
+                for index in 0..iovs_len.max(0) {
+                    let Some(len_ptr) = index
+                        .checked_mul(8)
+                        .and_then(|entry| entry.checked_add(iovs))
+                        .and_then(|entry| entry.checked_add(4))
+                    else {
+                        return WASI_ERRNO_FAULT;
+                    };
+                    let Ok(len) = read_wasi_u32(&mut caller, len_ptr) else {
+                        return WASI_ERRNO_FAULT;
+                    };
+                    written = written.saturating_add(len);
+                }
+                if write_wasi_u32(&mut caller, nwritten, written).is_err() {
+                    return WASI_ERRNO_FAULT;
+                }
+                0
+            },
         )
         .map_err(|e| {
             WasmError::Initialization(format!("Failed to register wasi fd_write stub: {}", e))
@@ -2643,12 +2679,17 @@ fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .func_wrap(
             "wasi_snapshot_preview1",
             "fd_seek",
-            |_caller: Caller<'_, StoreData>,
+            |mut caller: Caller<'_, StoreData>,
              _fd: i32,
              _offset: i64,
              _whence: i32,
-             _newoffset: i32|
-             -> i32 { 0 },
+             newoffset: i32|
+             -> i32 {
+                if write_wasi_bytes(&mut caller, newoffset, &0u64.to_le_bytes()).is_err() {
+                    return WASI_ERRNO_FAULT;
+                }
+                0
+            },
         )
         .map_err(|e| {
             WasmError::Initialization(format!("Failed to register wasi fd_seek stub: {}", e))
@@ -2669,12 +2710,7 @@ fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
             "wasi_snapshot_preview1",
             "environ_sizes_get",
             |mut caller: Caller<'_, StoreData>, count: i32, buf_size: i32| -> i32 {
-                if write_wasi_u32(&mut caller, count, 0).is_err()
-                    || write_wasi_u32(&mut caller, buf_size, 0).is_err()
-                {
-                    return 21; // __WASI_ERRNO_FAULT
-                }
-                0
+                write_empty_list_sizes(&mut caller, count, buf_size)
             },
         )
         .map_err(|e| {
@@ -2698,7 +2734,9 @@ fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .func_wrap(
             "wasi_snapshot_preview1",
             "args_sizes_get",
-            |_caller: Caller<'_, StoreData>, _argc: i32, _argv_buf_size: i32| -> i32 { 0 },
+            |mut caller: Caller<'_, StoreData>, argc: i32, argv_buf_size: i32| -> i32 {
+                write_empty_list_sizes(&mut caller, argc, argv_buf_size)
+            },
         )
         .map_err(|e| {
             WasmError::Initialization(format!(
@@ -2736,13 +2774,16 @@ fn register_wasi_stubs(linker: &mut Linker<StoreData>) -> WasmResult<()> {
         .func_wrap(
             "wasi_snapshot_preview1",
             "fd_read",
-            |_caller: Caller<'_, StoreData>,
+            |mut caller: Caller<'_, StoreData>,
              _fd: i32,
              _iovs: i32,
              _iovs_len: i32,
-             _nread: i32|
+             nread: i32|
              -> i32 {
-                0 // no data read
+                if write_wasi_u32(&mut caller, nread, 0).is_err() {
+                    return WASI_ERRNO_FAULT;
+                }
+                0
             },
         )
         .map_err(|e| {
@@ -2987,6 +3028,149 @@ mod resource_handle_tests {
 }
 
 #[cfg(test)]
+mod wasi_stub_tests {
+    use super::*;
+    use wasmtime::{Engine, Instance, Module, Store};
+
+    const GARBAGE: u32 = 0xdead_beef;
+
+    async fn guest() -> (Store<StoreData>, Instance, Memory) {
+        let engine = Engine::default();
+        let module = Module::new(
+            &engine,
+            wat::parse_str(
+                r#"(module
+                    (import "wasi_snapshot_preview1" "args_sizes_get" (func $args_sizes_get (param i32 i32) (result i32)))
+                    (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+                    (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+                    (import "wasi_snapshot_preview1" "fd_seek" (func $fd_seek (param i32 i64 i32 i32) (result i32)))
+                    (memory (export "memory") 1)
+                    (func (export "args_sizes_get") (param i32 i32) (result i32)
+                        (call $args_sizes_get (local.get 0) (local.get 1)))
+                    (func (export "fd_write") (param i32 i32 i32 i32) (result i32)
+                        (call $fd_write (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
+                    (func (export "fd_read") (param i32 i32 i32 i32) (result i32)
+                        (call $fd_read (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
+                    (func (export "fd_seek") (param i32 i64 i32 i32) (result i32)
+                        (call $fd_seek (local.get 0) (local.get 1) (local.get 2) (local.get 3))))"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut linker = Linker::new(&engine);
+        register_wasi_stubs(&mut linker).unwrap();
+        let mut store = Store::new(&engine, StoreData::new(WasmCapabilities::empty()));
+        let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
+        let memory = instance.get_memory(&mut store, "memory").unwrap();
+        (store, instance, memory)
+    }
+
+    fn fill(memory: &Memory, store: &mut Store<StoreData>, values: &[(usize, u32)]) {
+        for (offset, value) in values {
+            memory
+                .write(&mut *store, *offset, &value.to_le_bytes())
+                .unwrap();
+        }
+    }
+
+    fn read_u32(memory: &Memory, store: &Store<StoreData>, offset: usize) -> u32 {
+        let mut bytes = [0; 4];
+        memory.read(store, offset, &mut bytes).unwrap();
+        u32::from_le_bytes(bytes)
+    }
+
+    #[tokio::test]
+    async fn stubs_write_every_output_they_report_success_for() {
+        let (mut store, instance, memory) = guest().await;
+
+        fill(&memory, &mut store, &[(16, GARBAGE), (20, GARBAGE)]);
+        let args_sizes_get = instance
+            .get_typed_func::<(i32, i32), i32>(&mut store, "args_sizes_get")
+            .unwrap();
+        assert_eq!(
+            args_sizes_get
+                .call_async(&mut store, (16, 20))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(read_u32(&memory, &store, 16), 0);
+        assert_eq!(read_u32(&memory, &store, 20), 0);
+
+        fill(
+            &memory,
+            &mut store,
+            &[(100, 200), (104, 3), (108, 300), (112, 4), (24, GARBAGE)],
+        );
+        let fd_write = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "fd_write")
+            .unwrap();
+        assert_eq!(
+            fd_write
+                .call_async(&mut store, (1, 100, 2, 24))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(read_u32(&memory, &store, 24), 7);
+
+        fill(&memory, &mut store, &[(28, GARBAGE)]);
+        let fd_read = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "fd_read")
+            .unwrap();
+        assert_eq!(
+            fd_read
+                .call_async(&mut store, (0, 100, 2, 28))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(read_u32(&memory, &store, 28), 0);
+
+        fill(&memory, &mut store, &[(32, GARBAGE), (36, GARBAGE)]);
+        let fd_seek = instance
+            .get_typed_func::<(i32, i64, i32, i32), i32>(&mut store, "fd_seek")
+            .unwrap();
+        assert_eq!(
+            fd_seek
+                .call_async(&mut store, (3, 10, 0, 32))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(read_u32(&memory, &store, 32), 0);
+        assert_eq!(read_u32(&memory, &store, 36), 0);
+    }
+
+    #[tokio::test]
+    async fn stubs_fault_on_pointers_outside_guest_memory() {
+        let (mut store, instance, _memory) = guest().await;
+        let outside = 65_536;
+
+        let args_sizes_get = instance
+            .get_typed_func::<(i32, i32), i32>(&mut store, "args_sizes_get")
+            .unwrap();
+        assert_eq!(
+            args_sizes_get
+                .call_async(&mut store, (16, outside))
+                .await
+                .unwrap(),
+            WASI_ERRNO_FAULT
+        );
+        let fd_write = instance
+            .get_typed_func::<(i32, i32, i32, i32), i32>(&mut store, "fd_write")
+            .unwrap();
+        assert_eq!(
+            fd_write
+                .call_async(&mut store, (1, outside, 1, 24))
+                .await
+                .unwrap(),
+            WASI_ERRNO_FAULT
+        );
+    }
+}
+
+#[cfg(test)]
 mod websocket_tests {
     use super::*;
     use futures::{SinkExt, StreamExt};
@@ -3162,13 +3346,11 @@ mod websocket_tests {
             .await
             .unwrap();
         assert!(offset >= 0);
-        assert!(
-            String::from_utf8(
-                store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
-            )
-            .unwrap()
-            .contains("reply")
-        );
+        assert!(String::from_utf8(
+            store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
+        )
+        .unwrap()
+        .contains("reply"));
         assert_eq!(close.call_async(&mut store, handle).await.unwrap(), 0);
         assert_eq!(
             send.call_async(&mut store, (handle, 256, 6, 0))

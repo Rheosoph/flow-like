@@ -5,6 +5,7 @@
 //! - **User tokens**: For users to poll execution status
 //! - **Realtime tokens**: For y-webrtc collaboration
 //! - **ChannelResponder tokens**: For clients to push replies into a run's channel
+//! - **WidgetGrant tokens**: For one approved widget policy at one pinned widget document path
 //!
 //! IMPORTANT: The keypair must be injected at deploy time via environment variables
 //! to support horizontal scaling. All API instances must use the same keypair.
@@ -60,6 +61,9 @@ pub enum TokenType {
     /// Capability carried as Page-action request data. It authorizes one exact
     /// Page action target and must never be treated as an authenticated actor.
     PageAction,
+    /// Capability carried in a widget sandbox URL. It widens one widget
+    /// document to one approved policy and never authorizes access.
+    WidgetGrant,
 }
 
 impl TokenType {
@@ -73,6 +77,7 @@ impl TokenType {
             TokenType::ChannelResponder => "flow-like-channel-responder",
             TokenType::AppConnection => "flow-like-app-connection",
             TokenType::PageAction => "flow-like-page-action",
+            TokenType::WidgetGrant => "flow-like-widget-grant",
         }
     }
 
@@ -86,6 +91,7 @@ impl TokenType {
             TokenType::ChannelResponder => 60 * 60, // 1 hour; callers pass the channel lifetime
             TokenType::AppConnection => 10 * 60,    // 10 minutes
             TokenType::PageAction => 24 * 60 * 60,  // 24 hours
+            TokenType::WidgetGrant => 60 * 60,      // 1 hour
         }
     }
 }
@@ -204,6 +210,31 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
     token: &str,
     expected_type: TokenType,
 ) -> Result<T, BackendJwtError> {
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(&[ISSUER]);
+    validation.set_audience(&[expected_type.audience()]);
+    decode_with(token, &validation)
+}
+
+/// Verify like [`verify`], but with an explicit clock leeway applied to both
+/// `exp` and `nbf`. A leeway of `0` rejects a token the second it expires.
+pub fn verify_with_leeway<T: for<'de> Deserialize<'de>>(
+    token: &str,
+    expected_type: TokenType,
+    leeway_seconds: u64,
+) -> Result<T, BackendJwtError> {
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(&[ISSUER]);
+    validation.set_audience(&[expected_type.audience()]);
+    validation.leeway = leeway_seconds;
+    validation.validate_nbf = true;
+    decode_with(token, &validation)
+}
+
+fn decode_with<T: for<'de> Deserialize<'de>>(
+    token: &str,
+    validation: &Validation,
+) -> Result<T, BackendJwtError> {
     let public_key = PUBLIC_KEY_PEM
         .get()
         .ok_or(BackendJwtError::MissingPublicKey)?;
@@ -211,11 +242,7 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
     let decoding_key = DecodingKey::from_ec_pem(public_key)
         .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
 
-    let mut validation = Validation::new(Algorithm::ES256);
-    validation.set_issuer(&[ISSUER]);
-    validation.set_audience(&[expected_type.audience()]);
-
-    let token_data = decode::<T>(token, &decoding_key, &validation)
+    let token_data = decode::<T>(token, &decoding_key, validation)
         .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
 
     Ok(token_data.claims)
@@ -223,21 +250,10 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
 
 /// Verify a JWT without checking audience (for introspection)
 pub fn verify_any<T: for<'de> Deserialize<'de>>(token: &str) -> Result<T, BackendJwtError> {
-    let public_key = PUBLIC_KEY_PEM
-        .get()
-        .ok_or(BackendJwtError::MissingPublicKey)?;
-
-    let decoding_key = DecodingKey::from_ec_pem(public_key)
-        .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
-
     let mut validation = Validation::new(Algorithm::ES256);
     validation.set_issuer(&[ISSUER]);
     validation.validate_aud = false;
-
-    let token_data = decode::<T>(token, &decoding_key, &validation)
-        .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
-
-    Ok(token_data.claims)
+    decode_with(token, &validation)
 }
 
 // ============================================================================

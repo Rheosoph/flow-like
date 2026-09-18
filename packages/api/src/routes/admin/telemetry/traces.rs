@@ -12,6 +12,7 @@ use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
     QueryOrder, QuerySelect, Statement,
@@ -365,20 +366,17 @@ pub async fn list_telemetry_traces(
     let (page_sql, count_sql, values) =
         trace_queries(backend, &filters, page_size, page.saturating_mul(page_size));
 
-    let rows = TraceAggregateRow::find_by_statement(Statement::from_sql_and_values(
-        backend,
-        page_sql,
-        values.clone(),
-    ))
-    .all(&state.db)
-    .await?;
-
-    let total =
+    let (rows, total) = try_join!(
+        TraceAggregateRow::find_by_statement(Statement::from_sql_and_values(
+            backend,
+            page_sql,
+            values.clone(),
+        ))
+        .all(&state.db),
         ScalarCount::find_by_statement(Statement::from_sql_and_values(backend, count_sql, values))
-            .one(&state.db)
-            .await?
-            .map(|row| row.cnt.max(0) as u64)
-            .unwrap_or(0);
+            .one(&state.db),
+    )?;
+    let total = total.map(|row| row.cnt.max(0) as u64).unwrap_or(0);
 
     let roots = trace_roots(&state.db, &rows).await?;
 

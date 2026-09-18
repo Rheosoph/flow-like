@@ -14,6 +14,7 @@ use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_types::tokio::try_join;
 use futures::{StreamExt, stream};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Expr, Func};
@@ -593,42 +594,48 @@ pub async fn get_telemetry_issue(
     let cutoff = now - Duration::hours(ISSUE_DETAIL_HOURS);
     let bucket = bucket_for(ISSUE_DETAIL_HOURS, None);
 
-    let installs = install_counts(&state.db, vec![issue_id.clone()])
-        .await?
-        .get(&issue_id)
-        .copied()
-        .unwrap_or(0);
+    let breakdowns = async {
+        let releases = breakdown(
+            &state.db,
+            telemetry_error_event::Column::Release,
+            &issue_id,
+            cutoff,
+        )
+        .await?;
+        let platforms = breakdown(
+            &state.db,
+            telemetry_error_event::Column::Platform,
+            &issue_id,
+            cutoff,
+        )
+        .await?;
+        Ok::<_, ApiError>((releases, platforms))
+    };
 
-    let latest_event = latest_event(&state.db, &state.meta_bucket, &issue_id).await?;
-    let timeseries = issue_timeseries(&state.db, &issue_id, cutoff, now, bucket).await?;
+    let (installs, latest_event, timeseries, (release_rows, platform_rows)) = try_join!(
+        install_counts(&state.db, vec![issue_id.clone()]),
+        latest_event(&state.db, &state.meta_bucket, &issue_id),
+        issue_timeseries(&state.db, &issue_id, cutoff, now, bucket),
+        breakdowns,
+    )?;
 
-    let releases = breakdown(
-        &state.db,
-        telemetry_error_event::Column::Release,
-        &issue_id,
-        cutoff,
-    )
-    .await?
-    .into_iter()
-    .map(|row| IssueReleaseBucket {
-        release: row.key.unwrap_or_else(|| "unknown".to_string()),
-        count: row.cnt,
-    })
-    .collect();
+    let installs = installs.get(&issue_id).copied().unwrap_or(0);
 
-    let platforms = breakdown(
-        &state.db,
-        telemetry_error_event::Column::Platform,
-        &issue_id,
-        cutoff,
-    )
-    .await?
-    .into_iter()
-    .map(|row| PlatformBucket {
-        platform: row.key.unwrap_or_else(|| "unknown".to_string()),
-        count: row.cnt,
-    })
-    .collect();
+    let releases = release_rows
+        .into_iter()
+        .map(|row| IssueReleaseBucket {
+            release: row.key.unwrap_or_else(|| "unknown".to_string()),
+            count: row.cnt,
+        })
+        .collect();
+
+    let platforms = platform_rows
+        .into_iter()
+        .map(|row| PlatformBucket {
+            platform: row.key.unwrap_or_else(|| "unknown".to_string()),
+            count: row.cnt,
+        })
+        .collect();
 
     Ok(Json(TelemetryIssueDetailResponse {
         issue: issue_record(model, installs),

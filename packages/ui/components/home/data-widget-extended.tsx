@@ -12,6 +12,7 @@ import {
 	YAxis,
 } from "recharts";
 import { getNivoChartTheme } from "../../lib/chart-theme";
+import { temporalUnitFromTypeName } from "../../lib/date";
 import type { ExecuteSqlResult } from "../../state/backend-state/query-state";
 import { HomeDataLegend, HomeDataMessage } from "./data-widget-ui";
 import {
@@ -29,6 +30,14 @@ import {
 	formatHomeDataValue,
 	homeDataMeasureTitle,
 } from "./home-data-query";
+import { homeDataFieldLabel, homeDataInlineFieldLabel } from "./home-data-text";
+import {
+	type HomeDataLabels,
+	HomeDataTitle,
+	HomeDataValue,
+	homeDataValueTitle,
+} from "./home-data-value";
+import { homeDataDateLabel, homeDataTemporalValue } from "./home-data-values";
 
 const Sankey = lazy(async () => ({
 	default: (await import("@nivo/sankey")).ResponsiveSankey,
@@ -50,12 +59,39 @@ export const EXTENDED_HOME_DATA_VIEWS = new Set([
 	"recordcalendar",
 	"comparison",
 ]);
+const DATE_ONLY_TEXT = /^\d{4}-\d{2}-\d{2}$/;
+
+function HomeDataRecordField({
+	row,
+	field,
+	labels,
+	config,
+}: Readonly<{
+	row: Record<string, unknown>;
+	field: string;
+	labels: HomeDataLabels;
+	config: HomeDataConfig;
+}>) {
+	const format = labels.format(field);
+	return (
+		<p className="text-xs text-muted-foreground">
+			<span title={field}>{homeDataFieldLabel(field, format.kind)}</span>:{" "}
+			<HomeDataValue value={row[field]} format={format} config={config} />
+		</p>
+	);
+}
 
 export function HomeDataExtendedView({
 	result,
 	config,
+	labels,
 	width = 360,
-}: { result: ExecuteSqlResult; config: HomeDataConfig; width?: number }) {
+}: {
+	result: ExecuteSqlResult;
+	config: HomeDataConfig;
+	labels: HomeDataLabels;
+	width?: number;
+}) {
 	const theme = useMemo(() => getNivoChartTheme(), []);
 	const format = (value: unknown) => formatHomeDataValue(value, config);
 	const view = config.visualization;
@@ -174,7 +210,7 @@ export function HomeDataExtendedView({
 					}).format(value / config.target)}{" "}
 					of target
 					{config.groupBy
-						? ` · ${homeDataText(firstRow.__group)} (first group)`
+						? ` · ${labels.group(firstRow.__group)} (first group)`
 						: ""}
 				</p>
 			</div>
@@ -193,7 +229,8 @@ export function HomeDataExtendedView({
 				? []
 				: [
 						{
-							label: `${config.groupBy ? homeDataText(row.__group) : "All records"}${config.seriesBy ? ` · ${homeDataText(row.__series)}` : ""}`,
+							key: JSON.stringify([row.__group ?? null, row.__series ?? null]),
+							label: `${config.groupBy ? labels.group(row.__group) : "All records"}${config.seriesBy ? ` · ${labels.series(row.__series)}` : ""}`,
 							values: values as number[],
 						},
 					];
@@ -209,6 +246,7 @@ export function HomeDataExtendedView({
 		const span = max - min || 1;
 		const y = (value: number) => 190 - ((value - min) / span) * 160;
 		const plotWidth = Math.max(width, 60 + data.length * 56);
+		const distribution = `Distribution of ${homeDataInlineFieldLabel(config.yField)}`;
 		return (
 			<div className="flex h-full min-h-0 flex-col gap-1">
 				<div className="min-h-0 flex-1 overflow-auto">
@@ -218,11 +256,11 @@ export function HomeDataExtendedView({
 						style={{ minWidth: plotWidth }}
 						preserveAspectRatio="none"
 						role="img"
-						aria-label={`Distribution of ${config.yField}`}
+						aria-label={distribution}
 					>
 						<title>
-							Distribution of {config.yField}. Quartiles are approximate;
-							whiskers show minimum and maximum.
+							{distribution}. Quartiles are approximate; whiskers show minimum
+							and maximum.
 						</title>
 						{[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
 							<g key={fraction}>
@@ -247,7 +285,7 @@ export function HomeDataExtendedView({
 						{data.map((item, index) => {
 							const x = 55 + ((index + 0.5) / data.length) * (plotWidth - 65);
 							return (
-								<g key={item.label}>
+								<g key={item.key}>
 									<title>
 										{item.label}: min {format(item.values[0])}, Q1{" "}
 										{format(item.values[1])}, median {format(item.values[2])},
@@ -318,14 +356,17 @@ export function HomeDataExtendedView({
 					Choose a row group and a column series for the pivot table.
 				</HomeDataMessage>
 			);
-		const pivot = homeDataChartSeries(result.rows, config);
+		const pivot = homeDataChartSeries(result.rows, config, labels);
 		return (
 			<div className="h-full overflow-auto">
 				<table className="w-full border-collapse text-left text-xs">
 					<thead className="sticky top-0 z-10 bg-card">
 						<tr className="border-b">
-							<th className="sticky left-0 bg-background p-2">
-								{config.groupBy}
+							<th
+								className="sticky left-0 bg-background p-2"
+								title={config.groupBy}
+							>
+								{homeDataFieldLabel(config.groupBy, labels.kind("__group"))}
 							</th>
 							{pivot.series.map((series) => (
 								<th
@@ -338,9 +379,9 @@ export function HomeDataExtendedView({
 						</tr>
 					</thead>
 					<tbody>
-						{pivot.points.map((row) => (
+						{keyHomeDataRows(pivot.points).map(({ key, row }) => (
 							<tr
-								key={homeDataText(row.name)}
+								key={key}
 								className="border-b border-border/50 last:border-0 hover:bg-muted/20"
 							>
 								<th className="sticky left-0 bg-background p-2 font-medium">
@@ -368,16 +409,14 @@ export function HomeDataExtendedView({
 					Choose source groups and destination series for the Sankey.
 				</HomeDataMessage>
 			);
-		const labels = new Map<string, string>();
+		const nodeLabels = new Map<string, string>();
 		const links = result.rows.flatMap((row) => {
 			const value = homeDataNumber(row.__measure_0);
 			if (value === null || value <= 0) return [];
-			const from = homeDataText(row.__group);
-			const to = homeDataText(row.__series);
-			const source = `from:${from}`;
-			const target = `to:${to}`;
-			labels.set(source, from);
-			labels.set(target, to);
+			const source = `from:${homeDataText(row.__group)}`;
+			const target = `to:${homeDataText(row.__series)}`;
+			nodeLabels.set(source, labels.group(row.__group));
+			nodeLabels.set(target, labels.series(row.__series));
 			return [{ source, target, value }];
 		});
 		if (!links.length)
@@ -389,12 +428,12 @@ export function HomeDataExtendedView({
 		return (
 			<Sankey
 				data={{
-					nodes: [...labels].map(([id, label]) => ({ id, label })),
+					nodes: [...nodeLabels].map(([id, label]) => ({ id, label })),
 					links,
 				}}
 				label={(node) =>
 					homeDataShortLabel(
-						labels.get(node.id) ?? node.id,
+						nodeLabels.get(node.id) ?? node.id,
 						width < 360 ? 15 : 22,
 					)
 				}
@@ -408,12 +447,12 @@ export function HomeDataExtendedView({
 				linkOpacity={0.32}
 				nodeTooltip={({ node }) => (
 					<div className="rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-lg">
-						{labels.get(node.id) ?? node.id}: {format(node.value)}
+						{nodeLabels.get(node.id) ?? node.id}: {format(node.value)}
 					</div>
 				)}
 				linkTooltip={({ link }) => (
 					<div className="rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-lg">
-						{labels.get(link.source.id)} → {labels.get(link.target.id)}:{" "}
+						{nodeLabels.get(link.source.id)} → {nodeLabels.get(link.target.id)}:{" "}
 						{format(link.value)}
 					</div>
 				)}
@@ -433,7 +472,8 @@ export function HomeDataExtendedView({
 				: [
 						{
 							id: `${homeDataText(row.__group)}${config.seriesBy ? ` · ${homeDataText(row.__series)}` : ""}`,
-							label: config.groupBy ? homeDataText(row.__group) : "Total",
+							category: config.groupBy ? homeDataText(row.__group) : "Total",
+							label: config.groupBy ? labels.group(row.__group) : "Total",
 							value,
 						},
 					];
@@ -441,8 +481,12 @@ export function HomeDataExtendedView({
 		if (order.size)
 			data.sort(
 				(a, b) =>
-					(order.get(a.label) ?? Number.MAX_SAFE_INTEGER) -
-					(order.get(b.label) ?? Number.MAX_SAFE_INTEGER),
+					(order.get(a.category) ??
+						order.get(a.label) ??
+						Number.MAX_SAFE_INTEGER) -
+					(order.get(b.category) ??
+						order.get(b.label) ??
+						Number.MAX_SAFE_INTEGER),
 			);
 		if (view === "funnel") {
 			if (
@@ -485,6 +529,7 @@ export function HomeDataExtendedView({
 			const start = total;
 			total += item.value;
 			return {
+				id: item.id,
 				name: item.label,
 				range: [Math.min(start, total), Math.max(start, total)],
 				change: item.value,
@@ -537,7 +582,7 @@ export function HomeDataExtendedView({
 							>
 								{changes.map((item) => (
 									<Cell
-										key={item.name}
+										key={item.id}
 										fill={
 											item.change >= 0 ? "var(--chart-1)" : "var(--destructive)"
 										}
@@ -567,7 +612,11 @@ export function HomeDataExtendedView({
 							<th className="p-2">Property</th>
 							{rows.map(({ key, row }) => (
 								<th key={key} className="min-w-32 p-2">
-									{homeDataText(row[columns[0]])}
+									<HomeDataTitle
+										value={row[columns[0]]}
+										format={labels.format(columns[0])}
+										config={config}
+									/>
 								</th>
 							))}
 						</tr>
@@ -578,12 +627,19 @@ export function HomeDataExtendedView({
 								key={field}
 								className="border-b border-border/50 last:border-0 hover:bg-muted/20"
 							>
-								<th className="p-2 font-medium text-muted-foreground">
-									{field}
+								<th
+									className="p-2 font-medium text-muted-foreground"
+									title={field}
+								>
+									{homeDataFieldLabel(field, labels.kind(field))}
 								</th>
 								{rows.map(({ key, row }) => (
 									<td key={key} className="max-w-60 break-words p-2">
-										{homeDataText(row[field])}
+										<HomeDataValue
+											value={row[field]}
+											format={labels.format(field)}
+											config={config}
+										/>
 									</td>
 								))}
 							</tr>
@@ -606,18 +662,27 @@ export function HomeDataExtendedView({
 					Choose a date column in widget settings.
 				</HomeDataMessage>
 			);
+		const dateType =
+			result.columns.find((column) => column.name === config.xField)
+				?.type_name ?? "";
+		const dayPrecision = temporalUnitFromTypeName(dateType) === "day";
+		const titleFormat = labels.format(columns[0]);
 		const dated = keyHomeDataRows(result.rows)
 			.flatMap((item) => {
-				const value = item.row[config.xField];
-				if (value === null || value === undefined) return [];
-				const date = new Date(
-					typeof value === "number" ? value : homeDataText(value),
-				);
-				return Number.isNaN(date.getTime())
-					? []
-					: [{ ...item, date, day: date.toISOString().slice(0, 10) }];
+				const date = homeDataTemporalValue(item.row[config.xField], dateType);
+				return date
+					? [{ ...item, date, day: date.toISOString().slice(0, 10) }]
+					: [];
 			})
 			.sort((a, b) => a.date.getTime() - b.date.getTime());
+		const dateLabel = (value: unknown, date: Date) => {
+			const dateOnly = dayPrecision || DATE_ONLY_TEXT.test(homeDataText(value));
+			return homeDataDateLabel(date, {
+				bucket: "none",
+				showYear: dateOnly,
+				dateOnly,
+			});
+		};
 		if (!dated.length)
 			return (
 				<HomeDataMessage title="Nothing to display">
@@ -637,30 +702,26 @@ export function HomeDataExtendedView({
 								className="text-[11px] text-muted-foreground"
 								dateTime={date.toISOString()}
 							>
-								{/^\d{4}-\d{2}-\d{2}$/.test(homeDataText(row[config.xField]))
-									? date.toLocaleDateString(undefined, {
-											month: "short",
-											day: "numeric",
-											year: "numeric",
-											timeZone: "UTC",
-										})
-									: date.toLocaleString(undefined, {
-											month: "short",
-											day: "numeric",
-											hour: "2-digit",
-											minute: "2-digit",
-										})}
+								{dateLabel(row[config.xField], date)}
 							</time>
 							<p className="truncate text-sm font-medium">
-								{homeDataText(row[columns[0]])}
+								<HomeDataTitle
+									value={row[columns[0]]}
+									format={titleFormat}
+									config={config}
+								/>
 							</p>
 							{columns
 								.slice(1, 4)
 								.filter((field) => field !== config.xField)
 								.map((field) => (
-									<p className="text-xs text-muted-foreground" key={field}>
-										{field}: {homeDataText(row[field])}
-									</p>
+									<HomeDataRecordField
+										key={field}
+										row={row}
+										field={field}
+										labels={labels}
+										config={config}
+									/>
 								))}
 						</li>
 					))}
@@ -710,9 +771,16 @@ export function HomeDataExtendedView({
 												<p
 													key={key}
 													className="mt-1 truncate rounded bg-primary/15 px-1 py-0.5"
-													title={homeDataText(row[columns[0]])}
+													title={homeDataValueTitle(
+														row[columns[0]],
+														titleFormat.kind,
+													)}
 												>
-													{homeDataText(row[columns[0]])}
+													<HomeDataTitle
+														value={row[columns[0]]}
+														format={titleFormat}
+														config={config}
+													/>
 												</p>
 											))}
 										</div>

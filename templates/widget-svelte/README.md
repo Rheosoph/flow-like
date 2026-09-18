@@ -41,32 +41,46 @@ values use `[longitude, latitude]` coordinate order.
 
 ## Network access (CSP)
 
-Widgets run sandboxed with no network access. To call an external service,
-declare its origin in `widget.config.ts`. `src/widgets/weather-widget/` is a
-working example:
+Widgets run sandboxed. They can always use `data:` and `blob:` URLs, but they
+reach no site on the network until the viewer approves it. Declare what a
+widget needs in `widget.config.ts`. `src/widgets/weather-widget/` is a working
+example:
 
 ```ts
 export default defineWidget<Inputs, Events>({
 	id: "weather-widget",
 	// …
-	csp: {
-		connectSrc: ["https://api.open-meteo.com"],
-	},
+	csp: [
+		{
+			reason: "Fetches the current temperature from Open-Meteo",
+			connectSrc: ["https://api.open-meteo.com"],
+		},
+	],
 });
 ```
 
+- Group sources by purpose. Every group needs a `reason` (8–120 characters of
+  plain words, no web addresses). The viewer sees it, marked as your text.
 - `connectSrc` covers `fetch`, `EventSource` and WebSockets (`https://` or
-  `wss://`). `imgSrc`, `fontSrc`, `mediaSrc` and `styleSrc` take `https://`
-  origins.
-- Exact origins only: no paths, ports, wildcards, IP addresses or `localhost`,
-  and at most 16 per widget. Values must be string literals, because the
-  bundler reads the config statically and rejects anything invalid.
-- A widget that declares `csp` is published with `contractVersion: 2`. Before
-  it loads, Flow-Like shows the viewer the listed sites and asks for approval.
-  If the viewer runs it without approval, and in store previews, requests fail,
-  so show a useful error.
-- Every listed site can receive anything the widget sees. List only what the
-  widget needs.
+  `wss://`). `imgSrc`, `fontSrc`, `mediaSrc` and `styleSrc` take `https://`.
+- Sources are origins without paths or ports, at most 16 per widget, written
+  as string literals. A leading `*.` covers every subdomain, for example
+  `https://*.earthdata.nasa.gov`. Open hosting such as
+  `https://*.s3.eu-central-1.amazonaws.com` is allowed, but the viewer sees a
+  warning because anyone can host files there.
+- For hosts only known at runtime, such as a customer's CDN or signed storage
+  URLs, declare the input that carries the URL instead:
+  `{ reason, inputs: [{ path: "tileUrl", directives: ["imgSrc", "connectSrc"] }] }`.
+  Flow-Like reads only the origin from the value and asks the viewer to approve
+  it. A new signature on the same host needs no new approval.
+- Before the widget loads, the viewer sees each site with an explanation and
+  decides. If they run it without network access, and in store previews,
+  requests fail, so show a useful error.
+- Every approved site can receive anything the widget sees. Declare only what
+  the widget needs.
+
+The bundler checks all of this when it builds. The `@flow-like/widget-bundler`
+README has recipes for Cesium ion, NASA GIBS and S3, GCS or Azure signed URLs.
 
 ## Building & packing
 

@@ -784,17 +784,17 @@ intentional structure is a DEFECT even when the data wiring is correct. So is a 
 a settings screen.
 
 ## What Actually Renders - the three styling channels
-1. `style.className` (Tailwind utilities): only STANDARD utilities exist at runtime. The
-   stylesheet is compiled ahead of time and there is NO runtime Tailwind engine, so arbitrary
-   values (`w-[437px]`, `bg-[#ff00aa]`) and exotic variants silently render NOTHING - an
-   arbitrary value only works if that exact literal happens to exist in first-party source,
-   which you cannot rely on. Use standard-scale utilities and the theme tokens below; for any
-   custom value use channel 2 or 3.
+1. `style.className` (Tailwind v4 utilities): compiled at runtime against this theme, so
+   standard utilities, responsive/state/`dark:` variants, `text-5xl`..`text-9xl`, arbitrary
+   values (`w-[437px]`, `text-[clamp(2rem,5vw,4rem)]`, `_` for spaces) and arbitrary variants
+   (`[&_h2]:text-lg`) all render. Bracketed colours still come from the theme
+   (`bg-[color-mix(in_oklab,var(--primary)_12%,transparent)]`, never `bg-[#ff00aa]`). HTML in an
+   iframe `srcdoc`, package micro-widget internals and native home-screen widgets ignore it.
    Shadow gotcha: the standard `shadow-sm`/`shadow-md`/`shadow-lg` utilities are TRANSPARENT in
    this theme (alpha 0 by design) and render no elevation. For real shadows use the
    `shadow-floating` token, the typed `shadow` style field, or customCss box-shadow.
-2. Typed `style` fields: always render (inline CSS). Use them for every value outside the
-   standard scale: custom gradients, exact sizes, bespoke shadows, filters, animation values.
+2. Typed `style` fields: always render (inline CSS). Use them for structured values: custom
+   gradients, exact sizes, bespoke shadows, filters, animation values.
    Available fields: background, border, shadow, padding, margin, width/height (+ min/max),
    position, zIndex, transform, opacity, overflow, filter, backdropFilter, transition,
    animation, aspectRatio, display, gap, flex/grid placement, typography (color, fontSize,
@@ -866,8 +866,8 @@ only when mono is confined to numerals).
 
 Scale, then roles:
 - Display / hero: typed `fontSize` with clamp - `"fontSize": "clamp(2.25rem, 6vw, 4.5rem)"`,
-  `"lineHeight": "0.95"`, `"letterSpacing": "-0.03em"`. NOTE `text-5xl`/`text-6xl` are NOT
-  compiled - anything above `text-4xl` must go through typed `fontSize`.
+  `"lineHeight": "0.95"`, `"letterSpacing": "-0.03em"`. `text-5xl`..`text-9xl` compile but
+  are fixed steps; a hero that scales with the viewport needs clamp().
 - Section heading: text-2xl font-semibold tracking-tight
 - Card title: text-lg font-semibold
 - Body: text-sm/text-base text-foreground, typed `"maxWidth": "68ch"` on prose
@@ -1041,9 +1041,9 @@ host app); `@import` is stripped, so no webfonts.
 
 ## Responsive Design (every surface, mobile-first)
 Breakpoints: sm >=640px, md >=768px, lg >=1024px, xl >=1280px, 2xl >=1536px (viewport-based).
-- className route (standard utilities): grid-cols-1 sm:grid-cols-2 lg:grid-cols-3,
+- className route: grid-cols-1 sm:grid-cols-2 lg:grid-cols-3,
   flex-col md:flex-row, hidden md:block, p-4 md:p-6 lg:p-8, text-sm md:text-base
-- Guaranteed typed route (per component, breakpoint keys sm/md/lg/xl/xxl):
+- Typed route (per component, breakpoint keys sm/md/lg/xl/xxl):
   "responsiveOverrides": { "md": { "gridCols": 2 }, "xl": { "gridCols": 4 } }
   Per-breakpoint fields: className, display, flexDirection, justifyContent, alignItems, gap,
   gridCols, width, height, padding, margin, hidden, fontSize, textAlign, order.

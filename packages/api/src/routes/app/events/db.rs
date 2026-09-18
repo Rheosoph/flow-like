@@ -20,7 +20,7 @@ use flow_like::flow::event::{
 use flow_like_types::{anyhow, utils::constant_time_eq};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
-    DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -320,15 +320,19 @@ where
 {
     let model = event_to_db_model(app_id, event);
 
-    // Try to find existing
-    let existing = event::Entity::find_by_id(&event.id).one(db).await?;
+    let existing_app_id = event::Entity::find_by_id(&event.id)
+        .select_only()
+        .column(event::Column::AppId)
+        .into_tuple::<String>()
+        .one(db)
+        .await?;
 
-    if let Some(existing) = existing {
-        if existing.app_id != app_id {
+    if let Some(existing_app_id) = existing_app_id {
+        if existing_app_id != app_id {
             tracing::error!(
                 event_id = %event.id,
                 requested_app_id = %app_id,
-                existing_app_id = %existing.app_id,
+                existing_app_id = %existing_app_id,
                 "Refusing to reassign an event database row across apps"
             );
             return Err(anyhow!("Event ID collision while synchronizing event"));
@@ -675,6 +679,23 @@ pub async fn get_event_from_db(
     db_model_to_event(model)
 }
 
+/// [`get_event_from_db`] plus the row's `setupStatus`, which the core event
+/// does not carry, so a caller needing both reads the row once.
+pub async fn get_event_with_setup_status_from_db(
+    db: &DatabaseConnection,
+    event_id: &str,
+    app_id: &str,
+) -> flow_like_types::Result<(CoreEvent, Option<String>)> {
+    let model = event::Entity::find_by_id(event_id)
+        .filter(event::Column::AppId.eq(app_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow!("Event not found: {}", event_id))?;
+    let setup_status = model.setup_status.clone();
+
+    Ok((db_model_to_event(model)?, setup_status))
+}
+
 /// Get an event from the database by ID, validating it belongs to the given app.
 /// Returns None if not found.
 pub async fn get_event_from_db_opt(
@@ -877,6 +898,8 @@ pub async fn get_events_with_fallback(
     dialect: DbDialect,
     app: &App,
 ) -> flow_like_types::Result<Vec<CoreEvent>> {
+    use futures::{StreamExt, TryStreamExt};
+
     // Try DB first
     let db_events = get_events_for_app(db, &app.id).await?;
 
@@ -887,39 +910,53 @@ pub async fn get_events_with_fallback(
     // Load and validate the complete artifact set before changing the mirror.
     // This prevents one unreadable artifact from leaving a partial DB snapshot
     // that subsequent reads would incorrectly treat as authoritative.
-    let mut bucket_events = Vec::with_capacity(app.events.len());
-    for event_id in &app.events {
-        let event = app.get_event(event_id, None).await?;
-        if event.id != *event_id {
-            tracing::error!(
-                expected_event_id = %event_id,
-                artifact_event_id = %event.id,
-                app_id = %app.id,
-                "Event artifact ID does not match its manifest entry"
-            );
-            return Err(anyhow!("Event artifact ID mismatch"));
-        }
-        bucket_events.push(event);
+    let loads: Vec<_> = app
+        .events
+        .iter()
+        .map(|event_id| load_manifest_event(app, event_id))
+        .collect();
+    let bucket_events: Vec<CoreEvent> = futures::stream::iter(loads)
+        .buffered(MIRROR_BACKFILL_READ_CONCURRENCY)
+        .try_collect()
+        .await?;
+
+    let models: Vec<event::ActiveModel> = {
+        let mut seen = std::collections::HashSet::with_capacity(bucket_events.len());
+        bucket_events
+            .iter()
+            .filter(|event| seen.insert(event.id.as_str()))
+            .map(|event| event_to_db_model(&app.id, event))
+            .collect()
+    };
+    if models.is_empty() {
+        return Ok(bucket_events);
     }
 
     // Commit the mirror backfill atomically. The complete bucket result is
     // still safe to serve when a transient DB write fails; rollback keeps the
     // next request eligible to retry the repair. Every row is an upsert, so
     // the body may be re-run after a lost commit race.
-    let bucket_events = Arc::new(bucket_events);
+    let models = Arc::new(models);
     let app_id = app.id.clone();
     let backfill =
         retry_transaction::<_, (), DbErr>(db, dialect, None, &RetryPolicy::idempotent(), |txn| {
-            let bucket_events = bucket_events.clone();
+            let models = models.clone();
             let app_id = app_id.clone();
             Box::pin(async move {
-                for event in bucket_events.iter() {
-                    sync_event_to_db(txn, &app_id, event)
-                        .await
-                        .map_err(|error| match error.downcast::<DbErr>() {
-                            Ok(db_error) => db_error,
-                            Err(other) => DbErr::Custom(other.to_string()),
-                        })?;
+                for chunk in models.chunks(MIRROR_BACKFILL_WRITE_CHUNK) {
+                    let written = event::Entity::insert_many(chunk.to_vec())
+                        .on_conflict(mirror_backfill_conflict(&app_id))
+                        .exec_without_returning(txn)
+                        .await?;
+                    if written < chunk.len() as u64 {
+                        tracing::error!(
+                            requested_app_id = %app_id,
+                            "Refusing to reassign an event database row across apps"
+                        );
+                        return Err(DbErr::Custom(
+                            "Event ID collision while synchronizing event".to_string(),
+                        ));
+                    }
                 }
                 Ok(())
             })
@@ -933,7 +970,64 @@ pub async fn get_events_with_fallback(
         );
     }
 
-    Ok(Arc::try_unwrap(bucket_events).unwrap_or_else(|events| events.as_ref().clone()))
+    Ok(bucket_events)
+}
+
+const MIRROR_BACKFILL_READ_CONCURRENCY: usize = 16;
+
+/// Event rows carry JSON blobs, so a statement stays far below
+/// [`DEFAULT_WRITE_CHUNK`] rows to keep one wire message small.
+const MIRROR_BACKFILL_WRITE_CHUNK: usize = 100;
+
+async fn load_manifest_event(app: &App, event_id: &str) -> flow_like_types::Result<CoreEvent> {
+    let event = app.get_event(event_id, None).await?;
+    if event.id != event_id {
+        tracing::error!(
+            expected_event_id = %event_id,
+            artifact_event_id = %event.id,
+            app_id = %app.id,
+            "Event artifact ID does not match its manifest entry"
+        );
+        return Err(anyhow!("Event artifact ID mismatch"));
+    }
+    Ok(event)
+}
+
+/// Upsert on the primary key, guarded so a row owned by another app is left
+/// untouched; the caller detects that as a short write. Mirrors the columns
+/// [`event_to_db_model`] sets, so setup tracking survives like it does on
+/// [`sync_event_to_db`].
+fn mirror_backfill_conflict(app_id: &str) -> sea_orm::sea_query::OnConflict {
+    use sea_orm::sea_query::{Expr, ExprTrait, OnConflict};
+
+    OnConflict::column(event::Column::Id)
+        .update_columns([
+            event::Column::Name,
+            event::Column::Description,
+            event::Column::EventType,
+            event::Column::Active,
+            event::Column::Priority,
+            event::Column::BoardId,
+            event::Column::BoardVersion,
+            event::Column::NodeId,
+            event::Column::PageId,
+            event::Column::Route,
+            event::Column::IsDefault,
+            event::Column::EventVersion,
+            event::Column::ExecutionMode,
+            event::Column::Exposure,
+            event::Column::Variables,
+            event::Column::Config,
+            event::Column::Inputs,
+            event::Column::Notes,
+            event::Column::Canary,
+            event::Column::Variants,
+            event::Column::CorrelationMappings,
+            event::Column::CreatedAt,
+            event::Column::UpdatedAt,
+        ])
+        .action_and_where(Expr::col((event::Entity, event::Column::AppId)).eq(app_id))
+        .to_owned()
 }
 
 /// Get event by route with fallback - searches bucket events if not in DB

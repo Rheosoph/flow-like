@@ -16,6 +16,12 @@ export interface ElementSource {
 
 type ElementMap = Record<string, unknown>;
 
+/**
+ * Most serialized element bytes one transfer carries: a run's initial `_elements` or a
+ * `requestElements` answer. Channel transports cap a push well below an invocation body.
+ */
+export const MAX_ELEMENTS_BYTES = 512 * 1024;
+
 const SELECTOR_PREFIX = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/s;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

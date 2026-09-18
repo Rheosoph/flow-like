@@ -269,26 +269,27 @@ export const filterItem: HomeWidgetObjectContract = {
 export const appDiscoveryFields = (
 	defaultSource: string,
 	limitMaximum: number,
-): Record<string, HomeWidgetConfigFieldContract> => ({
-	source: text("Which app inventory supplies the widget.", {
-		default: defaultSource,
-		enum: DISCOVERY_APP_SOURCES,
-	}),
-	appId: profileApp("Exact app used by a single-app manual selection.", {
-		field: "source",
-		equals: "manual",
-	}),
-	appIds: profileApps(limitMaximum, {
-		all: [
-			{ field: "source", equals: "manual" },
-			{ field: "appId", equals: "" },
-		],
-	}),
-	query: text("Case-insensitive app search text."),
-	category: text("Exact app category filter.", { enum: APP_CATEGORIES }),
-	tag: text("Exact app tag filter."),
-	eyebrow: text("Short label above the widget heading."),
-});
+) =>
+	({
+		source: text("Which app inventory supplies the widget.", {
+			default: defaultSource,
+			enum: DISCOVERY_APP_SOURCES,
+		}),
+		appId: profileApp("Exact app used by a single-app manual selection.", {
+			field: "source",
+			equals: "manual",
+		}),
+		appIds: profileApps(limitMaximum, {
+			all: [
+				{ field: "source", equals: "manual" },
+				{ field: "appId", equals: "" },
+			],
+		}),
+		query: text("Case-insensitive app search text."),
+		category: text("Exact app category filter.", { enum: APP_CATEGORIES }),
+		tag: text("Exact app tag filter."),
+		eyebrow: text("Short label above the widget heading."),
+	}) satisfies Record<string, HomeWidgetConfigFieldContract>;
 
 export const emptyContract = (
 	description: string,

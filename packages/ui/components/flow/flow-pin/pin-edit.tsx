@@ -10,22 +10,17 @@ import {
 	useState,
 } from "react";
 import { Button } from "../../../components/ui/button";
-import { IValueType } from "../../../lib";
 import type { IBoard } from "../../../lib/schema/flow/board";
-import {
-	type IPin,
-	IPinType,
-	IVariableType,
-} from "../../../lib/schema/flow/pin";
+import type { IPin } from "../../../lib/schema/flow/pin";
 import useFlowControlState from "../../../state/flow-control-state";
 import type { FlowSelectorDataRef } from "../flow-selector-data";
+import { resolvePinEditorKind } from "./pin-editor-kind";
 import { BitVariable } from "./variable-types/bit-select";
 import { BooleanVariable } from "./variable-types/boolean-variable";
 import { VariableDescription } from "./variable-types/default-text";
 import { ElementSelect } from "./variable-types/element-select";
 import { EnumVariable } from "./variable-types/enum-variable";
 import { FnVariable } from "./variable-types/fn-select";
-import { GeometryChip } from "./variable-types/geometry-chip";
 import {
 	OntologyActionSelect,
 	OntologyObjectSelect,
@@ -96,243 +91,146 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 		[changeDefaultValue],
 	);
 
-	if (pin.pin_type === IPinType.Output)
-		return <VariableDescription pin={pin} />;
-	if (pin.depends_on.length > 0) return <VariableDescription pin={pin} />;
-	if (
-		pin.name === "_flow_user_sub" &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<ProjectUserSelect
-				pin={pin}
-				value={cachedDefaultValue}
-				appId={appId}
-				setValue={updateDefaultValue}
-			/>
-		);
-	}
+	const ontologyProps = {
+		pin,
+		value: cachedDefaultValue,
+		appId,
+		boardId,
+		nodeId,
+		currentLayerId,
+		boardRef,
+		setValue: updateDefaultValue,
+	} as const;
 
-	if (
-		pin.name === "_flow_remote_app_id" &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<RemoteProjectSelect
-				pin={pin}
-				value={cachedDefaultValue}
-				appId={appId}
-				boardId={boardId}
-				nodeId={nodeId}
-				boardRef={boardRef}
-				setValue={updateDefaultValue}
-				onPreviewValue={previewDefaultValue}
-			/>
-		);
-	}
-
-	if (
-		pin.name === "_flow_remote_database" &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<RemoteDatabaseSelect
-				pin={pin}
-				value={cachedDefaultValue}
-				appId={appId}
-				nodeId={nodeId}
-				boardRef={boardRef}
-				setValue={updateDefaultValue}
-			/>
-		);
-	}
-
-	if (
-		pin.name === "_flow_remote_event" &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<RemoteEventSelect
-				pin={pin}
-				value={cachedDefaultValue}
-				appId={appId}
-				boardId={boardId}
-				nodeId={nodeId}
-				nodeName={nodeName}
-				boardRef={boardRef}
-				setValue={updateDefaultValue}
-				onPreviewValue={previewDefaultValue}
-			/>
-		);
-	}
-
-	if (pin.name === "_flow_remote_event_meta") {
-		return <VariableDescription pin={pin} />;
-	}
-
-	if (
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		const ontologyProps = {
-			pin,
-			value: cachedDefaultValue,
-			appId,
-			boardId,
-			nodeId,
-			currentLayerId,
-			boardRef,
-			setValue: updateDefaultValue,
-		} as const;
-		if (
-			(nodeName === "ontology_query_objects" ||
-				nodeName === "ontology_action_request" ||
-				nodeName === "ontology_action_input") &&
-			pin.name === "ontology_id"
-		) {
+	switch (resolvePinEditorKind(pin, nodeName)) {
+		case "label":
+			return <VariableDescription pin={pin} />;
+		case "projectUser":
+			return (
+				<ProjectUserSelect
+					pin={pin}
+					value={cachedDefaultValue}
+					appId={appId}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "remoteProject":
+			return (
+				<RemoteProjectSelect
+					pin={pin}
+					value={cachedDefaultValue}
+					appId={appId}
+					boardId={boardId}
+					nodeId={nodeId}
+					boardRef={boardRef}
+					setValue={updateDefaultValue}
+					onPreviewValue={previewDefaultValue}
+				/>
+			);
+		case "remoteDatabase":
+			return (
+				<RemoteDatabaseSelect
+					pin={pin}
+					value={cachedDefaultValue}
+					appId={appId}
+					nodeId={nodeId}
+					boardRef={boardRef}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "remoteEvent":
+			return (
+				<RemoteEventSelect
+					pin={pin}
+					value={cachedDefaultValue}
+					appId={appId}
+					boardId={boardId}
+					nodeId={nodeId}
+					nodeName={nodeName}
+					boardRef={boardRef}
+					setValue={updateDefaultValue}
+					onPreviewValue={previewDefaultValue}
+				/>
+			);
+		case "ontology":
 			return <OntologySelect {...ontologyProps} />;
-		}
-		if (nodeName === "ontology_query_objects" && pin.name === "object_type") {
+		case "ontologyObject":
 			return <OntologyObjectSelect {...ontologyProps} />;
-		}
-		if (
-			(nodeName === "ontology_action_request" ||
-				nodeName === "ontology_action_input") &&
-			pin.name === "action_id"
-		) {
+		case "ontologyAction":
 			return <OntologyActionSelect {...ontologyProps} />;
-		}
-		if (
-			(nodeName === "ontology_query_remote_objects" ||
-				nodeName === "ontology_query_remote_children" ||
-				nodeName === "ontology_action_request_remote") &&
-			pin.name === "binding_id"
-		) {
+		case "remoteOntology":
 			return <RemoteOntologySelect {...ontologyProps} />;
-		}
-		if (
-			(nodeName === "ontology_query_remote_objects" ||
-				nodeName === "ontology_query_remote_children") &&
-			pin.name === "object_type"
-		) {
+		case "remoteOntologyObject":
 			return <RemoteOntologyObjectSelect {...ontologyProps} />;
-		}
-		if (
-			nodeName === "ontology_action_request_remote" &&
-			pin.name === "action_id"
-		) {
+		case "remoteOntologyAction":
 			return <RemoteOntologyActionSelect {...ontologyProps} />;
-		}
+		case "widget":
+			return (
+				<WidgetVariable
+					pin={pin}
+					value={cachedDefaultValue}
+					appId={appId}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "boolean":
+			return (
+				<BooleanVariable
+					pin={pin}
+					value={cachedDefaultValue}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "enum":
+			return (
+				<EnumVariable
+					pin={pin}
+					value={cachedDefaultValue}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "bit":
+			return (
+				<BitVariable
+					pin={pin}
+					value={cachedDefaultValue}
+					setValue={updateDefaultValue}
+					selectorDataRef={selectorDataRef}
+				/>
+			);
+		case "fn":
+			return (
+				<FnVariable
+					boardRef={boardRef}
+					pin={pin}
+					value={cachedDefaultValue}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "var":
+			return (
+				<VarVariable
+					boardRef={boardRef}
+					pin={pin}
+					value={cachedDefaultValue}
+					currentLayerId={currentLayerId}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "element":
+			return (
+				<ElementSelect
+					pin={pin}
+					value={cachedDefaultValue}
+					setValue={updateDefaultValue}
+					selectorDataRef={selectorDataRef}
+				/>
+			);
+		default:
+			return (
+				<WithMenu nodeId={nodeId} pin={pin} defaultValue={cachedDefaultValue} />
+			);
 	}
-
-	if (
-		nodeName === "a2ui_instantiate_widget" &&
-		pin.name === "widget_selector" &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<WidgetVariable
-				pin={pin}
-				value={cachedDefaultValue}
-				appId={appId}
-				setValue={updateDefaultValue}
-			/>
-		);
-	}
-
-	if (pin.data_type === IVariableType.Boolean)
-		return (
-			<BooleanVariable
-				pin={pin}
-				value={cachedDefaultValue}
-				setValue={updateDefaultValue}
-			/>
-		);
-	if (
-		pin.data_type === IVariableType.Geometry &&
-		pin.value_type === IValueType.Normal
-	)
-		return <GeometryChip nodeId={nodeId} pin={pin} value={cachedDefaultValue} />;
-	if (
-		(pin.options?.valid_values?.length ?? 0) > 0 &&
-		pin.data_type === IVariableType.String
-	)
-		return (
-			<EnumVariable
-				pin={pin}
-				value={cachedDefaultValue}
-				setValue={updateDefaultValue}
-			/>
-		);
-
-	if (
-		pin.name.startsWith("bit_id") &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<BitVariable
-				pin={pin}
-				value={cachedDefaultValue}
-				setValue={updateDefaultValue}
-				selectorDataRef={selectorDataRef}
-			/>
-		);
-	}
-
-	if (
-		pin.name.startsWith("fn_ref") &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<FnVariable
-				boardRef={boardRef}
-				pin={pin}
-				value={cachedDefaultValue}
-				setValue={updateDefaultValue}
-			/>
-		);
-	}
-
-	if (
-		pin.name.startsWith("var_ref") &&
-		pin.data_type === IVariableType.String &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<VarVariable
-				boardRef={boardRef}
-				pin={pin}
-				value={cachedDefaultValue}
-				currentLayerId={currentLayerId}
-				setValue={updateDefaultValue}
-			/>
-		);
-	}
-
-	if (
-		pin.name.startsWith("element_ref") &&
-		pin.value_type === IValueType.Normal
-	) {
-		return (
-			<ElementSelect
-				pin={pin}
-				value={cachedDefaultValue}
-				setValue={updateDefaultValue}
-				selectorDataRef={selectorDataRef}
-			/>
-		);
-	}
-
-	return (
-		<WithMenu nodeId={nodeId} pin={pin} defaultValue={cachedDefaultValue} />
-	);
 });
 
 function WithMenuInner({

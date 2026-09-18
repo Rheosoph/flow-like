@@ -304,28 +304,23 @@ pub async fn get_usage_summary(
 ) -> Result<Json<UsageSummary>, ApiError> {
     let sub = user.sub()?;
 
-    let user_record = user::Entity::find_by_id(&sub)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::FORBIDDEN)?;
+    let (user_record, llm_count, embedding_count, execution_count) = flow_like_types::tokio::join!(
+        user::Entity::find_by_id(&sub).one(&state.db),
+        llm_usage_tracking::Entity::find()
+            .filter(llm_usage_tracking::Column::UserId.eq(&sub))
+            .count(&state.db),
+        embedding_usage_tracking::Entity::find()
+            .filter(embedding_usage_tracking::Column::UserId.eq(&sub))
+            .count(&state.db),
+        execution_usage_tracking::Entity::find()
+            .filter(execution_usage_tracking::Column::UserId.eq(&sub))
+            .count(&state.db),
+    );
 
-    let llm_count = llm_usage_tracking::Entity::find()
-        .filter(llm_usage_tracking::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-
-    let embedding_count = embedding_usage_tracking::Entity::find()
-        .filter(embedding_usage_tracking::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-
-    let execution_count = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+    let user_record = user_record?.ok_or(ApiError::FORBIDDEN)?;
+    let llm_count = llm_count.map_err(|e| ApiError::internal_error(e.into()))?;
+    let embedding_count = embedding_count.map_err(|e| ApiError::internal_error(e.into()))?;
+    let execution_count = execution_count.map_err(|e| ApiError::internal_error(e.into()))?;
 
     Ok(Json(UsageSummary {
         total_llm_price: user_record.total_llm_price,

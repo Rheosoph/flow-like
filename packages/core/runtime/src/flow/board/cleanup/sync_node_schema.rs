@@ -187,6 +187,8 @@ fn repair_catalog_pin_schemas(
 /// Dynamic nodes (those that modify pins in `on_update`) will have their
 /// dynamic pins re-added after this sync since `on_update` runs afterwards.
 pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
+    let owns_text = placed_node.owns_descriptive_text();
+
     // Build lookup of catalog pins by name (owned strings to avoid borrow issues)
     let catalog_pins_by_name: std::collections::HashMap<String, Pin> = catalog_node
         .pins
@@ -214,8 +216,10 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
 
             if let Some(placed_pin) = placed_node.pins.get_mut(pin_id) {
                 // Update non-connection fields
-                placed_pin.friendly_name = catalog_pin.friendly_name.clone();
-                placed_pin.description = catalog_pin.description.clone();
+                if !owns_text {
+                    placed_pin.friendly_name = catalog_pin.friendly_name.clone();
+                    placed_pin.description = catalog_pin.description.clone();
+                }
                 placed_pin.pin_type = catalog_pin.pin_type.clone();
                 placed_pin.options = catalog_pin.options.clone();
 
@@ -295,8 +299,10 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
     placed_node.version = catalog_node.version;
 
     // Copy other metadata that should stay in sync
-    placed_node.friendly_name = catalog_node.friendly_name.clone();
-    placed_node.description = catalog_node.description.clone();
+    if !owns_text {
+        placed_node.friendly_name = catalog_node.friendly_name.clone();
+        placed_node.description = catalog_node.description.clone();
+    }
     placed_node.category = catalog_node.category.clone();
     placed_node.icon = catalog_node.icon.clone();
     placed_node.docs = catalog_node.docs.clone();
@@ -381,9 +387,13 @@ fn sync_flowscript_names(placed_node: &mut Node, catalog_node: &Node) {
 /// (call-function names, typed pins), so nothing dynamic is lost.
 ///
 /// Deliberately untouched: `friendly_name` (users rename nodes), pin types and schemas (owned by
-/// `on_update` and `repair_catalog_pin_schemas`), and any pin the catalog does not know (dynamic).
+/// `on_update` and `repair_catalog_pin_schemas`), any pin the catalog does not know (dynamic), and
+/// the user-written text of event nodes ([`Node::owns_descriptive_text`]).
 fn refresh_catalog_metadata(placed_node: &mut Node, catalog_node: &Node) {
-    placed_node.description = catalog_node.description.clone();
+    let owns_text = placed_node.owns_descriptive_text();
+    if !owns_text {
+        placed_node.description = catalog_node.description.clone();
+    }
     placed_node.category = catalog_node.category.clone();
     placed_node.icon = catalog_node.icon.clone();
     placed_node.docs = catalog_node.docs.clone();
@@ -411,8 +421,10 @@ fn refresh_catalog_metadata(placed_node: &mut Node, catalog_node: &Node) {
         if catalog_pin.pin_type != pin.pin_type {
             continue;
         }
-        pin.friendly_name = catalog_pin.friendly_name.clone();
-        pin.description = catalog_pin.description.clone();
+        if !owns_text {
+            pin.friendly_name = catalog_pin.friendly_name.clone();
+            pin.description = catalog_pin.description.clone();
+        }
         pin.options = catalog_pin.options.clone();
     }
 }
@@ -841,6 +853,68 @@ mod tests {
             VariableType::Integer,
             "dynamic typing survives"
         );
+    }
+
+    fn user_described_event() -> (Node, Node) {
+        let mut placed = Node::new("events_generic", "Order received", "Fires on orders", "Old");
+        placed.set_start(true);
+        placed.add_icon("/old.svg");
+        placed.add_output_pin(
+            "exec_out",
+            "Order",
+            "Begins order handling",
+            VariableType::Execution,
+        );
+
+        let mut catalog = Node::new(
+            "events_generic",
+            "Generic Event",
+            "A generic event without input or output",
+            "Events",
+        );
+        catalog.set_start(true);
+        catalog.add_icon("/new.svg");
+        catalog.add_output_pin(
+            "exec_out",
+            "Exec Out",
+            "Starting an event",
+            VariableType::Execution,
+        );
+        (placed, catalog)
+    }
+
+    fn assert_keeps_user_text(placed: &Node) {
+        assert_eq!(placed.friendly_name, "Order received");
+        assert_eq!(placed.description, "Fires on orders");
+        let exec_out = placed.get_pin_by_name("exec_out").unwrap();
+        assert_eq!(exec_out.friendly_name, "Order");
+        assert_eq!(exec_out.description, "Begins order handling");
+        assert_eq!(
+            placed.category, "Events",
+            "non-text metadata still refreshes"
+        );
+        assert_eq!(placed.icon.as_deref(), Some("/new.svg"));
+    }
+
+    #[test]
+    fn same_version_event_node_keeps_user_written_text() {
+        let (mut placed, catalog) = user_described_event();
+
+        refresh_catalog_metadata(&mut placed, &catalog);
+
+        assert_keeps_user_text(&placed);
+    }
+
+    #[test]
+    fn version_bump_keeps_user_written_event_text() {
+        let (mut placed, mut catalog) = user_described_event();
+        placed.set_version(1);
+        catalog.set_version(2);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        assert_keeps_user_text(&placed);
+        assert_eq!(placed.version, Some(2));
     }
 
     #[test]

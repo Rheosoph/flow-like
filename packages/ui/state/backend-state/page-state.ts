@@ -1,4 +1,5 @@
 import type { SurfaceComponent } from "../../components/a2ui/types";
+import type { IElementDemand } from "../../lib/schema/flow/element-demand";
 import type { IEvent } from "../../lib/schema/flow/event";
 import type { Version } from "./widget-state";
 
@@ -146,6 +147,11 @@ export interface IPageBootstrap {
 	readonly appCustomCss?: string | null;
 	/** Authority revision used by governed Page actions and lifecycle hooks. */
 	readonly executionRevision?: string | null;
+	/**
+	 * Page elements the Event's board reads. Governed runs send these with the invocation
+	 * instead of asking the Board demand endpoint, which a Page viewer may not read.
+	 */
+	readonly elementDemand?: Pick<IElementDemand, "selectors" | "dynamic"> | null;
 	readonly canonicalRoute?: string | null;
 	readonly routeMiss?: boolean;
 	/**

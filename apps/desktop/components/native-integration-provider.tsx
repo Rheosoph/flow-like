@@ -31,6 +31,7 @@ import {
 	executeNativeEventWithResult,
 } from "../lib/native-event-execution";
 import {
+	type NativeEventCatalog,
 	type NativePendingAction,
 	type NativeSnapshot,
 	dispatchNativeAction,
@@ -52,6 +53,9 @@ import {
 	type NativeMcpRequest,
 	NativeMcpRunDialog,
 } from "./native-mcp-run-dialog";
+
+const FOCUS_REFRESH_MS = 60_000;
+const PERIODIC_REFRESH_MS = 10 * 60_000;
 
 export function NativeIntegrationProvider() {
 	const backend = useBackend();
@@ -207,10 +211,17 @@ export function NativeIntegrationProvider() {
 		});
 		customWidgetPublisher.start();
 		publishCurrentPage.current = publish;
-		const refresh = (): Promise<void> => {
+		let lastRefreshAt = 0;
+		const eventCatalog: NativeEventCatalog = new Map();
+		const refresh = (maxAgeMs = 0): Promise<void> => {
 			if (refreshPromise) return refreshPromise;
-			if (!current() || document.visibilityState !== "visible")
+			if (
+				!current() ||
+				document.visibilityState !== "visible" ||
+				Date.now() - lastRefreshAt < maxAgeMs
+			)
 				return Promise.resolve();
+			lastRefreshAt = Date.now();
 			refreshPromise = (async () => {
 				try {
 					let notificationSources: NativeNotificationIconSource[] = [];
@@ -223,6 +234,7 @@ export function NativeIntegrationProvider() {
 						(sources) => {
 							notificationSources = sources;
 						},
+						eventCatalog,
 					);
 					if (current()) {
 						baseSnapshot = snapshot;
@@ -484,7 +496,14 @@ export function NativeIntegrationProvider() {
 		const onFocus = () => {
 			// Native entry points stay usable while hub/widget refreshes are slow or offline.
 			void drain();
+			void refresh(FOCUS_REFRESH_MS);
+		};
+		const onRecentApps = () => {
 			void refresh();
+		};
+		const onTick = () => {
+			void drain();
+			void refresh(PERIODIC_REFRESH_MS);
 		};
 		const unlisten = listen<{ url?: string; replayed?: boolean }>(
 			"native-action",
@@ -515,9 +534,9 @@ export function NativeIntegrationProvider() {
 				void publish();
 		});
 		window.addEventListener("focus", onFocus);
-		window.addEventListener(RECENT_APPS_CHANGED, onFocus);
+		window.addEventListener(RECENT_APPS_CHANGED, onRecentApps);
 		document.addEventListener("visibilitychange", onFocus);
-		const timer = window.setInterval(onFocus, 60_000);
+		const timer = window.setInterval(onTick, 60_000);
 		onFocus();
 		return () => {
 			stopped = true;
@@ -528,7 +547,7 @@ export function NativeIntegrationProvider() {
 				publishCurrentPage.current = undefined;
 			window.clearInterval(timer);
 			window.removeEventListener("focus", onFocus);
-			window.removeEventListener(RECENT_APPS_CHANGED, onFocus);
+			window.removeEventListener(RECENT_APPS_CHANGED, onRecentApps);
 			document.removeEventListener("visibilitychange", onFocus);
 			unsubscribeRuns();
 			void unlisten.then((off) => off());

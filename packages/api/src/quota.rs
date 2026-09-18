@@ -291,7 +291,38 @@ async fn active_period(
     period(txn, &id).await
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReserveMode {
+    /// The caller resolved the payer; the fence only verifies it.
+    Fixed,
+    /// The payer is resolved under the ownership fence and `payer_id` is ignored.
+    ResolvePayer,
+    /// Also bounds `runtime_ms` by the allowance read under the account lock.
+    CloudRuntime,
+}
+
 pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiError> {
+    reserve_as(state, request, ReserveMode::Fixed)
+        .await
+        .map(|_| ())
+}
+
+/// Resolves the billing owner like `resolve_payer`, inside the reservation
+/// transaction, and returns it. `request.payer_id` is ignored.
+pub async fn reserve_for_owner(
+    state: &AppState,
+    request: QuotaRequest,
+) -> Result<String, ApiError> {
+    Ok(reserve_as(state, request, ReserveMode::ResolvePayer)
+        .await?
+        .0)
+}
+
+async fn reserve_as(
+    state: &AppState,
+    request: QuotaRequest,
+    mode: ReserveMode,
+) -> Result<(String, QuotaAmounts), ApiError> {
     if request.amounts.values().iter().any(|v| *v < 0) || request.operation_id.is_empty() {
         return Err(ApiError::bad_request("Invalid quota reservation"));
     }
@@ -305,20 +336,30 @@ pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiE
     let tiers = state.platform_config.tiers.clone();
     let enforce = enforcing();
     retry_transaction(&state.db, state.db_dialect, None, &RetryPolicy::idempotent(), move |txn| {
-        let request = request.clone(); let tiers = tiers.clone();
+        let mut request = request.clone(); let tiers = tiers.clone();
         Box::pin(async move {
-            if let Some(app_id)=request.app_id.as_deref() {
-                flow_like_db::coordination::app_capacity(txn,app_id).await?;
-                if crate::capacity::payer_for_app(txn,app_id).await?.as_deref()!=Some(request.payer_id.as_str()) {
-                    return Err(ApiError::conflict("App billing ownership changed. Retry the operation."));
+            if let Some(app_id)=request.app_id.clone() {
+                flow_like_db::coordination::app_capacity(txn,&app_id).await?;
+                let owner=crate::capacity::payer_for_app(txn,&app_id).await?;
+                if mode==ReserveMode::Fixed {
+                    if owner.as_deref()!=Some(request.payer_id.as_str()) {
+                        return Err(ApiError::conflict("App billing ownership changed. Retry the operation."));
+                    }
+                } else {
+                    request.payer_id=owner.ok_or_else(||ApiError::forbidden("The app has no billing owner"))?;
                 }
+            } else if mode!=ReserveMode::Fixed {
+                request.payer_id=request.actor_id.clone().filter(|id|!id.is_empty()).ok_or_else(||ApiError::forbidden("A billing owner is required"))?;
             }
             coordinate(txn, "account-quota", &[&request.payer_id]).await?;
             if let Some(existing) = operation(txn, &request.operation_id).await? {
-                if existing.payer_id != request.payer_id || existing.app_id != request.app_id || existing.kind != request.kind || existing.actor_id != request.actor_id || existing.model_id != request.model_id || existing.provider != request.provider || existing.funding_class != request.funding_class || existing.execution_mode != request.execution_mode || decode(&existing.ceiling)? != request.amounts {
+                let ceiling = decode(&existing.ceiling)?;
+                // A cloud ceiling is derived below, so a repeated admission keeps the committed one.
+                let expected = if mode==ReserveMode::CloudRuntime { QuotaAmounts { runtime_ms: ceiling.runtime_ms, ..request.amounts } } else { request.amounts };
+                if existing.payer_id != request.payer_id || existing.app_id != request.app_id || existing.kind != request.kind || existing.actor_id != request.actor_id || existing.model_id != request.model_id || existing.provider != request.provider || existing.funding_class != request.funding_class || existing.execution_mode != request.execution_mode || ceiling != expected {
                     return Err(ApiError::conflict("Operation identity already has a different reservation"));
                 }
-                return Ok(());
+                return Ok((request.payer_id, ceiling));
             }
             // Billing webhooks use this account lock too. Read the entitlement
             // after acquiring it so a concurrent downgrade cannot admit old caps.
@@ -334,6 +375,10 @@ pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiE
             let period = active_period(txn, &request.payer_id, now, anchor).await?;
             let used = decode(&period.used)?;
             let reserved = decode(&period.reserved)?;
+            if mode==ReserveMode::CloudRuntime {
+                request.amounts.runtime_ms = if !enforce || tier.max_runtime_ms < 0 { 900_000 } else { tier.max_runtime_ms.saturating_sub(used.runtime_ms.saturating_add(reserved.runtime_ms)).clamp(1, 900_000) };
+            }
+            let admitted = (request.payer_id.clone(), request.amounts);
             let next = used.checked_add(reserved)?.checked_add(request.amounts)?;
             for (i, limit) in limits(&tier).values().into_iter().enumerate() {
                 if enforce && limit >= 0 && next.values()[i] > limit {
@@ -364,7 +409,7 @@ pub async fn reserve(state: &AppState, request: QuotaRequest) -> Result<(), ApiE
                 plan.into(),entitlement_version.into(),
             ])).await?;
             txn.execute_raw(sql("UPDATE \"QuotaPeriod\" SET reserved=$2,\"updatedAt\"=$3 WHERE id=$1", vec![period.id.into(), encode(reserved.checked_add(request.amounts)?).into(), now.timestamp_millis().into()])).await?;
-            Ok(())
+            Ok(admitted)
         })
     }).await
 }
@@ -419,28 +464,11 @@ pub async fn reserve_cloud(
         }
         return Ok(decode(&existing.ceiling)?.runtime_ms as u64);
     }
-    let payer_id = resolve_payer(state, Some(&request.user_id), Some(&request.app_id)).await?;
-    let (_, tier) = payer_plan(state, &payer_id).await?;
-    let now = Utc::now();
-    let row = state.db.query_one_raw(sql("SELECT used,reserved FROM \"QuotaPeriod\" WHERE \"payerId\"=$1 AND \"periodStart\"<=$2 AND \"periodEnd\">$2 ORDER BY \"periodStart\" DESC LIMIT 1", vec![payer_id.clone().into(), now.timestamp_millis().into()])).await?;
-    let occupied = match row {
-        Some(row) => decode(&row.try_get::<String>("", "used")?)?
-            .runtime_ms
-            .saturating_add(decode(&row.try_get::<String>("", "reserved")?)?.runtime_ms),
-        None => 0,
-    };
-    let runtime_ms = if !enforcing() || tier.max_runtime_ms < 0 {
-        900_000
-    } else {
-        tier.max_runtime_ms
-            .saturating_sub(occupied)
-            .clamp(1, 900_000)
-    };
-    reserve(
+    let (payer_id, admitted) = reserve_as(
         state,
         QuotaRequest {
             operation_id: request.run_id.clone(),
-            payer_id: payer_id.clone(),
+            payer_id: String::new(),
             actor_id: Some(request.user_id.clone()),
             app_id: Some(request.app_id.clone()),
             model_id: None,
@@ -449,12 +477,12 @@ pub async fn reserve_cloud(
             funding_class: "cloud".into(),
             execution_mode: mode.into(),
             amounts: QuotaAmounts {
-                runtime_ms,
                 cloud_starts: 1,
                 ..Default::default()
             },
-            deadline: now + chrono::Duration::hours(24),
+            deadline: Utc::now() + chrono::Duration::hours(24),
         },
+        ReserveMode::CloudRuntime,
     )
     .await?;
     crate::compute_attempts::associate_current(
@@ -465,7 +493,7 @@ pub async fn reserve_cloud(
         "workflow_compute",
     )
     .await?;
-    Ok(runtime_ms as u64)
+    Ok(admitted.runtime_ms as u64)
 }
 
 pub fn enforcing() -> bool {
@@ -528,7 +556,7 @@ pub async fn reconcile_runtime_receipts(state: &AppState) -> Result<u64, ApiErro
         if !schedule_runtime_receipt_retry(&state.db, &id, now).await? {
             continue;
         }
-        let read = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let read = flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(2), async {
             let result = match state.meta_bucket.as_generic().get(&receipt_path(&id)).await {
                 Ok(value) => value,
                 Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(None),
@@ -623,7 +651,7 @@ pub async fn finish_cloud(
     let row = state
         .db
         .query_one_raw(sql(
-            "SELECT \"ownerId\",\"executionMode\" FROM \"QuotaOperation\" WHERE id=$1",
+            "SELECT \"ownerId\",\"executionMode\",\"payerId\" FROM \"QuotaOperation\" WHERE id=$1",
             vec![run_id.into()],
         ))
         .await?
@@ -633,6 +661,7 @@ pub async fn finish_cloud(
             "Execution quota belongs to another worker",
         ));
     }
+    let payer_id: String = row.try_get("", "payerId")?;
     if row.try_get::<String>("", "executionMode")? == "realtime" {
         crate::execution::update_run_on_completion_with_runtime(
             &crate::audit::ExecutionAuditContext::from(state),
@@ -640,12 +669,15 @@ pub async fn finish_cloud(
             crate::execution::completed_run_status(Some(status)),
             if status == "completed" { 0 } else { 4 },
             Some(runtime_ms),
+            &crate::execution::run_summary::RunSummary::default(),
         )
         .await?;
     }
-    settle(
-        state,
+    settle_for_payer(
+        &state.db,
+        state.db_dialect,
         run_id,
+        payer_id,
         "workflow-terminal",
         QuotaAmounts {
             runtime_ms: i64::try_from(runtime_ms).unwrap_or(i64::MAX),
@@ -716,10 +748,36 @@ pub async fn settle_with_db(
     let Some(initial) = operation(db, operation_id).await? else {
         return Ok(());
     };
+    settle_for_payer(
+        db,
+        dialect,
+        operation_id,
+        initial.payer_id,
+        revision,
+        actual,
+        finalized,
+        detail,
+    )
+    .await
+}
+
+/// `payer_id` is the operation's own payer, which never changes after admission,
+/// and `actual` is non-negative.
+#[allow(clippy::too_many_arguments)]
+async fn settle_for_payer(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    operation_id: &str,
+    payer_id: String,
+    revision: &str,
+    actual: QuotaAmounts,
+    finalized: bool,
+    detail: Value,
+) -> Result<(), ApiError> {
     let operation_id = operation_id.to_owned();
     let event_id = format!("{operation_id}:{revision}");
     retry_transaction(db, dialect, None, &RetryPolicy::idempotent(), move |txn| {
-        let operation_id = operation_id.clone(); let event_id = event_id.clone(); let payer = initial.payer_id.clone(); let detail = detail.clone();
+        let operation_id = operation_id.clone(); let event_id = event_id.clone(); let payer = payer_id.clone(); let detail = detail.clone();
         Box::pin(async move {
             coordinate(txn, "account-quota", &[&payer]).await?;
             if txn.query_one_raw(sql("SELECT id FROM \"QuotaEvent\" WHERE id=$1", vec![event_id.clone().into()])).await?.is_some() { return Ok(()); }

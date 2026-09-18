@@ -19,7 +19,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+    routes::app::wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
     state::{AppState, flow_ir_draft_store_key},
 };
 
@@ -1005,8 +1005,8 @@ pub async fn apply_flow_ir_commit(
     };
 
     let persisted_original = board.clone();
-    let wasm_nodes = match app_wasm_nodes(&state, &app_id).await {
-        Ok(nodes) => nodes,
+    let wasm = match app_wasm_nodes_cached(&state, &app_id).await {
+        Ok(wasm) => wasm,
         Err(error) => {
             return Ok(Json(ApplyFlowIrCommitResult::empty(
                 "error",
@@ -1016,9 +1016,9 @@ pub async fn apply_flow_ir_commit(
         }
     };
     let builtin_nodes = state.registry.as_ref().get_nodes();
-    hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes);
+    hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes);
     let mut catalog_nodes = builtin_nodes;
-    catalog_nodes.extend(wasm_nodes);
+    catalog_nodes.extend(wasm.nodes.iter().cloned());
 
     let retained_commands = board_commands.clone();
     let apply_result = match flow_like::flow::ast::apply_board_commands_to_board(

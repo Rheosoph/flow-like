@@ -41,6 +41,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "../ui/card";
+import { WidgetNetworkSummary } from "./widget-network-access";
 
 const MAX_KEYWORD_CHIPS = 4;
 
@@ -365,6 +366,7 @@ export function WidgetCard({
 				)}
 				{!live && <PausedHint reason={pausedReason} />}
 				<ContractSummaryBadges widget={widget} />
+				<WidgetNetworkSummary widget={widget} showPreviewNote={canPreview} />
 				<KeywordChips keywords={widget.keywords ?? []} />
 			</CardContent>
 		</Card>

@@ -47,16 +47,19 @@ async function setup() {
 	};
 }
 
-const buttonByText = (container: { querySelectorAll: any }, text: string) =>
-	[
-		...(container.querySelectorAll("button") as ArrayLike<HTMLButtonElement>),
-	].find((button) => button.textContent?.trim() === text);
+type Queryable = { querySelectorAll(selectors: string): ArrayLike<unknown> };
 
-const numberInputs = (container: { querySelectorAll: any }) => [
-	...(container.querySelectorAll(
-		'input[type="number"]',
-	) as ArrayLike<HTMLInputElement>),
-];
+const buttonByText = (container: Queryable, text: string) =>
+	Array.from(
+		container.querySelectorAll("button") as ArrayLike<HTMLButtonElement>,
+	).find((button) => button.textContent?.trim() === text);
+
+const numberInputs = (container: Queryable) =>
+	Array.from(
+		container.querySelectorAll(
+			'input[type="number"]',
+		) as ArrayLike<HTMLInputElement>,
+	);
 
 describe("Geometry editor rendering", () => {
 	test("hydrates geometry defaults without sending an update command", async () => {

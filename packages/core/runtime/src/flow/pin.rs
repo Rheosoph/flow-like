@@ -334,10 +334,15 @@ impl Pin {
         self.schema.as_deref().is_some_and(is_open_object_schema)
     }
 
-    pub fn set_schema<T: Serialize + JsonSchema>(&mut self) -> &mut Self {
+    /// The schema string `set_schema::<T>()` stores. Pins built from other metadata use it to
+    /// carry exactly a native type's schema, because schema-enforcing pins compare the strings.
+    pub fn schema_string_for<T: JsonSchema>() -> Option<String> {
         let schema = schema_for!(T);
-        let schema_str = to_value(&schema).ok().and_then(|v| to_string(&v).ok());
-        self.schema = schema_str;
+        to_value(&schema).ok().and_then(|v| to_string(&v).ok())
+    }
+
+    pub fn set_schema<T: Serialize + JsonSchema>(&mut self) -> &mut Self {
+        self.schema = Self::schema_string_for::<T>();
         self
     }
 

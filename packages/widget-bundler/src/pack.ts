@@ -17,6 +17,7 @@ import {
 	type BundleWidgetEntry,
 	type WidgetBundleManifest,
 	manifestToJson,
+	unsafeArchiveEntryPaths,
 } from "./bundle-format";
 import {
 	WIDGET_PROTOCOL,
@@ -452,9 +453,13 @@ export async function pack(
 		entries.set(`widgets/${widget.id}/index.html`, widget.html);
 		entries.set(`widgets/${widget.id}/contract.json`, widget.contractJson);
 	}
-	const collisions = archiveNameCollisions([...entries.keys()]);
-	if (collisions.length > 0) {
-		throw new Error(collisions.join("; "));
+	const names = [...entries.keys()];
+	const archiveErrors = [
+		...unsafeArchiveEntryPaths(names),
+		...archiveNameCollisions(names),
+	];
+	if (archiveErrors.length > 0) {
+		throw new Error(archiveErrors.join("; "));
 	}
 
 	const zipOptions: ZipOptions = {

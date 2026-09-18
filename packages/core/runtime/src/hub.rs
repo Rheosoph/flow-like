@@ -303,11 +303,25 @@ pub struct Hub {
     #[serde(default)]
     pub conversion: ConversionConfig,
 
+    /// Where apps' Flow-Like storage files are served. A widget can only be
+    /// granted `{origin}{path_prefix}{appId}/` on these origins, never the
+    /// whole origin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub widget_storage: Vec<HubWidgetStorage>,
+
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,
 
     #[serde(skip)]
     http_client: Option<Arc<HTTPClient>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+pub struct HubWidgetStorage {
+    /// `scheme://host` the content bucket is served from
+    pub origin: String,
+    /// Path before the app id, starting and ending with `/`
+    pub path_prefix: String,
 }
 
 /// Fork-an-app feature config. Controls quotas and the unauthenticated-fork
@@ -349,20 +363,49 @@ impl Default for ForkingConfig {
     }
 }
 
+/// How much of the mutation surface the audit trail records. Each level includes
+/// everything below it. Execution lifecycle records additionally follow
+/// `AuditConfig::log_executions`.
+#[derive(
+    Debug, Serialize, Deserialize, JsonSchema, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditLevel {
+    /// Identity, access, credentials, publication, deletions and platform administration.
+    Minimal,
+    /// Minimal plus content changes: boards, events, pages, widgets, files, tables, settings.
+    #[default]
+    Standard,
+    /// Standard plus every request attempt and outcome, editor commands, graph row
+    /// writes, file read grants and execution lifecycle records.
+    Verbose,
+}
+
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct AuditConfig {
     /// Master switch. When false, no audit entries are recorded.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Which action families are recorded. Defaults to `standard`.
+    #[serde(default)]
+    pub level: AuditLevel,
     /// Whether to capture client IP addresses in audit entries (GDPR consideration)
     #[serde(default)]
     pub log_ip: bool,
+    /// Reverse proxies under the deployment's control that append to
+    /// `X-Forwarded-For`. The recorded client IP is taken that many entries from
+    /// the right, which a client cannot forge. Unset records the leftmost entry,
+    /// which the client chooses.
+    #[serde(default)]
+    pub trusted_proxy_hops: Option<u32>,
     /// Reserved retention setting. Stored IPs in signed entries are immutable;
     /// this setting does not currently erase them automatically.
     pub ip_retention_days: Option<u32>,
     /// If true, the server will refuse to start without signing keys configured
     #[serde(default)]
     pub require_signing: bool,
+    /// Record execution lifecycle transitions on the app chain at any level.
+    /// The `verbose` level records them regardless of this switch.
     #[serde(default)]
     pub log_executions: bool,
 }
@@ -375,7 +418,9 @@ impl Default for AuditConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            level: AuditLevel::default(),
             log_ip: false,
+            trusted_proxy_hops: None,
             ip_retention_days: None,
             require_signing: false,
             log_executions: false,

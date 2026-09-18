@@ -17,12 +17,12 @@ use flow_like::app::App;
 use flow_like::flow::board::Board;
 use flow_like::flow::execution::LogLevel;
 use flow_like::flow::execution::log::StoredLogMessage;
+use flow_like::flow::execution::run_index::runs_base_path;
 use flow_like::flow::regression::{
     CaseOutcome, FixtureBaseline, GateMode, RegressionSuite as CoreRegressionSuite,
     RunGradeEvidence, SuiteCase, compare_to_expectation, error_class_of, grade_run,
     plan_suite_cases,
 };
-use flow_like_storage::Path as StoragePath;
 use flow_like_storage::arrow_array::RecordBatch;
 use flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
 use flow_like_storage::serde_arrow;
@@ -192,20 +192,14 @@ pub(crate) async fn load_core_suite(
     }
 }
 
-/// Open the board's Lance runs database. Returns the connection plus the
-/// `runs` summary table when at least one run has ever flushed.
+/// Open the board's Lance log database — the connection its per-run log
+/// tables are read through.
 pub(crate) async fn open_runs_db(
     state: &AppState,
     sub: &str,
     app_id: &str,
     board_id: &str,
-) -> Result<
-    (
-        flow_like_storage::lancedb::Connection,
-        Option<flow_like_storage::lancedb::Table>,
-    ),
-    ApiError,
-> {
+) -> Result<flow_like_storage::lancedb::Connection, ApiError> {
     let credentials = state
         .scoped_credentials(sub, app_id, CredentialsAccess::ReadLogs)
         .await?;
@@ -215,27 +209,13 @@ pub(crate) async fn open_runs_db(
         .map_err(|e| {
             ApiError::internal_error(anyhow!("Failed to create logs db builder: {}", e))
         })?;
-    let base_path = StoragePath::from("runs").join(app_id).join(board_id);
-    let db = logs_db_builder(base_path.clone())
+    let base_path = runs_base_path(app_id, board_id);
+    logs_db_builder(base_path.clone())
         .execute()
         .await
         .map_err(|e| {
             ApiError::internal_error(anyhow!("Failed to open runs database at {base_path}: {e}"))
-        })?;
-    let table_names = db.table_names().execute().await.map_err(|e| {
-        ApiError::internal_error(anyhow!(
-            "Failed to list run tables for board {board_id}: {e}"
-        ))
-    })?;
-    if !table_names.iter().any(|name| name == "runs") {
-        return Ok((db, None));
-    }
-    let table = db.open_table("runs").execute().await.map_err(|e| {
-        ApiError::internal_error(anyhow!(
-            "Failed to open runs table for board {board_id}: {e}"
-        ))
-    })?;
-    Ok((db, Some(table)))
+        })
 }
 
 /// One grading query against a run's own log table.
@@ -699,7 +679,7 @@ async fn execute_suite_run(
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
-    let (logs_db, _runs_table) = open_runs_db(state, &subject, app_id, &suite.board_id).await?;
+    let logs_db = open_runs_db(state, &subject, app_id, &suite.board_id).await?;
 
     let context = Arc::new(CaseDispatchContext {
         app_id: app_id.to_string(),
@@ -927,6 +907,9 @@ async fn dispatch_case(
         app_id: Set(context.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
     if let Err(error) = run.insert(&state.db).await {
         return (None, Some(format!("failed to create the run row: {error}")));

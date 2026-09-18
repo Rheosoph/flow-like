@@ -31,6 +31,7 @@ import DownloadNotificationProvider from "../components/download-notification-pr
 import GlobalAnchorHandler from "../components/global-anchor-component";
 import { IdbMigrationGate } from "../components/idb-migration-gate";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
+import { LocalSinkConsentProvider } from "../components/local-sink";
 import { NativeIntegrationProvider } from "../components/native-integration-provider";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
@@ -159,6 +160,7 @@ export function Providers({
 									<TauriProvider>
 										<DownloadNotificationProvider />
 										<RpaPermissionProvider />
+										<LocalSinkConsentProvider />
 										<DeeplinkNavigationHandler>
 											<OAuthCallbackHandler>
 												<OAuthExecutionProvider>

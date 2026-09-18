@@ -11,6 +11,7 @@ use crate::{
     error::ApiError,
     execution::{
         ExecutionClaims, PageActionSealingContext,
+        run_summary::{RunSummary, apply_run_summary},
         state::{
             CreateEventInput, EventQuery, ExecutionRunRecord, ExecutionStateStore,
             PostgresStateStore, RunLeaseClaim, RunMode as StateRunMode,
@@ -55,6 +56,9 @@ pub struct ProgressUpdateRequest {
     pub lease_token: Option<String>,
     /// Requested ownership duration for claim/renewal in milliseconds.
     pub lease_duration_ms: Option<i64>,
+    /// Run summary sent with the terminal update; older executors omit it.
+    #[serde(flatten)]
+    pub summary: RunSummary,
 }
 
 /// Request body for pushing streaming events from executors
@@ -220,6 +224,7 @@ pub async fn report_progress(
     // Don't accept updates for terminal states
     if run.status.is_terminal() {
         mirror_run_update_to_sql(&state, store.as_ref(), &run).await?;
+        persist_run_summary(&state, &claims.run_id, &claims.app_id, &body.summary).await;
         return Ok(Json(ProgressUpdateResponse {
             accepted: false,
             status: format!("{:?}", run.status),
@@ -293,6 +298,7 @@ pub async fn report_progress(
     };
 
     mirror_run_update_to_sql(&state, store.as_ref(), &updated).await?;
+    persist_run_summary(&state, &claims.run_id, &claims.app_id, &body.summary).await;
 
     if updated.status.is_terminal() {
         let duration_us = match (updated.started_at, updated.completed_at) {
@@ -331,6 +337,14 @@ pub async fn report_progress(
     }))
 }
 
+/// Best-effort: a quota finish may already have closed the row, and a failed
+/// summary write must never block terminal accounting.
+async fn persist_run_summary(state: &AppState, run_id: &str, app_id: &str, summary: &RunSummary) {
+    if let Err(error) = apply_run_summary(&state.db, run_id, app_id, summary).await {
+        tracing::warn!(run_id = %run_id, error = %error, "Failed to persist run summary");
+    }
+}
+
 async fn mirror_run_update_to_sql(
     state: &AppState,
     store: &dyn ExecutionStateStore,
@@ -348,13 +362,19 @@ async fn mirror_run_update_to_sql(
             })?;
     }
     if run.status.is_terminal() {
-        let persisted = crate::entity::execution_run::Entity::find_by_id(&run.id)
-            .filter(crate::entity::execution_run::Column::AppId.eq(&run.app_id))
-            .one(&state.db)
-            .await?
-            .ok_or(ApiError::NOT_FOUND)?;
+        let audit_context = crate::audit::ExecutionAuditContext::from(state);
+        if !audit_context.enabled {
+            return Ok(());
+        }
+        let persisted = crate::execution::run_summary::without_nodes(
+            crate::entity::execution_run::Entity::find_by_id(&run.id),
+        )
+        .filter(crate::entity::execution_run::Column::AppId.eq(&run.app_id))
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
         crate::audit::record_execution_result(
-            &crate::audit::ExecutionAuditContext::from(state),
+            &audit_context,
             &persisted,
             &run.id,
             crate::entity::sea_orm_active_enums::AuditActorType::Executor,
@@ -1115,29 +1135,38 @@ fn backend_requires_queue_lease(backend: &str) -> bool {
     matches!(backend, "cosmos" | "dynamodb" | "firestore" | "redis")
 }
 
-/// Get or create the execution state store from app state
+/// The execution state store shared by this process, built on first use
 pub(crate) async fn get_state_store(
     state: &AppState,
 ) -> Result<Arc<dyn ExecutionStateStore>, ApiError> {
-    // Build config with available AppState components
-    let mut config =
-        crate::execution::state::StateStoreConfig::default().with_db(Arc::new(state.db.clone()));
+    state
+        .execution_state_store
+        .get_or_try_init(|| async {
+            let mut config = crate::execution::state::StateStoreConfig::default()
+                .with_db(Arc::new(state.db.clone()));
 
-    // Pass AWS config and content store for DynamoDB backend
-    #[cfg(feature = "aws")]
-    {
-        config = config.with_aws_config(state.aws_client.clone());
-    }
+            // Pass AWS config and content store for DynamoDB backend
+            #[cfg(feature = "aws")]
+            {
+                config = config.with_aws_config(state.aws_client.clone());
+            }
 
-    config = config.with_content_store(state.content_bucket.clone());
+            config = config.with_content_store(state.content_bucket.clone());
 
-    #[cfg(feature = "s3")]
-    {
-        config = config.with_meta_store(state.meta_bucket.clone());
-    }
+            #[cfg(feature = "s3")]
+            {
+                config = config.with_meta_store(state.meta_bucket.clone());
+            }
 
-    crate::execution::state::create_state_store(config)
+            let store = crate::execution::state::create_state_store(config).await?;
+            tracing::info!(
+                backend = store.backend_name(),
+                "Initialized execution state store"
+            );
+            Ok::<_, StateStoreError>(store)
+        })
         .await
+        .cloned()
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to create state store: {}", e)))
 }
 

@@ -10,6 +10,7 @@ import {
 	looksLikeTemporalName,
 	parseDateValue,
 	parseTemporalValue,
+	temporalUnitFromTypeName,
 	toDateInputValue,
 	toDateTimeInputValue,
 	toEpochNumber,
@@ -122,6 +123,47 @@ describe("epoch round trips", () => {
 		expect(detectEpochUnit(1_786_665_600_000)).toBe("millisecond");
 		expect(detectEpochUnit(1_786_665_600_000_000)).toBe("microsecond");
 		expect(detectEpochUnit(1_786_665_600_000_000_000)).toBe("nanosecond");
+	});
+});
+
+describe("temporalUnitFromTypeName", () => {
+	test("reads the unit out of every Timestamp spelling DataFusion reports", () => {
+		expect(temporalUnitFromTypeName("Timestamp(µs)")).toBe("microsecond");
+		expect(temporalUnitFromTypeName('Timestamp(ns, "UTC")')).toBe("nanosecond");
+		expect(temporalUnitFromTypeName("Timestamp(Millisecond, None)")).toBe(
+			"millisecond",
+		);
+		expect(temporalUnitFromTypeName("Timestamp(s)")).toBe("second");
+		expect(temporalUnitFromTypeName(' timestamp(us, "UTC") ')).toBe(
+			"microsecond",
+		);
+	});
+
+	test("reads Date32 as a day count and Date64 as millis", () => {
+		expect(temporalUnitFromTypeName("Date32")).toBe("day");
+		expect(temporalUnitFromTypeName("Date64")).toBe("millisecond");
+	});
+
+	test("names no unit for durations and plain numbers", () => {
+		expect(temporalUnitFromTypeName("Duration(ms)")).toBeUndefined();
+		expect(temporalUnitFromTypeName("Int64")).toBeUndefined();
+		expect(temporalUnitFromTypeName("Utf8")).toBeUndefined();
+		expect(temporalUnitFromTypeName("")).toBeUndefined();
+	});
+
+	test("decodes DATE_TRUNC nanoseconds to the bucket start", () => {
+		expect(
+			parseTemporalValue(
+				1_789_516_800_000_000_000,
+				temporalUnitFromTypeName("Timestamp(ns)"),
+			)?.toISOString(),
+		).toBe("2026-09-16T00:00:00.000Z");
+		expect(
+			parseTemporalValue(
+				20_712,
+				temporalUnitFromTypeName("Date32"),
+			)?.toISOString(),
+		).toBe("2026-09-16T00:00:00.000Z");
 	});
 });
 

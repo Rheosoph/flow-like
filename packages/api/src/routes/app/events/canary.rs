@@ -153,6 +153,148 @@ fn nearest_rank_us(sorted: &[i64], quantile: f64) -> u64 {
     sorted[rank - 1].max(0) as u64
 }
 
+/// `variantName` for canary runs and NULL otherwise, the same key the
+/// in-memory fold groups by. Parameter-free on purpose: Postgres only matches
+/// a projected expression to its `GROUP BY` twin when neither carries a bind.
+const STATS_VARIANT_KEY: &str = r#"CASE WHEN "runVariant" = 'CANARY' THEN "variantName" END"#;
+
+/// `percentile_disc` is nearest-rank, so it agrees with [`nearest_rank_us`].
+fn stats_percentile_us(quantile: &str) -> sea_orm::sea_query::SimpleExpr {
+    sea_orm::sea_query::Expr::cust(format!(
+        r#"percentile_disc({quantile}::float8) WITHIN GROUP (ORDER BY CAST(EXTRACT(EPOCH FROM ("completedAt" - "startedAt")) * 1000000 AS BIGINT))"#
+    ))
+}
+
+fn live_runs_since(
+    app_id: &str,
+    event_id: &str,
+    since: chrono::DateTime<chrono::FixedOffset>,
+) -> sea_orm::Select<crate::entity::execution_run::Entity> {
+    use crate::entity::execution_run;
+    use crate::entity::sea_orm_active_enums::RunVariant;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+    execution_run::Entity::find()
+        .select_only()
+        .filter(execution_run::Column::AppId.eq(app_id))
+        .filter(execution_run::Column::EventId.eq(event_id))
+        .filter(execution_run::Column::CreatedAt.gte(since))
+        .filter(execution_run::Column::RunVariant.is_in([RunVariant::Primary, RunVariant::Canary]))
+}
+
+async fn variant_stats_in_sql(
+    db: &sea_orm::DatabaseConnection,
+    app_id: &str,
+    event_id: &str,
+    since: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<Vec<EventVariantStats>, sea_orm::DbErr> {
+    use crate::entity::execution_run;
+    use crate::entity::sea_orm_active_enums::RunStatus;
+    use sea_orm::sea_query::{Expr, ExprTrait};
+    use sea_orm::{ColumnTrait, QuerySelect};
+
+    let variant_key = Expr::cust(STATS_VARIANT_KEY);
+    let errors = Expr::expr(Expr::case(
+        execution_run::Column::Status.is_in([
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+            RunStatus::Timeout,
+        ]),
+        Expr::col(execution_run::Column::Id),
+    ))
+    .count();
+
+    let rows: Vec<(Option<String>, i64, i64, Option<i64>, Option<i64>)> =
+        live_runs_since(app_id, event_id, since)
+            .expr_as(variant_key.clone(), "variant_name")
+            .expr_as(Expr::cust("CAST(COUNT(*) AS BIGINT)"), "requests")
+            .expr_as(errors, "errors")
+            .expr_as(stats_percentile_us("0.5"), "p50_us")
+            .expr_as(stats_percentile_us("0.95"), "p95_us")
+            .group_by(variant_key)
+            .into_tuple()
+            .all(db)
+            .await?;
+
+    let mut variants: Vec<EventVariantStats> = rows
+        .into_iter()
+        .map(
+            |(variant_name, requests, errors, p50_us, p95_us)| EventVariantStats {
+                variant_name,
+                requests: std::cmp::max(requests, 0) as u64,
+                errors: std::cmp::max(errors, 0) as u64,
+                p50_duration_us: std::cmp::max(p50_us.unwrap_or(0), 0) as u64,
+                p95_duration_us: std::cmp::max(p95_us.unwrap_or(0), 0) as u64,
+            },
+        )
+        .collect();
+    variants.sort_by(|a, b| a.variant_name.cmp(&b.variant_name));
+    Ok(variants)
+}
+
+async fn variant_stats_folded(
+    db: &sea_orm::DatabaseConnection,
+    app_id: &str,
+    event_id: &str,
+    since: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<Vec<EventVariantStats>, sea_orm::DbErr> {
+    use crate::entity::execution_run;
+    use crate::entity::sea_orm_active_enums::{RunStatus, RunVariant};
+    use sea_orm::{QueryOrder, QuerySelect};
+
+    let rows: Vec<(
+        RunVariant,
+        Option<String>,
+        RunStatus,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+    )> = live_runs_since(app_id, event_id, since)
+        .column_as(execution_run::Column::RunVariant, "run_variant")
+        .column_as(execution_run::Column::VariantName, "variant_name")
+        .column_as(execution_run::Column::Status, "status")
+        .column_as(execution_run::Column::StartedAt, "started_at")
+        .column_as(execution_run::Column::CompletedAt, "completed_at")
+        .order_by_desc(execution_run::Column::CreatedAt)
+        .limit(STATS_ROW_CAP)
+        .into_tuple()
+        .all(db)
+        .await?;
+
+    let mut grouped: std::collections::BTreeMap<Option<String>, (u64, u64, Vec<i64>)> =
+        std::collections::BTreeMap::new();
+    for (run_variant, variant_name, status, started_at, completed_at) in rows {
+        let key = match run_variant {
+            RunVariant::Canary => variant_name,
+            _ => None,
+        };
+        let entry = grouped.entry(key).or_default();
+        entry.0 += 1;
+        if matches!(
+            status,
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Timeout
+        ) {
+            entry.1 += 1;
+        }
+        if let (Some(start), Some(end)) = (started_at, completed_at) {
+            entry.2.push((end - start).num_microseconds().unwrap_or(0));
+        }
+    }
+
+    Ok(grouped
+        .into_iter()
+        .map(|(variant_name, (requests, errors, mut durations))| {
+            durations.sort_unstable();
+            EventVariantStats {
+                variant_name,
+                requests,
+                errors,
+                p50_duration_us: nearest_rank_us(&durations, 0.5),
+                p95_duration_us: nearest_rank_us(&durations, 0.95),
+            }
+        })
+        .collect())
+}
+
 /// GET /apps/{app_id}/events/{event_id}/canary/stats
 #[utoipa::path(
     get,
@@ -181,9 +323,7 @@ pub async fn canary_stats(
     Path((app_id, event_id)): Path<(String, String)>,
     Query(query): Query<CanaryStatsQuery>,
 ) -> Result<Json<EventVariantStatsResponse>, ApiError> {
-    use crate::entity::execution_run;
-    use crate::entity::sea_orm_active_enums::{RunStatus, RunVariant};
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+    use sea_orm::ConnectionTrait;
 
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
 
@@ -202,63 +342,23 @@ pub async fn canary_stats(
             _ => chrono::Duration::hours(24),
         };
 
-    let rows: Vec<(
-        RunVariant,
-        Option<String>,
-        RunStatus,
-        Option<chrono::DateTime<chrono::FixedOffset>>,
-        Option<chrono::DateTime<chrono::FixedOffset>>,
-    )> = execution_run::Entity::find()
-        .select_only()
-        .column_as(execution_run::Column::RunVariant, "run_variant")
-        .column_as(execution_run::Column::VariantName, "variant_name")
-        .column_as(execution_run::Column::Status, "status")
-        .column_as(execution_run::Column::StartedAt, "started_at")
-        .column_as(execution_run::Column::CompletedAt, "completed_at")
-        .filter(execution_run::Column::AppId.eq(&app_id))
-        .filter(execution_run::Column::EventId.eq(&event_id))
-        .filter(execution_run::Column::CreatedAt.gte(since))
-        .filter(execution_run::Column::RunVariant.is_in([RunVariant::Primary, RunVariant::Canary]))
-        .order_by_desc(execution_run::Column::CreatedAt)
-        .limit(STATS_ROW_CAP)
-        .into_tuple()
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-
-    let mut grouped: std::collections::BTreeMap<Option<String>, (u64, u64, Vec<i64>)> =
-        std::collections::BTreeMap::new();
-    for (run_variant, variant_name, status, started_at, completed_at) in rows {
-        let key = match run_variant {
-            RunVariant::Canary => variant_name,
-            _ => None,
-        };
-        let entry = grouped.entry(key).or_default();
-        entry.0 += 1;
-        if matches!(
-            status,
-            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Timeout
-        ) {
-            entry.1 += 1;
-        }
-        if let (Some(start), Some(end)) = (started_at, completed_at) {
-            entry.2.push((end - start).num_microseconds().unwrap_or(0));
-        }
-    }
-
-    let variants = grouped
-        .into_iter()
-        .map(|(variant_name, (requests, errors, mut durations))| {
-            durations.sort_unstable();
-            EventVariantStats {
-                variant_name,
-                requests,
-                errors,
-                p50_duration_us: nearest_rank_us(&durations, 0.5),
-                p95_duration_us: nearest_rank_us(&durations, 0.95),
+    let in_sql =
+        crate::telemetry::percentiles_in_sql(state.db.get_database_backend(), state.db_dialect);
+    let aggregated = if in_sql {
+        match variant_stats_in_sql(&state.db, &app_id, &event_id, since).await {
+            Ok(variants) => Ok(variants),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "canary stats SQL aggregation failed, folding runs in memory"
+                );
+                variant_stats_folded(&state.db, &app_id, &event_id, since).await
             }
-        })
-        .collect();
+        }
+    } else {
+        variant_stats_folded(&state.db, &app_id, &event_id, since).await
+    };
+    let variants = aggregated.map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
     Ok(Json(EventVariantStatsResponse {
         window: window.to_string(),

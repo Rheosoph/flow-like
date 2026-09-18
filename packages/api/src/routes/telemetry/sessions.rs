@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 use super::errors::{
-    MAX_RELEASE_LEN, MAX_SHORT_STRING_LEN, optional_string, upsert_release, validate_source,
+    MAX_RELEASE_LEN, MAX_SHORT_STRING_LEN, mark_release_recorded, optional_string,
+    release_is_recorded, upsert_release, validate_source,
 };
 use super::{parse_client_ts, validate_anon_id};
 use crate::{
@@ -263,8 +264,11 @@ async fn persist_sessions<C: ConnectionTrait>(
     sessions: Vec<ValidatedSession>,
     now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<usize, DbErr> {
-    if let Some(release) = payload.release.as_deref() {
+    if let Some(release) = payload.release.as_deref()
+        && !release_is_recorded(release, &payload.source)
+    {
         upsert_release(db, release, &payload.source, now).await?;
+        mark_release_recorded(release, &payload.source);
     }
 
     let accepted = sessions.len();

@@ -5,40 +5,9 @@
 use super::LogEntry;
 use serde_json::Value;
 
-/// Log levels (matching standard levels)
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Trace = 0,
-    Debug = 1,
-    Info = 2,
-    Warn = 3,
-    Error = 4,
-}
-
-impl From<u8> for LogLevel {
-    fn from(v: u8) -> Self {
-        match v {
-            0 => LogLevel::Trace,
-            1 => LogLevel::Debug,
-            2 => LogLevel::Info,
-            3 => LogLevel::Warn,
-            _ => LogLevel::Error,
-        }
-    }
-}
-
-impl LogLevel {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LogLevel::Trace => "TRACE",
-            LogLevel::Debug => "DEBUG",
-            LogLevel::Info => "INFO",
-            LogLevel::Warn => "WARN",
-            LogLevel::Error => "ERROR",
-        }
-    }
-}
+/// Guest log levels share the run log's numbering, which is also the scale of
+/// the `log_level` threshold sent to guests: Debug = 0 through Fatal = 4.
+pub use flow_like::flow::execution::LogLevel;
 
 impl LogEntry {
     pub fn new(level: LogLevel, message: String) -> Self {
@@ -58,6 +27,6 @@ impl LogEntry {
     }
 
     pub fn level(&self) -> LogLevel {
-        LogLevel::from(self.level)
+        LogLevel::from_u8(self.level.min(LogLevel::Fatal as u8))
     }
 }

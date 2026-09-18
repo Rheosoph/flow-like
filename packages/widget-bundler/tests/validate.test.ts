@@ -15,7 +15,7 @@ const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
 
 const CSP_DECLARATION = `id: "hello-widget",
-	csp: { connectSrc: ["https://api.maptiler.com"], imgSrc: ["https://tiles.maptiler.com"] },`;
+	csp: [{ reason: "Loads map tiles from MapTiler", connectSrc: ["https://api.maptiler.com"], imgSrc: ["https://tiles.maptiler.com"] }],`;
 
 function withCspWidget(fixture: ProjectFixture, declaration: string): void {
 	writeFileSync(
@@ -70,12 +70,12 @@ describe("validateProject", () => {
 		const fixture = makeProjectFixture();
 		withCspWidget(
 			fixture,
-			'id: "hello-widget", csp: { connectSrc: ["https://localhost"] },',
+			'id: "hello-widget", csp: [{ reason: "Loads map tiles", connectSrc: ["https://localhost"] }],',
 		);
 		const result = validateProject(fixture.projectDir);
 		expect(result.ok).toBeFalse();
 		expect(result.errors).toEqual([
-			'Invalid widget csp source "https://localhost" in connectSrc for widget hello-widget: host uses a reserved or local-only name',
+			'Invalid widget csp source "https://localhost" in csp[0].connectSrc for widget hello-widget: host uses a reserved or local-only name',
 		]);
 	}, 60000);
 });
@@ -153,6 +153,24 @@ describe("validateBundle", () => {
 			"Widget bundle entries 'widgets/hello-widget/contract.json' and 'widgets/hello-widget/CONTRACT.json' collide on case-insensitive filesystems",
 		]);
 	});
+
+	test("rejects drive-prefixed, stream and NUL entry names", () => {
+		const unsafe = [
+			"C:/x.txt",
+			"C:x.txt",
+			"widgets/hello-widget/index.html:ads",
+			"shared/react\0.js",
+			"C:/",
+		];
+		const entries = unzipSync(bytes);
+		entries["widgets/"] = new Uint8Array();
+		for (const name of unsafe) entries[name] = ENCODER.encode("x");
+		const result = validateBundle(writeBundle(entries));
+		expect(result.ok).toBeFalse();
+		expect(result.errors).toEqual(
+			unsafe.map((name) => `Unsafe widget bundle entry path: ${name}`),
+		);
+	});
 });
 
 describe("validateBundle csp contracts", () => {
@@ -208,16 +226,51 @@ describe("validateBundle csp contracts", () => {
 		const result = validateBundle(
 			withContract({
 				...packedContract(),
-				csp: {
-					connectSrc: ["https://*.maptiler.com"],
-					scriptSrc: ["https://cdn.example.org"],
-				},
+				csp: [
+					{
+						reason: "Loads map tiles",
+						connectSrc: ["https://a.*.maptiler.com"],
+						scriptSrc: ["https://cdn.example.org"],
+					},
+				],
 			}),
 		);
 		expect(result.ok).toBeFalse();
 		expect(result.errors).toEqual([
-			"Widget 'hello-widget': csp declares unknown directive \"scriptSrc\" (allowed: connectSrc, imgSrc, fontSrc, mediaSrc, styleSrc)",
-			"Widget 'hello-widget': Invalid csp source \"https://*.maptiler.com\" in connectSrc: wildcards are not allowed",
+			"Widget 'hello-widget': csp purpose 0: declares unknown key \"scriptSrc\" (allowed: reason, connectSrc, imgSrc, fontSrc, mediaSrc, styleSrc, inputs)",
+		]);
+		expect(
+			validateBundle(
+				withContract({
+					...packedContract(),
+					csp: [
+						{
+							reason: "Loads map tiles",
+							connectSrc: ["https://a.*.maptiler.com"],
+						},
+					],
+				}),
+			).errors,
+		).toEqual([
+			'Widget \'hello-widget\': csp purpose 0: Invalid csp source "https://a.*.maptiler.com" in connectSrc: wildcards are only allowed as a leading "*." label of the host',
+		]);
+	});
+
+	test("rejects what only the hub publish checks", () => {
+		const result = validateBundle(
+			withContract({
+				...packedContract(),
+				csp: [
+					{
+						reason: "Loads map tiles from maptiler.com",
+						connectSrc: ["https://*.co.uk", "https://api.maptiler.com"],
+					},
+				],
+			}),
+		);
+		expect(result.errors).toEqual([
+			"Widget 'hello-widget': csp purpose 0: reason must not contain web addresses, email addresses or domain names (reason-contains-address)",
+			"Widget 'hello-widget': Invalid csp source \"https://*.co.uk\": wildcard base is a public suffix or spans public suffixes",
 		]);
 	});
 });

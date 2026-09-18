@@ -1,10 +1,8 @@
 import {
-	type HomeDataSourceContext,
 	buildHomeDataQuery,
 	formatHomeDataValue,
-	homeDataColumns,
 	homeDataMeasureTitle,
-	homeOntologyColumns,
+	loadHomeDataSourceContext,
 } from "../components/home/home-data-query";
 import type { IBackendState } from "../state/backend-state";
 import type { ExecuteSqlResult } from "../state/backend-state/query-state";
@@ -139,25 +137,10 @@ export async function loadNativeWidgetChart(
 	)
 		throw new Error("Set a positive target for this widget.");
 	const personal = config.scope === "personal";
-	const context: HomeDataSourceContext = { viewerId, now: options.now };
-	if (config.sourceKind === "ontology") {
-		context.overlay = await backend.graphState.getOverlay(
-			config.appId,
-			config.ontologyId,
-			personal,
-		);
-		context.columns = homeOntologyColumns(context.overlay, config.objectType);
-	} else if (config.sourceKind === "query") {
-		context.savedQuery = await backend.queryState.getSavedQuery(
-			config.appId,
-			config.queryId,
-			personal,
-		);
-	} else {
-		context.columns = homeDataColumns(
-			await backend.dbState.getSchema(config.appId, config.table, personal),
-		);
-	}
+	const context = await loadHomeDataSourceContext(backend, config, {
+		viewerId,
+		now: options.now,
+	});
 	assertNativeWidgetActive(signal);
 	const query = buildHomeDataQuery(config, context);
 	const result = await backend.queryState.executeSql(

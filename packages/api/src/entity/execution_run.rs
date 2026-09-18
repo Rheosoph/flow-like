@@ -66,6 +66,12 @@ pub struct Model {
     pub caller_app_chain: Option<crate::json_types::StringList>,
     #[sea_orm(column_name = "runVariant", column_type = "Text")]
     pub run_variant: crate::sea_orm_active_enums::RunVariant,
+    #[sea_orm(column_name = "eventVersion", column_type = "Text", nullable)]
+    pub event_version: Option<String>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub nodes: Option<Json>,
+    #[sea_orm(column_name = "logsCount")]
+    pub logs_count: Option<i64>,
     #[sea_orm(
         belongs_to,
         from = "app_id",

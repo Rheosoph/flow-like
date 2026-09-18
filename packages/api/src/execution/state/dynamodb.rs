@@ -332,6 +332,45 @@ impl DynamoDbStateStore {
         serde_json::from_slice(&bytes).map_err(|e| StateStoreError::Serialization(e.to_string()))
     }
 
+    /// [`Self::fetch_large_payload`] tagged with the record position, so a page
+    /// of offloaded payloads can be read concurrently and written back in order.
+    async fn fetch_large_payload_at(
+        &self,
+        index: usize,
+        store_ref: String,
+    ) -> Result<(usize, serde_json::Value), StateStoreError> {
+        let payload = self.fetch_large_payload(&store_ref).await?;
+        Ok((index, payload))
+    }
+
+    /// The run condition also stops the update-as-upsert from minting a
+    /// phantom item for an unknown or foreign id; that condition failing
+    /// (expired or mismatched event) is a safe no-op.
+    async fn mark_event_delivered(&self, run_id: &str, id: String) -> Result<(), StateStoreError> {
+        let write = self
+            .client
+            .update_item()
+            .table_name(&self.events_table)
+            .key("id", AttributeValue::S(id))
+            .update_expression("SET delivered = :delivered")
+            .condition_expression("runId = :run_id")
+            .expression_attribute_values(":delivered", AttributeValue::Bool(true))
+            .expression_attribute_values(":run_id", AttributeValue::S(run_id.to_string()))
+            .send()
+            .await;
+        match write {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|error| error.is_conditional_check_failed_exception()) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(StateStoreError::Database(error.to_string())),
+        }
+    }
+
     pub async fn create_tables_if_not_exist(&self) -> Result<(), StateStoreError> {
         // Create runs table with TTL
         let tables = self
@@ -1396,17 +1435,31 @@ impl ExecutionStateStore for DynamoDbStateStore {
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
         let mut records = Vec::new();
+        let mut offloaded = Vec::new();
         if let Some(items) = result.items {
             for item in items {
-                let (mut record, payload_ref) = item_to_event(&item)?;
-
-                // Fetch large payload from S3 if needed
-                if let Some(s3_ref) = payload_ref {
-                    record.payload = self.fetch_large_payload(&s3_ref).await?;
+                let (record, payload_ref) = item_to_event(&item)?;
+                if let Some(store_ref) = payload_ref {
+                    offloaded.push((records.len(), store_ref));
                 }
-
                 records.push(record);
             }
+        }
+
+        if offloaded.is_empty() {
+            return Ok(records);
+        }
+
+        let payloads = stream::iter(
+            offloaded
+                .into_iter()
+                .map(|(index, store_ref)| self.fetch_large_payload_at(index, store_ref)),
+        )
+        .buffer_unordered(EVENT_WRITE_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
+        for (index, payload) in payloads {
+            records[index].payload = payload;
         }
 
         Ok(records)
@@ -1441,30 +1494,19 @@ impl ExecutionStateStore for DynamoDbStateStore {
         run_id: &str,
         event_ids: &[String],
     ) -> Result<(), StateStoreError> {
-        for id in event_ids {
-            // The run condition also stops the update-as-upsert from minting
-            // a phantom item for an unknown or foreign id; that condition
-            // failing (expired or mismatched event) is a safe no-op.
-            let write = self
-                .client
-                .update_item()
-                .table_name(&self.events_table)
-                .key("id", AttributeValue::S(id.clone()))
-                .update_expression("SET delivered = :delivered")
-                .condition_expression("runId = :run_id")
-                .expression_attribute_values(":delivered", AttributeValue::Bool(true))
-                .expression_attribute_values(":run_id", AttributeValue::S(run_id.to_string()))
-                .send()
-                .await;
-            match write {
-                Ok(_) => {}
-                Err(error)
-                    if error
-                        .as_service_error()
-                        .is_some_and(|error| error.is_conditional_check_failed_exception()) => {}
-                Err(error) => return Err(StateStoreError::Database(error.to_string())),
-            }
+        if event_ids.is_empty() {
+            return Ok(());
         }
+
+        stream::iter(
+            event_ids
+                .to_vec()
+                .into_iter()
+                .map(|id| self.mark_event_delivered(run_id, id)),
+        )
+        .buffer_unordered(EVENT_WRITE_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
 
         Ok(())
     }

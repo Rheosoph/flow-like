@@ -94,13 +94,36 @@ function collect(
 	});
 }
 
-const fullMap = () =>
+const { host: _host, ...pageComponents } = components;
+
+const pageMap = () =>
 	mergeStoredElementValues(
-		flattenSurfaceComponentsForElements(components, SURFACE),
+		flattenSurfaceComponentsForElements(pageComponents, SURFACE),
 		storedValues,
-		components,
+		pageComponents,
 		SURFACE,
 	);
+
+function manyWidgetRows(count: number): Record<string, SurfaceComponent> {
+	const rows: Record<string, SurfaceComponent> = { ...components };
+	for (let index = 0; index < count; index += 1) {
+		const instanceId = `row-${index}`;
+		rows[instanceId] = component(instanceId, {
+			type: "widgetInstance",
+			instanceId,
+			widgetId: "feed-row",
+			inlineWidgetDef: {
+				rootComponentId: "row-root",
+				components: Array.from({ length: 30 }, (_, child) => ({
+					id: `row-child-${child}`,
+					style: { className: "radar-card min-w-0 px-5 py-4" },
+					component: { type: "text", content: { path: "$item.name" } },
+				})),
+			},
+		});
+	}
+	return rows;
+}
 
 const boundValue = (elements: Record<string, unknown>, key: string) =>
 	(
@@ -171,21 +194,106 @@ describe("collectRunElements with a demand", () => {
 	});
 });
 
-describe("collectRunElements fallback", () => {
-	test("sends the full surface when the backend cannot answer", async () => {
-		expect(await collect({ boardState: {} })).toEqual(fullMap());
+describe("collectRunElements with a Page contract's demand", () => {
+	test("uses it without asking the Board endpoint", async () => {
+		const { backend, getElementDemand } = backendWith(async () =>
+			demandOf(["field"]),
+		);
+		const governed = await collect(backend, {
+			boardId: undefined,
+			demand: { selectors: ["title"] },
+			triggeringComponentId: "field",
+		});
+		const withBoard = await collect(backend, {
+			demand: { selectors: ["title"] },
+		});
+
+		expect(Object.keys(governed).sort()).toEqual([
+			`${SURFACE}/field`,
+			`${SURFACE}/title`,
+		]);
+		expect(Object.keys(withBoard)).toEqual([`${SURFACE}/title`]);
+		expect(getElementDemand).toHaveBeenCalledTimes(0);
 	});
 
-	test("sends the full surface when the demand request rejects", async () => {
+	test("sends the run's own scope when the selection is too large to send", async () => {
+		const elements = await collect(
+			{ boardState: {} },
+			{
+				boardId: undefined,
+				demand: { selectors: ["type:widgetInstance"] },
+				components: manyWidgetRows(200),
+			},
+		);
+
+		expect(elements).toEqual(pageMap());
+		expect(warn).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("collectRunElements fallback", () => {
+	test("a page run sends the page without its widget instances", async () => {
+		const elements = await collect({ boardState: {} });
+		expect(elements).toEqual(pageMap());
+		expect(Object.keys(elements).sort()).toEqual([
+			`${SURFACE}/field`,
+			`${SURFACE}/root`,
+			`${SURFACE}/title`,
+		]);
+		expect(boundValue(elements, `${SURFACE}/field`)).toEqual({
+			literalString: "typed",
+		});
+	});
+
+	test("a page run's size does not grow with widget instances", async () => {
+		const elements = await collect(
+			{ boardState: {} },
+			{ components: manyWidgetRows(200) },
+		);
+		expect(elements).toEqual(pageMap());
+	});
+
+	test("a page run always sends its trigger, even a widget host", async () => {
+		const elements = await collect(
+			{ boardState: {} },
+			{ triggeringComponentId: "host" },
+		);
+		expect(Object.keys(elements).sort()).toEqual([
+			`${SURFACE}/field`,
+			`${SURFACE}/host`,
+			`${SURFACE}/root`,
+			`${SURFACE}/title`,
+		]);
+	});
+
+	test("a widget run sends its own instance", async () => {
+		const widgetScope = { instanceId: "inst-1" };
+		const elements = await collect(
+			{ boardState: {} },
+			{ widgetScope, components: manyWidgetRows(3) },
+		);
+		expect(Object.keys(elements).sort()).toEqual([
+			"inst-1/child",
+			`${SURFACE}/field`,
+			`${SURFACE}/host`,
+			`${SURFACE}/root`,
+			`${SURFACE}/title`,
+		]);
+		expect(boundValue(elements, "inst-1/child")).toEqual({
+			literalString: "inner",
+		});
+	});
+
+	test("sends the page scope when the demand request rejects", async () => {
 		const { backend, getElementDemand } = backendWith(async () => {
 			throw new Error("offline");
 		});
-		expect(await collect(backend)).toEqual(fullMap());
+		expect(await collect(backend)).toEqual(pageMap());
 		expect(getElementDemand).toHaveBeenCalledTimes(1);
 		expect(warn).toHaveBeenCalledTimes(1);
 	});
 
-	test("sends the full surface when the demand request throws", async () => {
+	test("sends the page scope when the demand request throws", async () => {
 		const backend = {
 			boardState: {
 				getElementDemand: () => {
@@ -193,15 +301,15 @@ describe("collectRunElements fallback", () => {
 				},
 			},
 		};
-		expect(await collect(backend)).toEqual(fullMap());
+		expect(await collect(backend)).toEqual(pageMap());
 	});
 
-	test("sends the full surface without an app or board and asks nothing", async () => {
+	test("sends the page scope without an app or board and asks nothing", async () => {
 		const { backend, getElementDemand } = backendWith(async () =>
 			demandOf(["title"]),
 		);
-		expect(await collect(backend, { boardId: undefined })).toEqual(fullMap());
-		expect(await collect(backend, { appId: "" })).toEqual(fullMap());
+		expect(await collect(backend, { boardId: undefined })).toEqual(pageMap());
+		expect(await collect(backend, { appId: "" })).toEqual(pageMap());
 		expect(getElementDemand).toHaveBeenCalledTimes(0);
 	});
 
@@ -213,7 +321,7 @@ describe("collectRunElements fallback", () => {
 			return demandOf(["title"]);
 		});
 
-		expect(await collect(backend)).toEqual(fullMap());
+		expect(await collect(backend)).toEqual(pageMap());
 		expect(Object.keys(await collect(backend))).toEqual([`${SURFACE}/title`]);
 		expect(getElementDemand).toHaveBeenCalledTimes(2);
 	});

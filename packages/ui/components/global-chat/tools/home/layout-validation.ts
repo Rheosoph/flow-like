@@ -9,7 +9,12 @@ import {
 	parseHomeLayoutJson,
 } from "../../../home/home-layout-json";
 import type { IHomeLayout, IHomeWidget } from "../../../home/types";
-import { HOME_VARIANTS, HOME_WIDGET_TYPES, issue } from "./shared";
+import {
+	HOME_VARIANTS,
+	HOME_WIDGET_TYPES,
+	issue,
+	objectRecord,
+} from "./shared";
 import type { HomeLayoutValidationResult, HomeToolIssue } from "./types";
 import { validateKnownHomeWidgetConfig } from "./widget-contracts/validation";
 
@@ -94,12 +99,82 @@ function asJsonSource(value: unknown): string | undefined {
 	}
 }
 
+const LAYOUT_OWNED_UTILITY =
+	/^(?:static|fixed|absolute|relative|sticky|z-.+|(?:col|row)-(?:span|start|end)-.+|self-.+)$/;
+
+function classSegments(token: string): string[] {
+	const segments: string[] = [];
+	let depth = 0;
+	let start = 0;
+	for (let index = 0; index < token.length; index++) {
+		const char = token[index];
+		if (char === "[" || char === "(") depth++;
+		else if ((char === "]" || char === ")") && depth > 0) depth--;
+		else if (char === ":" && depth === 0) {
+			segments.push(token.slice(start, index));
+			start = index + 1;
+		}
+	}
+	segments.push(token.slice(start));
+	return segments;
+}
+
+/** Layout-owned utilities have no effect; sibling arbitrary variants select outside the widget. */
+function outOfScopeClass(token: string) {
+	const variants = classSegments(token);
+	const utility = (variants.pop() ?? "").replace(/^!?-?/, "").replace(/!$/, "");
+	return (
+		LAYOUT_OWNED_UTILITY.test(utility) ||
+		variants.some((variant) => variant.startsWith("[") && /[~+]/.test(variant))
+	);
+}
+
+/** Normalization drops a non-string className, so the raw candidate must be checked. */
+function validateRawClassNameType(
+	rawWidget: unknown,
+	path: string,
+	issues: HomeToolIssue[],
+) {
+	const raw =
+		objectRecord(rawWidget) && objectRecord(rawWidget.appearance)
+			? rawWidget.appearance.className
+			: undefined;
+	if (raw === undefined || typeof raw === "string") return;
+	issues.push(
+		issue(
+			"error",
+			"home_widget_class_name_type_invalid",
+			path,
+			"Use a space-separated string of Tailwind classes, or omit className.",
+		),
+	);
+}
+
+function validateClassNameScope(
+	className: string | undefined,
+	path: string,
+	issues: HomeToolIssue[],
+) {
+	const tokens = new Set(className?.split(" ").filter(outOfScopeClass));
+	if (tokens.size === 0) return;
+	issues.push(
+		issue(
+			"warning",
+			"home_widget_class_name_out_of_scope",
+			path,
+			`These classes have no effect or reach outside the widget: ${[...tokens].join(", ")}. The layout controls position, grid span, height, and self-alignment; z-index and sibling variants (~, +) are not supported.`,
+		),
+	);
+}
+
 function validateWidget(
 	widget: IHomeWidget,
+	rawWidget: unknown,
 	index: number,
 	issues: HomeToolIssue[],
 ) {
 	const path = `$.widgets[${index}]`;
+	validateRawClassNameType(rawWidget, `${path}.appearance.className`, issues);
 	if (!HOME_WIDGET_TYPES.has(widget.type)) {
 		issues.push(
 			issue(
@@ -160,6 +235,11 @@ function validateWidget(
 			),
 		);
 	}
+	validateClassNameScope(
+		widget.appearance.className,
+		`${path}.appearance.className`,
+		issues,
+	);
 	issues.push(
 		...validateKnownHomeWidgetConfig(
 			widget.type,
@@ -221,9 +301,11 @@ export function validateHomeLayoutCandidate(
 	const currentById = new Map(
 		currentLayout?.widgets.map((widget) => [widget.id, widget]),
 	);
+	const rawWidgets =
+		objectRecord(value) && Array.isArray(value.widgets) ? value.widgets : [];
 	parsed.layout.widgets.forEach((widget, index) => {
 		const widgetIssues: HomeToolIssue[] = [];
-		validateWidget(widget, index, widgetIssues);
+		validateWidget(widget, rawWidgets[index], index, widgetIssues);
 		issues.push(
 			...preserveFutureWidgetValues(
 				widgetIssues,

@@ -142,6 +142,7 @@ pub fn reconstruct_board(
         logic_nodes: HashMap::new(),
         app_state: None,
         pin_index: None,
+        page_metadata_source: Default::default(),
     };
     board.ensure_supported_format()?;
     Ok(board)
@@ -224,6 +225,7 @@ fn reconstruct_node(
         namespace: default_node.and_then(|d| d.namespace.clone()),
         alias: default_node.and_then(|d| d.alias.clone()),
         receiver: default_node.and_then(|d| d.receiver.clone()),
+        pins_collapsed: None,
     })
 }
 

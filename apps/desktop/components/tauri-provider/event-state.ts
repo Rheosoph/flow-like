@@ -65,6 +65,7 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import { requestLocalSinkConsent } from "../local-sink/local-sink-consent";
 import {
 	ensureRpaSystemPermissions,
 	requestRpaAutomationConsent,
@@ -72,6 +73,11 @@ import {
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 import { startRegressionSuiteRun } from "./regression-runner";
+
+/** Mirrors `SinkRegistration` in the Tauri `upsert_event` and `restore_event` commands. */
+type SinkRegistrationMode = "register" | "skip" | "keep";
+/** Mirrors `LocalSinkPlan` returned by the Tauri `local_sink_registration_plan` command. */
+type LocalSinkPlan = "none" | "existing" | "new";
 
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
@@ -387,6 +393,8 @@ export class EventState implements IEventState {
 					event: remoteData,
 					enforceId: true,
 					offline: isOffline,
+					// A cache mirror never starts a trigger on this device.
+					registerSink: "keep",
 				}).catch(() => {});
 			}
 
@@ -512,6 +520,8 @@ export class EventState implements IEventState {
 								event: event,
 								enforceId: true,
 								offline: isOffline,
+								// A cache mirror never starts a trigger on this device.
+								registerSink: "keep",
 							}).catch((error) => {
 								// A local write can fail for reasons the refresh does not share (a
 								// board that has not downloaded yet), and must not turn a successful
@@ -794,16 +804,36 @@ export class EventState implements IEventState {
 			acceptBlankSecrets?: boolean;
 		},
 	): Promise<IRestorePlanResult> {
-		return await invoke<IRestorePlanResult>("restore_event", {
+		const args = {
 			appId,
 			eventId,
 			version,
 			versionType: options?.versionType,
-			dryRun: options?.dryRun,
 			restoreRoute: options?.restoreRoute,
 			dropCanary: options?.dropCanary,
 			acceptBlankSecrets: options?.acceptBlankSecrets,
 			offline: await this.backend.isOffline(appId),
+		};
+		if (options?.dryRun ?? true) {
+			return await invoke<IRestorePlanResult>("restore_event", {
+				...args,
+				dryRun: true,
+			});
+		}
+		// The restored version may register a trigger the live event never
+		// had, so it goes through the same approval as a save.
+		const preview = await invoke<IRestorePlanResult>("restore_event", {
+			...args,
+			dryRun: true,
+		});
+		const registerSink = await this.confirmLocalSinkRegistration(
+			appId,
+			preview.plan.restored,
+		);
+		return await invoke<IRestorePlanResult>("restore_event", {
+			...args,
+			dryRun: false,
+			registerSink,
 		});
 	}
 
@@ -829,6 +859,8 @@ export class EventState implements IEventState {
 			);
 		}
 
+		const registerSink = await this.confirmLocalSinkRegistration(appId, event);
+
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline) {
 			return await invoke("upsert_event", {
@@ -840,6 +872,7 @@ export class EventState implements IEventState {
 				offline: isOffline,
 				pat: personalAccessToken,
 				oauthTokens: oauthTokens,
+				registerSink,
 			});
 		}
 		if (
@@ -874,9 +907,43 @@ export class EventState implements IEventState {
 			offline: isOffline,
 			pat: personalAccessToken,
 			oauthTokens: oauthTokens,
+			registerSink,
 		});
 		return response;
 	}
+
+	/**
+	 * Decides how the backend treats `event`'s trigger on this device. A trigger
+	 * that would start here anew needs the user's approval; an approved one is
+	 * refreshed silently. "skip" saves the event without a trigger and removes
+	 * an earlier one. Dismissing the dialog abandons the save.
+	 */
+	private async confirmLocalSinkRegistration(
+		appId: string,
+		event: IEvent,
+	): Promise<SinkRegistrationMode> {
+		if (!event.active) return "keep";
+		const plan = await invoke<LocalSinkPlan>("local_sink_registration_plan", {
+			appId,
+			event,
+		});
+		if (plan === "none") return "keep";
+		if (plan === "existing") return "register";
+		const answer = await requestLocalSinkConsent({
+			appId,
+			eventId: event.id,
+			eventName: event.name,
+			eventType: event.event_type,
+		});
+		if (answer === "allow") return "register";
+		if (answer === "decline") return "skip";
+		const error = new Error(
+			"Saving was cancelled before the local trigger was approved.",
+		) as Error & { isLocalSinkConsentDismissed?: boolean };
+		error.isLocalSinkConsentDismissed = true;
+		throw error;
+	}
+
 	async deleteEvent(appId: string, eventId: string): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -1544,23 +1611,6 @@ export class EventState implements IEventState {
 		// registrations. They do not register a local worker sink.
 		if (["rest", "mcp"].includes(event.event_type)) return event.active;
 
-		let target: string | undefined;
-		if (
-			["cron", "api", "http"].includes(event.event_type) &&
-			event.config.length
-		) {
-			const config = JSON.parse(
-				new TextDecoder().decode(new Uint8Array(event.config)),
-			) as { sink_execution?: string };
-			target = config.sink_execution?.toUpperCase();
-		}
-		// Trigger location is independent of the workflow's execution_mode.
-		// The native sink manager treats an unset target as local.
-		if (target !== "REMOTE" && target !== "HYBRID") return readLocal();
-		if (target === "HYBRID" && (await this.backend.isLocalOnly(appId))) {
-			return readLocal();
-		}
-
 		const readRemote = async (): Promise<boolean> => {
 			if (!this.backend.profile || !this.backend.auth) {
 				throw new Error("Remote sink status requires an online profile");
@@ -1578,6 +1628,30 @@ export class EventState implements IEventState {
 				throw error;
 			}
 		};
+
+		// The native sink manager refuses every event that runs remotely, so
+		// only the hosted sink can report it.
+		if (event.execution_mode === IEventExecutionMode.Remote) {
+			if (await this.backend.isLocalOnly(appId)) return false;
+			return readRemote();
+		}
+
+		let target: string | undefined;
+		if (
+			["cron", "api", "http"].includes(event.event_type) &&
+			event.config.length
+		) {
+			const config = JSON.parse(
+				new TextDecoder().decode(new Uint8Array(event.config)),
+			) as { sink_execution?: string };
+			target = config.sink_execution?.toUpperCase();
+		}
+		// A Local workflow's trigger location follows the sink target; the
+		// native sink manager treats an unset target as local.
+		if (target !== "REMOTE" && target !== "HYBRID") return readLocal();
+		if (target === "HYBRID" && (await this.backend.isLocalOnly(appId))) {
+			return readLocal();
+		}
 		if (target === "REMOTE") return readRemote();
 
 		const results = await Promise.allSettled([readLocal(), readRemote()]);

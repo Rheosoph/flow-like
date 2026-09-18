@@ -281,13 +281,21 @@ async fn percentile_cont_reports_support() {
     .await;
     let result = db
         .query_one_raw(stmt(format!(
-            r#"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) AS p50 FROM "{table}""#
+            r#"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) AS p50,
+                      percentile_disc(0.5) WITHIN GROUP (ORDER BY v) AS p50_disc
+               FROM "{table}""#
         )))
         .await;
     match result {
         Ok(Some(row)) => {
             let p50: f64 = row.try_get("", "p50").unwrap();
             assert!((p50 - 25.0).abs() < f64::EPSILON, "p50 = {p50}");
+            // Nearest rank, as analytics and canary statistics compute it.
+            let p50_disc: f64 = row.try_get("", "p50_disc").unwrap();
+            assert!(
+                (p50_disc - 20.0).abs() < f64::EPSILON,
+                "p50_disc = {p50_disc}"
+            );
             assert!(
                 DbDialect::Dsql.supports_ordered_set_aggregates(),
                 "percentile_cont works on this cluster; flip DbDialect::Dsql in supports_ordered_set_aggregates()"
@@ -295,14 +303,92 @@ async fn percentile_cont_reports_support() {
         }
         Ok(None) => panic!("percentile_cont returned no row"),
         Err(err) => {
-            eprintln!("percentile_cont is NOT supported: {err}");
+            eprintln!("percentile_cont or percentile_disc is NOT supported: {err}");
             assert!(
                 !DbDialect::Dsql.supports_ordered_set_aggregates(),
-                "the predicate claims support but the cluster refused percentile_cont"
+                "the predicate claims support but the cluster refused an ordered-set aggregate"
             );
         }
     }
     scratch.drop().await;
+}
+
+/// SQL shapes the query-efficiency pass introduced that only run on the
+/// Postgres wire: JSONB field extraction in a projection, a guarded
+/// `INSERT ... SELECT ... ON CONFLICT DO NOTHING RETURNING`, and a
+/// `CASE WHEN EXISTS` inside an `UPDATE ... SET`.
+#[tokio::test]
+#[ignore = "needs a live Aurora DSQL cluster"]
+async fn audit_pass_query_shapes_run() {
+    let Some(dsql) = connect().await else {
+        return;
+    };
+    let db = &dsql.connection;
+    let source = Scratch::create(db, "id TEXT PRIMARY KEY, kind TEXT NOT NULL, extras JSONB").await;
+    let target = Scratch::create(
+        db,
+        "id TEXT PRIMARY KEY, kind TEXT NOT NULL, total BIGINT NOT NULL",
+    )
+    .await;
+    let (source_table, target_table) = (&source.table, &target.table);
+    execute(
+        db,
+        &format!(
+            r#"INSERT INTO "{source_table}" (id, kind, extras) VALUES ('a', 'workflow', '{{"ui_path": "/docs"}}'), ('b', 'other', NULL)"#
+        ),
+    )
+    .await;
+
+    let row = db
+        .query_one_raw(stmt(format!(
+            r#"SELECT extras->'ui_path' AS ui_path, extras->'missing' AS missing FROM "{source_table}" WHERE id = 'a'"#
+        )))
+        .await
+        .expect("jsonb field extraction")
+        .expect("row");
+    let ui_path: Option<serde_json::Value> = row.try_get("", "ui_path").unwrap();
+    let missing: Option<serde_json::Value> = row.try_get("", "missing").unwrap();
+    assert_eq!(ui_path, Some(serde_json::json!("/docs")));
+    assert_eq!(missing, None);
+
+    let staged = |id: &str| {
+        stmt(format!(
+            r#"INSERT INTO "{target_table}" (id, kind, total)
+               SELECT id, kind, 1 FROM "{source_table}" WHERE id = '{id}' AND kind = 'workflow'
+               ON CONFLICT (id) DO NOTHING RETURNING id"#
+        ))
+    };
+    let first = db.query_all_raw(staged("a")).await.expect("insert select");
+    assert_eq!(first.len(), 1, "a fresh row comes back");
+    let repeat = db
+        .query_all_raw(staged("a"))
+        .await
+        .expect("repeat insert select");
+    assert!(repeat.is_empty(), "an existing row returns nothing");
+    let unmatched = db
+        .query_all_raw(staged("b"))
+        .await
+        .expect("unmatched insert select");
+    assert!(unmatched.is_empty(), "no source row returns nothing");
+
+    execute(
+        db,
+        &format!(
+            r#"UPDATE "{target_table}" SET total = CASE WHEN EXISTS (SELECT 1 FROM "{source_table}" s WHERE s.id = "{target_table}".id) THEN total + 5 ELSE total END WHERE id = 'a'"#
+        ),
+    )
+    .await;
+    let row = db
+        .query_one_raw(stmt(format!(
+            r#"SELECT total FROM "{target_table}" WHERE id = 'a'"#
+        )))
+        .await
+        .expect("read back")
+        .expect("row");
+    assert_eq!(row.try_get::<i64>("", "total").unwrap(), 6);
+
+    source.drop().await;
+    target.drop().await;
 }
 
 #[tokio::test]

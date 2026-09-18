@@ -108,6 +108,9 @@ pub enum PackageSource {
 #[serde(rename_all = "camelCase")]
 pub struct PackageVersion {
     pub version: String,
+    /// Object path of the WASM artifact. Server-internal, never serialized.
+    #[serde(skip)]
+    pub wasm_path: String,
     pub wasm_hash: String,
     pub wasm_size: u64,
     #[serde(default)]

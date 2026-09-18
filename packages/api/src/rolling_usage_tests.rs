@@ -279,8 +279,8 @@ async fn batched_contributions_keep_exact_corrections_expiry_and_query_counts() 
         );
         assert_eq!(
             counted.take().len(),
-            2,
-            "warm admission reads the counter and its expiry page"
+            1,
+            "warm admission reads the counter and its expiry flag in one statement"
         );
     }
     // A late backfill must not restore the pre-settlement estimate.

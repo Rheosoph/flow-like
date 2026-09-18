@@ -1,9 +1,13 @@
+import { looksLikeTemporalName } from "../../lib/date";
+import type { IBackendState } from "../../state/backend-state";
 import type { GraphOverlay } from "../../state/backend-state/graph-state";
 import type {
 	ExecuteSqlPayload,
 	QueryColumn,
 	SavedQuery,
 } from "../../state/backend-state/query-state";
+import { isNumericTypeName } from "../settings/data-studio/query-workbench/column-types";
+import { homeDataInlineFieldLabel } from "./home-data-text";
 
 export const HOME_DATA_VISUALIZATIONS = [
 	["stat", "Single metric"],
@@ -69,7 +73,10 @@ export function homeDataMeasureTitle(measure: HomeDataMeasure): string {
 		median: "Median",
 	}[measure.aggregation];
 	return measure.aggregation !== "count" && measure.field
-		? `${name} of ${measure.field}`
+		? `${name} of ${homeDataInlineFieldLabel(
+				measure.field,
+				looksLikeTemporalName(measure.field) ? "temporal" : undefined,
+			)}`
 		: name;
 }
 export function updateHomeDataMeasure(
@@ -379,6 +386,34 @@ export function homeSavedQuerySql(sql: string): string {
 		? `${sql.slice(0, code.length - 1)}${sql.slice(code.length)}`
 		: sql;
 }
+/** A zero-row run of a saved query, for learning its column names and types. */
+export function homeSavedQuerySchemaQuery(
+	savedQuery: SavedQuery,
+	params: Record<string, unknown>,
+): ExecuteSqlPayload {
+	return {
+		sql: `SELECT * FROM (\n${homeSavedQuerySql(savedQuery.sql)}\n) AS "__home_schema" WHERE false`,
+		params,
+		surface: savedQuery.surface,
+		overlay_id: savedQuery.overlay_id,
+		limit: 1,
+	};
+}
+export function homeDataUsesDates(
+	config: Pick<
+		HomeDataConfig,
+		"dateRange" | "groupBy" | "timeBucket" | "visualization"
+	>,
+): boolean {
+	return (
+		config.dateRange !== "all" ||
+		Boolean(
+			config.groupBy &&
+				config.timeBucket !== "none" &&
+				config.visualization !== "histogram",
+		)
+	);
+}
 export function extractHomeQueryParameters(sql: string): string[] {
 	return [
 		...new Set(
@@ -451,6 +486,49 @@ export interface HomeDataSourceContext {
 	viewerId?: string;
 	now?: Date;
 }
+
+/** Everything `buildHomeDataQuery` needs to know about a widget's source. */
+export async function loadHomeDataSourceContext(
+	backend: Pick<IBackendState, "dbState" | "graphState" | "queryState">,
+	config: HomeDataConfig,
+	context: Pick<HomeDataSourceContext, "viewerId" | "now"> = {},
+): Promise<HomeDataSourceContext> {
+	const loaded: HomeDataSourceContext = { ...context };
+	const personal = config.scope === "personal";
+	if (config.sourceKind === "ontology") {
+		loaded.overlay = await backend.graphState.getOverlay(
+			config.appId,
+			config.ontologyId,
+			personal,
+		);
+		loaded.columns = homeOntologyColumns(loaded.overlay, config.objectType);
+	} else if (config.sourceKind === "query") {
+		loaded.savedQuery = await backend.queryState.getSavedQuery(
+			config.appId,
+			config.queryId,
+			personal,
+		);
+		// Date grouping needs to know whether a column holds epoch numbers.
+		// Without the types the query still runs, so a failed probe is not fatal.
+		if (homeDataUsesDates(config))
+			loaded.columns = await backend.queryState
+				.executeSql(
+					config.appId,
+					homeSavedQuerySchemaQuery(
+						loaded.savedQuery,
+						resolveHomeQueryParams(config, context.viewerId),
+					),
+					personal,
+				)
+				.then((schema) => schema.columns)
+				.catch(() => undefined);
+	} else {
+		loaded.columns = homeDataColumns(
+			await backend.dbState.getSchema(config.appId, config.table, personal),
+		);
+	}
+	return loaded;
+}
 export function buildHomeDataQuery(
 	config: HomeDataConfig,
 	context: HomeDataSourceContext = {},
@@ -492,15 +570,26 @@ export function buildHomeDataQuery(
 		surface = "overlay";
 		overlayId = overlay.id;
 	} else source = quote(config.table);
-	const knownColumns = context.columns?.length
-		? new Set(context.columns.map((column) => column.name))
+	const columnTypes = context.columns?.length
+		? new Map(context.columns.map((column) => [column.name, column.type_name]))
 		: undefined;
 	const field = (name: string) => {
-		if (knownColumns && !knownColumns.has(name))
+		if (columnTypes && !columnTypes.has(name))
 			throw new Error(
 				`The field “${name}” is no longer available. Update this widget's settings.`,
 			);
 		return quote(name);
+	};
+	const instant = (name: string) => {
+		const column = field(name);
+		if (!isNumericTypeName(columnTypes?.get(name) ?? ""))
+			return `CAST(${column} AS TIMESTAMP)`;
+		// DataFusion reads a cast integer as seconds and overflows on epoch millis,
+		// so the unit is taken from the magnitude, as the table's date cells do.
+		const number = `CAST(${column} AS DOUBLE)`;
+		const scaled = (factor: string) =>
+			`to_timestamp_micros(CAST(${number} ${factor} AS BIGINT))`;
+		return `CASE WHEN ABS(${number}) < 100000000000 THEN ${scaled("* 1000000")} WHEN ABS(${number}) < 100000000000000 THEN ${scaled("* 1000")} WHEN ABS(${number}) < 100000000000000000 THEN to_timestamp_micros(CAST(${column} AS BIGINT)) ELSE ${scaled("/ 1000")} END`;
 	};
 	const conditions: string[] = [];
 	for (const [index, filter] of config.filters.entries()) {
@@ -558,12 +647,9 @@ export function buildHomeDataQuery(
 			);
 		params.__home_start = start.toISOString();
 		params.__home_end = now.toISOString();
-		conditions.push(
-			`CAST(${field(config.dateField)} AS TIMESTAMP) >= CAST($__home_start AS TIMESTAMP)`,
-		);
-		conditions.push(
-			`CAST(${field(config.dateField)} AS TIMESTAMP) <= CAST($__home_end AS TIMESTAMP)`,
-		);
+		const date = instant(config.dateField);
+		conditions.push(`${date} >= CAST($__home_start AS TIMESTAMP)`);
+		conditions.push(`${date} <= CAST($__home_end AS TIMESTAMP)`);
 	}
 	const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
 	const limit = Math.min(500, Math.max(1, Math.floor(config.limit)));
@@ -598,7 +684,7 @@ export function buildHomeDataQuery(
 			params.__home_bin_width = config.binWidth;
 			group = `FLOOR(CAST(${group} AS DOUBLE) / $__home_bin_width) * $__home_bin_width`;
 		} else if (group && config.timeBucket !== "none")
-			group = `DATE_TRUNC('${config.timeBucket}', CAST(${group} AS TIMESTAMP))`;
+			group = `DATE_TRUNC('${config.timeBucket}', ${instant(config.groupBy)})`;
 		if (group) {
 			groups.push(group);
 			select.push(`${group} AS ${quote("__group")}`);

@@ -93,10 +93,16 @@ import {
 	resolveNodeEditTarget,
 } from "./flow-node/flow-node-edit-menu";
 import { FlowPinAction } from "./flow-node/flow-node-pin-action";
+import {
+	FlowNodePinLatch,
+	PIN_LATCH_HEIGHT,
+} from "./flow-node/flow-node-pin-latch";
+import { isPinAction, layoutCollapsiblePins } from "./flow-node/pin-collapse";
 import { FlowNodeQualityBadge } from "./flow-node/flow-node-quality-badge";
 import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
 import { FlowPin } from "./flow-pin";
+import { planPinLabelCaps } from "./flow-pin/pin-label-caps";
 import { deriveRunCapabilities } from "./flow-run-capabilities";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
@@ -586,11 +592,85 @@ const FlowNodeInner = memo(
 			[parsePins, visiblePins],
 		);
 
-		const pinLayoutKey = useMemo(
+		const readOnly = typeof props.data.version !== "undefined";
+		// Version previews cannot write the board, so viewers get a local override.
+		const [previewCollapsed, setPreviewCollapsed] = useState<boolean>();
+		const nodeCollapsed = props.data.node.pins_collapsed === true;
+		const collapsed = readOnly
+			? (previewCollapsed ?? nodeCollapsed)
+			: nodeCollapsed;
+		const togglePinCollapse = useCallback(async () => {
+			if (readOnly) {
+				setPreviewCollapsed(!collapsed);
+				return;
+			}
+			const backend = useBackendStore.getState().backend;
+			if (!backend) return;
+			const current = getNode(props.id);
+			const node = current?.data?.node as INode | undefined;
+			if (!current || !node) return;
+			const command = updateNodeCommand({
+				node: {
+					...node,
+					pins_collapsed: !collapsed,
+					coordinates: [current.position.x, current.position.y, 0],
+				},
+			});
+			const result = await backend.boardState.executeCommand(
+				props.data.appId,
+				props.data.boardId,
+				command,
+			);
+			await pushCommand(result);
+			await invalidate(backend.boardState.getBoard, [
+				props.data.appId,
+				props.data.boardId,
+			]);
+		}, [
+			readOnly,
+			collapsed,
+			getNode,
+			pushCommand,
+			invalidate,
+			props.id,
+			props.data.appId,
+			props.data.boardId,
+		]);
+
+		// Start nodes never render their inputs, so those must not count as hideable.
+		const pinLayout = useMemo(
 			() =>
-				visiblePins.map((p) => `${p.id}:${p.index}:${p.pin_type}`).join("|"),
-			[visiblePins],
+				layoutCollapsiblePins(
+					props.data.node.start ? [] : inputPins,
+					outputPins,
+					collapsed && !isReroute,
+				),
+			[inputPins, outputPins, collapsed, isReroute, props.data.node.start],
 		);
+		const pinLabelCaps = useMemo(
+			() =>
+				isReroute
+					? {}
+					: planPinLabelCaps(
+							pinLayout.inputs,
+							pinLayout.outputs,
+							pinLayout.slots,
+							() => props.data.node.name,
+						),
+			[pinLayout, isReroute, props.data.node.name],
+		);
+		const showPinLatch = !isReroute && pinLayout.collapsibleCount > 0;
+
+		const pinLayoutKey = useMemo(() => {
+			const rows = [...pinLayout.inputs, ...pinLayout.outputs]
+				.map((row) =>
+					isPinAction(row)
+						? `${row.pin.id}:+`
+						: `${row.id}:${pinLayout.slots[row.id] ?? row.index}:${row.pin_type}`,
+				)
+				.join("|");
+			return `${collapsed ? "c" : "e"}|${rows}`;
+		}, [pinLayout, collapsed]);
 		const measuredPinLayout = useRef<string | null>(null);
 		useEffect(() => {
 			// React Flow measures handles itself when the node mounts (its
@@ -603,19 +683,16 @@ const FlowNodeInner = memo(
 
 		useEffect(() => {
 			if (isReroute) return;
-			const height = Math.max(inputPins.length, outputPins.length);
+			const rows = Math.max(pinLayout.inputs.length, pinLayout.outputs.length);
+			const latch = showPinLatch ? ` + ${PIN_LATCH_HEIGHT}px` : "";
 			if (div.current)
-				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
-		}, [isReroute, inputPins, outputPins]);
-
-		function isPinAction(pin: IPin | IPinAction): pin is IPinAction {
-			return typeof (pin as IPinAction).onAction === "function";
-		}
+				div.current.style.height = `calc(${rows * 15}px + 1.25rem + 0.5rem${latch})`;
+		}, [isReroute, pinLayout, showPinLatch]);
 
 		const renderInputPins = useMemo(
 			() =>
 				!(props.data.node.start ?? false) &&
-				inputPins
+				pinLayout.inputs
 					.filter((pin) => isPinAction(pin) || pin.pin_type === "Input")
 					.map((pin, arrayIndex) => {
 						return isPinAction(pin) ? (
@@ -634,6 +711,8 @@ const FlowNodeInner = memo(
 								boardRef={props.data.boardRef}
 								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
+								slot={pinLayout.slots[pin.id]}
+								labelMaxWidth={pinLabelCaps[pin.id]}
 								onPinRemove={pinRemoveCallback}
 								skipOffset={isReroute}
 								version={props.data.version}
@@ -644,7 +723,8 @@ const FlowNodeInner = memo(
 						);
 					}),
 			[
-				inputPins,
+				pinLayout,
+				pinLabelCaps,
 				props.data.node,
 				props.data.boardId,
 				props.data.boardDataVersion,
@@ -658,7 +738,7 @@ const FlowNodeInner = memo(
 
 		const renderOutputPins = useMemo(
 			() =>
-				outputPins.map((pin, arrayIndex) => {
+				pinLayout.outputs.map((pin, arrayIndex) => {
 					return isPinAction(pin) ? (
 						<FlowPinAction
 							action={pin}
@@ -675,6 +755,8 @@ const FlowNodeInner = memo(
 							boardDataVersion={props.data.boardDataVersion}
 							pin={pin}
 							key={pin.id}
+							slot={pinLayout.slots[pin.id]}
+							labelMaxWidth={pinLabelCaps[pin.id]}
 							onPinRemove={pinRemoveCallback}
 							skipOffset={isReroute}
 							version={props.data.version}
@@ -685,7 +767,8 @@ const FlowNodeInner = memo(
 					);
 				}),
 			[
-				outputPins,
+				pinLayout,
+				pinLabelCaps,
 				props.data.node,
 				props.data.boardId,
 				props.data.boardDataVersion,
@@ -1147,6 +1230,13 @@ const FlowNodeInner = memo(
 					</div>
 				)}
 				{renderOutputPins}
+				{showPinLatch && (
+					<FlowNodePinLatch
+						collapsed={collapsed}
+						hiddenCount={pinLayout.hiddenCount}
+						onToggle={togglePinCollapse}
+					/>
+				)}
 			</div>
 		);
 	},

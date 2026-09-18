@@ -14,9 +14,11 @@ describe("widget capabilities", () => {
 			wasm: true,
 		});
 		expect(csp).toContain("worker-src blob:");
-		expect(csp).toContain("media-src blob:");
 		expect(csp).toContain(
-			"connect-src 'self' flow-widget: http://flow-widget.localhost blob:",
+			"media-src data: blob: 'self' flow-widget: http://flow-widget.localhost",
+		);
+		expect(csp).toContain(
+			"connect-src data: blob: 'self' flow-widget: http://flow-widget.localhost;",
 		);
 		expect(csp).toContain("'wasm-unsafe-eval'");
 		expect(csp).not.toContain("'unsafe-eval'");
@@ -37,7 +39,9 @@ describe("widget capabilities", () => {
 			media: true,
 			microphone: false,
 		});
-		expect(buildCsp(null)).toContain("worker-src 'none'; media-src 'none'");
+		expect(buildCsp(null)).toContain(
+			"connect-src data: blob:; worker-src 'none'; media-src data: blob:",
+		);
 	});
 	test("rejects the removed resources capability", () => {
 		const path = join(tmpDir("widget-caps-resources"), "widget.config.ts");
@@ -50,7 +54,7 @@ describe("widget capabilities", () => {
 		);
 		expect(() => extractContract(path)).toThrow(/Invalid widget capability/);
 		expect(buildCsp(null, { resources: true } as never)).toContain(
-			"connect-src 'none'",
+			"connect-src data: blob:;",
 		);
 	});
 	test("rejects unknown permissions and CSP directive injection", () => {
@@ -72,7 +76,7 @@ describe("widget capabilities", () => {
 	});
 	test("host lists passed where capabilities belong grant nothing", () => {
 		const csp = buildCsp(null, ["https://api.example.com"] as never);
-		expect(csp).toContain("connect-src 'none'");
+		expect(csp).toContain("connect-src data: blob:;");
 		expect(csp).not.toContain("api.example.com");
 	});
 });

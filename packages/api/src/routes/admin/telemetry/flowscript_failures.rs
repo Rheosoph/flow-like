@@ -19,10 +19,11 @@ use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
-use sea_orm::sea_query::{Alias, Expr, LikeExpr, extension::postgres::PgExpr};
+use flow_like_types::tokio::try_join;
+use sea_orm::sea_query::{Alias, Expr, ExprTrait, LikeExpr, extension::postgres::PgExpr};
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Select,
+    ColumnTrait, Condition, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+    Select,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -95,6 +96,15 @@ struct FailureRow {
 struct FacetRow {
     key: Option<String>,
     count: i64,
+}
+
+#[derive(Debug, Default, FromQueryResult)]
+struct WindowTotalsRow {
+    total: i64,
+    users: i64,
+    /// Rows without a user. They form one more bucket in the user total.
+    unattributed: i64,
+    apps: i64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -269,6 +279,66 @@ fn filtered(
     select
 }
 
+async fn window_totals(
+    state: &AppState,
+    select: Select<flow_script_apply_failure::Entity>,
+) -> Result<WindowTotalsRow, ApiError> {
+    use flow_script_apply_failure::Column;
+
+    Ok(select
+        .select_only()
+        .column_as(Column::Id.count(), "total")
+        .column_as(Expr::col(Column::UserId).count_distinct(), "users")
+        .column_as(
+            Column::Id.count().sub(Column::UserId.count()),
+            "unattributed",
+        )
+        .column_as(Expr::col(Column::AppId).count_distinct(), "apps")
+        .into_model::<WindowTotalsRow>()
+        .one(&state.db)
+        .await?
+        .unwrap_or_default())
+}
+
+async fn page_rows(
+    state: &AppState,
+    select: Select<flow_script_apply_failure::Entity>,
+    page: u64,
+    page_size: u64,
+) -> Result<Vec<FailureRow>, ApiError> {
+    use flow_script_apply_failure::Column;
+
+    Ok(select
+        .select_only()
+        .column_as(Column::Id, "id")
+        .column_as(Column::UserId, "user_id")
+        .column_as(Column::AppId, "app_id")
+        .column_as(Column::BoardId, "board_id")
+        .column_as(Column::LayerId, "layer_id")
+        .column_as(Column::Source, "source")
+        .column_as(Column::Origin, "origin")
+        .column_as(Column::Outcome, "outcome")
+        .column_as(Column::Cause, "cause")
+        .column_as(Column::ErrorMessage, "error_message")
+        .column_as(Column::Diagnostics, "diagnostics")
+        .column_as(Column::CommandCount, "command_count")
+        .column_as(Column::AllowDeletions, "allow_deletions")
+        .column_as(Column::FlowscriptChars, "flowscript_chars")
+        .column_as(Column::DroppedValues, "dropped_values")
+        .column_as(Column::RedactedLiterals, "redacted_literals")
+        .column_as(Column::Truncated, "truncated")
+        .column_as(Column::AppVersion, "app_version")
+        .column_as(Column::Platform, "platform")
+        .column_as(Column::TraceId, "trace_id")
+        .column_as(Column::CreatedAt, "created_at")
+        .order_by_desc(Column::CreatedAt)
+        .limit(page_size)
+        .offset(page * page_size)
+        .into_model::<FailureRow>()
+        .all(&state.db)
+        .await?)
+}
+
 /// One grouped breakdown, ordered by count. `labels` names the ids that are not human readable.
 async fn facet(
     state: &AppState,
@@ -309,14 +379,18 @@ async fn user_names(
         return Ok(HashMap::new());
     }
     let rows = user::Entity::find()
+        .select_only()
+        .column(user::Column::Id)
+        .column(user::Column::Name)
         .filter(user::Column::Id.is_in(ids))
+        .into_tuple::<(String, Option<String>)>()
         .all(&state.db)
         .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|row| {
-            let name = row.name.filter(|n| !n.trim().is_empty())?;
-            Some((row.id, name))
+        .filter_map(|(id, name)| {
+            let name = name.filter(|n| !n.trim().is_empty())?;
+            Some((id, name))
         })
         .collect())
 }
@@ -353,44 +427,18 @@ pub async fn list_flowscript_failures(
         .clamp(1, MAX_PAGE_SIZE);
     let cutoff = Utc::now().fixed_offset() - Duration::hours(hours);
 
-    let total = filtered(&q, cutoff).count(&state.db).await?;
-
-    let rows = filtered(&q, cutoff)
-        .select_only()
-        .column_as(Column::Id, "id")
-        .column_as(Column::UserId, "user_id")
-        .column_as(Column::AppId, "app_id")
-        .column_as(Column::BoardId, "board_id")
-        .column_as(Column::LayerId, "layer_id")
-        .column_as(Column::Source, "source")
-        .column_as(Column::Origin, "origin")
-        .column_as(Column::Outcome, "outcome")
-        .column_as(Column::Cause, "cause")
-        .column_as(Column::ErrorMessage, "error_message")
-        .column_as(Column::Diagnostics, "diagnostics")
-        .column_as(Column::CommandCount, "command_count")
-        .column_as(Column::AllowDeletions, "allow_deletions")
-        .column_as(Column::FlowscriptChars, "flowscript_chars")
-        .column_as(Column::DroppedValues, "dropped_values")
-        .column_as(Column::RedactedLiterals, "redacted_literals")
-        .column_as(Column::Truncated, "truncated")
-        .column_as(Column::AppVersion, "app_version")
-        .column_as(Column::Platform, "platform")
-        .column_as(Column::TraceId, "trace_id")
-        .column_as(Column::CreatedAt, "created_at")
-        .order_by_desc(Column::CreatedAt)
-        .limit(page_size)
-        .offset(page * page_size)
-        .into_model::<FailureRow>()
-        .all(&state.db)
-        .await?;
-
-    let by_outcome = facet(&state, filtered(&q, cutoff), Column::Outcome, None).await?;
-    let by_source = facet(&state, filtered(&q, cutoff), Column::Source, None).await?;
-    let by_origin = facet(&state, filtered(&q, cutoff), Column::Origin, None).await?;
-    let by_cause = facet(&state, filtered(&q, cutoff), Column::Cause, None).await?;
-    let by_app = facet(&state, filtered(&q, cutoff), Column::AppId, None).await?;
-    let unnamed_users = facet(&state, filtered(&q, cutoff), Column::UserId, None).await?;
+    let (totals, rows, by_outcome, by_source) = try_join!(
+        window_totals(&state, filtered(&q, cutoff)),
+        page_rows(&state, filtered(&q, cutoff), page, page_size),
+        facet(&state, filtered(&q, cutoff), Column::Outcome, None),
+        facet(&state, filtered(&q, cutoff), Column::Source, None),
+    )?;
+    let (by_origin, by_cause, by_app, unnamed_users) = try_join!(
+        facet(&state, filtered(&q, cutoff), Column::Origin, None),
+        facet(&state, filtered(&q, cutoff), Column::Cause, None),
+        facet(&state, filtered(&q, cutoff), Column::AppId, None),
+        facet(&state, filtered(&q, cutoff), Column::UserId, None),
+    )?;
 
     let mut lookup: Vec<String> = rows.iter().filter_map(|row| row.user_id.clone()).collect();
     lookup.extend(unnamed_users.iter().map(|facet| facet.key.clone()));
@@ -406,18 +454,7 @@ pub async fn list_flowscript_failures(
         })
         .collect();
 
-    let users = filtered(&q, cutoff)
-        .select_only()
-        .column(Column::UserId)
-        .group_by(Column::UserId)
-        .count(&state.db)
-        .await? as i64;
-    let apps = filtered(&q, cutoff)
-        .select_only()
-        .column(Column::AppId)
-        .group_by(Column::AppId)
-        .count(&state.db)
-        .await? as i64;
+    let users = totals.users + i64::from(totals.unattributed > 0);
 
     let outcome_total = |name: &str| {
         by_outcome
@@ -428,12 +465,12 @@ pub async fn list_flowscript_failures(
     };
 
     let summary = FlowScriptFailureSummary {
-        total: total as i64,
+        total: totals.total,
         errors: outcome_total(crate::routes::flowscript::OUTCOME_ERROR),
         blocked: outcome_total(crate::routes::flowscript::OUTCOME_BLOCKED),
         partial: outcome_total(crate::routes::flowscript::OUTCOME_PARTIAL),
         users,
-        apps,
+        apps: totals.apps,
         by_outcome,
         by_source,
         by_origin,
@@ -447,7 +484,7 @@ pub async fn list_flowscript_failures(
             .into_iter()
             .map(|row| record_from(row, &names))
             .collect(),
-        total,
+        total: std::cmp::max(totals.total, 0) as u64,
         page,
         page_size,
         hours,

@@ -4,8 +4,8 @@ use flow_like::flow::board::{
 };
 use flow_like::flow::execution::LogLevel;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait,
-    FromJsonQueryResult, QueryFilter,
+    ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, FromJsonQueryResult, QueryFilter,
+    sea_query::OnConflict,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -301,54 +301,52 @@ pub async fn persist_board_score_with<C: ConnectionTrait>(
         computation.connection_count,
     ))?);
 
-    let existing = app_board_score::Entity::find()
-        .filter(app_board_score::Column::AppId.eq(app_id))
-        .filter(app_board_score::Column::BoardId.eq(&board.id))
-        .one(db)
-        .await?;
+    let active = app_board_score::ActiveModel {
+        id: Set(flow_like_types::create_id()),
+        app_id: Set(app_id.to_string()),
+        board_id: Set(board.id.clone()),
+        security: Set(scores.security as i32),
+        privacy: Set(scores.privacy as i32),
+        performance: Set(scores.performance as i32),
+        governance: Set(scores.governance as i32),
+        reliability: Set(scores.reliability as i32),
+        cost: Set(scores.cost as i32),
+        worst_score: Set(computation.worst_score as i32),
+        node_count: Set(computation.node_count as i32),
+        scored_node_count: Set(computation.scored_node_count as i32),
+        connection_count: Set(computation.connection_count as i32),
+        flagged_patterns: Set(flagged_json),
+        summary: Set(summary),
+        computed_at: Set(now),
+        updated_at: Set(now),
+    };
 
-    match existing {
-        Some(model) => {
-            let mut active: app_board_score::ActiveModel = model.into();
-            active.security = Set(scores.security as i32);
-            active.privacy = Set(scores.privacy as i32);
-            active.performance = Set(scores.performance as i32);
-            active.governance = Set(scores.governance as i32);
-            active.reliability = Set(scores.reliability as i32);
-            active.cost = Set(scores.cost as i32);
-            active.worst_score = Set(computation.worst_score as i32);
-            active.node_count = Set(computation.node_count as i32);
-            active.scored_node_count = Set(computation.scored_node_count as i32);
-            active.connection_count = Set(computation.connection_count as i32);
-            active.flagged_patterns = Set(flagged_json);
-            active.summary = Set(summary);
-            active.computed_at = Set(now);
-            active.updated_at = Set(now);
-            active.update(db).await?;
-        }
-        None => {
-            let active = app_board_score::ActiveModel {
-                id: Set(flow_like_types::create_id()),
-                app_id: Set(app_id.to_string()),
-                board_id: Set(board.id.clone()),
-                security: Set(scores.security as i32),
-                privacy: Set(scores.privacy as i32),
-                performance: Set(scores.performance as i32),
-                governance: Set(scores.governance as i32),
-                reliability: Set(scores.reliability as i32),
-                cost: Set(scores.cost as i32),
-                worst_score: Set(computation.worst_score as i32),
-                node_count: Set(computation.node_count as i32),
-                scored_node_count: Set(computation.scored_node_count as i32),
-                connection_count: Set(computation.connection_count as i32),
-                flagged_patterns: Set(flagged_json),
-                summary: Set(summary),
-                computed_at: Set(now),
-                updated_at: Set(now),
-            };
-            active.insert(db).await?;
-        }
-    }
+    app_board_score::Entity::insert(active)
+        .on_conflict(
+            OnConflict::columns([
+                app_board_score::Column::AppId,
+                app_board_score::Column::BoardId,
+            ])
+            .update_columns([
+                app_board_score::Column::Security,
+                app_board_score::Column::Privacy,
+                app_board_score::Column::Performance,
+                app_board_score::Column::Governance,
+                app_board_score::Column::Reliability,
+                app_board_score::Column::Cost,
+                app_board_score::Column::WorstScore,
+                app_board_score::Column::NodeCount,
+                app_board_score::Column::ScoredNodeCount,
+                app_board_score::Column::ConnectionCount,
+                app_board_score::Column::FlaggedPatterns,
+                app_board_score::Column::Summary,
+                app_board_score::Column::ComputedAt,
+                app_board_score::Column::UpdatedAt,
+            ])
+            .to_owned(),
+        )
+        .exec_without_returning(db)
+        .await?;
 
     Ok(())
 }

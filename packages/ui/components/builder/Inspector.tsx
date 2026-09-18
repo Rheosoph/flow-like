@@ -10,6 +10,7 @@ import {
 	ArrowUpFromLine,
 	ChevronDown,
 	ChevronUp,
+	Loader2,
 	Package,
 	Plus,
 	Trash2,
@@ -23,6 +24,7 @@ import {
 	useEffect,
 	useId,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { toast } from "sonner";
@@ -34,10 +36,7 @@ import {
 } from "../../lib/widget-contract-form";
 import { homogeneousArrayItemSchema } from "../../lib/widget-schema-form";
 import { useBackend } from "../../state/backend-state";
-import {
-	type ComponentEventDefinition,
-	getComponentEventDefinitions,
-} from "../a2ui/component-event-manifest";
+import type { ComponentEventDefinition } from "../a2ui/component-event-manifest";
 import {
 	NIVO_CHART_DEFAULTS,
 	NIVO_SAMPLE_DATA,
@@ -75,6 +74,12 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "../ui/collapsible";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { MonacoCodeEditor } from "../ui/monaco-code-editor";
@@ -90,11 +95,21 @@ import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { WidgetConsentStatus } from "../store/widget-permissions";
 import { WidgetSchemaListEditor } from "../widget-contract/WidgetSchemaListEditor";
 import { AssetPicker, type AssetPickerProps } from "./AssetPicker";
 import { useBuilder } from "./BuilderContext";
 import { getDefaultProps } from "./componentDefaults";
 import { getComponentSchema } from "./componentSchema";
+import {
+	type WorkflowEventKind,
+	getPageComponentEvents,
+	isWidgetInstanceType,
+	nameNewWorkflowEvent,
+	workflowEventKindsForComponent,
+	workflowEventsForComponent,
+} from "./page-workflow-events";
 
 type AssetAccept = NonNullable<AssetPickerProps["accept"]>;
 
@@ -877,6 +892,7 @@ interface MicroWidgetEditorProps {
  */
 function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
 	const { t } = useTranslation("flow");
+	const { actionContext } = useBuilder();
 	const micro = component.component as unknown as MicroWidgetInstanceComponent;
 	const contract = (micro.contract ?? null) as WidgetContract | null;
 	const props = micro.props ?? {};
@@ -921,6 +937,11 @@ function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
 						{ widgetId: micro.widgetId },
 					)}
 				</p>
+				<WidgetConsentStatus
+					appId={actionContext?.appId}
+					packageId={micro.packageId}
+					widgetId={micro.widgetId}
+				/>
 			</div>
 
 			<div className={INSPECTOR_FIELD_CLASS}>
@@ -5544,11 +5565,13 @@ function HandlerStatus({
 
 interface OrderedActionsEditorProps {
 	actions: ActionValue[];
+	eventName?: string;
 	onChange: (actions: ActionValue[]) => void;
 }
 
 function OrderedActionsEditor({
 	actions,
+	eventName,
 	onChange,
 }: OrderedActionsEditorProps) {
 	const { t } = useTranslation("flow");
@@ -5640,6 +5663,7 @@ function OrderedActionsEditor({
 					</div>
 					<ActionValueEditor
 						action={action}
+						eventName={eventName}
 						onChange={(nextAction) => updateAction(index, nextAction)}
 					/>
 				</div>
@@ -5660,13 +5684,25 @@ function OrderedActionsEditor({
 
 function ActionValueEditor({
 	action,
+	eventName,
 	onChange,
 }: {
 	action: ActionValue;
+	eventName?: string;
 	onChange: (action: ActionValue | null) => void;
 }) {
 	const { t } = useTranslation("flow");
-	const { actionContext } = useBuilder();
+	const { actionContext, selection, getComponent } = useBuilder();
+	const selectedId =
+		selection.componentIds.length === 1 ? selection.componentIds[0] : undefined;
+	const selectedType = selectedId
+		? getComponent(selectedId)?.component.type
+		: undefined;
+	const workflowEvents = workflowEventsForComponent(
+		actionContext?.workflowEvents,
+		selectedType,
+	);
+	const isWidgetInstance = isWidgetInstanceType(selectedType);
 	const currentType = action.name as ActionType;
 	const context = action.context ?? {};
 	const widgetActions = actionContext?.widgetActions;
@@ -5676,6 +5712,16 @@ function ActionValueEditor({
 		"external_link",
 		"workflow_event",
 	];
+	const selectWorkflowEvent = (nodeId: string) =>
+		onChange({
+			name: "workflow_event",
+			context: {
+				...context,
+				nodeId,
+				appId: actionContext?.appId,
+				boardId: actionContext?.boardId,
+			},
+		});
 
 	return (
 		<div className="space-y-3">
@@ -5850,46 +5896,159 @@ function ActionValueEditor({
 					<Label className="text-xs text-muted-foreground">
 						{t("workflowEvent", "Workflow Event")}
 					</Label>
-					<Select
-						value={(context.nodeId as string) ?? ""}
-						onValueChange={(nodeId) =>
-							onChange({
-								name: currentType,
-								context: {
-									...context,
-									nodeId,
-									appId: actionContext?.appId,
-									boardId: actionContext?.boardId,
-								},
-							})
-						}
-					>
-						<SelectTrigger className="h-8 text-sm">
-							<SelectValue placeholder={t("selectEvent", "Select event")} />
-						</SelectTrigger>
-						<SelectContent>
-							{actionContext?.workflowEvents?.length ? (
-								actionContext.workflowEvents.map((workflowEvent) => (
-									<SelectItem
-										key={workflowEvent.nodeId}
-										value={workflowEvent.nodeId}
-									>
-										{workflowEvent.name}
-									</SelectItem>
-								))
-							) : (
-								<div className="p-2 text-center text-sm text-muted-foreground">
-									{t(
-										"noWorkflowEventsAvailable",
-										"No workflow events available",
-									)}
-								</div>
+					<div className="flex items-center gap-1">
+						<Select
+							value={(context.nodeId as string) ?? ""}
+							onValueChange={selectWorkflowEvent}
+							onOpenChange={(open) => {
+								if (open) actionContext?.refreshWorkflowEvents?.();
+							}}
+						>
+							<SelectTrigger className="h-8 min-w-0 flex-1 text-sm">
+								<SelectValue placeholder={t("selectEvent", "Select event")} />
+							</SelectTrigger>
+							<SelectContent>
+								{workflowEvents.length ? (
+									workflowEvents.map((workflowEvent) => (
+										<SelectItem
+											key={workflowEvent.nodeId}
+											value={workflowEvent.nodeId}
+										>
+											{workflowEvent.name}
+											{workflowEvent.kind === "widget_action" && (
+												<span className="ml-2 text-xs text-muted-foreground">
+													{t("widgetActionEvent", "Widget Action Event")}
+												</span>
+											)}
+										</SelectItem>
+									))
+								) : (
+									<div className="p-2 text-center text-sm text-muted-foreground">
+										{t(
+											"noWorkflowEventsAvailable",
+											"No workflow events available",
+										)}
+									</div>
+								)}
+							</SelectContent>
+						</Select>
+						<CreateWorkflowEventButton
+							eventName={eventName}
+							componentId={selectedId}
+							componentType={selectedType}
+							onCreated={selectWorkflowEvent}
+						/>
+					</div>
+					{isWidgetInstance && (
+						<p className="text-xs text-muted-foreground">
+							{t(
+								"bindPageWidgetActionEvent",
+								"Choose a Widget Action Event node to receive this event's payload and widget instance ID. Add the node to the linked flow if it is missing here; no Instantiate Widget node is needed.",
 							)}
-						</SelectContent>
-					</Select>
+						</p>
+					)}
 				</div>
 			)}
 		</div>
+	);
+}
+
+function CreateWorkflowEventButton({
+	eventName,
+	componentId,
+	componentType,
+	onCreated,
+}: {
+	eventName?: string;
+	componentId?: string;
+	componentType?: string;
+	onCreated: (nodeId: string) => void;
+}) {
+	const { t } = useTranslation("flow");
+	const { actionContext } = useBuilder();
+	const [creating, setCreating] = useState(false);
+	// The create round trip outlives the render that started it: bind the result through the
+	// handlers of the latest render, and not at all once this action row is gone.
+	const onCreatedRef = useRef(onCreated);
+	onCreatedRef.current = onCreated;
+	const mountedRef = useRef(true);
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
+	const createWorkflowEvent = actionContext?.createWorkflowEvent;
+	if (!createWorkflowEvent) return null;
+
+	const kinds = workflowEventKindsForComponent(componentType);
+	const label = t("createEventInFlow", "Create event in flow");
+	const kindLabels: Record<WorkflowEventKind, string> = {
+		widget_action: t("widgetActionEvent", "Widget Action Event"),
+		simple: t("simpleEvent", "Simple Event"),
+	};
+
+	const create = async (kind: WorkflowEventKind) => {
+		setCreating(true);
+		try {
+			const created = await createWorkflowEvent({
+				name: nameNewWorkflowEvent(
+					{
+						eventName,
+						componentId,
+						fallback: t("common:newEvent", "New Event"),
+					},
+					actionContext?.workflowEvents,
+				),
+				kind,
+			});
+			if (mountedRef.current) onCreatedRef.current(created.nodeId);
+		} catch (error) {
+			toast.error(t("couldNotCreateEvent", "Could not create the event"), {
+				description: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			setCreating(false);
+		}
+	};
+
+	const withTooltip = (trigger: ReactNode) => (
+		<Tooltip>
+			<TooltipTrigger asChild>{trigger}</TooltipTrigger>
+			<TooltipContent>{label}</TooltipContent>
+		</Tooltip>
+	);
+	const button = (
+		<Button
+			type="button"
+			variant="outline"
+			size="icon"
+			className="h-8 w-8 shrink-0"
+			disabled={creating}
+			aria-label={label}
+			onClick={kinds.length === 1 ? () => void create(kinds[0]) : undefined}
+		>
+			{creating ? (
+				<Loader2 className="h-3.5 w-3.5 animate-spin" />
+			) : (
+				<Plus className="h-3.5 w-3.5" />
+			)}
+		</Button>
+	);
+
+	if (kinds.length === 1) return withTooltip(button);
+
+	return (
+		<DropdownMenu>
+			{withTooltip(<DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>)}
+			<DropdownMenuContent align="end">
+				{kinds.map((kind) => (
+					<DropdownMenuItem key={kind} onSelect={() => void create(kind)}>
+						{kindLabels[kind]}
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
@@ -5957,7 +6116,15 @@ function NamedEventHandlerEditor({
 				)}
 				{exact ? (
 					<>
-						<OrderedActionsEditor actions={actions} onChange={onSet} />
+						<OrderedActionsEditor
+							actions={actions}
+							eventName={
+								definition.id === WILDCARD_EVENT
+									? undefined
+									: definition.label || definition.id
+							}
+							onChange={onSet}
+						/>
 						<Button
 							type="button"
 							variant="ghost"
@@ -6096,6 +6263,7 @@ function LegacyDefaultEditor({
 
 function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 	const { t } = useTranslation("flow");
+	const { getWidgetRef } = useBuilder();
 	const componentData = component.component as ComponentActionData;
 	const legacyActions = componentData.actions ?? [];
 	const actionBindings = componentData.actionBindings ?? {};
@@ -6105,8 +6273,11 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 	const legacyAction = legacyActions[0];
 
 	const definitions = useMemo(() => {
-		const declared = getComponentEventDefinitions(
+		const declared = getPageComponentEvents(
 			component.component as A2UIComponent,
+			component.component.type === "widgetInstance"
+				? getWidgetRef(component.component.instanceId)
+				: undefined,
 		);
 		const declaredIds = new Set(declared.map((definition) => definition.id));
 		const savedEventIds = new Set([
@@ -6144,7 +6315,7 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			});
 		}
 		return definitions;
-	}, [actionBindings, component.component, handlers]);
+	}, [actionBindings, component.component, handlers, getWidgetRef, t]);
 
 	const updateHandler = (eventName: string, actions: ActionValue[] | null) => {
 		const next = { ...handlers };

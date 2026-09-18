@@ -1,22 +1,50 @@
-// Mirror of the source grammar in packages/wasm/schema/src/widget_policy.rs.
-// Both implementations are driven by
-// packages/wasm/schema/tests/fixtures/widget_csp.json.
+// Mirror of the source grammar, limits and input path grammar in
+// packages/wasm/schema/src/widget_policy.rs. Both implementations are driven
+// by packages/wasm/schema/tests/fixtures/widget_csp.json. No local runtime
+// imports: tests load this module under Node as well.
 
 import { domainToASCII } from "node:url";
-import type { WidgetCsp } from "@flow-like/widget-sdk";
+import type {
+	WidgetCsp,
+	WidgetCspDirective,
+	WidgetCspPurpose,
+} from "@flow-like/widget-sdk";
 
 export const MAX_WIDGET_CSP_SOURCES = 16;
+export const MAX_WIDGET_CSP_SOURCE_BYTES = 1536;
+export const MAX_WIDGET_CSP_PURPOSES = 8;
+export const MAX_WIDGET_NETWORK_INPUTS = 8;
+export const MAX_WIDGET_INPUT_PATH_SEGMENTS = 6;
+export const MAX_WIDGET_TEMPLATE_SUBDOMAINS = 16;
 
-/** Contract keys in the order serde serializes them */
+/** Widget inputs the host injects itself; network inputs never read them. */
+export const HOST_RESERVED_INPUT_KEYS: readonly string[] = [
+	"publicMediaGrants",
+];
+
+/** Contract keys in the order serde serializes them (`CspDirective::ALL`) */
 export const CSP_DIRECTIVES = [
 	"connectSrc",
 	"imgSrc",
 	"fontSrc",
 	"mediaSrc",
 	"styleSrc",
+] as const satisfies readonly WidgetCspDirective[];
+
+export type CspDirective = WidgetCspDirective;
+
+export const CSP_PURPOSE_KEYS = [
+	"reason",
+	...CSP_DIRECTIVES,
+	"inputs",
 ] as const;
 
-export type CspDirective = (typeof CSP_DIRECTIVES)[number];
+export const CSP_NETWORK_INPUT_KEYS = [
+	"path",
+	"directives",
+	"template",
+] as const;
+export const CSP_TEMPLATE_KEYS = ["subdomains", "subdomainsInput"] as const;
 
 export const CSP_ALLOWED_SCHEMES: Readonly<
 	Record<CspDirective, readonly string[]>
@@ -50,7 +78,7 @@ export const CSP_SOURCE_REJECTION_MESSAGES: Readonly<
 > = {
 	empty: "source is empty",
 	"non-ascii": "non-ASCII characters are not allowed (use punycode)",
-	wildcard: "wildcards are not allowed",
+	wildcard: 'wildcards are only allowed as a leading "*." label of the host',
 	keyword: "keywords, nonces and hashes are not allowed",
 	"forbidden-character": "contains a forbidden character",
 	uppercase: "uppercase characters are not allowed",
@@ -77,10 +105,18 @@ const RESERVED_NAME_SUFFIXES = [
 	"example",
 	"invalid",
 	"onion",
+	"nip.io",
+	"sslip.io",
+	"traefik.me",
+	"localtest.me",
+	"lvh.me",
+	"localhost.direct",
 ];
 
-const SOURCE_CHARSET = /^[a-z0-9.:/-]+$/;
+const SOURCE_CHARSET = /^[a-z0-9.:/*-]+$/;
+const WILDCARD_FORM = /^[a-z]+:\/\/\*\.[^*]+$/;
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const MEMBER_KEY = /^[A-Za-z_][A-Za-z0-9_]*/;
 
 export function isCspDirective(key: string): key is CspDirective {
 	return (CSP_DIRECTIVES as readonly string[]).includes(key);
@@ -105,8 +141,10 @@ function hasForbiddenDelimiter(value: string): boolean {
 }
 
 /**
- * Checks one declared source against the grammar and returns the first
- * failing check, in the same order as `validate_csp_source` in Rust.
+ * Checks one declared source against the grammar
+ * `scheme "://" [ "*." ] host` and returns the first failing check, in the
+ * same order as `validate_csp_source` in Rust. Public suffix checks on
+ * wildcard bases live in `validateWildcardBases`.
  */
 export function validateCspSource(
 	directive: CspDirective,
@@ -114,7 +152,7 @@ export function validateCspSource(
 ): CspSourceRejection | null {
 	if (source.length === 0) return "empty";
 	if (hasNonAscii(source)) return "non-ascii";
-	if (source.includes("*")) return "wildcard";
+	if (source.includes("*") && !WILDCARD_FORM.test(source)) return "wildcard";
 	if (source.startsWith("'")) return "keyword";
 	if (hasForbiddenDelimiter(source)) return "forbidden-character";
 	if (/[A-Z]/.test(source)) return "uppercase";
@@ -130,11 +168,13 @@ export function validateCspSource(
 	const rest = source.slice(separator + 3);
 	const hostEnd = rest.search(/[:/]/);
 	if (hostEnd !== -1) return rest[hostEnd] === ":" ? "port" : "path";
-	return validateHost(rest);
+	return rest.startsWith("*.")
+		? validateHost(rest.slice(2), MAX_HOST_LEN - 2)
+		: validateHost(rest, MAX_HOST_LEN);
 }
 
-function validateHost(host: string): CspSourceRejection | null {
-	if (host.length === 0 || host.length > MAX_HOST_LEN) return "invalid-host";
+function validateHost(host: string, maxLen: number): CspSourceRejection | null {
+	if (host.length === 0 || host.length > maxLen) return "invalid-host";
 	const labels = host.split(".");
 	if (labels.some((label) => label.length === 0)) return "invalid-host";
 	const tld = labels[labels.length - 1] ?? "";
@@ -160,6 +200,10 @@ function hostMatches(host: string, reserved: string): boolean {
 	);
 }
 
+export function isDnsLabel(label: string): boolean {
+	return DNS_LABEL.test(label);
+}
+
 const ENCODER = new TextEncoder();
 
 /** UTF-8 byte order, which is how Rust orders `String`s. */
@@ -175,6 +219,15 @@ export function compareCspSources(a: string, b: string): number {
 	return left.length - right.length;
 }
 
+export function isStrictlyAscending(
+	items: readonly string[],
+	compare: (a: string, b: string) => number = compareCspSources,
+): boolean {
+	return items.every(
+		(item, index) => index === 0 || compare(items[index - 1] ?? "", item) < 0,
+	);
+}
+
 /** An ASCII character a DNS host cannot contain; non-ASCII is left to IDNA */
 const FORBIDDEN_HOST_ASCII = /[^a-z0-9.-￿-]/;
 
@@ -188,14 +241,14 @@ const FORBIDDEN_HOST_ASCII = /[^a-z0-9.-￿-]/;
 function punycodeHost(host: string): string | null {
 	if (FORBIDDEN_HOST_ASCII.test(host)) return null;
 	const ascii = domainToASCII(host);
-	const rejection = validateHost(ascii);
+	const rejection = validateHost(ascii, MAX_HOST_LEN);
 	return rejection === null || rejection === "reserved-name" ? ascii : null;
 }
 
 /**
  * Authoring normalization: lowercases the source and converts an
- * internationalized host to punycode. Anything the grammar rejects is left
- * for `validateCspSource` to report.
+ * internationalized host (or wildcard base) to punycode. Anything the grammar
+ * rejects is left for `validateCspSource` to report.
  */
 export function normalizeCspSource(source: string): string {
 	const lowered = source.toLowerCase();
@@ -204,31 +257,18 @@ export function normalizeCspSource(source: string): string {
 	const prefix = lowered.slice(0, separator + 3);
 	const rest = lowered.slice(separator + 3);
 	const hostEnd = rest.search(/[:/?#]/);
-	const host = hostEnd === -1 ? rest : rest.slice(0, hostEnd);
+	const authority = hostEnd === -1 ? rest : rest.slice(0, hostEnd);
+	const wildcard = authority.startsWith("*.") ? "*." : "";
+	const host = authority.slice(wildcard.length);
 	if (!hasNonAscii(host)) return lowered;
 	const ascii = punycodeHost(host);
 	if (ascii === null) return lowered;
-	return `${prefix}${ascii}${hostEnd === -1 ? "" : rest.slice(hostEnd)}`;
+	return `${prefix}${wildcard}${ascii}${hostEnd === -1 ? "" : rest.slice(hostEnd)}`;
 }
 
 /** Sorted ascending in UTF-8 byte order without duplicates. */
 export function canonicalCspSources(sources: readonly string[]): string[] {
 	return [...new Set(sources)].sort(compareCspSources);
-}
-
-/**
- * Normalizes every source, then sorts and deduplicates each directive and
- * drops empty directives. Returns `{}` when nothing remains.
- */
-export function normalizeCspDeclaration(csp: WidgetCsp): WidgetCsp {
-	const normalized: WidgetCsp = {};
-	for (const directive of CSP_DIRECTIVES) {
-		const sources = canonicalCspSources(
-			(csp[directive] ?? []).map(normalizeCspSource),
-		);
-		if (sources.length > 0) normalized[directive] = sources;
-	}
-	return normalized;
 }
 
 export function isCspEmpty(csp: WidgetCsp): boolean {
@@ -244,59 +284,78 @@ export function cspSourceCount(csp: WidgetCsp): number {
 	);
 }
 
-/**
- * Mirrors `WidgetCsp::validate`: shape (what serde would refuse to parse),
- * grammar, canonical order and the source cap. Accepts untyped JSON.
- */
-export function validateCspDeclaration(csp: unknown): string[] {
-	if (typeof csp !== "object" || csp === null || Array.isArray(csp)) {
-		return ["csp must be an object"];
-	}
-	const declaration = csp as Record<string, unknown>;
-	const errors: string[] = [];
-	for (const key of Object.keys(declaration)) {
-		if (!isCspDirective(key)) {
-			errors.push(
-				`csp declares unknown directive "${key}" (allowed: ${CSP_DIRECTIVES.join(", ")})`,
-			);
-		}
-	}
-	let count = 0;
+/** Σ(len + 1) over every entry: the bytes the sources add to a header. */
+export function cspSourceBytes(csp: WidgetCsp): number {
+	return CSP_DIRECTIVES.reduce(
+		(bytes, directive) =>
+			bytes +
+			(csp[directive] ?? []).reduce(
+				(sum, source) => sum + ENCODER.encode(source).length + 1,
+				0,
+			),
+		0,
+	);
+}
+
+/** Per-directive union of every purpose's sources (`flatten_csp_purposes`). */
+export function flattenCspPurposes(
+	purposes: readonly WidgetCspPurpose[],
+): WidgetCsp {
+	const csp: WidgetCsp = {};
 	for (const directive of CSP_DIRECTIVES) {
-		const value = declaration[directive];
-		if (value === undefined) continue;
-		if (
-			!Array.isArray(value) ||
-			!value.every((source) => typeof source === "string")
-		) {
-			errors.push(`csp ${directive} must be an array of strings`);
-			continue;
-		}
-		const sources = value as string[];
-		for (const source of sources) {
-			const rejection = validateCspSource(directive, source);
-			if (rejection !== null) {
-				errors.push(
-					`Invalid csp source "${source}" in ${directive}: ${CSP_SOURCE_REJECTION_MESSAGES[rejection]}`,
-				);
-			}
-		}
-		if (
-			sources.some(
-				(source, index) =>
-					index > 0 && compareCspSources(sources[index - 1] ?? "", source) >= 0,
-			)
-		) {
-			errors.push(
-				`csp ${directive} must be sorted ascending without duplicates`,
-			);
-		}
-		count += sources.length;
-	}
-	if (count > MAX_WIDGET_CSP_SOURCES) {
-		errors.push(
-			`csp declares ${count} sources; at most ${MAX_WIDGET_CSP_SOURCES} are allowed`,
+		const sources = canonicalCspSources(
+			purposes.flatMap((purpose) => purpose[directive] ?? []),
 		);
+		if (sources.length > 0) csp[directive] = sources;
 	}
-	return errors;
+	return csp;
+}
+
+export type WidgetInputPathSegment =
+	| { kind: "key"; key: string }
+	| { kind: "items" }
+	| { kind: "values" };
+
+export interface WidgetInputPath {
+	root: string;
+	segments: WidgetInputPathSegment[];
+}
+
+/** Parses `root *( "." key / "[]" / ".*" )` with `key = [A-Za-z_][A-Za-z0-9_]*`. */
+export function parseWidgetInputPath(path: string): WidgetInputPath | null {
+	const root = MEMBER_KEY.exec(path)?.[0];
+	if (root === undefined) return null;
+	const segments: WidgetInputPathSegment[] = [];
+	let rest = path.slice(root.length);
+	while (rest.length > 0) {
+		if (rest.startsWith("[]")) {
+			segments.push({ kind: "items" });
+			rest = rest.slice(2);
+		} else if (rest.startsWith(".*")) {
+			segments.push({ kind: "values" });
+			rest = rest.slice(2);
+		} else {
+			const key = rest.startsWith(".")
+				? MEMBER_KEY.exec(rest.slice(1))?.[0]
+				: undefined;
+			if (key === undefined) return null;
+			segments.push({ kind: "key", key });
+			rest = rest.slice(1 + key.length);
+		}
+	}
+	return { root, segments };
+}
+
+export function isValidWidgetInputPath(path: string): boolean {
+	const parsed = parseWidgetInputPath(path);
+	return (
+		parsed !== null && parsed.segments.length < MAX_WIDGET_INPUT_PATH_SEGMENTS
+	);
+}
+
+export function compareCspDirectives(a: string, b: string): number {
+	return (
+		CSP_DIRECTIVES.indexOf(a as CspDirective) -
+		CSP_DIRECTIVES.indexOf(b as CspDirective)
+	);
 }

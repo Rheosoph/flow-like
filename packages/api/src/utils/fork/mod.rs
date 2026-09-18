@@ -31,7 +31,7 @@ pub use policy::{ForkDatabaseMode, ForkPolicy};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -331,16 +331,16 @@ pub async fn compute_offline_fork_bundle(
     )
     .await
     .map_err(|e| ApiError::internal_error(anyhow!("read source manifest: {e}")))?;
-    overlay_app_row_into_manifest(state, src_app_id, &mut manifest_proto).await?;
+    let src_app_row = app::Entity::find_by_id(src_app_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    overlay_app_row_into_manifest(&src_app_row, &mut manifest_proto);
 
     // Owner-defined policy, loaded server-side. The desktop is told what
     // it may pull, but the credential it receives still covers the whole
     // source content prefix — the forker already holds `ReadFiles` on the
     // source, so narrowing it would protect nothing.
-    let src_app_row = app::Entity::find_by_id(src_app_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
     let policy = ForkPolicy::from_app_row(&src_app_row);
     let mut warnings: Vec<String> = Vec::new();
 
@@ -351,32 +351,28 @@ pub async fn compute_offline_fork_bundle(
     // IDs from BOTH sources so a row that exists only in the DB
     // still gets a fresh translated id and doesn't ship with the
     // source's id.
-    let event_id_set: Vec<String> = event::Entity::find()
-        .filter(event::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    let page_rows: Vec<page::Model> = page::Entity::find()
-        .filter(page::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
+    let (event_rows, page_rows, widget_id_set, template_id_set) = flow_like_types::tokio::try_join!(
+        event::Entity::find()
+            .filter(event::Column::AppId.eq(src_app_id))
+            .all(&state.db),
+        page::Entity::find()
+            .filter(page::Column::AppId.eq(src_app_id))
+            .all(&state.db),
+        widget::Entity::find()
+            .filter(widget::Column::AppId.eq(src_app_id))
+            .select_only()
+            .column(widget::Column::Id)
+            .into_tuple::<String>()
+            .all(&state.db),
+        template::Entity::find()
+            .filter(template::Column::AppId.eq(src_app_id))
+            .select_only()
+            .column(template::Column::Id)
+            .into_tuple::<String>()
+            .all(&state.db),
+    )?;
+    let event_id_set: Vec<String> = event_rows.iter().map(|r| r.id.clone()).collect();
     let page_id_set: Vec<String> = page_rows.iter().map(|r| r.id.clone()).collect();
-    let widget_id_set: Vec<String> = widget::Entity::find()
-        .filter(widget::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    let template_id_set: Vec<String> = template::Entity::find()
-        .filter(template::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
 
     let mut maps = ForkIdMap {
         source_app_id: src_app_id.to_string(),
@@ -582,10 +578,6 @@ pub async fn compute_offline_fork_bundle(
     // stale. Listing storage would ship that drift to the desktop.
     let mut pointed_board_versions: std::collections::HashSet<(String, (u32, u32, u32))> =
         std::collections::HashSet::new();
-    let event_rows = event::Entity::find()
-        .filter(event::Column::AppId.eq(src_app_id))
-        .all(&state.db)
-        .await?;
     for row in event_rows {
         let src_event_id = row.id.clone();
         let core_event = match db_model_to_event(row) {
@@ -1038,16 +1030,7 @@ pub async fn compute_offline_fork_bundle(
 /// file's fields can be arbitrarily stale. Pulling the DB row's
 /// values forward gives the bundle current state without depending
 /// on a recent full-app save.
-async fn overlay_app_row_into_manifest(
-    state: &AppState,
-    src_app_id: &str,
-    manifest: &mut proto::App,
-) -> Result<(), ApiError> {
-    let row = match app::Entity::find_by_id(src_app_id).one(&state.db).await? {
-        Some(r) => r,
-        None => return Ok(()), // No DB row at all → nothing to overlay.
-    };
-
+fn overlay_app_row_into_manifest(row: &app::Model, manifest: &mut proto::App) {
     manifest.status = match row.status {
         Status::Active => proto::AppStatus::Active as i32,
         Status::Inactive => proto::AppStatus::Inactive as i32,
@@ -1074,7 +1057,7 @@ async fn overlay_app_row_into_manifest(
             proto::AppExecutionMode::Remote as i32
         }
     });
-    if let Some(bits) = row.bits {
+    if let Some(bits) = row.bits.clone() {
         manifest.bits = bits.into();
     }
     manifest.allow_forking = Some(row.allow_forking);
@@ -1090,7 +1073,6 @@ async fn overlay_app_row_into_manifest(
     if let Some(cat) = row.secondary_category.as_ref() {
         manifest.secondary_category = Some(category_to_proto(cat));
     }
-    Ok(())
 }
 
 fn category_to_proto(c: &crate::entity::sea_orm_active_enums::Category) -> i32 {
@@ -1552,6 +1534,8 @@ impl ForkContext {
         fork_job: &crate::entity::fork_job::Model,
         spec: &job::ForkJobSpec,
     ) -> Result<Self, ApiError> {
+        use flow_like_types::tokio::try_join;
+
         let src_app_id = fork_job.source_app_id.clone();
         let credentials = state.master_credentials().await?;
         let src_meta_store = credentials.to_store(true).await?.as_generic();
@@ -1559,41 +1543,49 @@ impl ForkContext {
         let dst_meta_store = credentials.to_store(true).await?.as_generic();
         let dst_content_store = credentials.to_store(false).await?.as_generic();
 
-        let src_app_row = app::Entity::find_by_id(src_app_id.as_str())
-            .one(&state.db)
-            .await?
-            .ok_or_else(|| {
-                ApiError::bad_request(format!("fork source app {src_app_id} no longer exists"))
-            })?;
-
-        let src_widget_rows = widget::Entity::find()
-            .filter(widget::Column::AppId.eq(src_app_id.as_str()))
-            .all(&state.db)
-            .await?;
-        let src_template_rows = template::Entity::find()
-            .filter(template::Column::AppId.eq(src_app_id.as_str()))
-            .all(&state.db)
-            .await?;
+        // Independent reads run together, at most four at a time so one fork
+        // pass never drains the connection pool.
+        let db = &state.db;
+        let (src_app_row, src_widget_rows, src_template_rows, src_meta_rows) = try_join!(
+            app::Entity::find_by_id(src_app_id.as_str()).one(db),
+            widget::Entity::find()
+                .filter(widget::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+            template::Entity::find()
+                .filter(template::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+            meta::Entity::find()
+                .filter(meta::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+        )?;
+        let src_app_row = src_app_row.ok_or_else(|| {
+            ApiError::bad_request(format!("fork source app {src_app_id} no longer exists"))
+        })?;
+        let (src_event_rows, src_page_rows, src_package_rows, src_role_rows) = try_join!(
+            event::Entity::find()
+                .filter(event::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+            page::Entity::find()
+                .filter(page::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+            app_package::Entity::find()
+                .filter(app_package::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+            role::Entity::find()
+                .filter(role::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+        )?;
         let src_widget_id_list: Vec<String> =
             src_widget_rows.iter().map(|r| r.id.clone()).collect();
-        let src_widget_meta_rows = if src_widget_id_list.is_empty() {
-            Vec::new()
-        } else {
-            meta::Entity::find()
-                .filter(meta::Column::WidgetId.is_in(src_widget_id_list))
-                .all(&state.db)
-                .await?
-        };
         let src_template_id_list: Vec<String> =
             src_template_rows.iter().map(|r| r.id.clone()).collect();
-        let src_template_meta_rows = if src_template_id_list.is_empty() {
-            Vec::new()
-        } else {
-            meta::Entity::find()
-                .filter(meta::Column::TemplateId.is_in(src_template_id_list))
-                .all(&state.db)
-                .await?
-        };
+        let (src_sink_rows, src_widget_meta_rows, src_template_meta_rows) = try_join!(
+            event_sink::Entity::find()
+                .filter(event_sink::Column::AppId.eq(src_app_id.as_str()))
+                .all(db),
+            meta_rows_referencing(db, meta::Column::WidgetId, src_widget_id_list),
+            meta_rows_referencing(db, meta::Column::TemplateId, src_template_id_list),
+        )?;
 
         Ok(Self {
             seed: fork_job.id.clone(),
@@ -1606,30 +1598,12 @@ impl ForkContext {
             src_prefix: Path::from("apps").join(src_app_id.clone()),
             dst_prefix: Path::from("apps").join(fork_job.dest_app_id.clone()),
             policy: spec.policy.clone(),
-            src_meta_rows: meta::Entity::find()
-                .filter(meta::Column::AppId.eq(src_app_id.as_str()))
-                .all(&state.db)
-                .await?,
-            src_event_rows: event::Entity::find()
-                .filter(event::Column::AppId.eq(src_app_id.as_str()))
-                .all(&state.db)
-                .await?,
-            src_page_rows: page::Entity::find()
-                .filter(page::Column::AppId.eq(src_app_id.as_str()))
-                .all(&state.db)
-                .await?,
-            src_package_rows: app_package::Entity::find()
-                .filter(app_package::Column::AppId.eq(src_app_id.as_str()))
-                .all(&state.db)
-                .await?,
-            src_role_rows: role::Entity::find()
-                .filter(role::Column::AppId.eq(src_app_id.as_str()))
-                .all(&state.db)
-                .await?,
-            src_sink_rows: event_sink::Entity::find()
-                .filter(event_sink::Column::AppId.eq(src_app_id.as_str()))
-                .all(&state.db)
-                .await?,
+            src_meta_rows,
+            src_event_rows,
+            src_page_rows,
+            src_package_rows,
+            src_role_rows,
+            src_sink_rows,
             src_app_row,
             src_widget_rows,
             src_template_rows,
@@ -1654,6 +1628,17 @@ impl ForkContext {
             .join("apps")
             .join(self.dest_app_id.clone())
     }
+}
+
+async fn meta_rows_referencing(
+    db: &sea_orm::DatabaseConnection,
+    column: meta::Column,
+    ids: Vec<String>,
+) -> Result<Vec<meta::Model>, sea_orm::DbErr> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    meta::Entity::find().filter(column.is_in(ids)).all(db).await
 }
 
 /// What the meta stage decided: the id map, the events as they will be
@@ -1725,7 +1710,7 @@ pub(crate) async fn materialize_meta(
         from_compressed(src_meta_store.clone(), manifest_path.clone())
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("read source manifest: {e}")))?;
-    overlay_app_row_into_manifest(state, src_app_id, &mut src_app_proto).await?;
+    overlay_app_row_into_manifest(&ctx.src_app_row, &mut src_app_proto);
 
     let mut skipped: Vec<SkippedItem> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();

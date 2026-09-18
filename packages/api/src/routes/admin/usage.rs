@@ -16,6 +16,7 @@ use crate::{
         AppUsageLimits, MONTHLY, get_app_usage_limits, get_app_usage_limits_for_scope,
         normalize_period, period_start, set_app_usage_limits, set_app_usage_limits_for_scope,
     },
+    utils::stats_period::StatsPeriod,
 };
 use axum::{
     Extension, Json,
@@ -23,7 +24,9 @@ use axum::{
 };
 use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect, Select, Set,
+    sea_query::{Alias, Expr, Func, SimpleExpr},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -63,6 +66,23 @@ struct UsageAggregate {
 }
 
 impl UsageAggregate {
+    fn add_llm(&mut self, row: &PeriodAiUsageRow) {
+        self.llm_price += row.price;
+        self.llm_tokens += row.tokens;
+        self.llm_invocations += to_count(row.invocations);
+    }
+
+    fn add_embedding(&mut self, row: &PeriodAiUsageRow) {
+        self.embedding_price += row.price;
+        self.embedding_tokens += row.tokens;
+        self.embedding_invocations += to_count(row.invocations);
+    }
+
+    fn add_executions(&mut self, row: &PeriodExecutionUsageRow) {
+        self.executions += to_count(row.executions);
+        self.execution_microseconds += row.microseconds;
+    }
+
     fn total_price(&self) -> i64 {
         self.llm_price + self.embedding_price
     }
@@ -108,12 +128,11 @@ impl PowerUserAggregate {
         self.ai_invocations + self.executions
     }
 
-    fn touch(&mut self, created_at: DateTime<FixedOffset>) {
-        self.active_days
-            .insert(created_at.date_naive().format("%Y-%m-%d").to_string());
+    fn touch(&mut self, day: &str, last_seen: DateTime<FixedOffset>) {
+        self.active_days.insert(day.to_string());
         self.last_seen = Some(match self.last_seen {
-            Some(last_seen) => last_seen.max(created_at),
-            None => created_at,
+            Some(current) => current.max(last_seen),
+            None => last_seen,
         });
     }
 }
@@ -418,6 +437,362 @@ pub struct AdminPaginated<T> {
     pub page_size: u64,
 }
 
+#[derive(Debug, FromQueryResult)]
+struct PeriodAiUsageRow {
+    bucket: String,
+    user_id: Option<String>,
+    technical_user_id: Option<String>,
+    app_id: Option<String>,
+    model_id: String,
+    provider: Option<String>,
+    endpoint: Option<String>,
+    invocations: i64,
+    price: i64,
+    tokens: i64,
+    latency_sum: Option<f64>,
+    latency_count: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct PeriodExecutionUsageRow {
+    bucket: String,
+    user_id: Option<String>,
+    technical_user_id: Option<String>,
+    app_id: Option<String>,
+    executions: i64,
+    microseconds: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct NewUserBucketRow {
+    bucket: String,
+    new_users: i64,
+}
+
+#[derive(Debug, Default, FromQueryResult)]
+struct UserCountsRow {
+    total_users: i64,
+    new_users_today: i64,
+    new_users_weekly: i64,
+    new_users_monthly: i64,
+}
+
+/// Usage of the last 30 days per UTC day, user and app. `interactions` counts
+/// the whole group, the daily/weekly variants only its rows inside that window.
+#[derive(Debug, FromQueryResult)]
+struct RecentUsageRow {
+    day: String,
+    user_id: Option<String>,
+    app_id: Option<String>,
+    interactions: i64,
+    daily_interactions: i64,
+    weekly_interactions: i64,
+    price: i64,
+    tokens: i64,
+    last_seen: DateTime<FixedOffset>,
+}
+
+#[derive(Clone, Copy)]
+enum ActivityWindow {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl RecentUsageRow {
+    fn interactions_in(&self, window: ActivityWindow) -> u64 {
+        to_count(match window {
+            ActivityWindow::Daily => self.daily_interactions,
+            ActivityWindow::Weekly => self.weekly_interactions,
+            ActivityWindow::Monthly => self.interactions,
+        })
+    }
+}
+
+struct RecentUsage {
+    llm: Vec<RecentUsageRow>,
+    embedding: Vec<RecentUsageRow>,
+    execution: Vec<RecentUsageRow>,
+}
+
+impl RecentUsage {
+    fn ai_rows(&self) -> impl Iterator<Item = &RecentUsageRow> {
+        self.llm.iter().chain(&self.embedding)
+    }
+}
+
+#[derive(Default)]
+struct PeriodUsage {
+    totals: UsageAggregate,
+    users: HashMap<Option<String>, UsageAggregate>,
+    technical_users: HashMap<String, UsageAggregate>,
+    apps: HashMap<Option<String>, UsageAggregate>,
+    models: HashMap<(String, String, Option<String>, Option<String>), ModelAggregate>,
+}
+
+impl PeriodUsage {
+    fn record(
+        &mut self,
+        user_id: &Option<String>,
+        technical_user_id: &Option<String>,
+        app_id: &Option<String>,
+        add: impl Fn(&mut UsageAggregate),
+    ) {
+        add(&mut self.totals);
+        add(self.users.entry(user_id.clone()).or_default());
+        if let Some(technical_user_id) = technical_user_id {
+            add(self
+                .technical_users
+                .entry(technical_user_id.clone())
+                .or_default());
+        }
+        add(self.apps.entry(app_id.clone()).or_default());
+    }
+
+    fn record_model(&mut self, kind: &str, row: &PeriodAiUsageRow) {
+        let model = self
+            .models
+            .entry((
+                kind.to_string(),
+                row.model_id.clone(),
+                row.provider.clone(),
+                row.endpoint.clone(),
+            ))
+            .or_default();
+        model.price += row.price;
+        model.tokens += row.tokens;
+        model.invocations += to_count(row.invocations);
+        model.latency_sum += row.latency_sum.unwrap_or(0.0);
+        model.latency_count += to_count(row.latency_count);
+    }
+}
+
+fn to_count(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
+fn db_error(err: sea_orm::DbErr) -> ApiError {
+    ApiError::internal_error(err.into())
+}
+
+#[derive(Clone, Copy)]
+struct UsageColumns<C> {
+    id: C,
+    created_at: C,
+    user_id: C,
+    technical_user_id: C,
+    app_id: C,
+}
+
+#[derive(Clone, Copy)]
+struct AiUsageColumns<C> {
+    usage: UsageColumns<C>,
+    model_id: C,
+    provider: C,
+    endpoint: C,
+    price: C,
+    latency: C,
+}
+
+const LLM_COLUMNS: AiUsageColumns<llm_usage_tracking::Column> = AiUsageColumns {
+    usage: UsageColumns {
+        id: llm_usage_tracking::Column::Id,
+        created_at: llm_usage_tracking::Column::CreatedAt,
+        user_id: llm_usage_tracking::Column::UserId,
+        technical_user_id: llm_usage_tracking::Column::TechnicalUserId,
+        app_id: llm_usage_tracking::Column::AppId,
+    },
+    model_id: llm_usage_tracking::Column::ModelId,
+    provider: llm_usage_tracking::Column::Provider,
+    endpoint: llm_usage_tracking::Column::Endpoint,
+    price: llm_usage_tracking::Column::Price,
+    latency: llm_usage_tracking::Column::Latency,
+};
+
+const EMBEDDING_COLUMNS: AiUsageColumns<embedding_usage_tracking::Column> = AiUsageColumns {
+    usage: UsageColumns {
+        id: embedding_usage_tracking::Column::Id,
+        created_at: embedding_usage_tracking::Column::CreatedAt,
+        user_id: embedding_usage_tracking::Column::UserId,
+        technical_user_id: embedding_usage_tracking::Column::TechnicalUserId,
+        app_id: embedding_usage_tracking::Column::AppId,
+    },
+    model_id: embedding_usage_tracking::Column::ModelId,
+    provider: embedding_usage_tracking::Column::Provider,
+    endpoint: embedding_usage_tracking::Column::Endpoint,
+    price: embedding_usage_tracking::Column::Price,
+    latency: embedding_usage_tracking::Column::Latency,
+};
+
+const EXECUTION_COLUMNS: UsageColumns<execution_usage_tracking::Column> = UsageColumns {
+    id: execution_usage_tracking::Column::Id,
+    created_at: execution_usage_tracking::Column::CreatedAt,
+    user_id: execution_usage_tracking::Column::UserId,
+    technical_user_id: execution_usage_tracking::Column::TechnicalUserId,
+    app_id: execution_usage_tracking::Column::AppId,
+};
+
+/// `CAST(COALESCE(SUM(<expr>), 0) AS BIGINT)`: `SUM` over a 64 bit column comes
+/// back as NUMERIC/DECIMAL, which does not decode into `i64`.
+fn sum_bigint(expr: SimpleExpr) -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
+    Expr::expr(Func::coalesce([
+        Expr::from(Func::sum(expr)),
+        Expr::val(0i64),
+    ]))
+    .cast_as(Alias::new("BIGINT"))
+}
+
+fn zero_bigint() -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
+    Expr::val(0i64).cast_as(Alias::new("BIGINT"))
+}
+
+fn llm_tokens() -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
+    Expr::col(llm_usage_tracking::Column::TokenIn)
+        .add(Expr::col(llm_usage_tracking::Column::TokenOut))
+}
+
+fn embedding_tokens() -> SimpleExpr {
+    Expr::col(embedding_usage_tracking::Column::TokenCount)
+}
+
+/// `COUNT(CASE WHEN <created_at> >= start THEN <id> END)`.
+fn count_since<C: ColumnTrait>(id: C, created_at: C, start: DateTime<FixedOffset>) -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
+    Expr::expr(Expr::case(
+        ColumnTrait::gte(&created_at, start),
+        Expr::col(id),
+    ))
+    .count()
+}
+
+/// Usage since `started_at`, grouped by trend bucket, user, technical user and
+/// app; callers add their own measures (and any further group keys).
+fn period_usage_select<E: EntityTrait>(
+    columns: UsageColumns<E::Column>,
+    bucket: &SimpleExpr,
+    started_at: DateTime<FixedOffset>,
+) -> Select<E> {
+    E::find()
+        .select_only()
+        .expr_as(bucket.clone(), "bucket")
+        .column_as(columns.user_id, "user_id")
+        .column_as(columns.technical_user_id, "technical_user_id")
+        .column_as(columns.app_id, "app_id")
+        .filter(columns.created_at.gte(started_at))
+        .group_by(bucket.clone())
+        .group_by(columns.user_id)
+        .group_by(columns.technical_user_id)
+        .group_by(columns.app_id)
+}
+
+fn ai_period_select<E: EntityTrait>(
+    columns: AiUsageColumns<E::Column>,
+    tokens: SimpleExpr,
+    bucket: &SimpleExpr,
+    started_at: DateTime<FixedOffset>,
+) -> Select<E> {
+    use sea_orm::sea_query::ExprTrait;
+
+    period_usage_select::<E>(columns.usage, bucket, started_at)
+        .column_as(columns.model_id, "model_id")
+        .column_as(columns.provider, "provider")
+        .column_as(columns.endpoint, "endpoint")
+        .expr_as(Expr::col(columns.usage.id).count(), "invocations")
+        .expr_as(sum_bigint(Expr::col(columns.price)), "price")
+        .expr_as(sum_bigint(tokens), "tokens")
+        .expr_as(Expr::col(columns.latency).sum(), "latency_sum")
+        .expr_as(Expr::col(columns.latency).count(), "latency_count")
+        .group_by(columns.model_id)
+        .group_by(columns.provider)
+        .group_by(columns.endpoint)
+}
+
+fn execution_period_select(
+    bucket: &SimpleExpr,
+    started_at: DateTime<FixedOffset>,
+) -> Select<execution_usage_tracking::Entity> {
+    use sea_orm::sea_query::ExprTrait;
+
+    period_usage_select::<execution_usage_tracking::Entity>(EXECUTION_COLUMNS, bucket, started_at)
+        .expr_as(Expr::col(EXECUTION_COLUMNS.id).count(), "executions")
+        .expr_as(
+            sum_bigint(Expr::col(execution_usage_tracking::Column::Microseconds)),
+            "microseconds",
+        )
+}
+
+fn new_users_select(
+    bucket: &SimpleExpr,
+    started_at: DateTime<FixedOffset>,
+) -> Select<user::Entity> {
+    use sea_orm::sea_query::ExprTrait;
+
+    user::Entity::find()
+        .select_only()
+        .expr_as(bucket.clone(), "bucket")
+        .expr_as(Expr::col(user::Column::Id).count(), "new_users")
+        .filter(user::Column::CreatedAt.gte(started_at))
+        .group_by(bucket.clone())
+}
+
+struct ActivityStarts {
+    daily: DateTime<FixedOffset>,
+    weekly: DateTime<FixedOffset>,
+    monthly: DateTime<FixedOffset>,
+}
+
+fn user_counts_select(starts: &ActivityStarts) -> Select<user::Entity> {
+    use sea_orm::sea_query::ExprTrait;
+
+    let new_users = |start| count_since(user::Column::Id, user::Column::CreatedAt, start);
+    user::Entity::find()
+        .select_only()
+        .expr_as(Expr::col(user::Column::Id).count(), "total_users")
+        .expr_as(new_users(starts.daily), "new_users_today")
+        .expr_as(new_users(starts.weekly), "new_users_weekly")
+        .expr_as(new_users(starts.monthly), "new_users_monthly")
+}
+
+/// Usage of the last 30 days grouped by UTC day, user and app.
+fn recent_usage_select<E: EntityTrait>(
+    columns: UsageColumns<E::Column>,
+    price: SimpleExpr,
+    tokens: SimpleExpr,
+    day: &SimpleExpr,
+    starts: &ActivityStarts,
+) -> Select<E> {
+    use sea_orm::sea_query::ExprTrait;
+
+    E::find()
+        .select_only()
+        .expr_as(day.clone(), "day")
+        .column_as(columns.user_id, "user_id")
+        .column_as(columns.app_id, "app_id")
+        .expr_as(Expr::col(columns.id).count(), "interactions")
+        .expr_as(
+            count_since(columns.id, columns.created_at, starts.daily),
+            "daily_interactions",
+        )
+        .expr_as(
+            count_since(columns.id, columns.created_at, starts.weekly),
+            "weekly_interactions",
+        )
+        .expr_as(price, "price")
+        .expr_as(tokens, "tokens")
+        .expr_as(Expr::col(columns.created_at).max(), "last_seen")
+        .filter(ColumnTrait::gte(&columns.created_at, starts.monthly))
+        .group_by(day.clone())
+        .group_by(columns.user_id)
+        .group_by(columns.app_id)
+}
+
 #[tracing::instrument(name = "GET /admin/usage/overview", skip_all)]
 pub async fn overview(
     State(state): State<AppState>,
@@ -435,197 +810,128 @@ pub async fn overview(
     let started_at =
         period_start(&period).ok_or_else(|| ApiError::bad_request("Invalid period"))?;
     let now = Utc::now().fixed_offset();
-    let daily_start = now - Duration::days(1);
-    let weekly_start = now - Duration::days(7);
-    let monthly_start = now - Duration::days(30);
+    let starts = ActivityStarts {
+        daily: now - Duration::days(1),
+        weekly: now - Duration::days(7),
+        monthly: now - Duration::days(30),
+    };
 
-    let llm_rows = llm_usage_tracking::Entity::find()
-        .filter(llm_usage_tracking::Column::CreatedAt.gte(started_at))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-    let embedding_rows = embedding_usage_tracking::Entity::find()
-        .filter(embedding_usage_tracking::Column::CreatedAt.gte(started_at))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-    let execution_rows = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::CreatedAt.gte(started_at))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-    let new_user_rows = user::Entity::find()
-        .filter(user::Column::CreatedAt.gte(started_at))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+    let backend = state.db.get_database_backend();
+    let monthly_buckets = period == crate::usage_limits::YEARLY;
+    let trend_period = if monthly_buckets {
+        StatsPeriod::Month
+    } else {
+        StatsPeriod::Day
+    };
+    let trend_bucket = trend_period.bucket_expr(backend, "createdAt");
+    let day_bucket = StatsPeriod::Day.bucket_expr(backend, "createdAt");
 
-    let recent_llm_rows = llm_usage_tracking::Entity::find()
-        .filter(llm_usage_tracking::Column::CreatedAt.gte(monthly_start))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-    let recent_embedding_rows = embedding_usage_tracking::Entity::find()
-        .filter(embedding_usage_tracking::Column::CreatedAt.gte(monthly_start))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-    let recent_execution_rows = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::CreatedAt.gte(monthly_start))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+    let (llm_rows, embedding_rows, execution_rows, new_user_rows) = flow_like_types::tokio::join!(
+        ai_period_select::<llm_usage_tracking::Entity>(
+            LLM_COLUMNS,
+            llm_tokens(),
+            &trend_bucket,
+            started_at,
+        )
+        .into_model::<PeriodAiUsageRow>()
+        .all(&state.db),
+        ai_period_select::<embedding_usage_tracking::Entity>(
+            EMBEDDING_COLUMNS,
+            embedding_tokens(),
+            &trend_bucket,
+            started_at,
+        )
+        .into_model::<PeriodAiUsageRow>()
+        .all(&state.db),
+        execution_period_select(&trend_bucket, started_at)
+            .into_model::<PeriodExecutionUsageRow>()
+            .all(&state.db),
+        new_users_select(&trend_bucket, started_at)
+            .into_model::<NewUserBucketRow>()
+            .all(&state.db),
+    );
+    let llm_rows = llm_rows.map_err(db_error)?;
+    let embedding_rows = embedding_rows.map_err(db_error)?;
+    let execution_rows = execution_rows.map_err(db_error)?;
+    let new_user_rows = new_user_rows.map_err(db_error)?;
 
-    let mut totals = UsageAggregate::default();
-    let mut users: HashMap<Option<String>, UsageAggregate> = HashMap::new();
-    let mut technical_users: HashMap<String, UsageAggregate> = HashMap::new();
-    let mut apps: HashMap<Option<String>, UsageAggregate> = HashMap::new();
-    let mut models: HashMap<(String, String, Option<String>, Option<String>), ModelAggregate> =
-        HashMap::new();
-    let mut user_ids = HashSet::new();
-    let mut technical_user_ids = HashSet::new();
-    let mut app_ids = HashSet::new();
+    let (recent_llm_rows, recent_embedding_rows, recent_execution_rows, user_counts) = flow_like_types::tokio::join!(
+        recent_usage_select::<llm_usage_tracking::Entity>(
+            LLM_COLUMNS.usage,
+            sum_bigint(Expr::col(LLM_COLUMNS.price)),
+            sum_bigint(llm_tokens()),
+            &day_bucket,
+            &starts,
+        )
+        .into_model::<RecentUsageRow>()
+        .all(&state.db),
+        recent_usage_select::<embedding_usage_tracking::Entity>(
+            EMBEDDING_COLUMNS.usage,
+            sum_bigint(Expr::col(EMBEDDING_COLUMNS.price)),
+            sum_bigint(embedding_tokens()),
+            &day_bucket,
+            &starts,
+        )
+        .into_model::<RecentUsageRow>()
+        .all(&state.db),
+        recent_usage_select::<execution_usage_tracking::Entity>(
+            EXECUTION_COLUMNS,
+            zero_bigint(),
+            zero_bigint(),
+            &day_bucket,
+            &starts,
+        )
+        .into_model::<RecentUsageRow>()
+        .all(&state.db),
+        user_counts_select(&starts)
+            .into_model::<UserCountsRow>()
+            .one(&state.db),
+    );
+    let recent = RecentUsage {
+        llm: recent_llm_rows.map_err(db_error)?,
+        embedding: recent_embedding_rows.map_err(db_error)?,
+        execution: recent_execution_rows.map_err(db_error)?,
+    };
+    let user_counts = user_counts.map_err(db_error)?.unwrap_or_default();
 
+    let mut usage = PeriodUsage::default();
     for row in &llm_rows {
-        let tokens = row.token_in + row.token_out;
-        totals.llm_price += row.price;
-        totals.llm_tokens += tokens;
-        totals.llm_invocations += 1;
-
-        if let Some(user_id) = &row.user_id {
-            user_ids.insert(user_id.clone());
-        }
-        if let Some(app_id) = &row.app_id {
-            app_ids.insert(app_id.clone());
-        }
-
-        let user_total = users.entry(row.user_id.clone()).or_default();
-        user_total.llm_price += row.price;
-        user_total.llm_tokens += tokens;
-        user_total.llm_invocations += 1;
-
-        if let Some(technical_user_id) = &row.technical_user_id {
-            technical_user_ids.insert(technical_user_id.clone());
-            let technical_total = technical_users
-                .entry(technical_user_id.clone())
-                .or_default();
-            technical_total.llm_price += row.price;
-            technical_total.llm_tokens += tokens;
-            technical_total.llm_invocations += 1;
-        }
-
-        let app_total = apps.entry(row.app_id.clone()).or_default();
-        app_total.llm_price += row.price;
-        app_total.llm_tokens += tokens;
-        app_total.llm_invocations += 1;
-
-        let model_total = models
-            .entry((
-                "llm".to_string(),
-                row.model_id.clone(),
-                row.provider.clone(),
-                row.endpoint.clone(),
-            ))
-            .or_default();
-        model_total.price += row.price;
-        model_total.tokens += tokens;
-        model_total.invocations += 1;
-        if let Some(latency) = row.latency {
-            model_total.latency_sum += latency;
-            model_total.latency_count += 1;
-        }
+        usage.record(
+            &row.user_id,
+            &row.technical_user_id,
+            &row.app_id,
+            |totals| totals.add_llm(row),
+        );
+        usage.record_model("llm", row);
     }
-
     for row in &embedding_rows {
-        totals.embedding_price += row.price;
-        totals.embedding_tokens += row.token_count;
-        totals.embedding_invocations += 1;
-
-        if let Some(user_id) = &row.user_id {
-            user_ids.insert(user_id.clone());
-        }
-        if let Some(app_id) = &row.app_id {
-            app_ids.insert(app_id.clone());
-        }
-
-        let user_total = users.entry(row.user_id.clone()).or_default();
-        user_total.embedding_price += row.price;
-        user_total.embedding_tokens += row.token_count;
-        user_total.embedding_invocations += 1;
-
-        if let Some(technical_user_id) = &row.technical_user_id {
-            technical_user_ids.insert(technical_user_id.clone());
-            let technical_total = technical_users
-                .entry(technical_user_id.clone())
-                .or_default();
-            technical_total.embedding_price += row.price;
-            technical_total.embedding_tokens += row.token_count;
-            technical_total.embedding_invocations += 1;
-        }
-
-        let app_total = apps.entry(row.app_id.clone()).or_default();
-        app_total.embedding_price += row.price;
-        app_total.embedding_tokens += row.token_count;
-        app_total.embedding_invocations += 1;
-
-        let model_total = models
-            .entry((
-                "embedding".to_string(),
-                row.model_id.clone(),
-                row.provider.clone(),
-                row.endpoint.clone(),
-            ))
-            .or_default();
-        model_total.price += row.price;
-        model_total.tokens += row.token_count;
-        model_total.invocations += 1;
-        if let Some(latency) = row.latency {
-            model_total.latency_sum += latency;
-            model_total.latency_count += 1;
-        }
+        usage.record(
+            &row.user_id,
+            &row.technical_user_id,
+            &row.app_id,
+            |totals| totals.add_embedding(row),
+        );
+        usage.record_model("embedding", row);
     }
-
     for row in &execution_rows {
-        totals.executions += 1;
-        totals.execution_microseconds += row.microseconds;
-
-        if let Some(user_id) = &row.user_id {
-            user_ids.insert(user_id.clone());
-        }
-        if let Some(app_id) = &row.app_id {
-            app_ids.insert(app_id.clone());
-        }
-
-        let user_total = users.entry(row.user_id.clone()).or_default();
-        user_total.executions += 1;
-        user_total.execution_microseconds += row.microseconds;
-
-        if let Some(technical_user_id) = &row.technical_user_id {
-            technical_user_ids.insert(technical_user_id.clone());
-            let technical_total = technical_users
-                .entry(technical_user_id.clone())
-                .or_default();
-            technical_total.executions += 1;
-            technical_total.execution_microseconds += row.microseconds;
-        }
-
-        let app_total = apps.entry(row.app_id.clone()).or_default();
-        app_total.executions += 1;
-        app_total.execution_microseconds += row.microseconds;
+        usage.record(
+            &row.user_id,
+            &row.technical_user_id,
+            &row.app_id,
+            |totals| totals.add_executions(row),
+        );
     }
+    let PeriodUsage {
+        totals,
+        users,
+        technical_users,
+        apps,
+        models,
+    } = usage;
 
-    let user_stats = build_user_stats(
-        &state,
-        &recent_llm_rows,
-        &recent_embedding_rows,
-        &recent_execution_rows,
-        daily_start,
-        weekly_start,
-        monthly_start,
-    )
-    .await?;
+    let user_stats = build_user_stats(&user_counts, &recent);
     let trend = build_usage_trend(
-        &period,
+        monthly_buckets,
         started_at,
         now,
         &llm_rows,
@@ -633,17 +939,42 @@ pub async fn overview(
         &execution_rows,
         &new_user_rows,
     );
-    let power_aggregates = build_power_user_aggregates(
-        &recent_llm_rows,
-        &recent_embedding_rows,
-        &recent_execution_rows,
-        monthly_start,
-    );
-    for user_id in power_aggregates.keys() {
-        user_ids.insert(user_id.clone());
-    }
+    let power_users = rank_power_users(build_power_user_aggregates(&recent));
 
-    let technical_user_lookup = load_technical_users(&state, technical_user_ids).await?;
+    let mut users: Vec<(Option<String>, UsageAggregate)> = users.into_iter().collect();
+    users.sort_by_key(|(_, totals)| std::cmp::Reverse(totals.total_price()));
+    users.truncate(10);
+
+    let mut technical_users: Vec<(String, UsageAggregate)> = technical_users.into_iter().collect();
+    technical_users.sort_by_key(|(_, totals)| {
+        std::cmp::Reverse((
+            totals.total_price(),
+            totals.total_tokens(),
+            totals.executions,
+        ))
+    });
+    technical_users.truncate(10);
+
+    let mut apps: Vec<AdminAppUsage> = apps
+        .into_iter()
+        .map(|(app_id, totals)| AdminAppUsage {
+            app_id,
+            app_name: None,
+            totals: totals.into(),
+            limits: None,
+        })
+        .collect();
+    retain_top_apps_by_either_cost(&mut apps, 10);
+
+    let technical_user_lookup = load_technical_users(
+        &state,
+        technical_users.iter().map(|(id, _)| id.clone()).collect(),
+    )
+    .await?;
+
+    let mut user_ids: HashSet<String> = users.iter().filter_map(|(id, _)| id.clone()).collect();
+    user_ids.extend(power_users.iter().map(|(id, _)| id.clone()));
+    let mut app_ids: HashSet<String> = apps.iter().filter_map(|row| row.app_id.clone()).collect();
     for technical_user in technical_user_lookup.values() {
         if let Some(creator_user_id) = &technical_user.creator_user_id {
             user_ids.insert(creator_user_id.clone());
@@ -651,20 +982,25 @@ pub async fn overview(
         app_ids.insert(technical_user.app_id.clone());
     }
 
-    let user_lookup = load_users(&state, user_ids).await?;
-    let app_names = load_app_names(&state, app_ids.clone()).await?;
-    let app_limits = load_app_limits(&state, app_ids).await?;
-    let technical_user_limits = load_scoped_limits(
-        &state,
-        technical_user_lookup
-            .keys()
-            .cloned()
-            .collect::<HashSet<_>>(),
-    )
-    .await?;
-    let power_users = build_power_users(power_aggregates, &user_lookup);
+    let (user_lookup, app_names, app_limits, technical_user_limits) = flow_like_types::tokio::join!(
+        load_users(&state, user_ids),
+        load_app_names(&state, app_ids.clone()),
+        load_app_limits(&state, app_ids),
+        load_scoped_limits(
+            &state,
+            technical_user_lookup
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>(),
+        ),
+    );
+    let user_lookup = user_lookup?;
+    let app_names = app_names?;
+    let app_limits = app_limits?;
+    let technical_user_limits = technical_user_limits?;
+    let power_users = build_power_users(power_users, &user_lookup);
 
-    let mut users: Vec<AdminUserUsage> = users
+    let users: Vec<AdminUserUsage> = users
         .into_iter()
         .map(|(user_id, totals)| {
             let user_model = user_id.as_ref().and_then(|id| user_lookup.get(id));
@@ -681,10 +1017,8 @@ pub async fn overview(
             }
         })
         .collect();
-    users.sort_by_key(|row| std::cmp::Reverse(row.totals.total_price));
-    users.truncate(10);
 
-    let mut technical_users: Vec<AdminTechnicalUserUsage> = technical_users
+    let technical_users: Vec<AdminTechnicalUserUsage> = technical_users
         .into_iter()
         .map(|(technical_user_id, totals)| {
             let technical_user = technical_user_lookup.get(&technical_user_id);
@@ -714,25 +1048,13 @@ pub async fn overview(
             }
         })
         .collect();
-    technical_users.sort_by_key(|row| {
-        std::cmp::Reverse((
-            row.totals.total_price,
-            row.totals.total_tokens,
-            row.totals.executions,
-        ))
-    });
-    technical_users.truncate(10);
 
-    let mut apps: Vec<AdminAppUsage> = apps
-        .into_iter()
-        .map(|(app_id, totals)| AdminAppUsage {
-            app_name: app_id.as_ref().and_then(|id| app_names.get(id).cloned()),
-            limits: app_id.as_ref().and_then(|id| app_limits.get(id).cloned()),
-            app_id,
-            totals: totals.into(),
-        })
-        .collect();
-    retain_top_apps_by_either_cost(&mut apps, 10);
+    for app in &mut apps {
+        if let Some(app_id) = &app.app_id {
+            app.app_name = app_names.get(app_id).cloned();
+            app.limits = app_limits.get(app_id).cloned();
+        }
+    }
 
     let mut models: Vec<AdminModelUsage> = models
         .into_iter()
@@ -1106,38 +1428,23 @@ fn paging(page: Option<u64>, page_size: Option<u64>) -> (u64, u64) {
     (page, page_size)
 }
 
-async fn build_user_stats(
-    state: &AppState,
-    llm_rows: &[llm_usage_tracking::Model],
-    embedding_rows: &[embedding_usage_tracking::Model],
-    execution_rows: &[execution_usage_tracking::Model],
-    daily_start: DateTime<FixedOffset>,
-    weekly_start: DateTime<FixedOffset>,
-    monthly_start: DateTime<FixedOffset>,
-) -> Result<AdminUserStats, ApiError> {
-    let total_users = user::Entity::find()
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
-    let new_users_today = count_new_users_since(state, daily_start).await?;
-    let new_users_weekly = count_new_users_since(state, weekly_start).await?;
-    let new_users_monthly = count_new_users_since(state, monthly_start).await?;
+fn build_user_stats(user_counts: &UserCountsRow, recent: &RecentUsage) -> AdminUserStats {
+    let daily = build_activity_sets(recent, ActivityWindow::Daily);
+    let weekly = build_activity_sets(recent, ActivityWindow::Weekly);
+    let monthly = build_activity_sets(recent, ActivityWindow::Monthly);
 
-    let daily = build_activity_sets(llm_rows, embedding_rows, execution_rows, daily_start);
-    let weekly = build_activity_sets(llm_rows, embedding_rows, execution_rows, weekly_start);
-    let monthly = build_activity_sets(llm_rows, embedding_rows, execution_rows, monthly_start);
-
+    let monthly_cost: i64 = recent.ai_rows().map(|row| row.price).sum();
     let average_cost_per_active_user = if monthly.active_users.is_empty() {
         None
     } else {
-        Some(monthly.cost as f64 / monthly.active_users.len() as f64 / 1_000_000.0)
+        Some(monthly_cost as f64 / monthly.active_users.len() as f64 / 1_000_000.0)
     };
 
-    Ok(AdminUserStats {
-        total_users,
-        new_users_today,
-        new_users_weekly,
-        new_users_monthly,
+    AdminUserStats {
+        total_users: to_count(user_counts.total_users),
+        new_users_today: to_count(user_counts.new_users_today),
+        new_users_weekly: to_count(user_counts.new_users_weekly),
+        new_users_monthly: to_count(user_counts.new_users_monthly),
         active_users_daily: daily.active_users.len() as u64,
         active_users_weekly: weekly.active_users.len() as u64,
         active_users_monthly: monthly.active_users.len() as u64,
@@ -1157,18 +1464,7 @@ async fn build_user_stats(
             .filter(|count| **count >= 25)
             .count() as u64,
         average_cost_per_active_user,
-    })
-}
-
-async fn count_new_users_since(
-    state: &AppState,
-    start: DateTime<FixedOffset>,
-) -> Result<u64, ApiError> {
-    user::Entity::find()
-        .filter(user::Column::CreatedAt.gte(start))
-        .count(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))
+    }
 }
 
 #[derive(Default)]
@@ -1178,98 +1474,62 @@ struct ActivitySets {
     ai_users: HashSet<String>,
     execution_users: HashSet<String>,
     user_interactions: HashMap<String, u64>,
-    cost: i64,
 }
 
-fn build_activity_sets(
-    llm_rows: &[llm_usage_tracking::Model],
-    embedding_rows: &[embedding_usage_tracking::Model],
-    execution_rows: &[execution_usage_tracking::Model],
-    start: DateTime<FixedOffset>,
-) -> ActivitySets {
+impl ActivitySets {
+    fn record(&mut self, row: &RecentUsageRow, window: ActivityWindow, ai: bool) {
+        let interactions = row.interactions_in(window);
+        if interactions == 0 {
+            return;
+        }
+        if let Some(user_id) = &row.user_id {
+            self.active_users.insert(user_id.clone());
+            if ai {
+                self.ai_users.insert(user_id.clone());
+            } else {
+                self.execution_users.insert(user_id.clone());
+            }
+            *self.user_interactions.entry(user_id.clone()).or_default() += interactions;
+        }
+        if let Some(app_id) = &row.app_id {
+            self.active_apps.insert(app_id.clone());
+        }
+    }
+}
+
+fn build_activity_sets(recent: &RecentUsage, window: ActivityWindow) -> ActivitySets {
     let mut activity = ActivitySets::default();
-
-    for row in llm_rows.iter().filter(|row| row.created_at >= start) {
-        activity.cost += row.price;
-        if let Some(user_id) = &row.user_id {
-            activity.active_users.insert(user_id.clone());
-            activity.ai_users.insert(user_id.clone());
-            *activity
-                .user_interactions
-                .entry(user_id.clone())
-                .or_default() += 1;
-        }
-        if let Some(app_id) = &row.app_id {
-            activity.active_apps.insert(app_id.clone());
-        }
+    for row in recent.ai_rows() {
+        activity.record(row, window, true);
     }
-
-    for row in embedding_rows.iter().filter(|row| row.created_at >= start) {
-        activity.cost += row.price;
-        if let Some(user_id) = &row.user_id {
-            activity.active_users.insert(user_id.clone());
-            activity.ai_users.insert(user_id.clone());
-            *activity
-                .user_interactions
-                .entry(user_id.clone())
-                .or_default() += 1;
-        }
-        if let Some(app_id) = &row.app_id {
-            activity.active_apps.insert(app_id.clone());
-        }
+    for row in &recent.execution {
+        activity.record(row, window, false);
     }
-
-    for row in execution_rows.iter().filter(|row| row.created_at >= start) {
-        if let Some(user_id) = &row.user_id {
-            activity.active_users.insert(user_id.clone());
-            activity.execution_users.insert(user_id.clone());
-            *activity
-                .user_interactions
-                .entry(user_id.clone())
-                .or_default() += 1;
-        }
-        if let Some(app_id) = &row.app_id {
-            activity.active_apps.insert(app_id.clone());
-        }
-    }
-
     activity
 }
 
 fn build_usage_trend(
-    period: &str,
+    monthly_buckets: bool,
     started_at: DateTime<FixedOffset>,
     now: DateTime<FixedOffset>,
-    llm_rows: &[llm_usage_tracking::Model],
-    embedding_rows: &[embedding_usage_tracking::Model],
-    execution_rows: &[execution_usage_tracking::Model],
-    new_user_rows: &[user::Model],
+    llm_rows: &[PeriodAiUsageRow],
+    embedding_rows: &[PeriodAiUsageRow],
+    execution_rows: &[PeriodExecutionUsageRow],
+    new_user_rows: &[NewUserBucketRow],
 ) -> Vec<AdminUsageTrendPoint> {
-    let monthly_buckets = period == crate::usage_limits::YEARLY;
     let mut buckets =
         seed_trend_buckets(started_at.date_naive(), now.date_naive(), monthly_buckets);
 
     for row in new_user_rows {
-        let key = trend_key(row.created_at, monthly_buckets);
-        buckets.entry(key).or_default().new_users += 1;
+        let key = trend_key(&row.bucket, monthly_buckets);
+        buckets.entry(key).or_default().new_users += to_count(row.new_users);
     }
 
-    for row in llm_rows {
-        let key = trend_key(row.created_at, monthly_buckets);
+    for row in llm_rows.iter().chain(embedding_rows) {
+        let key = trend_key(&row.bucket, monthly_buckets);
         let bucket = buckets.entry(key).or_default();
-        bucket.ai_invocations += 1;
-        bucket.tokens += row.token_in + row.token_out;
-        bucket.cost += row.price;
-        if let Some(user_id) = &row.user_id {
-            bucket.active_users.insert(user_id.clone());
-        }
-    }
-
-    for row in embedding_rows {
-        let key = trend_key(row.created_at, monthly_buckets);
-        let bucket = buckets.entry(key).or_default();
-        bucket.ai_invocations += 1;
-        bucket.tokens += row.token_count;
+        bucket.ai_invocations += to_count(row.invocations);
+        bucket.tokens += row.tokens;
         bucket.cost += row.price;
         if let Some(user_id) = &row.user_id {
             bucket.active_users.insert(user_id.clone());
@@ -1277,9 +1537,9 @@ fn build_usage_trend(
     }
 
     for row in execution_rows {
-        let key = trend_key(row.created_at, monthly_buckets);
+        let key = trend_key(&row.bucket, monthly_buckets);
         let bucket = buckets.entry(key).or_default();
-        bucket.executions += 1;
+        bucket.executions += to_count(row.executions);
         if let Some(user_id) = &row.user_id {
             bucket.active_users.insert(user_id.clone());
         }
@@ -1336,11 +1596,13 @@ fn seed_trend_buckets(
     buckets
 }
 
-fn trend_key(created_at: DateTime<FixedOffset>, monthly_buckets: bool) -> String {
+/// SQL buckets arrive as `YYYY-MM-DD` (the first of the month for monthly
+/// buckets); the monthly trend key is the `YYYY-MM` prefix.
+fn trend_key(bucket: &str, monthly_buckets: bool) -> String {
     if monthly_buckets {
-        created_at.format("%Y-%m").to_string()
+        bucket.get(..7).unwrap_or(bucket).to_string()
     } else {
-        created_at.format("%Y-%m-%d").to_string()
+        bucket.to_string()
     }
 }
 
@@ -1353,53 +1615,53 @@ fn trend_label(bucket: &str, monthly_buckets: bool) -> String {
         .unwrap_or_else(|_| bucket.to_string())
 }
 
-fn build_power_user_aggregates(
-    llm_rows: &[llm_usage_tracking::Model],
-    embedding_rows: &[embedding_usage_tracking::Model],
-    execution_rows: &[execution_usage_tracking::Model],
-    start: DateTime<FixedOffset>,
-) -> HashMap<String, PowerUserAggregate> {
+fn build_power_user_aggregates(recent: &RecentUsage) -> HashMap<String, PowerUserAggregate> {
     let mut users = HashMap::<String, PowerUserAggregate>::new();
 
-    for row in llm_rows.iter().filter(|row| row.created_at >= start) {
+    for row in recent.ai_rows() {
         let Some(user_id) = &row.user_id else {
             continue;
         };
         let entry = users.entry(user_id.clone()).or_default();
         entry.total_price += row.price;
-        entry.total_tokens += row.token_in + row.token_out;
-        entry.ai_invocations += 1;
-        entry.touch(row.created_at);
+        entry.total_tokens += row.tokens;
+        entry.ai_invocations += to_count(row.interactions);
+        entry.touch(&row.day, row.last_seen);
     }
 
-    for row in embedding_rows.iter().filter(|row| row.created_at >= start) {
+    for row in &recent.execution {
         let Some(user_id) = &row.user_id else {
             continue;
         };
         let entry = users.entry(user_id.clone()).or_default();
-        entry.total_price += row.price;
-        entry.total_tokens += row.token_count;
-        entry.ai_invocations += 1;
-        entry.touch(row.created_at);
-    }
-
-    for row in execution_rows.iter().filter(|row| row.created_at >= start) {
-        let Some(user_id) = &row.user_id else {
-            continue;
-        };
-        let entry = users.entry(user_id.clone()).or_default();
-        entry.executions += 1;
-        entry.touch(row.created_at);
+        entry.executions += to_count(row.interactions);
+        entry.touch(&row.day, row.last_seen);
     }
 
     users
 }
 
-fn build_power_users(
+fn rank_power_users(
     aggregates: HashMap<String, PowerUserAggregate>,
+) -> Vec<(String, PowerUserAggregate)> {
+    let mut ranked: Vec<_> = aggregates.into_iter().collect();
+    ranked.sort_by_key(|(_, totals)| {
+        std::cmp::Reverse((
+            totals.total_interactions(),
+            totals.active_days.len() as u64,
+            totals.total_tokens,
+            totals.total_price,
+        ))
+    });
+    ranked.truncate(8);
+    ranked
+}
+
+fn build_power_users(
+    ranked: Vec<(String, PowerUserAggregate)>,
     user_lookup: &HashMap<String, user::Model>,
 ) -> Vec<AdminPowerUser> {
-    let mut power_users: Vec<_> = aggregates
+    ranked
         .into_iter()
         .map(|(user_id, totals)| {
             let user_model = user_lookup.get(&user_id);
@@ -1421,17 +1683,7 @@ fn build_power_users(
                 last_seen: totals.last_seen.map(|last_seen| last_seen.to_rfc3339()),
             }
         })
-        .collect();
-    power_users.sort_by_key(|user| {
-        std::cmp::Reverse((
-            user.total_interactions,
-            user.active_days,
-            user.total_tokens,
-            user.total_price,
-        ))
-    });
-    power_users.truncate(8);
-    power_users
+        .collect()
 }
 
 async fn load_users(
@@ -1477,19 +1729,24 @@ async fn load_app_names(
     }
     let app_ids: Vec<String> = app_ids.into_iter().collect();
 
-    let metas = meta::Entity::find()
+    let metas: Vec<(Option<String>, String, String)> = meta::Entity::find()
+        .select_only()
+        .column(meta::Column::AppId)
+        .column(meta::Column::Lang)
+        .column(meta::Column::Name)
         .filter(meta::Column::AppId.is_in(app_ids))
+        .into_tuple()
         .all(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+        .map_err(db_error)?;
 
     let mut names = HashMap::new();
-    for row in metas {
-        let Some(app_id) = row.app_id else {
+    for (app_id, lang, name) in metas {
+        let Some(app_id) = app_id else {
             continue;
         };
-        if row.lang == "en" || !names.contains_key(&app_id) {
-            names.insert(app_id, row.name);
+        if lang == "en" || !names.contains_key(&app_id) {
+            names.insert(app_id, name);
         }
     }
     Ok(names)

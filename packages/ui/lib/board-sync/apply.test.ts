@@ -620,3 +620,30 @@ const _assign: IBoard = applyBoardSync(
 	undefined,
 ).board;
 void _assign;
+
+describe("hostile ids", () => {
+	test("an id of __proto__ becomes an own entry instead of the map's prototype", () => {
+		const response = fullResponse();
+		const hostile = JSON.parse('{"__proto__": null}') as Record<
+			string,
+			ISyncNode
+		>;
+		hostile.__proto__ = wireNode("__proto__", null);
+		response.segments = {
+			[ROOT_SEGMENT]: { hash: "s-root", nodes: hostile },
+			l1: { hash: "s-l1", nodes: { b: wireNode("b", "l1") } },
+		};
+		response.layers = JSON.parse(
+			`{"__proto__": ${JSON.stringify(layerDef("__proto__"))}}`,
+		);
+		const { board } = applyBoardSync(undefined, response, undefined);
+
+		expect(Object.getPrototypeOf(board.nodes)).toBe(Object.prototype);
+		expect(Object.keys(board.nodes).sort()).toEqual(["__proto__", "b"]);
+		expect(Object.getPrototypeOf(board.layers)).toBe(Object.prototype);
+		expect(Object.keys(board.layers)).toEqual(["__proto__"]);
+		expect(Object.keys(board.nodes.__proto__?.pins ?? {})).toEqual([
+			"__proto__-p",
+		]);
+	});
+});

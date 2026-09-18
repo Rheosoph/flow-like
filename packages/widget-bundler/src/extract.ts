@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { WidgetCapabilities, WidgetCsp } from "@flow-like/widget-sdk";
+import type {
+	WidgetCapabilities,
+	WidgetCspDirective,
+	WidgetCspPurpose,
+	WidgetNetworkInput,
+	WidgetUrlTemplate,
+} from "@flow-like/widget-sdk";
 import { isLlmKind } from "@flow-like/widget-sdk/llm";
 import { validateInputValue } from "@flow-like/widget-sdk/validate";
 import {
@@ -20,19 +26,28 @@ import {
 	type ContractQuery,
 	type JsonValue,
 	type WidgetContract,
+	normalizeCspPurposes,
 	validateContract,
+	validatePublishedCsp,
 } from "./contract-types";
 import {
+	cspReasonProblem,
+	foldWidgetCspReason,
+	reasonContainsAddress,
+	validateWidgetCspReason,
+} from "./csp-reason";
+import {
 	CSP_DIRECTIVES,
+	CSP_PURPOSE_KEYS,
 	CSP_SOURCE_REJECTION_MESSAGES,
-	MAX_WIDGET_CSP_SOURCES,
-	cspSourceCount,
+	type WidgetInputPathSegment,
+	flattenCspPurposes,
 	isCspDirective,
-	isCspEmpty,
-	normalizeCspDeclaration,
 	normalizeCspSource,
+	parseWidgetInputPath,
 	validateCspSource,
 } from "./csp-source";
+import { WILDCARD_PUBLIC_SUFFIX_MESSAGE, validateWildcardBases } from "./psl";
 
 type JsonObject = { [key: string]: JsonValue };
 
@@ -48,8 +63,8 @@ export interface ExtractedWidgetConfig {
 	description: string;
 	sizing?: WidgetSizingConfig;
 	capabilities?: WidgetCapabilities;
-	/** Normalized declaration; absent when it names no sources */
-	csp?: WidgetCsp;
+	/** Normalized, canonical purpose groups; absent when none are declared */
+	csp?: WidgetCspPurpose[];
 	fixtures?: Record<string, JsonValue>;
 }
 
@@ -174,11 +189,18 @@ export function extractContract(widgetConfigPath: string): ExtractResult {
 	};
 
 	const errors = validateContract(contract);
+	if (errors.length === 0) {
+		errors.push(
+			...validatePublishedCsp(contract),
+			...networkInputSchemaErrors(contract),
+		);
+	}
 	if (errors.length > 0) {
 		throw new Error(
 			`Invalid contract for widget '${config.id}' (${absPath}): ${errors.join("; ")}`,
 		);
 	}
+	warnings.push(...networkInputWarnings(contract));
 
 	return { contract, config, warnings };
 }
@@ -1080,67 +1102,519 @@ function readWidgetConfig(
 	};
 }
 
-function invalidCspSource(
-	source: JsonValue,
-	directive: string,
+const NETWORK_INPUT_KEYS = ["path", "directives", "template"];
+const TEMPLATE_KEYS = ["subdomains", "subdomainsInput"];
+
+function invalidCsp(
+	kind: string,
+	value: JsonValue | undefined,
+	location: string,
 	id: string,
 	reason: string,
 ): Error {
 	return new Error(
-		`Invalid widget csp source ${JSON.stringify(source)} in ${directive} for widget ${id}: ${reason}`,
+		`Invalid widget csp ${kind} ${JSON.stringify(value)} in ${location} for widget ${id}: ${reason}`,
 	);
 }
 
+function invalidCspShape(
+	location: string,
+	id: string,
+	expectation: string,
+): Error {
+	return new Error(
+		`Invalid widget csp ${location} for widget ${id}: must be ${expectation}`,
+	);
+}
+
+function rejectUnknownKeys(
+	value: JsonObject,
+	allowed: readonly string[],
+	location: string,
+	id: string,
+): void {
+	for (const key of Object.keys(value)) {
+		if (!allowed.includes(key)) {
+			throw invalidCsp(
+				"key",
+				key,
+				location,
+				id,
+				`allowed keys are ${allowed.join(", ")}`,
+			);
+		}
+	}
+}
+
+function readStringList(
+	value: JsonValue,
+	location: string,
+	id: string,
+	kind: string,
+): string[] {
+	if (!Array.isArray(value)) {
+		throw invalidCspShape(location, id, "an array of string literals");
+	}
+	return value.map((entry) => {
+		if (typeof entry !== "string") {
+			throw invalidCsp(kind, entry, location, id, "must be a string");
+		}
+		return entry;
+	});
+}
+
+function readCspSources(
+	value: JsonValue,
+	directive: WidgetCspDirective,
+	location: string,
+	id: string,
+): string[] {
+	return readStringList(value, location, id, "source").map((source) => {
+		const normalized = normalizeCspSource(source);
+		const rejection = validateCspSource(directive, normalized);
+		if (rejection !== null) {
+			throw invalidCsp(
+				"source",
+				source,
+				location,
+				id,
+				CSP_SOURCE_REJECTION_MESSAGES[rejection],
+			);
+		}
+		if (validateWildcardBases([normalized]).length > 0) {
+			throw invalidCsp(
+				"source",
+				source,
+				location,
+				id,
+				WILDCARD_PUBLIC_SUFFIX_MESSAGE,
+			);
+		}
+		return source;
+	});
+}
+
+function readUrlTemplate(
+	value: JsonValue,
+	location: string,
+	id: string,
+): WidgetUrlTemplate {
+	if (!isJsonObject(value)) {
+		throw invalidCspShape(
+			location,
+			id,
+			"an object ({ subdomains?, subdomainsInput? })",
+		);
+	}
+	rejectUnknownKeys(value, TEMPLATE_KEYS, location, id);
+	const template: WidgetUrlTemplate = {};
+	if (value.subdomains !== undefined) {
+		template.subdomains = readStringList(
+			value.subdomains,
+			`${location}.subdomains`,
+			id,
+			"subdomain",
+		);
+	}
+	if (value.subdomainsInput !== undefined) {
+		if (typeof value.subdomainsInput !== "string") {
+			throw invalidCsp(
+				"subdomainsInput",
+				value.subdomainsInput,
+				`${location}.subdomainsInput`,
+				id,
+				"must be a string naming a widget input",
+			);
+		}
+		template.subdomainsInput = value.subdomainsInput;
+	}
+	return template;
+}
+
+function readNetworkInput(
+	value: JsonValue,
+	location: string,
+	id: string,
+): WidgetNetworkInput {
+	if (!isJsonObject(value)) {
+		throw invalidCspShape(
+			location,
+			id,
+			"an object ({ path, directives, template? })",
+		);
+	}
+	rejectUnknownKeys(value, NETWORK_INPUT_KEYS, location, id);
+	if (typeof value.path !== "string") {
+		throw invalidCsp(
+			"input path",
+			value.path,
+			`${location}.path`,
+			id,
+			"must be a string such as tileUrl or layers[].url",
+		);
+	}
+	const directives = readStringList(
+		value.directives ?? null,
+		`${location}.directives`,
+		id,
+		"directive",
+	).map((directive) => {
+		if (!isCspDirective(directive)) {
+			throw invalidCsp(
+				"directive",
+				directive,
+				`${location}.directives`,
+				id,
+				`only ${CSP_DIRECTIVES.join(", ")} can be extended`,
+			);
+		}
+		return directive;
+	});
+	return {
+		path: value.path,
+		directives,
+		...(value.template !== undefined && {
+			template: readUrlTemplate(value.template, `${location}.template`, id),
+		}),
+	};
+}
+
+function readCspPurpose(
+	value: JsonValue,
+	location: string,
+	id: string,
+): WidgetCspPurpose {
+	if (!isJsonObject(value)) {
+		throw invalidCspShape(
+			location,
+			id,
+			"an object ({ reason, connectSrc?, imgSrc?, fontSrc?, mediaSrc?, styleSrc?, inputs? })",
+		);
+	}
+	for (const key of Object.keys(value)) {
+		if (!(CSP_PURPOSE_KEYS as readonly string[]).includes(key)) {
+			throw invalidCsp(
+				"key",
+				key,
+				location,
+				id,
+				`only reason, inputs and the directives ${CSP_DIRECTIVES.join(", ")} are allowed; scripts, frames and workers stay limited to the bundle`,
+			);
+		}
+	}
+	if (typeof value.reason !== "string") {
+		throw invalidCspShape(
+			location,
+			id,
+			"an object with a string 'reason' that tells the viewer why the widget needs these sources",
+		);
+	}
+	const purpose: WidgetCspPurpose = { reason: value.reason };
+	for (const directive of CSP_DIRECTIVES) {
+		const sources = value[directive];
+		if (sources === undefined) continue;
+		purpose[directive] = readCspSources(
+			sources,
+			directive,
+			`${location}.${directive}`,
+			id,
+		);
+	}
+	if (value.inputs !== undefined) {
+		if (!Array.isArray(value.inputs)) {
+			throw invalidCspShape(
+				`${location}.inputs`,
+				id,
+				"an array of { path, directives, template? }",
+			);
+		}
+		purpose.inputs = value.inputs.map((input, index) =>
+			readNetworkInput(input, `${location}.inputs[${index}]`, id),
+		);
+	}
+	return purpose;
+}
+
+function checkCspReasons(purposes: readonly WidgetCspPurpose[], id: string) {
+	const owners = new Map<string, number>();
+	purposes.forEach((purpose, index) => {
+		const location = `csp[${index}].reason`;
+		const rejection =
+			validateWidgetCspReason(
+				purpose.reason,
+				(purpose.inputs?.length ?? 0) > 0,
+			) ??
+			(reasonContainsAddress(purpose.reason)
+				? "reason-contains-address"
+				: null);
+		if (rejection !== null) {
+			throw invalidCsp(
+				"reason",
+				purpose.reason,
+				location,
+				id,
+				cspReasonProblem(rejection),
+			);
+		}
+		const folded = foldWidgetCspReason(purpose.reason);
+		const first = owners.get(folded);
+		if (first !== undefined) {
+			throw invalidCsp(
+				"reason",
+				purpose.reason,
+				location,
+				id,
+				`${cspReasonProblem("reason-duplicate")}; csp[${first}].reason reads the same`,
+			);
+		}
+		owners.set(folded, index);
+	});
+}
+
 /**
- * Reads `csp` as string-literal arrays under the five known directives,
- * normalizes them (lowercase, punycode, sort, dedupe) and checks each source
- * against the grammar shared with the Rust schema.
+ * Reads `csp` as an array of purpose groups made of string literals,
+ * normalizes it (reasons NFC with collapsed whitespace, sources lowercased
+ * and punycoded, lists sorted and deduplicated, inputs sorted by path) and
+ * rejects sources, wildcard bases and reasons the hub publish would refuse.
  */
 function readWidgetCsp(
 	value: JsonValue,
 	id: string,
 	path: string,
-): WidgetCsp | undefined {
-	if (!isJsonObject(value)) {
-		throw new Error(`Widget csp for widget ${id} in ${path} must be an object`);
-	}
-	const declared: WidgetCsp = {};
-	for (const [directive, sources] of Object.entries(value)) {
-		if (!isCspDirective(directive)) {
-			throw new Error(
-				`Invalid widget csp directive "${directive}" for widget ${id}: only ${CSP_DIRECTIVES.join(", ")} can be extended`,
-			);
-		}
-		if (!Array.isArray(sources)) {
-			throw new Error(
-				`Widget csp ${directive} for widget ${id} in ${path} must be an array of string literals`,
-			);
-		}
-		declared[directive] = sources.map((source) => {
-			if (typeof source !== "string") {
-				throw invalidCspSource(source, directive, id, "must be a string");
-			}
-			const rejection = validateCspSource(
-				directive,
-				normalizeCspSource(source),
-			);
-			if (rejection !== null) {
-				throw invalidCspSource(
-					source,
-					directive,
-					id,
-					CSP_SOURCE_REJECTION_MESSAGES[rejection],
-				);
-			}
-			return source;
-		});
-	}
-	const csp = normalizeCspDeclaration(declared);
-	const count = cspSourceCount(csp);
-	if (count > MAX_WIDGET_CSP_SOURCES) {
-		throw new Error(
-			`Widget csp for widget ${id} declares ${count} sources; at most ${MAX_WIDGET_CSP_SOURCES} are allowed`,
+): WidgetCspPurpose[] | undefined {
+	if (!Array.isArray(value)) {
+		throw invalidCspShape(
+			`in ${path}`,
+			id,
+			'an array of purpose groups, e.g. csp: [{ reason: "Loads map tiles from MapTiler", connectSrc: ["https://api.maptiler.com"] }]',
 		);
 	}
-	return isCspEmpty(csp) ? undefined : csp;
+	const purposes = normalizeCspPurposes(
+		value.map((purpose, index) => readCspPurpose(purpose, `csp[${index}]`, id)),
+	);
+	checkCspReasons(purposes, id);
+	return purposes.length > 0 ? purposes : undefined;
+}
+
+interface NetworkInputSlot {
+	purpose: number;
+	input: WidgetNetworkInput;
+}
+
+function networkInputSlots(contract: WidgetContract): NetworkInputSlot[] {
+	return (contract.csp ?? []).flatMap((purpose, index) =>
+		(purpose.inputs ?? []).map((input) => ({ purpose: index, input })),
+	);
+}
+
+function schemaBranches(schema: JsonObject): JsonObject[] {
+	const branches = [schema];
+	for (const key of ["anyOf", "oneOf", "allOf"]) {
+		const list = schema[key];
+		if (!Array.isArray(list)) continue;
+		for (const branch of list) {
+			if (isJsonObject(branch)) branches.push(...schemaBranches(branch));
+		}
+	}
+	return branches;
+}
+
+function schemaHasType(schema: JsonObject, type: string): boolean {
+	return (
+		schema.type === type ||
+		(Array.isArray(schema.type) && schema.type.includes(type))
+	);
+}
+
+function schemaValueChildren(schema: JsonObject): JsonObject[] {
+	const children: JsonObject[] = [];
+	if (isJsonObject(schema.additionalProperties)) {
+		children.push(schema.additionalProperties);
+	}
+	if (isJsonObject(schema.patternProperties)) {
+		children.push(
+			...Object.values(schema.patternProperties).filter(isJsonObject),
+		);
+	}
+	return children;
+}
+
+function schemaChildren(
+	schema: JsonObject,
+	segment: WidgetInputPathSegment,
+): JsonObject[] {
+	switch (segment.kind) {
+		case "key": {
+			const property = schemaProperties(schema)[segment.key];
+			return isJsonObject(property) ? [property] : schemaValueChildren(schema);
+		}
+		case "items": {
+			if (!schemaHasType(schema, "array")) return [];
+			const items = [schema.items, schema.prefixItems].flatMap((entry) =>
+				Array.isArray(entry) ? entry : [entry],
+			);
+			return items.filter(isJsonObject);
+		}
+		case "values":
+			return schemaValueChildren(schema);
+	}
+}
+
+function reachesString(
+	schema: JsonObject,
+	segments: readonly WidgetInputPathSegment[],
+): boolean {
+	const [segment, ...rest] = segments;
+	return schemaBranches(schema).some((branch) =>
+		segment === undefined
+			? schemaHasType(branch, "string")
+			: schemaChildren(branch, segment).some((child) =>
+					reachesString(child, rest),
+				),
+	);
+}
+
+/**
+ * Bundler-only slot check (§14.2.3 rule 5): each network input path must
+ * resolve to `type: string` through the generated input schema, with `[]` on
+ * arrays and `.*` on objects with `additionalProperties` or
+ * `patternProperties`. Roots the contract rules reject are skipped.
+ */
+export function networkInputSchemaErrors(contract: WidgetContract): string[] {
+	const errors: string[] = [];
+	for (const { purpose, input } of networkInputSlots(contract)) {
+		const parsed = parseWidgetInputPath(input.path);
+		if (parsed === null) continue;
+		const inputs = contract.inputs ?? {};
+		const root = Object.hasOwn(inputs, parsed.root)
+			? inputs[parsed.root]
+			: undefined;
+		if (root === undefined) continue;
+		const schema: JsonObject =
+			root.type === "string" ? { type: "string" } : (root.schema ?? {});
+		if (
+			(root.type === "string" || root.type === "json") &&
+			!reachesString(schema, parsed.segments)
+		) {
+			errors.push(
+				`Widget '${contract.id}': csp purpose ${purpose}: input "${input.path}" does not reach a string through the schema of input "${parsed.root}" ("[]" needs an array, ".*" an object with additionalProperties or patternProperties)`,
+			);
+		}
+	}
+	return errors;
+}
+
+function valuesAtPath(
+	value: JsonValue | undefined,
+	segments: readonly WidgetInputPathSegment[],
+): string[] {
+	let current: JsonValue[] = value === undefined ? [] : [value];
+	for (const segment of segments) {
+		current = current.flatMap((entry): JsonValue[] => {
+			if (segment.kind === "items") return Array.isArray(entry) ? entry : [];
+			if (!isJsonObject(entry)) return [];
+			if (segment.kind === "values") return Object.values(entry);
+			const child = Object.hasOwn(entry, segment.key)
+				? entry[segment.key]
+				: undefined;
+			return child === undefined ? [] : [child];
+		});
+	}
+	return current.filter((entry): entry is string => typeof entry === "string");
+}
+
+const URL_AUTHORITY = /^([a-z][a-z0-9+.-]*):\/\/([^/\\?#]*)/i;
+
+function templateSubdomains(
+	contract: WidgetContract,
+	template: WidgetUrlTemplate | undefined,
+): string[] {
+	if (!template) return [];
+	if ((template.subdomains?.length ?? 0) > 0) return template.subdomains ?? [];
+	const name = template.subdomainsInput;
+	const inputs = contract.inputs ?? {};
+	const fallback =
+		name !== undefined && Object.hasOwn(inputs, name)
+			? inputs[name]?.default
+			: undefined;
+	if (typeof fallback === "string") return Array.from(fallback);
+	return Array.isArray(fallback)
+		? fallback.filter((entry): entry is string => typeof entry === "string")
+		: [];
+}
+
+/** Origins a default URL resolves to; `{s}` expands, other placeholders stay. */
+function defaultUrlOrigins(
+	value: string,
+	subdomains: readonly string[],
+): string[] {
+	const match = URL_AUTHORITY.exec(value.trim());
+	const scheme = match?.[1]?.toLowerCase();
+	if (!match || (scheme !== "https" && scheme !== "wss")) return [];
+	const authority = match[2] ?? "";
+	const host = authority
+		.slice(authority.lastIndexOf("@") + 1)
+		.replace(/:\d*$/, "")
+		.replace(/\.$/, "");
+	if (host === "" || host.startsWith("[")) return [];
+	const hosts =
+		host.includes("{s}") && subdomains.length > 0
+			? subdomains.map((label) => host.replaceAll("{s}", label))
+			: [host];
+	return hosts.map((entry) => normalizeCspSource(`${scheme}://${entry}`));
+}
+
+function originDeclared(origin: string, sources: readonly string[]): boolean {
+	const separator = origin.indexOf("://");
+	const scheme = origin.slice(0, separator);
+	const host = origin.slice(separator + 3);
+	return sources.some((source) => {
+		if (source === origin) return true;
+		const prefix = `${scheme}://*.`;
+		return (
+			source.startsWith(prefix) &&
+			host.endsWith(`.${source.slice(prefix.length)}`)
+		);
+	});
+}
+
+/**
+ * Bundler-only slot lints (§14.2.3 rule 5): an input that feeds `mediaSrc`
+ * without `connectSrc`, and a `@default` URL whose origin no static source
+ * declares (the SDK merges defaults inside the widget, so the host never
+ * approves them).
+ */
+export function networkInputWarnings(contract: WidgetContract): string[] {
+	const warnings: string[] = [];
+	const declared = flattenCspPurposes(contract.csp ?? []);
+	for (const { purpose, input } of networkInputSlots(contract)) {
+		const prefix = `Widget '${contract.id}': csp purpose ${purpose}: input "${input.path}"`;
+		if (
+			input.directives.includes("mediaSrc") &&
+			!input.directives.includes("connectSrc")
+		) {
+			warnings.push(
+				`${prefix} feeds mediaSrc without connectSrc; hls.js and MSE players fetch through connectSrc, native HLS uses mediaSrc`,
+			);
+		}
+		const parsed = parseWidgetInputPath(input.path);
+		const inputs = contract.inputs ?? {};
+		if (parsed === null || !Object.hasOwn(inputs, parsed.root)) continue;
+		const subdomains = templateSubdomains(contract, input.template);
+		const origins = new Set(
+			valuesAtPath(inputs[parsed.root]?.default, parsed.segments).flatMap(
+				(value) => defaultUrlOrigins(value, subdomains),
+			),
+		);
+		for (const origin of origins) {
+			const missing = input.directives.filter(
+				(directive) => !originDeclared(origin, declared[directive] ?? []),
+			);
+			if (missing.length === 0) continue;
+			warnings.push(
+				`${prefix} has a @default URL on ${origin} that no static ${missing.join(", ")} source declares; the SDK merges defaults inside the widget, so the host never sees or approves them. Declare the origin statically or send the URL as an input value`,
+			);
+		}
+	}
+	return warnings;
 }

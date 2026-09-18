@@ -50,6 +50,11 @@ import {
 	TooltipTrigger,
 } from "../ui/tooltip";
 import { PackageSearchDialog } from "./package-search-dialog";
+import {
+	WidgetPermissionsButton,
+	WidgetPermissionsSheet,
+	useMicroWidgetConsentEntries,
+} from "./widget-permissions";
 
 export interface AppPackagesPageProps {
 	appId: string;
@@ -90,6 +95,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const [searchOpen, setSearchOpen] = useState(false);
+	const [permissionsOpen, setPermissionsOpen] = useState(false);
+	const widgetConsents = useMicroWidgetConsentEntries({ appId });
 
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -364,6 +371,17 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		[packages.data, updatesByPackage],
 	);
 
+	const packageNames = useMemo(
+		() =>
+			new Map(
+				(packages.data ?? []).map((p) => [
+					p.packageId,
+					p.packageName ?? p.packageId,
+				]),
+			),
+		[packages.data],
+	);
+
 	const excludeIds = packages.data?.map((p) => p.packageId) ?? [];
 	const staleCount = packages.data?.filter((p) => p.stale).length ?? 0;
 
@@ -383,6 +401,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					</CardDescription>
 				</div>
 				<div className="flex items-center gap-2">
+					<WidgetPermissionsButton
+						count={widgetConsents.length}
+						onClick={() => setPermissionsOpen(true)}
+					/>
 					{applicableUpdates.length > 0 && !isOffline.data && (
 						<Button
 							size="sm"
@@ -475,6 +497,13 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				onSelect={handleSelect}
 				excludePackageIds={excludeIds}
 				appId={appId}
+			/>
+			<WidgetPermissionsSheet
+				appId={appId}
+				entries={widgetConsents}
+				packageNames={packageNames}
+				open={permissionsOpen}
+				onOpenChange={setPermissionsOpen}
 			/>
 		</Card>
 	);

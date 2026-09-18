@@ -1,4 +1,18 @@
 import type { IRegistryState } from "@flow-like/flow-like-ui";
+import {
+	type WidgetGrantRequest,
+	type WidgetGrantResponse,
+	WidgetPolicyChangedError,
+	type WidgetPolicyDescriptor,
+	type WidgetPolicyRequest,
+	WidgetRuntimeSourcesError,
+	isPolicyChangedError,
+	isWebWidgetGrant,
+	parseWidgetGrantResponse,
+	parseWidgetPolicyDescriptor,
+	widgetRuntimeSourcesErrorCode,
+} from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
+import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
 import type {
 	AccessRequest,
 	CachedPackage,
@@ -21,6 +35,28 @@ import {
 	apiPost,
 	apiPut,
 } from "./api-utils";
+
+function widgetPolicyPath(request: WidgetPolicyRequest): string {
+	return `registry/package/${encodeURIComponent(
+		request.packageId,
+	)}/widget-policy/${encodeURIComponent(
+		request.packageVersion,
+	)}/${encodeURIComponent(request.widgetId)}`;
+}
+
+/** 400 `INVALID_RUNTIME_SOURCES` / `RUNTIME_SOURCES_IN_PREVIEW` are host bugs, never user decisions. */
+function runtimeSourcesError(
+	error: unknown,
+	request: WidgetPolicyRequest,
+): WidgetRuntimeSourcesError | null {
+	const code = widgetRuntimeSourcesErrorCode(error);
+	return code
+		? new WidgetRuntimeSourcesError(
+				code,
+				`The runtime sources sent for widget ${request.packageId}@${request.packageVersion}/${request.widgetId} were refused (${code})`,
+			)
+		: null;
+}
 
 export class WebRegistryState implements IRegistryState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -94,7 +130,11 @@ export class WebRegistryState implements IRegistryState {
 	}
 
 	async uninstallPackage(packageId: string): Promise<void> {
-		await apiDelete(`registry/packages/${packageId}`, this.backend.auth);
+		try {
+			await apiDelete(`registry/packages/${packageId}`, this.backend.auth);
+		} finally {
+			forgetMicroWidgetGrants(packageId);
+		}
 	}
 
 	async getInstalledPackages(): Promise<InstalledPackage[]> {
@@ -247,5 +287,73 @@ export class WebRegistryState implements IRegistryState {
 			`registry/package/${packageId}/comments/${commentId}`,
 			this.backend.auth,
 		);
+	}
+
+	/**
+	 * Declared-only descriptors come from the memoized `GET`; a request with
+	 * runtime sources is described through `POST` on the same path. An API
+	 * that predates runtime sources answers that `POST` with 404 or 405.
+	 */
+	async describeWidgetPolicy(
+		request: WidgetPolicyRequest,
+	): Promise<WidgetPolicyDescriptor> {
+		const runtimeSources = request.runtimeSources ?? [];
+		let descriptor: unknown;
+		if (runtimeSources.length === 0) {
+			descriptor = await apiGet<unknown>(
+				`${widgetPolicyPath(request)}?preview=${request.preview}`,
+				this.backend.auth,
+			);
+		} else {
+			try {
+				descriptor = await apiPost<unknown>(
+					widgetPolicyPath(request),
+					{
+						preview: request.preview,
+						...(request.appId ? { appId: request.appId } : {}),
+						runtimeSources,
+					},
+					this.backend.auth,
+				);
+			} catch (error) {
+				throw runtimeSourcesError(error, request) ?? error;
+			}
+		}
+		return parseWidgetPolicyDescriptor(descriptor, {
+			packageId: request.packageId,
+			packageVersion: request.packageVersion,
+			widgetId: request.widgetId,
+			preview: request.preview,
+		});
+	}
+
+	async mintWidgetGrant(
+		request: WidgetGrantRequest,
+	): Promise<WidgetGrantResponse> {
+		let response: unknown;
+		try {
+			response = await apiPost<unknown>(
+				`registry/package/${encodeURIComponent(request.packageId)}/widget-grant`,
+				{
+					version: request.packageVersion,
+					widgetId: request.widgetId,
+					preview: request.preview,
+					policyDigest: request.policyDigest,
+					...(request.appId ? { appId: request.appId } : {}),
+					...(request.runtimeSources && request.runtimeSources.length > 0
+						? { runtimeSources: request.runtimeSources }
+						: {}),
+				},
+				this.backend.auth,
+			);
+		} catch (error) {
+			if (isPolicyChangedError(error)) {
+				throw new WidgetPolicyChangedError(
+					`The permissions of widget ${request.packageId}@${request.packageVersion}/${request.widgetId} changed since they were approved`,
+				);
+			}
+			throw runtimeSourcesError(error, request) ?? error;
+		}
+		return parseWidgetGrantResponse(response, isWebWidgetGrant);
 	}
 }

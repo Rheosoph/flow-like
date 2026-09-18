@@ -7,7 +7,8 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::a2ui::widget::{Version, VersionType};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::sea_query::Expr;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -69,21 +70,19 @@ pub async fn create_widget_version(
 
     // upsert_widget keeps this column in step with the stored widget; publishing
     // moves the working copy too, so the row would otherwise name a stale version.
-    if widget::Entity::find_by_id(&widget_id)
+    widget::Entity::update_many()
+        .filter(widget::Column::Id.eq(&widget_id))
         .filter(widget::Column::AppId.eq(&app_id))
-        .one(&state.db)
-        .await?
-        .is_some()
-    {
-        let update = widget::ActiveModel {
-            id: Set(widget_id.clone()),
-            app_id: Set(app_id.to_string()),
-            version: Set(Some(format!("{}.{}.{}", version.0, version.1, version.2))),
-            updated_at: Set(chrono::Utc::now().fixed_offset()),
-            ..Default::default()
-        };
-        update.update(&state.db).await?;
-    }
+        .col_expr(
+            widget::Column::Version,
+            Expr::value(Some(format!("{}.{}.{}", version.0, version.1, version.2))),
+        )
+        .col_expr(
+            widget::Column::UpdatedAt,
+            Expr::value(chrono::Utc::now().fixed_offset()),
+        )
+        .exec(&state.db)
+        .await?;
 
     audit_branch!(
         state,

@@ -162,7 +162,9 @@
 			"$ref": "#/$defs/AuditConfig",
 			"default": {
 				"enabled": true,
+				"level": "standard",
 				"log_ip": false,
+				"trusted_proxy_hops": null,
 				"ip_retention_days": null,
 				"require_signing": false,
 				"log_executions": false
@@ -799,10 +801,22 @@
 					"type": "boolean",
 					"default": true
 				},
+				"level": {
+					"description": "Which action families are recorded. Defaults to `standard`.",
+					"$ref": "#/$defs/AuditLevel",
+					"default": "standard"
+				},
 				"log_ip": {
 					"description": "Whether to capture client IP addresses in audit entries (GDPR consideration)",
 					"type": "boolean",
 					"default": false
+				},
+				"trusted_proxy_hops": {
+					"description": "Reverse proxies under the deployment's control that append to\n`X-Forwarded-For`. The recorded client IP is taken that many entries from\nthe right, which a client cannot forge. Unset records the leftmost entry,\nwhich the client chooses.",
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0,
+					"default": null
 				},
 				"ip_retention_days": {
 					"description": "Reserved retention setting. Stored IPs in signed entries are immutable;\nthis setting does not currently erase them automatically.",
@@ -816,10 +830,31 @@
 					"default": false
 				},
 				"log_executions": {
+					"description": "Record execution lifecycle transitions on the app chain at any level.\nThe `verbose` level records them regardless of this switch.",
 					"type": "boolean",
 					"default": false
 				}
 			}
+		},
+		"AuditLevel": {
+			"description": "How much of the mutation surface the audit trail records. Each level includes\neverything below it. Execution lifecycle records additionally follow\n`AuditConfig::log_executions`.",
+			"oneOf": [
+				{
+					"description": "Identity, access, credentials, publication, deletions and platform administration.",
+					"type": "string",
+					"const": "minimal"
+				},
+				{
+					"description": "Minimal plus content changes: boards, events, pages, widgets, files, tables, settings.",
+					"type": "string",
+					"const": "standard"
+				},
+				{
+					"description": "Standard plus every request attempt and outcome, editor commands, graph row\nwrites, file read grants and execution lifecycle records.",
+					"type": "string",
+					"const": "verbose"
+				}
+			]
 		},
 		"PushNotificationsConfig": {
 			"type": "object",

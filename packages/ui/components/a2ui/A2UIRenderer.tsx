@@ -10,6 +10,7 @@ import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
 import { DataProvider, DataScopeProvider, useData } from "./DataContext";
 import { type IWidgetRef, WidgetRefsProvider } from "./WidgetRefsContext";
+import type { RunElementDemand } from "./collect-run-elements";
 import type { A2UINavigationMessageInterceptor } from "./navigation-message";
 import { resolveHidden } from "./resolve-hidden";
 import type {
@@ -122,6 +123,8 @@ export interface A2UIRendererProps {
 	eventId?: string;
 	/** True when workflow routes must come from the Page Event projection. */
 	governedPage?: boolean;
+	/** Page elements the Page Event's board reads, from its bootstrap. */
+	elementDemand?: RunElementDemand;
 	isPreviewMode?: boolean;
 	openDialog?: (
 		route: string,
@@ -147,6 +150,7 @@ export function A2UIRenderer({
 	boardVersion,
 	eventId,
 	governedPage = false,
+	elementDemand,
 	isPreviewMode = false,
 	openDialog,
 	closeDialog,
@@ -245,6 +249,7 @@ export function A2UIRenderer({
 					boardVersion={boardVersion}
 					eventId={eventId}
 					governedPage={governedPage}
+					elementDemand={elementDemand}
 					components={components}
 					isPreviewMode={isPreviewMode}
 					openDialog={openDialog}

@@ -11,6 +11,7 @@ use axum::{
 };
 use flow_like::{app::App, bit::Metadata};
 use flow_like_storage::Path as FlowPath;
+use flow_like_types::tokio::try_join;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 use utoipa::IntoParams;
@@ -115,23 +116,30 @@ pub async fn get_detail(
         app.events = scoped_app.events;
     }
 
-    // Load metadata
-    let existing_meta = meta::Entity::find()
+    // Load metadata (requested language, else English) and, for members, the
+    // active events behind can_use / use_href
+    let meta_rows = meta::Entity::find()
         .filter(meta::Column::AppId.eq(&app_id))
-        .filter(meta::Column::Lang.eq(&language))
-        .one(&state.db)
-        .await?;
-
-    let existing_meta = match existing_meta {
-        Some(m) => Some(m),
-        None => {
-            meta::Entity::find()
-                .filter(meta::Column::AppId.eq(&app_id))
-                .filter(meta::Column::Lang.eq("en"))
-                .one(&state.db)
-                .await?
+        .filter(meta::Column::Lang.is_in([language.as_str(), "en"]))
+        .all(&state.db);
+    let active_events = async {
+        if !is_member {
+            return Ok(Vec::new());
         }
+        event::Entity::find()
+            .filter(event::Column::AppId.eq(&app_id))
+            .filter(event::Column::Active.eq(true))
+            .order_by_desc(event::Column::Priority)
+            .all(&state.db)
+            .await
     };
+    let (mut meta_rows, active_events) = try_join!(meta_rows, active_events)?;
+
+    let existing_meta = meta_rows
+        .iter()
+        .position(|m| m.lang == language)
+        .or_else(|| meta_rows.iter().position(|m| m.lang == "en"))
+        .map(|index| meta_rows.swap_remove(index));
 
     let metadata = if let Some(meta_model) = existing_meta {
         let mut metadata = Metadata::from(meta_model);
@@ -146,13 +154,6 @@ pub async fn get_detail(
 
     // Compute can_use / use_href for members
     let (can_use, use_href) = if is_member {
-        let active_events = event::Entity::find()
-            .filter(event::Column::AppId.eq(&app_id))
-            .filter(event::Column::Active.eq(true))
-            .order_by_desc(event::Column::Priority)
-            .all(&state.db)
-            .await?;
-
         let href = compute_use_href(&app_id, &active_events);
         (href.is_some(), href)
     } else {

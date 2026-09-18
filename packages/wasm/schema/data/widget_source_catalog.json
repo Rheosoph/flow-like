@@ -1,0 +1,652 @@
+{
+  "catalogVersion": 1,
+  "providersSha256": "f14a9984088e11c062f80059a23282d59dd159daaf4e0a536bfff3f367f7ea01",
+  "publicSuffixRules": {
+    "pslVersion": "2026-09-15_10-18-26_UTC",
+    "sha256": "afeace59e72df2f85cc239fed5f8f90a3996e330d2c57d6b317bd7e552ecafca"
+  },
+  "providers": [
+    {
+      "id": "aws",
+      "name": "Amazon Web Services",
+      "aboutKey": "widgetSourceAboutCloudPlatform",
+      "docs": [
+        "https://docs.aws.amazon.com/general/latest/gr/rande.html"
+      ],
+      "match": [
+        { "type": "attribution", "domain": "amazonaws.com" },
+        { "type": "attribution", "domain": "amazonaws.com.cn" },
+        { "type": "attribution", "domain": "on.aws" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "aws-s3",
+      "name": "Amazon S3",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html",
+        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-points-naming.html",
+        "https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "s3.amazonaws.com" },
+        { "type": "shared-suffix", "domain": "s3.*.amazonaws.com" },
+        { "type": "shared-suffix", "domain": "s3.dualstack.*.amazonaws.com" },
+        { "type": "shared-suffix", "domain": "s3-accesspoint.*.amazonaws.com" },
+        { "type": "shared-suffix", "domain": "s3-accelerate.amazonaws.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "aws-apigw",
+      "name": "Amazon API Gateway",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://docs.aws.amazon.com/apigateway/latest/developerguide/how-to-call-api.html"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "execute-api.*.amazonaws.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "aws-lambda-url",
+      "name": "AWS Lambda",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "lambda-url.*.on.aws" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "aws-cloudfront",
+      "name": "Amazon CloudFront",
+      "aboutKey": "widgetSourceAboutSharedCdn",
+      "docs": [
+        "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LinkFormat.html"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "cloudfront.net" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "gcs",
+      "name": "Google Cloud Storage",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://cloud.google.com/storage/docs/request-endpoints"
+      ],
+      "match": [
+        { "type": "shared-host", "domain": "storage.googleapis.com" },
+        { "type": "shared-suffix", "domain": "storage.googleapis.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "google-apis",
+      "name": "Google Cloud",
+      "aboutKey": "widgetSourceAboutCloudPlatform",
+      "docs": [
+        "https://cloud.google.com/apis/docs/overview"
+      ],
+      "match": [
+        { "type": "attribution", "domain": "googleapis.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "google-firebase",
+      "name": "Firebase",
+      "aboutKey": "widgetSourceAboutCloudPlatform",
+      "docs": [
+        "https://firebase.google.com/docs/firestore/use-rest-api",
+        "https://firebase.google.com/docs/storage",
+        "https://firebase.google.com/docs/database/rest/start",
+        "https://cloud.google.com/storage/docs/json_api"
+      ],
+      "match": [
+        { "type": "shared-host", "domain": "firestore.googleapis.com" },
+        { "type": "shared-host", "domain": "firebasestorage.googleapis.com" },
+        { "type": "shared-host", "domain": "www.googleapis.com" },
+        { "type": "shared-suffix", "domain": "firebaseio.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "google-apps-script",
+      "name": "Google Apps Script",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://developers.google.com/apps-script/guides/web"
+      ],
+      "match": [
+        { "type": "shared-host", "domain": "script.google.com" },
+        { "type": "shared-host", "domain": "docs.google.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "google-user-content",
+      "name": "Google",
+      "aboutKey": "widgetSourceAboutUserContent",
+      "docs": [
+        "https://developers.google.com/apps-script/guides/html/restrictions"
+      ],
+      "match": [
+        { "type": "shared-subtree", "domain": "googleusercontent.com" }
+      ],
+      "receives": false,
+      "userContent": true
+    },
+    {
+      "id": "google-maps",
+      "name": "Google Maps Platform",
+      "aboutKey": "widgetSourceAboutMapTiles",
+      "docs": [
+        "https://developers.google.com/maps/documentation/tile",
+        "https://developers.google.com/maps/documentation/tile/policies",
+        "https://developers.google.com/maps/documentation/javascript/overview"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "tile.googleapis.com" },
+        { "type": "service-host", "domain": "maps.googleapis.com" }
+      ],
+      "receives": false,
+      "userContent": false
+    },
+    {
+      "id": "google-fonts",
+      "name": "Google Fonts",
+      "aboutKey": "widgetSourceAboutWebFonts",
+      "docs": [
+        "https://developers.google.com/fonts/docs/getting_started",
+        "https://developers.google.com/fonts/faq/privacy"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "fonts.googleapis.com" },
+        { "type": "service-host", "domain": "fonts.gstatic.com" }
+      ],
+      "receives": false,
+      "userContent": false
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "aboutKey": "widgetSourceAboutCodeHosting",
+      "docs": [
+        "https://docs.github.com/en/repositories/working-with-files/using-files/viewing-and-understanding-files"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "githubusercontent.com" },
+        { "type": "shared-host", "domain": "raw.githubusercontent.com" },
+        { "type": "shared-host", "domain": "gist.githubusercontent.com" },
+        { "type": "shared-host", "domain": "objects.githubusercontent.com" },
+        { "type": "shared-host", "domain": "user-images.githubusercontent.com" },
+        { "type": "shared-host", "domain": "avatars.githubusercontent.com" }
+      ],
+      "receives": false,
+      "userContent": true
+    },
+    {
+      "id": "github-pages",
+      "name": "GitHub Pages",
+      "aboutKey": "widgetSourceAboutCodeHosting",
+      "docs": [
+        "https://docs.github.com/en/pages/getting-started-with-github-pages/about-github-pages"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "github.io" }
+      ],
+      "receives": false,
+      "userContent": true
+    },
+    {
+      "id": "github-codespaces",
+      "name": "GitHub Codespaces",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://docs.github.com/en/codespaces/developing-in-a-codespace/forwarding-ports-in-your-codespace"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "app.github.dev" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "azure",
+      "name": "Microsoft Azure",
+      "aboutKey": "widgetSourceAboutCloudPlatform",
+      "docs": [
+        "https://learn.microsoft.com/en-us/azure/security/fundamentals/azure-domains"
+      ],
+      "match": [
+        { "type": "attribution", "domain": "windows.net" },
+        { "type": "attribution", "domain": "azure.com" },
+        { "type": "attribution", "domain": "azure.net" },
+        { "type": "attribution", "domain": "azure-devices.net" },
+        { "type": "attribution", "domain": "signalr.net" },
+        { "type": "attribution", "domain": "cloudapp.net" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "azure-blob",
+      "name": "Azure Storage",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://learn.microsoft.com/en-us/azure/storage/common/storage-account-overview",
+        "https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blob-static-website",
+        "https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blob-static-website-host"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "blob.core.windows.net" },
+        { "type": "shared-suffix", "domain": "dfs.core.windows.net" },
+        { "type": "shared-suffix", "domain": "web.core.windows.net" },
+        { "type": "shared-suffix", "domain": "*.web.core.windows.net" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "azure-app-service",
+      "name": "Azure App Service",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://learn.microsoft.com/en-us/azure/app-service/overview"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "azurewebsites.net" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "azure-vm-dns",
+      "name": "Azure Virtual Machines",
+      "aboutKey": "widgetSourceAboutCloudPlatform",
+      "docs": [
+        "https://learn.microsoft.com/en-us/azure/virtual-machines/custom-domain"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "*.cloudapp.azure.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "azure-frontdoor",
+      "name": "Azure Front Door",
+      "aboutKey": "widgetSourceAboutSharedCdn",
+      "docs": [
+        "https://learn.microsoft.com/en-us/azure/frontdoor/front-door-overview",
+        "https://learn.microsoft.com/en-us/azure/cdn/cdn-overview"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "azurefd.net" },
+        { "type": "shared-suffix", "domain": "azureedge.net" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "azure-devtunnels",
+      "name": "Microsoft Dev Tunnels",
+      "aboutKey": "widgetSourceAboutTunnel",
+      "docs": [
+        "https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "devtunnels.ms" },
+        { "type": "shared-suffix", "domain": "*.devtunnels.ms" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "cloudflare-r2",
+      "name": "Cloudflare R2",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://developers.cloudflare.com/r2/api/s3/api/",
+        "https://developers.cloudflare.com/r2/buckets/public-buckets/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "r2.cloudflarestorage.com" },
+        { "type": "shared-suffix", "domain": "eu.r2.cloudflarestorage.com" },
+        { "type": "shared-suffix", "domain": "fedramp.r2.cloudflarestorage.com" },
+        { "type": "shared-suffix", "domain": "r2.dev" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "cloudflare-pages",
+      "name": "Cloudflare Pages",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://developers.cloudflare.com/pages/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "pages.dev" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "cloudflare-workers",
+      "name": "Cloudflare Workers",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://developers.cloudflare.com/workers/configuration/routing/workers-dev/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "workers.dev" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "cloudflare-tunnel",
+      "name": "Cloudflare Tunnel",
+      "aboutKey": "widgetSourceAboutTunnel",
+      "docs": [
+        "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "trycloudflare.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "cdnjs",
+      "name": "cdnjs",
+      "aboutKey": "widgetSourceAboutLibraryCdn",
+      "docs": [
+        "https://cdnjs.com/about"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "cdnjs.cloudflare.com" }
+      ],
+      "receives": false,
+      "userContent": false
+    },
+    {
+      "id": "backblaze-b2",
+      "name": "Backblaze B2",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://www.backblaze.com/docs/cloud-storage-s3-compatible-api"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "s3.*.backblazeb2.com" },
+        { "type": "shared-subtree", "domain": "backblazeb2.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "wasabi",
+      "name": "Wasabi",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://docs.wasabi.com/docs/what-are-the-service-urls-for-wasabi-s-different-storage-regions"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "s3.wasabisys.com" },
+        { "type": "shared-suffix", "domain": "s3.*.wasabisys.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "do-spaces",
+      "name": "DigitalOcean Spaces",
+      "aboutKey": "widgetSourceAboutObjectStorage",
+      "docs": [
+        "https://docs.digitalocean.com/products/spaces/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "*.digitaloceanspaces.com" },
+        { "type": "shared-suffix", "domain": "*.cdn.digitaloceanspaces.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://vercel.com/docs/deployments/generated-urls",
+        "https://vercel.com/docs/functions"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "vercel.app" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://docs.netlify.com/site-deploys/overview/",
+        "https://docs.netlify.com/functions/overview/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "netlify.app" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "heroku",
+      "name": "Heroku",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://devcenter.heroku.com/articles/custom-domains"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "herokuapp.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "firebase-hosting",
+      "name": "Firebase Hosting",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://firebase.google.com/docs/hosting"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "firebaseapp.com" },
+        { "type": "shared-suffix", "domain": "web.app" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "render",
+      "name": "Render",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://render.com/docs/web-services"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "onrender.com" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "fly",
+      "name": "Fly",
+      "aboutKey": "widgetSourceAboutAppHosting",
+      "docs": [
+        "https://fly.io/docs/networking/services/"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "fly.dev" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "jsdelivr",
+      "name": "jsDelivr",
+      "aboutKey": "widgetSourceAboutPackageCdn",
+      "docs": [
+        "https://www.jsdelivr.com/documentation",
+        "https://www.jsdelivr.com/docs/data.jsdelivr.com"
+      ],
+      "match": [
+        { "type": "shared-host", "domain": "cdn.jsdelivr.net" },
+        { "type": "shared-host", "domain": "fastly.jsdelivr.net" }
+      ],
+      "receives": false,
+      "userContent": true
+    },
+    {
+      "id": "unpkg",
+      "name": "UNPKG",
+      "aboutKey": "widgetSourceAboutPackageCdn",
+      "docs": [
+        "https://unpkg.com/"
+      ],
+      "match": [
+        { "type": "shared-host", "domain": "unpkg.com" }
+      ],
+      "receives": false,
+      "userContent": true
+    },
+    {
+      "id": "request-capture",
+      "name": "Request capture service",
+      "aboutKey": "widgetSourceAboutRequestCapture",
+      "docs": [
+        "https://docs.webhook.site/",
+        "https://pipedream.com/docs/",
+        "https://requestcatcher.com/",
+        "https://beeceptor.com/docs/",
+        "https://ntfy.sh/docs/",
+        "https://pastebin.com/doc_api",
+        "https://api.slack.com/messaging/webhooks",
+        "https://discord.com/developers/docs/resources/webhook",
+        "https://core.telegram.org/bots/api"
+      ],
+      "match": [
+        { "type": "shared-subtree", "domain": "webhook.site" },
+        { "type": "shared-subtree", "domain": "pipedream.net" },
+        { "type": "shared-subtree", "domain": "requestcatcher.com" },
+        { "type": "shared-subtree", "domain": "beeceptor.com" },
+        { "type": "shared-host", "domain": "ntfy.sh" },
+        { "type": "shared-host", "domain": "pastebin.com" },
+        { "type": "shared-host", "domain": "hooks.slack.com" },
+        { "type": "shared-host", "domain": "discord.com" },
+        { "type": "shared-host", "domain": "api.telegram.org" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "tunnels",
+      "name": "Tunnel service",
+      "aboutKey": "widgetSourceAboutTunnel",
+      "docs": [
+        "https://ngrok.com/docs/",
+        "https://theboroer.github.io/localtunnel-www/",
+        "https://serveo.net/",
+        "https://localhost.run/docs/",
+        "https://pinggy.io/docs/",
+        "https://docs.zrok.io/",
+        "https://modal.com/docs/guide/webhook-urls"
+      ],
+      "match": [
+        { "type": "shared-suffix", "domain": "ngrok-free.app" },
+        { "type": "shared-suffix", "domain": "ngrok.app" },
+        { "type": "shared-suffix", "domain": "ngrok.io" },
+        { "type": "shared-suffix", "domain": "loca.lt" },
+        { "type": "shared-suffix", "domain": "serveo.net" },
+        { "type": "shared-suffix", "domain": "lhr.life" },
+        { "type": "shared-suffix", "domain": "pinggy.link" },
+        { "type": "shared-suffix", "domain": "zrok.io" },
+        { "type": "shared-suffix", "domain": "modal.run" }
+      ],
+      "receives": true
+    },
+    {
+      "id": "cesium-ion",
+      "name": "Cesium ion",
+      "aboutKey": "widgetSourceAboutMapData",
+      "docs": [
+        "https://cesium.com/learn/ion/rest-api/",
+        "https://cesium.com/learn/ion/ion-upload-rest/"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "api.cesium.com" }
+      ],
+      "receives": true,
+      "userContent": false
+    },
+    {
+      "id": "cesium-ion-assets",
+      "name": "Cesium ion",
+      "aboutKey": "widgetSourceAboutMapData",
+      "docs": [
+        "https://cesium.com/learn/ion/",
+        "https://cesium.com/learn/ion/ion-upload-rest/"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "assets.ion.cesium.com" }
+      ],
+      "receives": false,
+      "userContent": true
+    },
+    {
+      "id": "bing-maps",
+      "name": "Bing Maps",
+      "aboutKey": "widgetSourceAboutMapTiles",
+      "docs": [
+        "https://learn.microsoft.com/en-us/bingmaps/rest-services/imagery/get-imagery-metadata"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "dev.virtualearth.net" },
+        { "type": "service-subtree", "domain": "tiles.virtualearth.net" }
+      ],
+      "receives": false,
+      "userContent": false
+    },
+    {
+      "id": "nasa-gibs",
+      "name": "NASA GIBS",
+      "aboutKey": "widgetSourceAboutSatelliteImagery",
+      "docs": [
+        "https://nasa-gibs.github.io/gibs-api-docs/access-basics/"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "gibs.earthdata.nasa.gov" },
+        { "type": "service-host", "domain": "gibs-a.earthdata.nasa.gov" },
+        { "type": "service-host", "domain": "gibs-b.earthdata.nasa.gov" },
+        { "type": "service-host", "domain": "gibs-c.earthdata.nasa.gov" }
+      ],
+      "receives": false,
+      "userContent": false
+    },
+    {
+      "id": "osm-tiles",
+      "name": "OpenStreetMap",
+      "aboutKey": "widgetSourceAboutMapTiles",
+      "docs": [
+        "https://operations.osmfoundation.org/policies/tiles/"
+      ],
+      "match": [
+        { "type": "service-subtree", "domain": "tile.openstreetmap.org" }
+      ],
+      "receives": false,
+      "userContent": false
+    },
+    {
+      "id": "maptiler",
+      "name": "MapTiler",
+      "aboutKey": "widgetSourceAboutMapTiles",
+      "docs": [
+        "https://docs.maptiler.com/cloud/api/",
+        "https://docs.maptiler.com/cloud/api/data/"
+      ],
+      "match": [
+        { "type": "service-host", "domain": "api.maptiler.com" }
+      ],
+      "receives": false,
+      "userContent": true
+    }
+  ]
+}

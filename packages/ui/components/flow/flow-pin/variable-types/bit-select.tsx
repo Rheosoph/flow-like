@@ -1,4 +1,3 @@
-import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	Select,
@@ -6,7 +5,6 @@ import {
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
 } from "../../../../components/ui/select";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -19,6 +17,7 @@ import {
 	bitDisplayName,
 	bitRef,
 } from "../../flow-selector-data";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 
 export function BitVariable({
 	pin,
@@ -77,23 +76,16 @@ export function BitVariable({
 	);
 
 	return (
-		<div className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden">
+		<PinEditorRow>
 			<Select
 				open={open}
 				onOpenChange={handleOpenChange}
 				value={selectedValue}
 				onValueChange={(v) => setValue(convertJsonToUint8Array(v))}
 			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<small className="text-start text-[10px] m-0! truncate">
-						{selectedLabel ?? (loading ? "Loading" : "Select a bit")}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground mt-0.5 shrink-0" />
-				</SelectTrigger>
+				<PinSelectTrigger
+					label={selectedLabel ?? (loading ? "Loading" : "Select a bit")}
+				/>
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
@@ -108,6 +100,6 @@ export function BitVariable({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }

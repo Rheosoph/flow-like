@@ -1,7 +1,7 @@
 use super::elements::element_utils::extract_element_id;
 use super::micro_widget_utils::{
-    DYN_ARG_PREFIX, connected_widget_contract, json_schema_pin_shape, pin_connected,
-    remove_stale_prefixed_pins, trace_widget_selector,
+    DYN_ARG_PREFIX, connected_widget_contract, json_schema_pin_shape, llm_pin_schema,
+    pin_connected, remove_stale_prefixed_pins, trace_widget_selector,
 };
 use flow_like::a2ui::micro_widget::{
     ContractQuery, ResolvedWidget, WidgetContract, WidgetProvider, decode_package_widget_ref,
@@ -13,16 +13,20 @@ use flow_like::flow::{
     pin::{Pin, PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait};
+use flow_like_types::{Value, async_trait, json::json};
 use std::collections::BTreeSet;
 
-/// How long the node waits for a live surface to answer before falling back
-/// to the value:changed mirror.
+/// Reads wait this long before falling back to the value:changed mirror.
 const LIVE_QUERY_TIMEOUT_MS: u64 = 10_000;
+/// Mutations and unknown dynamic operations have no fallback; large arguments
+/// (map-source bytes) need time to cross the run stream and reply channel.
+const LIVE_MUTATION_TIMEOUT_MS: u64 = 30_000;
+const QUERY_OPERATIONS_SCHEMA_KEY: &str = "x-flow-like-widget-query-operations";
 
 /// Runs a contract query against a package (micro) widget instance. A mounted
-/// widget answers through the live request/response channel; headless and
-/// closed-surface runs fall back to values mirrored through `value:changed`.
+/// widget answers through the live request/response channel. Reads can fall
+/// back to values mirrored through `value:changed`; mutations require a live
+/// acknowledgement.
 #[crate::register_node]
 #[derive(Default)]
 pub struct WidgetQuery;
@@ -137,6 +141,11 @@ fn add_query_arg_pins(node: &mut Node, query: &ContractQuery) -> BTreeSet<String
     expected
 }
 
+/// Native model types (and lists of them) enforce their schema, like the model nodes' own pins.
+fn is_llm_schema(schema: &Value) -> bool {
+    llm_pin_schema(schema).is_some() || schema.get("items").and_then(llm_pin_schema).is_some()
+}
+
 fn apply_query_arg_schema(pin: &mut Pin, schema: &Value, apply_default: bool) {
     let mut options = PinOptions::new();
     let mut has_options = false;
@@ -163,6 +172,10 @@ fn apply_query_arg_schema(pin: &mut Pin, schema: &Value, apply_default: bool) {
         options.set_step(step);
         has_options = true;
     }
+    if is_llm_schema(schema) {
+        options.set_enforce_schema(true);
+        has_options = true;
+    }
     pin.options = has_options.then(|| options.build());
 
     if apply_default && let Some(default) = schema.get("default") {
@@ -177,11 +190,105 @@ fn raw_query_arg_pin_name(node: &Node) -> Option<String> {
         .map(|pin| pin.name.clone())
 }
 
+fn normalize_raw_query_arg(value: Option<Value>, object_args: bool) -> Option<Value> {
+    value
+        .filter(|value| !value.is_null())
+        .or_else(|| object_args.then(|| json!({})))
+}
+
 fn selected_query_name(node: &Node) -> Option<String> {
     node.get_pin_by_name("query")
         .and_then(|pin| pin.default_value.as_ref())
         .and_then(|bytes| flow_like_types::json::from_slice::<String>(bytes).ok())
         .filter(|value| !value.is_empty())
+}
+
+/// Store operation kinds and argument shapes on the existing Query pin. Custom
+/// JSON Schema keywords survive board serialization without adding a visible
+/// pin. Keeping every declared name also makes a wired Query pin safe.
+fn set_query_contract_metadata(node: &mut Node, contract: Option<&WidgetContract>) {
+    let Some(query_pin) = node.get_pin_mut_by_name("query") else {
+        return;
+    };
+    query_pin.schema = contract.map(|contract| {
+        let operations: flow_like_types::json::Map<String, Value> = contract
+            .queries
+            .iter()
+            .map(|(name, query)| {
+                let object_args = query
+                    .args_schema
+                    .as_ref()
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("object");
+                (
+                    name.clone(),
+                    json!({ "mutation": query.mutation, "objectArgs": object_args }),
+                )
+            })
+            .collect();
+        flow_like_types::json::to_string(&json!({
+            "type": "string",
+            "x-flow-like-widget-query-operations": operations
+        }))
+        .expect("widget query operation metadata must serialize")
+    });
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct QueryRuntimeInfo {
+    mutation: bool,
+    object_args: bool,
+    live_only: bool,
+}
+
+fn query_runtime_info(node: &Node, query: &str) -> QueryRuntimeInfo {
+    let Some(query_pin) = node.get_pin_by_name("query") else {
+        return QueryRuntimeInfo::default();
+    };
+    let operations = query_pin
+        .schema
+        .as_deref()
+        .and_then(|schema| flow_like_types::json::from_str::<Value>(schema).ok())
+        .and_then(|schema| schema.get(QUERY_OPERATIONS_SCHEMA_KEY).cloned())
+        .and_then(|operations| operations.as_object().cloned());
+    if let Some(operations) = operations {
+        let Some(operation) = operations.get(query) else {
+            // A wired query name outside the discovered contract must never
+            // inherit read fallback semantics from the dropdown default.
+            return QueryRuntimeInfo {
+                live_only: true,
+                ..Default::default()
+            };
+        };
+        let mutation = operation
+            .get("mutation")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return QueryRuntimeInfo {
+            mutation,
+            object_args: operation
+                .get("objectArgs")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            live_only: mutation,
+        };
+    }
+
+    // Contracts predating mutation metadata remain read-compatible when the
+    // query is a literal. Dynamic names are conservatively live-only.
+    QueryRuntimeInfo {
+        live_only: !query_pin.depends_on.is_empty(),
+        ..Default::default()
+    }
+}
+
+fn live_query_timeout(info: QueryRuntimeInfo) -> std::time::Duration {
+    std::time::Duration::from_millis(if info.live_only {
+        LIVE_MUTATION_TIMEOUT_MS
+    } else {
+        LIVE_QUERY_TIMEOUT_MS
+    })
 }
 
 fn reset_value_pin(node: &mut Node) {
@@ -195,6 +302,7 @@ fn reset_value_pin(node: &mut Node) {
 fn reset_query_shape(node: &mut Node, clear_options: bool) {
     remove_stale_prefixed_pins(node, DYN_ARG_PREFIX, &BTreeSet::new());
     reset_value_pin(node);
+    set_query_contract_metadata(node, None);
     if clear_options && let Some(query_pin) = node.get_pin_mut_by_name("query") {
         query_pin.options = None;
     }
@@ -218,6 +326,7 @@ fn configure_query_contract(node: &mut Node, widget_name: &str, contract: &Widge
                 .build(),
         );
     }
+    set_query_contract_metadata(node, Some(contract));
 
     let selected_query = selected_query_name(node);
     let Some(query_name) = selected_query.as_deref() else {
@@ -249,11 +358,16 @@ fn configure_query_contract(node: &mut Node, widget_name: &str, contract: &Widge
 
     if let Some(value_pin) = node.get_pin_mut_by_name("value") {
         match &query.result_schema {
-            Some(schema) if !schema.is_null() => json_schema_pin_shape(schema).apply(value_pin),
+            Some(schema) if !schema.is_null() => {
+                json_schema_pin_shape(schema).apply(value_pin);
+                value_pin.options = is_llm_schema(schema)
+                    .then(|| PinOptions::new().set_enforce_schema(true).build());
+            }
             _ => {
                 value_pin.data_type = VariableType::Generic;
                 value_pin.value_type = ValueType::Normal;
                 value_pin.schema = None;
+                value_pin.options = None;
             }
         }
     }
@@ -282,7 +396,7 @@ impl NodeLogic for WidgetQuery {
         let mut node = Node::new(
             "a2ui_widget_query",
             "Query Widget",
-            "Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.",
+            "Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.",
             "UI/Container",
         );
         node.set_flowscript_name("ui", "widgetQuery");
@@ -410,35 +524,32 @@ impl NodeLogic for WidgetQuery {
         // Object schemas become one pin per property. Scalar/array schemas use
         // the single friendly "Args" pin and must be sent as the raw value,
         // not wrapped as { "args": value }.
-        let raw_arg_pin = {
+        let (raw_arg_pin, runtime_info) = {
             let node = context.node.node.lock().await;
-            raw_query_arg_pin_name(&node)
+            (
+                raw_query_arg_pin_name(&node),
+                query_runtime_info(&node, &query),
+            )
         };
         let args = if let Some(pin_name) = raw_arg_pin {
-            context
-                .evaluate_pin::<Value>(&pin_name)
-                .await
-                .ok()
-                .filter(|value| !value.is_null())
+            normalize_raw_query_arg(
+                context.evaluate_pin::<Value>(&pin_name).await.ok(),
+                runtime_info.object_args,
+            )
         } else {
             let args = super::micro_widget_utils::collect_prefixed_pin_values(
                 context,
                 super::micro_widget_utils::DYN_ARG_PREFIX,
             )
             .await;
-            (!args.is_empty()).then_some(Value::Object(args))
+            (!args.is_empty() || runtime_info.object_args).then_some(Value::Object(args))
         };
 
         // Live round-trip first: a rendered surface answers via the frontend
-        // request channel. Falls back to the value:changed mirror when no
-        // surface is live (e.g. headless runs, closed page).
+        // request channel. Reads may fall back to the value:changed mirror;
+        // mutations and unknown dynamic operations require acknowledgement.
         let live = context
-            .query_widget(
-                &element_id,
-                &query,
-                args,
-                std::time::Duration::from_millis(LIVE_QUERY_TIMEOUT_MS),
-            )
+            .query_widget(&element_id, &query, args, live_query_timeout(runtime_info))
             .await;
         match live {
             Ok(envelope) => {
@@ -457,6 +568,20 @@ impl NodeLogic for WidgetQuery {
                     .get("error")
                     .and_then(Value::as_str)
                     .unwrap_or("widget returned an error without a message");
+                if runtime_info.live_only {
+                    let operation_kind = if runtime_info.mutation {
+                        "mutation"
+                    } else {
+                        "operation"
+                    };
+                    return Err(flow_like_types::anyhow!(
+                        "Widget {} '{}' on instance '{}' did not return a successful acknowledgement: {}. Its outcome is indeterminate; do not retry automatically.",
+                        operation_kind,
+                        query,
+                        element_id,
+                        error
+                    ));
+                }
                 return Err(flow_like_types::anyhow!(
                     "Widget query '{}' on instance '{}' failed in the widget: {}",
                     query,
@@ -465,6 +590,20 @@ impl NodeLogic for WidgetQuery {
                 ));
             }
             Err(err) => {
+                if runtime_info.live_only {
+                    let operation_kind = if runtime_info.mutation {
+                        "mutation"
+                    } else {
+                        "operation"
+                    };
+                    return Err(flow_like_types::anyhow!(
+                        "Widget {} '{}' on instance '{}' was not acknowledged: {}. Its outcome is indeterminate; do not retry automatically.",
+                        operation_kind,
+                        query,
+                        element_id,
+                        err
+                    ));
+                }
                 context.log_message(
                     &format!(
                         "Live widget query '{}' on '{}' got no response ({}); falling back to mirrored values",
@@ -528,7 +667,6 @@ mod tests {
     use super::*;
     use crate::a2ui::micro_widget_utils::set_widget_ref_metadata;
     use flow_like_storage::object_store::path::Path;
-    use flow_like_types::json::json;
 
     fn sales_contract() -> WidgetContract {
         flow_like_types::json::from_value(json!({
@@ -652,6 +790,7 @@ mod tests {
             })),
             result_schema: None,
             description: None,
+            mutation: false,
         };
 
         let mut node = Node::new("test", "Test", "Test", "Test");
@@ -671,6 +810,52 @@ mod tests {
     }
 
     #[test]
+    fn llm_query_pins_carry_and_enforce_the_native_model_schemas() {
+        use flow_like_model_provider::{response::Response, response_chunk::ResponseChunk};
+        let marker = |kind: &str| json!({"type":"object","x-flow-like-type":"llm","x-llm":kind});
+        let contract: WidgetContract = flow_like_types::json::from_value(json!({
+            "contractVersion": 1,
+            "id": "chat",
+            "queries": {
+                "pushChunk": {
+                    "argsSchema": {
+                        "type": "object",
+                        "properties": { "requestId": { "type": "string" }, "chunk": marker("ResponseChunk") },
+                        "required": ["requestId", "chunk"]
+                    },
+                    "resultSchema": marker("Response"),
+                    "mutation": true
+                }
+            }
+        }))
+        .unwrap();
+        let mut node = WidgetQuery::new().get_node();
+        node.get_pin_mut_by_name("query")
+            .unwrap()
+            .set_default_value(Some(json!("pushChunk")));
+        configure_query_contract(&mut node, "Chat", &contract);
+
+        // Model nodes declare their pins with set_schema and enforce_schema; the editor
+        // connects enforced pins only when both schema strings are identical.
+        let mut model = Node::new("model", "Model", "", "");
+        model
+            .add_output_pin("chunk", "Chunk", "", VariableType::Struct)
+            .set_schema::<ResponseChunk>();
+        model
+            .add_output_pin("result", "Result", "", VariableType::Struct)
+            .set_schema::<Response>();
+        for (widget_pin, model_pin) in [("dyn_arg_chunk", "chunk"), ("value", "result")] {
+            let pin = node.get_pin_by_name(widget_pin).unwrap();
+            assert_eq!(pin.data_type, VariableType::Struct);
+            assert_eq!(pin.value_type, ValueType::Normal);
+            assert_eq!(pin.schema, model.get_pin_by_name(model_pin).unwrap().schema);
+            assert_eq!(pin.options.as_ref().unwrap().enforce_schema, Some(true));
+        }
+        let request = node.get_pin_by_name("dyn_arg_requestId").unwrap();
+        assert!(request.options.is_none());
+    }
+
+    #[test]
     fn test_add_query_arg_pins_without_schema() {
         let mut node = Node::new("test", "Test", "Test", "Test");
         assert!(add_query_arg_pins(&mut node, &ContractQuery::default()).is_empty());
@@ -679,6 +864,7 @@ mod tests {
             args_schema: Some(Value::Null),
             result_schema: None,
             description: None,
+            mutation: false,
         };
         assert!(add_query_arg_pins(&mut node, &null_schema).is_empty());
 
@@ -686,6 +872,7 @@ mod tests {
             args_schema: Some(json!({ "type": "string" })),
             result_schema: None,
             description: None,
+            mutation: false,
         };
         let expected = add_query_arg_pins(&mut node, &scalar);
         assert_eq!(expected, BTreeSet::from(["dyn_arg_args".to_string()]));
@@ -827,6 +1014,106 @@ mod tests {
 
         configure_query_contract(&mut node, "Sales Chart", &sales_contract());
         assert_eq!(node.get_pin_by_name("dyn_arg_top").unwrap().id, argument_id);
+    }
+
+    #[test]
+    fn selected_mutation_persists_live_only_execution_metadata() {
+        let contract: WidgetContract = flow_like_types::json::from_value(json!({
+            "contractVersion": 1,
+            "id": "map",
+            "queries": {
+                "getView": {
+                    "argsSchema": null,
+                    "resultSchema": { "type": "object" }
+                },
+                "upsertEntities": {
+                    "argsSchema": {
+                        "type": "object",
+                        "properties": { "commandId": { "type": "string" } },
+                        "required": ["commandId"]
+                    },
+                    "resultSchema": { "type": "object" },
+                    "mutation": true
+                }
+            }
+        }))
+        .unwrap();
+        let mut node = WidgetQuery::new().get_node();
+        node.get_pin_mut_by_name("query")
+            .unwrap()
+            .set_default_value(Some(json!("upsertEntities")));
+
+        configure_query_contract(&mut node, "Map", &contract);
+        let info = query_runtime_info(&node, "upsertEntities");
+        assert_eq!(
+            info,
+            QueryRuntimeInfo {
+                mutation: true,
+                object_args: true,
+                live_only: true
+            }
+        );
+        let persisted: Value = flow_like_types::json::from_str(
+            node.get_pin_by_name("query")
+                .unwrap()
+                .schema
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            persisted[QUERY_OPERATIONS_SCHEMA_KEY]["upsertEntities"]["mutation"],
+            true
+        );
+
+        node.get_pin_mut_by_name("query")
+            .unwrap()
+            .set_default_value(Some(json!("getView")));
+        configure_query_contract(&mut node, "Map", &contract);
+        assert_eq!(
+            query_runtime_info(&node, "getView"),
+            QueryRuntimeInfo::default()
+        );
+        assert!(query_runtime_info(&node, "runtimeOnly").live_only);
+    }
+
+    #[test]
+    fn live_query_timeout_extends_only_live_only_operations() {
+        let mutation = QueryRuntimeInfo {
+            mutation: true,
+            object_args: true,
+            live_only: true,
+        };
+        assert_eq!(
+            live_query_timeout(mutation),
+            std::time::Duration::from_secs(30)
+        );
+        let dynamic = QueryRuntimeInfo {
+            live_only: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            live_query_timeout(dynamic),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            live_query_timeout(QueryRuntimeInfo::default()),
+            std::time::Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn unwired_raw_object_args_become_an_empty_object() {
+        assert_eq!(normalize_raw_query_arg(None, true), Some(json!({})));
+        assert_eq!(
+            normalize_raw_query_arg(Some(Value::Null), true),
+            Some(json!({}))
+        );
+        assert_eq!(normalize_raw_query_arg(None, false), None);
+        assert_eq!(
+            normalize_raw_query_arg(Some(json!("raw")), false),
+            Some(json!("raw"))
+        );
     }
 
     #[test]

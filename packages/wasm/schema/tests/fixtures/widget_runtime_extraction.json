@@ -1,0 +1,422 @@
+{
+  "notes": [
+    "Host extraction of runtime sources (spec 14.4.3), mirrored by packages/ui/components/a2ui/micro-widget-runtime-sources.ts.",
+    "Each case extracts with extractRuntimeSources(slots, platformStorage, appId, props, excluded) and must return exactly expected.request and expected.issues; issues never carry values.",
+    "slots name entries of the top-level slots catalog; platformStorage is the top-level list for every case.",
+    "request lists slots with at least one candidate, sorted by slot bytewise, each with its distinct candidates sorted bytewise.",
+    "issues list { slot, code, count } sorted by slot, then code; count is the number of values (or slots) with that code.",
+    "Walk: the root is the own property props[root]; .key needs a plain object; [] needs an array; .* visits the own enumerable string-keyed values of a plain object (never an array). Anything else yields nothing and non-string leaves are ignored.",
+    "Budget per slot: every visited value counts as a node, the root included; more than maxNodesPerSlot nodes or more than maxStringLeavesPerSlot string leaves gives one too-many-values issue and the slot yields nothing.",
+    "Values: longer than maxValueLength UTF-16 units is too-long (before trimming); ASCII whitespace is trimmed; a data: or blob: prefix (ASCII case-insensitive) or a value without a scheme is skipped silently; // or \\\\ prefixes are not-absolute; a scheme other than https or wss (case-insensitive) is scheme-not-allowed; a scheme not followed by :// is not-a-url.",
+    "The authority is the raw text after :// up to / \\ ? or #. Placeholders are only recognized there: {…} in the path or query is plain URL text.",
+    "Without { in the authority: WHATWG URL parse failure is not-a-url, then userinfo (username or password), port (non-empty url.port, so default ports pass), trailing-dot, ip-literal (IPv4 after parsing, or [); the candidate is protocol + // + hostname.",
+    "With { in the authority: the slot needs a template (template-not-allowed); {a-c} and {0-9} are single-character ascending ranges, {switch:v1,v2} lists values, {s} expands from template.subdomains when non-empty, else from props[subdomainsInput] (a string gives its characters, a string array its items; every value must be a lowercase DNS label); any other placeholder, an invalid range or missing or invalid subdomains is template-unexpanded; more than maxTemplateHosts expanded hosts is template-too-large. Each expanded URL is then checked as without {.",
+    "Platform storage: a candidate whose origin equals a platformStorage origin is accepted only with a non-null appId and a parsed URL pathname starting with pathPrefix + appId + '/'; the candidate becomes origin + pathPrefix + appId + '/'; otherwise platform-storage.",
+    "Candidates in excluded are skipped silently. A slot with more than maxSourcesPerSlot distinct candidates gets one too-many-sources issue and drops out; if more than maxSourcesTotal distinct candidates remain across slots, request is empty and one issue { slot: crossSlotIssueSlot, code: too-many-sources, count: 1 } is added.",
+    "Props generators: {\"$repeat\": v, \"count\": n} is an array of n copies of v; {\"$string\": prefix, \"fill\": c, \"length\": n} is prefix padded with c to n UTF-16 units.",
+    "server.rejected is what describe_with_runtime returns for expected.request with reservedHosts, the top-level platformStorage and the case appId; absent means nothing is rejected."
+  ],
+  "limits": {
+    "maxValueLength": 8192,
+    "maxNodesPerSlot": 2048,
+    "maxStringLeavesPerSlot": 256,
+    "maxSourcesPerSlot": 8,
+    "maxSourcesTotal": 8,
+    "maxTemplateHosts": 16
+  },
+  "issueCodes": [
+    "too-long",
+    "not-absolute",
+    "scheme-not-allowed",
+    "not-a-url",
+    "userinfo",
+    "port",
+    "trailing-dot",
+    "ip-literal",
+    "template-not-allowed",
+    "template-unexpanded",
+    "template-too-large",
+    "platform-storage",
+    "too-many-values",
+    "too-many-sources"
+  ],
+  "crossSlotIssueSlot": "*",
+  "reservedHosts": ["flow-like.com"],
+  "purposes": [
+    "Loads map tiles from tile servers given to it at runtime",
+    "Shows map layers from storage files given to it at runtime",
+    "Plays videos given to it at runtime"
+  ],
+  "inputs": {
+    "config": "json",
+    "layers": "json",
+    "sources": "json",
+    "tileSubdomains": "json",
+    "tileUrl": "string",
+    "urls": "json",
+    "videoUrl": "string"
+  },
+  "slots": {
+    "config.tiles[]": {"path": "config.tiles[]", "purpose": 0, "directives": ["imgSrc"], "template": {"subdomains": ["a", "b"], "subdomainsInput": "tileSubdomains"}},
+    "tileUrl": {"path": "tileUrl", "purpose": 0, "directives": ["connectSrc", "imgSrc"], "template": {"subdomainsInput": "tileSubdomains"}},
+    "config.layers[].sources.*.url": {"path": "config.layers[].sources.*.url", "purpose": 1, "directives": ["imgSrc"]},
+    "layers[].url": {"path": "layers[].url", "purpose": 1, "directives": ["connectSrc", "imgSrc"]},
+    "sources.*.href": {"path": "sources.*.href", "purpose": 1, "directives": ["imgSrc"]},
+    "urls[]": {"path": "urls[]", "purpose": 1, "directives": ["connectSrc"]},
+    "videoUrl": {"path": "videoUrl", "purpose": 2, "directives": ["connectSrc", "mediaSrc"]}
+  },
+  "platformStorage": [
+    {"origin": "https://s3.eu-central-1.amazonaws.com", "pathPrefix": "/flow-like-content/apps/"},
+    {"origin": "https://flow-like-content.s3.eu-central-1.amazonaws.com", "pathPrefix": "/apps/"}
+  ],
+  "cases": [
+    {
+      "name": "signed urls keep only the origin",
+      "slots": ["layers[].url"],
+      "appId": "app_1",
+      "excluded": [],
+      "props": {"layers": [
+        {"url": "https://acme-tiles.s3.eu-central-1.amazonaws.com/t/1/2/3.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"},
+        {"url": "https://acmetiles.blob.core.windows.net/tiles/a.png?sv=2024-05-04&sig=zzz%3D"},
+        {"url": "https://acme-tiles.storage.googleapis.com/x.png?X-Goog-Signature=1"},
+        {"url": "https://acme-tiles.s3.eu-central-1.amazonaws.com/t/9.png?X-Amz-Signature=def#frag"},
+        {"url": "https://media.customer.com/video/master.m3u8?Policy=eyJ&Signature=abc~def&Key-Pair-Id=K1"}
+      ]},
+      "expected": {
+        "request": [{"slot": "layers[].url", "sources": ["https://acme-tiles.s3.eu-central-1.amazonaws.com", "https://acme-tiles.storage.googleapis.com", "https://acmetiles.blob.core.windows.net", "https://media.customer.com"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "template subdomains from a string input",
+      "slots": ["tileUrl"],
+      "appId": null,
+      "excluded": [],
+      "props": {"tileUrl": "https://{s}.tiles.customer-maps.com/{z}/{x}/{y}.png", "tileSubdomains": "abc"},
+      "expected": {
+        "request": [{"slot": "tileUrl", "sources": ["https://a.tiles.customer-maps.com", "https://b.tiles.customer-maps.com", "https://c.tiles.customer-maps.com"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "template subdomains from a string array input",
+      "slots": ["tileUrl"],
+      "appId": null,
+      "excluded": [],
+      "props": {"tileUrl": "https://{s}.tile.example.org/{z}/{x}/{y}.png", "tileSubdomains": ["t0", "t1"]},
+      "expected": {
+        "request": [{"slot": "tileUrl", "sources": ["https://t0.tile.example.org", "https://t1.tile.example.org"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "static template subdomains win over the input",
+      "slots": ["config.tiles[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"config": {"tiles": ["https://{s}.basemaps.example.net/{z}/{x}/{y}.png"]}, "tileSubdomains": "xyz"},
+      "expected": {
+        "request": [{"slot": "config.tiles[]", "sources": ["https://a.basemaps.example.net", "https://b.basemaps.example.net"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "range and switch placeholders",
+      "slots": ["config.tiles[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"config": {"tiles": ["https://ecn.t{0-3}.tiles.virtualearth.net/tiles/a{q}.jpeg?g=1", "https://{switch:alpha,beta}.maps.example.org/{z}/{x}/{y}"]}},
+      "expected": {
+        "request": [{"slot": "config.tiles[]", "sources": ["https://alpha.maps.example.org", "https://beta.maps.example.org", "https://ecn.t0.tiles.virtualearth.net", "https://ecn.t1.tiles.virtualearth.net", "https://ecn.t2.tiles.virtualearth.net", "https://ecn.t3.tiles.virtualearth.net"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "placeholders need a template slot but path placeholders are plain text",
+      "slots": ["layers[].url"],
+      "appId": null,
+      "excluded": [],
+      "props": {"layers": [{"url": "https://{s}.tiles.example.com/{z}.png"}, {"url": "https://tiles.example.com/{z}/{x}/{y}.png"}]},
+      "expected": {
+        "request": [{"slot": "layers[].url", "sources": ["https://tiles.example.com"]}],
+        "issues": [{"slot": "layers[].url", "code": "template-not-allowed", "count": 1}]
+      }
+    },
+    {
+      "name": "unknown placeholder",
+      "slots": ["tileUrl"],
+      "appId": null,
+      "excluded": [],
+      "props": {"tileUrl": "https://{tenant}.maps.example.com/x"},
+      "expected": {"request": [], "issues": [{"slot": "tileUrl", "code": "template-unexpanded", "count": 1}]}
+    },
+    {
+      "name": "subdomain placeholder without subdomains",
+      "slots": ["tileUrl"],
+      "appId": null,
+      "excluded": [],
+      "props": {"tileUrl": "https://{s}.maps.example.com/x"},
+      "expected": {"request": [], "issues": [{"slot": "tileUrl", "code": "template-unexpanded", "count": 1}]}
+    },
+    {
+      "name": "subdomains that are not dns labels",
+      "slots": ["tileUrl"],
+      "appId": null,
+      "excluded": [],
+      "props": {"tileUrl": "https://{s}.maps.example.com/x", "tileSubdomains": ["a", "b_1"]},
+      "expected": {"request": [], "issues": [{"slot": "tileUrl", "code": "template-unexpanded", "count": 1}]}
+    },
+    {
+      "name": "too many template hosts and invalid ranges",
+      "slots": ["config.tiles[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"config": {"tiles": ["https://{a-z}.tiles.example.com/x", "https://{c-a}.tiles.example.com/x", "https://{0-9}.{0-1}.tiles.example.com/x"]}},
+      "expected": {
+        "request": [],
+        "issues": [{"slot": "config.tiles[]", "code": "template-too-large", "count": 2}, {"slot": "config.tiles[]", "code": "template-unexpanded", "count": 1}]
+      }
+    },
+    {
+      "name": "ports, ip literals, userinfo and trailing dots",
+      "slots": ["layers[].url"],
+      "appId": null,
+      "excluded": [],
+      "props": {"layers": [
+        {"url": "https://tiles.example.com:8443/a.png"},
+        {"url": "wss://live.example.com:9443/socket"},
+        {"url": "https://tiles.example.com:443/a.png"},
+        {"url": "https://user:pw@tiles.example.net/a.png"},
+        {"url": "https://10.0.0.1/a.png"},
+        {"url": "https://[::1]/a.png"},
+        {"url": "https://0x7f.1/a.png"},
+        {"url": "https://tiles.example.org./a.png"},
+        {"url": "https://10-0-0-1.sslip.io/x.png"},
+        {"url": "https://api.flow-like.com/x"}
+      ]},
+      "expected": {
+        "request": [{"slot": "layers[].url", "sources": ["https://10-0-0-1.sslip.io", "https://api.flow-like.com", "https://tiles.example.com"]}],
+        "issues": [
+          {"slot": "layers[].url", "code": "ip-literal", "count": 3},
+          {"slot": "layers[].url", "code": "port", "count": 2},
+          {"slot": "layers[].url", "code": "trailing-dot", "count": 1},
+          {"slot": "layers[].url", "code": "userinfo", "count": 1}
+        ]
+      },
+      "server": {"rejected": [
+        {"slot": "layers[].url", "source": "https://10-0-0-1.sslip.io", "code": "reserved-name"},
+        {"slot": "layers[].url", "source": "https://api.flow-like.com", "code": "reserved-host"}
+      ]}
+    },
+    {
+      "name": "schemes, local values and normalization",
+      "slots": ["urls[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"urls": [
+        "data:image/png;base64,AAAA",
+        "blob:https://app.flow-like.com/0b8f",
+        "DATA:text/plain,hi",
+        "/relative/tile.png",
+        "tiles/1.png",
+        "//cdn.example.com/x.png",
+        "\\\\cdn.example.com\\x.png",
+        "http://tiles.example.com/x",
+        "ftp://files.example.com/x",
+        "asset://localhost/x.png",
+        "http://asset.localhost/x.png",
+        "javascript:alert(1)",
+        "https:tiles.example.com/x",
+        "https://",
+        "https://exa mple.com/x",
+        "wss://live.example.com/socket",
+        "HTTPS://Tiles.Example.COM/a",
+        "  https://padded.example.com/a \n",
+        "https://bücher.de/x",
+        {"$string": "https://tiles.example.com/", "fill": "a", "length": 8193},
+        {"$string": "https://long.example.com/", "fill": "a", "length": 8192}
+      ]},
+      "expected": {
+        "request": [{"slot": "urls[]", "sources": ["https://long.example.com", "https://padded.example.com", "https://tiles.example.com", "https://xn--bcher-kva.de", "wss://live.example.com"]}],
+        "issues": [
+          {"slot": "urls[]", "code": "not-a-url", "count": 3},
+          {"slot": "urls[]", "code": "not-absolute", "count": 2},
+          {"slot": "urls[]", "code": "scheme-not-allowed", "count": 5},
+          {"slot": "urls[]", "code": "too-long", "count": 1}
+        ]
+      }
+    },
+    {
+      "name": "nested json paths",
+      "slots": ["sources.*.href", "config.layers[].sources.*.url"],
+      "appId": null,
+      "excluded": [],
+      "props": {
+        "sources": {"a": {"href": "https://a.example.com/x"}, "b": {"href": 42}, "c": "https://ignored.example.com/", "d": {"href": ["https://nested.example.com/"]}, "e": null},
+        "config": {"layers": [{"sources": {"x": {"url": "https://deep.example.com/t.png"}, "y": {"url": "https://deep.example.com/u.png"}}}, {"sources": [{"url": "https://array.example.com/"}]}, "https://skipped.example.com/"]}
+      },
+      "expected": {
+        "request": [
+          {"slot": "config.layers[].sources.*.url", "sources": ["https://deep.example.com"]},
+          {"slot": "sources.*.href", "sources": ["https://a.example.com"]}
+        ],
+        "issues": []
+      }
+    },
+    {
+      "name": "schemes the slot cannot use are rejected by the server",
+      "slots": ["sources.*.href"],
+      "appId": null,
+      "excluded": [],
+      "props": {"sources": {"live": {"href": "wss://live.example.com/socket"}, "tiles": {"href": "https://tiles.example.com/t.png"}}},
+      "expected": {
+        "request": [{"slot": "sources.*.href", "sources": ["https://tiles.example.com", "wss://live.example.com"]}],
+        "issues": []
+      },
+      "server": {"rejected": [{"slot": "sources.*.href", "source": "wss://live.example.com", "code": "scheme-not-allowed"}]}
+    },
+    {
+      "name": "platform storage for this app",
+      "slots": ["layers[].url"],
+      "appId": "app_1",
+      "excluded": [],
+      "props": {"layers": [
+        {"url": "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_1/files/a.png?X-Amz-Signature=1"},
+        {"url": "https://flow-like-content.s3.eu-central-1.amazonaws.com/apps/app_1/b.png"},
+        {"url": "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_2/b.png"},
+        {"url": "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_10/b.png"},
+        {"url": "https://s3.eu-central-1.amazonaws.com/other-bucket/x.png"},
+        {"url": "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_1/../app_2/x.png"},
+        {"url": "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_1/%2e%2e/app_2/x.png"},
+        {"url": "https://S3.EU-CENTRAL-1.amazonaws.com/flow-like-content/apps/app_1/c.png"}
+      ]},
+      "expected": {
+        "request": [{"slot": "layers[].url", "sources": ["https://flow-like-content.s3.eu-central-1.amazonaws.com/apps/app_1/", "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_1/"]}],
+        "issues": [{"slot": "layers[].url", "code": "platform-storage", "count": 5}]
+      }
+    },
+    {
+      "name": "platform storage without an app",
+      "slots": ["layers[].url"],
+      "appId": null,
+      "excluded": [],
+      "props": {"layers": [{"url": "https://s3.eu-central-1.amazonaws.com/flow-like-content/apps/app_1/a.png"}]},
+      "expected": {"request": [], "issues": [{"slot": "layers[].url", "code": "platform-storage", "count": 1}]}
+    },
+    {
+      "name": "excluded candidates are skipped",
+      "slots": ["tileUrl"],
+      "appId": null,
+      "excluded": ["https://b.tiles.customer-maps.com"],
+      "props": {"tileUrl": "https://{s}.tiles.customer-maps.com/{z}/{x}/{y}.png", "tileSubdomains": "abc"},
+      "expected": {
+        "request": [{"slot": "tileUrl", "sources": ["https://a.tiles.customer-maps.com", "https://c.tiles.customer-maps.com"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "more than eight sources in one slot drops the slot",
+      "slots": ["layers[].url", "videoUrl"],
+      "appId": null,
+      "excluded": [],
+      "props": {
+        "layers": [
+          {"url": "https://h1.example.com/t.png"}, {"url": "https://h2.example.com/t.png"}, {"url": "https://h3.example.com/t.png"},
+          {"url": "https://h4.example.com/t.png"}, {"url": "https://h5.example.com/t.png"}, {"url": "https://h6.example.com/t.png"},
+          {"url": "https://h7.example.com/t.png"}, {"url": "https://h8.example.com/t.png"}, {"url": "https://h9.example.com/t.png"},
+          {"url": "https://h9.example.com/u.png"}, {"url": "https://h1.example.com:8443/t.png"}
+        ],
+        "videoUrl": "https://media.example.com/v.m3u8"
+      },
+      "expected": {
+        "request": [{"slot": "videoUrl", "sources": ["https://media.example.com"]}],
+        "issues": [{"slot": "layers[].url", "code": "port", "count": 1}, {"slot": "layers[].url", "code": "too-many-sources", "count": 1}]
+      }
+    },
+    {
+      "name": "eight sources in one slot after exclusions stay",
+      "slots": ["layers[].url"],
+      "appId": null,
+      "excluded": ["https://h9.example.com"],
+      "props": {
+        "layers": [
+          {"url": "https://h1.example.com/t.png"}, {"url": "https://h2.example.com/t.png"}, {"url": "https://h3.example.com/t.png"},
+          {"url": "https://h4.example.com/t.png"}, {"url": "https://h5.example.com/t.png"}, {"url": "https://h6.example.com/t.png"},
+          {"url": "https://h7.example.com/t.png"}, {"url": "https://h8.example.com/t.png"}, {"url": "https://h9.example.com/t.png"}
+        ]
+      },
+      "expected": {
+        "request": [{"slot": "layers[].url", "sources": ["https://h1.example.com", "https://h2.example.com", "https://h3.example.com", "https://h4.example.com", "https://h5.example.com", "https://h6.example.com", "https://h7.example.com", "https://h8.example.com"]}],
+        "issues": []
+      }
+    },
+    {
+      "name": "more than eight sources across slots empties the request",
+      "slots": ["layers[].url", "sources.*.href"],
+      "appId": null,
+      "excluded": [],
+      "props": {
+        "layers": [{"url": "https://a1.example.com/t.png"}, {"url": "https://a2.example.com/t.png"}, {"url": "https://a3.example.com/t.png"}, {"url": "https://a4.example.com/t.png"}, {"url": "https://a5.example.com/t.png"}],
+        "sources": {"one": {"href": "https://b1.example.com/"}, "two": {"href": "https://b2.example.com/"}, "three": {"href": "https://b3.example.com/"}, "four": {"href": "https://b4.example.com/"}}
+      },
+      "expected": {"request": [], "issues": [{"slot": "*", "code": "too-many-sources", "count": 1}]}
+    },
+    {
+      "name": "a source in several slots counts once",
+      "slots": ["layers[].url", "sources.*.href"],
+      "appId": null,
+      "excluded": [],
+      "props": {
+        "layers": [{"url": "https://a1.example.com/t.png"}, {"url": "https://a2.example.com/t.png"}, {"url": "https://a3.example.com/t.png"}, {"url": "https://a4.example.com/t.png"}, {"url": "https://a5.example.com/t.png"}, {"url": "https://shared.example.com/t.png"}],
+        "sources": {"one": {"href": "https://b1.example.com/"}, "two": {"href": "https://b2.example.com/"}, "three": {"href": "https://shared.example.com/"}}
+      },
+      "expected": {
+        "request": [
+          {"slot": "layers[].url", "sources": ["https://a1.example.com", "https://a2.example.com", "https://a3.example.com", "https://a4.example.com", "https://a5.example.com", "https://shared.example.com"]},
+          {"slot": "sources.*.href", "sources": ["https://b1.example.com", "https://b2.example.com", "https://shared.example.com"]}
+        ],
+        "issues": []
+      }
+    },
+    {
+      "name": "too many string values",
+      "slots": ["urls[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"urls": {"$repeat": "https://ok.example.com/t.png", "count": 257}},
+      "expected": {"request": [], "issues": [{"slot": "urls[]", "code": "too-many-values", "count": 1}]}
+    },
+    {
+      "name": "string values at the budget",
+      "slots": ["urls[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"urls": {"$repeat": "https://ok.example.com/t.png", "count": 256}},
+      "expected": {"request": [{"slot": "urls[]", "sources": ["https://ok.example.com"]}], "issues": []}
+    },
+    {
+      "name": "too many nodes",
+      "slots": ["urls[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"urls": {"$repeat": 0, "count": 2048}},
+      "expected": {"request": [], "issues": [{"slot": "urls[]", "code": "too-many-values", "count": 1}]}
+    },
+    {
+      "name": "nodes at the budget",
+      "slots": ["urls[]"],
+      "appId": null,
+      "excluded": [],
+      "props": {"urls": {"$repeat": 0, "count": 2047}},
+      "expected": {"request": [], "issues": []}
+    },
+    {
+      "name": "non-string values and absent inputs yield nothing",
+      "slots": ["tileUrl", "videoUrl", "layers[].url"],
+      "appId": null,
+      "excluded": [],
+      "props": {"tileUrl": 42, "layers": {"url": "https://not-an-array.example.com/"}},
+      "expected": {"request": [], "issues": []}
+    }
+  ]
+}

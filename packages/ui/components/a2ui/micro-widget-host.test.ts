@@ -5,16 +5,21 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+	MICRO_WIDGET_EVENT_BURST,
+	MICRO_WIDGET_EVENT_RATE_PER_SECOND,
 	MICRO_WIDGET_THEME_TOKENS,
 	TokenBucket,
 	acceptHostEnvelope,
+	buildDesktopMicroWidgetFrameSrc,
 	buildDesktopMicroWidgetSrc,
+	buildWebMicroWidgetFramePath,
 	buildWebMicroWidgetPath,
 	clampWidgetHeight,
 	collectMicroWidgetValueKeys,
 	createQueryCorrelator,
 	diffMicroWidgetProps,
 	generateNonce,
+	isMicroWidgetServingUrl,
 	microWidgetHasInstance,
 	microWidgetQuery,
 	microWidgetValuesKey,
@@ -136,7 +141,236 @@ describe("diffMicroWidgetProps", () => {
 	});
 });
 
-describe("URL building", () => {
+const HASH = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const DESKTOP_GRANT = "0f".repeat(32);
+const WEB_GRANT = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
+
+describe("grant-aware frame URLs", () => {
+	test("desktop custom-protocol form carries the grant or the baseline segment", () => {
+		expect(
+			buildDesktopMicroWidgetFrameSrc({
+				packageId: "com.example.maps",
+				bundleHash: HASH,
+				widgetId: "live-map",
+				grant: DESKTOP_GRANT,
+				useHttpBridge: false,
+			}),
+		).toBe(
+			`flow-widget://localhost/com.example.maps/${HASH}/frame/live-map/${DESKTOP_GRANT}`,
+		);
+		expect(
+			buildDesktopMicroWidgetFrameSrc({
+				packageId: "com.example.maps",
+				bundleHash: HASH,
+				widgetId: "live-map",
+				grant: null,
+				useHttpBridge: false,
+			}),
+		).toBe(`flow-widget://localhost/com.example.maps/${HASH}/frame/live-map/0`);
+	});
+
+	test("desktop http bridge form (Windows WebView2 / Android)", () => {
+		expect(
+			buildDesktopMicroWidgetFrameSrc({
+				packageId: "com.example.maps",
+				bundleHash: HASH,
+				widgetId: "live-map",
+				grant: null,
+				useHttpBridge: true,
+			}),
+		).toBe(
+			`http://flow-widget.localhost/com.example.maps/${HASH}/frame/live-map/0`,
+		);
+	});
+
+	test("web path uses the widget-sandbox route", () => {
+		expect(
+			buildWebMicroWidgetFramePath({
+				packageId: "com.example.maps",
+				packageVersion: "1.2.0",
+				widgetId: "live-map",
+				grant: WEB_GRANT,
+			}),
+		).toBe(
+			`registry/package/com.example.maps/widget-sandbox/1.2.0/frame/live-map/${WEB_GRANT}`,
+		);
+		expect(
+			buildWebMicroWidgetFramePath({
+				packageId: "a b",
+				packageVersion: "1.0.0+build/1",
+				widgetId: "live-map",
+				grant: null,
+			}),
+		).toBe(
+			"registry/package/a%20b/widget-sandbox/1.0.0%2Bbuild%2F1/frame/live-map/0",
+		);
+	});
+
+	test("never emit a query, whatever the grant", () => {
+		const urls = [
+			buildDesktopMicroWidgetFrameSrc({
+				packageId: "com.example.maps",
+				bundleHash: HASH,
+				widgetId: "live-map",
+				grant: DESKTOP_GRANT,
+				useHttpBridge: false,
+			}),
+			buildWebMicroWidgetFramePath({
+				packageId: "com.example.maps",
+				packageVersion: "1.2.0",
+				widgetId: "live-map",
+				grant: WEB_GRANT,
+			}),
+		];
+		for (const url of urls) {
+			expect(url).not.toContain("?");
+			expect(url).not.toContain("downloads");
+		}
+	});
+
+	test("malformed grants are refused instead of spliced into the path", () => {
+		const desktop = (grant: string) => () =>
+			buildDesktopMicroWidgetFrameSrc({
+				packageId: "com.example.maps",
+				bundleHash: HASH,
+				widgetId: "live-map",
+				grant,
+				useHttpBridge: false,
+			});
+		const web = (grant: string) => () =>
+			buildWebMicroWidgetFramePath({
+				packageId: "com.example.maps",
+				packageVersion: "1.2.0",
+				widgetId: "live-map",
+				grant,
+			});
+		for (const grant of [
+			"",
+			"0",
+			"../../widgets/other/index.0.html",
+			DESKTOP_GRANT.toUpperCase(),
+			WEB_GRANT,
+		]) {
+			expect(desktop(grant)).toThrow(/malformed grant/);
+		}
+		for (const grant of [
+			"",
+			"0",
+			DESKTOP_GRANT,
+			"a.b",
+			"a.b.c?downloads=1",
+			"a.b/../c.d",
+			`${"a".repeat(2048)}.b.c`,
+			`${WEB_GRANT}~eyJ4IjpbXX0`,
+		]) {
+			expect(web(grant)).toThrow(/malformed grant/);
+		}
+	});
+
+	test("web grants carry the runtime component of their mint after a tilde", () => {
+		const web = (grant: string | null, runtime: string | null | undefined) =>
+			buildWebMicroWidgetFramePath({
+				packageId: "com.example.maps",
+				packageVersion: "1.2.0",
+				widgetId: "live-map",
+				grant,
+				runtime,
+			});
+		const runtime = "eyJ0aWxlVXJsIjpbImh0dHBzOi8vYS5leGFtcGxlLmNvbSJdfQ";
+		expect(web(WEB_GRANT, runtime)).toBe(
+			`registry/package/com.example.maps/widget-sandbox/1.2.0/frame/live-map/${WEB_GRANT}~${runtime}`,
+		);
+		expect(web(WEB_GRANT, null)).toEndWith(`/frame/live-map/${WEB_GRANT}`);
+		expect(web(WEB_GRANT, "a".repeat(1366))).toEndWith(
+			`${WEB_GRANT}~${"a".repeat(1366)}`,
+		);
+		for (const malformed of [
+			"",
+			"a",
+			"a".repeat(1367),
+			"abcde",
+			"eyJ4Ijo=",
+			"a/b",
+			"a~b",
+			"a.b",
+			"a%2Fb",
+		]) {
+			expect(() => web(WEB_GRANT, malformed)).toThrow(
+				/malformed runtime component/,
+			);
+		}
+		expect(() => web(null, runtime)).toThrow(/malformed runtime component/);
+	});
+});
+
+describe("isMicroWidgetServingUrl", () => {
+	test("recognizes every widget serving form", () => {
+		for (const url of [
+			`flow-widget://localhost/com.example.maps/${HASH}/frame/live-map/0`,
+			"FLOW-WIDGET://localhost/x",
+			" flow-widget://localhost/x",
+			`http://flow-widget.localhost/com.example.maps/${HASH}/frame/live-map/0`,
+			"https://flow-widget.localhost/x",
+			"http://sub.flow-widget.localhost/x",
+			"http://FLOW-WIDGET.localhost./x",
+			"https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/frame/live-map/0",
+			"https://app.flow-like.com/api/v1/registry/package/com.example.maps/widget-asset/1.2.0/widgets/live-map/index.html",
+			"https://api.flow-like.com/api/v1/registry//package/x/widget-sandbox/1/frame/w/0",
+			"https://api.flow-like.com/api/v1/Registry/Package/x/Widget-Sandbox/1/frame/w/0",
+			"https://api.flow-like.com/api/v1/registry/package/x/widget%2Dsandbox/1/frame/w/0",
+			"https://api.flow-like.com/api/v1/registry%2Fpackage%2Fx%2Fwidget-asset%2F1/a",
+			"https://api.flow-like.com/api/v1/registry/package/x/widget%252Dsandbox/1/a",
+			"https://api.flow-like.com/api/v1/registry/package/x/widget-sandbox/%252e%252e/y",
+			"https://api.flow-like.com/api/v1/registry/package/x/widget-sandbox",
+			"https://api.flow-like.com/api/v1/registry/package/x/%E0%A4%A",
+		]) {
+			expect({ url, serving: isMicroWidgetServingUrl(url) }).toEqual({
+				url,
+				serving: true,
+			});
+		}
+	});
+
+	test("resolves relative paths against the page", () => {
+		expect(
+			isMicroWidgetServingUrl(
+				"../api/v1/registry/package/x/widget-sandbox/1/frame/w/0",
+				"https://app.flow-like.com/use/page",
+			),
+		).toBeTrue();
+		expect(
+			isMicroWidgetServingUrl(
+				"apps/x/index.html",
+				"https://app.flow-like.com/use",
+			),
+		).toBeFalse();
+	});
+
+	test("ordinary pages are not serving URLs", () => {
+		for (const url of [
+			"https://www.youtube.com/embed/abc",
+			"https://api.flow-like.com/api/v1/registry/package/x",
+			"https://api.flow-like.com/api/v1/registry/package/x/versions",
+			"https://example.com/widget-sandbox/x",
+			"https://example.com/?next=/registry/package/x/widget-sandbox/1",
+			"https://example.com/#/registry/package/x/widget-asset/1",
+			"https://flow-widget.localhost.example.com/x",
+			"https://localhost/x",
+		]) {
+			expect({ url, serving: isMicroWidgetServingUrl(url) }).toEqual({
+				url,
+				serving: false,
+			});
+		}
+	});
+
+	test("unparseable input fails closed", () => {
+		expect(isMicroWidgetServingUrl("relative/without/base")).toBeTrue();
+		expect(isMicroWidgetServingUrl("http://[::1")).toBeTrue();
+	});
+});
+
+describe("legacy URL building", () => {
 	test("desktop custom-protocol form", () => {
 		expect(
 			buildDesktopMicroWidgetSrc({
@@ -146,7 +380,7 @@ describe("URL building", () => {
 				useHttpBridge: false,
 			}),
 		).toBe(
-			"flow-widget://localhost/com.example.sales/deadbeef/widgets/sales-chart/index.html",
+			"flow-widget://localhost/com.example.sales/deadbeef/frame/sales-chart",
 		);
 	});
 
@@ -159,7 +393,7 @@ describe("URL building", () => {
 				useHttpBridge: true,
 			}),
 		).toBe(
-			"http://flow-widget.localhost/com.example.sales/deadbeef/widgets/sales-chart/index.html",
+			"http://flow-widget.localhost/com.example.sales/deadbeef/frame/sales-chart",
 		);
 	});
 
@@ -171,14 +405,14 @@ describe("URL building", () => {
 				widgetId: "w/1",
 				useHttpBridge: false,
 			}),
-		).toBe("flow-widget://localhost/a%20b/h%231/widgets/w%2F1/index.html");
+		).toBe("flow-widget://localhost/a%20b/h%231/frame/w%2F1");
 	});
 
 	test("web registry path", () => {
 		expect(
 			buildWebMicroWidgetPath("com.example.sales", "1.2.0", "sales-chart"),
 		).toBe(
-			"registry/package/com.example.sales/widget-asset/1.2.0/widgets/sales-chart/index.html",
+			"registry/package/com.example.sales/widget-asset/1.2.0/frame/sales-chart",
 		);
 	});
 
@@ -250,6 +484,20 @@ describe("TokenBucket", () => {
 		expect(bucket.tryTake(now + 60_000)).toBeTrue();
 		expect(bucket.tryTake(now + 60_000)).toBeTrue();
 		expect(bucket.tryTake(now + 60_000)).toBeFalse();
+	});
+
+	test("contract event bucket allows 60 per second and refills after one second", () => {
+		const bucket = new TokenBucket(
+			MICRO_WIDGET_EVENT_BURST,
+			MICRO_WIDGET_EVENT_RATE_PER_SECOND,
+		);
+		for (let i = 0; i < 60; i++) {
+			expect(bucket.tryTake(1000)).toBeTrue();
+		}
+		expect(bucket.tryTake(1000)).toBeFalse();
+		for (let i = 0; i < 60; i++) {
+			expect(bucket.tryTake(2000)).toBeTrue();
+		}
 	});
 });
 
@@ -368,5 +616,31 @@ describe("live bridge registry", () => {
 		registerMicroWidgetBridge("reg-2", { query: async () => 2 });
 		first();
 		expect(microWidgetHasInstance("reg-2")).toBeTrue();
+	});
+});
+
+describe("legacy wrapper frame", () => {
+	test("hosts that predate grants still receive the downloads query", () => {
+		expect(
+			buildDesktopMicroWidgetSrc({
+				packageId: "com.example.sales",
+				bundleHash: "deadbeef",
+				widgetId: "sales-chart",
+				useHttpBridge: false,
+				allowDownloads: true,
+			}),
+		).toBe(
+			"flow-widget://localhost/com.example.sales/deadbeef/frame/sales-chart?downloads=1",
+		);
+		expect(
+			buildWebMicroWidgetPath(
+				"com.example.sales",
+				"1.2.0",
+				"sales-chart",
+				true,
+			),
+		).toBe(
+			"registry/package/com.example.sales/widget-asset/1.2.0/frame/sales-chart?downloads=1",
+		);
 	});
 });

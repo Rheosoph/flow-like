@@ -28,13 +28,13 @@ describe("buildCsp", () => {
 				"style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"img-src data: blob: 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"font-src data: 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
-				"connect-src 'none'; worker-src 'none'; media-src 'none'",
+				"connect-src data: blob:; worker-src 'none'; media-src data: blob:",
 		);
 	});
 
 	test("null prefix permits only supported bundle asset origins", () => {
 		expect(buildCsp(null)).toBe(
-			"default-src 'none'; script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; img-src data: blob: 'self' flow-widget: http://flow-widget.localhost; font-src data: 'self' flow-widget: http://flow-widget.localhost; connect-src 'none'; worker-src 'none'; media-src 'none'",
+			"default-src 'none'; script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; img-src data: blob: 'self' flow-widget: http://flow-widget.localhost; font-src data: 'self' flow-widget: http://flow-widget.localhost; connect-src data: blob:; worker-src 'none'; media-src data: blob:",
 		);
 	});
 });

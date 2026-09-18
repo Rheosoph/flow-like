@@ -251,6 +251,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::prerun_board::prerun_board,
         crate::routes::app::board::query_logs::query_logs,
         crate::routes::app::board::get_runs::get_runs,
+        crate::routes::app::board::get_run_payload::get_run_payload,
         crate::routes::app::board::get_execution_elements::get_execution_elements,
         crate::routes::app::board::element_demand::get_element_demand,
         crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
@@ -514,6 +515,10 @@ impl Modify for SecurityAddon {
         crate::routes::registry::search::search,
         crate::routes::registry::download::download,
         crate::routes::registry::widget_asset::get_widget_asset,
+        crate::routes::registry::widget_sandbox::get_widget_sandbox,
+        crate::routes::registry::widget_policy::describe_widget_policy,
+        crate::routes::registry::widget_policy::describe_widget_runtime_policy,
+        crate::routes::registry::widget_policy::mint_widget_grant,
         // Bit routes
         crate::routes::bit::get_bit::get_bit,
         crate::routes::bit::get_with_dependencies::get_with_dependencies,
@@ -944,6 +949,30 @@ impl Modify for SecurityAddon {
         crate::routes::app::packages::AppPackageResponse,
         crate::routes::app::packages::PatchInfo,
         crate::routes::app::packages::PackageUpdateInfo,
+        // Widget policy and grants
+        flow_like_wasm_schema::widget_policy::WidgetPolicyDescriptor,
+        flow_like_wasm_schema::widget_policy::WidgetPolicyStatus,
+        flow_like_wasm_schema::widget_policy::WidgetPolicy,
+        flow_like_wasm_schema::widget_policy::WidgetCsp,
+        flow_like_wasm_schema::widget_policy::CspDirective,
+        flow_like_wasm_schema::widget_policy::WidgetUrlTemplate,
+        flow_like_wasm_schema::widget_policy::WidgetNetworkInputSlot,
+        flow_like_wasm_schema::widget_policy::PlatformStorageScope,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeDescriptor,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeStatus,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeRejection,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeSourceRequest,
+        flow_like_wasm_schema::widget_policy::WidgetEngineSupport,
+        flow_like_wasm_schema::widget_sources::WidgetNetwork,
+        flow_like_wasm_schema::widget_sources::WidgetNetworkPurpose,
+        flow_like_wasm_schema::widget_sources::WidgetNetworkSource,
+        flow_like_wasm_schema::widget_sources::WidgetSourceClass,
+        flow_like_wasm_schema::widget_sources::WidgetSourceKind,
+        flow_like_wasm_schema::widget_sources::WidgetSourceLevel,
+        flow_like_wasm_schema::widget_sources::SourceProvenance,
+        crate::routes::registry::widget_policy::WidgetPolicyDescribeRequest,
+        crate::routes::registry::widget_policy::WidgetGrantRequest,
+        crate::routes::registry::widget_policy::WidgetGrantResponse,
         // Realtime
         crate::routes::app::board::realtime::RealtimeParams,
         crate::realtime_ice::RealtimeIceServer,
@@ -1209,6 +1238,55 @@ mod tests {
             )
             .and_then(Value::as_str),
             Some("#/components/schemas/PageTrigger")
+        );
+    }
+
+    #[test]
+    fn widget_policy_documents_declared_and_runtime_describe_and_grants() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let policy = spec
+            .pointer(
+                "/paths/~1registry~1package~1{package_id}~1widget-policy~1{version}~1{widget_id}",
+            )
+            .and_then(Value::as_object)
+            .expect("widget policy path is documented");
+        assert!(policy.contains_key("get"), "declared describe is missing");
+        assert_eq!(
+            policy
+                .get("post")
+                .and_then(|post| {
+                    post.pointer("/requestBody/content/application~1json/schema/$ref")
+                })
+                .and_then(Value::as_str),
+            Some("#/components/schemas/WidgetPolicyDescribeRequest")
+        );
+        for property in [
+            "networkInputs",
+            "platformStorage",
+            "runtime",
+            "engine",
+            "network",
+        ] {
+            assert!(
+                spec.pointer(&format!(
+                    "/components/schemas/WidgetPolicyDescriptor/properties/{property}"
+                ))
+                .is_some(),
+                "descriptor property {property} is missing"
+            );
+        }
+        for property in ["appId", "runtimeSources"] {
+            assert!(
+                spec.pointer(&format!(
+                    "/components/schemas/WidgetGrantRequest/properties/{property}"
+                ))
+                .is_some(),
+                "grant request property {property} is missing"
+            );
+        }
+        assert!(
+            spec.pointer("/components/schemas/WidgetGrantResponse/properties/runtime")
+                .is_some()
         );
     }
 

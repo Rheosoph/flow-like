@@ -915,5 +915,8 @@
 	"worstErrorRate": "",
 	"worstFirst": "",
 	"worstScore": "",
-	"yes": ""
+	"yes": "",
+	"auditNoEntries": "",
+	"auditSignedNotChecked": "",
+	"auditUnsignedNotChecked": ""
 }

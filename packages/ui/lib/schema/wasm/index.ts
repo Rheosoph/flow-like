@@ -87,6 +87,7 @@ export type WasmPackageCategory =
 	| "OTHER";
 
 export interface PackagePermissions {
+	database?: { read: boolean; write: boolean };
 	memory: MemoryTier;
 	timeout: TimeoutTier;
 	network: NetworkPermissions;
@@ -166,6 +167,8 @@ export interface PackageWidgetEntry {
 	thumbnail?: string | null;
 	contract: WidgetContract;
 	keywords?: string[];
+	/** The hub's display-only classification of the declared addresses (package details only); read with `describePackageWidgetNetwork`. */
+	network?: unknown;
 }
 
 export interface PackageManifest {

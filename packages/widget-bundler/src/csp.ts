@@ -1,12 +1,16 @@
 import type { WidgetCapabilities } from "@flow-like/widget-sdk";
 import { escapeHtmlAttr, insertAtHeadStart } from "./html";
 
+/** Local-only schemes every widget document may fetch and play (`LOCAL_SOURCES`). */
+export const LOCAL_CSP_SOURCES = ["data:", "blob:"] as const;
+
 /**
  * Build the pack-time widget-document CSP: `default-src 'none'` baseline,
  * inline script/style allowed (self-contained documents), chunk loads
- * restricted to the bundle asset origins, and browser features from the
- * contract `capabilities`. Contract `csp` sources are never included: hosts
- * add them to the header they serve, and only after the viewer approves.
+ * restricted to the bundle asset origins, local `data:`/`blob:` bytes for
+ * `connect-src` and `media-src`, and browser features from the contract
+ * `capabilities`. Contract `csp` sources are never included: hosts add them
+ * to the header they serve, and only after the viewer approves.
  */
 export function buildCsp(
 	servingPrefix: string | null,
@@ -29,16 +33,18 @@ export function buildCsp(
 		"http://flow-widget.localhost",
 		...(servingPrefix ? [servingPrefix] : []),
 	].join(" ");
-	const connect = capabilities.workers ? `${assetSources} blob:` : "'none'";
+	const local = LOCAL_CSP_SOURCES.join(" ");
+	const localAnd = (enabled: boolean | undefined) =>
+		enabled ? `${local} ${assetSources}` : local;
 	return [
 		"default-src 'none'",
 		`script-src 'unsafe-inline' ${capabilities.wasm ? "'wasm-unsafe-eval' " : ""}${assetSources}`,
 		`style-src 'unsafe-inline' ${assetSources}`,
-		`img-src data: blob: ${assetSources}`,
+		`img-src ${local} ${assetSources}`,
 		`font-src data: ${assetSources}`,
-		`connect-src ${connect}`,
+		`connect-src ${localAnd(capabilities.workers)}`,
 		`worker-src ${capabilities.workers ? `blob: ${assetSources}` : "'none'"}`,
-		`media-src ${capabilities.media ? `blob: ${assetSources}` : "'none'"}`,
+		`media-src ${localAnd(capabilities.media)}`,
 	].join("; ");
 }
 

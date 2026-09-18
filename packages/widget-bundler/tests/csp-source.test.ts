@@ -1,17 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import type { WidgetCspPurpose } from "@flow-like/widget-sdk";
 import {
-	CSP_DIRECTIVES,
+	type WidgetContract,
+	canonicalizeContract,
+	contractToJson,
+	normalizeCspPurposes,
+	validateContract,
+} from "../src/contract-types";
+import {
 	CSP_SOURCE_REJECTION_MESSAGES,
 	type CspDirective,
 	type CspSourceRejection,
-	MAX_WIDGET_CSP_SOURCES,
 	compareCspSources,
+	flattenCspPurposes,
 	isCspDirective,
-	normalizeCspDeclaration,
+	isValidWidgetInputPath,
 	normalizeCspSource,
-	validateCspDeclaration,
+	parseWidgetInputPath,
 	validateCspSource,
 } from "../src/csp-source";
 
@@ -21,9 +29,25 @@ interface SourceCase {
 	reason?: string;
 }
 
+interface ContractCase {
+	name: string;
+	contract: Partial<WidgetContract>;
+	error?: string;
+}
+
+interface GroupedCase {
+	name: string;
+	authored: Partial<WidgetContract>;
+	canonical: WidgetContract;
+	declaredCsp: Record<string, string[]>;
+}
+
 interface CspFixture {
 	acceptedSources: SourceCase[];
 	rejectedSources: SourceCase[];
+	groupedContracts: GroupedCase[];
+	invalidContracts: ContractCase[];
+	unparsableContracts: ContractCase[];
 }
 
 const FIXTURE: CspFixture = JSON.parse(
@@ -41,6 +65,43 @@ const FIXTURE: CspFixture = JSON.parse(
 		"utf8",
 	),
 );
+
+const CSP_SOURCE_URL = pathToFileURL(
+	join(import.meta.dir, "..", "src", "csp-source.ts"),
+).href;
+
+/** Hosts Node's and Bun's `domainToASCII` used to resolve differently */
+const HOST_PARSER_DEPENDENT_SOURCES = [
+	"https://bücher.de\\tiles",
+	"https://bücher.de\\evil.com",
+	"https://bü\tcher.de",
+	"https://bücher.de\nx",
+	"https://bü\rcher.de",
+	"https://bü%41cher.de",
+	"https://bü_cher.de",
+	"https://BÜ!cher.de",
+	"https://bü\uff1a.de",
+	"https://bü\uff0f.de",
+	"https://bü\uff20.de",
+	"https://bü\u2100.de",
+	"https://bü\u3000.de",
+	"https://bü.127.0.0.1",
+	"https://ü.0x7f",
+	"https://\uff10x7f.0.0.1",
+];
+
+function nodeStripsTypes(): boolean {
+	try {
+		const probe = Bun.spawnSync([
+			"node",
+			"-p",
+			"!process.versions.bun && Boolean(process.features.typescript)",
+		]);
+		return probe.exitCode === 0 && probe.stdout.toString().trim() === "true";
+	} catch {
+		return false;
+	}
+}
 
 function directiveOf(entry: SourceCase): CspDirective {
 	if (!isCspDirective(entry.directive)) {
@@ -113,9 +174,11 @@ describe("normalizeCspSource", () => {
 			["https://bücher.de/path", "path"],
 			["https://user@bücher.de", "non-ascii"],
 			["https://api.maptiler.com ", "non-ascii"],
-			["https://*.Example.com", "wildcard"],
+			["https://*.bücher.de:443", "port"],
+			["https://a.*.Example.com", "wildcard"],
 			["'self'", "keyword"],
 			["Https:api.maptiler.com", "missing-scheme"],
+			["https://bü.localhost", "reserved-name"],
 		] as const) {
 			expect([
 				source,
@@ -123,44 +186,59 @@ describe("normalizeCspSource", () => {
 			]).toEqual([source, reason]);
 		}
 	});
-});
 
-describe("normalizeCspDeclaration", () => {
-	test("sorts, deduplicates and drops empty directives", () => {
-		expect(
-			normalizeCspDeclaration({
-				styleSrc: ["https://fonts.googleapis.com"],
-				imgSrc: [
-					"https://B.tile.openstreetmap.org",
-					"https://a.tile.openstreetmap.org",
-					"https://b.tile.openstreetmap.org",
-				],
-				connectSrc: ["wss://live.example.com", "HTTPS://api.maptiler.com"],
-				mediaSrc: [],
-			}),
-		).toEqual({
-			connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
-			imgSrc: [
-				"https://a.tile.openstreetmap.org",
-				"https://b.tile.openstreetmap.org",
+	test("keeps IDNA mappings of non-ASCII characters", () => {
+		for (const source of [
+			"https://bücher\u3002de",
+			"https://bü\u00adcher.de",
+			"https://bü\u200bcher.de",
+			"https://\uff42ücher.de",
+		]) {
+			expect([source, normalizeCspSource(source)]).toEqual([
+				source,
+				"https://xn--bcher-kva.de",
+			]);
+		}
+	});
+
+	test("never lets the runtime's host parser repair an invalid host", () => {
+		for (const source of HOST_PARSER_DEPENDENT_SOURCES) {
+			const normalized = normalizeCspSource(source);
+			expect([source, normalized]).toEqual([source, source.toLowerCase()]);
+			expect([source, validateCspSource("connectSrc", normalized)]).toEqual([
+				source,
+				"non-ascii",
+			]);
+		}
+	});
+
+	test.skipIf(!nodeStripsTypes())("gives the same result under Node", () => {
+		const cases = [
+			...HOST_PARSER_DEPENDENT_SOURCES,
+			...FIXTURE.acceptedSources.map((entry) => entry.source),
+			...FIXTURE.rejectedSources.map((entry) => entry.source),
+			"https://BÜCHER.de",
+			"https://пример.рф",
+			"https://bücher.de:443",
+			"https://bücher\u3002de",
+			"https://straße.de",
+			"https://مثال.إختبار",
+		];
+		const result = Bun.spawnSync(
+			[
+				"node",
+				"--input-type=module",
+				"-e",
+				`import { normalizeCspSource } from ${JSON.stringify(CSP_SOURCE_URL)};
+process.stdout.write(JSON.stringify(JSON.parse(process.argv[1]).map(normalizeCspSource)));`,
+				JSON.stringify(cases),
 			],
-			styleSrc: ["https://fonts.googleapis.com"],
-		});
-	});
-
-	test("emits directives in serde field order", () => {
-		const normalized = normalizeCspDeclaration({
-			styleSrc: ["https://s.example.org"],
-			mediaSrc: ["https://m.example.org"],
-			fontSrc: ["https://f.example.org"],
-			imgSrc: ["https://i.example.org"],
-			connectSrc: ["https://c.example.org"],
-		});
-		expect(Object.keys(normalized)).toEqual([...CSP_DIRECTIVES]);
-	});
-
-	test("an all-empty declaration normalizes to nothing", () => {
-		expect(normalizeCspDeclaration({ connectSrc: [], imgSrc: [] })).toEqual({});
+			{ stderr: "pipe" },
+		);
+		expect(result.stderr.toString()).toBe("");
+		expect(JSON.parse(result.stdout.toString())).toEqual(
+			cases.map(normalizeCspSource),
+		);
 	});
 });
 
@@ -178,78 +256,212 @@ describe("compareCspSources", () => {
 	});
 });
 
-describe("validateCspDeclaration", () => {
-	test("accepts a canonical declaration", () => {
-		expect(
-			validateCspDeclaration({
-				connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
-				imgSrc: ["https://a.tile.openstreetmap.org"],
-			}),
-		).toEqual([]);
+function withDefaults(contract: Partial<WidgetContract>): WidgetContract {
+	return {
+		contractVersion: 1,
+		id: "",
+		inputs: {},
+		events: {},
+		queries: {},
+		sizing: { defaultHeight: 320, resizable: true },
+		...contract,
+	};
+}
+
+describe("purpose groups", () => {
+	test("canonicalize to the Rust bytes of every grouped fixture", () => {
+		expect(FIXTURE.groupedContracts.length).toBeGreaterThanOrEqual(3);
+		for (const entry of FIXTURE.groupedContracts) {
+			const canonical = canonicalizeContract(withDefaults(entry.authored));
+			expect([entry.name, contractToJson(canonical)]).toEqual([
+				entry.name,
+				JSON.stringify(entry.canonical, null, 2),
+			]);
+			expect([entry.name, validateContract(canonical)]).toEqual([
+				entry.name,
+				[],
+			]);
+			expect([entry.name, validateContract(entry.canonical)]).toEqual([
+				entry.name,
+				[],
+			]);
+			expect([entry.name, flattenCspPurposes(canonical.csp ?? [])]).toEqual([
+				entry.name,
+				entry.declaredCsp,
+			]);
+		}
 	});
 
-	test("reports grammar errors in the Rust message format", () => {
-		expect(
-			validateCspDeclaration({
-				connectSrc: ["http://api.example.org"],
-				imgSrc: ["wss://tiles.example.org"],
-			}),
-		).toEqual([
-			'Invalid csp source "http://api.example.org" in connectSrc: scheme is not allowed for this directive',
-			'Invalid csp source "wss://tiles.example.org" in imgSrc: scheme is not allowed for this directive',
+	test("report the listed error for every invalid fixture contract", () => {
+		expect(FIXTURE.invalidContracts.length).toBeGreaterThanOrEqual(25);
+		for (const entry of FIXTURE.invalidContracts) {
+			const errors = validateContract(withDefaults(entry.contract));
+			expect([
+				entry.name,
+				errors.some((error) => error.includes(entry.error ?? "")),
+				errors.every((error) => error.startsWith("Widget 'live-map'")),
+			]).toEqual([entry.name, true, true]);
+		}
+	});
+
+	test("reject every shape serde refuses to parse", () => {
+		for (const entry of FIXTURE.unparsableContracts) {
+			const errors = validateContract(withDefaults(entry.contract));
+			expect([entry.name, errors.length > 0]).toEqual([entry.name, true]);
+			expect(
+				errors.every((error) => error.startsWith("Widget 'live-map': csp ")),
+			).toBeTrue();
+		}
+	});
+
+	test("names the purpose and key of shape errors", () => {
+		const contract = withDefaults({
+			contractVersion: 2,
+			id: "live-map",
+			csp: [
+				{
+					reason: "Loads map tiles given at runtime",
+					inputs: [{ path: "tileUrl", directives: ["frameSrc"] }],
+				},
+			] as unknown as WidgetCspPurpose[],
+		});
+		expect(validateContract(contract)).toEqual([
+			"Widget 'live-map': csp purpose 0: input 0: declares unknown directive \"frameSrc\" (allowed: connectSrc, imgSrc, fontSrc, mediaSrc, styleSrc)",
 		]);
 	});
 
-	test("requires ascending order without duplicates", () => {
-		expect(
-			validateCspDeclaration({
-				connectSrc: ["https://b.example.org", "https://a.example.org"],
-			}),
-		).toEqual(["csp connectSrc must be sorted ascending without duplicates"]);
-		expect(
-			validateCspDeclaration({
-				fontSrc: ["https://a.example.org", "https://a.example.org"],
-			}),
-		).toEqual(["csp fontSrc must be sorted ascending without duplicates"]);
+	test("normalization folds whitespace, lowercases sources and keeps group order", () => {
+		const normalized = normalizeCspPurposes([
+			{
+				reason: "  Loads map\u00a0tiles\n from  Cafe\u0301 servers ",
+				imgSrc: ["https://B.example.com", "https://a.example.com"],
+				connectSrc: ["https://*.Bücher.de", "https://a.example.com"],
+			},
+			{
+				reason: "Loads runtime tiles",
+				inputs: [
+					{ path: "z", directives: ["imgSrc", "connectSrc", "imgSrc"] },
+					{
+						path: "a",
+						directives: ["mediaSrc"],
+						template: { subdomains: ["b", "a", "b"] },
+					},
+					{ path: "m", directives: ["imgSrc"], template: {} },
+				],
+			},
+		]);
+		expect(normalized).toEqual([
+			{
+				reason: "Loads map tiles from Caf\u00e9 servers",
+				connectSrc: ["https://*.xn--bcher-kva.de", "https://a.example.com"],
+				imgSrc: ["https://a.example.com", "https://b.example.com"],
+			},
+			{
+				reason: "Loads runtime tiles",
+				inputs: [
+					{
+						path: "a",
+						directives: ["mediaSrc"],
+						template: { subdomains: ["a", "b"] },
+					},
+					{ path: "m", directives: ["imgSrc"] },
+					{ path: "z", directives: ["connectSrc", "imgSrc"] },
+				],
+			},
+		]);
+		expect(Object.keys(normalized[0] ?? {})).toEqual([
+			"reason",
+			"connectSrc",
+			"imgSrc",
+		]);
 	});
 
-	test("caps the total number of sources", () => {
-		const sources = Array.from(
-			{ length: MAX_WIDGET_CSP_SOURCES },
+	test("an empty csp canonicalizes to a v1 contract without csp", () => {
+		const canonical = canonicalizeContract(
+			withDefaults({ contractVersion: 2, id: "plain", csp: [] }),
+		);
+		expect(canonical.contractVersion).toBe(1);
+		expect(canonical).not.toHaveProperty("csp");
+		expect(
+			validateContract(
+				withDefaults({ contractVersion: 2, id: "live-map", csp: [] }),
+			),
+		).toEqual([
+			"Widget 'live-map' declares an empty csp; omit csp when it declares no purposes",
+		]);
+	});
+
+	test("count a source once per directive across purposes and cap the bytes", () => {
+		const hosts = Array.from(
+			{ length: 16 },
 			(_, index) => `https://h${String(index).padStart(2, "0")}.example.org`,
 		);
-		const atCap = {
-			connectSrc: sources.slice(0, 8),
-			imgSrc: sources.slice(8),
-		};
-		expect(validateCspDeclaration(atCap)).toEqual([]);
+		const atCap = withDefaults({
+			contractVersion: 2,
+			id: "live-map",
+			csp: [
+				{ reason: "Loads map tiles", connectSrc: hosts.slice(0, 8) },
+				{ reason: "Loads map labels", imgSrc: hosts.slice(8) },
+			],
+		});
+		expect(validateContract(atCap)).toEqual([]);
 		expect(
-			validateCspDeclaration({
+			validateContract({
 				...atCap,
-				fontSrc: ["https://fonts.example.org"],
+				csp: [
+					...(atCap.csp ?? []),
+					{ reason: "Loads web fonts", fontSrc: ["https://fonts.example.org"] },
+				],
 			}),
-		).toEqual(["csp declares 17 sources; at most 16 are allowed"]);
+		).toEqual([
+			"Widget 'live-map': csp declares 17 sources; at most 16 are allowed",
+		]);
+	});
+});
+
+describe("network input paths", () => {
+	test("parse into segments like parse_widget_input_path", () => {
+		expect(parseWidgetInputPath("config.layers[].sources.*.url")).toEqual({
+			root: "config",
+			segments: [
+				{ kind: "key", key: "layers" },
+				{ kind: "items" },
+				{ kind: "key", key: "sources" },
+				{ kind: "values" },
+				{ kind: "key", key: "url" },
+			],
+		});
+		expect(parseWidgetInputPath("tileUrl")).toEqual({
+			root: "tileUrl",
+			segments: [],
+		});
+		expect(parseWidgetInputPath("_a[][]")).toEqual({
+			root: "_a",
+			segments: [{ kind: "items" }, { kind: "items" }],
+		});
 	});
 
-	test("refuses shapes serde would not parse", () => {
-		expect(
-			validateCspDeclaration({ scriptSrc: ["https://cdn.example.org"] }),
-		).toEqual([
-			'csp declares unknown directive "scriptSrc" (allowed: connectSrc, imgSrc, fontSrc, mediaSrc, styleSrc)',
-		]);
-		expect(
-			validateCspDeclaration({
-				connectSrc: "https://api.example.org",
-				imgSrc: [1],
-				fontSrc: null,
-			}),
-		).toEqual([
-			"csp connectSrc must be an array of strings",
-			"csp imgSrc must be an array of strings",
-			"csp fontSrc must be an array of strings",
-		]);
-		expect(validateCspDeclaration(["https://api.example.org"])).toEqual([
-			"csp must be an object",
-		]);
+	test("reject what Rust rejects", () => {
+		for (const invalid of [
+			"",
+			"1a",
+			"a.",
+			"a..b",
+			"a[0]",
+			"a[",
+			"a.*b",
+			"a*",
+			"a.1b",
+			".a",
+			"a b",
+			"a-b",
+			"a.b-c",
+			"ä",
+		]) {
+			expect([invalid, parseWidgetInputPath(invalid)]).toEqual([invalid, null]);
+			expect(isValidWidgetInputPath(invalid)).toBeFalse();
+		}
+		expect(isValidWidgetInputPath("a.b.c.d.e.f")).toBeTrue();
+		expect(isValidWidgetInputPath("a.b.c.d.e.f.g")).toBeFalse();
 	});
 });

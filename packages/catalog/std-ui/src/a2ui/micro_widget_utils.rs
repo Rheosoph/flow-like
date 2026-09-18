@@ -241,6 +241,24 @@ pub fn json_schema_variable_type(schema: &Value) -> VariableType {
     }
 }
 
+/// The native pin schema a contract `{"x-flow-like-type":"llm","x-llm":kind}` marker
+/// names: exactly what model and agent nodes set on their History, Response and
+/// ResponseChunk pins, so those pins connect. `None` for any other schema.
+pub fn llm_pin_schema(schema: &Value) -> Option<String> {
+    use flow_like_model_provider::{
+        history::History, response::Response, response_chunk::ResponseChunk,
+    };
+    if schema.get("x-flow-like-type").and_then(Value::as_str) != Some("llm") {
+        return None;
+    }
+    match schema.get("x-llm").and_then(Value::as_str)? {
+        "History" => Pin::schema_string_for::<History>(),
+        "Response" => Pin::schema_string_for::<Response>(),
+        "ResponseChunk" => Pin::schema_string_for::<ResponseChunk>(),
+        _ => None,
+    }
+}
+
 /// Pin shape for a raw JSON Schema.
 ///
 /// An array schema describes the container, but a pin models one element plus
@@ -248,6 +266,13 @@ pub fn json_schema_variable_type(schema: &Value) -> VariableType {
 /// `Make Struct` reporting "Schema has no object properties" — it needs the
 /// `items` schema.
 pub fn json_schema_pin_shape(schema: &Value) -> PinShape {
+    if let Some(native) = llm_pin_schema(schema) {
+        return PinShape {
+            data_type: VariableType::Struct,
+            value_type: ValueType::Normal,
+            schema: Some(native),
+        };
+    }
     if json_schema_variable_type(schema) == VariableType::Geometry {
         let marker = if schema.get("x-flow-like-type").and_then(Value::as_str) == Some("geometry") {
             match schema.get("x-geometry") {
@@ -564,6 +589,65 @@ mod tests {
             assert_eq!(shape.data_type, VariableType::Geometry);
             assert_eq!(shape.schema.as_deref(), Some(marker(GeometryKind::Point)));
             assert_eq!(shape.value_type, container);
+        }
+    }
+
+    #[test]
+    fn llm_markers_map_to_native_model_pin_schemas() {
+        use flow_like_model_provider::{
+            history::History, response::Response, response_chunk::ResponseChunk,
+        };
+        for (kind, native) in [
+            ("History", Pin::schema_string_for::<History>()),
+            ("Response", Pin::schema_string_for::<Response>()),
+            ("ResponseChunk", Pin::schema_string_for::<ResponseChunk>()),
+        ] {
+            assert!(native.is_some());
+            let marker = json!({"type":"object","x-flow-like-type":"llm","x-llm":kind});
+            let shape = json_schema_pin_shape(&marker);
+            assert_eq!(shape.data_type, VariableType::Struct);
+            assert_eq!(shape.value_type, ValueType::Normal);
+            assert_eq!(shape.schema, native);
+            let list = json_schema_pin_shape(&json!({"type":"array","items":marker}));
+            assert_eq!(list.data_type, VariableType::Struct);
+            assert_eq!(list.value_type, ValueType::Array);
+            assert_eq!(list.schema, native);
+        }
+        // An unknown kind stays the plain marker instead of becoming a native type.
+        let unknown = json!({"type":"object","x-flow-like-type":"llm","x-llm":"Completion"});
+        assert_eq!(llm_pin_schema(&unknown), None);
+        assert_eq!(
+            json_schema_pin_shape(&unknown).schema,
+            schema_string(&unknown)
+        );
+    }
+
+    #[test]
+    fn generated_llm_schemas_match_the_native_types() {
+        use flow_like_model_provider::{
+            history::History, response::Response, response_chunk::ResponseChunk,
+        };
+        use flow_like_types::json::{from_str, to_value};
+        // The widget SDK validates LLM markers with copies of these files.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schema/llm");
+        for (file, native) in [
+            ("history", to_value(schemars::schema_for!(History)).unwrap()),
+            (
+                "response",
+                to_value(schemars::schema_for!(Response)).unwrap(),
+            ),
+            (
+                "response-chunk",
+                to_value(schemars::schema_for!(ResponseChunk)).unwrap(),
+            ),
+        ] {
+            let generated: Value =
+                from_str(&std::fs::read_to_string(dir.join(format!("{file}.json"))).unwrap())
+                    .unwrap();
+            assert_eq!(
+                generated, native,
+                "packages/schema/llm/{file}.json is stale: run `cargo run -p schema-gen`, then copy it into packages/widget-sdk/src/llm-schemas.ts"
+            );
         }
     }
 

@@ -31,6 +31,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use flow_like::a2ui::ElementDemand;
 use flow_like::a2ui::widget::Page;
 use flow_like::flow::compiled::prerun::{decorate_page_actions, redact_page_execution_routes};
 use flow_like::flow::event::Event;
@@ -72,6 +73,11 @@ pub struct BootstrapResponse {
     /// Revision of the Page execution authority map. Clients return this with
     /// lifecycle and static action invocations.
     pub execution_revision: Option<String>,
+    /// Page elements the Event's board reads (`selectors`) and whether it also resolves
+    /// element references at run time (`dynamic`). Page runs send the matching elements
+    /// with the invocation; anything else is requested from the live page.
+    #[schema(value_type = Option<Object>)]
+    pub element_demand: Option<ElementDemand>,
     /// The app-wide stylesheet, injected above every page surface and scoped to
     /// the app root. Delivered here rather than read from the owner-gated
     /// appearance route, because an ordinary viewer holds only `ExecuteEvents`.
@@ -201,6 +207,7 @@ fn bootstrap_response(
     page: Option<Page>,
     app_custom_css: Option<String>,
     execution_revision: Option<String>,
+    element_demand: Option<ElementDemand>,
     served_variant: Option<String>,
     canonical_route: Option<String>,
     route_miss: bool,
@@ -224,6 +231,7 @@ fn bootstrap_response(
         revision,
         app_custom_css,
         execution_revision,
+        element_demand,
         served_variant,
     })
     .map_err(|error| ApiError::internal_error(anyhow!("failed to encode bootstrap: {error}")))?;
@@ -348,7 +356,7 @@ pub async fn bootstrap(
     // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
     // chats, and other runnable surfaces. When it declares a custom page, however, that page is
     // part of the contract and a missing version-bound artifact remains a uniform 404.
-    let (page, execution_revision) = if event.default_page_id.is_some() {
+    let (page, execution_revision, element_demand) = if event.default_page_id.is_some() {
         let contract = resolve_page_contract_for_bootstrap(&state, &app_id, &event).await?;
         let mut page = decorate_page_actions(
             &contract.page,
@@ -361,9 +369,13 @@ pub async fn bootstrap(
         if !can_use_direct_board {
             page = redact_page_execution_routes(&page).map_err(ApiError::internal_error)?;
         }
-        (Some(page), Some(contract.manifest_revision))
+        (
+            Some(page),
+            Some(contract.manifest_revision),
+            Some(contract.element_demand),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
     let mut event = filter_event_list_execution(filter_event_secrets(event));
     if !can_use_direct_board && event.default_page_id.is_some() {
@@ -376,6 +388,7 @@ pub async fn bootstrap(
             .as_ref()
             .and_then(|frontend| frontend.custom_css.clone()),
         execution_revision,
+        element_demand,
         served_variant,
         canonical_route,
         route_miss,
@@ -479,6 +492,7 @@ mod tests {
             None,
             Some("per1_test".to_string()),
             None,
+            None,
             Some("/".to_string()),
             false,
             &headers,
@@ -502,6 +516,7 @@ mod tests {
             None,
             Some("per1_test".to_string()),
             None,
+            None,
             Some("/".to_string()),
             false,
             &conditional,
@@ -514,6 +529,7 @@ mod tests {
             Some(page),
             None,
             Some("per1_test".to_string()),
+            None,
             None,
             Some("/".to_string()),
             false,
@@ -616,6 +632,7 @@ mod tests {
             revision: None,
             app_custom_css: None,
             execution_revision: None,
+            element_demand: None,
             served_variant: None,
         };
         let value = flow_like_types::json::to_value(response).unwrap();

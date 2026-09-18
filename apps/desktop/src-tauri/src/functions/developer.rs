@@ -7,6 +7,7 @@ use flow_like::flow::node::{Node, NodeLogic, NodePermission, NodeWasm};
 use flow_like_wasm::abi::{WasmExecutionInput, WasmExecutionResult, WasmNodeDefinition};
 use flow_like_wasm::host_functions::ModelContext;
 use flow_like_wasm::manifest::PackageManifest;
+use flow_like_wasm::widget_frame::is_valid_package_id;
 use flow_like_wasm::{
     WasmEngine, WasmNodeLogic, WasmSecurityConfig, WidgetBundleReader, WidgetContract,
     build_node_from_definition, sha256_hex, widget_store_dir,
@@ -1224,6 +1225,13 @@ pub async fn developer_prepare_widget_preview(
 
         let package_id = reader.manifest().package_id.clone();
         let package_version = reader.manifest().package_version.clone();
+        if !is_valid_package_id(&package_id) {
+            return Err(TauriFunctionError::new(&format!(
+                "Invalid widget bundle package id {:?} in '{}': use only letters, digits, '.', '_' and '-'",
+                package_id,
+                bundle_path.display()
+            )));
+        }
 
         let dest = widget_store_dir(&cache_dir, &package_id, &bundle_hash);
         if !dest.is_dir() {

@@ -53,29 +53,16 @@ struct FlaggedRow {
     flagged_patterns: Option<sea_orm::JsonValue>,
 }
 
-#[utoipa::path(
-    get,
-    path = "/admin/governance/patterns",
-    tag = "admin",
-    description = "Platform-wide aggregation of flagged low-score node patterns across all apps, searchable by node or category.",
-    params(ListPatternsQuery),
-    responses(
-        (status = 200, description = "Aggregated flagged patterns", body = ListPatternsResponse),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden")
-    )
-)]
-#[tracing::instrument(name = "GET /admin/governance/patterns", skip_all)]
-pub async fn list_patterns(
-    State(state): State<AppState>,
-    Extension(user): Extension<AppUser>,
-    axum::extract::Query(query): axum::extract::Query<ListPatternsQuery>,
-) -> Result<Json<ListPatternsResponse>, ApiError> {
-    user.check_global_permission(&state, GlobalPermission::ReadPublishing)
-        .await?;
+pub(super) const PATTERNS_CACHE_KEY: &str = "admin:governance:flagged-patterns";
 
-    let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(25).clamp(1, 100);
+/// Every flagged node/category pair on the platform, worst first. Building it
+/// reads the `flaggedPatterns` JSON of every scored board, so the ranked list
+/// is kept in the short-lived response cache: paging and searching then reuse
+/// one aggregation instead of repeating it per request.
+async fn ranked_patterns(state: &AppState) -> Result<Vec<PatternItem>, ApiError> {
+    if let Some(cached) = state.get_cache::<Vec<PatternItem>>(PATTERNS_CACHE_KEY) {
+        return Ok(cached);
+    }
 
     let rows: Vec<FlaggedRow> = app_board_score::Entity::find()
         .select_only()
@@ -119,6 +106,43 @@ pub async fn list_patterns(
         })
         .collect();
 
+    items.sort_by(|a, b| {
+        a.min_score
+            .cmp(&b.min_score)
+            .then_with(|| b.app_count.cmp(&a.app_count))
+            .then_with(|| a.node.cmp(&b.node))
+    });
+
+    state.set_cache(PATTERNS_CACHE_KEY.to_string(), &items);
+    Ok(items)
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/governance/patterns",
+    tag = "admin",
+    description = "Platform-wide aggregation of flagged low-score node patterns across all apps, searchable by node or category.",
+    params(ListPatternsQuery),
+    responses(
+        (status = 200, description = "Aggregated flagged patterns", body = ListPatternsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden")
+    )
+)]
+#[tracing::instrument(name = "GET /admin/governance/patterns", skip_all)]
+pub async fn list_patterns(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    axum::extract::Query(query): axum::extract::Query<ListPatternsQuery>,
+) -> Result<Json<ListPatternsResponse>, ApiError> {
+    user.check_global_permission(&state, GlobalPermission::ReadPublishing)
+        .await?;
+
+    let page = query.page.unwrap_or(1).max(1);
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
+
+    let mut items = ranked_patterns(&state).await?;
+
     if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
         && !search.is_empty()
     {
@@ -127,13 +151,6 @@ pub async fn list_patterns(
                 || item.category.to_lowercase().contains(&search)
         });
     }
-
-    items.sort_by(|a, b| {
-        a.min_score
-            .cmp(&b.min_score)
-            .then_with(|| b.app_count.cmp(&a.app_count))
-            .then_with(|| a.node.cmp(&b.node))
-    });
 
     let total = items.len() as u64;
     let offset = ((page - 1) * limit) as usize;

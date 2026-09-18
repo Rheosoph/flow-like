@@ -14,7 +14,7 @@ use crate::{
         sea_orm_active_enums::{ExecutionStatus, RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
-    execution::normalize_run_version_label,
+    execution::{normalize_run_version_label, run_summary::RunSummary},
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
@@ -30,6 +30,26 @@ pub struct ReportRunRequest {
     pub start: u64,
     pub end: u64,
     pub error_message: Option<String>,
+    /// Dotted `MAJOR.MINOR.PATCH` of the event that triggered the run.
+    #[serde(default)]
+    pub event_version: Option<String>,
+    /// Visited nodes, each with the highest log level it reached.
+    #[serde(default)]
+    pub nodes: Option<Vec<(String, u8)>>,
+    /// Number of log messages the run wrote.
+    #[serde(default)]
+    pub logs: Option<u64>,
+}
+
+impl ReportRunRequest {
+    fn summary(&self) -> RunSummary {
+        RunSummary {
+            log_level: Some(self.log_level),
+            event_version: self.event_version.clone(),
+            nodes: self.nodes.clone(),
+            logs: self.logs,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
@@ -169,7 +189,7 @@ pub async fn report_run(
                 ..Default::default()
             };
             update.status = Set(run_status);
-            update.log_level = Set(body.log_level as i32);
+            body.summary().apply_to(&mut update);
             update.started_at = Set(started_at);
             update.completed_at = Set(completed_at);
             update.progress = Set(100);
@@ -177,7 +197,7 @@ pub async fn report_run(
             if let Some(ref error) = body.error_message {
                 update.error_message = Set(Some(error.clone()));
             }
-            execution_run::Entity::update_many()
+            let updated = execution_run::Entity::update_many()
                 .set(update)
                 .filter(execution_run::Column::Id.eq(&body.run_id))
                 .filter(execution_run::Column::AppId.eq(&app_id))
@@ -187,20 +207,24 @@ pub async fn report_run(
                 .filter(
                     execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]),
                 )
-                .exec(&state.db)
+                .exec_with_returning(&state.db)
                 .await
                 .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?;
-            execution_run::Entity::find_by_id(&body.run_id)
-                .filter(execution_run::Column::AppId.eq(&app_id))
-                .one(&state.db)
-                .await?
-                .ok_or(ApiError::NOT_FOUND)?
+            // Nothing is returned when a concurrent report already finished the run.
+            match updated.into_iter().next() {
+                Some(run) => run,
+                None => execution_run::Entity::find_by_id(&body.run_id)
+                    .filter(execution_run::Column::AppId.eq(&app_id))
+                    .one(&state.db)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?,
+            }
         } else {
             existing
         }
     } else {
         let version_label = body.version.as_deref().map(normalize_run_version_label);
-        let run = execution_run::ActiveModel {
+        let mut run = execution_run::ActiveModel {
             id: Set(body.run_id.clone()),
             board_id: Set(board_id.clone()),
             version: Set(version_label),
@@ -231,7 +255,11 @@ pub async fn report_run(
             app_id: Set(app_id.clone()),
             created_at: Set(now),
             updated_at: Set(now),
+            event_version: Set(None),
+            nodes: Set(None),
+            logs_count: Set(None),
         };
+        body.summary().apply_to(&mut run);
         run.insert(&state.db)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to create run: {}", e)))?

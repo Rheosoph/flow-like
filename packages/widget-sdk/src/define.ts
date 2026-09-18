@@ -1,4 +1,8 @@
-import type { WidgetCapabilities, WidgetCsp, WidgetSizing } from "./contract";
+import type {
+	WidgetCapabilities,
+	WidgetCspPurpose,
+	WidgetSizing,
+} from "./contract";
 
 export type WidgetInputsShape = object;
 export type WidgetEventsShape = object;
@@ -27,10 +31,10 @@ export interface WidgetConfig<Inputs extends WidgetInputsShape> {
 	sizing?: WidgetSizing;
 	capabilities?: WidgetCapabilities;
 	/**
-	 * Network sources the viewer must approve before the widget can reach
-	 * them. Extracted statically: use string literals only.
+	 * Purpose groups of network sources the viewer must approve before the
+	 * widget can reach them. Extracted statically: use string literals only.
 	 */
-	csp?: WidgetCsp;
+	csp?: WidgetCspPurpose[];
 	dev?: WidgetDevConfig<Inputs>;
 }
 

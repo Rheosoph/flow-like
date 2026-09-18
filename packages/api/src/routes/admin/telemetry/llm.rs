@@ -29,6 +29,7 @@ use crate::telemetry::percentiles_in_sql;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::sea_query::{Expr, SimpleExpr};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
@@ -724,13 +725,6 @@ async fn llm_from_sql<C: ConnectionTrait>(
            FROM "TelemetryLlmCall"
            WHERE {where_sql}"#
     );
-    let totals = TotalsRow::find_by_statement(Statement::from_sql_and_values(
-        backend,
-        totals_sql,
-        values.clone(),
-    ))
-    .one(db)
-    .await?;
 
     let model_sql = format!(
         r#"SELECT "provider" AS provider,
@@ -747,13 +741,6 @@ async fn llm_from_sql<C: ConnectionTrait>(
            ORDER BY calls DESC, provider ASC, model ASC
            LIMIT {LLM_TOP_LIMIT}"#
     );
-    let model_rows = ModelRow::find_by_statement(Statement::from_sql_and_values(
-        backend,
-        model_sql,
-        values.clone(),
-    ))
-    .all(db)
-    .await?;
 
     let provider_sql = format!(
         r#"SELECT "provider" AS provider,
@@ -769,13 +756,6 @@ async fn llm_from_sql<C: ConnectionTrait>(
            ORDER BY calls DESC, provider ASC
            LIMIT {LLM_TOP_LIMIT}"#
     );
-    let provider_rows = ProviderRow::find_by_statement(Statement::from_sql_and_values(
-        backend,
-        provider_sql,
-        values.clone(),
-    ))
-    .all(db)
-    .await?;
 
     let trend_sql = format!(
         r#"SELECT date_trunc('{bucket}', "createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,
@@ -788,10 +768,14 @@ async fn llm_from_sql<C: ConnectionTrait>(
            GROUP BY bucket
            ORDER BY bucket ASC"#
     );
-    let trend_rows =
-        LlmTrendRow::find_by_statement(Statement::from_sql_and_values(backend, trend_sql, values))
-            .all(db)
-            .await?;
+
+    let statement = |sql: String| Statement::from_sql_and_values(backend, sql, values.clone());
+    let (totals, model_rows, provider_rows, trend_rows) = try_join!(
+        TotalsRow::find_by_statement(statement(totals_sql)).one(db),
+        ModelRow::find_by_statement(statement(model_sql)).all(db),
+        ProviderRow::find_by_statement(statement(provider_sql)).all(db),
+        LlmTrendRow::find_by_statement(statement(trend_sql)).all(db),
+    )?;
 
     let trend_buckets = trend_rows
         .into_iter()
@@ -981,10 +965,16 @@ async fn raw_breakdowns<C: ConnectionTrait>(
     db: &C,
     filters: &LlmFilters,
 ) -> Result<(Vec<LlmOperationStats>, Vec<LlmErrorKindStats>), ApiError> {
-    let operations = operation_stats_query(filters)
-        .into_model::<OperationRow>()
-        .all(db)
-        .await?
+    let (operation_rows, error_kind_rows) = try_join!(
+        operation_stats_query(filters)
+            .into_model::<OperationRow>()
+            .all(db),
+        error_kind_stats_query(filters)
+            .into_model::<ErrorKindRow>()
+            .all(db),
+    )?;
+
+    let operations = operation_rows
         .into_iter()
         .map(|row| LlmOperationStats {
             operation: row.operation,
@@ -993,10 +983,7 @@ async fn raw_breakdowns<C: ConnectionTrait>(
         })
         .collect();
 
-    let error_kinds = error_kind_stats_query(filters)
-        .into_model::<ErrorKindRow>()
-        .all(db)
-        .await?
+    let error_kinds = error_kind_rows
         .into_iter()
         .map(|row| LlmErrorKindStats {
             error_kind: row.error_kind,

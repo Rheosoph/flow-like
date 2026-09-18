@@ -44,13 +44,29 @@ export interface WidgetBundleManifest {
 	widgets: BundleWidgetEntry[];
 }
 
+/**
+ * Relative `/`-separated path that stays inside the unpack directory on every
+ * OS: `:` would allow drive prefixes (`C:/`, `C:x`) and NTFS streams.
+ */
 export function isSafeEntryPath(path: string): boolean {
 	return (
 		path.length > 0 &&
 		!path.startsWith("/") &&
 		!path.includes("\\") &&
+		!path.includes(":") &&
+		!path.includes("\0") &&
 		path.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..")
 	);
+}
+
+/**
+ * Mirrors the archive name check in `WidgetBundleReader::validate`: directory
+ * entries are checked without their trailing `/`.
+ */
+export function unsafeArchiveEntryPaths(names: readonly string[]): string[] {
+	return names
+		.filter((name) => !isSafeEntryPath(name.replace(/\/$/, "")))
+		.map((name) => `Unsafe widget bundle entry path: ${name}`);
 }
 
 /** Rebuild with serde field order and skip-serializing semantics. */

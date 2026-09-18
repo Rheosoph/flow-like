@@ -65,7 +65,7 @@ use crate::{
     state::AppState,
 };
 
-use super::db::{encrypt_token, get_event_from_db};
+use super::db::{encrypt_token, get_event_with_setup_status_from_db};
 
 #[path = "setup_persistence.rs"]
 mod persistence;
@@ -296,9 +296,10 @@ pub(crate) async fn run_event_setup(
     }
 
     // Load the event (validates ownership) and capture its current version.
-    let core_event = get_event_from_db(&state.db, &event_id, &app_id)
-        .await
-        .map_err(|e| ApiError::not_found(e.to_string()))?;
+    let (core_event, stable_setup_status) =
+        get_event_with_setup_status_from_db(&state.db, &event_id, &app_id)
+            .await
+            .map_err(|e| ApiError::not_found(e.to_string()))?;
     if !super::generic_event_endpoint_allowed(&core_event.event_type) {
         return Err(ApiError::forbidden(
             "Ontology action events are managed and invoked through Data Studio",
@@ -340,12 +341,7 @@ pub(crate) async fn run_event_setup(
     // registrations and serving pointers.
     if !body.force {
         let running = if variant_name == STABLE_VARIANT {
-            event::Entity::find_by_id(&core_event.id)
-                .filter(event::Column::AppId.eq(&app_id))
-                .one(&state.db)
-                .await
-                .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
-                .is_some_and(|row| row.setup_status.as_deref() == Some("running"))
+            stable_setup_status.as_deref() == Some("running")
         } else {
             find_event_setup(&state.db, &app_id, &core_event.id, &variant_name)
                 .await
@@ -425,19 +421,19 @@ pub(crate) async fn run_event_setup(
     })
     .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
-    let credentials = state
-        .scoped_credentials(
+    let (credentials_result, profile, wasm_packages) = flow_like_types::tokio::join!(
+        state.scoped_credentials(
             &sub,
             &app_id,
             crate::credentials::CredentialsAccess::ServerExecute,
-        )
-        .await?;
+        ),
+        fetch_profile_for_dispatch(&state, &sub, body.profile_id.as_deref(), &app_id, true),
+        resolve_wasm_packages(&state, &app_id),
+    );
+    let credentials = credentials_result?;
     let shared_credentials = credentials.into_shared_credentials();
     let credentials_json = serde_json::to_string(&shared_credentials)
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-    let profile =
-        fetch_profile_for_dispatch(&state, &sub, body.profile_id.as_deref(), &app_id, true).await;
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     // Persist a run record. Setup runs are tracked as `Http` mode runs
     // because they go through the same dispatch path.
@@ -472,6 +468,9 @@ pub(crate) async fn run_event_setup(
         app_id: Set(app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
     run_active
         .insert(&state.db)
@@ -1338,7 +1337,7 @@ async fn persist_registrations_in(
         enforce_stable_parity(
             app_id,
             event_id,
-            event_version,
+            &inputs.prepared,
             variant,
             stable_setup_version.as_deref(),
             txn,
@@ -1572,14 +1571,14 @@ async fn load_mcp_auth_mode<C: ConnectionTrait>(
         .filter(event_remote_registration::Column::Kind.eq("mcp_raw"))
         .one(txn)
         .await?
-        .map(|registration| {
-            registration
-                .extras_json
-                .as_ref()
-                .and_then(|config| config.get("flow_like_auth"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        }))
+        .map(|registration| mcp_flow_like_auth(registration.extras_json.as_ref())))
+}
+
+fn mcp_flow_like_auth(extras: Option<&Value>) -> bool {
+    extras
+        .and_then(|config| config.get("flow_like_auth"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn validate_live_mcp_auth_mode(
@@ -1603,6 +1602,8 @@ async fn enforce_live_mcp_auth_mode_parity<C: ConnectionTrait>(
     event_version: &str,
     txn: &C,
 ) -> Result<(), PersistError> {
+    use sea_orm::{Condition, QuerySelect};
+
     let core_event = super::db::db_model_to_event(row.clone())?;
     let live_variants: Vec<EventVariant> = core_event
         .variant_set()
@@ -1619,22 +1620,65 @@ async fn enforce_live_mcp_auth_mode_parity<C: ConnectionTrait>(
     };
     // Zero-weight Live variants remain reachable through an explicit pin.
     // A variant without a serving pointer falls back to stable instead.
-    for variant in live_variants {
-        let Some(setup) = find_event_setup(txn, &row.app_id, &row.id, &variant.name)
-            .await?
-            .filter(|setup| !setup.event_version.is_empty() && !setup.board_id.is_empty())
-        else {
-            continue;
-        };
-        let variant_auth_mode = load_mcp_auth_mode(
-            &row.app_id,
-            &row.id,
-            &setup.event_version,
-            &variant.name,
-            txn,
-        )
+    let served_versions: HashMap<String, String> = event_setup::Entity::find()
+        .select_only()
+        .columns([
+            event_setup::Column::Variant,
+            event_setup::Column::EventVersion,
+            event_setup::Column::BoardId,
+        ])
+        .filter(event_setup::Column::AppId.eq(&row.app_id))
+        .filter(event_setup::Column::EventId.eq(&row.id))
+        .filter(event_setup::Column::Variant.is_in(live_variants.iter().map(|v| v.name.clone())))
+        .into_tuple::<(String, String, String)>()
+        .all(txn)
+        .await?
+        .into_iter()
+        .filter(|(_, event_version, board_id)| !event_version.is_empty() && !board_id.is_empty())
+        .map(|(variant, event_version, _)| (variant, event_version))
+        .collect();
+    if served_versions.is_empty() {
+        return Ok(());
+    }
+
+    let mut served_pairs = Condition::any();
+    for (variant, version) in &served_versions {
+        served_pairs = served_pairs.add(
+            Condition::all()
+                .add(event_remote_registration::Column::Variant.eq(variant))
+                .add(event_remote_registration::Column::EventVersion.eq(version)),
+        );
+    }
+    let mut auth_modes: HashMap<String, bool> = HashMap::new();
+    let raw_registrations: Vec<(String, Option<Value>)> = event_remote_registration::Entity::find()
+        .select_only()
+        .columns([
+            event_remote_registration::Column::Variant,
+            event_remote_registration::Column::ExtrasJson,
+        ])
+        .filter(event_remote_registration::Column::AppId.eq(&row.app_id))
+        .filter(event_remote_registration::Column::EventId.eq(&row.id))
+        .filter(event_remote_registration::Column::Kind.eq("mcp_raw"))
+        .filter(served_pairs)
+        .into_tuple()
+        .all(txn)
         .await?;
-        validate_live_mcp_auth_mode(stable_mode, &variant.name, &variant.mode, variant_auth_mode)?;
+    for (variant, extras) in raw_registrations {
+        auth_modes
+            .entry(variant)
+            .or_insert_with(|| mcp_flow_like_auth(extras.as_ref()));
+    }
+
+    for variant in live_variants {
+        if !served_versions.contains_key(&variant.name) {
+            continue;
+        }
+        validate_live_mcp_auth_mode(
+            stable_mode,
+            &variant.name,
+            &variant.mode,
+            auth_modes.get(&variant.name).copied(),
+        )?;
     }
     Ok(())
 }
@@ -1646,63 +1690,127 @@ async fn load_inbound_surface<C: ConnectionTrait>(
     variant: &str,
     txn: &C,
 ) -> flow_like_types::Result<InboundSurface> {
-    let auth_type_by_id: HashMap<String, String> = event_remote_auth::Entity::find()
+    use sea_orm::QuerySelect;
+
+    let auths: Vec<(String, Value)> = event_remote_auth::Entity::find()
+        .select_only()
+        .columns([
+            event_remote_auth::Column::Id,
+            event_remote_auth::Column::ConfigJson,
+        ])
         .filter(event_remote_auth::Column::AppId.eq(app_id))
         .filter(event_remote_auth::Column::EventId.eq(event_id))
         .filter(event_remote_auth::Column::EventVersion.eq(event_version))
         .filter(event_remote_auth::Column::Variant.eq(variant))
+        .into_tuple()
         .all(txn)
-        .await?
+        .await?;
+    let registrations: Vec<(String, String, Option<String>, Option<Value>)> =
+        event_remote_registration::Entity::find()
+            .select_only()
+            .columns([
+                event_remote_registration::Column::Kind,
+                event_remote_registration::Column::Path,
+                event_remote_registration::Column::AuthId,
+                event_remote_registration::Column::ExtrasJson,
+            ])
+            .filter(event_remote_registration::Column::AppId.eq(app_id))
+            .filter(event_remote_registration::Column::EventId.eq(event_id))
+            .filter(event_remote_registration::Column::EventVersion.eq(event_version))
+            .filter(event_remote_registration::Column::Variant.eq(variant))
+            .into_tuple()
+            .all(txn)
+            .await?;
+
+    Ok(build_inbound_surface(
+        auths.iter().map(|(id, config)| (id.as_str(), config)),
+        registrations.iter().map(|(kind, path, auth_id, extras)| {
+            (
+                kind.as_str(),
+                path.as_str(),
+                auth_id.as_deref(),
+                extras.as_ref(),
+            )
+        }),
+    ))
+}
+
+fn build_inbound_surface<'a>(
+    auths: impl IntoIterator<Item = (&'a str, &'a Value)>,
+    registrations: impl IntoIterator<Item = (&'a str, &'a str, Option<&'a str>, Option<&'a Value>)>,
+) -> InboundSurface {
+    let auth_type_by_id: HashMap<&str, &str> = auths
         .into_iter()
-        .map(|auth| {
-            let auth_type = auth
-                .config_json
+        .map(|(id, config)| {
+            let auth_type = config
                 .get("type")
                 .and_then(|value| value.as_str())
                 .map(canonical_rest_auth_type)
-                .unwrap_or("untyped")
-                .to_string();
-            (auth.id, auth_type)
+                .unwrap_or("untyped");
+            (id, auth_type)
         })
         .collect();
 
     let mut auth_types: HashMap<(String, String), BTreeSet<String>> = HashMap::new();
     let mut mcp_tool_names = BTreeSet::new();
-    let registrations = event_remote_registration::Entity::find()
-        .filter(event_remote_registration::Column::AppId.eq(app_id))
-        .filter(event_remote_registration::Column::EventId.eq(event_id))
-        .filter(event_remote_registration::Column::EventVersion.eq(event_version))
-        .filter(event_remote_registration::Column::Variant.eq(variant))
-        .all(txn)
-        .await?;
-    for registration in registrations {
-        let resolved = registration
-            .auth_id
-            .as_deref()
-            .map(|auth_id| {
-                auth_type_by_id
-                    .get(auth_id)
-                    .cloned()
-                    .unwrap_or_else(|| "untyped".to_string())
-            })
-            .unwrap_or_else(|| "none".to_string());
-        let resolved = inbound_registration_auth_type(
-            &registration.kind,
-            registration.extras_json.as_ref(),
-            resolved,
-        );
-        if registration.kind == "mcp_tool" {
-            mcp_tool_names.insert(registration.path.clone());
+    for (kind, path, auth_id, extras) in registrations {
+        let resolved = auth_id
+            .map(|auth_id| auth_type_by_id.get(auth_id).copied().unwrap_or("untyped"))
+            .unwrap_or("none")
+            .to_string();
+        let resolved = inbound_registration_auth_type(kind, extras, resolved);
+        if kind == "mcp_tool" {
+            mcp_tool_names.insert(path.to_string());
         }
         auth_types
-            .entry((registration.kind, registration.path))
+            .entry((kind.to_string(), path.to_string()))
             .or_default()
             .insert(resolved);
     }
-    Ok(InboundSurface {
+    InboundSurface {
         auth_types,
         mcp_tool_names,
-    })
+    }
+}
+
+fn prepared_field<'a, V: Into<sea_orm::Value>>(
+    value: &'a sea_orm::ActiveValue<V>,
+    field: &str,
+) -> flow_like_types::Result<&'a V> {
+    value
+        .try_as_ref()
+        .ok_or_else(|| flow_like_types::anyhow!("prepared setup row has no `{field}`"))
+}
+
+/// The surface `prepared` exposes once written. Auth ids are only matched
+/// against each other, so the ids reconciliation swaps in for reused rows do
+/// not change the result.
+fn prepared_inbound_surface(
+    prepared: &PreparedRegistrations,
+) -> flow_like_types::Result<InboundSurface> {
+    let auths = prepared
+        .auths
+        .iter()
+        .map(|auth| {
+            Ok((
+                prepared_field(&auth.id, "id")?.as_str(),
+                prepared_field(&auth.config_json, "config_json")?,
+            ))
+        })
+        .collect::<flow_like_types::Result<Vec<_>>>()?;
+    let registrations = prepared
+        .registrations
+        .iter()
+        .map(|registration| {
+            Ok((
+                prepared_field(&registration.kind, "kind")?.as_str(),
+                prepared_field(&registration.path, "path")?.as_str(),
+                prepared_field(&registration.auth_id, "auth_id")?.as_deref(),
+                prepared_field(&registration.extras_json, "extras_json")?.as_ref(),
+            ))
+        })
+        .collect::<flow_like_types::Result<Vec<_>>>()?;
+    Ok(build_inbound_surface(auths, registrations))
 }
 
 /// The two fatal gates a non-stable setup must pass against the stable
@@ -1715,7 +1823,7 @@ async fn load_inbound_surface<C: ConnectionTrait>(
 async fn enforce_stable_parity<C: ConnectionTrait>(
     app_id: &str,
     event_id: &str,
-    event_version: &str,
+    prepared: &PreparedRegistrations,
     variant: &str,
     stable_setup_version: Option<&str>,
     txn: &C,
@@ -1725,7 +1833,8 @@ async fn enforce_stable_parity<C: ConnectionTrait>(
     };
     let stable =
         load_inbound_surface(app_id, event_id, stable_version, STABLE_VARIANT, txn).await?;
-    let candidate = load_inbound_surface(app_id, event_id, event_version, variant, txn).await?;
+    // This transaction just wrote exactly these rows for the variant.
+    let candidate = prepared_inbound_surface(prepared)?;
 
     validate_inbound_surface_parity(&stable, &candidate, variant)
 }

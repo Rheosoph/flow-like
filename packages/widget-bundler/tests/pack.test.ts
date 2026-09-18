@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import {
@@ -133,7 +133,7 @@ describe("pack", () => {
 		);
 		expect(html).toContain('http-equiv="Content-Security-Policy"');
 		expect(html).toContain("flow-widget://com.example.demo@hash/");
-		expect(html).toContain("connect-src 'none'");
+		expect(html).toContain("connect-src data: blob:; worker-src 'none'");
 		expect(html).toContain('src="../../shared/react-abc123.js"');
 		expect(html).toContain("hello entry");
 		expect(html).toContain("<style>#root { color: red; }");
@@ -213,13 +213,19 @@ describe("pack", () => {
 				'id: "hello-widget",',
 				`id: "hello-widget",
 	capabilities: { workers: true, media: true },
-	csp: {
-		connectSrc: ["wss://live.example.com", "https://API.maptiler.com"],
-		imgSrc: ["https://a.tile.openstreetmap.org"],
-		fontSrc: ["https://fonts.gstatic.com"],
-		mediaSrc: ["https://media.maptiler.com"],
-		styleSrc: ["https://fonts.googleapis.com"],
-	},`,
+	csp: [
+		{
+			reason: "Loads map tiles and live positions",
+			connectSrc: ["wss://live.example.com", "https://API.maptiler.com"],
+			imgSrc: ["https://a.tile.openstreetmap.org"],
+			mediaSrc: ["https://media.maptiler.com"],
+		},
+		{
+			reason: "Loads web fonts for labels",
+			fontSrc: ["https://fonts.gstatic.com"],
+			styleSrc: ["https://fonts.googleapis.com"],
+		},
+	],`,
 			),
 		);
 		const result = await pack(project.projectDir, {
@@ -233,13 +239,19 @@ describe("pack", () => {
 			),
 		);
 		expect(contract.contractVersion).toBe(2);
-		expect(contract.csp).toEqual({
-			connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
-			imgSrc: ["https://a.tile.openstreetmap.org"],
-			fontSrc: ["https://fonts.gstatic.com"],
-			mediaSrc: ["https://media.maptiler.com"],
-			styleSrc: ["https://fonts.googleapis.com"],
-		});
+		expect(contract.csp).toEqual([
+			{
+				reason: "Loads map tiles and live positions",
+				connectSrc: ["https://api.maptiler.com", "wss://live.example.com"],
+				imgSrc: ["https://a.tile.openstreetmap.org"],
+				mediaSrc: ["https://media.maptiler.com"],
+			},
+			{
+				reason: "Loads web fonts for labels",
+				fontSrc: ["https://fonts.gstatic.com"],
+				styleSrc: ["https://fonts.googleapis.com"],
+			},
+		]);
 
 		const html = DECODER.decode(
 			entries["widgets/hello-widget/index.html"] as Uint8Array,
@@ -249,10 +261,10 @@ describe("pack", () => {
 			expect(csp).not.toContain(host);
 		}
 		expect(csp).toContain(
-			"connect-src 'self' flow-widget: http://flow-widget.localhost blob:",
+			"connect-src data: blob: 'self' flow-widget: http://flow-widget.localhost;",
 		);
-		expect(csp).toContain(
-			"media-src blob: 'self' flow-widget: http://flow-widget.localhost",
+		expect(csp).toEndWith(
+			"media-src data: blob: 'self' flow-widget: http://flow-widget.localhost",
 		);
 	}, 60000);
 
@@ -265,6 +277,23 @@ describe("pack", () => {
 			} as never),
 		).rejects.toThrow(CONNECT_HOSTS_REMOVED);
 	});
+
+	test.skipIf(process.platform === "win32")(
+		"refuses shared chunk file names the hub would refuse",
+		async () => {
+			const project = makeProjectFixture();
+			const out = join(tmpDir("flwb-unsafe"), "widgets.flwb");
+			writeFileSync(
+				join(project.groupDir, "dist", "shared", "chunk:ads.js"),
+				"x",
+			);
+			await expect(
+				pack(project.projectDir, { out, quiet: true }),
+			).rejects.toThrow("Unsafe widget bundle entry path: shared/chunk:ads.js");
+			expect(existsSync(out)).toBeFalse();
+		},
+		60000,
+	);
 
 	test("rejects package ids the hub would refuse", async () => {
 		const dir = tmpDir("flwb-toml");

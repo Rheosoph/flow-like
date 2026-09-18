@@ -18,6 +18,14 @@ import {
 	pasteClipboard,
 } from "./builderClipboard";
 import { moveComponentInTree } from "./componentTree";
+import type {
+	CreateWorkflowEventRequest,
+	WorkflowEventInfo,
+} from "./page-workflow-events";
+export type {
+	CreateWorkflowEventRequest,
+	WorkflowEventInfo,
+} from "./page-workflow-events";
 
 export type { BuilderClipboard } from "./builderClipboard";
 
@@ -59,16 +67,16 @@ export interface PageInfo {
 	boardId?: string;
 }
 
-export interface WorkflowEventInfo {
-	nodeId: string;
-	name: string;
-}
-
 export interface ActionContext {
 	appId?: string;
 	boardId?: string;
 	pages?: PageInfo[];
 	workflowEvents?: WorkflowEventInfo[];
+	refreshWorkflowEvents?: () => void;
+	/** Only provided while the page is linked to a board. */
+	createWorkflowEvent?: (
+		request: CreateWorkflowEventRequest,
+	) => Promise<WorkflowEventInfo>;
 	/** Widget-level actions that can be triggered by components inside the widget */
 	widgetActions?: { id: string; label: string; description?: string }[];
 	eventId?: string;

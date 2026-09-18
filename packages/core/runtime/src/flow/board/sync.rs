@@ -277,6 +277,9 @@ pub struct SyncNode {
     pub start: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Editor latch state; per instance, so it always ships.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pins_collapsed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<u64>,
     /// `fn_refs.fn_refs` is per-instance wiring, so the whole struct always ships.
@@ -339,6 +342,7 @@ impl SyncNode {
             comment: node.comment.clone(),
             start: node.start,
             error: node.error.clone(),
+            pins_collapsed: node.pins_collapsed,
             hash: node.hash,
             fn_refs: node.fn_refs.clone(),
             wasm: node.wasm.clone(),

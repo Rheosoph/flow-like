@@ -10,7 +10,7 @@ use flow_like::flow::{
     node::{Node, NodeWasm},
 };
 use flow_like_wasm_schema::manifest::PackageNodeEntry;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 use std::sync::Arc;
 
 /// An app's WASM node catalog together with a token that changes whenever the catalog does.
@@ -20,7 +20,7 @@ pub struct AppWasmNodes {
     pub fingerprint: String,
 }
 
-/// [`app_wasm_nodes`] behind a per-app cache keyed by the app's package pins.
+/// The app's WASM node catalog behind a per-app cache keyed by the app's package pins.
 ///
 /// The board sync endpoint needs this on every poll and the mutation path on every write; without
 /// a cache each call pays a second database round trip that pulls every pinned package's node
@@ -96,11 +96,6 @@ fn packages_epoch(packages: &[app_package::Model]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
-    let packages = app_packages(state, app_id).await?;
-    wasm_nodes_for_packages(state, &packages).await
-}
-
 async fn wasm_nodes_for_packages(
     state: &AppState,
     packages: &[app_package::Model],
@@ -139,10 +134,17 @@ pub async fn wasm_nodes_for_pins(
     let mut nodes_by_pin: HashMap<(String, String), serde_json::Value> =
         wasm_package_version::Entity::find()
             .filter(pinned)
+            .select_only()
+            .columns([
+                wasm_package_version::Column::PackageId,
+                wasm_package_version::Column::Version,
+                wasm_package_version::Column::Nodes,
+            ])
+            .into_tuple::<(String, String, serde_json::Value)>()
             .all(db)
             .await?
             .into_iter()
-            .map(|record| ((record.package_id, record.version), record.nodes))
+            .map(|(package_id, version, nodes)| ((package_id, version), nodes))
             .collect();
 
     let mut wasm_nodes: Vec<Node> = Vec::with_capacity(pins.len() * 5);
@@ -212,6 +214,7 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         namespace: None,
         alias: None,
         receiver: None,
+        pins_collapsed: None,
     };
     node.ensure_flowscript_names();
     node

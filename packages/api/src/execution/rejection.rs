@@ -8,8 +8,9 @@
 //!
 //! [`record`] gives those attempts the same two homes a real run has:
 //! an `ExecutionRun` row (so they show up in `GET /apps/{id}/board/{id}/runs`)
-//! and a LanceDB per-run table holding one `Fatal` log message with the reason
-//! (so `GET /apps/{id}/board/{id}/logs` explains what happened). It is
+//! and, in the logs bucket, a LanceDB per-run table holding one `Fatal` log
+//! message with the reason (so `GET /apps/{id}/board/{id}/logs` explains what
+//! happened) next to the refused payload's sidecar. It is
 //! best-effort by construction: a failure to record a rejection must never
 //! change the response the caller already earned.
 
@@ -18,15 +19,16 @@ use crate::credentials::CredentialsAccess;
 use crate::entity::execution_run;
 use crate::entity::sea_orm_active_enums::{RunMode, RunStatus, RunVariant};
 use crate::state::AppState;
+use flow_like::credentials::StoreType;
 use flow_like::flow::execution::rejection::{RejectedRun, record_rejection};
 
 pub use flow_like::flow::execution::rejection::RejectionStage;
 use flow_like_types::create_id;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ColumnTrait, EntityTrait, Iterable, QueryFilter, QueryOrder, QuerySelect,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// `LogLevel::Fatal` — a rejected trigger never reached a node, so it is worse
 /// than a run that failed inside one.
@@ -46,6 +48,10 @@ const DEDUP_WINDOW_MINUTES: i64 = 15;
 /// a new row and a new Lance table. Past this many rejections of one event
 /// inside the window, stop recording and let the log line carry it.
 const MAX_REJECTIONS_PER_EVENT: u64 = 20;
+
+/// Rows read per suppression check. Rejections recorded under a caller-supplied
+/// run id skip the cap above, so nothing else bounds the window.
+const SUPPRESSION_SCAN_LIMIT: u64 = 100;
 
 /// Everything known about a trigger at the moment it was refused.
 #[derive(Debug, Clone)]
@@ -178,14 +184,15 @@ pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
 
     match suppression(state, &context).await {
         Ok(Suppression::Fold(existing)) => {
-            record_rejection_audit(state, &context, &existing).await;
+            let existing_id = existing.id.clone();
+            record_rejection_audit(state, &context, &existing_id, Some(*existing)).await;
             tracing::debug!(
-                run_id = %existing,
+                run_id = %existing_id,
                 app_id = %context.app_id,
                 stage = context.stage.as_str(),
                 "Trigger rejected again for the same reason; folding into the existing run"
             );
-            return existing;
+            return existing_id;
         }
         Ok(Suppression::Throttled(latest)) => {
             tracing::warn!(
@@ -208,7 +215,7 @@ pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
     }
 
     match record_run_row(state, &context).await {
-        Ok(()) => record_rejection_audit(state, &context, &run_id).await,
+        Ok(persisted) => record_rejection_audit(state, &context, &run_id, persisted).await,
         Err(error) => tracing::error!(
             error = %error,
             run_id = %run_id,
@@ -242,17 +249,30 @@ pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
 
 /// Match the existing rejection cap: a folded attempt shares its audit entry
 /// with the persisted rejected run, and retries can repair an earlier failure.
-async fn record_rejection_audit(state: &AppState, context: &RejectedRunContext, run_id: &str) {
-    if !state.platform_config.audit.enabled || !state.platform_config.audit.log_executions {
+/// `persisted` is the row as the caller just wrote it; without one (a reused
+/// run id that was already terminal) the row is read back.
+async fn record_rejection_audit(
+    state: &AppState,
+    context: &RejectedRunContext,
+    run_id: &str,
+    persisted: Option<execution_run::Model>,
+) {
+    if !crate::audit::records_executions(&state.platform_config.audit) {
         return;
     }
     let result: flow_like_types::Result<()> = async {
-        let Some(run) = execution_run::Entity::find_by_id(run_id)
-            .filter(execution_run::Column::AppId.eq(&context.app_id))
-            .one(&state.db)
-            .await?
-        else {
-            return Ok(());
+        let run = match persisted {
+            Some(run) => run,
+            None => {
+                let Some(run) = execution_run::Entity::find_by_id(run_id)
+                    .filter(execution_run::Column::AppId.eq(&context.app_id))
+                    .one(&state.db)
+                    .await?
+                else {
+                    return Ok(());
+                };
+                run
+            }
         };
         if run.status != RunStatus::Failed
             || run.current_step.as_deref() != Some(context.stage.operation_id().as_str())
@@ -300,7 +320,7 @@ enum Suppression {
     /// Nothing comparable recently; write the run.
     Record,
     /// The same rejection is already on record; reuse that run.
-    Fold(String),
+    Fold(Box<execution_run::Model>),
     /// This event has produced too many distinct rejections to keep recording;
     /// carries the newest one so the caller still names a run that exists.
     Throttled(String),
@@ -323,36 +343,42 @@ async fn suppression(
 
     let now = chrono::Utc::now().fixed_offset();
     let since = now - chrono::Duration::minutes(DEDUP_WINDOW_MINUTES);
-    let recent = || {
-        execution_run::Entity::find()
-            .filter(execution_run::Column::AppId.eq(&context.app_id))
-            .filter(execution_run::Column::EventId.eq(event_id))
-            .filter(execution_run::Column::CurrentStep.eq(context.stage.operation_id()))
-            .filter(execution_run::Column::CreatedAt.gte(since))
-    };
-
-    let existing = recent()
-        .filter(execution_run::Column::ErrorMessage.eq(context.reason.clone()))
+    // Naming every variant matches the same rows while letting the
+    // (eventId, runVariant, createdAt) index bound the scan to the window.
+    let recent: Vec<(String, Option<String>)> = execution_run::Entity::find()
+        .select_only()
+        .columns([
+            execution_run::Column::Id,
+            execution_run::Column::ErrorMessage,
+        ])
+        .filter(execution_run::Column::AppId.eq(&context.app_id))
+        .filter(execution_run::Column::EventId.eq(event_id))
+        .filter(execution_run::Column::RunVariant.is_in(RunVariant::iter()))
+        .filter(execution_run::Column::CurrentStep.eq(context.stage.operation_id()))
+        .filter(execution_run::Column::CreatedAt.gte(since))
         .order_by_desc(execution_run::Column::CreatedAt)
-        .one(&state.db)
+        .limit(SUPPRESSION_SCAN_LIMIT)
+        .into_tuple()
+        .all(&state.db)
         .await?;
 
-    if let Some(existing) = existing {
+    let existing = recent
+        .iter()
+        .find(|(_, reason)| reason.as_deref() == Some(context.reason.as_str()));
+    if let Some((existing_id, _)) = existing {
         let bump = execution_run::ActiveModel {
-            id: Set(existing.id.clone()),
+            id: Set(existing_id.clone()),
             updated_at: Set(now),
             ..Default::default()
         };
-        bump.update(&state.db).await?;
-        return Ok(Suppression::Fold(existing.id));
+        return Ok(Suppression::Fold(Box::new(bump.update(&state.db).await?)));
     }
 
-    if recent().count(&state.db).await? >= MAX_REJECTIONS_PER_EVENT {
-        let latest = recent()
-            .order_by_desc(execution_run::Column::CreatedAt)
-            .one(&state.db)
-            .await?
-            .map(|run| run.id)
+    if recent.len() as u64 >= MAX_REJECTIONS_PER_EVENT {
+        let latest = recent
+            .into_iter()
+            .next()
+            .map(|(latest_id, _)| latest_id)
             .unwrap_or_else(|| context.run_id.clone());
         return Ok(Suppression::Throttled(latest));
     }
@@ -366,14 +392,20 @@ async fn suppression(
 async fn record_run_row(
     state: &AppState,
     context: &RejectedRunContext,
-) -> flow_like_types::Result<()> {
+) -> flow_like_types::Result<Option<execution_run::Model>> {
     let now = chrono::Utc::now().fixed_offset();
-    let existing = execution_run::Entity::find_by_id(&context.run_id)
-        .filter(execution_run::Column::AppId.eq(&context.app_id))
-        .one(&state.db)
-        .await?;
+    // Only a caller-supplied id can already be on record.
+    let exists = context.reuses_run_id
+        && execution_run::Entity::find_by_id(&context.run_id)
+            .select_only()
+            .column(execution_run::Column::Id)
+            .filter(execution_run::Column::AppId.eq(&context.app_id))
+            .into_tuple::<String>()
+            .one(&state.db)
+            .await?
+            .is_some();
 
-    if existing.is_some() {
+    if exists {
         let update = execution_run::ActiveModel {
             id: Set(context.run_id.clone()),
             status: Set(RunStatus::Failed),
@@ -382,16 +414,19 @@ async fn record_run_row(
             current_step: Set(Some(context.stage.operation_id())),
             completed_at: Set(Some(now)),
             updated_at: Set(now),
+            event_version: Set(context.event_version.clone()),
+            nodes: Set(Some(json!([]))),
+            logs_count: Set(Some(1)),
             ..Default::default()
         };
-        execution_run::Entity::update_many()
+        let finalized = execution_run::Entity::update_many()
             .set(update)
             .filter(execution_run::Column::Id.eq(&context.run_id))
             .filter(execution_run::Column::AppId.eq(&context.app_id))
             .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
-            .exec(&state.db)
+            .exec_with_returning(&state.db)
             .await?;
-        return Ok(());
+        return Ok(finalized.into_iter().next());
     }
 
     // `started_at` stays NULL: the run never started, and that is the
@@ -427,10 +462,11 @@ async fn record_run_row(
         app_id: Set(context.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
+        event_version: Set(context.event_version.clone()),
+        nodes: Set(Some(json!([]))),
+        logs_count: Set(Some(1)),
     };
-    run.insert(&state.db).await?;
-
-    Ok(())
+    Ok(Some(run.insert(&state.db).await?))
 }
 
 /// The detail view. Without a board there is no log database to write into —
@@ -456,7 +492,9 @@ async fn record_run_logs(
         .scoped_credentials(subject, &context.app_id, CredentialsAccess::ServerExecute)
         .await
         .map_err(|e| flow_like_types::anyhow!("failed to scope log credentials: {e}"))?;
-    let logs_db_builder = credentials.into_shared_credentials().to_logs_db_builder()?;
+    let shared = credentials.into_shared_credentials();
+    let logs_db_builder = shared.to_logs_db_builder()?;
+    let log_store = shared.to_store_type(StoreType::Logs).await?;
 
     let rejection = RejectedRun::new(
         context.app_id.clone(),
@@ -473,7 +511,14 @@ async fn record_run_logs(
     .with_version_label(context.version.clone())
     .with_payload(context.payload.as_ref());
 
-    record_rejection(logs_db_builder.as_ref(), &rejection, None).await?;
+    record_rejection(
+        logs_db_builder.as_ref(),
+        &rejection,
+        None,
+        Some(&log_store),
+        None,
+    )
+    .await?;
 
     Ok(())
 }

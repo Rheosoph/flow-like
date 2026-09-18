@@ -9,15 +9,37 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
-use chrono::{Duration, Utc};
-use sea_orm::sea_query::Expr;
+use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio;
 use sea_orm::{
     ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::Serialize;
+use std::sync::OnceLock;
+use std::time::Instant;
 use utoipa::ToSchema;
 
 const AUTOMATIC_VERIFICATION_ENTRY_LIMIT: i64 = 1_000;
+/// The dashboard polls this endpoint; the platform-wide counts scan the table.
+const TOTALS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[derive(Clone, Copy)]
+struct Totals {
+    total: i64,
+    signed: i64,
+    branches: i64,
+    last_24h: i64,
+}
+
+static TOTALS: OnceLock<tokio::sync::Mutex<Option<(Instant, Totals)>>> = OnceLock::new();
+
+type TailRow = (
+    i64,
+    DateTime<FixedOffset>,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ChainSummary {
@@ -54,17 +76,31 @@ async fn build_summary(
     label: String,
     verify: bool,
 ) -> Result<ChainSummary, ApiError> {
-    let q = audit_entry::Entity::find().filter(chain_filter(chain_id));
-    let entries = q.clone().count(&state.db).await? as i64;
-    let tail = newest_first(q).one(&state.db).await?;
+    let tail: Option<TailRow> = newest_first(
+        audit_entry::Entity::find()
+            .select_only()
+            .columns([
+                audit_entry::Column::Sequence,
+                audit_entry::Column::Timestamp,
+                audit_entry::Column::EntryHash,
+                audit_entry::Column::Signature,
+                audit_entry::Column::Kid,
+            ])
+            .filter(chain_filter(chain_id)),
+    )
+    .into_tuple()
+    .one(&state.db)
+    .await?;
 
+    // Sequences are contiguous from 1, so the tail already is the entry count.
+    let entries = tail.as_ref().map_or(0, |tail| tail.0);
     let (last_sequence, last_entry_at, last_entry_hash, signed, kid) = match tail {
-        Some(e) => (
-            Some(e.sequence),
-            Some(e.timestamp.to_rfc3339()),
-            Some(e.entry_hash),
-            e.signature.is_some(),
-            e.kid,
+        Some((sequence, timestamp, entry_hash, signature, kid)) => (
+            Some(sequence),
+            Some(timestamp.to_rfc3339()),
+            Some(entry_hash),
+            signature.is_some(),
+            kid,
         ),
         None => (None, None, None, false, None),
     };
@@ -123,42 +159,28 @@ pub async fn chain_status(
     user.check_global_permission(&state, GlobalPermission::ReadLogs)
         .await?;
 
-    let total_entries = audit_entry::Entity::find().count(&state.db).await? as i64;
-    let signed_entries = audit_entry::Entity::find()
-        .filter(audit_entry::Column::Signature.is_not_null())
-        .count(&state.db)
-        .await? as i64;
-    let unsigned_entries = (total_entries - signed_entries).max(0);
-
-    let branch_chain_count = audit_entry::Entity::find()
-        .filter(audit_entry::Column::ChainId.is_not_null())
-        .select_only()
-        .column(audit_entry::Column::ChainId)
-        .group_by(audit_entry::Column::ChainId)
-        .count(&state.db)
-        .await? as i64;
-
-    let last_24h_cutoff = Utc::now().fixed_offset() - Duration::hours(24);
-    let last_24h_entries = audit_entry::Entity::find()
-        .filter(audit_entry::Column::Timestamp.gte(last_24h_cutoff))
-        .count(&state.db)
-        .await? as i64;
-
+    let totals = totals(&state).await?;
     let root_chain = build_summary(&state, None, "Platform Root".to_string(), true).await?;
 
     let mut recent_branches: Vec<ChainSummary> = Vec::new();
-    let recent = audit_entry::Entity::find()
+    let recent: Vec<(Option<String>, String)> = audit_entry::Entity::find()
+        .select_only()
+        .columns([
+            audit_entry::Column::ChainId,
+            audit_entry::Column::ResourceType,
+        ])
         .filter(audit_entry::Column::ChainId.is_not_null())
         .order_by(audit_entry::Column::Timestamp, Order::Desc)
         .limit(50)
+        .into_tuple()
         .all(&state.db)
         .await?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for entry in recent {
-        if let Some(cid) = entry.chain_id.clone()
+    for (chain_id, resource_type) in recent {
+        if let Some(cid) = chain_id
             && seen.insert(cid.clone())
         {
-            let label = format!("{} :: {}", entry.resource_type, cid);
+            let label = format!("{resource_type} :: {cid}");
             let summary = build_summary(&state, Some(&cid), label, false).await?;
             recent_branches.push(summary);
             if recent_branches.len() >= 8 {
@@ -166,17 +188,49 @@ pub async fn chain_status(
             }
         }
     }
-    let _ = Expr::value(0); // keep Expr import used
 
     Ok(Json(ChainStatusResponse {
         signing_configured: sign::is_signing_configured(),
         current_kid: sign::current_kid().to_string(),
-        total_entries,
-        signed_entries,
-        unsigned_entries,
-        branch_chain_count,
-        last_24h_entries,
+        total_entries: totals.total,
+        signed_entries: totals.signed,
+        unsigned_entries: (totals.total - totals.signed).max(0),
+        branch_chain_count: totals.branches,
+        last_24h_entries: totals.last_24h,
         root_chain,
         recent_branches,
     }))
+}
+
+async fn totals(state: &AppState) -> Result<Totals, ApiError> {
+    let mut cached = TOTALS.get_or_init(Default::default).lock().await;
+    if let Some((at, totals)) = *cached
+        && at.elapsed() < TOTALS_TTL
+    {
+        return Ok(totals);
+    }
+    let last_24h_cutoff = Utc::now().fixed_offset() - Duration::hours(24);
+    let (total, signed, branches, last_24h) = tokio::try_join!(
+        audit_entry::Entity::find().count(&state.db),
+        audit_entry::Entity::find()
+            .filter(audit_entry::Column::Signature.is_not_null())
+            .count(&state.db),
+        audit_entry::Entity::find()
+            .filter(audit_entry::Column::ChainId.is_not_null())
+            .select_only()
+            .column(audit_entry::Column::ChainId)
+            .group_by(audit_entry::Column::ChainId)
+            .count(&state.db),
+        audit_entry::Entity::find()
+            .filter(audit_entry::Column::Timestamp.gte(last_24h_cutoff))
+            .count(&state.db),
+    )?;
+    let totals = Totals {
+        total: total as i64,
+        signed: signed as i64,
+        branches: branches as i64,
+        last_24h: last_24h as i64,
+    };
+    *cached = Some((Instant::now(), totals));
+    Ok(totals)
 }

@@ -60,7 +60,10 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
-import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	ApiResponseError,
+	isMissingResourceError,
+} from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	type BoardFormatCapabilities,
 	CURRENT_BOARD_FORMAT_VERSION,
@@ -2126,6 +2129,39 @@ export class BoardState implements IBoardState {
 		);
 
 		return merged;
+	}
+
+	// The listing merges hub runs into the local ones, so a run the local log
+	// store does not know falls through to the hub's sidecar endpoint.
+	async getRunPayload(
+		appId: string,
+		boardId: string,
+		runId: string,
+	): Promise<object | undefined> {
+		const local = await invoke<object | null>("get_run_payload", {
+			appId,
+			boardId,
+			runId,
+		});
+		if (local !== null) return local;
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			(await this.backend.isOffline(appId))
+		) {
+			return undefined;
+		}
+		try {
+			return await fetcher<object>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/runs/${runId}/payload`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+		} catch (error) {
+			if (isMissingResourceError(error)) return undefined;
+			throw error;
+		}
 	}
 
 	async queryRun(

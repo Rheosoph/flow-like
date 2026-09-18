@@ -19,7 +19,14 @@ import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
+import { cn } from "../../../../lib/utils";
 import type { FlowSelectorDataRef } from "../../flow-selector-data";
+import {
+	PIN_CHEVRON_CLASS,
+	PIN_TRIGGER_CLASS,
+	PinEditorRow,
+	PinLabel,
+} from "../pin-chrome";
 
 interface ElementSelectProps {
 	readonly pin: IPin;
@@ -73,18 +80,16 @@ export function ElementSelect({
 	}, [currentValue, loading, selectedElement?.rawId]);
 
 	return (
-		<div className="flex flex-row items-center justify-start w-fit max-w-full ml-1 overflow-hidden">
+		<PinEditorRow>
 			<Popover open={open} onOpenChange={handleOpenChange}>
 				<PopoverTrigger asChild>
 					<button
 						type="button"
-						className="flex flex-row items-center gap-0.5 w-fit max-w-full p-0 border-0 text-xs bg-card text-start h-4 overflow-hidden cursor-pointer"
+						className={cn("flex cursor-pointer", PIN_TRIGGER_CLASS)}
 					>
 						<Layers className="size-2 min-w-2 min-h-2 text-muted-foreground mr-0.5 shrink-0" />
-						<small className="text-start text-[10px] m-0! truncate">
-							{triggerLabel}
-						</small>
-						<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
+						<PinLabel text={triggerLabel} />
+						<ChevronDown className={PIN_CHEVRON_CLASS} />
 					</button>
 				</PopoverTrigger>
 				<PopoverContent className="w-60 p-0" align="start">
@@ -131,6 +136,6 @@ export function ElementSelect({
 					</Command>
 				</PopoverContent>
 			</Popover>
-		</div>
+		</PinEditorRow>
 	);
 }

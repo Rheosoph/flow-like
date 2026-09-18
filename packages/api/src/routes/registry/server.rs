@@ -7,6 +7,7 @@ use super::types::{
     MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
     RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
 };
+use super::widget_policy::declared_widget_network;
 use crate::deletion::{DeletionRoot, job};
 use crate::entity::sea_orm_active_enums::{
     WasmCompilationStatus, WasmPackageCategory, WasmPackageVisibility,
@@ -24,12 +25,14 @@ use flow_like_types::create_id;
 use flow_like_wasm_schema::manifest::{
     PackageManifest, PackageNodeEntry, PackagePermissions, PackageWidgetEntry,
 };
+use flow_like_wasm_schema::widget::WidgetContract;
 use flow_like_wasm_schema::widget_bundle::{WidgetBundleReader, sha256_hex};
+use flow_like_wasm_schema::widget_sources::{reason_contains_address, validate_wildcard_bases};
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, TransactionTrait,
-    sea_query::Expr,
+    FromQueryResult, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
+    RelationTrait, TransactionTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -142,7 +145,70 @@ pub fn validate_manifest_widget_bundle(
         }
     }
 
+    let problems: Vec<String> = manifest
+        .widgets
+        .iter()
+        .flat_map(|entry| widget_network_publish_problems(&entry.contract))
+        .collect();
+    if !problems.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "Widget network declarations rejected: {}",
+            problems.join("; ")
+        ));
+    }
+
     Ok((actual_hash, bundle_bytes.len() as i64))
+}
+
+/// Stored widget rows with the declared-only `network` block recomputed, so the
+/// store and admin review read the hub's classification rather than any value a
+/// manifest carried. Rows that no longer parse are returned unchanged.
+fn widgets_with_network(widgets: serde_json::Value) -> serde_json::Value {
+    let Ok(mut entries) = serde_json::from_value::<Vec<PackageWidgetEntry>>(widgets.clone()) else {
+        return widgets;
+    };
+    for entry in &mut entries {
+        entry.network = declared_widget_network(&entry.contract);
+    }
+    serde_json::to_value(entries).unwrap_or(widgets)
+}
+
+/// Hub-authoritative checks that need the public suffix list (§14.2.4 rule 8,
+/// §14.3.1): declared wildcard bases and addresses inside purpose reasons.
+pub fn widget_network_publish_problems(contract: &WidgetContract) -> Vec<String> {
+    let declared = contract.declared_csp();
+    let mut problems: Vec<String> =
+        validate_wildcard_bases(declared.entries().map(|(_, source)| source))
+            .err()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|error| format!("Widget '{}': {error}", contract.id))
+            .collect();
+    for (index, purpose) in contract.csp.iter().flatten().enumerate() {
+        if reason_contains_address(&purpose.reason) {
+            problems.push(format!(
+                "Widget '{}': csp purpose {index}: reason must not contain a web address or domain name (reason-contains-address)",
+                contract.id
+            ));
+        }
+    }
+    problems
+}
+
+/// Widgets as stored on version rows: `network` is derived by the hub on
+/// read and never taken from the publisher's manifest.
+fn stored_widgets_json(
+    widgets: &[PackageWidgetEntry],
+) -> flow_like_types::Result<serde_json::Value> {
+    let widgets: Vec<PackageWidgetEntry> = widgets
+        .iter()
+        .cloned()
+        .map(|widget| PackageWidgetEntry {
+            network: None,
+            ..widget
+        })
+        .collect();
+    Ok(serde_json::to_value(widgets)?)
 }
 
 /// Unpack a widget bundle into the bucket under
@@ -449,9 +515,27 @@ fn status_to_package_status(
     }
 }
 
-fn package_version_from_model(v: wasm_package_version::Model) -> PackageVersion {
+/// The scalar columns of a version row: what a version list needs, without the
+/// `nodes` / `widgets` JSON blobs.
+#[derive(Debug, FromQueryResult)]
+struct VersionRow {
+    version: String,
+    wasm_path: String,
+    wasm_hash: String,
+    wasm_size: i64,
+    status: crate::entity::sea_orm_active_enums::WasmPackageStatus,
+    published_at: sea_orm::prelude::DateTimeWithTimeZone,
+    min_flow_like_version: Option<String>,
+    release_notes: Option<String>,
+    yanked: bool,
+    widget_bundle_hash: Option<String>,
+    widget_bundle_size: Option<i64>,
+}
+
+fn package_version_from_row(v: VersionRow) -> PackageVersion {
     PackageVersion {
         version: v.version,
+        wasm_path: v.wasm_path,
         wasm_hash: v.wasm_hash,
         wasm_size: v.wasm_size as u64,
         status: status_to_package_status(&v.status),
@@ -657,12 +741,28 @@ impl ServerRegistry {
     /// Get a signed URL or CDN URL for downloading a WASM file
     async fn get_download_url(
         &self,
-        package_id: &str,
+        entry: &RegistryEntry,
         version: &str,
     ) -> flow_like_types::Result<String> {
-        let path = self.resolve_wasm_path(package_id, version).await?;
+        if let Some(listed) = entry.get_version(version) {
+            return self.sign_wasm_path(&listed.wasm_path).await;
+        }
+
+        let path = self.resolve_wasm_path(&entry.id, version).await?;
 
         // Otherwise generate a signed URL (valid for 1 hour)
+        let url = self
+            .content_bucket
+            .sign("GET", &path, Duration::from_secs(3600))
+            .await?;
+        Ok(url.to_string())
+    }
+
+    /// Presigned GET URL for a `wasmPath` the caller already loaded. It runs
+    /// no package or version status check; [`Self::get_wasm_url`] is the
+    /// checked entry point.
+    pub async fn sign_wasm_path(&self, wasm_path: &str) -> flow_like_types::Result<String> {
+        let path = flow_like_storage::normalize_object_path(wasm_path);
         let url = self
             .content_bucket
             .sign("GET", &path, Duration::from_secs(3600))
@@ -712,21 +812,27 @@ impl ServerRegistry {
     }
 
     /// Presigned GET URL for a stored widget bundle, when the version ships one.
+    /// `known_has_bundle` skips the version lookup for a caller that already
+    /// resolved the version row.
     pub async fn sign_widget_bundle_url(
         &self,
         package_id: &str,
         version: &str,
+        known_has_bundle: Option<bool>,
     ) -> flow_like_types::Result<Option<String>> {
-        let record = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(package_id))
-            .filter(wasm_package_version::Column::Version.eq(version))
-            .one(&self.db)
-            .await?;
-
-        let has_bundle = record
-            .as_ref()
-            .and_then(|r| r.widget_bundle_hash.as_deref())
-            .is_some_and(|h| !h.is_empty());
+        let has_bundle = match known_has_bundle {
+            Some(known) => known,
+            None => wasm_package_version::Entity::find()
+                .select_only()
+                .column(wasm_package_version::Column::WidgetBundleHash)
+                .filter(wasm_package_version::Column::PackageId.eq(package_id))
+                .filter(wasm_package_version::Column::Version.eq(version))
+                .into_tuple::<Option<String>>()
+                .one(&self.db)
+                .await?
+                .flatten()
+                .is_some_and(|h| !h.is_empty()),
+        };
         if !has_bundle {
             return Ok(None);
         }
@@ -810,7 +916,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: None,
-                    capabilities: capability_tags_from_json(pkg.permissions),
+                    capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
                 }
             })
             .collect();
@@ -924,56 +1030,23 @@ impl ServerRegistry {
         self.build_registry_entry(pkg, true).await.map(Some)
     }
 
-    /// Fetch a package applying correct version-visibility rules for a given viewer:
+    /// Build the entry of an already loaded package row with the version
+    /// visibility of its viewer:
     /// - Private → all versions (to any caller with access)
     /// - Public / PublicRequestAccess + owner/maintainer → all versions
     /// - Public / PublicRequestAccess + regular user → approved versions only
     ///
-    /// Access control (who may call this) is the caller's responsibility.
-    pub async fn get_package_as_viewer(
+    /// Access control and resolving `viewer_can_manage` (see
+    /// [`super::viewer_can_manage`]) are the caller's responsibility.
+    pub async fn entry_for_viewer(
         &self,
-        id: &str,
-        viewer_sub: Option<&str>,
-    ) -> flow_like_types::Result<Option<RegistryEntry>> {
+        pkg: wasm_package::Model,
+        viewer_can_manage: bool,
+    ) -> flow_like_types::Result<RegistryEntry> {
         use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
 
-        let Some(pkg) = wasm_package::Entity::find_by_id(id).one(&self.db).await? else {
-            return Ok(None);
-        };
-
-        let show_all = match pkg.visibility {
-            WasmPackageVisibility::Private => true,
-            _ => match viewer_sub {
-                Some(sub) => self.can_view_unapproved_versions(sub, id).await?,
-                None => false,
-            },
-        };
-
-        self.build_registry_entry(pkg, show_all).await.map(Some)
-    }
-
-    /// Returns `true` when `user_id` can manage `package_id`.
-    async fn can_view_unapproved_versions(
-        &self,
-        user_id: &str,
-        package_id: &str,
-    ) -> flow_like_types::Result<bool> {
-        let record = wasm_package_user::Entity::find()
-            .filter(wasm_package_user::Column::PackageId.eq(package_id))
-            .filter(wasm_package_user::Column::UserId.eq(user_id))
-            .one(&self.db)
-            .await?;
-        let Some(record) = record else {
-            return Ok(false);
-        };
-
-        let permission =
-            crate::permission::wasm_package_permission::WasmPackagePermission::from_bits_truncate(
-                record.permission,
-            );
-        Ok(permission.has_permission(
-            crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer,
-        ))
+        let show_all = pkg.visibility == WasmPackageVisibility::Private || viewer_can_manage;
+        self.build_registry_entry(pkg, show_all).await
     }
 
     async fn latest_pending_version(
@@ -1046,7 +1119,7 @@ impl ServerRegistry {
             download_count: pkg.download_count as u64,
             wasm_size,
             nodes,
-            widgets,
+            widgets: widgets_with_network(widgets),
             widget_bundle_hash,
             widget_bundle_size,
             permissions: pkg.permissions,
@@ -1080,27 +1153,38 @@ impl ServerRegistry {
         &self,
         package_id: &str,
     ) -> flow_like_types::Result<Vec<AuthorInfo>> {
-        let author_records = wasm_package_author::Entity::find()
+        let rows = wasm_package_author::Entity::find()
+            .select_only()
+            .column(wasm_package_author::Column::UserId)
+            .column(wasm_package_author::Column::Role)
+            .column(user::Column::Username)
+            .column(user::Column::Name)
+            .column(user::Column::Avatar)
+            .join(
+                JoinType::LeftJoin,
+                wasm_package_author::Relation::User.def(),
+            )
             .filter(wasm_package_author::Column::PackageId.eq(package_id))
+            .into_tuple::<(
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            )>()
             .all(&self.db)
             .await?;
 
-        let mut authors = Vec::new();
-        for record in author_records {
-            let user_info = user::Entity::find_by_id(&record.user_id)
-                .one(&self.db)
-                .await?;
-
-            authors.push(AuthorInfo {
-                user_id: record.user_id,
-                username: user_info.as_ref().and_then(|u| u.username.clone()),
-                name: user_info.as_ref().and_then(|u| u.name.clone()),
-                avatar: user_info.and_then(|u| u.avatar),
-                role: record.role,
-            });
-        }
-
-        Ok(authors)
+        Ok(rows
+            .into_iter()
+            .map(|(user_id, role, username, name, avatar)| AuthorInfo {
+                user_id,
+                username,
+                name,
+                avatar,
+                role,
+            })
+            .collect())
     }
 
     async fn get_user_author_info(
@@ -1118,6 +1202,61 @@ impl ServerRegistry {
         }))
     }
 
+    /// Version rows of a package, newest first, without their JSON blobs.
+    async fn load_version_rows(
+        &self,
+        package_id: &str,
+        active_only: bool,
+    ) -> flow_like_types::Result<Vec<VersionRow>> {
+        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+        use crate::entity::wasm_package_version::Column;
+
+        let mut query = wasm_package_version::Entity::find()
+            .select_only()
+            .column_as(Column::Version, "version")
+            .column_as(Column::WasmPath, "wasm_path")
+            .column_as(Column::WasmHash, "wasm_hash")
+            .column_as(Column::WasmSize, "wasm_size")
+            .column_as(Column::Status, "status")
+            .column_as(Column::PublishedAt, "published_at")
+            .column_as(Column::MinFlowLikeVersion, "min_flow_like_version")
+            .column_as(Column::ReleaseNotes, "release_notes")
+            .column_as(Column::Yanked, "yanked")
+            .column_as(Column::WidgetBundleHash, "widget_bundle_hash")
+            .column_as(Column::WidgetBundleSize, "widget_bundle_size")
+            .filter(Column::PackageId.eq(package_id))
+            .order_by_desc(Column::PublishedAt);
+
+        if active_only {
+            query = query.filter(Column::Status.eq(WasmPackageStatus::Active));
+        }
+
+        Ok(query.into_model::<VersionRow>().all(&self.db).await?)
+    }
+
+    /// One JSON column (`nodes` / `widgets`) of a single version row: the given
+    /// version, or the newest one of any status.
+    async fn version_json_column(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        column: wasm_package_version::Column,
+    ) -> flow_like_types::Result<Option<serde_json::Value>> {
+        let query = wasm_package_version::Entity::find()
+            .select_only()
+            .column(column)
+            .filter(wasm_package_version::Column::PackageId.eq(package_id));
+        let query = match version {
+            Some(version) => query.filter(wasm_package_version::Column::Version.eq(version)),
+            None => query.order_by_desc(wasm_package_version::Column::PublishedAt),
+        };
+
+        Ok(query
+            .into_tuple::<serde_json::Value>()
+            .one(&self.db)
+            .await?)
+    }
+
     /// Build a RegistryEntry from a package model.
     /// `show_all_versions`: when `true`, all versions are included regardless of
     /// approval status; when `false`, only `Active` versions are returned.
@@ -1126,18 +1265,7 @@ impl ServerRegistry {
         pkg: wasm_package::Model,
         show_all_versions: bool,
     ) -> flow_like_types::Result<RegistryEntry> {
-        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
-
-        let mut version_query = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(&pkg.id))
-            .order_by_desc(wasm_package_version::Column::PublishedAt);
-
-        if !show_all_versions {
-            version_query = version_query
-                .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::Active));
-        }
-
-        let versions = version_query.all(&self.db).await?;
+        let versions = self.load_version_rows(&pkg.id, !show_all_versions).await?;
 
         // Get authors from junction table
         let author_infos = self.get_package_authors(&pkg.id).await?;
@@ -1157,15 +1285,30 @@ impl ServerRegistry {
             serde_json::from_value(pkg.widgets.clone()).unwrap_or_default();
         let mut widget_bundle_hash = pkg.widget_bundle_hash.clone().filter(|h| !h.is_empty());
         if let Some(latest_v) = versions.first() {
-            if widgets.is_empty() {
-                widgets = serde_json::from_value(latest_v.widgets.clone()).unwrap_or_default();
+            let latest_bundle_hash = latest_v
+                .widget_bundle_hash
+                .clone()
+                .filter(|h| !h.is_empty());
+            // A version declares widgets exactly when it ships a bundle, so
+            // only a version with a bundle hash is worth a widgets lookup.
+            if widgets.is_empty()
+                && latest_bundle_hash.is_some()
+                && let Some(latest_widgets) = self
+                    .version_json_column(
+                        &pkg.id,
+                        Some(&latest_v.version),
+                        wasm_package_version::Column::Widgets,
+                    )
+                    .await?
+            {
+                widgets = serde_json::from_value(latest_widgets).unwrap_or_default();
             }
             if widget_bundle_hash.is_none() {
-                widget_bundle_hash = latest_v
-                    .widget_bundle_hash
-                    .clone()
-                    .filter(|h| !h.is_empty());
+                widget_bundle_hash = latest_bundle_hash;
             }
+        }
+        for widget in &mut widgets {
+            widget.network = declared_widget_network(&widget.contract);
         }
 
         let manifest = PackageManifest {
@@ -1191,22 +1334,18 @@ impl ServerRegistry {
             metadata: Default::default(),
         };
 
-        let package_versions: Vec<PackageVersion> = versions
-            .into_iter()
-            .map(package_version_from_model)
-            .collect();
+        let package_versions: Vec<PackageVersion> =
+            versions.into_iter().map(package_version_from_row).collect();
 
-        // Prefer nodes from the latest version; fall back to the parent package.
+        // Nodes of the parent package; fall back to the newest version of any status.
         let mut nodes: Vec<PackageNodeEntry> =
             serde_json::from_value(pkg.nodes.clone()).unwrap_or_default();
         if nodes.is_empty()
-            && let Some(latest_v) = wasm_package_version::Entity::find()
-                .filter(wasm_package_version::Column::PackageId.eq(&pkg.id))
-                .order_by_desc(wasm_package_version::Column::PublishedAt)
-                .one(&self.db)
+            && let Some(latest_nodes) = self
+                .version_json_column(&pkg.id, None, wasm_package_version::Column::Nodes)
                 .await?
         {
-            nodes = serde_json::from_value(latest_v.nodes).unwrap_or_default();
+            nodes = serde_json::from_value(latest_nodes).unwrap_or_default();
         }
 
         let vis = visibility_to_string(&pkg.visibility);
@@ -1233,6 +1372,23 @@ impl ServerRegistry {
             rating_sum: pkg.rating_sum,
             current_user_permission: None,
         })
+    }
+
+    /// Total matches of a search whose page of `fetched` rows is already
+    /// loaded. A short page pins the total, so only a full page (or an empty
+    /// page past the first) costs a `COUNT`.
+    async fn total_matches(
+        &self,
+        count_query: sea_orm::Select<wasm_package::Entity>,
+        filters: &SearchFilters,
+        fetched: usize,
+    ) -> flow_like_types::Result<usize> {
+        let page_pins_total = fetched < filters.limit && (fetched > 0 || filters.offset == 0);
+        if page_pins_total {
+            return Ok(filters.offset + fetched);
+        }
+
+        Ok(count_query.count(&self.db).await? as usize)
     }
 
     /// Search packages with filters
@@ -1262,12 +1418,12 @@ impl ServerRegistry {
 
         // Text search (name, description, keywords)
         if let Some(q) = &filters.query {
-            let pattern = format!("%{}%", q.to_lowercase());
+            let term = q.to_lowercase();
             query = query.filter(
                 wasm_package::Column::Name
-                    .contains(&pattern)
-                    .or(wasm_package::Column::Description.contains(&pattern))
-                    .or(wasm_package::Column::Id.contains(&pattern)),
+                    .contains(&term)
+                    .or(wasm_package::Column::Description.contains(&term))
+                    .or(wasm_package::Column::Id.contains(&term)),
             );
         }
 
@@ -1284,8 +1440,7 @@ impl ServerRegistry {
             );
         }
 
-        // Get total count before pagination
-        let total_count = query.clone().count(&self.db).await? as usize;
+        let count_query = query.clone();
 
         // Apply sorting
         query = match filters.sort_by {
@@ -1333,6 +1488,9 @@ impl ServerRegistry {
             .limit(filters.limit as u64)
             .all(&self.db)
             .await?;
+        let total_count = self
+            .total_matches(count_query, filters, packages.len())
+            .await?;
 
         let language = filters.language.as_deref().unwrap_or("en");
         let meta_map = self.fetch_meta_map(&packages, language).await?;
@@ -1361,7 +1519,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
-                    capabilities: capability_tags_from_json(pkg.permissions),
+                    capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
                 }
             })
             .collect();
@@ -1478,12 +1636,12 @@ impl ServerRegistry {
         }
 
         if let Some(q) = &filters.query {
-            let pattern = format!("%{}%", q.to_lowercase());
+            let term = q.to_lowercase();
             query = query.filter(
                 wasm_package::Column::Name
-                    .contains(&pattern)
-                    .or(wasm_package::Column::Description.contains(&pattern))
-                    .or(wasm_package::Column::Id.contains(&pattern)),
+                    .contains(&term)
+                    .or(wasm_package::Column::Description.contains(&term))
+                    .or(wasm_package::Column::Id.contains(&term)),
             );
         }
 
@@ -1500,7 +1658,7 @@ impl ServerRegistry {
             );
         }
 
-        let total_count = query.clone().count(&self.db).await? as usize;
+        let count_query = query.clone();
 
         query = match filters.sort_by {
             SortField::Downloads => {
@@ -1545,6 +1703,9 @@ impl ServerRegistry {
             .limit(filters.limit as u64)
             .all(&self.db)
             .await?;
+        let total_count = self
+            .total_matches(count_query, filters, packages.len())
+            .await?;
 
         let language = filters.language.as_deref().unwrap_or("en");
         let meta_map = self.fetch_meta_map(&packages, language).await?;
@@ -1573,7 +1734,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
-                    capabilities: capability_tags_from_json(pkg.permissions),
+                    capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
                 }
             })
             .collect();
@@ -1613,27 +1774,27 @@ impl ServerRegistry {
                 .unwrap_or_else(|| entry.manifest.version.clone())
         };
 
-        let download_url = self.get_download_url(package_id, &version_str).await?;
+        let download_url = self.get_download_url(&entry, &version_str).await?;
 
         Ok((download_url, entry.manifest, version_str))
     }
 
-    /// Get download URL for a package using viewer-aware package resolution.
+    /// Get download URL for an already loaded package using viewer-aware
+    /// version resolution (see [`Self::entry_for_viewer`]).
+    ///
+    /// The last element tells whether the resolved version ships a widget
+    /// bundle; it is `None` when that version is not among the viewer's listed
+    /// versions.
     ///
     /// The caller is responsible for enforcing access control and deciding
     /// whether non-active packages should be reachable for the provided viewer.
     pub async fn get_wasm_url_as_viewer(
         &self,
-        package_id: &str,
+        pkg: wasm_package::Model,
         version: Option<&str>,
-        viewer_sub: Option<&str>,
-    ) -> flow_like_types::Result<(Option<String>, PackageManifest, String)> {
-        let Some(entry) = self.get_package_as_viewer(package_id, viewer_sub).await? else {
-            return Err(flow_like_types::anyhow!(
-                "Package not found: {}",
-                package_id
-            ));
-        };
+        viewer_can_manage: bool,
+    ) -> flow_like_types::Result<(Option<String>, PackageManifest, String, Option<bool>)> {
+        let entry = self.entry_for_viewer(pkg, viewer_can_manage).await?;
 
         let version_str = if let Some(v) = version {
             entry
@@ -1649,12 +1810,15 @@ impl ServerRegistry {
 
         // Widgets-only packages carry no WASM artifact to sign
         let download_url = if manifest_has_wasm(&entry.manifest) {
-            Some(self.get_download_url(package_id, &version_str).await?)
+            Some(self.get_download_url(&entry, &version_str).await?)
         } else {
             None
         };
+        let has_widget_bundle = entry
+            .get_version(&version_str)
+            .map(|listed| listed.widget_bundle_hash.is_some());
 
-        Ok((download_url, entry.manifest, version_str))
+        Ok((download_url, entry.manifest, version_str, has_widget_bundle))
     }
 
     /// Download package WASM binary directly (for backward compatibility)
@@ -1682,7 +1846,7 @@ impl ServerRegistry {
                 .clone()
         };
 
-        let path = self.resolve_wasm_path(package_id, &ver.version).await?;
+        let path = flow_like_storage::normalize_object_path(&ver.wasm_path);
         let data = self.content_bucket.as_generic().get(&path).await?;
         let bytes = data.bytes().await?.to_vec();
 
@@ -1774,7 +1938,7 @@ impl ServerRegistry {
         };
 
         // Validate, store, and unpack the widget bundle when widgets are declared
-        let widgets_json = serde_json::to_value(&manifest.widgets)?;
+        let widgets_json = stored_widgets_json(&manifest.widgets)?;
         let mut widget_bundle_hash: Option<String> = None;
         let mut widget_bundle_size: Option<i64> = None;
         if !manifest.widgets.is_empty() {
@@ -2142,16 +2306,9 @@ impl ServerRegistry {
         &self,
         package_id: &str,
     ) -> flow_like_types::Result<Vec<PackageVersion>> {
-        let versions = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(package_id))
-            .order_by_desc(wasm_package_version::Column::PublishedAt)
-            .all(&self.db)
-            .await?;
+        let versions = self.load_version_rows(package_id, false).await?;
 
-        Ok(versions
-            .into_iter()
-            .map(package_version_from_model)
-            .collect())
+        Ok(versions.into_iter().map(package_version_from_row).collect())
     }
 
     /// Get only approved (Active status) versions for a package
@@ -2159,19 +2316,9 @@ impl ServerRegistry {
         &self,
         package_id: &str,
     ) -> flow_like_types::Result<Vec<PackageVersion>> {
-        use crate::entity::sea_orm_active_enums::WasmPackageStatus;
+        let versions = self.load_version_rows(package_id, true).await?;
 
-        let versions = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(package_id))
-            .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::Active))
-            .order_by_desc(wasm_package_version::Column::PublishedAt)
-            .all(&self.db)
-            .await?;
-
-        Ok(versions
-            .into_iter()
-            .map(package_version_from_model)
-            .collect())
+        Ok(versions.into_iter().map(package_version_from_row).collect())
     }
 
     // ==================== ADMIN METHODS ====================
@@ -2556,7 +2703,7 @@ impl ServerRegistry {
                     avg_rating: pkg.avg_rating,
                     rating_count: pkg.rating_count,
                     metadata: None,
-                    capabilities: capability_tags_from_json(pkg.permissions),
+                    capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
                 }
             })
             .collect())
@@ -2572,6 +2719,50 @@ fn capability_tags_from_json(raw: serde_json::Value) -> Vec<String> {
     serde_json::from_value::<PackagePermissions>(raw)
         .map(|permissions| permissions.capability_tags())
         .unwrap_or_default()
+}
+
+/// Listing tag for packages with a widget that declares network sites or
+/// network inputs.
+pub const WIDGET_NET_CAPABILITY_TAG: &str = "widget.net";
+
+/// Whether any stored widget contract has a `csp` purpose with a source or a
+/// network input.
+fn widgets_declare_network_access(widgets: &serde_json::Value) -> bool {
+    let has_entries =
+        |value: &serde_json::Value| value.as_array().is_some_and(|list| !list.is_empty());
+    widgets.as_array().is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry
+                .pointer("/contract/csp")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|purposes| {
+                    purposes.iter().any(|purpose| {
+                        purpose.as_object().is_some_and(|purpose| {
+                            purpose
+                                .iter()
+                                .any(|(key, value)| key != "reason" && has_entries(value))
+                        })
+                    })
+                })
+        })
+    })
+}
+
+/// Permission tags plus [`WIDGET_NET_CAPABILITY_TAG`], placed right after the
+/// `net.*` tags to keep the most-sensitive-first order.
+fn package_capability_tags(
+    permissions: serde_json::Value,
+    widgets: &serde_json::Value,
+) -> Vec<String> {
+    let mut tags = capability_tags_from_json(permissions);
+    if widgets_declare_network_access(widgets) {
+        let position = tags
+            .iter()
+            .rposition(|tag| tag.starts_with("net."))
+            .map_or(0, |index| index + 1);
+        tags.insert(position, WIDGET_NET_CAPABILITY_TAG.to_string());
+    }
+    tags
 }
 
 #[derive(Deserialize)]
@@ -2691,6 +2882,9 @@ mod tests {
     use super::*;
     use flow_like_wasm_schema::widget::{ContractInput, ContractInputType, WidgetContract};
     use flow_like_wasm_schema::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
+    use flow_like_wasm_schema::widget_policy::{
+        CspDirective, WidgetCspPurpose, WidgetNetworkInput,
+    };
 
     fn contract_with_input(widget_id: &str) -> WidgetContract {
         let mut contract = WidgetContract::new(widget_id);
@@ -2711,15 +2905,23 @@ mod tests {
     }
 
     fn build_bundle(package_id: &str, version: &str, widget_id: &str) -> (Vec<u8>, String) {
+        build_bundle_with(package_id, version, contract_with_input(widget_id))
+    }
+
+    fn build_bundle_with(
+        package_id: &str,
+        version: &str,
+        contract: WidgetContract,
+    ) -> (Vec<u8>, String) {
         WidgetBundleBuilder::new(package_id, version)
             .created_at("2026-07-31T00:00:00Z")
             .add_widget(BuilderWidget {
-                id: widget_id.to_string(),
-                name: widget_id.to_string(),
+                id: contract.id.clone(),
+                name: contract.id.clone(),
                 description: "test widget".into(),
                 framework: Some("vanilla".into()),
                 entry_html: b"<html><body>test</body></html>".to_vec(),
-                contract: contract_with_input(widget_id),
+                contract,
                 assets: vec![],
                 thumbnail: None,
             })
@@ -2745,6 +2947,7 @@ mod tests {
                 thumbnail: None,
                 contract,
                 keywords: vec![],
+                network: None,
             });
         manifest.widget_bundle_hash = Some(bundle_hash.to_string());
         manifest
@@ -2846,6 +3049,220 @@ mod tests {
         assert!(err.to_string().contains("Contract mismatch"));
     }
 
+    fn csp_purpose(reason: &str, host: &str) -> WidgetCspPurpose {
+        WidgetCspPurpose {
+            reason: reason.to_string(),
+            connect_src: vec![host.to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn csp_contract(widget_id: &str, host: &str) -> WidgetContract {
+        contract_with_input(widget_id).with_csp(vec![csp_purpose("Loads vector map tiles", host)])
+    }
+
+    fn input_contract(widget_id: &str) -> WidgetContract {
+        contract_with_input(widget_id).with_csp(vec![WidgetCspPurpose {
+            reason: "Loads a title image given to it at runtime".into(),
+            inputs: vec![WidgetNetworkInput {
+                path: "title".into(),
+                directives: vec![CspDirective::ImgSrc],
+                template: None,
+            }],
+            ..Default::default()
+        }])
+    }
+
+    #[test]
+    fn widget_net_tag_marks_widget_csp_after_network_permissions() {
+        let with_csp = serde_json::json!([
+            { "id": "plain", "contract": WidgetContract::new("plain") },
+            { "id": "live-map", "contract": csp_contract("live-map", "https://api.maptiler.com") },
+        ]);
+        let with_inputs = serde_json::json!([
+            { "id": "runtime", "contract": input_contract("runtime") },
+        ]);
+        let without_csp = serde_json::json!([
+            { "id": "plain", "contract": WidgetContract::new("plain") },
+            { "id": "empty", "contract": { "id": "empty", "csp": [{ "reason": "Nothing at all", "connectSrc": [] }] } },
+            { "id": "legacy", "contract": { "id": "legacy", "csp": { "connectSrc": ["https://a.com"] } } },
+        ]);
+        assert_eq!(
+            package_capability_tags(serde_json::json!({}), &with_inputs),
+            [WIDGET_NET_CAPABILITY_TAG]
+        );
+        let permissions = serde_json::json!({
+            "network": { "http_enabled": true, "websocket_enabled": true },
+            "models": true
+        });
+
+        assert_eq!(
+            package_capability_tags(permissions.clone(), &with_csp),
+            ["net.http", "net.ws", WIDGET_NET_CAPABILITY_TAG, "models"]
+        );
+        assert_eq!(
+            package_capability_tags(permissions, &without_csp),
+            ["net.http", "net.ws", "models"]
+        );
+        assert_eq!(
+            package_capability_tags(serde_json::json!({ "models": true }), &with_csp),
+            [WIDGET_NET_CAPABILITY_TAG, "models"]
+        );
+        assert_eq!(
+            package_capability_tags(serde_json::json!({}), &serde_json::json!({})),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_validate_manifest_widget_bundle_csp_mismatch() {
+        let bundle_contract = csp_contract("kpi-card", "https://api.maptiler.com");
+        let (bytes, hash) = WidgetBundleBuilder::new("com.example.w", "1.0.0")
+            .created_at("2026-07-31T00:00:00Z")
+            .add_widget(BuilderWidget {
+                id: "kpi-card".to_string(),
+                name: "kpi-card".to_string(),
+                description: "test widget".into(),
+                framework: Some("vanilla".into()),
+                entry_html: b"<html><body>test</body></html>".to_vec(),
+                contract: bundle_contract.clone(),
+                assets: vec![],
+                thumbnail: None,
+            })
+            .build()
+            .unwrap();
+
+        let matching =
+            manifest_with_widget("com.example.w", "1.0.0", "kpi-card", &hash, bundle_contract);
+        assert!(validate_manifest_widget_bundle(&matching, &bytes).is_ok());
+
+        let widened = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &hash,
+            csp_contract("kpi-card", "https://collector.example-maps.com"),
+        );
+        let err = validate_manifest_widget_bundle(&widened, &bytes).unwrap_err();
+        assert!(err.to_string().contains("Contract mismatch"));
+
+        let stripped = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "kpi-card",
+            &hash,
+            contract_with_input("kpi-card"),
+        );
+        let err = validate_manifest_widget_bundle(&stripped, &bytes).unwrap_err();
+        assert!(err.to_string().contains("Contract mismatch"));
+    }
+
+    fn publish_error(contract: WidgetContract) -> Option<String> {
+        let (bytes, hash) = build_bundle_with("com.example.w", "1.0.0", contract.clone());
+        let widget_id = contract.id.clone();
+        let manifest = manifest_with_widget("com.example.w", "1.0.0", &widget_id, &hash, contract);
+        validate_manifest_widget_bundle(&manifest, &bytes)
+            .err()
+            .map(|error| error.to_string())
+    }
+
+    #[test]
+    fn widget_publish_rejects_public_suffix_wildcards_and_address_reasons() {
+        assert_eq!(
+            publish_error(csp_contract("kpi-card", "https://*.customer-maps.com")),
+            None
+        );
+        assert_eq!(publish_error(input_contract("kpi-card")), None);
+        assert_eq!(
+            publish_error(contract_with_input("kpi-card").with_csp(vec![csp_purpose(
+                "Loads tiles built with Node.js, e.g. vector maps",
+                "https://api.maptiler.com"
+            )])),
+            None
+        );
+
+        for base in ["co.uk", "kawasaki.jp"] {
+            let error = publish_error(csp_contract("kpi-card", &format!("https://*.{base}")))
+                .expect("public suffix wildcard is rejected");
+            assert!(
+                error.contains("Widget network declarations rejected"),
+                "{error}"
+            );
+            assert!(error.contains(&format!("https://*.{base}")), "{error}");
+            assert!(error.contains("public suffix"), "{error}");
+        }
+
+        for reason in [
+            "Loads tiles from maps.example.com",
+            "Sends data to https colon slash www.tiles",
+            "Loads tiles from tiles.example.de servers",
+        ] {
+            let error = publish_error(contract_with_input("kpi-card").with_csp(vec![
+                csp_purpose("Loads vector map tiles", "https://api.maptiler.com"),
+                csp_purpose(reason, "https://tiles.example-maps.com"),
+            ]))
+            .unwrap_or_else(|| panic!("{reason} must be rejected"));
+            assert!(
+                error.contains("csp purpose 1: reason must not contain a web address"),
+                "{error}"
+            );
+            assert!(error.contains("reason-contains-address"), "{error}");
+        }
+    }
+
+    #[test]
+    fn package_details_carry_the_hubs_declared_network_classification() {
+        let widget = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "live-map",
+            "hash",
+            csp_contract("live-map", "https://api.maptiler.com"),
+        )
+        .widgets
+        .remove(0);
+        let stored = stored_widgets_json(&[widget]).unwrap();
+        assert!(stored[0].get("network").is_none());
+
+        let detailed = widgets_with_network(stored);
+        assert_eq!(
+            detailed[0]["network"]["purposes"][0]["sources"][0]["source"],
+            "https://api.maptiler.com"
+        );
+
+        let unparsable = serde_json::json!([{ "id": 7 }]);
+        assert_eq!(widgets_with_network(unparsable.clone()), unparsable);
+    }
+
+    #[test]
+    fn widget_publish_never_stores_publisher_network_classification() {
+        let mut widget = manifest_with_widget(
+            "com.example.w",
+            "1.0.0",
+            "live-map",
+            "hash",
+            csp_contract("live-map", "https://api.maptiler.com"),
+        )
+        .widgets
+        .remove(0);
+        widget.network = declared_widget_network(&csp_contract(
+            "live-map",
+            "https://*.s3.eu-central-1.amazonaws.com",
+        ));
+        assert!(widget.network.is_some());
+        let stored = stored_widgets_json(&[widget]).unwrap();
+        assert!(stored[0].get("network").is_none(), "{stored}");
+
+        let classified =
+            declared_widget_network(&csp_contract("live-map", "https://api.maptiler.com"))
+                .expect("declared widgets classify");
+        let json = serde_json::to_value(&classified).unwrap();
+        assert_eq!(
+            json["purposes"][0]["sources"][0]["source"],
+            "https://api.maptiler.com"
+        );
+    }
+
     #[test]
     fn test_validate_manifest_widget_bundle_widget_set_mismatch() {
         let (bytes, hash) = build_bundle("com.example.w", "1.0.0", "kpi-card");
@@ -2866,6 +3283,7 @@ mod tests {
                 thumbnail: None,
                 contract: WidgetContract::new("extra-widget"),
                 keywords: vec![],
+                network: None,
             });
 
         let err = validate_manifest_widget_bundle(&manifest, &bytes).unwrap_err();
@@ -2947,6 +3365,7 @@ mod tests {
                 thumbnail: None,
                 contract: WidgetContract::new("w"),
                 keywords: vec![],
+                network: None,
             });
         assert!(!manifest_has_wasm(&manifest));
 

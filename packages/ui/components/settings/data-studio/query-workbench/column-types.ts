@@ -1,4 +1,7 @@
-import { looksLikeTemporalName } from "../../../../lib/date";
+import {
+	looksLikeEpochNumber,
+	looksLikeTemporalName,
+} from "../../../../lib/date";
 import { isGeometryMetadata } from "../../../../lib/geometry-columns";
 import { resolveStorageFile } from "../../../../lib/storage-file";
 import { looksLikeUserColumnName } from "../../../../lib/user-display";
@@ -15,13 +18,26 @@ export type ColumnKind =
 	| "file"
 	| "text";
 
+const NUMERIC_TYPE = /int|float|double|decimal|numeric|number|real|serial/;
+
+export function isNumericTypeName(typeName: string): boolean {
+	const type = typeName.toLowerCase();
+	return (
+		!/bool|date|time|timestamp|instant|duration|interval/.test(type) &&
+		NUMERIC_TYPE.test(type)
+	);
+}
+
 export function classifyColumn(column: QueryColumn): ColumnKind {
 	if (isGeometryMetadata(column.metadata)) return "geometry";
 	const type = column.type_name.toLowerCase();
 	if (/bool/.test(type)) return "boolean";
-	if (/date|time|timestamp|instant|duration|interval/.test(type))
-		return "temporal";
-	if (/int|float|double|decimal|numeric|number|real|serial/.test(type)) {
+	// A duration is a length of time and a Time32/Time64 a time of day; neither
+	// is a point in time, and both arrive as bare integers.
+	if (/^duration/.test(type)) return "number";
+	if (/^time(32|64)/.test(type)) return "text";
+	if (/date|time|timestamp|instant|interval/.test(type)) return "temporal";
+	if (NUMERIC_TYPE.test(type)) {
 		// An integer column named `created_at` holds an instant; the declared type
 		// is all the SQL layer knows, so the name is the only remaining signal.
 		return looksLikeTemporalName(column.name) ? "temporal" : "number";
@@ -50,6 +66,18 @@ export function classifyResultColumn(
 	const kind = classifyColumn(column);
 	if (rows.length === 0) return kind;
 	const sample = rows.slice(0, VALUE_SAMPLE);
+
+	// A `created_at` counter or a `response_time` in milliseconds is only a date
+	// once a value is large enough to be an epoch. Null and 0 are how an unset
+	// integer instant is stored, so they are no evidence either way.
+	if (kind === "temporal" && isNumericTypeName(column.type_name)) {
+		const values = sample
+			.map((row) => row[column.name])
+			.filter((value) => !isNullish(value) && Number(value) !== 0);
+		return values.length === 0 || values.some(looksLikeEpochNumber)
+			? "temporal"
+			: "number";
+	}
 
 	if (kind === "user") {
 		return sample.some((row) => accountIdFromValue(row[column.name]))

@@ -1,3 +1,4 @@
+pub mod head;
 pub mod query;
 pub mod verify;
 
@@ -8,5 +9,6 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/entries", get(query::query_audit_entries))
+        .route("/head", get(head::chain_head))
         .route("/verify", get(verify::verify_chain))
 }

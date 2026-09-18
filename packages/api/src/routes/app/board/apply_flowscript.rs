@@ -8,7 +8,7 @@ use crate::{
     routes::{
         app::{
             board::{scoring::save_board_and_refresh_summary, sync_board::seed_board_revision},
-            wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+            wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
         },
         flowscript::{
             FlowScriptApplyFailure, ORIGIN_AGENT, ORIGIN_EDITOR, OUTCOME_ERROR, SOURCE_WEB,
@@ -119,14 +119,14 @@ pub async fn apply_flowscript(
         }
     };
 
-    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    let wasm = app_wasm_nodes_cached(&state, &app_id).await?;
     let builtin_nodes = state.registry.as_ref().get_nodes();
-    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+    if hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes) {
         board.mark_changed();
     }
 
     let mut catalog_nodes = builtin_nodes;
-    catalog_nodes.extend(wasm_nodes);
+    catalog_nodes.extend(wasm.nodes.iter().cloned());
 
     let origin = match params.origin.as_deref() {
         Some(ORIGIN_AGENT) => ORIGIN_AGENT,

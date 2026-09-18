@@ -9,6 +9,9 @@ pub mod limits;
 pub mod manifest;
 pub mod runtime;
 pub mod widget;
+pub mod widget_frame;
+pub mod widget_policy;
+pub mod widget_sources;
 
 #[cfg(feature = "bundle")]
 pub mod widget_bundle;

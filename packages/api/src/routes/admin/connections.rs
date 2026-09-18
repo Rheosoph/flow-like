@@ -10,7 +10,7 @@ use crate::{
             ProcessGraphResponse, app_category_lookup, content_stats, flow_window, load_notes,
             observed_flows_global, presign_media,
         },
-        role_name_lookup, role_permission_lookup, status_to_string,
+        role_lookup, status_to_string,
     },
     state::AppState,
 };
@@ -77,8 +77,7 @@ pub async fn get_global_connection_graph(
         .iter()
         .filter_map(|c| c.role_id.clone())
         .collect();
-    let role_names = role_name_lookup(&state, &role_ids).await?;
-    let role_permissions = role_permission_lookup(&state, &role_ids).await?;
+    let (role_names, role_permissions) = role_lookup(&state, &role_ids).await?;
     let content = content_stats(&state, &node_ids).await?;
     let media = presign_media(&state, &app_meta).await;
     let categories = app_category_lookup(&state, &node_ids).await;

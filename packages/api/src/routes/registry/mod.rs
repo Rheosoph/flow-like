@@ -18,11 +18,14 @@ pub mod types;
 pub mod upload;
 pub mod users;
 pub mod widget_asset;
+pub mod widget_grant_jwt;
+pub mod widget_policy;
+pub mod widget_sandbox;
 
 use crate::state::AppState;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post, put},
 };
@@ -108,6 +111,25 @@ macro_rules! check_wasm_access {
     }};
 }
 
+/// Whether the viewer manages the package (maintainer or owner) and therefore
+/// sees its unapproved versions. Resolved through the permission cache.
+pub(crate) async fn viewer_can_manage(
+    state: &AppState,
+    viewer_sub: Option<&str>,
+    package_id: &str,
+) -> Result<bool, crate::error::ApiError> {
+    let Some(user_id) = viewer_sub else {
+        return Ok(false);
+    };
+
+    let access = crate::check_wasm_access!(state, user_id, package_id);
+    Ok(access.is_some_and(|permission| {
+        permission.has_permission(
+            crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer,
+        )
+    }))
+}
+
 async fn compilation_callback(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -144,6 +166,24 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/package/{package_id}/widget-asset/{version}/{*path}",
             get(widget_asset::get_widget_asset),
+        )
+        .route(
+            "/package/{package_id}/widget-sandbox/{version}/{*path}",
+            get(widget_sandbox::get_widget_sandbox),
+        )
+        .route(
+            "/package/{package_id}/widget-policy/{version}/{widget_id}",
+            get(widget_policy::describe_widget_policy)
+                .post(widget_policy::describe_widget_runtime_policy)
+                .layer(DefaultBodyLimit::max(
+                    widget_policy::MAX_WIDGET_POLICY_REQUEST_BYTES,
+                )),
+        )
+        .route(
+            "/package/{package_id}/widget-grant",
+            post(widget_policy::mint_widget_grant).layer(DefaultBodyLimit::max(
+                widget_policy::MAX_WIDGET_POLICY_REQUEST_BYTES,
+            )),
         )
         .route(
             "/package/{package_id}/readme",

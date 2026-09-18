@@ -26,11 +26,11 @@ use crate::{
     execution::{
         ByteStream, DispatchError, DispatchRequest, DispatchTrigger, ExecutionBackend,
         ExecutionJwtParams, PageActionSealingContext, PageExecutionJwtContext, TokenType,
-        completed_run_status, fetch_profile_for_dispatch, format_run_version, is_jwt_configured,
-        payload_storage, proxy_sse_response_with_page_actions, rejection, resolve_wasm_packages,
-        sign_execution_jwt, sign_execution_jwt_with_page_context,
+        fetch_profile_for_dispatch, format_run_version, is_completed_event, is_jwt_configured,
+        parse_completed_payload, payload_storage, proxy_sse_response_with_page_actions, rejection,
+        resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
-        update_run_on_completion, variant,
+        update_run_on_completed_event, update_run_on_completion, variant,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -228,6 +228,32 @@ pub struct InvokeEventResponse {
 /// Get credentials access for remote server-side execution.
 fn get_credentials_access() -> crate::credentials::CredentialsAccess {
     crate::credentials::CredentialsAccess::ServerExecute
+}
+
+/// Encrypts and stores a run's input payload so the run can be re-run, and
+/// returns the key for the run row. `None` without a payload.
+pub(super) async fn store_input_payload(
+    state: &AppState,
+    app_id: &str,
+    run_id: &str,
+    payload: Option<&serde_json::Value>,
+) -> Result<Option<String>, ApiError> {
+    let Some(payload) = payload else {
+        return Ok(None);
+    };
+    let payload_bytes = serde_json::to_vec(payload)
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize payload: {}", e)))?;
+    let master_creds = state.master_credentials().await.map_err(|e| {
+        ApiError::internal_error(anyhow!("Failed to get master credentials: {}", e))
+    })?;
+    let store = master_creds
+        .to_store(false)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get object store: {}", e)))?;
+    let stored = payload_storage::store_payload(store.as_generic(), app_id, run_id, &payload_bytes)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to store payload: {}", e)))?;
+    Ok(Some(stored.key))
 }
 
 /// POST /apps/{app_id}/events/{event_id}/invoke
@@ -442,7 +468,45 @@ async fn invoke_event_impl(
     }
     .map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
 
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
+    // A remote run's dispatch inputs do not depend on each other, so they
+    // resolve together. Each result is consumed where it was awaited before,
+    // which keeps the order in which failures surface. A local tracking run
+    // only resolves the WASM package set.
+    let remote = !query.local;
+    let (wasm_packages, input_payload_key, credentials, profile) = flow_like_types::tokio::join!(
+        resolve_wasm_packages(&state, &app_id),
+        store_input_payload(
+            &state,
+            &app_id,
+            &run_id,
+            params.payload.as_ref().filter(|_| remote),
+        ),
+        async {
+            if remote {
+                Some(
+                    state
+                        .scoped_credentials(&sub, &app_id, get_credentials_access())
+                        .await,
+                )
+            } else {
+                None
+            }
+        },
+        async {
+            if remote {
+                fetch_profile_for_dispatch(
+                    &state,
+                    &sub,
+                    params.profile_id.as_deref(),
+                    &app_id,
+                    true,
+                )
+                .await
+            } else {
+                None
+            }
+        },
+    );
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
     if resolved_page_trigger
@@ -492,33 +556,8 @@ async fn invoke_event_impl(
         RunMode::Http
     };
 
-    // Store payload in object storage if present (for remote runs only - enables re-run)
-    let input_payload_key = if !query.local {
-        if let Some(ref payload) = params.payload {
-            let payload_bytes = serde_json::to_vec(payload).map_err(|e| {
-                ApiError::internal_error(anyhow!("Failed to serialize payload: {}", e))
-            })?;
-            let master_creds = state.master_credentials().await.map_err(|e| {
-                ApiError::internal_error(anyhow!("Failed to get master credentials: {}", e))
-            })?;
-            let store = master_creds.to_store(false).await.map_err(|e| {
-                ApiError::internal_error(anyhow!("Failed to get object store: {}", e))
-            })?;
-            let stored = payload_storage::store_payload(
-                store.as_generic(),
-                &app_id,
-                &run_id,
-                &payload_bytes,
-            )
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to store payload: {}", e)))?;
-            Some(stored.key)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // Payload stored in object storage if present (for remote runs only - enables re-run)
+    let input_payload_key = input_payload_key?;
 
     // Resolve this run's correlation: inherit the trace root & business keys
     // from the caller, otherwise this run is the root of its own trace.
@@ -580,6 +619,9 @@ async fn invoke_event_impl(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),
@@ -673,9 +715,10 @@ async fn invoke_event_impl(
         )));
     }
 
-    // Get scoped credentials based on user permissions
-    let access = get_credentials_access();
-    let credentials = state.scoped_credentials(&sub, &app_id, access).await?;
+    // Scoped credentials based on user permissions
+    let credentials = credentials
+        .transpose()?
+        .ok_or_else(|| anyhow!("Scoped credentials were not resolved for a remote run"))?;
 
     // Convert to SharedCredentials for runtime compatibility
     let shared_credentials = credentials.into_shared_credentials();
@@ -726,9 +769,6 @@ async fn invoke_event_impl(
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
-
-    let profile =
-        fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true).await;
 
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -934,25 +974,13 @@ fn proxy_lambda_sse_response(
                             page_actions.as_deref(),
                         );
                         event_ordinal = event_ordinal.saturating_add(1);
-                        // Check if this is a completed event and update the database
                         if let Some(db) = &db
                             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event_data)
-                                && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
-                                    && event_type == "completed" {
-                                        let log_level = parsed.get("payload")
-                                            .and_then(|p| p.get("log_level"))
-                                            .and_then(|l| l.as_i64())
-                                            .unwrap_or(0) as i32;
-                                        let status = parsed.get("payload")
-                                            .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str());
-
-                                        let run_status = completed_run_status(status);
-
-                                        if let Err(e) = update_run_on_completion(db, &run_id, run_status, log_level).await {
-                                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
-                                        }
-                                    }
+                            && is_completed_event(&parsed)
+                            && let Err(e) = update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed)).await
+                        {
+                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                        }
 
                         let sse_event = Event::default()
                             .event(&event.event_type)

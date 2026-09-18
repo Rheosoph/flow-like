@@ -122,8 +122,7 @@ pub async fn sweep_once(
     batch_size: u64,
 ) -> Result<u64, sea_orm::DbErr> {
     let db = context.db.as_ref();
-    // ExecutionRun timestamps use millisecond precision. Reuse that exact value
-    // for the update and the query identifying rows changed by this sweep.
+    // ExecutionRun timestamps use millisecond precision.
     let now = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
         .expect("current timestamp is representable in milliseconds")
         .fixed_offset();
@@ -131,13 +130,21 @@ pub async fn sweep_once(
         now - chrono::Duration::from_std(grace).unwrap_or_else(|_| chrono::Duration::seconds(3600));
     let batch_size = batch_size.clamp(1, MAX_BATCH_SIZE);
 
-    let stale = ExecutionRun::find()
+    let stale: Vec<(String, String, RunMode, RunStatus)> = ExecutionRun::find()
+        .select_only()
+        .columns([
+            execution_run::Column::Id,
+            execution_run::Column::AppId,
+            execution_run::Column::Mode,
+            execution_run::Column::Status,
+        ])
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
         .filter(execution_run::Column::Mode.ne(RunMode::Local))
         .filter(execution_run::Column::UpdatedAt.lt(threshold))
         .order_by_asc(execution_run::Column::UpdatedAt)
         .order_by_asc(execution_run::Column::Id)
         .limit(batch_size)
+        .into_tuple()
         .all(db)
         .await?;
 
@@ -145,18 +152,18 @@ pub async fn sweep_once(
         return Ok(0);
     }
 
-    let ids: Vec<String> = stale.iter().map(|r| r.id.clone()).collect();
-    for run in stale.iter().take(20) {
+    for (run_id, app_id, mode, status) in stale.iter().take(20) {
         tracing::info!(
-            run_id = %run.id,
-            app_id = %run.app_id,
-            mode = ?run.mode,
-            status = ?run.status,
+            run_id = %run_id,
+            app_id = %app_id,
+            mode = ?mode,
+            status = ?status,
             "Marking stuck run as Timeout"
         );
     }
+    let ids: Vec<String> = stale.into_iter().map(|(run_id, ..)| run_id).collect();
 
-    let result = ExecutionRun::update_many()
+    let update = ExecutionRun::update_many()
         .set(execution_run::ActiveModel {
             status: Set(RunStatus::Timeout),
             completed_at: Set(Some(now)),
@@ -166,29 +173,24 @@ pub async fn sweep_once(
             )),
             ..Default::default()
         })
-        .filter(execution_run::Column::Id.is_in(ids.clone()))
+        .filter(execution_run::Column::Id.is_in(ids))
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
         // A callback may refresh a run after the selection query. Keep the
         // age predicate in the conditional update so the sweep cannot time out
         // a run that became active in that window.
-        .filter(execution_run::Column::UpdatedAt.lt(threshold))
-        .exec(db)
-        .await?;
+        .filter(execution_run::Column::UpdatedAt.lt(threshold));
 
-    if context.enabled && result.rows_affected > 0 {
-        let timed_out = ExecutionRun::find()
-            .filter(execution_run::Column::Id.is_in(ids))
-            .filter(execution_run::Column::Status.eq(RunStatus::Timeout))
-            .filter(execution_run::Column::CompletedAt.eq(now))
-            .all(db)
-            .await?;
-        for run in timed_out {
-            record_execution_result(context, &run, "run-sweeper", AuditActorType::System)
-                .await
-                .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
-        }
+    if !context.enabled {
+        return Ok(update.exec(db).await?.rows_affected);
     }
-    Ok(result.rows_affected)
+
+    let timed_out = update.exec_with_returning(db).await?;
+    for run in &timed_out {
+        record_execution_result(context, run, "run-sweeper", AuditActorType::System)
+            .await
+            .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+    }
+    Ok(timed_out.len() as u64)
 }
 
 #[cfg(test)]

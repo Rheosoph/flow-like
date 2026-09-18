@@ -40,12 +40,14 @@ export default defineConfig({
 		// and is already translated. The `store:*` entries below are looked up
 		// through a lookup table (category enum → key, sort option → key), so the
 		// scanner never sees the literal and would delete translated work.
+		// Widget source About keys arrive in the backend's classification.
 		preservePatterns: [
 			"nav:*",
 			"store:category*",
 			"store:bestRated",
 			"store:mostPopular",
 			"store:newestFirst",
+			"common:widgetSourceAbout*",
 		],
 		sort: true,
 		indentation: "\t",
