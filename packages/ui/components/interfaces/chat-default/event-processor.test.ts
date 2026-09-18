@@ -123,6 +123,56 @@ const upsertEvent = (elementId: string) => ({
 	},
 });
 
+const a2uiEvent = (payload: Record<string, unknown>) => ({
+	event_type: "a2ui",
+	payload,
+});
+
+/** Widget B pushed into a container of widget A, then addressed by bare id and bound path. */
+const nested = {
+	pushChild: a2uiEvent({
+		type: "upsertElement",
+		element_id: "inst-a/root",
+		value: { type: "pushChild", childId: "inst-b" },
+	}),
+	createB: a2uiEvent({
+		type: "upsertElement",
+		element_id: "inst-b",
+		value: {
+			type: "createComponent",
+			component: {
+				type: "widgetInstance",
+				instanceId: "inst-b",
+				inlineWidgetDef: {
+					name: "Child",
+					rootComponentId: "b-text",
+					components: [
+						{
+							id: "b-text",
+							component: { type: "text", text: { path: "/b/label" } },
+						},
+					],
+				},
+			},
+		},
+	}),
+	setBText: a2uiEvent({
+		type: "upsertElement",
+		element_id: "b-text",
+		value: { type: "setText", text: "hi" },
+	}),
+	dataUpdate: a2uiEvent({
+		type: "dataModelUpdate",
+		surface_id: "page",
+		contents: [{ key: "/b/label", value: "hello" }],
+	}),
+	unrelated: a2uiEvent({
+		type: "upsertElement",
+		element_id: "elsewhere",
+		value: { type: "setText", text: "no" },
+	}),
+};
+
 describe("processChatEvents", () => {
 	test("chat_stream from Push Response sets assistant content", () => {
 		const result = processChatEvents(
@@ -241,6 +291,33 @@ describe("processChatEvents", () => {
 		expect(result.responseMessage.widgets?.[1]?.updates).toHaveLength(1);
 	});
 
+	test("updates follow instances pushed into a widget across batches", () => {
+		const message = baseMessage();
+
+		// Each batch sees the widget objects produced by the previous one, so the
+		// cached targets must carry the pushed instance forward, not just within
+		// one batch.
+		processChatEvents([widgetPushEvent("inst-a")], baseState(message));
+		processChatEvents([nested.pushChild], baseState(message));
+		processChatEvents([nested.createB], baseState(message));
+		const result = processChatEvents(
+			[nested.setBText, nested.dataUpdate, nested.unrelated],
+			baseState(message),
+		);
+
+		const updates = result.responseMessage.widgets?.[0]?.updates as Array<
+			Record<string, unknown>
+		>;
+		expect(updates.map((update) => update.type)).toEqual([
+			"upsertElement",
+			"upsertElement",
+			"upsertElement",
+			"dataModelUpdate",
+		]);
+		expect(updates[2]?.element_id).toBe("b-text");
+		expect(updates[3]?.surfaceId).toBe("inst-a");
+	});
+
 	test("chat_out re-send never regresses live-appended updates", () => {
 		const message = baseMessage();
 		processChatEvents(
@@ -249,6 +326,7 @@ describe("processChatEvents", () => {
 		);
 
 		// chat_out replays the widget as snapshotted at push time (no updates)
+		const before = message.widgets;
 		const result = processChatEvents(
 			[
 				{
@@ -263,6 +341,8 @@ describe("processChatEvents", () => {
 		);
 
 		expect(result.responseMessage.widgets?.[0]?.updates).toHaveLength(1);
+		// Nothing new arrived, so the list (and every widget in it) keeps identity.
+		expect(result.responseMessage.widgets).toBe(before);
 	});
 });
 

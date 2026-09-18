@@ -81,6 +81,8 @@ interface MessageProps {
 	boardId?: string;
 	/** Chat event id — forwarded to embedded widget surfaces. */
 	eventId?: string;
+	/** Pre-rasterize embedded widgets for the model's context (chat `attach_widget_snapshots`). */
+	widgetSnapshots?: boolean;
 }
 
 const MessageActionButton = ({
@@ -436,6 +438,7 @@ export const MessageComponent = memo(
 		appId,
 		boardId,
 		eventId,
+		widgetSnapshots = true,
 	}: Readonly<MessageProps>) {
 		const { t } = useTranslation("chat");
 		const isUser = message.inner.role === IRole.User;
@@ -889,6 +892,7 @@ export const MessageComponent = memo(
 								appId={appId}
 								boardId={boardId}
 								eventId={eventId}
+								snapshots={widgetSnapshots}
 							/>
 						)}
 						{!isUser && (message.app_refs?.length ?? 0) > 0 && (
@@ -1007,6 +1011,7 @@ export const MessageComponent = memo(
 			prev.boardId === next.boardId &&
 			prev.eventId === next.eventId &&
 			prev.loading === next.loading &&
+			prev.widgetSnapshots === next.widgetSnapshots &&
 			prev.onMessageUpdate === next.onMessageUpdate
 		);
 	},
