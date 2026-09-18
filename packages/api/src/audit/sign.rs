@@ -63,30 +63,49 @@ fn parse_verifying_keys(
         .collect()
 }
 
-/// Initialize the audit signing keys from pre-resolved secret values.
+const BACKEND_DEFAULT_KID: &str = "backend-es256-v1";
+
+/// Initialize audit signing from the shared backend key. Kept for installations
+/// without a dedicated audit key; their entries carry the backend key id.
 /// Must be called once during State construction. Subsequent calls are no-ops.
 pub fn init(backend_key_b64: Option<&str>, kid: Option<String>) {
+    install(backend_key_b64, |_| {
+        kid.unwrap_or_else(|| BACKEND_DEFAULT_KID.to_string())
+    });
+}
+
+/// Initialize audit signing from a key no token issuer holds. Without an explicit
+/// id the key's own fingerprint names it, so a rotated key can never reuse an id.
+pub fn init_dedicated(audit_key_b64: &str, kid: Option<String>) {
+    install(Some(audit_key_b64), |key| {
+        kid.unwrap_or_else(|| {
+            let point = key.verifying_key().to_encoded_point(true);
+            let fingerprint = blake3::hash(point.as_bytes()).to_hex();
+            format!("audit-es256-{}", &fingerprint[..16])
+        })
+    });
+}
+
+fn install(backend_key_b64: Option<&str>, kid: impl FnOnce(&SigningKey) -> String) {
     match backend_key_b64 {
         None => {
-            tracing::warn!("audit::sign::init called with no BACKEND_KEY value");
+            tracing::warn!("audit signing initialized without a key");
         }
         Some(b64) => match STANDARD.decode(b64) {
             Err(e) => {
-                tracing::error!("BACKEND_KEY base64 decode failed: {e}");
+                tracing::error!("audit signing key base64 decode failed: {e}");
             }
             Ok(pem_bytes) => match String::from_utf8(pem_bytes) {
                 Err(e) => {
-                    tracing::error!("BACKEND_KEY is not valid UTF-8 after decode: {e}");
+                    tracing::error!("audit signing key is not valid UTF-8 after decode: {e}");
                 }
                 Ok(pem_str) => match SigningKey::from_pkcs8_pem(&pem_str) {
                     Err(e) => {
-                        tracing::error!("BACKEND_KEY PKCS#8 parse failed: {e}");
+                        tracing::error!("audit signing key PKCS#8 parse failed: {e}");
                     }
                     Ok(sk) => {
-                        let _ = SIGNING_CONFIG.set(SigningConfig {
-                            key: sk,
-                            kid: kid.unwrap_or_else(|| "backend-es256-v1".to_string()),
-                        });
+                        let kid = kid(&sk);
+                        let _ = SIGNING_CONFIG.set(SigningConfig { key: sk, kid });
                         tracing::info!("Audit signing key initialized successfully");
                     }
                 },
@@ -103,7 +122,7 @@ pub fn current_kid() -> &'static str {
     SIGNING_CONFIG
         .get()
         .map(|config| config.kid.as_str())
-        .unwrap_or("backend-es256-v1")
+        .unwrap_or(BACKEND_DEFAULT_KID)
 }
 
 /// Sign an entry hash using raw P-256 ECDSA.

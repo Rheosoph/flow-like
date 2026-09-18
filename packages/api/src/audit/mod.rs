@@ -1,5 +1,6 @@
 pub mod chain;
 mod execution;
+pub mod level;
 pub mod request;
 pub mod service;
 pub mod sign;
@@ -7,8 +8,9 @@ pub mod sign;
 pub use chain::{GENESIS_HASH, compute_entry_hash};
 pub use execution::{
     ExecutionAuditContext, record_execution_dispatch, record_execution_dispatch_failure,
-    record_execution_outcome, record_execution_result,
+    record_execution_dispatch_for, record_execution_outcome, record_execution_result,
 };
+pub use level::{AuditLevel, records, records_executions, required_level};
 pub use service::AuditService;
 pub use sign::{sign_entry, verify_entry_signature};
 
@@ -42,8 +44,21 @@ pub fn actor_type_from_user(user: &AppUser) -> AuditActorType {
     }
 }
 
+/// Record an entry with the same level gate and failure handling as the
+/// `audit!` macros, for paths that have no `AppUser`: webhooks and background jobs.
+pub async fn record_entry(state: &AppState, input: service::AuditEntryInput) {
+    if !records(&state.platform_config.audit, &input.action) {
+        return;
+    }
+    let action = input.action.clone();
+    if let Err(error) = AuditService::record(&state.db, state.db_dialect, input).await {
+        request::record_failure();
+        tracing::error!(%error, action, "AUDIT FAILURE (detached)");
+    }
+}
+
 pub async fn record_execution_start(state: &AppState, user: &AppUser, execution: ExecutionAudit) {
-    if !state.platform_config.audit.enabled || !state.platform_config.audit.log_executions {
+    if !records_executions(&state.platform_config.audit) {
         return;
     }
 
@@ -112,14 +127,14 @@ pub async fn record_execution_start(state: &AppState, user: &AppUser, execution:
 /// Record an audit entry on the platform root chain (chain_id = None).
 /// Records synchronously after the domain mutation. Failures are traced and
 /// counted in the request outcome; the middleware records an attempt before dispatch.
-/// Respects `audit.enabled` from platform config.
+/// Respects `audit.enabled` and `audit.level` from platform config.
 ///
 /// Usage: `audit!(state, user, action, resource_type, resource_id, summary);`
 /// With details: `audit!(state, user, action, resource_type, resource_id, summary, details);`
 #[macro_export]
 macro_rules! audit {
     ($state:expr, $user:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr) => {{
-        if $state.platform_config.audit.enabled {
+        if $crate::audit::records(&$state.platform_config.audit, &$action) {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
@@ -154,7 +169,7 @@ macro_rules! audit {
         }
     }};
     ($state:expr, $user:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr, $details:expr) => {{
-        if $state.platform_config.audit.enabled {
+        if $crate::audit::records(&$state.platform_config.audit, &$action) {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
@@ -194,14 +209,14 @@ macro_rules! audit {
 /// Record an audit entry on a branch chain (app or package).
 /// Records synchronously after the domain mutation. Failures are traced and
 /// counted in the request outcome; the middleware records an attempt before dispatch.
-/// Respects `audit.enabled` from platform config.
+/// Respects `audit.enabled` and `audit.level` from platform config.
 ///
 /// Usage: `audit_branch!(state, user, chain_id, action, resource_type, resource_id, summary);`
 /// With details: `audit_branch!(state, user, chain_id, action, resource_type, resource_id, summary, details);`
 #[macro_export]
 macro_rules! audit_branch {
     ($state:expr, $user:expr, $chain_id:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr) => {{
-        if $state.platform_config.audit.enabled {
+        if $crate::audit::records(&$state.platform_config.audit, &$action) {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
@@ -237,7 +252,7 @@ macro_rules! audit_branch {
         }
     }};
     ($state:expr, $user:expr, $chain_id:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr, $details:expr) => {{
-        if $state.platform_config.audit.enabled {
+        if $crate::audit::records(&$state.platform_config.audit, &$action) {
             let user = $user.clone();
             let actor_type = $crate::audit::actor_type_from_user(&user);
             let db = $state.db.clone();
