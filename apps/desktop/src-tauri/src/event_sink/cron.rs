@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use super::{EventRegistration, EventSink, manager::DbConnection};
+use super::{EventRegistration, EventSink, failure_log::FailureLog, manager::DbConnection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledLocal {
@@ -50,6 +50,28 @@ pub struct CronSink {
 
 /// A row from `cron_jobs` that is ready to fire: (event_id, expression, scheduled_for, timezone).
 type DueJob = (String, Option<String>, Option<i64>, String);
+
+/// What the worker does with a due job after one attempt to fire it.
+enum FireOutcome {
+    Fired,
+    /// The bus could not take the event right now; the job is retried shortly.
+    Retry(String),
+    /// The registration cannot fire until it is saved again; the job moves on.
+    Defer(String),
+}
+
+/// Delay before a job whose event could not be handed to the bus is retried.
+const TRANSIENT_RETRY_SECS: i64 = 5;
+
+/// Retry delay for a one-off job that could not fire. An expression job skips
+/// to its next occurrence instead.
+const DEFERRED_ONE_SHOT_RETRY_SECS: i64 = 5 * 60;
+
+fn format_timestamp(ts: i64) -> String {
+    DateTime::<Utc>::from_timestamp(ts, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| ts.to_string())
+}
 
 impl CronSink {
     fn init_tables(db: &DbConnection) -> Result<()> {
@@ -192,6 +214,8 @@ impl CronSink {
     }
 
     fn remove_job(db: &DbConnection, event_id: &str) -> Result<()> {
+        // Startup cleanup unregisters before the worker has created the table.
+        Self::init_tables(db)?;
         let conn = db.lock().unwrap();
         conn.execute(
             "DELETE FROM cron_jobs WHERE event_id = ?1",
@@ -276,20 +300,20 @@ impl CronSink {
         .map_err(Into::into)
     }
 
-    fn fire_event(app_handle: &AppHandle, event_id: &str) -> Result<bool> {
+    fn fire_event(app_handle: &AppHandle, event_id: &str) -> FireOutcome {
         use crate::state::TauriEventSinkManagerState;
 
-        if let Some(manager_state) = app_handle.try_state::<TauriEventSinkManagerState>() {
-            match manager_state.0.try_lock() {
-                Ok(manager) => manager.fire_event(app_handle, event_id, None, None),
-                Err(_) => {
-                    tracing::warn!("EventSinkManager busy while firing cron event {}", event_id);
-                    Ok(false)
-                }
-            }
-        } else {
-            tracing::error!("EventSinkManager state not available for {}", event_id);
-            Ok(false)
+        let Some(manager_state) = app_handle.try_state::<TauriEventSinkManagerState>() else {
+            return FireOutcome::Retry("event sink manager not available".to_owned());
+        };
+        let manager = match manager_state.0.try_lock() {
+            Ok(manager) => manager,
+            Err(_) => return FireOutcome::Retry("event sink manager busy".to_owned()),
+        };
+        match manager.fire_event_for_retry(app_handle, event_id, None, None) {
+            Ok(Ok(())) => FireOutcome::Fired,
+            Ok(Err(reason)) => FireOutcome::Retry(reason),
+            Err(err) => FireOutcome::Defer(err.to_string()),
         }
     }
 
@@ -324,6 +348,40 @@ impl CronSink {
         Ok(())
     }
 
+    /// Stores `next_run`, or drops the job when there is none.
+    fn reschedule(db: &DbConnection, event_id: &str, next_run: Option<i64>) -> Result<()> {
+        let conn = db.lock().unwrap();
+        match next_run {
+            Some(ts) => conn.execute(
+                "UPDATE cron_jobs SET next_run = ?1 WHERE event_id = ?2",
+                params![ts, event_id],
+            )?,
+            None => conn.execute(
+                "DELETE FROM cron_jobs WHERE event_id = ?1",
+                params![event_id],
+            )?,
+        };
+        Ok(())
+    }
+
+    /// Moves a job that cannot fire past `now`, so the worker stops retrying it
+    /// every tick. Returns the new `next_run`, or `None` when the job was
+    /// dropped because its expression never yields another time.
+    fn defer_job(
+        db: &DbConnection,
+        event_id: &str,
+        expression: Option<String>,
+        tz: Tz,
+        now: i64,
+    ) -> Result<Option<i64>> {
+        let next_run = match expression.filter(|e| !e.trim().is_empty()) {
+            Some(expr) => Self::compute_next_from_cron(expr.trim(), tz),
+            None => Some(now + DEFERRED_ONE_SHOT_RETRY_SECS),
+        };
+        Self::reschedule(db, event_id, next_run)?;
+        Ok(next_run)
+    }
+
     fn get_next_upcoming(db: &DbConnection) -> Option<i64> {
         let conn = db.lock().unwrap();
         conn.query_row(
@@ -334,7 +392,12 @@ impl CronSink {
         .unwrap_or(None)
     }
 
-    async fn process_jobs(db: &DbConnection, app_handle: &AppHandle) -> Result<Option<i64>> {
+    /// Fires every due job and returns the earliest `next_run` left in the table.
+    async fn process_jobs(
+        db: &DbConnection,
+        app_handle: &AppHandle,
+        failures: &mut FailureLog,
+    ) -> Result<Option<i64>> {
         Self::calculate_missing_next_runs(db)?;
 
         let now = Utc::now().timestamp();
@@ -345,21 +408,51 @@ impl CronSink {
         for (event_id, expression, _scheduled_for, tz_str) in due_jobs {
             let tz = Self::parse_tz(Some(&tz_str));
 
-            tracing::info!("Firing event: {}", event_id);
+            tracing::debug!("Firing event: {}", event_id);
 
+            // A failure is logged at full level only when it changes.
             match Self::fire_event(app_handle, &event_id) {
-                Ok(true) => {
-                    tracing::info!("Event {} fired successfully", event_id);
+                FireOutcome::Fired => {
+                    match failures.record_success(&event_id) {
+                        Some(attempts) => tracing::info!(
+                            "Event {} fired successfully after {} failed attempts",
+                            event_id,
+                            attempts
+                        ),
+                        None => tracing::info!("Event {} fired successfully", event_id),
+                    }
                     Self::handle_executed_job(db, &event_id, expression, tz, now)?;
                 }
-                Ok(false) => {
-                    tracing::warn!(
-                        "Event {} failed to fire, will retry in next cycle",
-                        event_id
-                    );
+                FireOutcome::Retry(reason) => {
+                    Self::reschedule(db, &event_id, Some(now + TRANSIENT_RETRY_SECS))?;
+                    if failures.record_failure(&event_id, &reason) {
+                        tracing::warn!(
+                            "Event {} could not be fired ({}), retrying in {}s",
+                            event_id,
+                            reason,
+                            TRANSIENT_RETRY_SECS
+                        );
+                    } else {
+                        tracing::debug!(
+                            "Event {} could not be fired ({}), retrying in {}s",
+                            event_id,
+                            reason,
+                            TRANSIENT_RETRY_SECS
+                        );
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Error firing event {}: {}", event_id, e);
+                FireOutcome::Defer(reason) => {
+                    let next_run = Self::defer_job(db, &event_id, expression, tz, now)?;
+                    let outcome = match next_run {
+                        Some(ts) => format!("next attempt at {}", format_timestamp(ts)),
+                        None => "dropped, its schedule has no further occurrence".to_owned(),
+                    };
+                    // The schedule misses its runs until the registration is fixed.
+                    if failures.record_failure(&event_id, &reason) {
+                        tracing::error!("Event {} cannot fire: {}; {}", event_id, reason, outcome);
+                    } else {
+                        tracing::debug!("Event {} cannot fire: {}; {}", event_id, reason, outcome);
+                    }
                 }
             }
         }
@@ -384,14 +477,17 @@ impl EventSink for CronSink {
             const MIN_TICK: Duration = Duration::from_millis(250);
             const MAX_TICK: Duration = Duration::from_secs(10);
 
+            let mut failures = FailureLog::default();
+
             loop {
-                let next_upcoming = match Self::process_jobs(&worker_db, &app_handle).await {
-                    Ok(ts) => ts,
-                    Err(e) => {
-                        tracing::error!("Cron processing error: {}", e);
-                        None
-                    }
-                };
+                let next_upcoming =
+                    match Self::process_jobs(&worker_db, &app_handle, &mut failures).await {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!("Cron processing error: {}", e);
+                            None
+                        }
+                    };
 
                 let now = Utc::now().timestamp();
                 let sleep_dur = if let Some(ts) = next_upcoming {
@@ -445,5 +541,108 @@ impl EventSink for CronSink {
     ) -> Result<()> {
         Self::remove_job(&db, &registration.event_id)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::sync::{Arc, Mutex};
+
+    fn db_with_job(
+        event_id: &str,
+        expression: Option<&str>,
+        scheduled_for: Option<i64>,
+        next_run: i64,
+    ) -> DbConnection {
+        let db: DbConnection = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        CronSink::init_tables(&db).unwrap();
+        db.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO cron_jobs
+                 (event_id, expression, scheduled_for, timezone, last_fired, next_run, created_at)
+                 VALUES (?1, ?2, ?3, 'UTC', NULL, ?4, 0)",
+                params![event_id, expression, scheduled_for, next_run],
+            )
+            .unwrap();
+        db
+    }
+
+    /// `None` when the job row is gone.
+    fn stored_next_run(db: &DbConnection, event_id: &str) -> Option<Option<i64>> {
+        db.lock()
+            .unwrap()
+            .query_row(
+                "SELECT next_run FROM cron_jobs WHERE event_id = ?1",
+                params![event_id],
+                |row| row.get(0),
+            )
+            .ok()
+    }
+
+    #[test]
+    fn defer_job_skips_an_expression_job_to_its_next_occurrence() {
+        let now = Utc::now().timestamp();
+        let db = db_with_job("minutely", Some("* * * * *"), None, now - 3600);
+
+        let deferred = CronSink::defer_job(
+            &db,
+            "minutely",
+            Some("* * * * *".to_owned()),
+            chrono_tz::UTC,
+            now,
+        )
+        .unwrap();
+
+        let next_run = deferred.expect("expression job keeps a next_run");
+        assert!(next_run > now, "{next_run} <= {now}");
+        assert!(next_run <= now + 61, "{next_run} > {now} + 61");
+        assert_eq!(stored_next_run(&db, "minutely"), Some(deferred));
+    }
+
+    #[test]
+    fn defer_job_retries_a_one_shot_job_later() {
+        let now = Utc::now().timestamp();
+        let db = db_with_job("once", None, Some(now - 10), now - 10);
+
+        let deferred = CronSink::defer_job(&db, "once", None, chrono_tz::UTC, now).unwrap();
+
+        assert_eq!(deferred, Some(now + DEFERRED_ONE_SHOT_RETRY_SECS));
+        assert_eq!(stored_next_run(&db, "once"), Some(deferred));
+    }
+
+    #[test]
+    fn defer_job_drops_a_job_whose_expression_never_recurs() {
+        let now = Utc::now().timestamp();
+        let db = db_with_job("broken", Some("not a cron"), None, now - 10);
+
+        let deferred = CronSink::defer_job(
+            &db,
+            "broken",
+            Some("not a cron".to_owned()),
+            chrono_tz::UTC,
+            now,
+        )
+        .unwrap();
+
+        assert_eq!(deferred, None);
+        assert_eq!(stored_next_run(&db, "broken"), None);
+    }
+
+    #[test]
+    fn remove_job_works_before_the_worker_created_the_table() {
+        let db: DbConnection = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+
+        CronSink::remove_job(&db, "missing").unwrap();
+
+        db.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO cron_jobs (event_id, timezone, created_at) VALUES ('later', 'UTC', 0)",
+                [],
+            )
+            .expect("remove_job created the table");
     }
 }

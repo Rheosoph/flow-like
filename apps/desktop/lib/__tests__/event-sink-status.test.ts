@@ -6,7 +6,9 @@ const mocks = vi.hoisted(() => ({
 	fetcher: vi.fn(),
 }));
 
-vi.mock("@flow-like/flow-like-ui", () => ({}));
+vi.mock("@flow-like/flow-like-ui", () => ({
+	IEventExecutionMode: { Local: "Local", Remote: "Remote" },
+}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../api", () => ({ fetcher: mocks.fetcher, streamFetcher: vi.fn() }));
 vi.mock("../oauth-db", () => ({ oauthConsentStore: {}, oauthTokenStore: {} }));
@@ -64,24 +66,39 @@ describe("desktop event trigger status", () => {
 	);
 
 	test.each(["LOCAL", undefined])(
-		"keeps a %s trigger local when its workflow runs remotely",
+		"reads a %s trigger from the hosted sink when its workflow runs remotely",
 		async (target) => {
-			mocks.invoke.mockResolvedValue(true);
+			mocks.fetcher.mockResolvedValue({ active: true });
 			const value = {
 				...event("cron", target),
 				execution_mode: "Remote",
 			} as IEvent;
-			const state = new EventState(backend() as never);
+			const stateBackend = backend();
+			const state = new EventState(stateBackend as never);
 
 			await expect(
 				state.isEventSinkActive("event-1", context(value)),
 			).resolves.toBe(true);
-			expect(mocks.invoke).toHaveBeenCalledWith("is_event_sink_active", {
-				eventId: "event-1",
-			});
-			expect(mocks.fetcher).not.toHaveBeenCalled();
+			expect(mocks.fetcher).toHaveBeenCalledWith(
+				stateBackend.profile,
+				"sink/event-1",
+				{ method: "GET" },
+				stateBackend.auth,
+			);
+			expect(mocks.invoke).not.toHaveBeenCalled();
 		},
 	);
+
+	test("reports a remote workflow's trigger inactive in a local-only app", async () => {
+		const value = { ...event("discord"), execution_mode: "Remote" } as IEvent;
+		const state = new EventState(backend(true) as never);
+
+		await expect(
+			state.isEventSinkActive("event-1", context(value)),
+		).resolves.toBe(false);
+		expect(mocks.invoke).not.toHaveBeenCalled();
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
 
 	test.each(["rest", "mcp"])(
 		"uses the enabled flag for hosted %s even with a Local workflow",

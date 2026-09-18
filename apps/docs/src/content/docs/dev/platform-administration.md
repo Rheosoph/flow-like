@@ -14,14 +14,42 @@ result, and check whether the stored records still match their hashes and server
 signatures. Platform administrators read the root chain. App owners can read their
 app's branch through `/api/v1/audit/entries?chain_id=<app-id>`.
 
+### Levels
+
+`audit.level` selects how much of the mutation surface is recorded. Each level
+includes the ones below it.
+
+| Level | Records |
+| --- | --- |
+| `minimal` | Identity and access: roles, memberships, invites, personal access tokens, API keys, app connections, sinks, platform administration, app creation, visibility and publication, and deletions of primary resources (apps, boards, events, pages, widgets, templates, routes, tables, graph overlays). |
+| `standard` (default) | `minimal` plus content changes: board saves and versions, FlowScript and IR commits, events, canaries, regression suites, pages, widgets, templates, routes, metadata, process notes, table creation and row changes, graph overlay schema changes, upload grants and file deletions. |
+| `verbose` | `standard` plus `api.request.attempt` and `api.request.finish` for every mutation, editor commands (`board.commands.*`), graph node and edge writes, file read grants and execution lifecycle records. |
+
+Execution lifecycle records also follow `audit.log_executions`: the switch
+enables them at any level, and `verbose` records them without it. The
+checked-in configuration for the public instance uses `standard` with
+`log_executions` off, so it records access and content changes but not
+per-request or per-run records. An installation without `level` in its
+configuration runs at `standard`; set `verbose` to keep the previous behavior.
+
+The level applies when an entry is written. An action that is not recorded at
+the configured level leaves no gap in the chain: sequences stay contiguous and
+verification is unaffected. Actions the level classifier does not know are
+recorded at `standard`. The classification lives in
+`packages/api/src/audit/level.rs` and its test lists every action name.
+
 ### Coverage and failure behavior
 
-When `audit.enabled` is true, authenticated POST, PUT, PATCH and DELETE requests
+At the `verbose` level, authenticated POST, PUT, PATCH and DELETE requests
 record `api.request.attempt` before dispatch and `api.request.finish` when the
 handler produces response headers. Both entries share a request ID. The finish
 entry records the HTTP status and the number of failed domain audit writes.
-App-scoped routes put these records on the app chain. Other routes use the root
-chain. Telemetry ingestion is excluded.
+App-scoped routes put these records on the app chain when the caller holds a role
+in that app. A caller without one is recorded on the root chain with the requested
+app in `details.requested_app_id`, so naming an app in a path cannot write into or
+create its chain. Other routes use the root chain. Telemetry ingestion is excluded. At lower levels the request context is
+still established so domain hooks record the actor IP and a failed domain
+write still marks the response as described below.
 
 The middleware records the matched route template, method and actor. It does not
 read request bodies, query strings, credential headers or concrete paths.
@@ -31,22 +59,25 @@ records the authorization to upload or read. Provider access or event logs are
 needed to establish what happened after a client received a signed URL or scoped
 storage credentials.
 
-An attempt write failure returns HTTP 503 before the handler runs. An outcome or
-domain audit write failure after dispatch is traced and adds
+At `verbose`, an attempt write failure returns HTTP 503 before the handler runs.
+An outcome or domain audit write failure after dispatch is traced and adds
 `x-flow-like-audit-status: incomplete` to the original response. The response
 retains the handler's status because a mutation may already have committed.
+A request deadline (HTTP 504) drops the handler while a domain audit write may
+still be waiting, so a timed-out mutation is always marked `incomplete`, and at
+`verbose` its finish entry carries `domain_audit_outcome: "unknown"`.
 Operators should investigate attempts without a finish and finishes with a
 nonzero `domain_audit_failures`. Domain changes and their audit entries are not
 one atomic transaction. A crash can leave an attempt with an unknown outcome.
 Execution state updates have the same boundary. Callback retries can repair a
 missing terminal entry, but background crashes have no durable outbox recovery.
 
-With `audit.log_executions` enabled, persisted run transitions record starts,
-completion, failure, cancellation and timeout on the app chain. Repeated terminal
-callbacks reuse the first record for that run and action. Streaming and background
-work record their execution outcomes separately from HTTP response status. The
-checked-in platform configuration enables execution logging; the configuration
-type's default remains false for installations that have not opted in.
+With `audit.log_executions` enabled or at the `verbose` level, persisted run
+transitions record starts, completion, failure, cancellation, timeout and
+admission rejections on the app chain. Repeated terminal callbacks reuse the
+first record for that run and action. Streaming and background work record
+their execution outcomes separately from HTTP response status. Run details
+remain available in the execution run index regardless of this setting.
 
 Anonymous requests and authentication failures are outside the mutation middleware's
 coverage. Inbound and sink execution paths use explicit lifecycle hooks. This
@@ -60,8 +91,16 @@ type, optional IP, action, resource, chain scope, summary, details, previous has
 previous signature and signing key ID. P-256 ECDSA signs the resulting BLAKE3 hash.
 Timestamps are normalized to the database's millisecond precision before hashing.
 
+Entry timestamps are taken under the chain lock and are never earlier than the
+entry they link to, so sequence order and time order agree within a chain and with
+a branch's root anchor. U+0000 in any stored string is replaced with U+FFFD before
+hashing, because PostgreSQL rejects it and the entry for an already committed
+mutation must not fail on hostile text.
+
 Writers serialize through a retained `MutationLock` row before reading a chain's
-tail. This also coordinates the first append and the root chain, whose nullable
+tail. An append waits at most three seconds for that row on PostgreSQL and
+CockroachDB, retries lost commit races for up to ten seconds, and gives up after
+fifteen. An exhausted budget is logged as `audit append exhausted its retry budget`. This also coordinates the first append and the root chain, whose nullable
 `chainId` cannot provide uniqueness by itself. Transaction retries retain the same
 record ID so an acknowledged-late commit does not create a duplicate. Upgrade all
 API writers together: older writers do not participate in this coordination and
@@ -73,28 +112,50 @@ verifier reads a database snapshot, checks sequence continuity, resolves branch
 anchors from the root chain, reconstructs hashes and verifies signatures. The
 `entries_checked` and assurance counters include an immediate predecessor or root
 anchor when the selected range depends on it.
+Verification streams the chain in batches of 1,000 inside that snapshot, so its
+memory use does not grow with the chain. The result also reports `empty` when the
+chain or range holds no entries, and `anchor_sequence`, the root sequence a branch
+is anchored to. `GET /api/v1/audit/entries` pages with `before_sequence`; `offset`
+is capped at 10,000.
+
 The dashboard automatically verifies root chains with at most 1,000 entries;
-larger chains show "Not checked" and require an operator to request full
-verification in the chain explorer.
+larger chains and all branch chains show "Signed, not checked" or "Unsigned, not
+checked" until an operator requests verification in the chain explorer.
 
 `valid` means the requested verification checks succeeded. `fully_authenticated`
 additionally requires signed v2 entries with available verification keys. Legacy
 entries retain their original hash algorithm; its omitted metadata and ambiguous
 field boundaries cannot be repaired retroactively. They are counted as legacy
 and do not qualify as fully authenticated. Unsigned entries are counted separately.
-An unavailable historical public key causes verification to fail with an
+An unsigned entry that follows a signed entry or a signed anchor is reported as
+broken at its sequence: entry hashes need no key, so stripping signatures is what
+a rewrite without the signing key looks like. A chain that starts unsigned and
+later becomes signed stays valid. An unavailable historical public key causes verification to fail with an
 `unverifiable_signatures` count. It does not by itself prove that a record changed.
 
 Verification cannot establish events that were never recorded. Detecting deletion
 of a whole chain or its final records requires a previously retained checkpoint
-outside this database. Retain signed chain heads independently when that evidence
-is required. A valid subrange also does not certify all earlier history.
+outside this database. `GET /api/v1/audit/head` returns a chain's newest sequence,
+hash, signature and key id. Store it outside the platform and pass it back as
+`expected_head_sequence` and `expected_head_hash` to `/audit/verify`: a missing or
+different entry at that sequence marks the chain broken there. A valid subrange also does not certify all earlier history.
 
 ### Signing keys and IP addresses
 
-`BACKEND_KEY` supplies the base64-encoded P-256 PKCS#8 PEM signing key and
-`BACKEND_KID` identifies it. With `audit.require_signing` true, API startup refuses
+`AUDIT_SIGNING_KEY` supplies a base64-encoded P-256 PKCS#8 PEM key used only for
+audit entries and `AUDIT_KID` identifies it; without `AUDIT_KID` the id is derived
+from the key's fingerprint. Prefer it: every component that issues backend tokens
+holds `BACKEND_KEY`, and whoever holds the audit key can re-sign rewritten history.
+Without `AUDIT_SIGNING_KEY` the trail falls back to `BACKEND_KEY` and `BACKEND_KID`.
+Switching to the dedicated key is a rotation: retain the old public key as
+described below. With `audit.require_signing` true, API startup refuses
 to proceed without a usable signing key. The checked-in configuration requires it.
+
+A rotated key needs a new key id. At startup the API verifies the newest root
+entry signed under the current id with the configured key; a mismatch means the
+key changed under the same id, or a replica holds a different key. With
+`audit.require_signing` the API refuses to start, otherwise it logs
+`AUDIT SIGNING KEY MISMATCH`.
 
 Before rotating the signing key, retain its public key. Supply historical keys in
 the `AUDIT_VERIFYING_KEYS` secret as a JSON object mapping key IDs to P-256 SPKI
@@ -112,8 +173,11 @@ rejects a historical key that conflicts with the active signing key's ID.
 
 `audit.log_ip` is false by default. When enabled, request audit records and
 synchronous domain hooks can include a syntactically valid client IP from the
-authentication middleware. Forwarded headers must be controlled by the deployment's
-trusted proxy; parsing an address does not establish its provenance. Signed IP
+authentication middleware. Set `audit.trusted_proxy_hops` to the number of reverse
+proxies under the deployment's control that append to `X-Forwarded-For`; the
+recorded address is then taken that many entries from the right, which a client
+cannot forge, and `X-Real-Ip` is ignored. Unset, the leftmost entry is recorded,
+which the client chooses. Signed IP
 fields are immutable. `ip_retention_days` does not currently erase them, so keep
 IP recording disabled if automatic IP expiry is required.
 
