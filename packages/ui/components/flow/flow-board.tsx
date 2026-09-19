@@ -215,6 +215,7 @@ import {
 	upsertVariableCommand,
 } from "../../lib";
 import { ownsWindowChrome } from "../../lib/chrome-route";
+import { buildEdgeRerouteCommands } from "../../lib/edge-reroute";
 import { getErrorMessage } from "../../lib/error-message";
 import {
 	type LayoutBox,
@@ -411,6 +412,7 @@ interface FlowCanvasProps {
 	onContextMenu: ReactFlowProps["onContextMenu"];
 	onInit: ReactFlowProps["onInit"];
 	onNodeDoubleClick: ReactFlowProps["onNodeDoubleClick"];
+	onEdgeDoubleClick: ReactFlowProps["onEdgeDoubleClick"];
 	onNodesChange: ReactFlowProps["onNodesChange"];
 	onEdgesChange: ReactFlowProps["onEdgesChange"];
 	onNodeDragStop: ReactFlowProps["onNodeDragStop"];
@@ -445,6 +447,7 @@ const FlowCanvas = memo(function FlowCanvas({
 	onContextMenu,
 	onInit,
 	onNodeDoubleClick,
+	onEdgeDoubleClick,
 	onNodesChange,
 	onEdgesChange,
 	onNodeDragStop,
@@ -481,6 +484,7 @@ const FlowCanvas = memo(function FlowCanvas({
 			maxZoom={3}
 			minZoom={0.1}
 			onNodeDoubleClick={onNodeDoubleClick}
+			onEdgeDoubleClick={onEdgeDoubleClick}
 			onNodesChange={onNodesChange}
 			onEdgesChange={onEdgesChange}
 			onNodeDragStop={onNodeDragStop}
@@ -4162,6 +4166,31 @@ export function FlowBoard({
 		[pushLayer, board.data?.layers],
 	);
 
+	const onEdgeDoubleClick = useCallback(
+		async (event: React.MouseEvent, edge: Edge) => {
+			if (typeof version !== "undefined") return;
+			const reroute = catalog.data?.find((node) => node.name === "reroute");
+			if (!reroute) return;
+			const commands = buildEdgeRerouteCommands({
+				reroute,
+				edge,
+				position: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+				currentLayer,
+				pinCache,
+			});
+			if (!commands) return;
+			await executeCommands(commands);
+		},
+		[
+			version,
+			catalog.data,
+			screenToFlowPosition,
+			currentLayer,
+			pinCache,
+			executeCommands,
+		],
+	);
+
 	const onCommentPlace = useCallback(async () => {
 		// Don't execute commands when viewing an old version
 		if (typeof version !== "undefined") {
@@ -5719,6 +5748,7 @@ export function FlowBoard({
 										onContextMenu={onContextMenuCB}
 										onInit={initializeFlow}
 										onNodeDoubleClick={onNodeDoubleClick}
+										onEdgeDoubleClick={onEdgeDoubleClick}
 										onNodesChange={onNodesChangeIntercept}
 										onEdgesChange={onEdgesChange}
 										onNodeDragStop={onNodeDragStop}
