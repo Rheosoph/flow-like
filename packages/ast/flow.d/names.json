@@ -14975,6 +14975,33 @@
     "class": null,
     "category": "Utils/Bytes"
   },
+  "tracking_associate_entities": {
+    "qualified": "tracking::associateEntities",
+    "namespace": "tracking",
+    "alias": "associateEntities",
+    "flat": "trackingAssociateEntities",
+    "receiver": "observations",
+    "class": "array",
+    "category": "AI/ML/Tracking"
+  },
+  "tracking_extract_appearance": {
+    "qualified": "tracking::extractAppearance",
+    "namespace": "tracking",
+    "alias": "extractAppearance",
+    "flat": "trackingExtractAppearance",
+    "receiver": "image_in",
+    "class": "NodeImage",
+    "category": "AI/ML/Tracking"
+  },
+  "tracking_track_detections": {
+    "qualified": "tracking::trackDetections",
+    "namespace": "tracking",
+    "alias": "trackDetections",
+    "flat": "trackingTrackDetections",
+    "receiver": "detections",
+    "class": "array",
+    "category": "AI/ML/Tracking"
+  },
   "trim_audio": {
     "qualified": "onnx::trimAudio",
     "namespace": "onnx",

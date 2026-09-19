@@ -33,6 +33,8 @@ pub mod feature;
 pub mod gliner;
 /// ONNX Model Loader Nodes
 pub mod load;
+/// Verified model downloads cached in a quota-bounded FlowPath directory
+pub(crate) mod model_cache;
 /// ONNX Named Entity Recognition (NER) Nodes
 pub mod ner;
 /// ONNX OCR (Text Detection/Recognition) Nodes

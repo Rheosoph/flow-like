@@ -1331,6 +1331,28 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Tracking",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ai/ml/tracking"
+              },
+              {
+                "label": "Associate Entities",
+                "slug": "nodes/ai/ml/tracking/tracking-associate-entities"
+              },
+              {
+                "label": "Extract Appearance",
+                "slug": "nodes/ai/ml/tracking/tracking-extract-appearance"
+              },
+              {
+                "label": "Track Detections",
+                "slug": "nodes/ai/ml/tracking/tracking-track-detections"
+              }
+            ]
+          },
+          {
             "label": "Tuning",
             "collapsed": true,
             "items": [
