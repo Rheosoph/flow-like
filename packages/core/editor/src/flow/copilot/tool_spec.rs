@@ -2330,7 +2330,8 @@ fn home_layout_schema() -> Value {
                             "additionalProperties": false,
                             "properties": {
                                 "variant": { "type": "string", "minLength": 1, "description": "Exact supported variant from the widget catalog." },
-                                "accent": { "type": "string", "minLength": 1, "description": "Exact supported accent from the widget catalog." }
+                                "accent": { "type": "string", "minLength": 1, "description": "Exact supported accent from the widget catalog." },
+                                "className": { "type": "string", "maxLength": 1024, "description": "Optional Tailwind CSS v4 utility classes for the widget root surface, compiled at runtime and applied over variant and accent. Prefer theme tokens such as bg-card or border-primary/30. The layout controls position, grid span, height, and alignment. Preserve an existing value unless asked to restyle." }
                             },
                             "required": ["variant", "accent"]
                         },
@@ -2867,6 +2868,13 @@ mod tests {
             apply_schema["properties"]["layout"]["properties"]["widgets"]["maxItems"],
             json!(80)
         );
+        for schema in [&validate_schema, &apply_schema] {
+            let appearance = &schema["properties"]["layout"]["properties"]["widgets"]["items"]["properties"]
+                ["appearance"];
+            assert_eq!(appearance["properties"]["className"]["type"], "string");
+            assert_eq!(appearance["properties"]["className"]["maxLength"], 1024);
+            assert_eq!(appearance["required"], json!(["variant", "accent"]));
+        }
         assert!(missing_required_args(&apply, &json!({ "layout": {} })).is_some());
         assert_eq!(
             resolve_tool_effect(

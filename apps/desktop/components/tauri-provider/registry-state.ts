@@ -1,3 +1,17 @@
+import {
+	type WidgetGrantRequest,
+	type WidgetGrantResponse,
+	WidgetPolicyChangedError,
+	type WidgetPolicyDescriptor,
+	type WidgetPolicyRequest,
+	WidgetRuntimeSourcesError,
+	isDesktopWidgetGrant,
+	isPolicyChangedError,
+	parseWidgetGrantResponse,
+	parseWidgetPolicyDescriptor,
+	widgetRuntimeSourcesErrorCode,
+} from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
+import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
 import type {
 	AccessRequest,
 	CachedPackage,
@@ -17,6 +31,41 @@ import type { IRegistryState } from "@flow-like/flow-like-ui/state/backend-state
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+
+function requireBundleHash(request: WidgetPolicyRequest): string {
+	if (!request.bundleHash) {
+		throw new Error(
+			`Widget ${request.packageId}/${request.widgetId} has no bundle hash, so its installed bundle cannot be resolved`,
+		);
+	}
+	return request.bundleHash;
+}
+
+function widgetPolicyArgs(request: WidgetPolicyRequest, bundleHash: string) {
+	const runtimeSources = request.runtimeSources ?? [];
+	return {
+		packageId: request.packageId,
+		bundleHash,
+		widgetId: request.widgetId,
+		preview: request.preview,
+		appId: request.appId ?? null,
+		runtimeSources: runtimeSources.length > 0 ? runtimeSources : null,
+	};
+}
+
+/** `invalid_runtime_sources: …` and `runtime_sources_in_preview: …` are host bugs, never user decisions. */
+function runtimeSourcesError(
+	error: unknown,
+	request: WidgetPolicyRequest,
+): WidgetRuntimeSourcesError | null {
+	const code = widgetRuntimeSourcesErrorCode(error);
+	return code
+		? new WidgetRuntimeSourcesError(
+				code,
+				`The runtime sources sent for widget ${request.packageId}/${request.widgetId} were refused (${code})`,
+			)
+		: null;
+}
 
 export class RegistryState implements IRegistryState {
 	private initPromise: Promise<void> | null = null;
@@ -121,8 +170,12 @@ export class RegistryState implements IRegistryState {
 	}
 
 	async uninstallPackage(packageId: string): Promise<void> {
-		await this.ensureInit();
-		return invoke("registry_uninstall_package", { packageId });
+		try {
+			await this.ensureInit();
+			await invoke("registry_uninstall_package", { packageId });
+		} finally {
+			forgetMicroWidgetGrants(packageId);
+		}
 	}
 
 	async getInstalledPackages(): Promise<InstalledPackage[]> {
@@ -229,6 +282,68 @@ export class RegistryState implements IRegistryState {
 
 	async setAuthToken(token: string | null): Promise<void> {
 		return invoke("registry_set_auth_token", { token });
+	}
+
+	async describeWidgetPolicy(
+		request: WidgetPolicyRequest,
+	): Promise<WidgetPolicyDescriptor> {
+		const bundleHash = requireBundleHash(request);
+		await this.ensureInit();
+		let descriptor: unknown;
+		try {
+			descriptor = await invoke<unknown>(
+				"registry_describe_widget_policy",
+				widgetPolicyArgs(request, bundleHash),
+			);
+		} catch (error) {
+			throw runtimeSourcesError(error, request) ?? error;
+		}
+		return parseWidgetPolicyDescriptor(descriptor, {
+			packageId: request.packageId,
+			bundleHash,
+			widgetId: request.widgetId,
+			preview: request.preview,
+		});
+	}
+
+	async mintWidgetGrant(
+		request: WidgetGrantRequest,
+	): Promise<WidgetGrantResponse> {
+		const bundleHash = requireBundleHash(request);
+		await this.ensureInit();
+		let response: unknown;
+		try {
+			response = await invoke<unknown>("registry_mint_widget_grant", {
+				...widgetPolicyArgs(request, bundleHash),
+				policyDigest: request.policyDigest,
+			});
+		} catch (error) {
+			if (isPolicyChangedError(error)) {
+				throw new WidgetPolicyChangedError(
+					`The permissions of widget ${request.packageId}/${request.widgetId} changed since they were approved`,
+				);
+			}
+			throw runtimeSourcesError(error, request) ?? error;
+		}
+		return {
+			...parseWidgetGrantResponse(response, isDesktopWidgetGrant),
+			runtime: null,
+		};
+	}
+
+	async revokeWidgetGrants(
+		packageId: string,
+		widgetId?: string,
+	): Promise<void> {
+		try {
+			await this.ensureInit();
+			await invoke("registry_revoke_widget_grants", {
+				packageId,
+				widgetId: widgetId ?? null,
+			});
+		} finally {
+			forgetMicroWidgetGrants(packageId, widgetId);
+		}
 	}
 
 	async getPackageComments(

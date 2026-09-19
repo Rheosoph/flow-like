@@ -376,6 +376,37 @@ impl RegistryClient {
         self.search_with_token(filters, None).await
     }
 
+    /// Versions accumulate only onto an entry from the same registry. Any other
+    /// entry is replaced wholesale so a bundle never inherits another source.
+    fn merge_registry_install(
+        existing: Option<InstalledPackage>,
+        fresh: InstalledPackage,
+    ) -> InstalledPackage {
+        let same_registry = |existing: &InstalledPackage| match (&existing.source, &fresh.source) {
+            (
+                PackageSource::Remote {
+                    registry_url: existing_url,
+                    ..
+                },
+                PackageSource::Remote {
+                    registry_url: fresh_url,
+                    ..
+                },
+            ) => existing_url == fresh_url,
+            _ => false,
+        };
+        let Some(mut existing) = existing.filter(same_registry) else {
+            return fresh;
+        };
+        existing.version = fresh.version;
+        existing.installed_at = fresh.installed_at;
+        existing.wasm_path = fresh.wasm_path;
+        existing.manifest = fresh.manifest;
+        existing.metadata = fresh.metadata;
+        existing.versions.extend(fresh.versions);
+        existing
+    }
+
     /// Download and cache a package
     pub async fn download_package(
         &self,
@@ -571,35 +602,26 @@ impl RegistryClient {
             widget_bundle_hash: widget_bundle_hash.clone(),
         };
 
+        let fresh = InstalledPackage {
+            id: download.package_id.clone(),
+            version: download.version.clone(),
+            source: PackageSource::Remote {
+                registry_url: self.config.default_registry.clone(),
+                download_url: download.download_url.clone().unwrap_or(url.clone()),
+            },
+            installed_at: now,
+            wasm_path: wasm_path.clone(),
+            manifest: download.manifest.clone(),
+            versions: HashMap::from([(download.version.clone(), installed_version)]),
+            metadata: download.metadata.clone(),
+            wasm_hash,
+        };
         let mut state = self.state.write().await;
-        if let Some(existing) = state.installed.get_mut(&download.package_id) {
-            existing.version = download.version.clone();
-            existing.installed_at = now;
-            existing.wasm_path = wasm_path.clone();
-            existing.manifest = download.manifest.clone();
-            existing.metadata = download.metadata.clone();
-            existing
-                .versions
-                .insert(download.version.clone(), installed_version);
-        } else {
-            let installed = InstalledPackage {
-                id: download.package_id.clone(),
-                version: download.version.clone(),
-                source: PackageSource::Remote {
-                    registry_url: self.config.default_registry.clone(),
-                    download_url: download.download_url.clone().unwrap_or(url.clone()),
-                },
-                installed_at: now,
-                wasm_path: wasm_path.clone(),
-                manifest: download.manifest.clone(),
-                versions: HashMap::from([(download.version.clone(), installed_version)]),
-                metadata: download.metadata.clone(),
-                wasm_hash,
-            };
-            state
-                .installed
-                .insert(download.package_id.clone(), installed);
-        }
+        let existing = state.installed.remove(&download.package_id);
+        state.installed.insert(
+            download.package_id.clone(),
+            Self::merge_registry_install(existing, fresh),
+        );
         drop(state);
         self.save_state().await?;
         self.prune_widget_store(&download.package_id).await;
@@ -1160,7 +1182,7 @@ impl RegistryClient {
             .map(|def| {
                 let node_security =
                     crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
-                        .with_limits(manifest_security.limits.clone());
+                        .bounded_by_manifest(&manifest_security);
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
@@ -1219,7 +1241,7 @@ impl RegistryClient {
             .map(|def| {
                 let node_security =
                     crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
-                        .with_limits(manifest_security.limits.clone());
+                        .bounded_by_manifest(&manifest_security);
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
@@ -1432,6 +1454,7 @@ mod tests {
             thumbnail: None,
             contract: WidgetContract::new(widget_id),
             keywords: vec![],
+            network: None,
         });
         manifest.widget_bundle_path = Some("widgets.flwb".into());
         manifest
@@ -1657,5 +1680,320 @@ mod tests {
         // Wiping the unpacked store makes it not-ready (forces re-unpack path).
         std::fs::remove_dir_all(widget_store_dir(&cache_dir, package_id, &hash)).unwrap();
         assert!(!client.installed_package_ready(&installed));
+    }
+
+    struct MockRelease {
+        manifest: PackageManifest,
+        bundle: Vec<u8>,
+    }
+
+    fn registry_release(package_id: &str, version: &str, body: &str) -> (MockRelease, String) {
+        let (bundle, hash) = build_test_bundle(package_id, "live-map", body);
+        let mut manifest = widgets_only_manifest(package_id, "live-map");
+        manifest.version = version.to_string();
+        manifest.widget_bundle_path = None;
+        manifest.widget_bundle_hash = Some(hash.clone());
+        (MockRelease { manifest, bundle }, hash)
+    }
+
+    async fn spawn_mock_registry(releases: Vec<MockRelease>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let mut routes: HashMap<String, Vec<u8>> = HashMap::new();
+        for release in releases {
+            let version = release.manifest.version.clone();
+            let bundle_path = format!("/bundles/{}.flwb", version);
+            let download = DownloadResponse {
+                package_id: release.manifest.id.clone(),
+                version: version.clone(),
+                wasm_base64: String::new(),
+                download_url: None,
+                manifest: release.manifest,
+                metadata: None,
+                cwasm_download_url: None,
+                cwasm_checksum: None,
+                widget_bundle_download_url: Some(format!("{}{}", base, bundle_path)),
+            };
+            routes.insert(
+                format!("/download@{}", version),
+                serde_json::to_vec(&download).unwrap(),
+            );
+            routes.insert(bundle_path, release.bundle);
+        }
+        let routes = Arc::new(routes);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(serve_mock_request(stream, routes.clone()));
+            }
+        });
+        base
+    }
+
+    async fn serve_mock_request(
+        mut stream: tokio::net::TcpStream,
+        routes: Arc<HashMap<String, Vec<u8>>>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).await.unwrap_or(0);
+            if read == 0 {
+                return;
+            }
+            buf.extend_from_slice(&chunk[..read]);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let content_length = head
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        while buf.len() < header_end + content_length {
+            let read = stream.read(&mut chunk).await.unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..read]);
+        }
+
+        let path = head.split_whitespace().nth(1).unwrap_or_default();
+        let key = if path == "/download" {
+            serde_json::from_slice::<DownloadRequest>(&buf[header_end..])
+                .ok()
+                .and_then(|request| request.version)
+                .map(|version| format!("/download@{}", version))
+                .unwrap_or_default()
+        } else {
+            path.to_string()
+        };
+        let (status, body) = match routes.get(&key) {
+            Some(body) => ("200 OK", body.clone()),
+            None => ("404 Not Found", Vec::new()),
+        };
+        let header = format!(
+            "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+            status,
+            body.len()
+        );
+        let _ = stream.write_all(header.as_bytes()).await;
+        let _ = stream.write_all(&body).await;
+        let _ = stream.shutdown().await;
+    }
+
+    fn registry_client(cache_dir: &Path, registry: &str) -> RegistryClient {
+        RegistryClient::new(RegistryConfig {
+            default_registry: registry.to_string(),
+            cache_dir: cache_dir.to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_registry_install_replaces_local_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let package_id = "com.acme.maps";
+        let (local_bundle, local_hash) = build_test_bundle(package_id, "live-map", "local");
+        std::fs::write(project_dir.join("widgets.flwb"), &local_bundle).unwrap();
+
+        let (release, remote_hash) = registry_release(package_id, "2.0.0", "registry");
+        assert_ne!(local_hash, remote_hash);
+        let registry = spawn_mock_registry(vec![release]).await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        client
+            .register_local_package(
+                &project_dir.join("node.wasm"),
+                widgets_only_manifest(package_id, "live-map"),
+            )
+            .await
+            .unwrap();
+
+        client
+            .install(package_id, Some("2.0.0"), None)
+            .await
+            .unwrap();
+
+        let assert_registry_entry = |installed: &InstalledPackage| {
+            match &installed.source {
+                PackageSource::Remote { registry_url, .. } => assert_eq!(registry_url, &registry),
+                other => panic!("registry install kept a non-registry source: {:?}", other),
+            }
+            assert_eq!(installed.version, "2.0.0");
+            assert_eq!(
+                installed.versions.keys().collect::<Vec<_>>(),
+                vec!["2.0.0"],
+                "registry install must not inherit local versions"
+            );
+            assert!(installed
+                .versions
+                .values()
+                .all(|iv| iv.widget_bundle_hash.as_deref() != Some(local_hash.as_str())));
+            assert_eq!(
+                installed.manifest.widget_bundle_hash.as_deref(),
+                Some(remote_hash.as_str())
+            );
+        };
+
+        assert_registry_entry(&client.get_installed(package_id).await.unwrap());
+        assert!(widget_store_dir(&cache_dir, package_id, &remote_hash).is_dir());
+        assert!(!widget_store_dir(&cache_dir, package_id, &local_hash).exists());
+        assert!(project_dir.join("widgets.flwb").exists());
+
+        let reloaded = registry_client(&cache_dir, &registry);
+        reloaded.init().await.unwrap();
+        assert_registry_entry(&reloaded.get_installed(package_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_registry_install_merges_onto_registry_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+
+        let package_id = "com.acme.maps";
+        let (release_v1, hash_v1) = registry_release(package_id, "1.0.0", "v1");
+        let (release_v2, hash_v2) = registry_release(package_id, "2.0.0", "v2");
+        let registry = spawn_mock_registry(vec![release_v1, release_v2]).await;
+
+        let client = registry_client(&cache_dir, &registry);
+        client.init().await.unwrap();
+        client
+            .install(package_id, Some("1.0.0"), None)
+            .await
+            .unwrap();
+        client
+            .install(package_id, Some("2.0.0"), None)
+            .await
+            .unwrap();
+
+        let installed = client.get_installed(package_id).await.unwrap();
+        assert!(matches!(
+            &installed.source,
+            PackageSource::Remote { registry_url, .. } if registry_url == &registry
+        ));
+        assert_eq!(installed.version, "2.0.0");
+        assert_eq!(
+            installed
+                .versions
+                .get("1.0.0")
+                .and_then(|iv| iv.widget_bundle_hash.as_deref()),
+            Some(hash_v1.as_str())
+        );
+        assert_eq!(
+            installed
+                .versions
+                .get("2.0.0")
+                .and_then(|iv| iv.widget_bundle_hash.as_deref()),
+            Some(hash_v2.as_str())
+        );
+        assert!(widget_store_dir(&cache_dir, package_id, &hash_v1).is_dir());
+        assert!(widget_store_dir(&cache_dir, package_id, &hash_v2).is_dir());
+    }
+
+    fn installed_entry(
+        version: &str,
+        bundle_hash: &str,
+        source: PackageSource,
+    ) -> InstalledPackage {
+        let mut manifest = widgets_only_manifest("com.acme.maps", "live-map");
+        manifest.version = version.to_string();
+        manifest.widget_bundle_hash = Some(bundle_hash.to_string());
+        let installed_version = InstalledVersion {
+            version: version.to_string(),
+            wasm_path: PathBuf::new(),
+            installed_at: Utc::now(),
+            manifest: manifest.clone(),
+            metadata: None,
+            wasm_hash: None,
+            widget_bundle_path: None,
+            widget_bundle_hash: Some(bundle_hash.to_string()),
+        };
+        InstalledPackage {
+            id: manifest.id.clone(),
+            version: version.to_string(),
+            source,
+            installed_at: Utc::now(),
+            wasm_path: PathBuf::new(),
+            manifest,
+            versions: HashMap::from([(version.to_string(), installed_version)]),
+            metadata: None,
+            wasm_hash: None,
+        }
+    }
+
+    fn remote_source(registry_url: &str) -> PackageSource {
+        PackageSource::Remote {
+            registry_url: registry_url.to_string(),
+            download_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_merge_registry_install_replaces_foreign_entries() {
+        let foreign_sources = [
+            PackageSource::Local {
+                path: PathBuf::from("/project/node.wasm"),
+            },
+            PackageSource::Embedded {
+                data: vec![1, 2, 3],
+            },
+            remote_source("https://other-registry.example"),
+        ];
+        for source in foreign_sources {
+            let merged = RegistryClient::merge_registry_install(
+                Some(installed_entry("1.0.0", "foreign-hash", source.clone())),
+                installed_entry(
+                    "2.0.0",
+                    "fresh-hash",
+                    remote_source("https://registry.example"),
+                ),
+            );
+            assert!(
+                matches!(
+                    &merged.source,
+                    PackageSource::Remote { registry_url, .. } if registry_url == "https://registry.example"
+                ),
+                "entry from {:?} must be replaced, got {:?}",
+                source,
+                merged.source
+            );
+            assert_eq!(merged.versions.keys().collect::<Vec<_>>(), vec!["2.0.0"]);
+            assert!(merged
+                .versions
+                .values()
+                .all(|iv| iv.widget_bundle_hash.as_deref() == Some("fresh-hash")));
+        }
+    }
+
+    #[test]
+    fn test_merge_registry_install_merges_same_registry_entry() {
+        let merged = RegistryClient::merge_registry_install(
+            Some(installed_entry(
+                "1.0.0",
+                "hash-v1",
+                remote_source("https://registry.example"),
+            )),
+            installed_entry(
+                "2.0.0",
+                "hash-v2",
+                remote_source("https://registry.example"),
+            ),
+        );
+        assert_eq!(merged.version, "2.0.0");
+        assert_eq!(merged.manifest.version, "2.0.0");
+        let mut versions = merged.versions.keys().cloned().collect::<Vec<_>>();
+        versions.sort();
+        assert_eq!(versions, vec!["1.0.0", "2.0.0"]);
     }
 }

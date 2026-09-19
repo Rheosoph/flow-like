@@ -43,7 +43,10 @@ import {
 	useRouteDialog,
 } from "../a2ui/RouteDialogProvider";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
-import { collectRunElements } from "../a2ui/collect-run-elements";
+import {
+	type RunElementDemand,
+	collectRunElements,
+} from "../a2ui/collect-run-elements";
 import type { ElementSource } from "../a2ui/element-materializer";
 import { handleElementsRequestMessage } from "../a2ui/elements-request-handler";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
@@ -76,6 +79,8 @@ export interface PageInterfaceProps extends IUseInterfaceProps {
 	pageRevision?: string;
 	/** Exact Page execution authority revision returned by bootstrap. */
 	pageExecutionRevision?: string;
+	/** Page elements the Event's board reads, returned by bootstrap. */
+	pageElementDemand?: RunElementDemand;
 	/** Page-owned query state. Embedded pages pass this instead of inheriting the chat URL. */
 	queryParams?: Record<string, string>;
 	/** Consume page-owned route and query changes inside an embedded runtime. */
@@ -136,6 +141,7 @@ function PageInterfaceInner({
 	page,
 	pageRevision,
 	pageExecutionRevision,
+	pageElementDemand,
 	queryParams: providedQueryParams,
 	onNavigationMessage,
 	active = true,
@@ -160,6 +166,9 @@ function PageInterfaceInner({
 	}, [hostSearch, providedQueryParams]);
 	const runtimeQueryContextRef = useRef(runtimeQueryContext);
 	runtimeQueryContextRef.current = runtimeQueryContext;
+	// Read at run time: a refetched bootstrap must not re-create the lifecycle callbacks.
+	const pageElementDemandRef = useRef(pageElementDemand);
+	pageElementDemandRef.current = pageElementDemand;
 	const auth = useAuth();
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
@@ -485,6 +494,7 @@ function PageInterfaceInner({
 							// The Event endpoint resolves the configured board. Omitting it here
 							// avoids requiring Page users to read that board.
 							boardId: undefined,
+							demand: pageElementDemandRef.current,
 							surfaceId: currentSurface.id,
 							components: currentSurface.components,
 							storedValues: {},
@@ -755,6 +765,7 @@ function PageInterfaceInner({
 						boardVersion={pageExecutionVersion}
 						eventId={event.id}
 						governedPage={isGovernedPage}
+						elementDemand={pageElementDemand}
 						onA2UIMessage={handleA2UIMessage}
 						onNavigationMessage={onNavigationMessage}
 						isPreviewMode={true}

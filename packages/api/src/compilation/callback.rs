@@ -65,6 +65,7 @@ pub async fn handle_compilation_callback(
     let version_record = wasm_package_version::Entity::find()
         .filter(wasm_package_version::Column::PackageId.eq(&result.package_id))
         .filter(wasm_package_version::Column::Version.eq(&result.version))
+        .find_also_related(wasm_package::Entity)
         .one(db.as_ref())
         .await
         .map_err(|e| {
@@ -77,7 +78,7 @@ pub async fn handle_compilation_callback(
             )
         })?;
 
-    let version_record = version_record.ok_or_else(|| {
+    let (version_record, package) = version_record.ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(CallbackResponse {
@@ -131,19 +132,6 @@ pub async fn handle_compilation_callback(
     }
 
     // Auto-approve private packages on successful compilation
-    let package = wasm_package::Entity::find_by_id(&result.package_id)
-        .one(db.as_ref())
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(CallbackResponse {
-                    ok: false,
-                    error: Some(format!("DB error: {e}")),
-                }),
-            )
-        })?;
-
     let auto_approve = compiled_ok
         && package
             .as_ref()

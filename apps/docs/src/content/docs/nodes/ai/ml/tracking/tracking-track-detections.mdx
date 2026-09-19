@@ -1,0 +1,24 @@
+---
+title: "Track Detections Node"
+description: "Track Detections Flow-Like node: Follows detected objects across the frames of one camera and gives each a stable track id (ByteTrack, with BoT-SORT..."
+sidebar:
+  label: "Track Detections"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Track Detections, Track Detections node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tracking, onnx, tracking_track_detections, AI, ML, Tracking, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Tracking"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Track Detections Node\",\"name\":\"Track Detections\",\"description\":\"Track Detections Flow-Like node: Follows detected objects across the frames of one camera and gives each a stable track id (ByteTrack, with BoT-SORT...\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/tracking/tracking-track-detections/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Tracking\",\"keywords\":\"Track Detections, Track Detections node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tracking, onnx, tracking_track_detections, AI, ML, Tracking, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Track Detections\",\"description\":\"Follows detected objects across the frames of one camera and gives each a stable track id (ByteTrack, with BoT-SORT appearance matching when detections carry embeddings). Run it once per frame: the tracker is kept in memory per user, board, node, Camera pin and Session pin between runs and uses frame timestamps for motion and expiry. Track ids are only unique per tracker instance, named by each track's tracker_id: a new Camera or Session pin value, 10 minutes without frames, eviction when too many trackers are open, or a process restart starts a new tracker with a new tracker_id (a session carried by the detections does not). Deployments that spread runs over several processes keep one independent tracker per process.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/tracking/tracking-track-detections"]} />

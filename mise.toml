@@ -542,3 +542,13 @@ run = "mise run clean:all"
 description = "Run tests for all templates"
 dir = "templates"
 run = "mise run test:all"
+
+# ── Widget source classification data ───────
+
+[tasks."widget-sources:update-psl"]
+description = "Fetch the Public Suffix List, convert it for widget source classification and regenerate the TS data module"
+run = "bun tools/widget-sources/update-psl.ts"
+
+[tasks."widget-sources:generate"]
+description = "Recompute widget source catalog pins, bump catalogVersion on change and write the bundler data module"
+run = "bun tools/widget-sources/generate.ts"

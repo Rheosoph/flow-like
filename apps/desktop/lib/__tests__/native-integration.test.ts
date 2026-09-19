@@ -504,6 +504,36 @@ describe("native snapshots", () => {
 			"signed_out",
 		);
 	});
+	test("event catalog reuses fresh reads, evicts removed apps and serves stale events when a refetch fails", async () => {
+		const backend = fixture();
+		const catalog = new Map([["removed", { events: [event()], fetchedAt: 0 }]]);
+		const start = new Date("2026-09-12T00:00:00Z").getTime();
+		const load = (minutes: number) =>
+			loadNativeSnapshot(
+				backend,
+				"account-a",
+				[],
+				true,
+				new Date(start + minutes * 60_000),
+				undefined,
+				catalog,
+			);
+		const first = await load(0);
+		expect(backend.eventState.getEvents).toHaveBeenCalledOnce();
+		expect(first.events.map((item) => item.id)).toEqual(["app:event"]);
+		expect([...catalog.keys()]).toEqual(["app"]);
+		await load(29);
+		expect(backend.eventState.getEvents).toHaveBeenCalledOnce();
+		backend.eventState.getEvents = vi.fn(async () => {
+			throw new Error("offline");
+		}) as never;
+		const stale = await load(31);
+		expect(backend.eventState.getEvents).toHaveBeenCalledOnce();
+		expect(stale.events.map((item) => item.id)).toEqual(["app:event"]);
+		expect(
+			stale.sections.find((item) => item.kind === "event_favorites")?.state,
+		).toBe("ready");
+	});
 });
 
 describe("native navigation and active runs", () => {

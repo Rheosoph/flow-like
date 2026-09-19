@@ -20,6 +20,7 @@ import { type IPin, IPinType, IValueType } from "../../lib/schema/flow/pin";
 import { useBackendStore } from "../../state/backend-state";
 import { useUndoRedo } from "./flow-history";
 import { PinEdit } from "./flow-pin/pin-edit";
+import { PIN_LABEL_CAP_SHARED } from "./flow-pin/pin-label-caps";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { typeToColor } from "./utils";
 
@@ -122,6 +123,10 @@ type FlowPinInnerProps = Readonly<{
 	boardRef?: RefObject<IBoard | undefined>;
 	boardDataVersion?: string;
 	skipOffset?: boolean;
+	/** Display row while the node hides pins; falls back to `pin.index`. */
+	slot?: number;
+	/** Inline max-width (px) of the label container; see pin-label-caps.ts. */
+	labelMaxWidth?: number;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
 	currentLayerId?: string;
@@ -158,6 +163,8 @@ function FlowPinInnerComponent({
 	node,
 	boardRef,
 	skipOffset,
+	slot,
+	labelMaxWidth,
 	onPinRemove,
 	version,
 	currentLayerId,
@@ -182,15 +189,15 @@ function FlowPinInnerComponent({
 		if (skipOffset) {
 			return {
 				marginTop: "1.75rem",
-				top: (pin.index - 1) * 15,
+				top: ((slot ?? pin.index) - 1) * 15,
 			} as React.CSSProperties;
 		}
 
 		return {
 			marginTop: "1.75rem",
-			top: (pin.index - 1) * 15,
+			top: ((slot ?? pin.index) - 1) * 15,
 		} as React.CSSProperties;
-	}, [pin.index, node?.name, skipOffset]);
+	}, [pin.index, slot, node?.name, skipOffset]);
 
 	// visible dot color follows your previous logic
 	const dotColor = useMemo(
@@ -221,10 +228,14 @@ function FlowPinInnerComponent({
 
 	const pinEditContainerClassName = useMemo(
 		() =>
-			`flex flex-row items-center gap-1 max-w-[10rem] ${
+			`flex flex-row items-center gap-1 shrink-0 ${
 				pin.pin_type === "Input" ? "ml-2.5" : "translate-x-[calc(-100%+0.2rem)]"
 			}`,
 		[pin.pin_type],
+	);
+	const pinEditContainerStyle = useMemo(
+		() => ({ maxWidth: labelMaxWidth ?? PIN_LABEL_CAP_SHARED }),
+		[labelMaxWidth],
 	);
 
 	const refetchBoard = useCallback(async () => {
@@ -367,7 +378,10 @@ function FlowPinInnerComponent({
 		>
 			{pinIcons}
 			{shouldRenderPinEdit && (
-				<div className={pinEditContainerClassName}>
+				<div
+					className={pinEditContainerClassName}
+					style={pinEditContainerStyle}
+				>
 					<PinEdit
 						nodeId={node.id}
 						nodeName={node.name}
@@ -388,7 +402,7 @@ function FlowPinInnerComponent({
 						<DeletePinButton
 							pin={pin}
 							onPinRemove={onPinRemove}
-							className="opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary"
+							className="shrink-0 opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary"
 						/>
 					)}
 				</div>
@@ -397,7 +411,7 @@ function FlowPinInnerComponent({
 				<DeletePinButton
 					pin={pin}
 					onPinRemove={onPinRemove}
-					className={`opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary ${
+					className={`shrink-0 opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary ${
 						pin.pin_type === IPinType.Input
 							? "ml-2.5"
 							: "mr-2.5 right-0 absolute"
@@ -430,6 +444,8 @@ function pinPropsAreEqual(
 		prevProps.node?.hash !== nextProps.node?.hash ||
 		prevProps.pin.id !== nextProps.pin.id ||
 		prevProps.pin.index !== nextProps.pin.index ||
+		prevProps.slot !== nextProps.slot ||
+		prevProps.labelMaxWidth !== nextProps.labelMaxWidth ||
 		prevProps.pin.name !== nextProps.pin.name ||
 		prevProps.pin.friendly_name !== nextProps.pin.friendly_name ||
 		prevProps.pin.default_value !== nextProps.pin.default_value ||
@@ -478,6 +494,8 @@ function FlowPin({
 	boardDataVersion,
 	onPinRemove,
 	skipOffset,
+	slot,
+	labelMaxWidth,
 	version,
 	currentLayerId,
 	selectorDataRef,
@@ -490,6 +508,10 @@ function FlowPin({
 	boardRef?: RefObject<IBoard | undefined>;
 	boardDataVersion?: string;
 	skipOffset?: boolean;
+	/** Display row while the node hides pins; falls back to `pin.index`. */
+	slot?: number;
+	/** Inline max-width (px) of the label container; see pin-label-caps.ts. */
+	labelMaxWidth?: number;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
 	currentLayerId?: string;
@@ -507,6 +529,8 @@ function FlowPin({
 				boardDataVersion={boardDataVersion}
 				node={node}
 				skipOffset={skipOffset}
+				slot={slot}
+				labelMaxWidth={labelMaxWidth}
 				onPinRemove={onPinRemove}
 				version={version}
 				currentLayerId={currentLayerId}
@@ -526,6 +550,8 @@ function FlowPin({
 			boardDataVersion={boardDataVersion}
 			node={node}
 			skipOffset={skipOffset}
+			slot={slot}
+			labelMaxWidth={labelMaxWidth}
 			version={version}
 			currentLayerId={currentLayerId}
 			selectorDataRef={selectorDataRef}

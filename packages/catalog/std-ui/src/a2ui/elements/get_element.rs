@@ -171,8 +171,19 @@ impl NodeLogic for GetElement {
     }
 }
 
-async fn find_component_in_board(board: &Board, element_id: &str) -> Option<SurfaceComponent> {
+pub(crate) async fn find_component_in_board(
+    board: &Board,
+    element_id: &str,
+) -> Option<SurfaceComponent> {
     let loaded = board.load_all_pages(None).await.ok()?;
+
+    // A known Page can arrive before its payload. Do not borrow a different Page's
+    // contract while the explicitly selected Page is unavailable.
+    if let Some((page_id, _)) = element_id.split_once('/')
+        && loaded.unreadable.iter().any(|page| page.page_id == page_id)
+    {
+        return None;
+    }
 
     // The exactly referenced page wins so schema and display come from the user's actual
     // selection; any page's same-named component is only the fallback, matching the

@@ -187,7 +187,7 @@ impl NodeLogic for InvokeLLM {
                     match run {
                         Ok(_) => {}
                         Err(_) => {
-                            println!("Error running stream node {}", id);
+                            tracing::warn!(node_id = %id, "Error running stream node");
                         }
                     }
                 }

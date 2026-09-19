@@ -5,7 +5,7 @@
 
 use crate::{
     audit_branch, ensure_permission,
-    entity::{event_sink, membership, role},
+    entity::{event, event_sink, membership, role},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::{RolePermissions, has_role_permission},
@@ -18,10 +18,11 @@ use axum::{
 };
 use flow_like_types::anyhow;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, JoinType, QueryFilter,
-    QueryOrder, QuerySelect, RelationTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, JoinType,
+    QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use utoipa::ToSchema;
 
 /// Response for a sink - includes event info via lookup
@@ -85,6 +86,61 @@ fn normalize_http_auth_token(value: &str) -> &str {
     trimmed
 }
 
+/// Builds the responses for `sinks`, resolving their event info in one query.
+/// An event only enriches a sink of the same app; a failed lookup leaves the
+/// event fields empty.
+async fn sink_responses_with_events(
+    db: &DatabaseConnection,
+    sinks: Vec<event_sink::Model>,
+) -> Vec<SinkResponse> {
+    if sinks.is_empty() {
+        return Vec::new();
+    }
+
+    let event_ids: Vec<String> = sinks.iter().map(|sink| sink.event_id.clone()).collect();
+    let mut app_ids: Vec<String> = sinks.iter().map(|sink| sink.app_id.clone()).collect();
+    app_ids.sort_unstable();
+    app_ids.dedup();
+
+    let mut events: HashMap<String, (String, String, String, Option<String>)> =
+        event::Entity::find()
+            .select_only()
+            .columns([
+                event::Column::Id,
+                event::Column::AppId,
+                event::Column::Name,
+                event::Column::EventType,
+                event::Column::BoardId,
+            ])
+            .filter(event::Column::Id.is_in(event_ids))
+            .filter(event::Column::AppId.is_in(app_ids))
+            .into_tuple::<(String, String, String, String, Option<String>)>()
+            .all(db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, app_id, name, event_type, board_id)| {
+                (id, (app_id, name, event_type, board_id))
+            })
+            .collect();
+
+    sinks
+        .into_iter()
+        .map(|sink| {
+            let event = events
+                .remove(&sink.event_id)
+                .filter(|(app_id, ..)| *app_id == sink.app_id);
+            let mut response = SinkResponse::from(sink);
+            if let Some((_, name, event_type, board_id)) = event {
+                response.event_name = Some(name);
+                response.event_type = Some(event_type);
+                response.board_id = Some(board_id.unwrap_or_default());
+            }
+            response
+        })
+        .collect()
+}
+
 /// GET /sink
 /// List all active sinks for apps the user has WriteEvents permission
 #[utoipa::path(
@@ -137,24 +193,7 @@ pub async fn list_sinks(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to list sinks: {}", e)))?;
 
-    // Enrich with event info from database
-    let mut responses: Vec<SinkResponse> = Vec::with_capacity(sinks.len());
-    for sink in sinks {
-        let mut response = SinkResponse::from(sink.clone());
-
-        // Use database lookup instead of bucket
-        if let Ok(Some(event)) =
-            get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await
-        {
-            response.event_name = Some(event.name.clone());
-            response.event_type = Some(event.event_type.clone());
-            response.board_id = Some(event.board_id.clone());
-        }
-
-        responses.push(response);
-    }
-
-    Ok(Json(responses))
+    Ok(Json(sink_responses_with_events(&state.db, sinks).await))
 }
 
 /// GET /sink/app/{app_id}
@@ -190,23 +229,7 @@ pub async fn list_app_sinks(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to list sinks: {}", e)))?;
 
-    // Enrich with event info from database
-    let mut responses: Vec<SinkResponse> = Vec::with_capacity(sinks.len());
-    for sink in sinks {
-        let mut response = SinkResponse::from(sink.clone());
-
-        if let Ok(Some(event)) =
-            get_event_from_db_opt(&state.db, &sink.event_id, &sink.app_id).await
-        {
-            response.event_name = Some(event.name.clone());
-            response.event_type = Some(event.event_type.clone());
-            response.board_id = Some(event.board_id.clone());
-        }
-
-        responses.push(response);
-    }
-
-    Ok(Json(responses))
+    Ok(Json(sink_responses_with_events(&state.db, sinks).await))
 }
 
 /// GET /sink/{event_id}

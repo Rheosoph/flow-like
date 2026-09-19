@@ -55,6 +55,11 @@ describe("Home FlowPilot tools", () => {
 				max_bytes: 131_072,
 				grid_columns: { mobile: 1, tablet: 6, desktop: 12 },
 				height_modes: ["auto", "content", "fixed"],
+				class_name: {
+					field: "appearance.className",
+					optional: true,
+					max_bytes: 1024,
+				},
 			},
 			data_options: {
 				aggregations: expect.arrayContaining(["count", "sum", "median"]),
@@ -84,7 +89,7 @@ describe("Home FlowPilot tools", () => {
 
 	test("every catalog template satisfies local presentation constraints", () => {
 		const catalog = getHomeWidgetCatalog({});
-		if (!("presets" in catalog)) throw new Error("Catalog was unavailable");
+		if (!catalog.presets) throw new Error("Catalog was unavailable");
 		const bindingErrors = new Set([
 			"app_embed_missing_app",
 			"app_embed_missing_event",
@@ -157,6 +162,84 @@ describe("Home FlowPilot tools", () => {
 			const legacy = widget(`legacy-${type}-${variant}`, type);
 			legacy.appearance.variant = variant;
 			expect(validateHomeLayoutCandidate(layout([legacy])).valid).toBe(true);
+		}
+	});
+
+	test("candidate validation keeps widget classes and flags ones the layout owns", () => {
+		const styled = (className: unknown) =>
+			validateHomeLayoutCandidate(
+				layout([
+					{
+						...widget("styled"),
+						appearance: {
+							variant: "card",
+							accent: "neutral",
+							className,
+						} as IHomeLayout["widgets"][number]["appearance"],
+					},
+				]),
+			);
+		const codes = (result: ReturnType<typeof validateHomeLayoutCandidate>) =>
+			result.issues.map((entry) => entry.code);
+
+		const clean = styled(
+			"bg-linear-to-br from-card to-primary/10 md:hover:shadow-lg [&_h2]:text-lg [&:hover_p]:text-primary hidden md:block bg-[url(https://x.test/a.png)]",
+		);
+		expect(clean.valid).toBe(true);
+		expect(clean.issues).toEqual([]);
+
+		const normalized = styled("  bg-card\n\ttext-primary  ");
+		expect(normalized.valid).toBe(true);
+		expect(normalized.canonical_layout?.widgets[0].appearance).toEqual({
+			variant: "card",
+			accent: "neutral",
+			className: "bg-card text-primary",
+		});
+		expect(codes(normalized)).toEqual(["home_layout_normalized"]);
+		expect(codes(styled("bg-card text-primary"))).toEqual([]);
+		expect(
+			styled("   ").canonical_layout?.widgets[0].appearance,
+		).not.toHaveProperty("className");
+
+		for (const invalid of [42, ["bg-card"], { base: "bg-card" }, null]) {
+			const result = styled(invalid);
+			expect(result.valid).toBe(false);
+			expect(result.issues).toContainEqual(
+				expect.objectContaining({
+					severity: "error",
+					code: "home_widget_class_name_type_invalid",
+					path: "$.widgets[0].appearance.className",
+				}),
+			);
+		}
+
+		const outOfScope = styled(
+			"bg-card absolute md:z-10 !-z-10 z-20! lg:col-span-full row-start-2 self-end [&~div]:hidden [&+section]:mt-2 relative",
+		);
+		expect(outOfScope.valid).toBe(true);
+		expect(outOfScope.issues).toEqual([
+			expect.objectContaining({
+				severity: "warning",
+				code: "home_widget_class_name_out_of_scope",
+				path: "$.widgets[0].appearance.className",
+			}),
+		]);
+		expect(outOfScope.issues[0].message).toContain(
+			": absolute, md:z-10, !-z-10, z-20!, lg:col-span-full, row-start-2, self-end, [&~div]:hidden, [&+section]:mt-2, relative.",
+		);
+
+		expect(codes(styled("x".repeat(1024)))).toEqual([]);
+		for (const oversized of ["x".repeat(1025), "é".repeat(513)]) {
+			const result = styled(oversized);
+			expect(result.valid).toBe(false);
+			expect(result.canonical_layout).toBeUndefined();
+			expect(result.issues).toEqual([
+				expect.objectContaining({
+					severity: "error",
+					code: "home_layout_invalid",
+					message: "Widget 1 appearance className must not exceed 1024 bytes.",
+				}),
+			]);
 		}
 	});
 

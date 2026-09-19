@@ -511,6 +511,23 @@ fn mint_mcp_session_id(served_variant: &str) -> String {
     format!("{}~{}", served_variant, uuid::Uuid::new_v4().simple())
 }
 
+/// The event row behind a resolved slug. An id-addressed slug loaded it during
+/// resolution; an alias hit has not.
+async fn resolved_event_row(
+    state: &AppState,
+    resolved: alias_util::ResolvedAlias,
+) -> Result<event::Model, ApiError> {
+    if let Some(event_row) = resolved.event {
+        return Ok(event_row);
+    }
+    event::Entity::find_by_id(&resolved.event_id)
+        .filter(event::Column::AppId.eq(&resolved.app_id))
+        .one(&state.db)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::not_found("event not found"))
+}
+
 async fn dispatch_inbound_rest(
     state: &AppState,
     slug_or_id: &str,
@@ -523,12 +540,7 @@ async fn dispatch_inbound_rest(
     let resolved = alias_util::resolve_for_event_type(&state.db, slug_or_id, None, "rest").await?;
 
     // Load event row to get last_setup_version + node_id (entry).
-    let event_row = event::Entity::find_by_id(&resolved.event_id)
-        .filter(event::Column::AppId.eq(&resolved.app_id))
-        .one(&state.db)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::not_found("event not found"))?;
+    let event_row = resolved_event_row(state, resolved).await?;
 
     dispatch_rest_for_event(
         state,
@@ -609,6 +621,7 @@ pub(crate) async fn dispatch_rest_for_event(
     let resolved = alias_util::ResolvedAlias {
         event_id: event_row.id.clone(),
         app_id: event_row.app_id.clone(),
+        event: None,
     };
     let slug_or_id = public_slug;
 
@@ -824,12 +837,7 @@ async fn dispatch_inbound_mcp(
     body: &Bytes,
 ) -> Result<Response, ApiError> {
     let resolved = alias_util::resolve_for_event_type(&state.db, slug_or_id, None, "mcp").await?;
-    let event_row = event::Entity::find_by_id(&resolved.event_id)
-        .filter(event::Column::AppId.eq(&resolved.app_id))
-        .one(&state.db)
-        .await
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::not_found("event not found"))?;
+    let event_row = resolved_event_row(state, resolved).await?;
 
     dispatch_mcp_for_event(
         state,
@@ -1406,14 +1414,15 @@ async fn build_options_response(
     version: &str,
     normalized_path: &str,
 ) -> Response {
-    let rows = match event_remote_registration::Entity::find()
-        .filter(event_remote_registration::Column::AppId.eq(&resolved.app_id))
-        .filter(event_remote_registration::Column::EventId.eq(&resolved.event_id))
-        .filter(event_remote_registration::Column::EventVersion.eq(version))
-        // Pre-flights always describe the stable surface (§8.5).
-        .filter(event_remote_registration::Column::Variant.eq(STABLE_VARIANT))
-        .all(&state.db)
-        .await
+    // Pre-flights always describe the stable surface (§8.5).
+    let rows = match load_registration_routes(
+        state,
+        &resolved.app_id,
+        &resolved.event_id,
+        version,
+        STABLE_VARIANT,
+    )
+    .await
     {
         Ok(rows) => rows,
         Err(_) => return StatusCode::NO_CONTENT.into_response(),
@@ -1477,10 +1486,7 @@ async fn build_options_response(
     resp
 }
 
-fn openapi_registration_matches_get_path(
-    r: &event_remote_registration::Model,
-    normalized_path: &str,
-) -> bool {
+fn openapi_registration_matches_get_path(r: &RegistrationRoute, normalized_path: &str) -> bool {
     match r.kind.as_str() {
         "rest_openapi" => {
             r.path == normalized_path
@@ -1491,7 +1497,7 @@ fn openapi_registration_matches_get_path(
     }
 }
 
-fn openapi_ui_path_from_registration(r: &event_remote_registration::Model) -> Option<String> {
+fn openapi_ui_path_from_registration(r: &RegistrationRoute) -> Option<String> {
     r.extras_json
         .as_ref()
         .and_then(|extras| {
@@ -1517,7 +1523,7 @@ fn openapi_ui_extras(r: &event_remote_registration::Model) -> Value {
 
 /// Match a normalized path against either an exact registration path or a
 /// `{name}` template. Returns true only if the segment counts match.
-fn registration_matches_path(r: &event_remote_registration::Model, path: &str) -> bool {
+fn registration_matches_path(r: &RegistrationRoute, path: &str) -> bool {
     if r.path == path {
         return true;
     }
@@ -1580,7 +1586,7 @@ fn rest_file_mount_path(path: &str) -> String {
     )
 }
 
-fn rest_file_is_directory_registration(r: &event_remote_registration::Model) -> bool {
+fn rest_file_is_directory_registration(r: &RegistrationRoute) -> bool {
     r.extras_json
         .as_ref()
         .and_then(|extras| extras.get("directory"))
@@ -1601,10 +1607,7 @@ fn rest_file_subpath_for_request(route_path: &str, normalized_path: &str) -> Opt
     Some(subpath.to_string())
 }
 
-fn rest_file_registration_matches_path(
-    r: &event_remote_registration::Model,
-    normalized_path: &str,
-) -> bool {
+fn rest_file_registration_matches_path(r: &RegistrationRoute, normalized_path: &str) -> bool {
     if !rest_file_is_directory_registration(r) {
         return r.path == normalized_path;
     }
@@ -1652,6 +1655,94 @@ fn append_object_path_segments(
     flow_like_storage::join_object_path(&path, value)
 }
 
+/// What route matching reads of a registration. `extras_json` is rebuilt from
+/// the keys matching looks at, so the generated spec a `rest_openapi` row stores
+/// there only leaves the database for the row that is actually served.
+struct RegistrationRoute {
+    id: String,
+    kind: String,
+    method: Option<String>,
+    path: String,
+    extras_json: Option<Value>,
+}
+
+async fn load_registration_routes(
+    state: &AppState,
+    app_id: &str,
+    event_id: &str,
+    version: &str,
+    variant: &str,
+) -> Result<Vec<RegistrationRoute>, sea_orm::DbErr> {
+    use sea_orm::{QuerySelect, sea_query::Expr};
+
+    let rows = event_remote_registration::Entity::find()
+        .select_only()
+        .columns([
+            event_remote_registration::Column::Id,
+            event_remote_registration::Column::Kind,
+            event_remote_registration::Column::Method,
+            event_remote_registration::Column::Path,
+        ])
+        .expr_as(Expr::cust(r#""extrasJson"->'ui_path'"#), "ui_path")
+        .expr_as(
+            Expr::cust(r#""extrasJson"->'route'->'ui_path'"#),
+            "route_ui_path",
+        )
+        .expr_as(Expr::cust(r#""extrasJson"->'directory'"#), "directory")
+        .filter(event_remote_registration::Column::AppId.eq(app_id))
+        .filter(event_remote_registration::Column::EventId.eq(event_id))
+        .filter(event_remote_registration::Column::EventVersion.eq(version))
+        .filter(event_remote_registration::Column::Variant.eq(variant))
+        .into_tuple::<(
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<Value>,
+            Option<Value>,
+            Option<Value>,
+        )>()
+        .all(&state.db)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, kind, method, path, ui_path, route_ui_path, directory)| {
+                let mut extras = serde_json::Map::new();
+                if let Some(ui_path) = ui_path {
+                    extras.insert("ui_path".to_string(), ui_path);
+                }
+                if let Some(route_ui_path) = route_ui_path {
+                    extras.insert("route".to_string(), json!({ "ui_path": route_ui_path }));
+                }
+                if let Some(directory) = directory {
+                    extras.insert("directory".to_string(), directory);
+                }
+                RegistrationRoute {
+                    id,
+                    kind,
+                    method,
+                    path,
+                    extras_json: (!extras.is_empty()).then(|| Value::Object(extras)),
+                }
+            },
+        )
+        .collect())
+}
+
+async fn load_matched_registration(
+    state: &AppState,
+    route: &RegistrationRoute,
+    params: HashMap<String, String>,
+) -> Result<Option<(event_remote_registration::Model, HashMap<String, String>)>, ApiError> {
+    let registration = event_remote_registration::Entity::find_by_id(&route.id)
+        .one(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(registration.map(|registration| (registration, params)))
+}
+
 async fn match_registration(
     state: &AppState,
     app_id: &str,
@@ -1661,17 +1752,12 @@ async fn match_registration(
     method: &axum::http::Method,
     normalized_path: &str,
 ) -> Result<Option<(event_remote_registration::Model, HashMap<String, String>)>, ApiError> {
-    let rows = event_remote_registration::Entity::find()
-        .filter(event_remote_registration::Column::AppId.eq(app_id))
-        .filter(event_remote_registration::Column::EventId.eq(event_id))
-        .filter(event_remote_registration::Column::EventVersion.eq(version))
-        .filter(event_remote_registration::Column::Variant.eq(variant))
-        .all(&state.db)
+    let rows = load_registration_routes(state, app_id, event_id, version, variant)
         .await
         .map_err(ApiError::from)?;
 
     let method_str = method.as_str().to_uppercase();
-    let method_ok = |r: &event_remote_registration::Model| -> bool {
+    let method_ok = |r: &RegistrationRoute| -> bool {
         r.method
             .as_deref()
             .map(|m| m.eq_ignore_ascii_case(&method_str) || m.eq_ignore_ascii_case("ANY"))
@@ -1683,13 +1769,13 @@ async fn match_registration(
         .iter()
         .find(|r| r.kind == "rest_fn" && r.path == normalized_path && method_ok(r))
     {
-        return Ok(Some((hit.clone(), HashMap::new())));
+        return load_matched_registration(state, hit, HashMap::new()).await;
     }
 
     // 2. rest_fn — templated path + method match.
     for r in rows.iter().filter(|r| r.kind == "rest_fn" && method_ok(r)) {
         if let Some(params) = match_template(&r.path, normalized_path) {
-            return Ok(Some((r.clone(), params)));
+            return load_matched_registration(state, r, params).await;
         }
     }
 
@@ -1700,16 +1786,20 @@ async fn match_registration(
                 && r.path == normalized_path
         })
     {
-        return Ok(Some((hit.clone(), HashMap::new())));
+        return load_matched_registration(state, hit, HashMap::new()).await;
     }
     if method == axum::http::Method::GET {
         for r in rows.iter().filter(|r| r.kind == "rest_openapi") {
             if openapi_ui_path_from_registration(r).as_deref() == Some(normalized_path) {
-                let mut hit = r.clone();
+                let Some((mut hit, params)) =
+                    load_matched_registration(state, r, HashMap::new()).await?
+                else {
+                    return Ok(None);
+                };
+                hit.extras_json = Some(openapi_ui_extras(&hit));
                 hit.kind = "rest_openapi_ui".to_string();
                 hit.path = normalized_path.to_string();
-                hit.extras_json = Some(openapi_ui_extras(r));
-                return Ok(Some((hit, HashMap::new())));
+                return Ok(Some((hit, params)));
             }
         }
     }
@@ -1724,11 +1814,11 @@ async fn match_registration(
                 && !rest_file_is_directory_registration(r)
                 && r.path == normalized_path
         }) {
-            return Ok(Some((hit.clone(), HashMap::new())));
+            return load_matched_registration(state, hit, HashMap::new()).await;
         }
 
         // 4b. Longest directory mount prefix.
-        let mut best: Option<&event_remote_registration::Model> = None;
+        let mut best: Option<&RegistrationRoute> = None;
         for r in rows.iter().filter(|r| r.kind == "rest_file") {
             if !rest_file_is_directory_registration(r)
                 || rest_file_subpath_for_request(&r.path, normalized_path).is_none()
@@ -1749,7 +1839,7 @@ async fn match_registration(
                 "__subpath".to_string(),
                 rest_file_subpath_for_request(&hit.path, normalized_path).unwrap_or_default(),
             );
-            return Ok(Some((hit.clone(), params)));
+            return load_matched_registration(state, hit, params).await;
         }
     }
 
@@ -2670,12 +2760,15 @@ async fn dispatch_event_collect(
         app_id: Set(event_row.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
-    crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
+    let run_model = crate::entity::caller_apps::insert_run_with_caller_apps(&state.db, run)
         .await
         .map_err(ApiError::from)?;
 
-    crate::audit::record_execution_dispatch(state, &run_id, "inbound").await?;
+    crate::audit::record_execution_dispatch_for(state, &run_model, "inbound").await?;
 
     let db = Some(crate::audit::ExecutionAuditContext::from(state));
     match state.dispatcher.backend() {

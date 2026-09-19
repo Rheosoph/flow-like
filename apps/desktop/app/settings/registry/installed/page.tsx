@@ -13,7 +13,9 @@ import {
 	useBackend,
 	useSearch,
 } from "@flow-like/flow-like-ui";
+import { ClearWidgetPermissionsButton } from "@flow-like/flow-like-ui/components/store/widget-permissions";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { readManifestWidgets } from "@flow-like/flow-like-ui/lib/package-widgets";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -39,7 +41,7 @@ import {
 	X,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { usePackageStatusMap } from "../../../../hooks/use-package-status";
@@ -73,6 +75,10 @@ function PackageItem({
 		| "stale";
 }) {
 	const { t } = useTranslation("common");
+	const hasWidgets = useMemo(
+		() => readManifestWidgets(pkg.manifest).length > 0,
+		[pkg.manifest],
+	);
 	return (
 		<div
 			className={`rounded-xl border p-4 transition-all cursor-pointer ${
@@ -132,6 +138,13 @@ function PackageItem({
 					)}
 				</div>
 				<div className="flex items-center gap-1 shrink-0">
+					{hasWidgets && (
+						<ClearWidgetPermissionsButton
+							packageId={pkg.id}
+							packageName={pkg.manifest.name}
+							className="rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+						/>
+					)}
 					{hasUpdate && latestVersion && (
 						<Tooltip>
 							<TooltipTrigger asChild>

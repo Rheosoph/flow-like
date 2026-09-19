@@ -675,9 +675,11 @@ impl BitModelClassification {
 
         for meta in bit.meta.values() {
             let local_similarity = strsim::jaro_winkler(&meta.name, hint) as f32;
-            println!(
-                "[BIT NAME SIMILARITY] similarity '{}' <-> '{}': {}",
-                meta.name, hint, local_similarity
+            tracing::trace!(
+                name = %meta.name,
+                hint,
+                similarity = local_similarity,
+                "bit name similarity"
             );
             if local_similarity > similarity {
                 similarity = local_similarity;
@@ -689,8 +691,11 @@ impl BitModelClassification {
             Some(provider) => {
                 if let Some(model_id) = provider.model_id {
                     let local_similarity = strsim::jaro_winkler(&model_id, hint) as f32;
-                    println!(
-                        "[BIT NAME SIMILARITY] similarity (provider) '{model_id}' <-> '{hint}': {local_similarity}"
+                    tracing::trace!(
+                        %model_id,
+                        hint,
+                        similarity = local_similarity,
+                        "bit name similarity (provider)"
                     );
                     if local_similarity > similarity {
                         similarity = local_similarity;
@@ -746,10 +751,13 @@ impl BitModelClassification {
             .unwrap_or(0.0);
 
         // Log results
-        println!("[BIT SCORING] Accumulated Preference Weight: {preferences_acc}");
-        println!("[BIT SCORING] Static Name Hint Weight: {NAME_HINT_WEIGHT}");
-        println!("[BIT SCORING] Accumulated Preference Score: {preference_match_score}");
-        println!("[BIT SCORING] Name Hint Score: {name_match_score}");
+        tracing::trace!(
+            preferences_acc,
+            name_hint_weight = NAME_HINT_WEIGHT,
+            preference_match_score,
+            name_match_score,
+            "bit scoring"
+        );
 
         // total score = match preferences + weighted match name
         let total_score = preference_match_score + (name_match_score * NAME_HINT_WEIGHT);
@@ -1089,18 +1097,21 @@ impl BitPack {
             // These should count as a successful "download" operation from a UX perspective
             // so we simply don't schedule a download but DO include it in the returned list.
             if Self::is_virtual_bit(bit) {
-                println!("Skipping network download for bit {}: no download link (proxied or empty model)", bit.id);
+                tracing::debug!(
+                    bit_id = %bit.id,
+                    "Skipping network download for bit: no download link (proxied or empty model)"
+                );
                 // Do not attempt any download but keep it in the final success vector
                 return;
             }
 
             if bit.size.is_none() || bit.file_name.is_none() {
-                println!("Skipping bit {}: missing size or file_name", bit.id);
+                tracing::warn!(bit_id = %bit.id, "Skipping bit: missing size or file_name");
                 return;
             }
 
             if bit.size.unwrap_or(0) == 0 {
-                println!("Skipping bit {}: size is zero, cannot download", bit.id);
+                tracing::warn!(bit_id = %bit.id, "Skipping bit: size is zero, cannot download");
                 return;
             }
 
@@ -1111,9 +1122,9 @@ impl BitPack {
                     .expect("file_name was checked immediately above"),
             );
             if !deduplication_helper.insert(artifact_key) {
-                println!(
-                    "Skipping bit {}: duplicate hash/file_name artifact already queued",
-                    bit.id
+                tracing::debug!(
+                    bit_id = %bit.id,
+                    "Skipping bit: duplicate hash/file_name artifact already queued"
                 );
                 return;
             }
@@ -1124,7 +1135,7 @@ impl BitPack {
         // If there is nothing to actually download we still return success with the original bits
         // so the frontend can proceed (useful for empty / proxied models)
         if deduplicated_bits.is_empty() {
-            println!(
+            tracing::debug!(
                 "No concrete bits to download; returning success (all bits were proxied or lacked downloadable artifacts)"
             );
             let filtered: Vec<Bit> = self
@@ -1136,14 +1147,14 @@ impl BitPack {
             return Ok(filtered);
         }
 
-        println!(
-            "Downloading {} bits: {}",
-            deduplicated_bits.len(),
-            deduplicated_bits
+        tracing::debug!(
+            count = deduplicated_bits.len(),
+            bits = %deduplicated_bits
                 .iter()
                 .map(|bit| bit.id.clone())
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            "Downloading bits"
         );
 
         let download_futures: Vec<_> = deduplicated_bits
@@ -1569,6 +1580,16 @@ impl Bit {
         None
     }
 
+    /// Provider for a runtime that serves exactly this Bit. A missing `model_id` is bound to the
+    /// Bit id so request and usage labels name the Bit instead of a caller-side fallback.
+    pub fn try_to_served_provider(&self) -> Option<ModelProvider> {
+        let mut provider = self.try_to_provider()?;
+        if provider.model_id.as_deref().is_none_or(str::is_empty) {
+            provider.model_id = Some(self.id.clone());
+        }
+        Some(provider)
+    }
+
     pub fn try_to_embedding_provider(&self) -> Option<ModelProvider> {
         if let Some(parameters) = self.try_to_embedding() {
             return Some(parameters.provider);
@@ -1617,15 +1638,15 @@ impl Bit {
 
         let dependencies = collect_dependencies(self, state.clone()).await?;
 
-        println!("Dependencies for {} found", self.id);
+        tracing::debug!(bit_id = %self.id, "Dependencies found");
 
         let bit_pack = BitPack { bits: dependencies };
         let res = compress_to_file_json(bits_store, cache_dir, &bit_pack).await;
         if res.is_err() {
-            println!(
-                "Failed to compress dependencies for {}, err: {}",
-                self.id,
-                res.err().unwrap()
+            tracing::warn!(
+                bit_id = %self.id,
+                error = %res.err().unwrap(),
+                "Failed to compress dependencies"
             );
         }
 
@@ -2401,6 +2422,83 @@ mod tests {
             .size(),
             20
         );
+    }
+
+    fn llm_bit(id: &str, provider_name: &str, model_id: Option<&str>) -> Bit {
+        let parameters = LLMParameters {
+            context_length: 4096,
+            provider: ModelProvider {
+                api_surface: None,
+                provider_name: provider_name.to_string(),
+                model_id: model_id.map(str::to_string),
+                version: Some("v1".to_string()),
+                params: None,
+            },
+            model_classification: BitModelClassification::default(),
+        };
+        Bit {
+            id: id.to_string(),
+            bit_type: BitTypes::Llm,
+            parameters: flow_like_types::json::to_value(parameters).unwrap(),
+            ..Bit::default()
+        }
+    }
+
+    #[test]
+    fn served_provider_binds_a_missing_model_id_to_the_bit_id() {
+        let bit = llm_bit("o1bygitpw14myg943sh4vjgz", "Local", None);
+
+        let provider = bit.try_to_served_provider().unwrap();
+
+        assert_eq!(
+            provider.model_id.as_deref(),
+            Some("o1bygitpw14myg943sh4vjgz")
+        );
+        assert_eq!(provider.provider_name, "Local");
+        assert_eq!(provider.version.as_deref(), Some("v1"));
+    }
+
+    #[test]
+    fn served_provider_treats_an_empty_model_id_as_missing() {
+        let bit = llm_bit("local-gguf", "Local", Some(""));
+
+        let provider = bit.try_to_served_provider().unwrap();
+
+        assert_eq!(provider.model_id.as_deref(), Some("local-gguf"));
+    }
+
+    #[test]
+    fn served_provider_keeps_an_explicit_model_id() {
+        let bit = llm_bit("imported-gguf", "Local", Some("unsloth/Qwen3-4B-GGUF"));
+
+        let provider = bit.try_to_served_provider().unwrap();
+
+        assert_eq!(provider.model_id.as_deref(), Some("unsloth/Qwen3-4B-GGUF"));
+    }
+
+    #[test]
+    fn served_provider_binds_local_vision_bits() {
+        let bit = local_vlm_bit(flow_like_types::json::json!({"file_name": "mmproj.gguf"}));
+
+        let provider = bit.try_to_served_provider().unwrap();
+
+        assert_eq!(provider.model_id.as_deref(), Some("my-vlm"));
+        assert!(
+            provider
+                .params
+                .is_some_and(|params| params.contains_key("projection"))
+        );
+    }
+
+    #[test]
+    fn served_provider_is_none_for_bits_without_a_provider() {
+        let bit = Bit {
+            id: "not-a-model".to_string(),
+            bit_type: BitTypes::Other,
+            ..Bit::default()
+        };
+
+        assert!(bit.try_to_served_provider().is_none());
     }
 
     #[test]

@@ -24,9 +24,10 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, DispatchTrigger, ExecutionBackend, ExecutionJwtParams,
-        TokenType, completed_run_status, fetch_profile_for_dispatch, format_run_version,
-        is_jwt_configured, payload_storage, proxy_sse_response, resolve_wasm_packages,
-        sign_execution_jwt, update_run_on_completion,
+        TokenType, fetch_profile_for_dispatch, format_run_version, is_completed_event,
+        is_jwt_configured, parse_completed_payload, payload_storage, proxy_sse_response,
+        resolve_wasm_packages, sign_execution_jwt, update_run_on_completed_event,
+        update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -250,6 +251,9 @@ pub async fn invoke_board(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),
@@ -514,25 +518,13 @@ fn proxy_lambda_sse_response(
 
                     // Try to parse complete SSE events from buffer
                     while let Some(event) = extract_sse_event(&mut buffer) {
-                        // Check if this is a completed event and update the database
                         if let Some(db) = &db
                             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
-                                && let Some(event_type) = parsed.get("event_type").and_then(|v| v.as_str())
-                                    && event_type == "completed" {
-                                        let log_level = parsed.get("payload")
-                                            .and_then(|p| p.get("log_level"))
-                                            .and_then(|l| l.as_i64())
-                                            .unwrap_or(0) as i32;
-                                        let status = parsed.get("payload")
-                                            .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str());
-
-                                        let run_status = completed_run_status(status);
-
-                                        if let Err(e) = update_run_on_completion(db, &run_id, run_status, log_level).await {
-                                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
-                                        }
-                                    }
+                            && is_completed_event(&parsed)
+                            && let Err(e) = update_run_on_completed_event(db, &run_id, parse_completed_payload(&parsed)).await
+                        {
+                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                        }
 
                         let sse_event = Event::default()
                             .event(&event.event_type)

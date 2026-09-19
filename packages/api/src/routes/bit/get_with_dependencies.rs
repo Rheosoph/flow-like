@@ -107,6 +107,8 @@ pub async fn get_with_dependencies(
             }
         }
 
+        state.set_cache(cache_key, &bits);
+
         return Ok(Json(bits));
     }
 

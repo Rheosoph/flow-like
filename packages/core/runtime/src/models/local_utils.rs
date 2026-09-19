@@ -23,9 +23,11 @@ pub async fn ensure_local_weights(
 
     if let Err(err) = pack.download(app_state.clone(), None).await {
         if was_installed || is_pack_installed(pack, app_state).await {
-            println!(
-                "Failed to refresh {} {}. Using cached weights instead. Error: {}",
-                model_kind, bit_id, err
+            tracing::warn!(
+                model_kind,
+                bit_id,
+                error = %err,
+                "Failed to refresh model weights; using cached weights instead"
             );
             return Ok(());
         }
@@ -38,9 +40,10 @@ pub async fn ensure_local_weights(
 
     let missing = missing_local_artifacts(pack, app_state).await?;
     if missing.is_empty() {
-        println!(
-            "{} {} has cached files with metadata mismatches; continuing with local artifacts.",
-            model_kind, bit_id
+        tracing::warn!(
+            model_kind,
+            bit_id,
+            "Cached files have metadata mismatches; continuing with local artifacts"
         );
         return Ok(());
     }

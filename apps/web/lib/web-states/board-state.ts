@@ -38,7 +38,10 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
-import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	apiResponseError,
+	isMissingResourceError,
+} from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	BOARD_FORMAT_HEADER,
 	type BoardFormatCapabilities,
@@ -836,6 +839,22 @@ export class WebBoardState implements IBoardState {
 			return runs;
 		} catch {
 			return [];
+		}
+	}
+
+	async getRunPayload(
+		appId: string,
+		boardId: string,
+		runId: string,
+	): Promise<object | undefined> {
+		try {
+			return await apiGet<object | undefined>(
+				`apps/${appId}/board/${boardId}/runs/${runId}/payload`,
+				this.backend.auth,
+			);
+		} catch (error) {
+			if (isMissingResourceError(error)) return undefined;
+			throw error;
 		}
 	}
 

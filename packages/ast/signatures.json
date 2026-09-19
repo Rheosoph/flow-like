@@ -4093,7 +4093,7 @@
         }
       ],
       "impure": true,
-      "doc": "Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.",
+      "doc": "Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.",
       "namespace": "ui",
       "alias": "widgetQuery"
     },
@@ -4162,13 +4162,13 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Element reference of a package widget instance (from Instantiate Widget)",
+          "doc": "Select a Page widget, or connect its reference from Instantiate Widget or Get Element",
           "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ElementRef\",\"description\":\"The handle every a2ui node passes around to say \\\"this element, on this\\nsurface\\\". Producers fill in what they know: a widget instantiation carries the\\nwidget and surface it belongs to, while a plain element only carries its id.\\nConsumers read `instance_id` and fall back to `id`.\",\"type\":\"object\",\"properties\":{\"id\":{\"description\":\"Identifier of the element or widget instance.\",\"type\":\"string\"},\"instanceId\":{\"description\":\"Instance the element lives in. Absent for elements addressed directly.\",\"type\":[\"string\",\"null\"]},\"widgetId\":{\"description\":\"Widget this instance was created from.\",\"type\":[\"string\",\"null\"]},\"surfaceId\":{\"description\":\"Surface the element is rendered on.\",\"type\":[\"string\",\"null\"]},\"component\":{\"description\":\"The component itself, whose props are defined by the component type.\"}},\"required\":[\"id\"]}"
         }
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.",
+      "doc": "Sends a typed input patch to a package widget instance. Select a Page widget, or connect Element Ref from Instantiate Widget or Element from Get Element, to generate one optional pin per contract input. Only set pins are included in the patch.",
       "namespace": "ui",
       "alias": "widgetUpdateInputs"
     },
@@ -74670,6 +74670,15 @@
           },
           "optional": true,
           "doc": "Optional hint to guide the extraction (e.g. 'only extract individual line items, not totals')"
+        },
+        {
+          "name": "max_tokens",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool"
         }
       ],
       "outputs": [
@@ -74812,6 +74821,15 @@
           },
           "optional": true,
           "doc": "Optional hint to guide the extraction, such as selecting line items instead of totals"
+        },
+        {
+          "name": "max_tokens",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool"
         }
       ],
       "outputs": [
@@ -78953,7 +78971,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Whether the notification was sent successfully"
+          "doc": "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery."
         }
       ],
       "impure": true,
@@ -79022,7 +79040,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Whether the notification was sent successfully"
+          "doc": "Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery."
         }
       ],
       "impure": true,
@@ -92394,6 +92412,412 @@
       "doc": "Writes text out as UTF-8 bytes",
       "namespace": "bytes",
       "alias": "fromText"
+    },
+    {
+      "node_type": "tracking_associate_entities",
+      "display": "trackingAssociateEntities",
+      "friendly": "Associate Entities",
+      "category": "AI/ML/Tracking",
+      "inputs": [
+        {
+          "name": "observations",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Observations with appearance embeddings, e.g. from Extract Appearance. Observations with a track id accumulate evidence per track; ones without are only matched to known entities, and lost tracks only report the entity they already have. Timestamps are Unix milliseconds from one clock shared by all cameras of the task; a missing timestamp means now, and one further ahead of this machine's clock than a minute (or half the entity lifetime, if shorter) is clamped.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"AppearanceObservation\",\"description\":\"A detection plus the identity context needed to follow it over time.\\n\\nEvery field of `BoundingBox` is flattened in, so plain detection boxes deserialize into it and\\nany pin expecting boxes accepts it. Output of Extract Appearance; input of Associate Entities.\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]},\"embedding\":{\"description\":\"L2-normalized appearance embedding; empty when none was extracted\",\"type\":\"array\",\"items\":{\"type\":\"number\",\"format\":\"float\"},\"default\":[]},\"camera_id\":{\"description\":\"Camera the observation came from\",\"type\":\"string\",\"default\":\"\"},\"session_id\":{\"description\":\"Stream session of that camera\",\"type\":\"string\",\"default\":\"\"},\"tracker_id\":{\"description\":\"Tracker instance that issued `track_id`; track ids are only unique per tracker instance\",\"type\":\"string\",\"default\":\"\"},\"track_id\":{\"description\":\"Local track id from Track Detections, if the observation belongs to a track\",\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"state\":{\"description\":\"State of the source track; plain detections are `tracked`\",\"$ref\":\"#/$defs/TrackState\",\"default\":\"tracked\"},\"timestamp_ms\":{\"description\":\"Frame capture time in Unix milliseconds\",\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"detection_index\":{\"description\":\"Index of the source element in the producing node's input array\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0,\"default\":null}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\"],\"$defs\":{\"TrackState\":{\"oneOf\":[{\"description\":\"Matched to a detection in the latest frame\",\"type\":\"string\",\"const\":\"tracked\"},{\"description\":\"Not matched recently; kept alive for re-identification until it expires\",\"type\":\"string\",\"const\":\"lost\"}]}}}"
+        },
+        {
+          "name": "task_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Identities are shared by every board, user and camera of this app using the same task id"
+        },
+        {
+          "name": "min_similarity",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Lowest cosine similarity for matching an observation to an entity"
+        },
+        {
+          "name": "ambiguity_margin",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "A match is left unresolved when the next best entity is at most this much less similar"
+        },
+        {
+          "name": "min_observations",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Observations a new track needs before it is matched or creates an entity (at least 1)"
+        },
+        {
+          "name": "entity_ttl_ms",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Entities, track bindings and pending tracks unseen for this long, measured by observation timestamps, are forgotten"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "associations",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Observations with their global entity id, in input order",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"EntityAssociation\",\"description\":\"A global identity assigned to one observation.\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]},\"camera_id\":{\"type\":\"string\",\"default\":\"\"},\"session_id\":{\"type\":\"string\",\"default\":\"\"},\"tracker_id\":{\"type\":\"string\",\"default\":\"\"},\"track_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"timestamp_ms\":{\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"detection_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0,\"default\":null},\"entity_id\":{\"description\":\"Global entity id, unique within the association task\",\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"similarity\":{\"description\":\"Cosine similarity to the entity's prototype: of this observation when `matched` or\\n`created`, of the track's last embedded observation when `tracked`\",\"type\":\"number\",\"format\":\"float\"},\"status\":{\"$ref\":\"#/$defs/AssociationStatus\"}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\",\"entity_id\",\"similarity\",\"status\"],\"$defs\":{\"AssociationStatus\":{\"oneOf\":[{\"description\":\"The local track was already bound to this entity\",\"type\":\"string\",\"const\":\"tracked\"},{\"description\":\"The local track was newly matched to an existing entity\",\"type\":\"string\",\"const\":\"matched\"},{\"description\":\"No existing entity matched; a new one was created\",\"type\":\"string\",\"const\":\"created\"}]}}}"
+        },
+        {
+          "name": "unresolved",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Observations without an entity yet, with the reason and the closest entities",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"UnresolvedObservation\",\"description\":\"An observation that could not be given a global identity yet.\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]},\"camera_id\":{\"type\":\"string\",\"default\":\"\"},\"session_id\":{\"type\":\"string\",\"default\":\"\"},\"tracker_id\":{\"type\":\"string\",\"default\":\"\"},\"track_id\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"timestamp_ms\":{\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"detection_index\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0,\"default\":null},\"reason\":{\"$ref\":\"#/$defs/UnresolvedReason\"},\"observations\":{\"description\":\"Observations accumulated for this local track so far\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0},\"candidates\":{\"description\":\"Closest entities, most similar first\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/EntityCandidate\"}}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\",\"reason\",\"observations\",\"candidates\"],\"$defs\":{\"UnresolvedReason\":{\"oneOf\":[{\"description\":\"The local track has not been observed often enough to create an entity\",\"type\":\"string\",\"const\":\"pending\"},{\"description\":\"Two or more entities match within the ambiguity margin\",\"type\":\"string\",\"const\":\"ambiguous\"},{\"description\":\"The observation carries no usable embedding\",\"type\":\"string\",\"const\":\"missing_embedding\"},{\"description\":\"No track id, so no evidence can accumulate and no entity is created\",\"type\":\"string\",\"const\":\"untracked\"},{\"description\":\"The track is lost: its box is a prediction, so it neither matches nor creates an entity\",\"type\":\"string\",\"const\":\"lost\"}]},\"EntityCandidate\":{\"type\":\"object\",\"properties\":{\"entity_id\":{\"type\":\"integer\",\"format\":\"uint64\",\"minimum\":0},\"similarity\":{\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"entity_id\",\"similarity\"]}}}"
+        },
+        {
+          "name": "entity_count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entities currently known to this task"
+        }
+      ],
+      "impure": true,
+      "doc": "Gives local tracks from one or more cameras a global identity by comparing appearance embeddings. A track is collected for a few observations before it creates a new entity; later tracks that look like a known entity are matched to it, even on another camera. Every board and user of this app using the same task id shares the identities. They live in this process's memory only: after an hour without calls or a restart the task starts over and entity ids begin again at 1. An app can have at most 16 active tasks (64 per process); an idle task is released after an hour.",
+      "namespace": "tracking",
+      "alias": "associateEntities",
+      "receiver": "observations"
+    },
+    {
+      "node_type": "tracking_extract_appearance",
+      "display": "trackingExtractAppearance",
+      "friendly": "Extract Appearance",
+      "category": "AI/ML/Tracking",
+      "inputs": [
+        {
+          "name": "model",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "person-openvino-0270 (6 MB, default) or person-openvino-0265 (9.6 MB): Intel OpenVINO person re-identification models, Apache-2.0, downloaded into Cache Dir on first use. custom uses the Custom Model pin."
+        },
+        {
+          "name": "cache_dir",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Folder the built-in model is downloaded to when missing and loaded from when present. Not used with a custom model.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "custom_model",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Session from Load ONNX, used when Model is custom. Takes an RGB float tensor [N,3,H,W] or [N,H,W,3] and returns one embedding per crop, shaped [N,D] or [N,D,1,1].",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NodeOnnxSession\",\"description\":\"ONNX Runtime Session Reference\",\"type\":\"object\",\"properties\":{\"session_ref\":{\"description\":\"Cache ID for Session\",\"type\":\"string\"}},\"required\":[\"session_ref\"]}"
+        },
+        {
+          "name": "image_in",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Frame the detections were found in",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NodeImage\",\"type\":\"object\",\"properties\":{\"image_ref\":{\"type\":\"string\"}},\"required\":[\"image_ref\"]}"
+        },
+        {
+          "name": "detections",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Boxes in image pixel coordinates, from Object Detection or tracks from Track Detections",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"BoundingBox\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\"]}"
+        },
+        {
+          "name": "camera_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Camera stamped on every observation; empty keeps the incoming value"
+        },
+        {
+          "name": "session_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Camera session stamped on every observation; empty keeps the incoming value"
+        },
+        {
+          "name": "timestamp_ms",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Frame capture time in Unix milliseconds; 0 keeps the incoming value, or uses the current time when there is none"
+        },
+        {
+          "name": "normalization",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Pixel scaling a custom model expects (the built-in models normalize their input themselves, so any value works for them): imagenet ((x/255 - mean) / std) for torchreid/OSNet exports, raw (0–255 unchanged) for FastReID onnx_export.py exports that normalize inside the model, zero_one (x/255) or minus_one_one (x/127.5 - 1)"
+        },
+        {
+          "name": "input_width",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Crop width in pixels, used only when the model's input width is dynamic"
+        },
+        {
+          "name": "input_height",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Crop height in pixels, used only when the model's input height is dynamic"
+        },
+        {
+          "name": "padding",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Fraction of the box width and height added on each side before cropping"
+        },
+        {
+          "name": "min_box_size",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Boxes narrower or shorter than this many pixels after padding and clipping to the image are skipped"
+        },
+        {
+          "name": "batch_size",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Crops per inference call, used only when the model's batch dimension is dynamic"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "observations",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "One observation per cropped detection with its new embedding, plus every lost track with its existing one; each carries its index in Detections",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"AppearanceObservation\",\"description\":\"A detection plus the identity context needed to follow it over time.\\n\\nEvery field of `BoundingBox` is flattened in, so plain detection boxes deserialize into it and\\nany pin expecting boxes accepts it. Output of Extract Appearance; input of Associate Entities.\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]},\"embedding\":{\"description\":\"L2-normalized appearance embedding; empty when none was extracted\",\"type\":\"array\",\"items\":{\"type\":\"number\",\"format\":\"float\"},\"default\":[]},\"camera_id\":{\"description\":\"Camera the observation came from\",\"type\":\"string\",\"default\":\"\"},\"session_id\":{\"description\":\"Stream session of that camera\",\"type\":\"string\",\"default\":\"\"},\"tracker_id\":{\"description\":\"Tracker instance that issued `track_id`; track ids are only unique per tracker instance\",\"type\":\"string\",\"default\":\"\"},\"track_id\":{\"description\":\"Local track id from Track Detections, if the observation belongs to a track\",\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"state\":{\"description\":\"State of the source track; plain detections are `tracked`\",\"$ref\":\"#/$defs/TrackState\",\"default\":\"tracked\"},\"timestamp_ms\":{\"description\":\"Frame capture time in Unix milliseconds\",\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"detection_index\":{\"description\":\"Index of the source element in the producing node's input array\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0,\"default\":null}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\"],\"$defs\":{\"TrackState\":{\"oneOf\":[{\"description\":\"Matched to a detection in the latest frame\",\"type\":\"string\",\"const\":\"tracked\"},{\"description\":\"Not matched recently; kept alive for re-identification until it expires\",\"type\":\"string\",\"const\":\"lost\"}]}}}"
+        },
+        {
+          "name": "dimensions",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Embedding length of the model output; 0 when no detection was cropped"
+        }
+      ],
+      "impure": true,
+      "doc": "Crops every detection from the frame and runs a re-identification model on the crops in batches. The built-in models are Intel OpenVINO person re-identification models (Apache-2.0): the chosen one is downloaded into Cache Dir on first use, checked against its SHA-256 and read from there afterwards. With Model set to custom, connect your own session from Load ONNX and set Normalization to match its export: imagenet for torchreid/OSNet exports, raw for FastReID onnx_export.py exports, which normalize inside the model. Each detection becomes an observation with an L2-normalized appearance embedding, keeping its box, camera, session, tracker id, track id and state (track-only fields such as hits and velocity are not carried). Lost tracks from Track Detections (Include Lost) carry a predicted box, so they are passed through with their existing embedding instead of being cropped. Feed the result into Track Detections for appearance-aware tracking or into Associate Entities to recognize the same object across cameras. Boxes that are not finite or smaller than Min Box Size are left out.",
+      "namespace": "tracking",
+      "alias": "extractAppearance",
+      "receiver": "image_in"
+    },
+    {
+      "node_type": "tracking_track_detections",
+      "display": "trackingTrackDetections",
+      "friendly": "Track Detections",
+      "category": "AI/ML/Tracking",
+      "inputs": [
+        {
+          "name": "detections",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Boxes detected in this frame. Embeddings from Extract Appearance are used for appearance matching when present. Elements in the lost state (predicted boxes of lost tracks fed back in) are ignored.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"BoundingBox\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\"]}"
+        },
+        {
+          "name": "camera_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Camera the frame comes from. Empty keeps the camera carried by the detections, or the last one seen. Every value of this pin gets its own tracker, so set it when one node tracks several cameras."
+        },
+        {
+          "name": "session_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Stream session of the camera. Empty keeps the session carried by the detections, or the last one seen. A new value of this pin starts a fresh tracker with a new tracker_id."
+        },
+        {
+          "name": "timestamp_ms",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Frame capture time in Unix milliseconds; 0 uses the current time, never earlier than the last processed frame. A frame up to Max Lost older than the last processed one is skipped; one further back is taken as a clock reset that drops all tracks."
+        },
+        {
+          "name": "high_threshold",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Detections scoring at least this take part in the first association"
+        },
+        {
+          "name": "low_threshold",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Detections scoring at least this, but below the high threshold, can only keep existing tracks alive"
+        },
+        {
+          "name": "new_track_threshold",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Minimum score for an unmatched detection to start a new track"
+        },
+        {
+          "name": "match_threshold",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum matching cost (1 - IoU × score, or appearance distance) of the first association; higher matches more loosely"
+        },
+        {
+          "name": "max_lost_ms",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "How long a track that lost its object can be re-acquired with the same id"
+        },
+        {
+          "name": "min_appearance_similarity",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Minimum cosine similarity of embeddings for appearance to count as a match"
+        },
+        {
+          "name": "class_aware",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Never match a track with a detection of another class"
+        },
+        {
+          "name": "include_lost",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Also output tracks that lost their object. Their boxes are Kalman predictions, not detections: Extract Appearance and Associate Entities treat them as passive, and this node ignores them when they are fed back in."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "tracks",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Confirmed tracks matched in this frame (plus lost tracks if enabled), sorted by track id. Track ids are unique per tracker_id.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"TrackedObject\",\"description\":\"A local track from Track Detections. Covers `AppearanceObservation`, so tracks can be fed\\nstraight into Extract Appearance or Associate Entities.\",\"type\":\"object\",\"properties\":{\"x1\":{\"type\":\"number\",\"format\":\"float\"},\"y1\":{\"type\":\"number\",\"format\":\"float\"},\"x2\":{\"type\":\"number\",\"format\":\"float\"},\"y2\":{\"type\":\"number\",\"format\":\"float\"},\"score\":{\"type\":\"number\",\"format\":\"float\"},\"class_idx\":{\"type\":\"integer\",\"format\":\"int32\"},\"class_name\":{\"type\":[\"string\",\"null\"]},\"embedding\":{\"description\":\"Smoothed appearance embedding of the track; empty when no embeddings were supplied\",\"type\":\"array\",\"items\":{\"type\":\"number\",\"format\":\"float\"},\"default\":[]},\"camera_id\":{\"type\":\"string\",\"default\":\"\"},\"session_id\":{\"type\":\"string\",\"default\":\"\"},\"tracker_id\":{\"description\":\"Tracker instance that issued `track_id`. A new tracker (new Camera/Session pin value, 10\\nminutes without frames, eviction or restart) gets a new one; a clock reset keeps it\",\"type\":\"string\",\"default\":\"\"},\"track_id\":{\"description\":\"Track id, unique within one tracker instance\",\"type\":[\"integer\",\"null\"],\"format\":\"uint64\",\"minimum\":0,\"default\":null},\"timestamp_ms\":{\"description\":\"Timestamp of the frame this track state belongs to, in Unix milliseconds\",\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"detection_index\":{\"description\":\"Index of the matched detection in this frame's input, or null for lost tracks\",\"type\":[\"integer\",\"null\"],\"format\":\"uint32\",\"minimum\":0,\"default\":null},\"state\":{\"$ref\":\"#/$defs/TrackState\",\"default\":\"tracked\"},\"hits\":{\"description\":\"Number of frames the track was matched in\",\"type\":\"integer\",\"format\":\"uint32\",\"minimum\":0,\"default\":0},\"first_seen_ms\":{\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"last_seen_ms\":{\"type\":\"integer\",\"format\":\"int64\",\"default\":0},\"velocity_x\":{\"description\":\"Box-center velocity in pixels per second\",\"type\":\"number\",\"format\":\"float\",\"default\":0E0},\"velocity_y\":{\"type\":\"number\",\"format\":\"float\",\"default\":0E0}},\"required\":[\"x1\",\"y1\",\"x2\",\"y2\",\"score\",\"class_idx\"],\"$defs\":{\"TrackState\":{\"oneOf\":[{\"description\":\"Matched to a detection in the latest frame\",\"type\":\"string\",\"const\":\"tracked\"},{\"description\":\"Not matched recently; kept alive for re-identification until it expires\",\"type\":\"string\",\"const\":\"lost\"}]}}}"
+        },
+        {
+          "name": "skipped",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True when the frame was older than the last processed one and was ignored"
+        }
+      ],
+      "impure": true,
+      "doc": "Follows detected objects across the frames of one camera and gives each a stable track id (ByteTrack, with BoT-SORT appearance matching when detections carry embeddings). Run it once per frame: the tracker is kept in memory per user, board, node, Camera pin and Session pin between runs and uses frame timestamps for motion and expiry. Track ids are only unique per tracker instance, named by each track's tracker_id: a new Camera or Session pin value, 10 minutes without frames, eviction when too many trackers are open, or a process restart starts a new tracker with a new tracker_id (a session carried by the detections does not). Deployments that spread runs over several processes keep one independent tracker per process.",
+      "namespace": "tracking",
+      "alias": "trackDetections",
+      "receiver": "detections"
     },
     {
       "node_type": "trim_audio",

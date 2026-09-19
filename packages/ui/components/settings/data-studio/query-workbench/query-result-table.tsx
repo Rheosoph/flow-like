@@ -26,10 +26,8 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
-import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 import { Button } from "../../../ui/button";
 import {
 	DropdownMenu,
@@ -39,17 +37,13 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
-import { GeometryCell } from "../../../ui/geometry-cell";
-import { RelativeTime } from "../../../ui/relative-time";
-import { StorageFileCell } from "../../../ui/storage-file-cell";
-import { UserInlineTag } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
 	cellToString,
 	classifyResultColumn,
-	formatNumber,
 	isNullish,
 } from "./column-types";
+import { ResultCellValue } from "./result-value";
 import { RowInspectorSheet } from "./row-inspector-sheet";
 
 const GUTTER_WIDTH = 52;
@@ -86,64 +80,9 @@ function copyText(value: string, label: string): void {
 	toast.success(label);
 }
 
-function CellContent({
-	value,
-	kind,
-	name,
-	appId,
-	metadata,
-}: Readonly<{
-	value: unknown;
-	kind: ColumnKind;
-	name: string;
-	appId?: string;
-	metadata?: Record<string, string>;
-}>) {
-	const { t } = useTranslation("settings");
-	if (isNullish(value)) {
-		return (
-			<span className="select-none italic text-muted-foreground/50">NULL</span>
-		);
-	}
-	if (kind === "geometry")
-		return <GeometryCell value={value} metadata={metadata} />;
-	if (kind === "boolean") {
-		const truthy = value === true || value === "true" || value === 1;
-		return (
-			<span className="flex items-center gap-1.5">
-				<span
-					className={cn(
-						"h-1.5 w-1.5 rounded-full",
-						truthy ? "bg-chart-2" : "bg-muted-foreground/40",
-					)}
-				/>
-				{String(value)}
-			</span>
-		);
-	}
-	if (kind === "number") {
-		return <span className="tabular-nums">{formatNumber(value)}</span>;
-	}
-	if (kind === "temporal") {
-		return <RelativeTime value={value} className="min-w-0 truncate" />;
-	}
-	// A user column still holds text for rows that name no account, so the tag is
-	// used only where the value is an id the directory could answer for.
-	if (kind === "user") {
-		const userId = accountIdFromValue(value);
-		if (userId) return <UserInlineTag userId={userId} />;
-	}
-	// Same story for files: the column holds paths, but a row may hold a path that
-	// points nowhere this app can open, and that row stays text.
-	if (kind === "file") {
-		const file = resolveStorageFile(name, value, appId);
-		if (file && appId) return <StorageFileCell appId={appId} file={file} />;
-	}
-	return <span className="min-w-0 truncate">{cellToString(value)}</span>;
-}
-
 function HeaderCell({
 	name,
+	label = name,
 	kind,
 	typeName,
 	sorted,
@@ -154,6 +93,7 @@ function HeaderCell({
 	isResizing,
 }: Readonly<{
 	name: string;
+	label?: string;
 	kind: ColumnKind;
 	typeName: string;
 	sorted: false | "asc" | "desc";
@@ -176,8 +116,13 @@ function HeaderCell({
 				className="flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				title={`${name} · ${typeName || "unknown"}`}
 			>
-				<span className="truncate font-mono text-xs font-medium text-foreground">
-					{name}
+				<span
+					className={cn(
+						"truncate text-xs font-medium text-foreground",
+						label === name && "font-mono",
+					)}
+				>
+					{label}
 				</span>
 				<SortIcon
 					className={cn(
@@ -229,14 +174,26 @@ function HeaderCell({
 	);
 }
 
+/** How a host that knows more about its columns than their names wants them shown. */
+export interface ResultTablePresentation {
+	/** Header text; the raw column name stays in the tooltip and menus. */
+	label?: (name: string, kind: ColumnKind) => string;
+	/** The kind to show a column as, when the host knows better than the column alone. */
+	kind?: (column: QueryColumn) => ColumnKind | undefined;
+	/** A cell reading that replaces the default one; undefined keeps the default. */
+	cell?: (name: string, value: unknown) => React.ReactNode | undefined;
+}
+
 export function QueryResultTable({
 	columns,
 	rows,
 	appId,
+	presentation,
 }: Readonly<{
 	columns: QueryColumn[];
 	rows: ResultRow[];
 	appId?: string;
+	presentation?: ResultTablePresentation;
 }>) {
 	const { t } = useTranslation("settings");
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -247,17 +204,19 @@ export function QueryResultTable({
 		const map = new Map<string, ColumnMeta>();
 		for (const column of columns)
 			map.set(column.name, {
-				kind: classifyResultColumn(column, rows, appId),
+				kind:
+					presentation?.kind?.(column) ??
+					classifyResultColumn(column, rows, appId),
 				typeName: column.type_name,
 				metadata: column.metadata,
 			});
 		return map;
-	}, [columns, rows, appId]);
+	}, [columns, rows, appId, presentation]);
 
 	const columnDefs = useMemo<ColumnDef<ResultRow>[]>(
 		() =>
 			columns.map((column) => {
-				const kind = classifyResultColumn(column, rows, appId);
+				const kind = metaById.get(column.name)?.kind ?? "text";
 				return {
 					id: column.name,
 					// Map SQL NULL (JS null) to undefined so `sortUndefined: "last"`
@@ -283,7 +242,7 @@ export function QueryResultTable({
 							: "alphanumeric",
 				};
 			}),
-		[columns, rows, appId],
+		[columns, metaById],
 	);
 
 	const table = useReactTable({
@@ -368,6 +327,7 @@ export function QueryResultTable({
 									>
 										<HeaderCell
 											name={header.column.id}
+											label={presentation?.label?.(header.column.id, meta.kind)}
 											kind={meta.kind}
 											typeName={meta.typeName}
 											sorted={sorted}
@@ -437,13 +397,15 @@ export function QueryResultTable({
 														meta.kind === "number" && "justify-end",
 													)}
 												>
-													<CellContent
-														value={value}
-														kind={meta.kind}
-														metadata={meta.metadata}
-														name={cell.column.id}
-														appId={appId}
-													/>
+													{presentation?.cell?.(cell.column.id, value) ?? (
+														<ResultCellValue
+															value={value}
+															kind={meta.kind}
+															metadata={meta.metadata}
+															name={cell.column.id}
+															appId={appId}
+														/>
+													)}
 												</div>
 												{!isNullish(value) && (
 													<button
@@ -475,6 +437,7 @@ export function QueryResultTable({
 				row={inspect}
 				columns={columns}
 				appId={appId}
+				kindOf={(column) => metaById.get(column.name)?.kind ?? "text"}
 				onOpenChange={(open) => {
 					if (!open) setInspect(null);
 				}}

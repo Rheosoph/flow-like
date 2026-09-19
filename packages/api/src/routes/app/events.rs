@@ -179,9 +179,9 @@ mod tests {
         parse_version_tuple,
     };
 
-    /// `StoredLogMeta.event_version` is dotted while `StoredLogMeta.version`
-    /// (the board) is `v{major}-{minor}-{patch}` — this fails if the shared
-    /// helper ever drifts toward the board format.
+    /// `LogMeta.event_version` is dotted while `LogMeta.version` (the board)
+    /// is `v{major}-{minor}-{patch}` — this fails if the shared helper ever
+    /// drifts toward the board format.
     #[test]
     fn dotted_version_key_is_the_lance_event_version_format() {
         assert_eq!(dotted_version_key((1, 0, 3)), "1.0.3");

@@ -237,12 +237,20 @@ async fn record_deletion(
     }
 }
 
+/// The user update reads the app update's output, so the app row still locks first.
+const USER_SCOPED_USAGE_SQL: &str = r#"WITH a AS (UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2 RETURNING 1), u AS (UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $3 AND EXISTS (SELECT 1 FROM a) RETURNING 1) SELECT (SELECT count(*) FROM a) AS "apps", (SELECT count(*) FROM u) AS "users""#;
+
 /// `UPDATE "App" SET "totalSize" = "totalSize" + delta` (and the same for
 /// `"User"` when the key is user-scoped) in one retried transaction; a missing
 /// row is a permanent failure like on AWS. Relative increments keep concurrent
 /// events safe without a read-modify-write, and a lost commit race on this hot
 /// row is re-run by `retry_transaction`; an unknown commit outcome is not,
 /// because applying the delta twice would over-count.
+///
+/// A user-scoped key moves both totals in one statement so the app row lock is
+/// not held across a second round trip. The statement stays inside the
+/// transaction: a missing user must roll the app increment back, and only an
+/// open transaction makes a lost connection safe to re-run.
 async fn apply_usage_delta(
     database: &DatabaseConnection,
     dialect: DbDialect,
@@ -261,30 +269,33 @@ async fn apply_usage_delta(
             let app_id = app_key.clone();
             let user_id = user_key.clone();
             Box::pin(async move {
-                let app_rows = txn
-                    .execute_raw(Statement::from_sql_and_values(
-                        DatabaseBackend::Postgres,
-                        r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
-                        [delta.into(), app_id.into()],
-                    ))
-                    .await?
-                    .rows_affected();
-                if app_rows == 0 {
-                    return Err(UsageError::AppNotFound);
-                }
-
-                if let Some(user_id) = user_id {
-                    let user_rows = txn
+                let Some(user_id) = user_id else {
+                    let app_rows = txn
                         .execute_raw(Statement::from_sql_and_values(
                             DatabaseBackend::Postgres,
-                            r#"UPDATE "public"."User" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
-                            [delta.into(), user_id.into()],
+                            r#"UPDATE "public"."App" SET "totalSize" = "totalSize" + $1 WHERE "id" = $2"#,
+                            [delta.into(), app_id.into()],
                         ))
                         .await?
                         .rows_affected();
-                    if user_rows == 0 {
-                        return Err(UsageError::UserNotFound);
+                    if app_rows == 0 {
+                        return Err(UsageError::AppNotFound);
                     }
+                    return Ok(());
+                };
+                let counts = txn
+                    .query_one_raw(Statement::from_sql_and_values(
+                        DatabaseBackend::Postgres,
+                        USER_SCOPED_USAGE_SQL,
+                        [delta.into(), app_id.into(), user_id.into()],
+                    ))
+                    .await?
+                    .ok_or_else(|| DbErr::Custom("usage update returned no row counts".into()))?;
+                if counts.try_get::<i64>("", "apps")? == 0 {
+                    return Err(UsageError::AppNotFound);
+                }
+                if counts.try_get::<i64>("", "users")? == 0 {
+                    return Err(UsageError::UserNotFound);
                 }
                 Ok(())
             })

@@ -88,6 +88,8 @@ pub async fn recompute_scores(
         }
     }
 
+    state.invalidate_cache(super::list_patterns::PATTERNS_CACHE_KEY);
+
     Ok(Json(RecomputeScoresResponse {
         apps_processed,
         boards_processed,

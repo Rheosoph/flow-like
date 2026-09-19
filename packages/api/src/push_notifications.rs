@@ -664,7 +664,7 @@ async fn record_invalidation_failure(
 ) -> Result<(), sea_orm::DbErr> {
     let now = chrono::Utc::now().fixed_offset();
 
-    push_notification_target::Entity::update_many()
+    let updated = push_notification_target::Entity::update_many()
         .col_expr(
             push_notification_target::Column::FailureCount,
             sea_orm::sea_query::Expr::col(push_notification_target::Column::FailureCount).add(1),
@@ -674,14 +674,10 @@ async fn record_invalidation_failure(
             sea_orm::sea_query::Expr::value(now),
         )
         .filter(push_notification_target::Column::Id.eq(target_id.to_string()))
-        .exec(&state.db)
+        .exec_with_returning(&state.db)
         .await?;
 
-    let target = push_notification_target::Entity::find_by_id(target_id.to_string())
-        .one(&state.db)
-        .await?;
-
-    let Some(target) = target else {
+    let Some(target) = updated.into_iter().next() else {
         return Ok(());
     };
 

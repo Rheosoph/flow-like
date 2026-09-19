@@ -129,6 +129,27 @@ const RELATIVE_DIVISIONS: readonly {
 ];
 
 /**
+ * Building an Intl formatter costs far more than using one (tens of µs each in
+ * JavaScriptCore), and a page of rows formats hundreds of values per render.
+ */
+const relativeTimeFormatters = new Map<
+	Intl.RelativeTimeFormatStyle,
+	Intl.RelativeTimeFormat
+>();
+function relativeTimeFormatter(style: Intl.RelativeTimeFormatStyle) {
+	let formatter = relativeTimeFormatters.get(style);
+	if (!formatter) {
+		formatter = new Intl.RelativeTimeFormat(undefined, {
+			numeric: "auto",
+			style,
+		});
+		relativeTimeFormatters.set(style, formatter);
+	}
+	return formatter;
+}
+let absoluteDateTimeFormatter: Intl.DateTimeFormat | undefined;
+
+/**
  * "2 days ago" in the viewer's locale. Walks the whole unit ladder, so a value
  * years old reads as years rather than as a four-digit day count.
  */
@@ -144,10 +165,7 @@ export function formatRelativeTime(
 		return fallback;
 	}
 
-	const formatter = new Intl.RelativeTimeFormat(undefined, {
-		numeric: "auto",
-		style: style,
-	});
+	const formatter = relativeTimeFormatter(style);
 
 	let duration = (targetTimeMs - Date.now()) / 1000;
 	for (const division of RELATIVE_DIVISIONS) {
@@ -163,10 +181,11 @@ export function formatRelativeTime(
 export function formatAbsoluteDateTime(dateInput: DateValue, fallback = "") {
 	const parsed = parseDateValue(dateInput);
 	if (!parsed) return fallback;
-	return parsed.toLocaleString(undefined, {
+	absoluteDateTimeFormatter ??= new Intl.DateTimeFormat(undefined, {
 		dateStyle: "full",
 		timeStyle: "medium",
 	});
+	return absoluteDateTimeFormatter.format(parsed);
 }
 
 /** The epoch units Arrow ships instants in, plus Date32's day count. */
@@ -191,6 +210,51 @@ const MAX_EPOCH_DAYS = 100_000;
 const MAX_EPOCH_SECONDS = 1e11;
 const MAX_EPOCH_MILLIS = 1e14;
 const MAX_EPOCH_MICROS = 1e17;
+
+const ARROW_TYPE_UNITS: Record<string, TemporalUnit> = {
+	s: "second",
+	second: "second",
+	ms: "millisecond",
+	millisecond: "millisecond",
+	µs: "microsecond",
+	us: "microsecond",
+	microsecond: "microsecond",
+	ns: "nanosecond",
+	nanosecond: "nanosecond",
+};
+
+/**
+ * The unit an instant column's values count in, read from the Arrow type name
+ * the SQL layer reports (`Timestamp(µs)`, `Timestamp(Millisecond, None)`,
+ * `Date32`). Undefined for anything that is not an instant, durations included.
+ */
+export function temporalUnitFromTypeName(
+	typeName: string,
+): TemporalUnit | undefined {
+	const type = typeName.trim();
+	if (/^date32$/i.test(type)) return "day";
+	if (/^date64$/i.test(type)) return "millisecond";
+	const unit = /^timestamp\(\s*([^,)\s]+)/i.exec(type)?.[1];
+	return unit ? ARROW_TYPE_UNITS[unit.toLowerCase()] : undefined;
+}
+
+/**
+ * Below this magnitude a bare number is a counter or a duration, not an instant:
+ * as epoch seconds it would fall within about three years of 1970, while
+ * `response_time` and `retry_count` values are routinely that small.
+ */
+const MIN_EPOCH_MAGNITUDE = 1e8;
+
+/** Whether a stored number (or numeric string) can be an epoch instant at all. */
+export function looksLikeEpochNumber(value: unknown): boolean {
+	const number =
+		typeof value === "number" || typeof value === "bigint"
+			? Number(value)
+			: typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())
+				? Number(value)
+				: Number.NaN;
+	return Number.isFinite(number) && Math.abs(number) >= MIN_EPOCH_MAGNITUDE;
+}
 
 /** The unit a bare epoch number was most likely written in. */
 export function detectEpochUnit(value: number): TemporalUnit {
@@ -299,6 +363,11 @@ export function fromDateInputValue(value: string): Date | null {
 	return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+const calendarDateFormatters = new Map<
+	"medium" | "full",
+	Intl.DateTimeFormat
+>();
+
 /** A day-precision value read in the zone it was written in: UTC. */
 export function formatCalendarDate(
 	dateInput: DateValue,
@@ -307,7 +376,15 @@ export function formatCalendarDate(
 ) {
 	const parsed = parseDateValue(dateInput);
 	if (!parsed) return fallback;
-	return parsed.toLocaleDateString(undefined, { dateStyle, timeZone: "UTC" });
+	let formatter = calendarDateFormatters.get(dateStyle);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(undefined, {
+			dateStyle,
+			timeZone: "UTC",
+		});
+		calendarDateFormatters.set(dateStyle, formatter);
+	}
+	return formatter.format(parsed);
 }
 
 /** The zone the editor is implicitly writing in, for a hint next to the input. */

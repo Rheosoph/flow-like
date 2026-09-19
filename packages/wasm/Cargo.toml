@@ -19,7 +19,8 @@ flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-runtime = { workspace = true, features = ["flow-metadata", "model"] }
 flow-like-model-provider.workspace = true
-flow-like-catalog-core.workspace = true
+flow-like-catalog-core = { workspace = true, features = ["execute"] }
+flow-like-catalog-data-support = { workspace = true, features = ["execute"] }
 flow-like-catalog-embedding.workspace = true
 
 # Schema generation

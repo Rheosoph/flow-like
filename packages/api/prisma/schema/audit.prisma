@@ -25,7 +25,7 @@ model AuditEntry {
   details Json?
 
   // Cryptographic integrity
-  entryHash String // blake3(sequence || timestamp || actorId || action || resourceType || resourceId || details || prevHash || prevSignature)
+  entryHash String // "v2:" + blake3 over canonical JSON of every column except entryHash and signature (audit/chain.rs); entries without the prefix use the legacy concatenated hash
   prevHash  String // hash of previous entry in this chain (genesis = "0000...0000")
   signature String? // raw P-256 ECDSA signature (base64 DER) over entryHash
   kid       String? // key identifier used for the signature — enables key rotation auditing
@@ -36,4 +36,6 @@ model AuditEntry {
   @@index([actorId, timestamp])
   @@index([resourceType, resourceId])
   @@index([action])
+  @@index([entryHash])
+  @@index([timestamp])
 }

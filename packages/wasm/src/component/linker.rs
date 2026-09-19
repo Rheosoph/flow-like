@@ -1,8 +1,9 @@
+use super::guest_output::GuestOutput;
 use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::llm_message::sdk_message_content;
-use crate::wasi::{IsolatedWasiCtxBuilder, isolated_wasi_ctx_builder};
+use crate::wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
 use flow_like_storage::object_store::ObjectStoreExt;
 use serde_json::Value;
 use std::future::Future;
@@ -31,6 +32,7 @@ pub struct ComponentStoreData {
     /// policy by omission rather than failing closed.
     pub environment: flow_like::flow::execution::ExecutionEnvironment,
     http_hooks: EgressHttpHooks,
+    guest_output: GuestOutput,
 }
 
 /// `wasi:http` hooks that apply the server-side egress policy to the
@@ -142,23 +144,36 @@ pub(super) fn configure_guest_network(
 
 impl ComponentStoreData {
     pub fn new(security: &WasmSecurityConfig) -> Self {
+        let guest_output = GuestOutput::default();
         let mut builder = isolated_wasi_ctx_builder();
 
-        // Provide output streams and args so Component Model runtimes (C#,
-        // TypeScript) that target wasi:cli/command can function correctly.
-        // Stdin stays closed and the guest environment remains empty.
-        builder.inherit_output();
+        // Runtimes that target wasi:cli/command (C#, TypeScript) need writable
+        // output streams and args. Output goes to the run log, never the host's
+        // stdout, which carries the runner's event protocol. Stdin stays closed
+        // and the guest environment remains empty.
+        builder
+            .stdout(guest_output.stdout())
+            .stderr(guest_output.stderr());
         configure_guest_network(&mut builder, security);
         builder.args(&["flow-like-wasm-node"]);
         if security.deterministic {
             builder.make_deterministic();
         }
 
-        Self::with_host_state(
-            HostState::with_security(security),
-            builder.build(),
-            security,
-        )
+        Self {
+            guest_output,
+            ..Self::with_host_state(
+                HostState::with_security(security),
+                builder.build(),
+                security,
+            )
+        }
+    }
+
+    /// Move guest stdout and stderr written since the last drain into the
+    /// current invocation's log.
+    pub(crate) fn drain_guest_output(&self) {
+        self.guest_output.drain_into(&self.host_state);
     }
 
     /// Store data around an already-populated host state (child stores such
@@ -179,6 +194,7 @@ impl ComponentStoreData {
             http_hooks: EgressHttpHooks {
                 environment: security.execution_environment,
             },
+            guest_output: GuestOutput::default(),
         }
     }
 }
@@ -1084,14 +1100,14 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         .host_state
                         .has_capability(WasmCapabilities::MODELS)
                     {
-                        println!("llm-prompt: MODELS capability not granted");
+                        tracing::warn!("llm-prompt: MODELS capability not granted");
                         return Ok((None::<String>,));
                     }
 
                     let bit: flow_like::bit::Bit = match serde_json::from_str(&bit_json) {
                         Ok(b) => b,
                         Err(e) => {
-                            println!("llm-prompt: failed to parse bit JSON");
+                            tracing::warn!(error = %e, "llm-prompt: failed to parse bit JSON");
                             let err = serde_json::json!({"error": format!("Failed to parse model descriptor: {e}")}).to_string();
                             return Ok((Some(err),));
                         }
@@ -1100,7 +1116,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let model_ctx = match &store.data().host_state.model_context {
                         Some(c) => c,
                         None => {
-                            println!("llm-prompt: model_context is None");
+                            tracing::warn!("llm-prompt: model_context is None");
                             let err = serde_json::json!({"error": "Model context not available — ensure the node has Models permission"}).to_string();
                             return Ok((Some(err),));
                         }
@@ -1133,16 +1149,17 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             Err(_) => match serde_json::from_str::<Vec<Value>>(&messages_json) {
                                 Ok(msgs) => (msgs, None, None, None, None, None, None),
                                 Err(e) => {
-                                    println!("llm-prompt: failed to parse messages JSON");
+                                    tracing::warn!(error = %e, "llm-prompt: failed to parse messages JSON");
                                     let err = serde_json::json!({"error": format!("Failed to parse messages: {e}")}).to_string();
                                     return Ok((Some(err),));
                                 }
                             },
                         };
 
-                    println!("llm-prompt: received {} messages, tools={}",
-                        raw_messages.len(),
-                        raw_tools.as_ref().map(|t| t.len()).unwrap_or(0)
+                    tracing::debug!(
+                        messages = raw_messages.len(),
+                        tools = raw_tools.as_ref().map_or(0, |t| t.len()),
+                        "llm-prompt: received request"
                     );
 
                     // Convert WASM SDK messages → native HistoryMessage
@@ -1241,7 +1258,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             let name = match t.get("name").and_then(|n| n.as_str()) {
                                 Some(n) => n.to_string(),
                                 None => {
-                                    println!("llm-prompt: tool[{i}] missing 'name' field");
+                                    tracing::warn!("llm-prompt: tool[{i}] missing 'name' field");
                                     continue;
                                 }
                             };
@@ -1259,7 +1276,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                                     });
                                 }
                                 Err(_) => {
-                                    println!("llm-prompt: tool[{i}] parameter deserialization failed");
+                                    tracing::warn!("llm-prompt: tool[{i}] parameter deserialization failed");
                                 }
                             }
                         }
@@ -1282,7 +1299,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         {
                             Ok(m) => m,
                             Err(e) => {
-                                println!("llm-prompt: failed to build model");
+                                tracing::warn!(error = %e, "llm-prompt: failed to build model");
                                 let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();
                                 return Ok((Some(err),));
                             }
@@ -1315,7 +1332,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let response = match model.invoke(&history, callback).await {
                         Ok(r) => r,
                         Err(e) => {
-                            println!("llm-prompt: model invoke failed");
+                            tracing::warn!(error = %e, "llm-prompt: model invoke failed");
                             let err = serde_json::json!({"error": format!("Model invocation failed: {e}")}).to_string();
                             return Ok((Some(err),));
                         }
@@ -1331,7 +1348,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let resp_msg = match response.last_message() {
                         Some(m) => m,
                         None => {
-                            println!("llm-prompt: model returned empty response (no messages)");
+                            tracing::warn!("llm-prompt: model returned empty response (no messages)");
                             let err = serde_json::json!({"error": "Model returned empty response"}).to_string();
                             return Ok((Some(err),));
                         }
@@ -1672,27 +1689,22 @@ fn register_db(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
     let mut db = linker
         .instance("flow-like:node/db@0.1.0")
         .map_err(map_err)?;
-
     db.func_wrap_async(
         "query",
         |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
-         (op, connection_json, payload_json): (u32, String, String)| {
+         (op, connection, payload): (u32, String, String)| {
             Box::new(async move {
-                if !store
-                    .data()
-                    .host_state
-                    .has_capability(WasmCapabilities::MODELS)
-                {
-                    return Ok((None::<String>,));
-                }
-                let _ = (op, connection_json, payload_json);
-                // Stub — DB operations via connection cache key
-                Ok((None::<String>,))
+                Ok((crate::host_functions::database::query(
+                    &store.data().host_state,
+                    op,
+                    &connection,
+                    &payload,
+                )
+                .await,))
             })
         },
     )
     .map_err(map_err)?;
-
     Ok(())
 }
 
@@ -1784,21 +1796,27 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                 // Same egress policy as native HTTP nodes: server-side, the
                 // URL, its resolution and every redirect are checked against
                 // the host-plane block list.
+                // The shared client pools connections across calls, so a node
+                // fetching many URLs reuses TCP + TLS instead of paying a
+                // handshake per request. Server-side the pool belongs to the
+                // package's socket registry, which no other package or run
+                // shares, so no connection crosses runs or tenants.
                 // A request cannot usefully outlive its node, so the node's own
-                // execution budget is the request timeout — nothing tighter.
+                // execution budget is the request timeout — nothing tighter. It
+                // is set per request (same total deadline, body included, as
+                // `ClientBuilder::timeout`) because the client is shared.
                 let environment = store.data().environment;
                 let node_timeout = store.data().node_timeout;
-                let client = flow_like::flow::execution::egress::GuardedHttpClient::configured(
+                let client = match flow_like::flow::execution::egress::GuardedHttpClient::shared(
                     environment,
-                    |builder| builder.timeout(node_timeout),
-                );
-                let client = match client {
+                    &store.data().host_state.websocket,
+                ) {
                     Ok(c) => c,
                     Err(_) => return Ok((None,)),
                 };
 
                 let mut req = match client.request(method_str, &url) {
-                    Ok(req) => req,
+                    Ok(req) => req.timeout(node_timeout),
                     Err(_) => {
                         tracing::warn!("WASM HTTP request refused by egress policy");
                         return Ok((None,));
@@ -2402,6 +2420,43 @@ mod tests {
                 "{name} component guest inherited host environment, including the PATH sentinel"
             );
         }
+    }
+
+    #[test]
+    fn guest_output_goes_to_the_run_log_instead_of_the_host_process() {
+        use crate::host_functions::logging::LogLevel;
+        use wasmtime_wasi::p2::bindings::cli::{stderr, stdout};
+
+        let mut data = ComponentStoreData::new(&WasmSecurityConfig::permissive());
+        let mut cli = data.cli();
+        let out = stdout::Host::get_stdout(&mut cli).unwrap();
+        let err = stderr::Host::get_stderr(&mut cli).unwrap();
+        let forged_event = "{\"event_type\":\"completed\",\"payload\":{}}";
+        cli.table
+            .get_mut(&out)
+            .unwrap()
+            .write(format!("{forged_event}\n").into())
+            .unwrap();
+        cli.table
+            .get_mut(&err)
+            .unwrap()
+            .write("warning\n".into())
+            .unwrap();
+        data.drain_guest_output();
+
+        let logs: Vec<_> = data
+            .host_state
+            .get_logs()
+            .into_iter()
+            .map(|entry| (entry.level, entry.message))
+            .collect();
+        assert_eq!(
+            logs,
+            [
+                (LogLevel::Info as u8, forged_event.to_owned()),
+                (LogLevel::Warn as u8, "warning".to_owned()),
+            ]
+        );
     }
 
     #[test]

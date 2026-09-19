@@ -22,6 +22,20 @@ function ActionProbe({ elementRef }: ComponentProps) {
 		</button>
 	);
 }
+const editorControlClick = mock(noop);
+function EditorControlProbe({ elementRef }: ComponentProps) {
+	return (
+		<div ref={elementRef}>
+			<button
+				type="button"
+				data-builder-interactive=""
+				onClick={editorControlClick}
+			>
+				<span>Reload</span>
+			</button>
+		</div>
+	);
+}
 const builder = {
 	selection: { componentIds: [] as string[] },
 	selectComponent: selected,
@@ -41,6 +55,9 @@ mock.module("@flow-like/locales", () => ({
 	}),
 }));
 mock.module("./BuilderContext", () => ({ useBuilder: () => builder }));
+mock.module("./use-micro-widget-reload", () => ({
+	useMicroWidgetReload: () => null,
+}));
 mock.module("./WidgetBuilder", () => ({
 	CONTAINER_TYPES: new Set(["row", "column", "box"]),
 	ROOT_ID: "root",
@@ -79,6 +96,7 @@ mock.module("../a2ui/ComponentRegistry", () => ({
 			text: A2UIText,
 			spacer: A2UISpacer,
 			button: ActionProbe,
+			editorControl: EditorControlProbe,
 		};
 		return renderers[type as keyof typeof renderers];
 	},
@@ -241,6 +259,39 @@ describe("BuilderRenderer element roots", () => {
 		});
 		expect(selected.mock.calls).toEqual([["action", false]]);
 		expect(runtimeClick).not.toHaveBeenCalled();
+	});
+
+	test("lets editor controls inside an element handle their own clicks", async () => {
+		const surface = {
+			id: "builder-test",
+			rootComponentId: "root",
+			components: {
+				root: {
+					id: "root",
+					component: {
+						type: "column",
+						children: { explicitList: ["control"] },
+					},
+				},
+				control: { id: "control", component: { type: "editorControl" } },
+			},
+			dataModel: [],
+		} as unknown as Surface;
+		editorControlClick.mockClear();
+		const { host, window } = await renderBuilder(surface);
+		const control = host.querySelector('[data-builder-component="control"]');
+		await act(() => {
+			control
+				?.querySelector("span")
+				?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+		});
+		expect(editorControlClick).toHaveBeenCalledTimes(1);
+		expect(selected).not.toHaveBeenCalled();
+		await act(() => {
+			control?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+		});
+		expect(selected.mock.calls).toEqual([["control", false]]);
+		expect(editorControlClick).toHaveBeenCalledTimes(1);
 	});
 
 	test("keeps the selected element's drag handle mounted throughout a drag", async () => {

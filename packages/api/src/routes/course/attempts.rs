@@ -2,8 +2,8 @@ use crate::{
     credentials::CredentialsAccess,
     db::lease::touch_lock_row,
     entity::{
-        challenge, course_module, leaderboard_opt_in, lesson, sea_orm_active_enums::ChallengeKind,
-        user_challenge_attempt, user_course_enrollment,
+        leaderboard_opt_in, sea_orm_active_enums::ChallengeKind, user_challenge_attempt,
+        user_course_enrollment,
     },
     error::ApiError,
     execution::state::{EventQuery, ExecutionRunRecord, RunStatus as ExecutionRunStatus},
@@ -18,8 +18,10 @@ use axum::{
 };
 use flow_like::flow::{board::Board, pin::PinType};
 use flow_like_types::{Value, create_id};
+use sea_orm::sea_query::{Alias, Expr, Func, SimpleExpr};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -164,21 +166,6 @@ fn enrollment_value<'a>(
             .and_then(|value| value.as_str()),
         _ => alias_value.as_str(),
     }
-}
-
-async fn course_id_for_challenge(
-    state: &AppState,
-    challenge: &challenge::Model,
-) -> Result<String, ApiError> {
-    let lesson = lesson::Entity::find_by_id(&challenge.lesson_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    let module = course_module::Entity::find_by_id(&lesson.module_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    Ok(module.course_id)
 }
 
 struct ChallengeTarget {
@@ -644,6 +631,20 @@ async fn validate_board_riddle(
     Ok(validate_board_riddle_submission(payload, &submission))
 }
 
+/// CockroachDB returns DECIMAL for `SUM` over an integer column, hence the cast.
+fn points_awarded_sum() -> SimpleExpr {
+    use sea_orm::sea_query::ExprTrait;
+
+    Expr::expr(Func::coalesce([
+        Expr::from(Func::sum(Expr::col((
+            user_challenge_attempt::Entity,
+            user_challenge_attempt::Column::PointsAwarded,
+        )))),
+        Expr::val(0i64),
+    ]))
+    .cast_as(Alias::new("BIGINT"))
+}
+
 #[utoipa::path(
     post,
     path = "/courses/challenges/{challenge_id}/attempt",
@@ -666,8 +667,9 @@ pub async fn submit_attempt(
 ) -> Result<Json<AttemptResult>, ApiError> {
     let sub = user.sub()?;
     let now = chrono::Utc::now().fixed_offset();
-    let challenge = ensure_challenge_course_readable(&state, &user, &challenge_id).await?;
-    let course_id = course_id_for_challenge(&state, &challenge).await?;
+    let (challenge, module) =
+        ensure_challenge_course_readable(&state, &user, &challenge_id).await?;
+    let course_id = module.course_id;
 
     let (is_correct, explanation_override) = match challenge.kind {
         ChallengeKind::SingleChoice | ChallengeKind::MultipleChoice => {
@@ -707,14 +709,15 @@ pub async fn submit_attempt(
             Box::pin(async move {
                 touch_lock_row(txn, lock_id).await?;
                 let previously_awarded = user_challenge_attempt::Entity::find()
+                    .select_only()
+                    .column_as(points_awarded_sum(), "total")
                     .filter(user_challenge_attempt::Column::UserId.eq(&sub))
                     .filter(user_challenge_attempt::Column::ChallengeId.eq(&challenge_id))
-                    .all(txn)
+                    .into_tuple::<i64>()
+                    .one(txn)
                     .await?
-                    .into_iter()
-                    .map(|attempt| attempt.points_awarded.max(0))
-                    .sum::<i32>()
-                    .min(max_points);
+                    .unwrap_or(0);
+                let previously_awarded = previously_awarded.clamp(0, i64::from(max_points)) as i32;
                 let points_awarded = (current_score - previously_awarded).max(0);
 
                 user_challenge_attempt::ActiveModel {

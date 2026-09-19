@@ -905,5 +905,8 @@
 	"worstErrorRate": "Schlechteste Fehlerrate",
 	"worstFirst": ", schlechteste zuerst.",
 	"worstScore": "Schlechtester Wert",
-	"yes": "Ja"
+	"yes": "Ja",
+	"auditNoEntries": "",
+	"auditSignedNotChecked": "",
+	"auditUnsignedNotChecked": ""
 }

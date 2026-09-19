@@ -192,6 +192,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 		const voiceEnabled = isVoiceEnabled(voiceConfig);
 		const configuredColorScheme = resolveChatColorScheme(config.color_scheme);
+		const widgetSnapshots = config.attach_widget_snapshots !== false;
 		const chatTheme =
 			configuredColorScheme === "system"
 				? resolvedTheme
@@ -588,6 +589,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										appId={appId}
 										boardId={boardId}
 										eventId={eventId}
+										widgetSnapshots={widgetSnapshots}
 									/>
 								</MessageShell>
 							</div>
@@ -653,6 +655,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									appId={appId}
 									boardId={boardId}
 									eventId={eventId}
+									widgetSnapshots={widgetSnapshots}
 								/>
 							</div>
 						))}

@@ -412,48 +412,53 @@ UNION ALL
     Ok(ready)
 }
 
-/// A warming counter commits cursor progress before returning temporary unavailability.
-/// The caller holds the app's usage-budget coordination row throughout this call.
+/// The admission path for a single counter.
+#[cfg(test)]
 pub(crate) async fn totals<C: ConnectionTrait>(
     db: &C,
     app: &str,
     user: &str,
     period: &str,
 ) -> Result<Option<UsageLimitTotals>, DbErr> {
-    let Some(window) = window_ms(period) else {
-        return Ok(Some(UsageLimitTotals::default()));
-    };
-    let id = key(&[app, user, period]);
-    let mut counter = if let Some(counter) = Counter::find_by_statement(statement(
-        r#"SELECT * FROM "AppRollingUsage" WHERE id=$1"#,
-        vec![id.clone().into()],
-    ))
-    .one(db)
-    .await?
-    {
-        counter
-    } else {
-        let now = Utc::now().fixed_offset();
-        let cursor_at = now - Duration::milliseconds(window);
-        db.execute_raw(statement(r#"INSERT INTO "AppRollingUsage" (id,"appId","userId",period,"backfillCutoff","cursorAt") VALUES($1,$2,$3,$4,$5,$6)"#,
-            vec![id.clone().into(),app.into(),user.into(),period.into(),now.into(),cursor_at.into()])).await?;
-        Counter {
-            id,
-            app_id: app.into(),
-            user_id: user.into(),
-            period: period.into(),
-            cost: 0,
-            tokens: 0,
-            calls: 0,
-            ready: false,
-            cutoff: now,
-            cursor_at,
-            cursor_id: String::new(),
-            swept_at: 0,
-        }
-    };
-    let expired = expire(db, &mut counter, ADMISSION_BATCH).await?;
-    let filled = backfill(db, &mut counter, ADMISSION_BATCH).await?;
+    let mut counters = admission_counters(db, app, &[user.to_owned()]).await?;
+    totals_from(db, &mut counters, app, user, period).await
+}
+
+async fn create_counter<C: ConnectionTrait>(
+    db: &C,
+    id: String,
+    app: &str,
+    user: &str,
+    period: &str,
+    window: i64,
+) -> Result<Counter, DbErr> {
+    let now = Utc::now().fixed_offset();
+    let cursor_at = now - Duration::milliseconds(window);
+    db.execute_raw(statement(r#"INSERT INTO "AppRollingUsage" (id,"appId","userId",period,"backfillCutoff","cursorAt") VALUES($1,$2,$3,$4,$5,$6)"#,
+        vec![id.clone().into(),app.into(),user.into(),period.into(),now.into(),cursor_at.into()])).await?;
+    Ok(Counter {
+        id,
+        app_id: app.into(),
+        user_id: user.into(),
+        period: period.into(),
+        cost: 0,
+        tokens: 0,
+        calls: 0,
+        ready: false,
+        cutoff: now,
+        cursor_at,
+        cursor_id: String::new(),
+        swept_at: 0,
+    })
+}
+
+async fn admission_totals<C: ConnectionTrait>(
+    db: &C,
+    counter: &mut Counter,
+    may_have_expired: bool,
+) -> Result<Option<UsageLimitTotals>, DbErr> {
+    let expired = !may_have_expired || expire(db, counter, ADMISSION_BATCH).await?;
+    let filled = backfill(db, counter, ADMISSION_BATCH).await?;
     if !expired || !filled {
         return Ok(None);
     }
@@ -462,6 +467,66 @@ pub(crate) async fn totals<C: ConnectionTrait>(
         tokens: counter.tokens,
         invocations: counter.calls,
     }))
+}
+
+/// Every counter one limit check can read, with whether its expiry page is non-empty.
+pub(crate) struct AdmissionCounters(HashMap<String, (Counter, bool)>);
+
+/// One statement replaces the counter read and the expiry probe of each limit.
+/// The caller holds the app's usage-budget coordination row, so the snapshot
+/// stays current until `totals_from` consumes it.
+pub(crate) async fn admission_counters<C: ConnectionTrait>(
+    db: &C,
+    app: &str,
+    users: &[String],
+) -> Result<AdmissionCounters, DbErr> {
+    let mut counters = HashMap::new();
+    if users.is_empty() {
+        return Ok(AdmissionCounters(counters));
+    }
+    let mut values: Vec<sea_orm::Value> = vec![app.into(), Utc::now().timestamp_millis().into()];
+    values.extend(users.iter().map(|user| user.clone().into()));
+    let rows = db
+        .query_all_raw(statement(
+            format!(
+                r#"SELECT u.*,EXISTS(SELECT 1 FROM "AppRollingContribution" c WHERE c."counterId"=u.id AND c."expiresAt"<$2) AS "hasExpired" FROM "AppRollingUsage" u WHERE u."appId"=$1 AND u."userId" IN ({})"#,
+                placeholders(3, users.len())
+            ),
+            values,
+        ))
+        .await?;
+    for row in rows {
+        let counter = Counter::from_query_result(&row, "")?;
+        let has_expired: bool = row.try_get("", "hasExpired")?;
+        counters.insert(counter.id.clone(), (counter, has_expired));
+    }
+    Ok(AdmissionCounters(counters))
+}
+
+/// A warming counter commits cursor progress before returning temporary unavailability.
+/// The caller holds the app's usage-budget coordination row from `admission_counters`
+/// through this call.
+pub(crate) async fn totals_from<C: ConnectionTrait>(
+    db: &C,
+    counters: &mut AdmissionCounters,
+    app: &str,
+    user: &str,
+    period: &str,
+) -> Result<Option<UsageLimitTotals>, DbErr> {
+    let Some(window) = window_ms(period) else {
+        return Ok(Some(UsageLimitTotals::default()));
+    };
+    let id = key(&[app, user, period]);
+    let (mut counter, may_have_expired) = match counters.0.remove(&id) {
+        Some(loaded) => loaded,
+        None => (
+            create_counter(db, id.clone(), app, user, period, window).await?,
+            true,
+        ),
+    };
+    let totals = admission_totals(db, &mut counter, may_have_expired).await?;
+    counters.0.insert(id, (counter, true));
+    Ok(totals)
 }
 
 /// Runs in the same transaction as the invocation mutation, under app coordination.

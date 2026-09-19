@@ -7,8 +7,7 @@ use super::{postgres::PostgresStateStore, types::*};
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use redis::{
-    AsyncCommands, Client, ExistenceCheck, Script, SetExpiry, SetOptions,
-    aio::MultiplexedConnection,
+    AsyncCommands, Client, ExistenceCheck, Script, SetExpiry, SetOptions, aio::ConnectionManager,
 };
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
@@ -104,7 +103,8 @@ return 1
 
 #[derive(Debug)]
 pub struct RedisStateStore {
-    conn: Arc<Mutex<MultiplexedConnection>>,
+    /// Held for the life of the process, so it must reconnect after a dropped link.
+    conn: Arc<Mutex<ConnectionManager>>,
     source_run_store: Option<PostgresStateStore>,
 }
 
@@ -118,8 +118,7 @@ impl RedisStateStore {
         source_db: Option<Arc<DatabaseConnection>>,
     ) -> Result<Self, StateStoreError> {
         let client = Client::open(url).map_err(|e| StateStoreError::Connection(e.to_string()))?;
-        let conn = client
-            .get_multiplexed_async_connection()
+        let conn = ConnectionManager::new(client)
             .await
             .map_err(|e| StateStoreError::Connection(e.to_string()))?;
         Ok(Self {
@@ -206,6 +205,29 @@ impl RedisStateStore {
                 .map_err(|error| StateStoreError::Serialization(error.to_string()))
         })
         .transpose()
+    }
+
+    /// A handle for multi-round-trip event work. Clones of the manager share
+    /// one multiplexed link, so the poll loop does not hold the store-wide
+    /// lock across its awaits and queue every other caller behind it.
+    async fn event_connection(&self) -> ConnectionManager {
+        self.conn.lock().await.clone()
+    }
+
+    /// The bodies of `ids` in one MGET, in the same order; a slot is `None`
+    /// once its key has expired.
+    async fn read_event_bodies(
+        conn: &mut ConnectionManager,
+        ids: &[String],
+    ) -> Result<Vec<Option<String>>, StateStoreError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let keys: Vec<String> = ids.iter().map(|id| Self::event_key(id)).collect();
+        conn.mget(keys)
+            .await
+            .map_err(|error: redis::RedisError| StateStoreError::Database(error.to_string()))
     }
 
     async fn import_source_run(
@@ -628,7 +650,7 @@ impl ExecutionStateStore for RedisStateStore {
         query: EventQuery,
     ) -> Result<Vec<ExecutionEventRecord>, StateStoreError> {
         let run_events_key = Self::events_by_run_key(&query.run_id);
-        let mut conn = self.conn.lock().await;
+        let mut conn = self.event_connection().await;
 
         let min_score = query.after_sequence.map(|s| s + 1).unwrap_or(0);
         let ids: Vec<String> = if let Some(limit) = query.limit {
@@ -641,20 +663,13 @@ impl ExecutionStateStore for RedisStateStore {
                 .map_err(|e: redis::RedisError| StateStoreError::Database(e.to_string()))?
         };
 
-        let mut records = Vec::with_capacity(ids.len());
-        for id in &ids {
-            let key = Self::event_key(id);
-            let json: Option<String> = conn
-                .get(&key)
-                .await
-                .map_err(|e: redis::RedisError| StateStoreError::Database(e.to_string()))?;
-
-            if let Some(j) = json {
-                let record: ExecutionEventRecord = serde_json::from_str(&j)
-                    .map_err(|e| StateStoreError::Serialization(e.to_string()))?;
-                if !query.only_undelivered || !record.delivered {
-                    records.push(record);
-                }
+        let bodies = Self::read_event_bodies(&mut conn, &ids).await?;
+        let mut records = Vec::with_capacity(bodies.len());
+        for json in bodies.into_iter().flatten() {
+            let record: ExecutionEventRecord = serde_json::from_str(&json)
+                .map_err(|e| StateStoreError::Serialization(e.to_string()))?;
+            if !query.only_undelivered || !record.delivered {
+                records.push(record);
             }
         }
 
@@ -682,32 +697,34 @@ impl ExecutionStateStore for RedisStateStore {
             return Ok(());
         }
 
-        let mut conn = self.conn.lock().await;
+        let mut conn = self.event_connection().await;
+        let bodies = Self::read_event_bodies(&mut conn, event_ids).await?;
 
-        for id in event_ids {
-            let key = Self::event_key(id);
-            let json: Option<String> = conn
-                .get(&key)
-                .await
-                .map_err(|e: redis::RedisError| StateStoreError::Database(e.to_string()))?;
-
-            if let Some(j) = json {
-                let mut record: ExecutionEventRecord = serde_json::from_str(&j)
-                    .map_err(|e| StateStoreError::Serialization(e.to_string()))?;
-                if record.run_id != run_id {
-                    continue;
-                }
-                record.delivered = true;
-
-                let new_json = serde_json::to_string(&record)
-                    .map_err(|e| StateStoreError::Serialization(e.to_string()))?;
-
-                let ttl = Self::calc_ttl(Some(record.expires_at));
-                conn.set_ex::<&str, &str, ()>(&key, &new_json, ttl as u64)
-                    .await
-                    .map_err(|e: redis::RedisError| StateStoreError::Database(e.to_string()))?;
+        let mut pipe = redis::pipe();
+        for (id, json) in event_ids.iter().zip(bodies) {
+            let Some(json) = json else {
+                continue;
+            };
+            let mut record: ExecutionEventRecord = serde_json::from_str(&json)
+                .map_err(|e| StateStoreError::Serialization(e.to_string()))?;
+            if record.run_id != run_id {
+                continue;
             }
+            record.delivered = true;
+
+            let new_json = serde_json::to_string(&record)
+                .map_err(|e| StateStoreError::Serialization(e.to_string()))?;
+            let ttl = Self::calc_ttl(Some(record.expires_at));
+            pipe.set_ex(Self::event_key(id), new_json, ttl as u64);
         }
+
+        if pipe.cmd_iter().next().is_none() {
+            return Ok(());
+        }
+
+        pipe.query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
         Ok(())
     }

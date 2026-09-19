@@ -58,4 +58,6 @@ pub use resolve::{
 };
 pub use router::{executor_router, ExecutorState};
 pub use streaming::{execute_streaming, ExecutionStream, StreamEvent};
-pub use types::{BoardVersion, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
+pub use types::{
+    BoardVersion, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus, RunSummary,
+};

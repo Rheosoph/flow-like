@@ -905,5 +905,8 @@
 	"worstErrorRate": "최악 오류율",
 	"worstFirst": ", 최악 순으로 정렬.",
 	"worstScore": "최악 점수",
-	"yes": "예"
+	"yes": "예",
+	"auditNoEntries": "",
+	"auditSignedNotChecked": "",
+	"auditUnsignedNotChecked": ""
 }

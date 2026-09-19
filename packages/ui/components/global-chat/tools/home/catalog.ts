@@ -13,6 +13,7 @@ import {
 import {
 	MAX_HOME_LAYOUT_BYTES,
 	MAX_HOME_WIDGETS,
+	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
 	responsiveHomeColumns,
 } from "../../../home/home-layout";
 import { DATA_SOURCE_KINDS, HOME_VARIANTS, stringArg } from "./shared";
@@ -97,6 +98,19 @@ export function getHomeWidgetCatalog(args: Record<string, unknown>) {
 				desktop_min: 1050,
 			},
 			height_modes: ["auto", "content", "fixed"],
+			class_name: {
+				field: "appearance.className",
+				optional: true,
+				max_bytes: MAX_HOME_WIDGET_CLASS_NAME_BYTES,
+				applies_to:
+					"Widget root surface, after variant and accent; conflicting background, border, radius, shadow, and text color classes win.",
+				syntax:
+					"Space-separated Tailwind CSS v4 utility classes compiled at runtime (v4 names such as bg-linear-to-br; arbitrary values work). Style descendants with variants such as [&_h2]:text-lg.",
+				ignored:
+					"The layout controls position, grid span, height, and self-alignment, so those utilities have no effect. Do not use z-index or sibling variants (~, +).",
+				prefer:
+					"Theme tokens such as bg-card, text-primary, border-primary/30.",
+			},
 		},
 		categories: [...HOME_CATEGORIES],
 		accents: Object.keys(HOME_ACCENTS),

@@ -189,6 +189,42 @@ describe("filterPropsPatch", () => {
 			{ key: "title", errors: ["$: value is required"] },
 		]);
 	});
+
+	test("filters geometry props:update values using the geometry contract", () => {
+		const geometryContract: WidgetContract = {
+			...contract,
+			inputs: {
+				location: {
+					type: "json",
+					optional: true,
+					schema: {
+						type: "object",
+						"x-flow-like-type": "geometry",
+						"x-geometry": "Point",
+					},
+				},
+				title: { type: "string" },
+			},
+		};
+		const point = { type: "Point", coordinates: [13.4, 52.5] };
+		expect(filterPropsPatch(geometryContract, { location: point })).toEqual({
+			accepted: { location: point },
+			rejected: [],
+		});
+		const invalid = filterPropsPatch(geometryContract, {
+			location: { ...point, coordinates: [13.4, 95] },
+			title: "Updated",
+		});
+		expect(invalid.accepted).toEqual({ title: "Updated" });
+		expect(invalid.rejected[0]?.key).toBe("location");
+		expect(invalid.rejected[0]?.errors[0]).toContain("WGS 84");
+		expect(filterPropsPatch(geometryContract, { location: undefined })).toEqual(
+			{
+				accepted: { location: undefined },
+				rejected: [],
+			},
+		);
+	});
 });
 
 describe("non-DOM environment guards", () => {

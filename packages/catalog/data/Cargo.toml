@@ -92,6 +92,7 @@ ahash.workspace = true
 blake3.workspace = true
 tracing.workspace = true
 schemars.workspace = true
+jsonschema.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util"] }

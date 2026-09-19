@@ -87,6 +87,70 @@ impl Cacheable for A2UIUpdateLog {
     }
 }
 
+const A2UI_DETACHED_KEY: &str = "__a2ui_detached_elements";
+
+/// Element ids this run detached children from. Unlike [`A2UIUpdateLog`] it is never capped:
+/// a missed id would leave that container's dropped children on the page for good.
+#[derive(Clone, Default)]
+struct A2UIDetachedElements {
+    ids: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+}
+
+impl Cacheable for A2UIDetachedElements {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+fn detaching_element_id(message: &crate::a2ui::A2UIServerMessage) -> Option<&str> {
+    use crate::a2ui::A2UIServerMessage as Msg;
+    match message {
+        Msg::UpsertElement { element_id, value } => matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("clearChildren" | "removeChildAt")
+        )
+        .then_some(element_id.as_str()),
+        Msg::RemoveElement { element_id, .. } => Some(element_id.as_str()),
+        _ => None,
+    }
+}
+
+/// The run's closing `pruneDetached`, sent only when the run detached children. Delivery is
+/// best effort: a page that misses it keeps the detached components, as before.
+pub(super) async fn stream_prune_detached(
+    cache: &RwLock<AHashMap<String, Arc<dyn Cacheable>>>,
+    callback: &InterComCallback,
+) {
+    let element_ids: Vec<String> = {
+        let cache = cache.read().await;
+        let Some(detached) = cache
+            .get(A2UI_DETACHED_KEY)
+            .and_then(|c| c.as_any().downcast_ref::<A2UIDetachedElements>().cloned())
+        else {
+            return;
+        };
+        detached
+            .ids
+            .lock()
+            .map(|ids| ids.iter().cloned().collect())
+            .unwrap_or_default()
+    };
+    if element_ids.is_empty() {
+        return;
+    }
+    let message = crate::a2ui::A2UIServerMessage::prune_detached(element_ids);
+    if let Err(err) = InterComEvent::with_type("a2ui", message)
+        .call(callback)
+        .await
+    {
+        tracing::warn!(error = %err, "Failed to stream the run's pruneDetached message");
+    }
+}
+
 #[derive(Clone)]
 pub struct ExecutionContextCache {
     pub stores: FlowLikeStores,
@@ -1369,7 +1433,38 @@ impl ExecutionContext {
     ) -> flow_like_types::Result<()> {
         tracing::debug!("Streaming A2UI update");
         self.record_a2ui_update(&message).await;
+        self.record_detached(&message).await;
         self.stream_response("a2ui", message).await
+    }
+
+    /// Get-or-insert under a single write lock: parallel branches emitting the run's first
+    /// update must not race two entries into existence.
+    async fn shared_cache_entry<T: Cacheable + Clone + Default + 'static>(&self, key: &str) -> T {
+        let mut cache = self.cache.write().await;
+        if let Some(entry) = cache
+            .get(key)
+            .and_then(|c| c.as_any().downcast_ref::<T>().cloned())
+        {
+            return entry;
+        }
+        let entry = T::default();
+        cache.insert(
+            key.to_string(),
+            Arc::new(entry.clone()) as Arc<dyn Cacheable>,
+        );
+        entry
+    }
+
+    async fn record_detached(&self, message: &crate::a2ui::A2UIServerMessage) {
+        let Some(element_id) = detaching_element_id(message) else {
+            return;
+        };
+        let detached = self
+            .shared_cache_entry::<A2UIDetachedElements>(A2UI_DETACHED_KEY)
+            .await;
+        if let Ok(mut ids) = detached.ids.lock() {
+            ids.insert(element_id.to_string());
+        }
     }
 
     /// Records surface-mutating a2ui messages in a run-scoped log so nodes that
@@ -1388,25 +1483,9 @@ impl ExecutionContext {
             return;
         }
 
-        // Get-or-insert under a single write lock: parallel branches emitting
-        // the run's first update must not race two logs into existence.
-        let log = {
-            let mut cache = self.cache.write().await;
-            match cache
-                .get(A2UI_UPDATE_LOG_KEY)
-                .and_then(|c| c.as_any().downcast_ref::<A2UIUpdateLog>().cloned())
-            {
-                Some(log) => log,
-                None => {
-                    let log = A2UIUpdateLog::default();
-                    cache.insert(
-                        A2UI_UPDATE_LOG_KEY.to_string(),
-                        Arc::new(log.clone()) as Arc<dyn Cacheable>,
-                    );
-                    log
-                }
-            }
-        };
+        let log = self
+            .shared_cache_entry::<A2UIUpdateLog>(A2UI_UPDATE_LOG_KEY)
+            .await;
 
         if let Ok(mut entries) = log.entries.lock() {
             if entries.len() >= A2UI_UPDATE_LOG_CAP {
@@ -1795,5 +1874,76 @@ mod tests {
         append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, second);
 
         assert_eq!(traces.len(), 2);
+    }
+
+    use crate::a2ui::A2UIServerMessage;
+    use flow_like_types::json::json;
+
+    fn update(element_id: &str, kind: &str) -> A2UIServerMessage {
+        A2UIServerMessage::upsert_element(element_id, json!({ "type": kind, "index": 0 }))
+    }
+
+    fn capturing_callback() -> (InterComCallback, Arc<std::sync::Mutex<Vec<InterComEvent>>>) {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let callback: InterComCallback = Some(Arc::new(move |event| {
+            sink.lock().unwrap().push(event);
+            Box::pin(async { Ok(()) })
+        }));
+        (callback, events)
+    }
+
+    #[test]
+    fn only_child_removals_detach() {
+        assert_eq!(
+            detaching_element_id(&update("page/list", "clearChildren")),
+            Some("page/list")
+        );
+        assert_eq!(
+            detaching_element_id(&update("inst/list", "removeChildAt")),
+            Some("inst/list")
+        );
+        assert_eq!(
+            detaching_element_id(&A2UIServerMessage::remove_element("page", "card")),
+            Some("card")
+        );
+        assert_eq!(detaching_element_id(&update("list", "pushChild")), None);
+        assert_eq!(
+            detaching_element_id(&update("list", "createComponent")),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn run_end_names_every_detaching_element_once() {
+        let detached = A2UIDetachedElements::default();
+        detached
+            .ids
+            .lock()
+            .unwrap()
+            .extend(["list", "card", "list"].map(String::from));
+        let cache = RwLock::new(AHashMap::new());
+        cache.write().await.insert(
+            A2UI_DETACHED_KEY.to_string(),
+            Arc::new(detached) as Arc<dyn Cacheable>,
+        );
+        let (callback, events) = capturing_callback();
+
+        stream_prune_detached(&cache, &callback).await;
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "a2ui");
+        assert_eq!(
+            events[0].payload,
+            json!({ "type": "pruneDetached", "element_ids": ["card", "list"] })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_detached_nothing_sends_nothing() {
+        let (callback, events) = capturing_callback();
+        stream_prune_detached(&RwLock::new(AHashMap::new()), &callback).await;
+        assert!(events.lock().unwrap().is_empty());
     }
 }

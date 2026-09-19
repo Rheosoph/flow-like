@@ -177,34 +177,39 @@ pub(crate) async fn app_meta_lookup(
         .collect())
 }
 
-/// Loads the role names for the given role ids.
-pub(crate) async fn role_name_lookup(
-    state: &AppState,
-    role_ids: &[String],
-) -> Result<std::collections::HashMap<String, String>, ApiError> {
-    if role_ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-    let roles = role::Entity::find()
-        .filter(role::Column::Id.is_in(role_ids.iter().cloned()))
-        .all(&state.db)
-        .await?;
-    Ok(roles.into_iter().map(|r| (r.id, r.name)).collect())
-}
+/// Role id → name and role id → raw permission bits for the given role ids,
+/// from a single query.
+pub(crate) type RoleLookup = (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, i64>,
+);
 
-/// Loads the raw permission bits granted by the given role ids.
-pub(crate) async fn role_permission_lookup(
+/// Loads the names and the raw permission bits of the given role ids.
+pub(crate) async fn role_lookup(
     state: &AppState,
     role_ids: &[String],
-) -> Result<std::collections::HashMap<String, i64>, ApiError> {
+) -> Result<RoleLookup, ApiError> {
+    use sea_orm::QuerySelect;
+
     if role_ids.is_empty() {
-        return Ok(std::collections::HashMap::new());
+        return Ok(RoleLookup::default());
     }
-    let roles = role::Entity::find()
+    let roles: Vec<(String, String, i64)> = role::Entity::find()
         .filter(role::Column::Id.is_in(role_ids.iter().cloned()))
+        .select_only()
+        .column(role::Column::Id)
+        .column(role::Column::Name)
+        .column(role::Column::Permissions)
+        .into_tuple()
         .all(&state.db)
         .await?;
-    Ok(roles.into_iter().map(|r| (r.id, r.permissions)).collect())
+
+    let mut lookup = RoleLookup::default();
+    for (id, name, permissions) in roles {
+        lookup.0.insert(id.clone(), name);
+        lookup.1.insert(id, permissions);
+    }
+    Ok(lookup)
 }
 
 pub(crate) fn to_connection_info(

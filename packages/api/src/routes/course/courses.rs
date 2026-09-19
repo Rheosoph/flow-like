@@ -21,8 +21,8 @@ use flow_like_storage::Path as FlowPath;
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect, Select,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, FromQueryResult, IntoActiveModel,
+    QueryFilter, QueryOrder, QuerySelect, Select,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -579,7 +579,7 @@ pub async fn upsert_course(
     }))
 }
 
-#[derive(Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Serialize, Deserialize, ToSchema, FromQueryResult)]
 pub struct LessonSummary {
     pub id: String,
     pub module_id: String,
@@ -698,12 +698,21 @@ pub async fn get_course_structure(
         Vec::new()
     } else {
         lesson::Entity::find()
+            .select_only()
+            .column_as(lesson::Column::Id, "id")
+            .column_as(lesson::Column::ModuleId, "module_id")
+            .column_as(lesson::Column::Title, "title")
+            .column_as(lesson::Column::Position, "position")
+            .column_as(lesson::Column::EstimatedMinutes, "estimated_minutes")
+            .column_as(lesson::Column::IsOptional, "is_optional")
+            .column_as(lesson::Column::VideoUrl.is_not_null(), "has_video")
             .filter(not_pending_deletion(
                 DeletionRoot::Lesson,
                 (lesson::Entity, lesson::Column::Id),
             ))
             .filter(lesson::Column::ModuleId.is_in(module_ids))
             .order_by_asc(lesson::Column::Position)
+            .into_model::<LessonSummary>()
             .all(&state.db)
             .await?
     };
@@ -714,15 +723,7 @@ pub async fn get_course_structure(
             let lessons = lessons
                 .iter()
                 .filter(|l| l.module_id == m.id)
-                .map(|l| LessonSummary {
-                    id: l.id.clone(),
-                    module_id: l.module_id.clone(),
-                    title: l.title.clone(),
-                    position: l.position,
-                    estimated_minutes: l.estimated_minutes,
-                    is_optional: l.is_optional,
-                    has_video: l.video_url.is_some(),
-                })
+                .cloned()
                 .collect();
             ModuleWithLessons {
                 id: m.id,

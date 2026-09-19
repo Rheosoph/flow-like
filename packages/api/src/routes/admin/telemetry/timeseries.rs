@@ -14,6 +14,7 @@ use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::sea_query::Expr;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
@@ -219,22 +220,27 @@ async fn daily_points<C: ConnectionTrait>(
 ) -> Result<Vec<TelemetryTimeseriesPoint>, ApiError> {
     let counts = daily_counts_query(start, end, name, source)
         .into_model::<DailyCountRow>()
-        .all(db)
-        .await?;
+        .all(db);
+    let installs = async {
+        match name {
+            Some(_) => Ok(Vec::new()),
+            None => {
+                daily_installs_query(start, end, source)
+                    .into_model::<DailyInstallRow>()
+                    .all(db)
+                    .await
+            }
+        }
+    };
+    let (counts, installs) = try_join!(counts, installs)?;
 
     let mut points: BTreeMap<DateTime<FixedOffset>, (i64, i64)> = counts
         .into_iter()
         .map(|row| (row.day, (row.cnt, row.installs)))
         .collect();
 
-    if name.is_none() {
-        let installs = daily_installs_query(start, end, source)
-            .into_model::<DailyInstallRow>()
-            .all(db)
-            .await?;
-        for row in installs {
-            points.entry(row.day).or_insert((0, 0)).1 = row.installs;
-        }
+    for row in installs {
+        points.entry(row.day).or_insert((0, 0)).1 = row.installs;
     }
 
     Ok(points

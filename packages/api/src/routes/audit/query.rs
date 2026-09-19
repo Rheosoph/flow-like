@@ -44,7 +44,10 @@ pub struct AuditQueryParams {
     pub actor_id: Option<String>,
     pub resource_type: Option<String>,
     pub resource_id: Option<String>,
+    /// Return only entries with a lower sequence. Page with this instead of `offset`.
+    pub before_sequence: Option<i64>,
     pub limit: Option<u64>,
+    /// Capped at 10,000. Use `before_sequence` to page further.
     pub offset: Option<u64>,
 }
 
@@ -75,6 +78,7 @@ pub async fn query_audit_entries(
         actor_id: params.actor_id,
         resource_type: params.resource_type,
         resource_id: params.resource_id,
+        before_sequence: params.before_sequence,
         limit: params.limit,
         offset: params.offset,
     };

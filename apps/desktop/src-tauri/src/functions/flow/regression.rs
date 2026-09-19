@@ -1,7 +1,7 @@
 //! Desktop regression suites (Track D, lane F): corpus listing, fixture
-//! promotion and suite config over the local Lance runs tables and the local
-//! meta store, via the core `flow::regression` helpers — the same bucket
-//! layout as cloud (`apps/{app_id}/regression/`).
+//! promotion and suite config over the local run index, its payload sidecars
+//! and the local meta store, via the core `flow::regression` helpers — the
+//! same bucket layout as cloud (`apps/{app_id}/regression/`).
 //!
 //! The desktop split: no scheduling, no publish gate, and the suite RUNNER is
 //! client-side TS (`components/tauri-provider/regression-runner.ts`) — cases
@@ -15,7 +15,10 @@ use flow_like::{
     app::App,
     flow::{
         event::Event,
-        execution::{LogLevel, LogMeta, StoredLogMeta},
+        execution::{
+            LogLevel, LogMeta,
+            run_index::{RunIndex, RunQuery, read_run_payload},
+        },
         regression::{
             CAVEAT_GRADING_BLIND, CorpusCandidate, FIXTURE_PAYLOAD_CAP_BYTES, FixtureBaseline,
             GateMode, RegressionFixture, RegressionSuite, RunGradeEvidence, SUITE_CASE_CAP,
@@ -24,14 +27,11 @@ use flow_like::{
             select_corpus_window, shape_hash,
         },
     },
-    flow_like_storage::{
-        lancedb::query::{ExecutableQuery, QueryBase},
-        serde_arrow,
-    },
+    flow_like_storage::files::store::FlowLikeStore,
     state::FlowLikeState,
 };
 use flow_like_types::{Value, create_id};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -168,25 +168,36 @@ fn require_suite(suite: Option<RegressionSuite>) -> Result<RegressionSuite, Taur
     })
 }
 
-/// Open the board's local Lance `runs` summary table; `None` when no run has
-/// ever flushed for the board.
-async fn open_runs_table_opt(
-    state: &Arc<FlowLikeState>,
-    app_id: &str,
-    board_id: &str,
-) -> flow_like_types::Result<Option<flow_like::flow_like_storage::lancedb::Table>> {
-    let db = super::run::open_runs_db(state, app_id, board_id).await?;
-    let table_names = db.table_names().execute().await.map_err(|e| {
-        flow_like_types::anyhow!("Failed to list run tables for board {board_id}: {e}")
-    })?;
-    if !table_names.iter().any(|name| name == "runs") {
-        return Ok(None);
-    }
-    let table = db.open_table("runs").execute().await.map_err(|e| {
-        flow_like_types::anyhow!("Failed to open runs table for board {board_id}: {e}")
-    })?;
-    Ok(Some(table))
+/// Where recorded runs live on the desktop: summary rows in the run index,
+/// replay payloads as sidecars in the log store.
+struct RunStores {
+    index: Arc<dyn RunIndex>,
+    log_store: FlowLikeStore,
 }
+
+impl RunStores {
+    async fn open(state: &Arc<FlowLikeState>) -> flow_like_types::Result<Self> {
+        let index = crate::run_index::registered_run_index(state).await?;
+        let log_store = FlowLikeState::stores(state)
+            .await
+            .log_store
+            .ok_or_else(|| flow_like_types::anyhow!("No log store configured"))?;
+        Ok(Self { index, log_store })
+    }
+
+    /// The row with its recorded payload attached; empty bytes when the run
+    /// recorded no input (or predates the sidecar), which reads as a `null`
+    /// payload downstream.
+    async fn with_payload(&self, mut row: LogMeta) -> flow_like_types::Result<LogMeta> {
+        row.payload = read_run_payload(&self.log_store, &row.app_id, &row.board_id, &row.run_id)
+            .await?
+            .unwrap_or_default();
+        Ok(row)
+    }
+}
+
+/// Sidecar reads in flight at once while a corpus window is hydrated.
+const CORPUS_PAYLOAD_CONCURRENCY: usize = 16;
 
 /// The replay-exclusion set: every case replay run id recorded in the suite's
 /// archived runs (the archive is pruned to the newest
@@ -227,32 +238,24 @@ async fn replay_exclusion_set(app: &App, suite: Option<&RegressionSuite>) -> Has
     excluded
 }
 
-/// Load one run's summary row from the runs table, newest first (a double
-/// flush writes the same run twice). The `event_id` filter scopes the lookup
-/// to the event being queried.
+/// Load one run's summary row plus its recorded payload. The board and event
+/// checks scope the lookup to the event being queried.
 async fn load_corpus_row(
-    table: &flow_like::flow_like_storage::lancedb::Table,
+    stores: &RunStores,
+    app_id: &str,
+    board_id: &str,
     event_id: &str,
     run_id: &str,
-) -> Result<Option<StoredLogMeta>, TauriFunctionError> {
-    let filter = format!("run_id = '{run_id}' AND event_id = '{event_id}'");
-    let batches = table
-        .query()
-        .only_if(&filter)
-        .limit(4)
-        .execute()
-        .await
-        .map_err(|e| flow_like_types::anyhow!("Failed to query run {run_id}: {e}"))?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|e| flow_like_types::anyhow!("Failed to collect run row for {run_id}: {e}"))?;
-    let mut rows: Vec<StoredLogMeta> = Vec::new();
-    for batch in &batches {
-        rows.extend(
-            serde_arrow::from_record_batch::<Vec<StoredLogMeta>>(batch).unwrap_or_default(),
-        );
+) -> Result<Option<LogMeta>, TauriFunctionError> {
+    let row = stores
+        .index
+        .get(app_id, run_id)
+        .await?
+        .filter(|row| row.board_id == board_id && row.event_id == event_id);
+    match row {
+        Some(row) => Ok(Some(stores.with_payload(row).await?)),
+        None => Ok(None),
     }
-    Ok(rows.into_iter().max_by_key(|row| row.start))
 }
 
 /// Gather grading evidence for a recorded run from the local log store: one
@@ -476,56 +479,54 @@ pub async fn list_regression_corpus(
     let suite = find_suite_for_event(&app, &event_id).await?;
     let excluded = replay_exclusion_set(&app, suite.as_ref()).await;
 
-    let Some(table) = open_runs_table_opt(&flow_like_state, &app_id, &board_id).await? else {
-        // No run has ever flushed for this board — an empty corpus, not an error.
-        return Ok(EventCorpusResponse {
-            entries: Vec::new(),
-            board_id,
-            window_secs: 0,
-            scanned_rows: 0,
-            scan_capped: false,
-        });
-    };
+    let stores = Arc::new(RunStores::open(&flow_like_state).await?);
 
     let side_meta: Arc<Mutex<HashMap<String, CorpusRowMeta>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let scan_app_id = app_id.clone();
+    let scan_board_id = board_id.clone();
     let scan_event_id = event_id.clone();
     let scan_meta = side_meta.clone();
     let selection = select_corpus_window(target, &excluded, move |window: Duration, cap: usize| {
-        let table = table.clone();
-        let event_id = scan_event_id.clone();
+        let stores = stores.clone();
+        let query = RunQuery {
+            app_id: scan_app_id.clone(),
+            board_ids: vec![scan_board_id.clone()],
+            event_id: Some(scan_event_id.clone()),
+            from: Some(now_micros().saturating_sub(window.as_micros() as u64)),
+            limit: cap,
+            include_nodes: true,
+            ..RunQuery::default()
+        };
         let side_meta = scan_meta.clone();
         async move {
-            let cutoff = now_micros().saturating_sub(window.as_micros() as u64);
-            let filter = format!("event_id = '{event_id}' AND start >= {cutoff}");
-            let batches = table
-                .query()
-                .only_if(&filter)
-                .limit(cap)
-                .execute()
+            let summaries =
+                stores.index.list(&query).await.map_err(|e| {
+                    flow_like_types::anyhow!("Failed to scan the corpus window: {e}")
+                })?;
+            let rows: Vec<LogMeta> = stream::iter(summaries)
+                .map(|row| {
+                    let stores = stores.clone();
+                    async move { stores.with_payload(row).await }
+                })
+                .buffer_unordered(CORPUS_PAYLOAD_CONCURRENCY)
+                .try_collect()
                 .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to scan the corpus window: {e}"))?
-                .try_collect::<Vec<_>>()
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to collect corpus rows: {e}"))?;
-            let mut rows = Vec::new();
-            for batch in &batches {
-                let stored: Vec<StoredLogMeta> =
-                    serde_arrow::from_record_batch(batch).unwrap_or_default();
-                for row in stored {
-                    side_meta.lock().expect("corpus meta lock").insert(
-                        row.run_id.clone(),
-                        CorpusRowMeta {
-                            version: row.version.clone(),
-                            event_version: row.event_version.clone(),
-                            log_level: row.log_level,
-                            payload_len: row.payload.len(),
-                        },
-                    );
-                    rows.push(CorpusCandidate::from_log_meta(&LogMeta::from(row)));
-                }
+                .map_err(|e| flow_like_types::anyhow!("Failed to read corpus payloads: {e}"))?;
+            let mut candidates = Vec::with_capacity(rows.len());
+            for row in rows {
+                side_meta.lock().expect("corpus meta lock").insert(
+                    row.run_id.clone(),
+                    CorpusRowMeta {
+                        version: row.version.clone(),
+                        event_version: row.event_version.clone(),
+                        log_level: row.log_level,
+                        payload_len: row.payload.len(),
+                    },
+                );
+                candidates.push(CorpusCandidate::from_log_meta(&row));
             }
-            Ok(rows)
+            Ok(candidates)
         }
     })
     .await?;
@@ -603,10 +604,8 @@ pub async fn get_regression_corpus_payload(
     ensure_regression_capable_event(&event)?;
     let board_id = event_board_id(&app, &event)?;
 
-    let table = open_runs_table_opt(&flow_like_state, &app_id, &board_id)
-        .await?
-        .ok_or_else(|| TauriFunctionError::new("No runs recorded for this board"))?;
-    let row = load_corpus_row(&table, &event_id, &run_id)
+    let stores = RunStores::open(&flow_like_state).await?;
+    let row = load_corpus_row(&stores, &app_id, &board_id, &event_id, &run_id)
         .await?
         .ok_or_else(|| {
             TauriFunctionError::new(&format!("Run {run_id} not found for this event"))
@@ -671,10 +670,8 @@ pub async fn promote_regression_fixture(
         )));
     }
 
-    let table = open_runs_table_opt(&flow_like_state, &app_id, &board_id)
-        .await?
-        .ok_or_else(|| TauriFunctionError::new("No runs recorded for this board"))?;
-    let row = load_corpus_row(&table, &event_id, &run_id)
+    let stores = RunStores::open(&flow_like_state).await?;
+    let row = load_corpus_row(&stores, &app_id, &board_id, &event_id, &run_id)
         .await?
         .ok_or_else(|| {
             TauriFunctionError::new(&format!("Run {run_id} not found for this event"))
@@ -699,11 +696,10 @@ pub async fn promote_regression_fixture(
     let source_node_id = row.node_id.clone();
     let payload = prepare_fixture_payload(payload_value(&row.payload))?;
 
-    // Grade the recorded run from its stored Lance artifacts — the baseline
-    // future replays are compared against. A missing or unreadable log table
-    // yields an `error` baseline, never a green light.
-    let meta = LogMeta::from(row);
-    let grade = grade_run(collect_local_evidence(&flow_like_state, &meta).await);
+    // Grade the recorded run from its stored log table — the baseline future
+    // replays are compared against. A missing or unreadable log table yields
+    // an `error` baseline, never a green light.
+    let grade = grade_run(collect_local_evidence(&flow_like_state, &row).await);
     let verdict = expectation.unwrap_or(grade.verdict);
     let error_class = if verdict == TestVerdict::Pass {
         None

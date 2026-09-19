@@ -105,15 +105,12 @@ impl NodeLogic for TemplateStringNode {
         let err = jinja_env.add_template("template", &template_string);
 
         if let Err(e) = err {
-            println!(
-                "Failed to parse template: {}. Error: {}",
-                template_string, e
-            );
+            tracing::debug!(template = %template_string, error = %e, "Failed to parse template");
             return;
         }
 
         let Ok(template) = jinja_env.get_template("template") else {
-            println!("Failed to parse template: {}", template_string);
+            tracing::debug!(template = %template_string, "Failed to parse template");
             return;
         };
         let template_placeholders = template.undeclared_variables(false);

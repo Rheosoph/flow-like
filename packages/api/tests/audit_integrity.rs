@@ -43,6 +43,7 @@ fn filter(chain_id: Option<&str>, action: Option<&str>) -> AuditFilter {
         actor_id: None,
         resource_type: None,
         resource_id: None,
+        before_sequence: None,
         limit: Some(200),
         offset: None,
     }

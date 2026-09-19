@@ -660,6 +660,15 @@ impl NodeLogic for WasmNodeLogic {
         });
         host_state.model_usage_context = context.model_usage_context();
 
+        let database_context = crate::host_functions::database::DatabaseContext::from_inputs(
+            context,
+            &definition,
+            &inputs,
+            security.capabilities,
+        )
+        .await?;
+        host_state.database_context = Some(database_context.clone());
+
         // Execute
         let exec_input = WasmExecutionInput {
             inputs,
@@ -699,6 +708,10 @@ impl NodeLogic for WasmNodeLogic {
             .map_err(|e| flow_like_types::anyhow!("WASM execution failed: {}", e))?;
         let result = call.result;
 
+        database_context
+            .validate_outputs(context, &definition, &result.outputs)
+            .await?;
+
         // Process outputs
         for (name, value) in result.outputs {
             context.set_pin_value(&name, value).await?;
@@ -711,13 +724,7 @@ impl NodeLogic for WasmNodeLogic {
 
         // Process logs
         for log in call.logs {
-            let level = match log.level {
-                0..=1 => LogLevel::Debug,
-                2 => LogLevel::Info,
-                3 => LogLevel::Warn,
-                _ => LogLevel::Error,
-            };
-            context.log_message(&log.message, level);
+            context.log_message(&log.message, log.level());
         }
 
         // Process stream events
@@ -767,6 +774,7 @@ fn strip_shadow_capabilities(capabilities: WasmCapabilities) -> WasmCapabilities
     capabilities
         & !(WasmCapabilities::STORAGE_WRITE
             | WasmCapabilities::STORAGE_DELETE
+            | WasmCapabilities::DATABASE_WRITE
             | WasmCapabilities::HTTP_WRITE
             | WasmCapabilities::VARIABLES_WRITE
             | WasmCapabilities::CACHE_WRITE

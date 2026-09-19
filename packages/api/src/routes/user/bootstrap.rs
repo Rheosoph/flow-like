@@ -1,5 +1,5 @@
 use crate::{
-    entity::{app, invitation, membership, meta, notification, user},
+    entity::{app, invitation, membership, meta, user},
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
@@ -9,15 +9,16 @@ use axum::{
     extract::{Query, State},
 };
 use flow_like::{app::App, bit::Metadata};
-use sea_orm::sea_query::ExprTrait;
+use flow_like_types::tokio::try_join;
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     RelationTrait,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use utoipa::IntoParams;
 
-use super::notifications::NotificationOverview;
+use super::notifications::{NotificationOverview, notification_overview};
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 pub struct BootstrapParams {
@@ -79,65 +80,66 @@ pub async fn bootstrap(
     let sub = user.sub()?;
 
     // 2. Notification counts
-    let invites_count = invitation::Entity::find()
-        .filter(invitation::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await?;
+    let notifications = notification_overview(&state.db, &sub).await?;
+    let invites_total = notifications.invites_count;
 
-    let notifications_count = notification::Entity::find()
-        .filter(notification::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await?;
-
-    let unread_count = notification::Entity::find()
-        .filter(notification::Column::UserId.eq(&sub))
-        .filter(notification::Column::Read.eq(false))
-        .count(&state.db)
-        .await?;
-
-    let notifications = NotificationOverview {
-        invites_count,
-        notifications_count,
-        unread_count,
-    };
-
-    // 3. Apps (paginated)
+    // 3. Apps and pending invites (paginated)
     let language = params.language.clone().unwrap_or_else(|| "en".to_string());
     let apps_limit = std::cmp::Ord::min(params.apps_limit.unwrap_or(50), 100);
     let apps_offset = params.apps_offset.unwrap_or(0);
+    let invites_limit_val = std::cmp::Ord::min(params.invites_limit.unwrap_or(20), 100);
+    let invites_offset_val = params.invites_offset.unwrap_or(0);
 
-    let apps_total = app::Entity::find()
+    let apps_total_fut = app::Entity::find()
         .join(JoinType::InnerJoin, app::Relation::Membership.def())
         .filter(membership::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await?;
-
-    let apps_with_meta = app::Entity::find()
+        .count(&state.db);
+    let apps_page_fut = app::Entity::find()
         .order_by_desc(app::Column::UpdatedAt)
+        .order_by_asc(app::Column::Id)
         .join(JoinType::InnerJoin, app::Relation::Membership.def())
-        .find_with_related(meta::Entity)
-        .filter(
-            meta::Column::Lang
-                .eq(&language)
-                .or(meta::Column::Lang.eq("en")),
-        )
         .filter(membership::Column::UserId.eq(&sub))
         .limit(Some(apps_limit))
         .offset(Some(apps_offset))
-        .all(&state.db)
-        .await?;
+        .all(&state.db);
+    let invitations_fut = invitation::Entity::find()
+        .order_by_desc(invitation::Column::CreatedAt)
+        .filter(invitation::Column::UserId.eq(&sub))
+        .find_also_related(membership::Entity)
+        .limit(Some(invites_limit_val))
+        .offset(Some(invites_offset_val))
+        .all(&state.db);
+
+    let (apps_total, app_models, invitations) =
+        try_join!(apps_total_fut, apps_page_fut, invitations_fut)?;
+
+    let mut preferred_meta: HashMap<String, meta::Model> = HashMap::new();
+    if !app_models.is_empty() {
+        let metas = meta::Entity::find()
+            .filter(meta::Column::AppId.is_in(app_models.iter().map(|a| a.id.clone())))
+            .filter(meta::Column::Lang.is_in([language.as_str(), "en"]))
+            .all(&state.db)
+            .await?;
+        for m in metas {
+            let Some(app_id) = m.app_id.clone() else {
+                continue;
+            };
+            let preferred = preferred_meta
+                .get(&app_id)
+                .is_none_or(|current| current.lang != language && m.lang == language);
+            if preferred {
+                preferred_meta.insert(app_id, m);
+            }
+        }
+    }
 
     let master_store = state.master_credentials().await?;
     let store = master_store.to_store(false).await?;
 
-    let mut apps_items = Vec::new();
-    for (app_model, meta_models) in apps_with_meta {
-        let metadata = if let Some(m) = meta_models
-            .iter()
-            .find(|m| m.lang == language)
-            .or_else(|| meta_models.first())
-        {
-            let mut metadata = Metadata::from(m.clone());
+    let mut apps_items = Vec::with_capacity(app_models.len());
+    for app_model in app_models {
+        let metadata = if let Some(m) = preferred_meta.remove(&app_model.id) {
+            let mut metadata = Metadata::from(m);
             let prefix = flow_like_storage::Path::from("media")
                 .join("apps")
                 .join(app_model.id.clone());
@@ -148,24 +150,6 @@ pub async fn bootstrap(
         };
         apps_items.push((App::from(app_model), metadata));
     }
-
-    // 4. Pending invites (paginated)
-    let invites_limit_val = std::cmp::Ord::min(params.invites_limit.unwrap_or(20), 100);
-    let invites_offset_val = params.invites_offset.unwrap_or(0);
-
-    let invites_total = invitation::Entity::find()
-        .filter(invitation::Column::UserId.eq(&sub))
-        .count(&state.db)
-        .await?;
-
-    let invitations = invitation::Entity::find()
-        .order_by_desc(invitation::Column::CreatedAt)
-        .filter(invitation::Column::UserId.eq(&sub))
-        .find_also_related(membership::Entity)
-        .limit(Some(invites_limit_val))
-        .offset(Some(invites_offset_val))
-        .all(&state.db)
-        .await?;
 
     let invite_items: Vec<_> = invitations
         .into_iter()

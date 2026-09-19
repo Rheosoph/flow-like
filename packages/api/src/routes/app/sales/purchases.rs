@@ -88,15 +88,23 @@ pub async fn list_purchases(
     Path(app_id): Path<String>,
     Query(query): Query<PurchasesQuery>,
 ) -> Result<Json<PurchasesResponse>, ApiError> {
-    use sea_orm::sea_query::ExprTrait;
-    let sub = user.sub()?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
-    verify_sales_access(&state, &sub, &app_id).await?;
+    Ok(Json(purchases_page(&state, &app_id, query).await?))
+}
+
+/// One page of the app's purchases. Callers must verify access first.
+pub(super) async fn purchases_page(
+    state: &AppState,
+    app_id: &str,
+    query: PurchasesQuery,
+) -> Result<PurchasesResponse, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
 
     let limit = Ord::min(query.limit, 100);
 
     let mut query_builder =
-        app_purchase::Entity::find().filter(app_purchase::Column::AppId.eq(&app_id));
+        app_purchase::Entity::find().filter(app_purchase::Column::AppId.eq(app_id));
 
     // Filter by status if provided
     if let Some(status_str) = &query.status {
@@ -169,10 +177,10 @@ pub async fn list_purchases(
         })
         .collect();
 
-    Ok(Json(PurchasesResponse {
+    Ok(PurchasesResponse {
         purchases: purchase_items,
         total,
         offset: query.offset,
         limit,
-    }))
+    })
 }

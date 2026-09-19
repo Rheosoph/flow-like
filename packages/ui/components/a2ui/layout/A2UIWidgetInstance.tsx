@@ -175,7 +175,7 @@ export function useWidgetInstance(): WidgetInstanceContextValue | null {
 export type WidgetInstanceEventRoute =
 	| { kind: "actions"; actions: Action[] }
 	| { kind: "binding"; binding: ActionBinding }
-	| { kind: "diagnostic" };
+	| { kind: "unbound" };
 
 /**
  * Resolve a declarative widget event in compatibility order. Named handlers
@@ -196,13 +196,19 @@ export function resolveWidgetInstanceEventRoute(
 		return { kind: "actions", actions: named.actions };
 	}
 
-	const binding = widgetInstance?.actionBindings[actionId];
+	// Own keys only: an inherited name such as `constructor` must not pick up
+	// `Object` as a binding.
+	const bindings = widgetInstance?.actionBindings;
+	const binding =
+		bindings && Object.prototype.hasOwnProperty.call(bindings, actionId)
+			? bindings[actionId]
+			: undefined;
 	if (binding) return { kind: "binding", binding };
 
 	const legacyAction = widgetInstance?.actions?.[0];
 	if (legacyAction) return { kind: "actions", actions: [legacyAction] };
 
-	return { kind: "diagnostic" };
+	return { kind: "unbound" };
 }
 
 /**

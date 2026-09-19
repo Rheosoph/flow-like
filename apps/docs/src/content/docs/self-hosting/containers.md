@@ -15,12 +15,13 @@ production and retain it with the deployment configuration.
 
 Repository names follow `ghcr.io/<owner>/flow-like-<target>-<workload>`; the owner
 is the lowercased GitHub repository owner. Forks publish to their own namespace.
-The checked-in matrix contains 55 platform builds for 40 image repositories:
+The checked-in matrix contains 58 platform builds for 42 image repositories:
 
 | Target | Workloads | Platform |
 | --- | --- | --- |
 | AWS | API, compiler, file-tracker, media-transformer, event-bridge, maintenance, signaling, migration | ARM64 |
 | AWS | executor, executor-async | AMD64 |
+| AWS | api-ecs | AMD64 and ARM64 |
 | GCP | API, queue-worker, executor, signaling, migration, scheduler, maintenance | AMD64 |
 | Azure | API, queue-worker, executor, maintenance, scheduler, migration, signaling, otel-collector | AMD64 |
 | Docker Compose | API, runtime, compiler, execution-manager, sink-services, signaling, db-init, object-store-init, web | AMD64 and ARM64 |
@@ -38,7 +39,8 @@ set is published, the workflow combines both records of each self-hosted
 repository into one multi-architecture image index, so a Compose host or a
 mixed-architecture Kubernetes cluster pulls the index by tag or digest and
 receives the matching platform. Cloud repositories stay single-image manifests
-because Lambda rejects an index. See [Tags and visibility](#tags-and-visibility).
+because Lambda rejects an index. The AWS ECS API never runs on Lambda, so its two
+records become an index as well. See [Tags and visibility](#tags-and-visibility).
 
 The fifteen self-hosted packages are public: anyone can pull them without a
 registry login. Cloud packages (AWS, GCP, Azure) stay private to the owner
@@ -182,9 +184,9 @@ commit. The workflow requests the index annotations
 `org.opencontainers.image.revision`, `org.opencontainers.image.source` and
 `org.opencontainers.image.version`; an OCI index keeps them, while a Docker
 manifest list (produced when the pushed images use Docker media types) cannot
-carry annotations. The twenty-five cloud repositories are single-platform: the
-tags point at the image manifest itself, never at an index, because Lambda
-requires a single-image manifest. The workflow asserts this after every copy.
+carry annotations. Apart from the ECS API, the twenty-six cloud repositories are
+single-platform: the tags point at the image manifest itself, never at an index,
+because Lambda requires a single-image manifest. The workflow asserts this after every copy.
 The image config labels carry the revision and source for both kinds and are the
 fallback the guard reads.
 

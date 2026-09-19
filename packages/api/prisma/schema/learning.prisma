@@ -253,6 +253,7 @@ model Certificate {
   @@index([userId])
 
   @@index([courseId])
+  @@index([hash])
 }
 
 model LeaderboardOptIn {
@@ -261,6 +262,8 @@ model LeaderboardOptIn {
   isOptedIn   Boolean  @default(true)
   totalPoints Int      @default(0)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([isOptedIn, totalPoints, userId])
 }
 
 model WeeklyChallenge {

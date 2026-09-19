@@ -1,6 +1,5 @@
 import { useTranslation } from "@flow-like/locales";
 import { useReactFlow } from "@xyflow/react";
-import { ChevronDown } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useBackend } from "../../../..";
@@ -10,7 +9,6 @@ import {
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand } from "../../../../lib";
@@ -23,6 +21,7 @@ import {
 } from "../../../../lib/uint8";
 import type { IRemoteEvent } from "../../../../state/backend-state/types";
 import { useUndoRedo } from "../../flow-history";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 import { filterRemoteEventsForNode } from "./remote-event-filter";
 
 const REMOTE_APP_PIN_NAME = "_flow_remote_app_id";
@@ -235,11 +234,7 @@ export function RemoteEventSelect({
 	);
 
 	return (
-		<div
-			className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden"
-			onMouseDown={(e) => e.stopPropagation()}
-			onPointerDown={(e) => e.stopPropagation()}
-		>
+		<PinEditorRow>
 			<Select
 				disabled={!targetAppId}
 				open={open}
@@ -247,18 +242,13 @@ export function RemoteEventSelect({
 				value={selectedEventId || undefined}
 				onValueChange={(eventId) => void persistSelection(eventId)}
 			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<small className="text-start text-[10px] m-0! truncate">
-						{!targetAppId && t("selectAProjectFirst", "Select a project first")}
-						{targetAppId &&
-							(selectedEventLabel || selectedEventId || "Select event")}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
-				</SelectTrigger>
+				<PinSelectTrigger
+					label={
+						targetAppId
+							? selectedEventLabel || selectedEventId || "Select event"
+							: t("selectAProjectFirst", "Select a project first")
+					}
+				/>
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
@@ -309,6 +299,6 @@ export function RemoteEventSelect({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }

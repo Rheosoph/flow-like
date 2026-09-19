@@ -120,6 +120,27 @@ struct ModelCounts {
     updated_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
+#[derive(sea_orm::FromQueryResult)]
+struct ModelCountsRow {
+    app_id: String,
+    model_count: i64,
+    unvetted_model_count: i64,
+    drift_count: i64,
+    updated_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+}
+
+/// The scalar columns of an assessment the inventory listing reads; the
+/// questionnaire JSON stays in the database.
+#[derive(sea_orm::FromQueryResult)]
+struct AssessmentSummary {
+    app_id: String,
+    status: crate::entity::sea_orm_active_enums::AiActAssessmentStatus,
+    risk_category: crate::entity::sea_orm_active_enums::AiRiskCategory,
+    conformity_score: Option<i32>,
+    conformity_band: Option<String>,
+    updated_at: chrono::DateTime<chrono::FixedOffset>,
+}
+
 #[derive(Clone, Serialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryResponse {
@@ -191,10 +212,21 @@ async fn load_inventory_items(
     use sea_orm::sea_query::ExprTrait;
 
     let assessment_rows = ai_act_assessment::Entity::find()
+        .select_only()
+        .column_as(ai_act_assessment::Column::AppId, "app_id")
+        .column_as(ai_act_assessment::Column::Status, "status")
+        .column_as(ai_act_assessment::Column::RiskCategory, "risk_category")
+        .column_as(
+            ai_act_assessment::Column::ConformityScore,
+            "conformity_score",
+        )
+        .column_as(ai_act_assessment::Column::ConformityBand, "conformity_band")
+        .column_as(ai_act_assessment::Column::UpdatedAt, "updated_at")
         .order_by_desc(ai_act_assessment::Column::Version)
+        .into_model::<AssessmentSummary>()
         .all(&state.db)
         .await?;
-    let mut assessments: HashMap<String, ai_act_assessment::Model> = HashMap::new();
+    let mut assessments: HashMap<String, AssessmentSummary> = HashMap::new();
     for assessment in assessment_rows {
         assessments
             .entry(assessment.app_id.clone())
@@ -237,24 +269,49 @@ async fn load_inventory_items(
         .map(|agg| (agg.app_id.clone(), agg))
         .collect();
 
-    let observations = ai_act_model_observation::Entity::find()
+    let observation_count_if = |condition: sea_orm::sea_query::SimpleExpr| {
+        Expr::expr(Expr::case(
+            condition,
+            Expr::col(ai_act_model_observation::Column::Id),
+        ))
+        .count()
+    };
+    let model_counts: HashMap<String, ModelCounts> = ai_act_model_observation::Entity::find()
+        .select_only()
+        .column_as(ai_act_model_observation::Column::AppId, "app_id")
+        .column_as(
+            Expr::col(ai_act_model_observation::Column::Id).count(),
+            "model_count",
+        )
+        .column_as(
+            observation_count_if(ai_act_model_observation::Column::Vetted.eq(false)),
+            "unvetted_model_count",
+        )
+        .column_as(
+            observation_count_if(ai_act_model_observation::Column::DriftFlagged.eq(true)),
+            "drift_count",
+        )
+        .column_as(
+            Expr::col(ai_act_model_observation::Column::LastSeenAt).max(),
+            "updated_at",
+        )
+        .group_by(ai_act_model_observation::Column::AppId)
+        .into_model::<ModelCountsRow>()
         .all(&state.db)
-        .await?;
-    let mut model_counts: HashMap<String, ModelCounts> = HashMap::new();
-    for obs in &observations {
-        let entry = model_counts.entry(obs.app_id.clone()).or_default();
-        entry.model_count += 1;
-        if !obs.vetted {
-            entry.unvetted_model_count += 1;
-        }
-        if obs.drift_flagged {
-            entry.drift_count += 1;
-        }
-        entry.updated_at = Some(match entry.updated_at {
-            Some(current) => std::cmp::Ord::max(current, obs.last_seen_at),
-            None => obs.last_seen_at,
-        });
-    }
+        .await?
+        .into_iter()
+        .map(|row| {
+            (
+                row.app_id,
+                ModelCounts {
+                    model_count: row.model_count,
+                    unvetted_model_count: row.unvetted_model_count,
+                    drift_count: row.drift_count,
+                    updated_at: row.updated_at,
+                },
+            )
+        })
+        .collect();
 
     let mut app_ids: HashSet<String> = HashSet::new();
     app_ids.extend(assessments.keys().cloned());
@@ -357,15 +414,23 @@ async fn load_app_names(state: &AppState, app_ids: &[String]) -> HashMap<String,
     if app_ids.is_empty() {
         return names;
     }
-    // Best-effort: read the English meta name per app.
-    let metas = meta::Entity::find()
+    // Best-effort: read the English meta name per app, else any language.
+    let metas: Vec<(Option<String>, String, String)> = meta::Entity::find()
+        .select_only()
+        .column(meta::Column::AppId)
+        .column(meta::Column::Lang)
+        .column(meta::Column::Name)
         .filter(meta::Column::AppId.is_in(app_ids.to_vec()))
+        .into_tuple()
         .all(&state.db)
         .await
         .unwrap_or_default();
-    for m in metas {
-        if let Some(app_id) = m.app_id {
-            names.entry(app_id).or_insert(Some(m.name));
+    for (app_id, lang, name) in metas {
+        let Some(app_id) = app_id else {
+            continue;
+        };
+        if lang == "en" || !names.contains_key(&app_id) {
+            names.insert(app_id, Some(name));
         }
     }
     names
@@ -869,12 +934,68 @@ pub struct RegistryItem {
     pub observed_count: i64,
 }
 
-#[derive(Clone, Debug, sea_orm::FromQueryResult)]
+#[derive(Clone, Debug, Serialize, Deserialize, sea_orm::FromQueryResult)]
 struct ObservedRegistryModel {
     provider: Option<String>,
     model_id: String,
     observed_count: i64,
     last_seen_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+}
+
+const OBSERVED_USAGE_MODELS_CACHE_KEY: &str = "admin:ai-act:observed-usage-models";
+
+/// Provider/model pairs seen in the raw usage tables. Neither table has an
+/// index leading on `(provider, modelId)`, so both aggregates scan everything;
+/// the result is memoised in the short-lived response cache so refreshing the
+/// registry (e.g. after rating a model) does not rescan them.
+async fn observed_usage_models(state: &AppState) -> Result<Vec<ObservedRegistryModel>, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
+    if let Some(cached) =
+        state.get_cache::<Vec<ObservedRegistryModel>>(OBSERVED_USAGE_MODELS_CACHE_KEY)
+    {
+        return Ok(cached);
+    }
+
+    let (llm_models, embedding_models) = flow_like_types::tokio::join!(
+        llm_usage_tracking::Entity::find()
+            .select_only()
+            .column_as(llm_usage_tracking::Column::Provider, "provider")
+            .column_as(llm_usage_tracking::Column::ModelId, "model_id")
+            .column_as(
+                Expr::col(llm_usage_tracking::Column::Id).count(),
+                "observed_count",
+            )
+            .column_as(
+                Expr::col(llm_usage_tracking::Column::CreatedAt).max(),
+                "last_seen_at",
+            )
+            .group_by(llm_usage_tracking::Column::Provider)
+            .group_by(llm_usage_tracking::Column::ModelId)
+            .into_model::<ObservedRegistryModel>()
+            .all(&state.db),
+        embedding_usage_tracking::Entity::find()
+            .select_only()
+            .column_as(embedding_usage_tracking::Column::Provider, "provider")
+            .column_as(embedding_usage_tracking::Column::ModelId, "model_id")
+            .column_as(
+                Expr::col(embedding_usage_tracking::Column::Id).count(),
+                "observed_count",
+            )
+            .column_as(
+                Expr::col(embedding_usage_tracking::Column::CreatedAt).max(),
+                "last_seen_at",
+            )
+            .group_by(embedding_usage_tracking::Column::Provider)
+            .group_by(embedding_usage_tracking::Column::ModelId)
+            .into_model::<ObservedRegistryModel>()
+            .all(&state.db),
+    );
+
+    let mut models = llm_models?;
+    models.extend(embedding_models?);
+    state.set_cache(OBSERVED_USAGE_MODELS_CACHE_KEY.to_string(), &models);
+    Ok(models)
 }
 
 fn normalise_registry_provider(provider: Option<&str>) -> String {
@@ -1037,48 +1158,10 @@ pub async fn list_models(
         .all(&state.db)
         .await?;
 
-    let observed_llm_models = llm_usage_tracking::Entity::find()
-        .select_only()
-        .column_as(llm_usage_tracking::Column::Provider, "provider")
-        .column_as(llm_usage_tracking::Column::ModelId, "model_id")
-        .column_as(
-            Expr::col(llm_usage_tracking::Column::Id).count(),
-            "observed_count",
-        )
-        .column_as(
-            Expr::col(llm_usage_tracking::Column::CreatedAt).max(),
-            "last_seen_at",
-        )
-        .group_by(llm_usage_tracking::Column::Provider)
-        .group_by(llm_usage_tracking::Column::ModelId)
-        .into_model::<ObservedRegistryModel>()
-        .all(&state.db)
-        .await?;
-
-    let observed_embedding_models = embedding_usage_tracking::Entity::find()
-        .select_only()
-        .column_as(embedding_usage_tracking::Column::Provider, "provider")
-        .column_as(embedding_usage_tracking::Column::ModelId, "model_id")
-        .column_as(
-            Expr::col(embedding_usage_tracking::Column::Id).count(),
-            "observed_count",
-        )
-        .column_as(
-            Expr::col(embedding_usage_tracking::Column::CreatedAt).max(),
-            "last_seen_at",
-        )
-        .group_by(embedding_usage_tracking::Column::Provider)
-        .group_by(embedding_usage_tracking::Column::ModelId)
-        .into_model::<ObservedRegistryModel>()
-        .all(&state.db)
-        .await?;
+    let usage_models = observed_usage_models(&state).await?;
 
     let mut observed_by_key: HashMap<(String, String), ObservedRegistryModel> = HashMap::new();
-    for model in observed_models
-        .into_iter()
-        .chain(observed_llm_models)
-        .chain(observed_embedding_models)
-    {
+    for model in observed_models.into_iter().chain(usage_models) {
         merge_observed_registry_model(&mut observed_by_key, model);
     }
 

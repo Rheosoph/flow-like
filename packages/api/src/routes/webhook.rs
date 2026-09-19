@@ -1,4 +1,4 @@
-use crate::{error::ApiError, state::AppState};
+use crate::{audit::service::AuditEntryInput, error::ApiError, state::AppState};
 use axum::{
     body::Bytes,
     extract::State,
@@ -9,6 +9,8 @@ use flow_like_secrets::{ExposeSecret, SecretRef};
 use flow_like_types::anyhow;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use stripe::{Event, EventObject, EventType, Webhook};
+
+const STRIPE_ACTOR: &str = "system:stripe";
 
 #[tracing::instrument(name = "POST /webhook/stripe", skip(state, headers, payload))]
 pub async fn stripe_webhook(
@@ -194,6 +196,19 @@ async fn handle_checkout_completed(
 
         active.update(&state.db).await?;
 
+        crate::audit::record_entry(
+            state,
+            AuditEntryInput::system(
+                STRIPE_ACTOR,
+                "solution.deposit.paid",
+                "SolutionRequest",
+                &submission_id,
+                "Solution deposit paid",
+            )
+            .with_details(serde_json::json!({ "stripe_session_id": session_id })),
+        )
+        .await;
+
         tracing::info!(
             submission_id = %submission_id,
             "Solution request updated: paid_deposit=true, status=PENDING_REVIEW"
@@ -344,6 +359,24 @@ async fn handle_app_purchase_completed(
     };
 
     new_membership.insert(&state.db).await?;
+
+    crate::audit::record_entry(
+        state,
+        AuditEntryInput::system(
+            STRIPE_ACTOR,
+            "membership.purchase",
+            "membership",
+            user_id,
+            "Membership granted by purchase",
+        )
+        .on_chain(app_id)
+        .with_details(serde_json::json!({
+            "membership_id": membership_id,
+            "purchase_id": purchase_id,
+            "stripe_session_id": session_id,
+        })),
+    )
+    .await;
 
     tracing::info!(
         membership_id = %membership_id,
@@ -515,6 +548,24 @@ async fn handle_wasm_purchase_completed(
 
     // Invalidate permission cache
     state.invalidate_wasm_permission(user_id, package_id);
+
+    crate::audit::record_entry(
+        state,
+        AuditEntryInput::system(
+            STRIPE_ACTOR,
+            "registry.access.purchase",
+            "WasmPackage",
+            package_id,
+            "Package access granted by purchase",
+        )
+        .on_chain(package_id)
+        .with_details(serde_json::json!({
+            "user_id": user_id,
+            "purchase_id": purchase_id,
+            "stripe_session_id": session_id,
+        })),
+    )
+    .await;
 
     tracing::info!(
         access_id = %access_id,

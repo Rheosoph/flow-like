@@ -12,8 +12,9 @@ import {
 	Shield,
 	XCircle,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { formatAbsoluteDateValue } from "../../lib";
+import { readManifestWidgets } from "../../lib/package-widgets";
 import type {
 	AdminPackageDetailResponse,
 	PackageAdminStatus,
@@ -49,6 +50,7 @@ import {
 	TabsTrigger,
 	Textarea,
 } from "../ui";
+import { WidgetCapabilitiesCard } from "./widget-network-access";
 
 const statusBadgeVariant: Record<
 	PackageAdminStatus,
@@ -211,6 +213,7 @@ export function AdminPackageDetailView({
 
 	const pkg = packageDetail?.package;
 	const reviews = packageDetail?.reviews ?? [];
+	const widgets = useMemo(() => readManifestWidgets(pkg), [pkg]);
 
 	if (isLoading) {
 		return (
@@ -383,7 +386,7 @@ export function AdminPackageDetailView({
 							</Card>
 						</TabsContent>
 
-						<TabsContent value="permissions" className="mt-4">
+						<TabsContent value="permissions" className="mt-4 space-y-4">
 							<Card>
 								<CardHeader>
 									<CardTitle>
@@ -402,6 +405,7 @@ export function AdminPackageDetailView({
 									</pre>
 								</CardContent>
 							</Card>
+							<WidgetCapabilitiesCard widgets={widgets} />
 						</TabsContent>
 
 						<TabsContent value="nodes" className="mt-4">

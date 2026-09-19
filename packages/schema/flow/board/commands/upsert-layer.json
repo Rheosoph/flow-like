@@ -311,6 +311,10 @@
 				"receiver": {
 					"description": "Name of the data input pin that receives the value in FlowScript method form (`s` in `s.trim()`).\nPresentation only. Absent applies the default rule; an empty string opts out (static only).",
 					"type": ["string", "null"]
+				},
+				"pins_collapsed": {
+					"description": "The editor hides this node's unconnected data pins behind its latch. Presentation only; execution never reads it.",
+					"type": ["boolean", "null"]
 				}
 			},
 			"required": [

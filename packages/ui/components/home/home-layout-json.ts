@@ -2,6 +2,7 @@ import { appBuildFingerprint } from "../../lib/app-build/fingerprint";
 import {
 	MAX_HOME_LAYOUT_BYTES,
 	MAX_HOME_WIDGETS,
+	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
 	homeLayoutByteLength,
 	normalizeHomeLayout,
 } from "./home-layout";
@@ -76,6 +77,11 @@ function persistenceError(layout: IHomeLayout) {
 				`${prefix} appearance accent`,
 				128,
 				true,
+			) ??
+			textLimitError(
+				widget.appearance.className,
+				`${prefix} appearance className`,
+				MAX_HOME_WIDGET_CLASS_NAME_BYTES,
 			);
 		if (widgetError) return widgetError;
 	}

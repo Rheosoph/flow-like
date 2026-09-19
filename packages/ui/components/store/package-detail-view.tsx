@@ -91,6 +91,7 @@ import { PackageMetaTab } from "./package-meta-tab";
 import { PackageReviewsTab } from "./package-reviews-tab";
 import { PackageUsersContainer } from "./package-users-container";
 import { WidgetCardGrid } from "./widget-card";
+import { WidgetNetworkAccessCard } from "./widget-network-access";
 
 function PermissionBadge({
 	label,
@@ -1475,6 +1476,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								)}
 							</CardContent>
 						</Card>
+
+						<WidgetNetworkAccessCard widgets={widgets} />
 					</TabsContent>
 
 					<TabsContent value="versions" className="space-y-4">

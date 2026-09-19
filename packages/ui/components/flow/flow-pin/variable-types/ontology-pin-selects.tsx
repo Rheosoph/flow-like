@@ -1,6 +1,6 @@
 import { useTranslation } from "@flow-like/locales";
 import { useReactFlow, useStore } from "@xyflow/react";
-import { ChevronDown, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useBackend } from "../../../..";
@@ -10,7 +10,6 @@ import {
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand, upsertLayerCommand } from "../../../../lib";
@@ -27,6 +26,7 @@ import type {
 	RemoteOntologyImport,
 } from "../../../../state/backend-state/graph-state";
 import { useUndoRedo } from "../../flow-history";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 
 // ─── Shared helpers ───
 
@@ -375,11 +375,7 @@ function CompactSelect({
 	open?: boolean;
 }>) {
 	return (
-		<div
-			className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden"
-			onMouseDown={(event) => event.stopPropagation()}
-			onPointerDown={(event) => event.stopPropagation()}
-		>
+		<PinEditorRow>
 			<Select
 				disabled={disabled}
 				open={open}
@@ -387,16 +383,7 @@ function CompactSelect({
 				value={value || undefined}
 				onValueChange={onChange}
 			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<small className="text-start text-[10px] m-0! truncate">
-						{value || placeholder}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
-				</SelectTrigger>
+				<PinSelectTrigger label={value || placeholder} />
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{label}</SelectLabel>
@@ -404,7 +391,7 @@ function CompactSelect({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }
 

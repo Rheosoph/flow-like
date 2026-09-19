@@ -153,8 +153,7 @@ pub fn filter_excluded(
     rows
 }
 
-/// Keep the newest row per `run_id` — a double `LogMeta::flush` writes the
-/// same run twice into the runs table.
+/// Keep the newest row per `run_id` — a run recorded twice can surface twice.
 pub fn dedupe_by_run_id(mut rows: Vec<CorpusCandidate>) -> Vec<CorpusCandidate> {
     sort_newest_first(&mut rows);
     let mut seen = HashSet::with_capacity(rows.len());

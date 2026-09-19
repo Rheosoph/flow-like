@@ -6,21 +6,18 @@ use flow_like::{
             Event, ReleaseNotes, RestoreIssueSeverity, RestoreOptions, RestorePlan,
             filter_event_secrets,
         },
-        execution::LogMeta,
+        execution::{LogMeta, run_index::RunQuery},
         oauth::OAuthToken,
     },
-    flow_like_storage::{
-        lancedb::query::{ExecutableQuery, QueryBase, Select},
-        serde_arrow,
-    },
 };
-use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
-use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
+use crate::{
+    event_sink::EventSinkManager, functions::TauriFunctionError, state::TauriFlowLikeState,
+};
 
 /// Bound on how many archived versions one response projects, matching the
 /// API endpoint. Listings past it set `truncated`.
@@ -28,27 +25,6 @@ const TIMELINE_VERSION_CAP: usize = 200;
 const DEFAULT_RUNS_LIMIT: u64 = 100;
 /// Hard cap on one page of merged run summaries, matching the API endpoint.
 const MAX_RUNS_LIMIT: u64 = 200;
-/// Bound on how many `(run_id, start)` ordering rows one board contributes.
-/// The Lance query API cannot sort, so ordering rows are fetched narrow (two
-/// columns) and sorted in-process; a board past this cap cannot page deeper.
-const RUNS_ORDER_SCAN_CAP: usize = 50_000;
-
-/// Every `StoredLogMeta` column except `payload` — run inputs never leave the
-/// log store through this listing.
-const SUMMARY_COLUMNS: &[&str] = &[
-    "app_id",
-    "run_id",
-    "board_id",
-    "start",
-    "end",
-    "log_level",
-    "version",
-    "nodes",
-    "logs",
-    "node_id",
-    "event_version",
-    "event_id",
-];
 
 /// Wire twin of the API's `GET /apps/{app_id}/events/{event_id}/timeline`
 /// response. Field names and serde casing must stay identical so the UI
@@ -69,8 +45,8 @@ pub struct EventTimelineResponse {
 #[derive(Serialize, Debug, Clone)]
 pub struct EventTimelineEntry {
     pub version: (u32, u32, u32),
-    /// Dotted `MAJOR.MINOR.PATCH` — the same format the Lance `runs` table
-    /// stores in `event_version`, so runs group against entries by this key.
+    /// Dotted `MAJOR.MINOR.PATCH` — the same format the run index stores in
+    /// `event_version`, so runs group against entries by this key.
     pub version_key: String,
     pub is_live: bool,
     pub name: String,
@@ -103,66 +79,21 @@ pub struct EventTimelineEntry {
 #[derive(Serialize, Debug, Clone)]
 pub struct EventRunsResponse {
     pub runs: Vec<LogMeta>,
-    /// Boards whose Lance `runs` tables were successfully queried.
+    /// Every validated board the run index was queried for.
     pub boards_queried: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct RunOrderRow {
-    run_id: String,
-    start: u64,
-}
-
-/// `StoredLogMeta` minus `payload`, matching [`SUMMARY_COLUMNS`].
-#[derive(Deserialize)]
-struct RunSummaryRow {
-    app_id: String,
-    run_id: String,
-    board_id: String,
-    start: u64,
-    end: u64,
-    log_level: u8,
-    version: String,
-    nodes: Option<Vec<(String, u8)>>,
-    logs: Option<u64>,
-    node_id: String,
-    event_version: Option<String>,
-    event_id: String,
-}
-
-impl From<RunSummaryRow> for LogMeta {
-    fn from(row: RunSummaryRow) -> Self {
-        LogMeta {
-            app_id: row.app_id,
-            run_id: row.run_id,
-            board_id: row.board_id,
-            start: row.start,
-            end: row.end,
-            log_level: row.log_level,
-            version: row.version,
-            nodes: row.nodes,
-            logs: row.logs,
-            node_id: row.node_id,
-            event_version: row.event_version,
-            event_id: row.event_id,
-            payload: Vec::new(),
-            is_remote: false,
-        }
-    }
-}
-
 /// Dotted `MAJOR.MINOR.PATCH` — the one event-version key format, shared by
-/// timeline entries and the Lance `runs` table's `event_version` column. The
-/// board `version` column in the same table uses `v{major}-{minor}-{patch}`;
-/// mixing the two silently breaks version grouping.
+/// timeline entries and the run index's `event_version` column. The board
+/// `version` column in the same index uses `v{major}-{minor}-{patch}`; mixing
+/// the two silently breaks version grouping.
 fn dotted_version_key(version: (u32, u32, u32)) -> String {
     format!("{}.{}.{}", version.0, version.1, version.2)
 }
 
-/// Ids are inlined into Lance filter strings, so only `create_id()`-shaped
-/// values may pass. In LanceDB `only_if`, a double-quoted value is a COLUMN
-/// reference — string literals are single-quoted — so any id that could close
-/// a quote must never reach the filter.
+/// Ids name log-store paths and per-run tables, so only `create_id()`-shaped
+/// values may pass; anything that could escape a path segment or a quoted
+/// filter literal never reaches storage.
 pub(crate) fn is_safe_id(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -372,10 +303,10 @@ pub async fn get_event_timeline(
 }
 
 /// Run telemetry for an event across the boards its timeline touched, read
-/// from the local Lance `runs` tables. Mirrors the API endpoint's semantics:
-/// callers feed `board_ids` from the timeline's `boards` (falling back to the
-/// live event's board when absent), every interpolated id is allowlisted and
-/// validated against the app, and results merge newest-first across boards.
+/// from the local run index. Mirrors the API endpoint's semantics: callers
+/// feed `board_ids` from the timeline's `boards` (falling back to the live
+/// event's board when absent), every id is allowlisted and validated against
+/// the app, and results come back newest-first across boards.
 #[tauri::command(async)]
 pub async fn list_event_runs(
     handler: AppHandle,
@@ -434,153 +365,22 @@ pub async fn list_event_runs(
         }
     }
 
-    let event_filter = format!("event_id = '{event_id}'");
-    let mut boards_queried: Vec<String> = Vec::new();
-    let mut tables: Vec<(String, flow_like::flow_like_storage::lancedb::Table)> = Vec::new();
-    // (table index, run_id, start) across every queried board.
-    let mut order_rows: Vec<(usize, String, u64)> = Vec::new();
-
-    // Per-board failures skip that board rather than failing the listing —
-    // one board with an unreadable log store must not hide the others.
-    for board_id in &board_ids {
-        let db = match super::run::open_runs_db(&flow_like_state, &app_id, board_id).await {
-            Ok(db) => db,
-            Err(error) => {
-                tracing::warn!(%error, board_id = %board_id, "Failed to open runs database for board; skipping");
-                continue;
-            }
-        };
-        let table_names = match db.table_names().execute().await {
-            Ok(names) => names,
-            Err(error) => {
-                tracing::warn!(%error, board_id = %board_id, "Failed to list run tables for board; skipping");
-                continue;
-            }
-        };
-        if !table_names.iter().any(|name| name == "runs") {
-            // No run has ever flushed for this board — queried, zero rows.
-            boards_queried.push(board_id.clone());
-            continue;
-        }
-        let table = match db.open_table("runs").execute().await {
-            Ok(table) => table,
-            Err(error) => {
-                tracing::warn!(%error, board_id = %board_id, "Failed to open runs table for board; skipping");
-                continue;
-            }
-        };
-        let batches = match table
-            .query()
-            .only_if(&event_filter)
-            .select(Select::columns(&["run_id", "start"]))
-            .limit(RUNS_ORDER_SCAN_CAP)
-            .execute()
-            .await
-        {
-            Ok(stream) => stream.try_collect::<Vec<_>>().await,
-            Err(error) => Err(error),
-        };
-        let batches = match batches {
-            Ok(batches) => batches,
-            Err(error) => {
-                tracing::warn!(%error, board_id = %board_id, "Failed to query runs for board; skipping");
-                continue;
-            }
-        };
-
-        let table_index = tables.len();
-        for batch in &batches {
-            let rows: Vec<RunOrderRow> = serde_arrow::from_record_batch(batch).unwrap_or_default();
-            order_rows.extend(
-                rows.into_iter()
-                    .map(|row| (table_index, row.run_id, row.start)),
-            );
-        }
-        tables.push((board_id.clone(), table));
-        boards_queried.push(board_id.clone());
-    }
-
-    // Dedupe by run id (a double flush keeps the newest row), newest first.
-    let mut newest_by_run: HashMap<String, (usize, u64)> = HashMap::new();
-    for (table_index, run_id, start) in order_rows {
-        match newest_by_run.get(&run_id) {
-            Some((_, existing)) if *existing >= start => {}
-            _ => {
-                newest_by_run.insert(run_id, (table_index, start));
-            }
-        }
-    }
-    let mut ordered: Vec<(String, usize, u64)> = newest_by_run
-        .into_iter()
-        .map(|(run_id, (table_index, start))| (run_id, table_index, start))
-        .collect();
-    ordered.sort_unstable_by(|a, b| b.2.cmp(&a.2).then_with(|| b.0.cmp(&a.0)));
-
-    let page: Vec<(String, usize)> = ordered
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .map(|(run_id, table_index, _)| (run_id, table_index))
-        .collect();
-
-    // Second pass: fetch the page's full summaries per board. Run ids come
-    // out of the log store, so they pass the same allowlist before being
-    // inlined into the filter.
-    let mut ids_by_table: HashMap<usize, Vec<&str>> = HashMap::new();
-    for (run_id, table_index) in &page {
-        if is_safe_id(run_id) {
-            ids_by_table
-                .entry(*table_index)
-                .or_default()
-                .push(run_id.as_str());
-        }
-    }
-
-    let mut summaries: HashMap<String, LogMeta> = HashMap::new();
-    for (table_index, ids) in ids_by_table {
-        let (board_id, table) = &tables[table_index];
-        let filter = format!(
-            "run_id IN ({})",
-            ids.iter()
-                .map(|id| format!("'{id}'"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        let batches = match table
-            .query()
-            .only_if(&filter)
-            .select(Select::columns(SUMMARY_COLUMNS))
-            .limit(ids.len())
-            .execute()
-            .await
-        {
-            Ok(stream) => stream.try_collect::<Vec<_>>().await,
-            Err(error) => Err(error),
-        };
-        let batches = match batches {
-            Ok(batches) => batches,
-            Err(error) => {
-                tracing::warn!(%error, board_id = %board_id, "Failed to load run summaries for board");
-                continue;
-            }
-        };
-        for batch in &batches {
-            let rows: Vec<RunSummaryRow> =
-                serde_arrow::from_record_batch(batch).unwrap_or_default();
-            for row in rows {
-                summaries.insert(row.run_id.clone(), LogMeta::from(row));
-            }
-        }
-    }
-
-    let runs: Vec<LogMeta> = page
-        .into_iter()
-        .filter_map(|(run_id, _)| summaries.remove(&run_id))
-        .collect();
+    let index = crate::run_index::registered_run_index(&flow_like_state).await?;
+    let runs = index
+        .list(&RunQuery {
+            app_id,
+            board_ids: board_ids.clone(),
+            event_id: Some(event_id),
+            limit,
+            offset,
+            include_nodes: true,
+            ..RunQuery::default()
+        })
+        .await?;
 
     Ok(EventRunsResponse {
         runs,
-        boards_queried,
+        boards_queried: board_ids,
     })
 }
 
@@ -644,6 +444,50 @@ pub async fn get_events(
     Err(TauriFunctionError::new("Events not found"))
 }
 
+/// How a save treats the event's trigger on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SinkRegistration {
+    /// The user approved the trigger: register it, or refresh an existing one.
+    Register,
+    /// The user declined the trigger: remove it, keeping its credentials.
+    Skip,
+    /// Refresh an existing registration only, never create one. The default,
+    /// so cache mirrors and other unattended saves cannot start a trigger.
+    Keep,
+}
+
+/// Applies `mode` for the saved `event`. `pat` and `oauth_tokens` merge into
+/// the registration's stored credentials.
+async fn sync_local_sink(
+    handler: &AppHandle,
+    app_id: &str,
+    event: &Event,
+    offline: Option<bool>,
+    pat: Option<String>,
+    oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    mode: SinkRegistration,
+) -> anyhow::Result<()> {
+    let manager_state = crate::state::TauriEventSinkManagerState::construct(handler).await?;
+    let manager = manager_state.lock().await;
+    match mode {
+        SinkRegistration::Register => {
+            manager
+                .register_from_flow_event(handler, app_id, event, offline, pat, oauth_tokens)
+                .await
+        }
+        SinkRegistration::Keep => {
+            if manager.get_registration(&event.id)?.is_none() {
+                return Ok(());
+            }
+            manager
+                .register_from_flow_event(handler, app_id, event, offline, pat, oauth_tokens)
+                .await
+        }
+        SinkRegistration::Skip => manager.decline_local_registration(handler, &event.id).await,
+    }
+}
+
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_event(
@@ -655,6 +499,7 @@ pub async fn upsert_event(
     offline: Option<bool>,
     pat: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    register_sink: Option<SinkRegistration>,
 ) -> Result<Event, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
@@ -671,48 +516,23 @@ pub async fn upsert_event(
         }
         let event = app.upsert_event(event, version_type, enforce_id).await?;
 
-        // Automatically register/update the event with the sink manager if applicable
-        match crate::state::TauriEventSinkManagerState::construct(&handler).await {
-            Ok(event_sink_manager) => {
-                let manager = event_sink_manager.lock().await;
-                if let Err(e) = manager
-                    .register_from_flow_event(&handler, &app_id, &event, offline, pat, oauth_tokens)
-                    .await
-                {
-                    println!(
-                        "Failed to auto-register event {} with sink manager: {}",
-                        event.id, e
-                    );
-                    tracing::warn!(
-                        "Failed to auto-register event {} with sink manager: {}",
-                        event.id,
-                        e
-                    );
-                    if event.event_type == "geolocation" {
-                        return Err(TauriFunctionError::new(&format!(
-                            "Location Event was saved, but device monitoring could not be updated: {e}"
-                        )));
-                    }
-                }
-            }
-            Err(e) => {
-                println!(
-                    "EventSinkManager not available (may still be initializing): {}",
-                    e
-                );
-                tracing::warn!(
-                    "EventSinkManager not available (may still be initializing): {}",
-                    e
-                );
-                tracing::warn!(
-                    "Event {} will need to be registered with sink manager later",
-                    event.id
-                );
-                if event.event_type == "geolocation" {
-                    return Err(TauriFunctionError::new(&format!(
-                        "Location Event was saved, but device monitoring is unavailable: {e}"
-                    )));
-                }
+        let mode = register_sink.unwrap_or(SinkRegistration::Keep);
+        if let Err(e) =
+            sync_local_sink(&handler, &app_id, &event, offline, pat, oauth_tokens, mode).await
+        {
+            println!(
+                "Failed to update sink registration of event {}: {}",
+                event.id, e
+            );
+            tracing::warn!(
+                "Failed to update sink registration of event {}: {}",
+                event.id,
+                e
+            );
+            if event.event_type == "geolocation" {
+                return Err(TauriFunctionError::new(&format!(
+                    "Location Event was saved, but device monitoring could not be updated: {e}"
+                )));
             }
         }
 
@@ -720,6 +540,46 @@ pub async fn upsert_event(
     }
 
     Err(TauriFunctionError::new("Failed to upsert event"))
+}
+
+/// What saving `event` does to this device's triggers, so the UI can ask
+/// before a new one starts running here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalSinkPlan {
+    /// Nothing registers locally: unsupported type, inactive, Remote, or a
+    /// remote-only sink.
+    None,
+    /// A registration of the same trigger type exists; saving refreshes it.
+    Existing,
+    /// A trigger would start on this device, for the first time or with a
+    /// new type.
+    New,
+}
+
+#[tauri::command(async)]
+pub async fn local_sink_registration_plan(
+    handler: AppHandle,
+    app_id: String,
+    mut event: Event,
+) -> Result<LocalSinkPlan, TauriFunctionError> {
+    // Saving reconciles the execution mode with the board, so a stale client
+    // copy must not decide whether the user is asked.
+    if let Ok(state) = TauriFlowLikeState::construct(&handler).await
+        && let Ok(app) = App::load(app_id, state).await
+    {
+        let _ = event.reconcile_execution_mode_with_board(&app).await;
+    }
+    if EventSinkManager::local_registration_blocker(&event).is_some() {
+        return Ok(LocalSinkPlan::None);
+    }
+
+    let manager_state = crate::state::TauriEventSinkManagerState::construct(&handler).await?;
+    let existing = manager_state.lock().await.get_registration(&event.id)?;
+    Ok(match existing {
+        Some(registration) if registration.r#type == event.event_type => LocalSinkPlan::Existing,
+        _ => LocalSinkPlan::New,
+    })
 }
 
 /// Wire twin of the API's `POST /apps/{app_id}/events/{event_id}/restore`
@@ -757,6 +617,7 @@ pub async fn restore_event(
     drop_canary: Option<bool>,
     accept_blank_secrets: Option<bool>,
     offline: Option<bool>,
+    register_sink: Option<SinkRegistration>,
 ) -> Result<RestoreEventResponse, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let mut app = App::load(app_id.clone(), flow_like_state)
@@ -812,35 +673,21 @@ pub async fn restore_event(
 
     // Mirror of the upsert command's sink sync, with pat/oauth None so the
     // stored PAT and tokens survive the restore. Forward-only: a failed
-    // re-registration never rolls the restore back. No archive prune on
+    // sink update never rolls the restore back. No archive prune on
     // desktop — history here is the user's disk.
-    let setup_status = match crate::state::TauriEventSinkManagerState::construct(&handler).await {
-        Ok(event_sink_manager) => {
-            let manager = event_sink_manager.lock().await;
-            match manager
-                .register_from_flow_event(&handler, &app_id, &event, offline, None, None)
-                .await
-            {
-                Ok(()) => None,
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to re-register event {} with sink manager after restore: {}",
-                        event.id,
-                        e
-                    );
-                    Some(format!("error: {e}"))
-                }
+    let mode = register_sink.unwrap_or(SinkRegistration::Keep);
+    let setup_status =
+        match sync_local_sink(&handler, &app_id, &event, offline, None, None, mode).await {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to update sink registration of event {} after restore: {}",
+                    event.id,
+                    e
+                );
+                Some(format!("error: {e}"))
             }
-        }
-        Err(e) => {
-            tracing::warn!(
-                "EventSinkManager not available after restoring event {}: {}",
-                event.id,
-                e
-            );
-            Some(format!("error: {e}"))
-        }
-    };
+        };
 
     plan.restored = filter_event_secrets(plan.restored);
     Ok(RestoreEventResponse {
@@ -911,10 +758,10 @@ pub async fn validate_event(
 mod tests {
     use super::*;
 
-    /// `StoredLogMeta.event_version` is dotted `major.minor.patch`, while the
-    /// board `version` column is `v{major}-{minor}-{patch}`. `version_key` and
-    /// every Lance event-version filter must use the dotted form — this fails
-    /// if the two formats are ever swapped.
+    /// `LogMeta.event_version` is dotted `major.minor.patch`, while the board
+    /// `version` column is `v{major}-{minor}-{patch}`. `version_key` and every
+    /// event-version filter must use the dotted form — this fails if the two
+    /// formats are ever swapped.
     #[test]
     fn version_key_uses_the_dotted_event_format_not_the_board_format() {
         assert_eq!(dotted_version_key((1, 2, 3)), "1.2.3");

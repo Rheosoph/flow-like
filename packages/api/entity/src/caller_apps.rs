@@ -26,7 +26,8 @@ pub fn caller_app_rows(
 }
 
 /// Inserts the run and its caller-app rows in one transaction so the mirror
-/// can never lag behind the chain column.
+/// can never lag behind the chain column. A run without a chain has no mirror
+/// rows, so it is a single autocommit insert.
 pub async fn insert_run_with_caller_apps(
     db: &DatabaseConnection,
     run: execution_run::ActiveModel,
@@ -35,14 +36,14 @@ pub async fn insert_run_with_caller_apps(
         ActiveValue::Set(Some(chain)) | ActiveValue::Unchanged(Some(chain)) => chain.0.clone(),
         _ => Vec::new(),
     };
+    if chain.is_empty() {
+        return run.insert(db).await;
+    }
     let txn = db.begin().await?;
     let model = run.insert(&txn).await?;
-    let rows = caller_app_rows(&model.id, &chain);
-    if !rows.is_empty() {
-        execution_run_caller_app::Entity::insert_many(rows)
-            .exec(&txn)
-            .await?;
-    }
+    execution_run_caller_app::Entity::insert_many(caller_app_rows(&model.id, &chain))
+        .exec(&txn)
+        .await?;
     txn.commit().await?;
     Ok(model)
 }

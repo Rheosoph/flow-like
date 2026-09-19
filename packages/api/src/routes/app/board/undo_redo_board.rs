@@ -6,7 +6,7 @@ use crate::{
     routes::app::{
         board::{scoring::save_board_and_refresh_summary, sync_board::seed_board_revision},
         wasm_catalog::{
-            app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+            app_wasm_nodes_cached, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
         },
     },
     state::AppState,
@@ -67,12 +67,12 @@ pub async fn undo_board(
             "No app state found for board"
         )))?
         .clone();
-    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    let wasm = app_wasm_nodes_cached(&state, &app_id).await?;
     let builtin_nodes = state.registry.as_ref().get_nodes_shared();
-    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+    if hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes) {
         board.mark_changed();
     }
-    sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
+    sanitize_wasm_command_metadata(&mut params.commands, &wasm.nodes, &builtin_nodes)?;
 
     let command_count = params.commands.len();
     board.undo(params.commands, flow_state.clone()).await?;
@@ -139,12 +139,12 @@ pub async fn redo_board(
             "No app state found for board"
         )))?
         .clone();
-    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    let wasm = app_wasm_nodes_cached(&state, &app_id).await?;
     let builtin_nodes = state.registry.as_ref().get_nodes_shared();
-    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+    if hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes) {
         board.mark_changed();
     }
-    sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
+    sanitize_wasm_command_metadata(&mut params.commands, &wasm.nodes, &builtin_nodes)?;
 
     let command_count = params.commands.len();
     board.redo(params.commands, flow_state.clone()).await?;

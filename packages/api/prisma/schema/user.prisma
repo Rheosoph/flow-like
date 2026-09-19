@@ -66,6 +66,7 @@ model User {
 
   // User search resolves a pasted address exactly before it falls back to a scan.
   @@index([email])
+  @@index([createdAt])
 }
 
 model Profile {
@@ -389,7 +390,7 @@ model ExecutionEvent {
   /// to keep in the row; `payload` then holds a marked placeholder
   payloadRef String?
 
-  @@index([runId, delivered, sequence])
+  @@index([runId, sequence])
   @@index([expiresAt])
 }
 
@@ -471,6 +472,15 @@ model ExecutionRun {
   /// REGRESSION runs only: the suite run that scheduled this replay
   regressionRunId String?
 
+  /// Run summary reported by the executor on completion. NULL means the
+  /// executor never reported it (older senders), not an empty run.
+  /// Dotted `MAJOR.MINOR.PATCH` of the event that triggered the run
+  eventVersion String?
+  /// Visited nodes with their highest log level: `[["node_id", level], …]`
+  nodes        Json?
+  /// Number of log messages the run wrote
+  logsCount    BigInt?
+
   /// Streaming events for this run
   events ExecutionEvent[]
 
@@ -479,7 +489,9 @@ model ExecutionRun {
 
   @@index([appId, status])
   @@index([userId, status])
-  @@index([boardId])
+  @@index([boardId, createdAt])
+  @@index([eventId, createdAt, id])
+  @@index([status])
   @@index([expiresAt])
   @@index([parentRunId])
   @@index([traceId])

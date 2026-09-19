@@ -46,7 +46,7 @@ impl NodeLogic for RerouteNode {
         let input = match node.get_pin_by_name("route_in") {
             Some(pin) => pin,
             None => {
-                println!("Input Reroute pin not found");
+                tracing::warn!("Input Reroute pin not found");
                 return;
             }
         }
@@ -55,7 +55,7 @@ impl NodeLogic for RerouteNode {
         let output = match node.get_pin_by_name("route_out") {
             Some(pin) => pin,
             None => {
-                println!("Output Reroute pin not found");
+                tracing::warn!("Output Reroute pin not found");
                 return;
             }
         }

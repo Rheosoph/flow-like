@@ -7,7 +7,6 @@ use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{InternalRun, LogMeta, UserExecutionContext};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::flow_like_storage::Path;
 use flow_like::hub::Hub;
 use flow_like::state::RunData;
 use flow_like::{flow::execution::RunPayload, state::FlowLikeState};
@@ -324,47 +323,14 @@ impl EventBusEvent {
             }
         };
 
-        let app_id = self.app_id.clone();
-
         if let Err(err) = buffered_sender.flush().await {
             println!("Error flushing buffered sender: {}", err);
         }
 
-        let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
-            let (db_fn, write_options) = {
-                let guard = execution_state.config.read().await;
-                (
-                    guard.callbacks.build_logs_database.clone(),
-                    guard.callbacks.lance_write_options.clone(),
-                )
-            };
-            async {
-                let db_fn = db_fn
-                    .as_ref()
-                    .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-                let base_path = Path::from("runs").join(app_id).join(board_id);
-                let db = execution_state
-                    .with_lance_session(db_fn(base_path.clone()))
-                    .execute()
-                    .await
-                    .map_err(|e| {
-                        flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-                    })?;
-                meta.flush(db, write_options.as_ref()).await.map_err(|e| {
-                    flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
-                })?;
-                Ok(())
-            }
-            .await
-        } else {
-            Ok(())
-        };
-
-        // Always release the finished run from the registry, even if flushing
-        // its logs failed. Otherwise the run stays flagged "in use" and its
-        // logs can never be deleted from storage management until restart.
+        // Release the finished run from the registry; otherwise it stays
+        // flagged "in use" and its logs can never be deleted from storage
+        // management until restart.
         let _res = flow_like_state.remove_and_cancel_run(&run_id);
-        flush_result?;
 
         Ok(meta)
     }

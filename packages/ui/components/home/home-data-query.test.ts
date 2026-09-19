@@ -11,6 +11,8 @@ import {
 	extractHomeQueryParameters,
 	homeDataColumns,
 	homeDataMeasureTitle,
+	homeDataUsesDates,
+	homeSavedQuerySchemaQuery,
 	homeSavedQuerySql,
 	normalizeHomeDataConfig,
 	quoteHomeDataIdentifier,
@@ -218,6 +220,57 @@ describe("home data query boundaries", () => {
 		expect(query.params?.__home_end).toBe("2026-09-05T12:00:00.000Z");
 		expect(query.sql).toContain('ORDER BY "__group" ASC');
 	});
+	test("reads integer epoch columns in the unit their magnitude implies", () => {
+		const columns = [
+			{ name: "started_at", type_name: "Int64", position: 0 },
+			{ name: "seen_at", type_name: "Timestamp(µs)", position: 1 },
+		];
+		const query = buildHomeDataQuery(
+			base({
+				groupBy: "started_at",
+				timeBucket: "day",
+				dateRange: "30d",
+				dateField: "started_at",
+			}),
+			{ columns, now: new Date("2026-09-05T12:00:00Z") },
+		);
+		const epoch = `CASE WHEN ABS(CAST("started_at" AS DOUBLE)) < 100000000000 THEN to_timestamp_micros(CAST(CAST("started_at" AS DOUBLE) * 1000000 AS BIGINT)) WHEN ABS(CAST("started_at" AS DOUBLE)) < 100000000000000 THEN to_timestamp_micros(CAST(CAST("started_at" AS DOUBLE) * 1000 AS BIGINT)) WHEN ABS(CAST("started_at" AS DOUBLE)) < 100000000000000000 THEN to_timestamp_micros(CAST("started_at" AS BIGINT)) ELSE to_timestamp_micros(CAST(CAST("started_at" AS DOUBLE) / 1000 AS BIGINT)) END`;
+		expect(query.sql).toContain(`DATE_TRUNC('day', ${epoch})`);
+		expect(query.sql).toContain(`${epoch} >= CAST($__home_start AS TIMESTAMP)`);
+		expect(query.sql).toContain(`${epoch} <= CAST($__home_end AS TIMESTAMP)`);
+		expect(query.sql).not.toContain('CAST("started_at" AS TIMESTAMP)');
+
+		const declared = buildHomeDataQuery(
+			base({ groupBy: "seen_at", timeBucket: "week" }),
+			{ columns },
+		);
+		expect(declared.sql).toContain(
+			`DATE_TRUNC('week', CAST("seen_at" AS TIMESTAMP))`,
+		);
+	});
+	test("probes saved-query column types only when dates are grouped or bounded", () => {
+		expect(homeSavedQuerySchemaQuery(savedQuery, { owner: "me" })).toEqual({
+			sql: 'SELECT * FROM (\nSELECT * FROM invoices WHERE owner = $owner\n) AS "__home_schema" WHERE false',
+			params: { owner: "me" },
+			surface: "native",
+			overlay_id: undefined,
+			limit: 1,
+		});
+		expect(homeDataUsesDates(base())).toBe(false);
+		expect(homeDataUsesDates(base({ dateRange: "7d" }))).toBe(true);
+		expect(
+			homeDataUsesDates(base({ groupBy: "created_at", timeBucket: "day" })),
+		).toBe(true);
+		expect(
+			homeDataUsesDates(
+				base({
+					visualization: "histogram",
+					groupBy: "amount",
+					timeBucket: "day",
+				}),
+			),
+		).toBe(false);
+	});
 	test("histogram bins are calculated before aggregation with bound width", () => {
 		const query = buildHomeDataQuery(
 			base({ visualization: "histogram", groupBy: "amount", binWidth: 25 }),
@@ -363,7 +416,7 @@ describe("home data presentation preserves meaning", () => {
 		expect(homeDataMeasureTitle(custom)).toBe("Revenue");
 		expect(
 			homeDataMeasureTitle(updateHomeDataMeasure(custom, { label: "" })),
-		).toBe("Sum of net_amount");
+		).toBe("Sum of net amount");
 	});
 	test("a truncated percentage chart retains the source denominator", () => {
 		const result = homeDataChartSeries(

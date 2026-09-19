@@ -125,6 +125,13 @@ export class EmptyBoardState implements IBoardState {
 	): Promise<ILogMetadata[]> {
 		throw new Error("Method not implemented.");
 	}
+	getRunPayload(
+		appId: string,
+		boardId: string,
+		runId: string,
+	): Promise<object | undefined> {
+		return Promise.resolve(undefined);
+	}
 	queryRun(
 		logMeta: ILogMetadata,
 		query: string,

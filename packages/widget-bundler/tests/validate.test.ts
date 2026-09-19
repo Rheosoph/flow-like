@@ -4,7 +4,44 @@ import { join } from "node:path";
 import { unzipSync, zipSync } from "fflate";
 import { pack } from "../src/pack";
 import { validateBundle, validateProject } from "../src/validate-cmd";
-import { type ProjectFixture, makeProjectFixture, tmpDir } from "./helpers";
+import {
+	HELLO_WIDGET_CONFIG,
+	type ProjectFixture,
+	makeProjectFixture,
+	tmpDir,
+} from "./helpers";
+
+const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder();
+
+const CSP_DECLARATION = `id: "hello-widget",
+	csp: [{ reason: "Loads map tiles from MapTiler", connectSrc: ["https://api.maptiler.com"], imgSrc: ["https://tiles.maptiler.com"] }],`;
+
+function withCspWidget(fixture: ProjectFixture, declaration: string): void {
+	writeFileSync(
+		fixture.widgetConfigPath,
+		HELLO_WIDGET_CONFIG.replace('id: "hello-widget",', declaration),
+	);
+}
+
+type Entries = Record<string, Uint8Array>;
+
+function writeBundle(entries: Entries): string {
+	const path = join(tmpDir("flwb-edit"), "edited.flwb");
+	writeFileSync(path, zipSync(entries));
+	return path;
+}
+
+function editManifest(
+	entries: Entries,
+	edit: (manifest: Record<string, unknown>) => void,
+): void {
+	const manifest = JSON.parse(
+		DECODER.decode(entries["bundle.json"] as Uint8Array),
+	);
+	edit(manifest);
+	entries["bundle.json"] = ENCODER.encode(JSON.stringify(manifest));
+}
 
 describe("validateProject", () => {
 	test("accepts the synthetic project", () => {
@@ -20,6 +57,27 @@ describe("validateProject", () => {
 		expect(result.ok).toBeFalse();
 		expect(result.errors.some((e) => e.includes("flow-like.toml"))).toBeTrue();
 	});
+
+	test("accepts a valid csp declaration", () => {
+		const fixture = makeProjectFixture();
+		withCspWidget(fixture, CSP_DECLARATION);
+		const result = validateProject(fixture.projectDir);
+		expect(result.errors).toEqual([]);
+		expect(result.ok).toBeTrue();
+	}, 60000);
+
+	test("reports csp grammar errors", () => {
+		const fixture = makeProjectFixture();
+		withCspWidget(
+			fixture,
+			'id: "hello-widget", csp: [{ reason: "Loads map tiles", connectSrc: ["https://localhost"] }],',
+		);
+		const result = validateProject(fixture.projectDir);
+		expect(result.ok).toBeFalse();
+		expect(result.errors).toEqual([
+			'Invalid widget csp source "https://localhost" in csp[0].connectSrc for widget hello-widget: host uses a reserved or local-only name',
+		]);
+	}, 60000);
 });
 
 describe("validateBundle", () => {
@@ -66,5 +124,153 @@ describe("validateBundle", () => {
 		const result = validateBundle("/nonexistent/widgets.flwb");
 		expect(result.ok).toBeFalse();
 		expect(result.errors[0]).toContain("not found");
+	});
+
+	test("requires the exact entry and contract paths", () => {
+		const entries = unzipSync(bytes);
+		entries["widgets/hello-widget/main.html"] = entries[
+			"widgets/hello-widget/index.html"
+		] as Uint8Array;
+		editManifest(entries, (manifest) => {
+			const [widget] = manifest.widgets as Record<string, unknown>[];
+			if (widget) widget.entry = "widgets/hello-widget/main.html";
+		});
+		const result = validateBundle(writeBundle(entries));
+		expect(result.errors).toEqual([
+			"Widget 'hello-widget' entry path 'widgets/hello-widget/main.html' must be 'widgets/hello-widget/index.html'",
+		]);
+	});
+
+	test("rejects invalid package ids and aliasing archive names", () => {
+		const entries = unzipSync(bytes);
+		entries["widgets/hello-widget/CONTRACT.json"] = ENCODER.encode("{}");
+		editManifest(entries, (manifest) => {
+			manifest.packageId = 'com.example"; script-src *';
+		});
+		const result = validateBundle(writeBundle(entries));
+		expect(result.errors).toEqual([
+			"Invalid bundle packageId \"com.example\\\"; script-src *\": use only letters, digits, '.', '_' and '-'",
+			"Widget bundle entries 'widgets/hello-widget/contract.json' and 'widgets/hello-widget/CONTRACT.json' collide on case-insensitive filesystems",
+		]);
+	});
+
+	test("rejects drive-prefixed, stream and NUL entry names", () => {
+		const unsafe = [
+			"C:/x.txt",
+			"C:x.txt",
+			"widgets/hello-widget/index.html:ads",
+			"shared/react\0.js",
+			"C:/",
+		];
+		const entries = unzipSync(bytes);
+		entries["widgets/"] = new Uint8Array();
+		for (const name of unsafe) entries[name] = ENCODER.encode("x");
+		const result = validateBundle(writeBundle(entries));
+		expect(result.ok).toBeFalse();
+		expect(result.errors).toEqual(
+			unsafe.map((name) => `Unsafe widget bundle entry path: ${name}`),
+		);
+	});
+});
+
+describe("validateBundle csp contracts", () => {
+	let bytes: Uint8Array;
+
+	beforeAll(async () => {
+		const fixture = makeProjectFixture();
+		withCspWidget(fixture, CSP_DECLARATION);
+		({ bytes } = await pack(fixture.projectDir, {
+			out: join(fixture.projectDir, "widgets.flwb"),
+			quiet: true,
+		}));
+	});
+
+	function withContract(contract: Record<string, unknown>): string {
+		const entries = unzipSync(bytes);
+		entries["widgets/hello-widget/contract.json"] = ENCODER.encode(
+			JSON.stringify(contract, null, 2),
+		);
+		return writeBundle(entries);
+	}
+
+	function packedContract(): Record<string, unknown> {
+		return JSON.parse(
+			DECODER.decode(
+				unzipSync(bytes)["widgets/hello-widget/contract.json"] as Uint8Array,
+			),
+		);
+	}
+
+	test("accepts a packed v2 bundle", () => {
+		const path = join(tmpDir("flwb-csp"), "csp.flwb");
+		writeFileSync(path, bytes);
+		const result = validateBundle(path);
+		expect(result.errors).toEqual([]);
+		expect(packedContract().contractVersion).toBe(2);
+	});
+
+	test("rejects csp on a v1 contract and v2 without csp", () => {
+		expect(
+			validateBundle(withContract({ ...packedContract(), contractVersion: 1 }))
+				.errors,
+		).toEqual([
+			"Widget 'hello-widget' declares csp and must use contractVersion 2",
+		]);
+		const { csp: _csp, ...withoutCsp } = packedContract();
+		expect(validateBundle(withContract(withoutCsp)).errors).toEqual([
+			"Widget 'hello-widget' uses contractVersion 2 without csp; contracts without csp must use contractVersion 1",
+		]);
+	});
+
+	test("rejects hand-edited csp sources and directives", () => {
+		const result = validateBundle(
+			withContract({
+				...packedContract(),
+				csp: [
+					{
+						reason: "Loads map tiles",
+						connectSrc: ["https://a.*.maptiler.com"],
+						scriptSrc: ["https://cdn.example.org"],
+					},
+				],
+			}),
+		);
+		expect(result.ok).toBeFalse();
+		expect(result.errors).toEqual([
+			"Widget 'hello-widget': csp purpose 0: declares unknown key \"scriptSrc\" (allowed: reason, connectSrc, imgSrc, fontSrc, mediaSrc, styleSrc, inputs)",
+		]);
+		expect(
+			validateBundle(
+				withContract({
+					...packedContract(),
+					csp: [
+						{
+							reason: "Loads map tiles",
+							connectSrc: ["https://a.*.maptiler.com"],
+						},
+					],
+				}),
+			).errors,
+		).toEqual([
+			'Widget \'hello-widget\': csp purpose 0: Invalid csp source "https://a.*.maptiler.com" in connectSrc: wildcards are only allowed as a leading "*." label of the host',
+		]);
+	});
+
+	test("rejects what only the hub publish checks", () => {
+		const result = validateBundle(
+			withContract({
+				...packedContract(),
+				csp: [
+					{
+						reason: "Loads map tiles from maptiler.com",
+						connectSrc: ["https://*.co.uk", "https://api.maptiler.com"],
+					},
+				],
+			}),
+		);
+		expect(result.errors).toEqual([
+			"Widget 'hello-widget': csp purpose 0: reason must not contain web addresses, email addresses or domain names (reason-contains-address)",
+			"Widget 'hello-widget': Invalid csp source \"https://*.co.uk\": wildcard base is a public suffix or spans public suffixes",
+		]);
 	});
 });

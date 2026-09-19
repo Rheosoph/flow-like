@@ -5040,11 +5040,13 @@ fn schema_constraints_are_compatible(
         && output_data_type != "Generic"
     {
         return match (input_schema.as_deref(), output_schema.as_deref()) {
-            // Two declared contracts: they must be the same one. This is what catches a genuinely
-            // wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
+            // Two declared contracts: the output has to cover the input. This is what catches a
+            // genuinely wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
             // `CachedEmbeddingModel` input without loading the model first.
             (Some(input), Some(output)) => {
-                input == output || nullable_contract_matches(input, output)
+                input == output
+                    || nullable_contract_matches(input, output)
+                    || crate::flow::pin::schema_covers(output, input)
             }
             // Only one side declares a contract, so there is nothing to contradict. An untyped
             // `Struct` boundary pin — a FlowScript `function db(): (database: Struct)` parameter or
@@ -5148,8 +5150,8 @@ fn planned_output_is_compatible(
 }
 
 /// Variable nodes specialize their Generic catalog pins from the selected variable. Their runtime
-/// `on_update` contract permits a schema-less side, but if both sides carry schemas they must
-/// describe the same structure. This check complements the generic pin compatibility rules, whose
+/// `on_update` contract permits a schema-less side, but if both sides carry schemas the output must
+/// cover the input. This check complements the generic pin compatibility rules, whose
 /// `value_in`/`value_ref` exception is needed while those nodes are still unspecialized.
 fn variable_assignment_schemas_are_compatible(
     input: &PinMetadata,
@@ -5167,7 +5169,7 @@ fn variable_assignment_schemas_are_compatible(
         normalized_pin_schema(input.schema.as_deref(), refs),
         normalized_pin_schema(output.schema.as_deref(), refs),
     ) {
-        (Some(input), Some(output)) => input == output,
+        (Some(input), Some(output)) => crate::flow::pin::schema_covers(&output, &input),
         _ => true,
     }
 }
@@ -11545,7 +11547,7 @@ impl<'a> StructuralPlanner<'a> {
                     None => "no schema".to_string(),
                 };
                 format!(
-                    "source `{}` and input `{}` are both `{}/{}`, but their schemas differ: the source declares {}, the input requires {}{}",
+                    "source `{}` and input `{}` are both `{}/{}`, but the source schema does not cover every field the input declares: the source declares {}, the input requires {}{}",
                     output.source,
                     input.name,
                     input.data_type,
@@ -16967,20 +16969,24 @@ mod tests {
         ));
     }
 
+    const CACHED_EMBEDDING_MODEL_SCHEMA: &str = r##"{"title":"CachedEmbeddingModel","type":"object","properties":{"cache_key":{"type":"string"},"model_type":{"$ref":"#/$defs/BitTypes"}},"required":["cache_key","model_type"],"$defs":{"BitTypes":{"type":"string","enum":["Llm","Embedding"]}}}"##;
+
     #[test]
     fn two_declared_schemas_must_still_match() {
-        // findModel returns a `Bit`; embedDocument wants a loaded `CachedEmbeddingModel`. Both
-        // sides declare a contract, so this stays a real error the author has to fix.
+        // findModel returns a `Bit`; embedDocument wants a loaded `CachedEmbeddingModel`. The Bit
+        // does not cover the model's fields, so this stays a real error the author has to fix.
         assert!(!schema_constraints_are_compatible(
             "model",
             "Struct",
             "Normal",
-            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            Some(CACHED_EMBEDDING_MODEL_SCHEMA),
             true,
             "model",
             "Struct",
             "Normal",
-            Some("{\"title\":\"Bit\"}"),
+            Some(
+                r##"{"title":"Bit","type":"object","properties":{"id":{"type":"string"},"type":{"$ref":"#/$defs/BitTypes"}},"$defs":{"BitTypes":{"type":"string","enum":["Llm","Embedding"]}}}"##
+            ),
             false,
             &HashMap::new(),
         ));
@@ -17038,7 +17044,7 @@ mod tests {
             "model",
             "Struct",
             "Normal",
-            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            Some(CACHED_EMBEDDING_MODEL_SCHEMA),
             true,
             "model",
             "Struct",
@@ -23775,6 +23781,52 @@ eventsSimple() {
             metadata_pins_are_compatible(&input, &output, &refs),
             "differing descriptive schemas must remain connectable when neither side enforces"
         );
+    }
+
+    #[test]
+    fn enforced_struct_outputs_connect_when_they_cover_the_input_schema() {
+        let narrow = r#"{"type":"object","properties":{"subject":{"type":"string"}},"required":["subject"]}"#;
+        let wide = r#"{"title":"Message","type":"object","properties":{"subject":{"type":"string"},"uid":{"type":"integer"}},"required":["subject","uid"]}"#;
+        let mut input = pin_meta("payload", "Struct", PinType::Input);
+        input.schema = Some(narrow.to_string());
+        input.enforce_schema = true;
+        let mut output = pin_meta("message", "Struct", PinType::Output);
+        output.schema = Some(wide.to_string());
+        output.enforce_schema = true;
+        let refs = HashMap::new();
+
+        assert!(
+            metadata_pins_are_compatible(&input, &output, &refs),
+            "an output declaring every input field, and more, covers the input"
+        );
+        let planned = PlannedOutputType {
+            source: "mail.message".to_string(),
+            pin_name: output.name.clone(),
+            data_type: output.data_type.clone(),
+            value_type: output.value_type.clone(),
+            is_generic: false,
+            schema: output.schema.clone(),
+            enforce_schema: true,
+        };
+        assert!(planned_output_is_compatible(&input, &planned, &refs));
+        assert!(variable_assignment_schemas_are_compatible(
+            &input, &planned, &refs
+        ));
+
+        input.schema = Some(wide.to_string());
+        output.schema = Some(narrow.to_string());
+        assert!(
+            !metadata_pins_are_compatible(&input, &output, &refs),
+            "an input declaring a field the output lacks is not covered"
+        );
+        let planned = PlannedOutputType {
+            schema: output.schema.clone(),
+            ..planned
+        };
+        assert!(!planned_output_is_compatible(&input, &planned, &refs));
+        assert!(!variable_assignment_schemas_are_compatible(
+            &input, &planned, &refs
+        ));
     }
 
     #[test]

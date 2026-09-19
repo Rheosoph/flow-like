@@ -19,6 +19,7 @@ import {
 	TabsTrigger,
 	useSearch,
 } from "@flow-like/flow-like-ui";
+import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
 import { ExploreHubLayout } from "@flow-like/flow-like-ui/components/store/explore-hub-layout";
 import {
 	Avatar,
@@ -314,7 +315,11 @@ function InstalledContent({ navigation }: { navigation: ReactNode }) {
 	const uninstallMutation = useMutation({
 		mutationFn: async (packageId: string) => {
 			setUninstallingPackages((prev) => new Set(prev).add(packageId));
-			await invoke("registry_uninstall_package", { packageId });
+			try {
+				await invoke("registry_uninstall_package", { packageId });
+			} finally {
+				forgetMicroWidgetGrants(packageId);
+			}
 		},
 		onSuccess: (_, packageId) => {
 			toast.success("Package uninstalled");

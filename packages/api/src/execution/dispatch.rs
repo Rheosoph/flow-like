@@ -3533,7 +3533,7 @@ pub async fn hydrate_profile_custom_bit_secrets(
     profile_json: &mut serde_json::Value,
 ) {
     use crate::entity::user_bit;
-    use sea_orm::EntityTrait;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     let Some(custom_bits) = profile_json
         .get_mut("custom_bits")
@@ -3542,24 +3542,45 @@ pub async fn hydrate_profile_custom_bit_secrets(
         return;
     };
 
+    let bit_ids: Vec<String> = custom_bits
+        .iter()
+        .filter_map(|bit| bit.get("id").and_then(|id| id.as_str()))
+        .map(str::to_owned)
+        .collect();
+    if bit_ids.is_empty() {
+        return;
+    }
+
+    let rows = match user_bit::Entity::find()
+        .filter(user_bit::Column::Id.is_in(bit_ids))
+        .all(&state.db)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!("Failed to load custom bits for hydration: {err:?}");
+            return;
+        }
+    };
+
+    let hydrated: std::collections::HashMap<String, serde_json::Value> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let bit_id = row.id.clone();
+            let bit = crate::routes::user::bits::user_bit_to_core(row, state, true);
+            serde_json::to_value(&bit).ok().map(|value| (bit_id, value))
+        })
+        .collect();
+
     for bit in custom_bits {
-        let Some(bit_id) = bit.get("id").and_then(|id| id.as_str()) else {
+        let Some(value) = bit
+            .get("id")
+            .and_then(|id| id.as_str())
+            .and_then(|bit_id| hydrated.get(bit_id))
+        else {
             continue;
         };
-
-        let row = match user_bit::Entity::find_by_id(bit_id).one(&state.db).await {
-            Ok(Some(row)) => row,
-            Ok(None) => continue,
-            Err(err) => {
-                tracing::warn!(bit_id = %bit_id, "Failed to load custom bit for hydration: {err:?}");
-                continue;
-            }
-        };
-
-        let hydrated = crate::routes::user::bits::user_bit_to_core(row, state, true);
-        if let Ok(hydrated) = serde_json::to_value(&hydrated) {
-            *bit = hydrated;
-        }
+        *bit = value.clone();
     }
 }
 

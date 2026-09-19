@@ -65,6 +65,9 @@ pub struct FlowLikeCallbacks {
     /// Default write options for LanceDB. Android overrides these to add its object store wrapper.
     #[cfg(feature = "flow-runtime")]
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
+    /// Where finished runs record their summary row. Hosts that report runs
+    /// elsewhere (the cloud executor) leave this unset.
+    pub run_index: Option<Arc<dyn crate::flow::execution::run_index::RunIndex>>,
 }
 
 impl Default for FlowLikeCallbacks {
@@ -80,6 +83,7 @@ impl Default for FlowLikeCallbacks {
             lance_write_options: Some(
                 flow_like_storage::lancedb_write_options::default_write_options(),
             ),
+            run_index: None,
         }
     }
 }
@@ -166,6 +170,13 @@ impl FlowLikeConfig {
         options: flow_like_storage::lancedb::table::WriteOptions,
     ) {
         self.callbacks.lance_write_options = Some(options);
+    }
+
+    pub fn register_run_index(
+        &mut self,
+        index: Arc<dyn crate::flow::execution::run_index::RunIndex>,
+    ) {
+        self.callbacks.run_index = Some(index);
     }
 }
 
@@ -658,11 +669,13 @@ impl FlowLikeState {
     ) -> flow_like_types::Result<LogMeta> {
         use flow_like_types::anyhow;
 
-        let (db_fn, write_options) = {
+        let (db_fn, write_options, log_store, run_index) = {
             let guard = self.config.read().await;
             (
                 guard.callbacks.build_logs_database.clone(),
                 guard.callbacks.lance_write_options.clone(),
+                guard.stores.log_store.clone(),
+                guard.callbacks.run_index.clone(),
             )
         };
 
@@ -674,7 +687,14 @@ impl FlowLikeState {
             .await
             .map_err(|e| anyhow!("Failed to open log database: {}, {:?}", base_path, e))?;
 
-        rejection.write(db, write_options.as_ref()).await
+        rejection
+            .write(
+                db,
+                write_options.as_ref(),
+                log_store.as_ref(),
+                run_index.as_ref(),
+            )
+            .await
     }
 
     pub fn for_execution_run(&self) -> Self {

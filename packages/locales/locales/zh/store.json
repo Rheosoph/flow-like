@@ -42,6 +42,8 @@
 	"capabilities": "功能",
 	"capabilityA2ui": "",
 	"capabilityCache": "",
+	"capabilityDatabaseRead": "",
+	"capabilityDatabaseWrite": "",
 	"capabilityModels": "",
 	"capabilityNetDns": "",
 	"capabilityNetHttp": "",

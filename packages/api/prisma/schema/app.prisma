@@ -223,7 +223,7 @@ model Feedback {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, eventId])
-  @@index([appId])
+  @@index([appId, createdAt])
   @@index([createdAt])
   @@index([userId])
 
@@ -253,7 +253,7 @@ model Comment {
 
   @@unique([userId, appId])
   @@unique([userId, packageId])
-  @@index([appId])
+  @@index([appId, createdAt])
   @@index([packageId])
   @@index([userId])
 

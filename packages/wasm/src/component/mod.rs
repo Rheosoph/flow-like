@@ -1,3 +1,4 @@
+mod guest_output;
 pub mod instance;
 pub mod linker;
 

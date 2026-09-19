@@ -40,6 +40,7 @@ fn get_http_client() -> Result<&'static reqwest::Client, Error> {
     }
 
     let client = reqwest::Client::builder()
+        .user_agent(concat!("flow-like-maintenance/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::none())

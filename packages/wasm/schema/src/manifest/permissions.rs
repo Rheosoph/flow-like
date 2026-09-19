@@ -129,10 +129,22 @@ pub struct FileSystemPermissions {
     pub cache_dir: bool,
 }
 
+/// Database permissions still require wired, typed handles for each resource.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct DatabasePermissions {
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default)]
+    pub write: bool,
+}
+
 /// Package permissions declaration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PackagePermissions {
+    #[serde(default)]
+    pub database: DatabasePermissions,
     #[serde(default)]
     pub memory: MemoryTier,
     #[serde(default)]
@@ -202,6 +214,12 @@ impl PackagePermissions {
         if self.a2ui {
             capabilities |= WasmCapabilities::A2UI;
         }
+        if self.database.read {
+            capabilities |= WasmCapabilities::DATABASE_READ;
+        }
+        if self.database.write {
+            capabilities |= WasmCapabilities::DATABASE_WRITE;
+        }
         if self.models {
             capabilities |= WasmCapabilities::MODELS;
         }
@@ -257,6 +275,12 @@ impl PackagePermissions {
         if self.a2ui {
             permissions.push("A2UI: Enabled".to_string());
         }
+        if self.database.read {
+            permissions.push("Database: Read connected tables and sessions".to_string());
+        }
+        if self.database.write {
+            permissions.push("Database: Write connected tables".to_string());
+        }
         if self.models {
             permissions.push("Models/LLM: Enabled".to_string());
         }
@@ -280,6 +304,8 @@ impl PackagePermissions {
         push(self.network.dns_enabled, "net.dns");
         push(!self.oauth_scopes.is_empty(), "oauth");
         push(self.models, "models");
+        push(self.database.read, "database.read");
+        push(self.database.write, "database.write");
         push(self.filesystem.user_storage, "storage.user");
         push(self.filesystem.node_storage, "storage.node");
         push(self.filesystem.upload_dir, "storage.uploads");
@@ -294,6 +320,32 @@ impl PackagePermissions {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn database_permissions_are_explicit_and_independent() {
+        let read: super::PackagePermissions =
+            serde_json::from_str(r#"{"database":{"read":true}}"#).unwrap();
+        assert!(
+            read.to_capabilities()
+                .has(crate::limits::WasmCapabilities::DATABASE_READ)
+        );
+        assert_eq!(read.capability_tags(), ["database.read"]);
+        assert!(
+            read.summary()
+                .iter()
+                .any(|entry| entry == "Database: Read connected tables and sessions")
+        );
+        assert!(
+            !read
+                .to_capabilities()
+                .has(crate::limits::WasmCapabilities::DATABASE_WRITE)
+        );
+        let models: super::PackagePermissions = serde_json::from_str(r#"{"models":true}"#).unwrap();
+        assert!(!models.to_capabilities().intersects(
+            crate::limits::WasmCapabilities::DATABASE_READ
+                | crate::limits::WasmCapabilities::DATABASE_WRITE
+        ));
+    }
+
     use super::*;
 
     #[test]

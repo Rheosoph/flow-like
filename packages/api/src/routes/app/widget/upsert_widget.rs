@@ -12,6 +12,7 @@ use axum::{
 };
 use flow_like::a2ui::widget::Widget;
 use flow_like_types::create_id;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
 };
@@ -121,67 +122,54 @@ pub async fn upsert_widget(
 
     app.save_widget(&widget).await?;
 
-    // Check if widget exists in DB
-    let existing = widget::Entity::find_by_id(&widget_id)
-        .filter(widget::Column::AppId.eq(&app_id))
-        .one(&state.db)
-        .await?;
+    let version = widget.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2));
+    let now = chrono::Utc::now().fixed_offset();
 
-    if existing.is_none() {
-        // Create new widget record in DB
+    let created = widget::Entity::update_many()
+        .filter(widget::Column::Id.eq(&widget_id))
+        .filter(widget::Column::AppId.eq(&app_id))
+        .col_expr(widget::Column::Version, Expr::value(version.clone()))
+        .col_expr(widget::Column::UpdatedAt, Expr::value(now))
+        .exec(&state.db)
+        .await?
+        .rows_affected
+        == 0;
+
+    if created {
         let new_widget = widget::ActiveModel {
             id: Set(widget_id.clone()),
             app_id: Set(app_id.to_string()),
-            version: Set(widget.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
-            created_at: Set(chrono::Utc::now().fixed_offset()),
-            updated_at: Set(chrono::Utc::now().fixed_offset()),
+            version: Set(version),
+            created_at: Set(now),
+            updated_at: Set(now),
         };
 
         widget::Entity::insert(new_widget)
             .exec_with_returning(&state.db)
             .await?;
+    }
 
-        upsert_widget_meta(
-            &state.db,
-            &widget_id,
-            &widget.name,
-            widget.description.as_deref(),
-        )
-        .await?;
+    upsert_widget_meta(
+        &state.db,
+        &widget_id,
+        &widget.name,
+        widget.description.as_deref(),
+    )
+    .await?;
 
-        if !app.widget_ids.contains(&widget_id) {
-            app.widget_ids.push(widget_id);
-            app.save().await?;
-        }
-    } else {
-        // Update existing widget record
-        let update_widget = widget::ActiveModel {
-            id: Set(widget_id.clone()),
-            app_id: Set(app_id.to_string()),
-            version: Set(widget.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
-            updated_at: Set(chrono::Utc::now().fixed_offset()),
-            ..Default::default()
-        };
-
-        update_widget.update(&state.db).await?;
-
-        upsert_widget_meta(
-            &state.db,
-            &widget_id,
-            &widget.name,
-            widget.description.as_deref(),
-        )
-        .await?;
+    if created && !app.widget_ids.contains(&widget_id) {
+        app.widget_ids.push(widget_id);
+        app.save().await?;
     }
 
     audit_branch!(
         state,
         user,
         app_id,
-        if existing.is_some() {
-            "widget.update"
-        } else {
+        if created {
             "widget.create"
+        } else {
+            "widget.update"
         },
         "Widget",
         widget.id,

@@ -1,18 +1,38 @@
 use crate::{
     functions::TauriFunctionError,
+    profile::UserProfile,
     state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState, TauriWasmEngineState},
+    widget_grants::{
+        WIDGET_ENGINE_GATE, WIDGET_GRANTS, WidgetGrantMint, describe_unpacked_widget,
+        mint_widget_grant,
+    },
+    widget_protocol::bundle_source,
 };
 use flow_like::a2ui::micro_widget::{PackageWidgetRef, PackageWidgetSource};
 use flow_like::flow::node::NodeLogic;
+use flow_like::hub::{Hub, HubWidgetStorage};
 use flow_like_types::sync::Mutex;
+use flow_like_wasm::widget_policy::{
+    PlatformStorageScope, WIDGET_POLICY_SOURCE_LOCAL, WidgetPolicyDescriptor, WidgetPolicySubject,
+    WidgetRuntimeContext, WidgetRuntimeSourceRequest, registry_policy_source, reserved_host,
+};
 use flow_like_wasm::{
     client::RegistryClient,
-    registry::{CachedPackage, InstalledPackage, RegistryConfig, SearchFilters, SearchResults},
+    registry::{
+        CachedPackage, InstalledPackage, PackageSource, RegistryConfig, SearchFilters,
+        SearchResults,
+    },
 };
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::AppHandle;
+
+/// How long a describe waits for an uncached hub before treating it as
+/// announcing no widget storage.
+const HUB_WIDGET_STORAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bridges the widget provider to whichever registry client is installed right
 /// now. `registry_init` replaces the client, so registering a clone once at
@@ -342,6 +362,7 @@ pub async fn registry_uninstall_package(
     package_id: String,
 ) -> Result<(), TauriFunctionError> {
     let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
+    WIDGET_GRANTS.revoke(&package_id, None);
     registry_client.uninstall(&package_id).await?;
 
     if let Err(e) = rebuild_node_registry(&app_handle, true).await {
@@ -480,6 +501,304 @@ pub async fn registry_set_auth_token(
     Ok(())
 }
 
+/// Every distinct hub of the default hub and of every profile.
+fn profile_hub_urls<'a>(
+    default_hub: &'a str,
+    profiles: impl IntoIterator<Item = &'a UserProfile>,
+) -> Vec<String> {
+    let hubs = std::iter::once(default_hub).chain(profiles.into_iter().flat_map(|profile| {
+        std::iter::once(profile.hub_profile.hub.as_str())
+            .chain(profile.hub_profile.hubs.iter().map(String::as_str))
+    }));
+    let mut urls: Vec<String> = Vec::new();
+    for hub in hubs.map(str::trim) {
+        if !hub.is_empty() && !urls.iter().any(|url| url == hub) {
+            urls.push(hub.to_string());
+        }
+    }
+    urls
+}
+
+/// Hub hosts a widget may never name as a CSP source.
+fn hub_hosts(hub_urls: &[String]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for host in hub_urls.iter().filter_map(|url| reserved_host(url)) {
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    hosts
+}
+
+/// Hosts a hub serves besides its API URL (API domain, app, web, CDN).
+fn hub_service_hosts(
+    domain: &str,
+    app: Option<&str>,
+    web: Option<&str>,
+    cdn: Option<&str>,
+) -> Vec<String> {
+    [Some(domain), app, web, cdn]
+        .into_iter()
+        .flatten()
+        .filter_map(reserved_host)
+        .collect()
+}
+
+struct HubWidgetFacts {
+    platform_storage: Vec<PlatformStorageScope>,
+    reserved_hosts: Vec<String>,
+}
+
+/// Every reachable hub reserves its own service hosts, but only `storage_hub`
+/// (the current profile's hub, which serves the app) may announce
+/// platform-storage scopes. A hub that cannot be reached in time contributes
+/// nothing, so its storage hosts classify like any host.
+async fn hub_widget_facts(
+    app_handle: &AppHandle,
+    hub_urls: &[String],
+    storage_hub: Option<&str>,
+) -> HubWidgetFacts {
+    let http_client = match TauriFlowLikeState::http_client(app_handle).await {
+        Ok(http_client) => http_client,
+        Err(error) => {
+            tracing::warn!(%error, "No HTTP client to read hub widget facts");
+            return HubWidgetFacts {
+                platform_storage: Vec::new(),
+                reserved_hosts: Vec::new(),
+            };
+        }
+    };
+    let hubs = join_all(hub_urls.iter().map(|hub_url| {
+        let http_client = http_client.clone();
+        async move {
+            let hub = match tokio::time::timeout(
+                HUB_WIDGET_STORAGE_TIMEOUT,
+                Hub::new(hub_url, http_client),
+            )
+            .await
+            {
+                Ok(Ok(hub)) => Some(hub),
+                Ok(Err(error)) => {
+                    tracing::debug!(hub = %hub_url, %error, "Hub info unavailable for widget policy");
+                    None
+                }
+                Err(_) => {
+                    tracing::debug!(hub = %hub_url, "Hub info timed out for widget policy");
+                    None
+                }
+            };
+            (hub_url, hub)
+        }
+    }))
+    .await;
+    let mut reserved_hosts = Vec::new();
+    let mut storage = Vec::new();
+    for (hub_url, hub) in hubs {
+        let Some(hub) = hub else { continue };
+        reserved_hosts.extend(hub_service_hosts(
+            &hub.domain,
+            hub.app.as_deref(),
+            hub.web.as_deref(),
+            hub.cdn.as_deref(),
+        ));
+        if storage_hub == Some(hub_url.as_str()) {
+            storage.extend(hub.widget_storage);
+        }
+    }
+    HubWidgetFacts {
+        platform_storage: platform_storage_scopes(storage),
+        reserved_hosts,
+    }
+}
+
+/// Well-formed, distinct scopes in a stable order. A scope must yield an
+/// `https` app path source for a valid app id.
+fn platform_storage_scopes(
+    storage: impl IntoIterator<Item = HubWidgetStorage>,
+) -> Vec<PlatformStorageScope> {
+    let mut scopes: Vec<PlatformStorageScope> = storage
+        .into_iter()
+        .map(|storage| PlatformStorageScope {
+            origin: storage.origin,
+            path_prefix: storage.path_prefix,
+        })
+        .filter(|scope| {
+            let valid = scope.origin.starts_with("https://") && scope.app_source("app").is_some();
+            if !valid {
+                tracing::warn!(
+                    origin = %scope.origin,
+                    path_prefix = %scope.path_prefix,
+                    "Ignoring a malformed hub widget storage scope"
+                );
+            }
+            valid
+        })
+        .collect();
+    scopes.sort_by(|a, b| (&a.origin, &a.path_prefix).cmp(&(&b.origin, &b.path_prefix)));
+    scopes.dedup();
+    scopes
+}
+
+/// Host of the registry that installed `bundle_hash` as a widget bundle of
+/// this package, or `None` for local, developer and unknown bundles.
+fn registry_bundle_host(installed: Option<&InstalledPackage>, bundle_hash: &str) -> Option<String> {
+    let installed = installed?;
+    let PackageSource::Remote { registry_url, .. } = &installed.source else {
+        return None;
+    };
+    let is_installed_bundle = installed.manifest.widget_bundle_hash.as_deref() == Some(bundle_hash)
+        || installed
+            .versions
+            .values()
+            .any(|version| version.widget_bundle_hash.as_deref() == Some(bundle_hash));
+    is_installed_bundle
+        .then(|| reserved_host(registry_url))
+        .flatten()
+}
+
+/// One describe or mint request of the host.
+struct WidgetPolicyRequest {
+    package_id: String,
+    bundle_hash: String,
+    widget_id: String,
+    preview: bool,
+    app_id: Option<String>,
+    runtime_sources: Vec<WidgetRuntimeSourceRequest>,
+}
+
+/// Derives the descriptor against this machine's profile hubs, their widget
+/// storage scopes, the registry that installed the bundle and the webview's
+/// engine gate. `network_at` (unix seconds) adds the display-only `network`.
+async fn describe_widget_policy(
+    app_handle: &AppHandle,
+    request: WidgetPolicyRequest,
+    network_at: Option<i64>,
+) -> Result<WidgetPolicyDescriptor, TauriFunctionError> {
+    let settings = TauriSettingsState::construct(app_handle).await?;
+    let (cache_dir, hub_urls, storage_hub) = {
+        let guard = settings.lock().await;
+        (
+            wasm_registry_cache_dir(&guard.project_dir),
+            profile_hub_urls(&guard.default_hub, guard.profiles.values()),
+            guard
+                .get_current_profile()
+                .ok()
+                .map(|profile| profile.hub_profile.hub.trim().to_string())
+                .filter(|hub| !hub.is_empty()),
+        )
+    };
+    let mut reserved_hosts = hub_hosts(&hub_urls);
+    let facts = hub_widget_facts(app_handle, &hub_urls, storage_hub.as_deref()).await;
+    for host in facts.reserved_hosts {
+        if !reserved_hosts.contains(&host) {
+            reserved_hosts.push(host);
+        }
+    }
+    let platform_storage = facts.platform_storage;
+    let registry_client = TauriRegistryState::get_client(app_handle).await?;
+    let installed = registry_client.get_installed(&request.package_id).await;
+    let registry_host = registry_bundle_host(installed.as_ref(), &request.bundle_hash);
+    let source = registry_host.as_deref().map_or_else(
+        || WIDGET_POLICY_SOURCE_LOCAL.to_string(),
+        registry_policy_source,
+    );
+    reserved_hosts.extend(registry_host);
+    let WidgetPolicyRequest {
+        package_id,
+        bundle_hash,
+        widget_id,
+        preview,
+        app_id,
+        runtime_sources,
+    } = request;
+    let bundle_sources = [bundle_source(&package_id, &bundle_hash)];
+    let subject = WidgetPolicySubject {
+        source,
+        package_id,
+        package_version: None,
+        bundle_hash,
+        widget_id,
+        preview,
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let context = WidgetRuntimeContext {
+            reserved_hosts: &reserved_hosts,
+            platform_storage: &platform_storage,
+            app_id: app_id.as_deref(),
+            bundle_sources: &bundle_sources,
+            engine: *WIDGET_ENGINE_GATE,
+        };
+        describe_unpacked_widget(&cache_dir, subject, &runtime_sources, &context, network_at)
+    })
+    .await
+    .map_err(|error| TauriFunctionError::new(&format!("Widget policy task failed: {error}")))?
+    .map_err(|error| TauriFunctionError::new(&error))
+}
+
+/// Authoritative policy of one widget of an unpacked bundle, derived from its
+/// declared `contract.json` plus the runtime sources the host extracted for
+/// its declared network inputs. The host renders consent from this
+/// descriptor. Malformed runtime sources fail with `invalid_runtime_sources: …`,
+/// runtime sources on a preview with `runtime_sources_in_preview: …`.
+#[tauri::command]
+pub async fn registry_describe_widget_policy(
+    app_handle: AppHandle,
+    package_id: String,
+    bundle_hash: String,
+    widget_id: String,
+    preview: bool,
+    app_id: Option<String>,
+    runtime_sources: Option<Vec<WidgetRuntimeSourceRequest>>,
+) -> Result<WidgetPolicyDescriptor, TauriFunctionError> {
+    let request = WidgetPolicyRequest {
+        package_id,
+        bundle_hash,
+        widget_id,
+        preview,
+        app_id,
+        runtime_sources: runtime_sources.unwrap_or_default(),
+    };
+    describe_widget_policy(&app_handle, request, Some(chrono::Utc::now().timestamp())).await
+}
+
+/// Re-derives the widget policy with the same runtime sources and mints a
+/// grant for it. Fails with `policy_changed: …` when `policy_digest` no
+/// longer matches, and with the describe errors for malformed requests.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn registry_mint_widget_grant(
+    app_handle: AppHandle,
+    package_id: String,
+    bundle_hash: String,
+    widget_id: String,
+    preview: bool,
+    policy_digest: String,
+    app_id: Option<String>,
+    runtime_sources: Option<Vec<WidgetRuntimeSourceRequest>>,
+) -> Result<WidgetGrantMint, TauriFunctionError> {
+    let request = WidgetPolicyRequest {
+        package_id,
+        bundle_hash,
+        widget_id,
+        preview,
+        app_id,
+        runtime_sources: runtime_sources.unwrap_or_default(),
+    };
+    let descriptor = describe_widget_policy(&app_handle, request, None).await?;
+    mint_widget_grant(&WIDGET_GRANTS, &descriptor, &policy_digest)
+        .map_err(|error| TauriFunctionError::new(&error))
+}
+
+#[tauri::command]
+pub async fn registry_revoke_widget_grants(
+    package_id: String,
+    widget_id: Option<String>,
+) -> Result<(), TauriFunctionError> {
+    WIDGET_GRANTS.revoke(&package_id, widget_id.as_deref());
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryInitConfig {
     #[serde(default)]
@@ -583,4 +902,168 @@ pub async fn registry_init(
     super::developer::emit_catalog_updated(&app_handle);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_wasm::manifest::PackageManifest;
+    use flow_like_wasm::registry::InstalledVersion;
+    use std::path::PathBuf;
+
+    fn installed(source: PackageSource, version_hashes: &[&str]) -> InstalledPackage {
+        let manifest = PackageManifest::new("com.example.maps", "Maps", "1.0.0", "maps");
+        let versions = version_hashes
+            .iter()
+            .enumerate()
+            .map(|(index, hash)| {
+                let version = format!("1.0.{index}");
+                (
+                    version.clone(),
+                    InstalledVersion {
+                        version,
+                        wasm_path: PathBuf::from("/tmp/maps.wasm"),
+                        installed_at: chrono::Utc::now(),
+                        manifest: manifest.clone(),
+                        metadata: None,
+                        wasm_hash: None,
+                        widget_bundle_path: None,
+                        widget_bundle_hash: Some(hash.to_string()),
+                    },
+                )
+            })
+            .collect();
+        InstalledPackage {
+            id: manifest.id.clone(),
+            version: "1.0.0".into(),
+            source,
+            installed_at: chrono::Utc::now(),
+            wasm_path: PathBuf::from("/tmp/maps.wasm"),
+            manifest,
+            versions,
+            metadata: None,
+            wasm_hash: None,
+        }
+    }
+
+    fn remote() -> PackageSource {
+        PackageSource::Remote {
+            registry_url: "https://API.flow-like.com:443/api/v1/registry".into(),
+            download_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn widget_policy_source_is_registry_only_for_installed_registry_bundles() {
+        let old = "a".repeat(64);
+        let current = "b".repeat(64);
+        let package = installed(remote(), &[old.as_str(), current.as_str()]);
+
+        assert_eq!(
+            registry_bundle_host(Some(&package), &old).as_deref(),
+            Some("api.flow-like.com")
+        );
+        assert_eq!(
+            registry_bundle_host(Some(&package), &current).as_deref(),
+            Some("api.flow-like.com")
+        );
+        assert_eq!(registry_bundle_host(Some(&package), &"c".repeat(64)), None);
+        assert_eq!(registry_bundle_host(None, &current), None);
+
+        let local = installed(
+            PackageSource::Local {
+                path: PathBuf::from("/dev/maps.wasm"),
+            },
+            &[current.as_str()],
+        );
+        assert_eq!(registry_bundle_host(Some(&local), &current), None);
+    }
+
+    #[test]
+    fn widget_reserved_hosts_cover_every_profile_hub() {
+        let mut first = UserProfile::new(flow_like::profile::Profile::default());
+        first.hub_profile.hub = "hub.acme.eu:8443".into();
+        first.hub_profile.hubs = vec![" https://api.flow-like.com ".into()];
+        let mut second = UserProfile::new(flow_like::profile::Profile::default());
+        second.hub_profile.hubs = vec!["https://Other.Example.org/api".into(), String::new()];
+
+        let urls = profile_hub_urls("https://api.flow-like.com", [&first, &second]);
+        assert_eq!(
+            urls,
+            [
+                "https://api.flow-like.com",
+                "hub.acme.eu:8443",
+                "https://Other.Example.org/api"
+            ]
+        );
+        let hosts = hub_hosts(&urls);
+        assert_eq!(hosts.len(), 3);
+        for host in ["api.flow-like.com", "hub.acme.eu", "other.example.org"] {
+            assert!(
+                hosts.iter().any(|entry| entry == host),
+                "{host} in {hosts:?}"
+            );
+        }
+        assert!(hosts.iter().all(|entry| !entry.is_empty()));
+    }
+
+    #[test]
+    fn widget_reserved_hosts_include_each_hubs_service_hosts() {
+        let hosts = hub_service_hosts(
+            "api.flow-like.com",
+            Some("https://app.flow-like.com"),
+            Some("https://flow-like.com"),
+            Some("https://cdn.flow-like.com/assets"),
+        );
+        assert_eq!(
+            hosts,
+            [
+                "api.flow-like.com",
+                "app.flow-like.com",
+                "flow-like.com",
+                "cdn.flow-like.com"
+            ]
+        );
+        assert_eq!(
+            hub_service_hosts("self-hosted.example.org", None, None, None),
+            ["self-hosted.example.org"]
+        );
+    }
+
+    #[test]
+    fn widget_platform_storage_scopes_come_from_well_formed_hub_entries() {
+        let storage = |origin: &str, path_prefix: &str| HubWidgetStorage {
+            origin: origin.into(),
+            path_prefix: path_prefix.into(),
+        };
+        let scopes = platform_storage_scopes([
+            storage("https://storage.googleapis.com", "/content/apps/"),
+            storage(
+                "https://flow-like-content.s3.eu-central-1.amazonaws.com",
+                "/apps/",
+            ),
+            storage("https://storage.googleapis.com", "/content/apps/"),
+            storage("http://insecure.example.org", "/apps/"),
+            storage("wss://socket.example.org", "/apps/"),
+            storage("https://*.blob.core.windows.net", "/apps/"),
+            storage("https://bucket.s3.amazonaws.com/", "/apps/"),
+            storage("https://bucket.s3.amazonaws.com", "apps/"),
+            storage("https://bucket.s3.amazonaws.com", "/apps"),
+            storage("https://bucket.s3.amazonaws.com", "/../apps/"),
+        ]);
+        let scope = |origin: &str, path_prefix: &str| PlatformStorageScope {
+            origin: origin.into(),
+            path_prefix: path_prefix.into(),
+        };
+        assert_eq!(
+            scopes,
+            vec![
+                scope(
+                    "https://flow-like-content.s3.eu-central-1.amazonaws.com",
+                    "/apps/"
+                ),
+                scope("https://storage.googleapis.com", "/content/apps/"),
+            ]
+        );
+    }
 }

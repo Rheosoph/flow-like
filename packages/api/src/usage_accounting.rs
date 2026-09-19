@@ -183,10 +183,9 @@ pub async fn start_usage_invocation(
         .clone()
         .ok_or_else(|| ApiError::internal("Hosted AI accounting rate is unavailable"))?;
     rate.validate()?;
-    let payer = crate::quota::resolve_payer(state, start.user_id, start.app_id).await?;
     let mut request = crate::quota::QuotaRequest {
         operation_id: String::new(),
-        payer_id: payer.clone(),
+        payer_id: String::new(),
         actor_id: start.user_id.map(ToOwned::to_owned),
         app_id: start.app_id.map(ToOwned::to_owned),
         model_id: start.model_id.map(ToOwned::to_owned),
@@ -202,25 +201,15 @@ pub async fn start_usage_invocation(
         },
         deadline: Utc::now() + Duration::milliseconds(rate.max_request_ms),
     };
-    let id = start_usage_invocation_with_db(&state.db, state.db_dialect, start)
-        .await?
-        .ok_or_else(|| ApiError::internal("Failed to reserve hosted AI invocation"))?;
-    let original = usage_invocation::Entity::find_by_id(&id)
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| ApiError::internal("Hosted AI admission is missing"))?;
-    if original.status != STATUS_PENDING {
-        return Err(ApiError::conflict(
-            "Hosted AI admission has already expired",
-        ));
-    }
+    let original = admit_usage_invocation(&state.db, state.db_dialect, start).await?;
+    let id = original.id.clone();
     // Recovery can release an account-less admission after fifteen minutes.
     // A resumed process keeps this original deadline, and mark_started checks it
     // again after the quota transaction, so it cannot revive the released work.
     request.deadline = request
         .deadline
         .min(original.created_at.with_timezone(&Utc) + Duration::milliseconds(rate.max_request_ms));
-    if let Err(error) = crate::quota::reserve(
+    let payer = match crate::quota::reserve_for_owner(
         state,
         crate::quota::QuotaRequest {
             operation_id: id.clone(),
@@ -229,38 +218,52 @@ pub async fn start_usage_invocation(
     )
     .await
     {
-        settle_usage_invocation_with_dialect(
-            &state.db,
-            state.db_dialect,
-            Some(&id),
-            UsageInvocationSettlement {
-                status: STATUS_FAILED,
-                error: Some("Account plan rejected the request before provider dispatch".into()),
-                ..Default::default()
-            },
-        )
-        .await?;
-        return Err(error);
-    }
+        Ok(payer) => payer,
+        Err(error) => {
+            settle_usage_invocation_with_dialect(
+                &state.db,
+                state.db_dialect,
+                Some(&id),
+                Some(original.app_id),
+                UsageInvocationSettlement {
+                    status: STATUS_FAILED,
+                    error: Some(
+                        "Account plan rejected the request before provider dispatch".into(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            return Err(error);
+        }
+    };
     crate::compute_attempts::associate_current(&state.db, &id, &payer, "ai_relay", "ai_serving")
         .await?;
     Ok(Some(id))
 }
 
+#[cfg(test)]
 pub(crate) async fn start_usage_invocation_with_db(
     db: &DatabaseConnection,
     dialect: crate::db::DbDialect,
     start: UsageInvocationStart<'_>,
 ) -> Result<Option<String>, ApiError> {
+    Ok(Some(admit_usage_invocation(db, dialect, start).await?.id))
+}
+
+async fn admit_usage_invocation(
+    db: &DatabaseConnection,
+    dialect: crate::db::DbDialect,
+    start: UsageInvocationStart<'_>,
+) -> Result<usage_invocation::Model, ApiError> {
     let app_id = start
         .app_id
         .map(str::trim)
         .filter(|app_id| !app_id.is_empty());
 
     let now = Utc::now().fixed_offset();
-    let id = create_id();
     let reservation = usage_invocation::ActiveModel {
-        id: Set(id.clone()),
+        id: Set(create_id()),
         kind: Set(start.kind.to_string()),
         status: Set(STATUS_PENDING.to_string()),
         user_id: Set(start.user_id.map(ToOwned::to_owned)),
@@ -302,7 +305,6 @@ pub(crate) async fn start_usage_invocation_with_db(
             let app_id = app_id.clone();
             let user_id = user_id.clone();
             let technical_user_id = technical_user_id.clone();
-            let id = id.clone();
             Box::pin(async move {
                 if let Some(app_id) = app_id.as_deref() {
                     crate::db::coordination::coordinate(txn, "usage-budget", &[app_id]).await?;
@@ -321,7 +323,7 @@ pub(crate) async fn start_usage_invocation_with_db(
                 }
                 let row = reservation.insert(txn).await?;
                 crate::rolling_usage::sync_invocation(txn, &row).await?;
-                Ok(Ok(Some(id)))
+                Ok(Ok(row))
             })
         },
     )
@@ -338,6 +340,7 @@ pub async fn settle_usage_invocation(
         db,
         crate::db::DbDialect::Postgres,
         invocation_id,
+        None,
         settlement,
     )
     .await
@@ -352,6 +355,7 @@ pub(crate) async fn release_unstarted_hosted(
         db,
         dialect,
         Some(invocation_id),
+        None,
         UsageInvocationSettlement {
             status: STATUS_FAILED,
             error: Some("Released before provider dispatch".into()),
@@ -361,10 +365,13 @@ pub(crate) async fn release_unstarted_hosted(
     .await
 }
 
+/// `known_app` is the invocation's immutable app id when the caller already
+/// loaded the row; `None` looks it up to find the coordination key.
 async fn settle_usage_invocation_with_dialect(
     db: &DatabaseConnection,
     dialect: crate::db::DbDialect,
     invocation_id: Option<&str>,
+    known_app: Option<Option<String>>,
     settlement: UsageInvocationSettlement,
 ) -> Result<(), sea_orm::DbErr> {
     let Some(invocation_id) = invocation_id
@@ -382,39 +389,53 @@ async fn settle_usage_invocation_with_dialect(
         &crate::db::RetryPolicy::default(),
         move |txn| {
             let id = id.clone();
+            let known_app = known_app.clone();
             let settlement = settlement.clone();
             Box::pin(async move {
-                let Some(row) = usage_invocation::Entity::find_by_id(&id).one(txn).await? else {
-                    return Ok::<_, sea_orm::DbErr>(());
+                let app = match known_app {
+                    Some(app) => app,
+                    None => {
+                        let Some(app) = usage_invocation::Entity::find_by_id(&id)
+                            .select_only()
+                            .column(usage_invocation::Column::AppId)
+                            .into_tuple::<Option<String>>()
+                            .one(txn)
+                            .await?
+                        else {
+                            return Ok::<_, sea_orm::DbErr>(());
+                        };
+                        app
+                    }
                 };
-                if let Some(app) = row.app_id.as_deref() {
+                if let Some(app) = app.as_deref() {
                     crate::db::coordination::coordinate(txn, "usage-budget", &[app]).await?;
                 }
-                let Some(row) = usage_invocation::Entity::find_by_id(&id).one(txn).await? else {
-                    return Ok(());
-                };
-                if !matches!(row.status.as_str(), STATUS_PENDING | STATUS_UNKNOWN_USAGE) {
-                    return Ok(());
-                }
                 let now = Utc::now().fixed_offset();
-                let active: usage_invocation::ActiveModel = row.into();
-                let row = usage_invocation::ActiveModel {
-                    status: Set(settlement.status.to_string()),
-                    input_tokens: Set(settlement.input_tokens.max(0)),
-                    output_tokens: Set(settlement.output_tokens.max(0)),
-                    embedding_tokens: Set(settlement.embedding_tokens.max(0)),
-                    cost_micro_dollars: Set(settlement.cost_micro_dollars.max(0)),
-                    latency: Set(settlement.latency_ms),
-                    provider_request_id: Set(settlement.provider_request_id),
-                    raw_usage: Set(settlement.raw_usage),
-                    error: Set(settlement.error),
-                    completed_at: Set(Some(now)),
-                    updated_at: Set(now),
-                    ..active
+                let settled = usage_invocation::Entity::update_many()
+                    .set(usage_invocation::ActiveModel {
+                        status: Set(settlement.status.to_string()),
+                        input_tokens: Set(settlement.input_tokens.max(0)),
+                        output_tokens: Set(settlement.output_tokens.max(0)),
+                        embedding_tokens: Set(settlement.embedding_tokens.max(0)),
+                        cost_micro_dollars: Set(settlement.cost_micro_dollars.max(0)),
+                        latency: Set(settlement.latency_ms),
+                        provider_request_id: Set(settlement.provider_request_id),
+                        raw_usage: Set(settlement.raw_usage),
+                        error: Set(settlement.error),
+                        completed_at: Set(Some(now)),
+                        updated_at: Set(now),
+                        ..Default::default()
+                    })
+                    .filter(usage_invocation::Column::Id.eq(id.as_str()))
+                    .filter(
+                        usage_invocation::Column::Status
+                            .is_in([STATUS_PENDING, STATUS_UNKNOWN_USAGE]),
+                    )
+                    .exec_with_returning(txn)
+                    .await?;
+                for row in &settled {
+                    crate::rolling_usage::sync_invocation(txn, row).await?;
                 }
-                .update(txn)
-                .await?;
-                crate::rolling_usage::sync_invocation(txn, &row).await?;
                 Ok::<_, sea_orm::DbErr>(())
             })
         },
@@ -519,7 +540,14 @@ pub async fn settle_hosted_usage_invocation(
     .await
     .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
     settlement.raw_usage = Some(detail);
-    settle_usage_invocation_with_dialect(&state.db, state.db_dialect, Some(id), settlement).await
+    settle_usage_invocation_with_dialect(
+        &state.db,
+        state.db_dialect,
+        Some(id),
+        Some(row.app_id),
+        settlement,
+    )
+    .await
 }
 
 pub async fn record_provider_request_id(
@@ -549,29 +577,33 @@ pub async fn reconcile_stale_invocations(
 ) -> Result<UsageReconciliationResult, sea_orm::DbErr> {
     let cutoff = Utc::now().fixed_offset() - Duration::minutes(older_than_minutes.max(1));
     let stale = usage_invocation::Entity::find()
+        .select_only()
+        .column(usage_invocation::Column::Id)
         .filter(usage_invocation::Column::Status.eq(STATUS_PENDING))
         .filter(usage_invocation::Column::StartedAt.lt(cutoff))
         .order_by_asc(usage_invocation::Column::StartedAt)
         .limit(500)
+        .into_tuple::<String>()
         .all(db)
         .await?;
 
-    let now = Utc::now().fixed_offset();
-    let mut marked = 0;
-    for row in stale {
-        let updated = usage_invocation::Entity::update_many()
+    let marked = if stale.is_empty() {
+        0
+    } else {
+        let now = Utc::now().fixed_offset();
+        usage_invocation::Entity::update_many()
             .set(usage_invocation::ActiveModel {
                 status: Set(STATUS_UNKNOWN_USAGE.to_string()),
                 completed_at: Set(Some(now)),
                 updated_at: Set(now),
                 ..Default::default()
             })
-            .filter(usage_invocation::Column::Id.eq(row.id))
+            .filter(usage_invocation::Column::Id.is_in(stale))
             .filter(usage_invocation::Column::Status.eq(STATUS_PENDING))
             .exec(db)
-            .await?;
-        marked += updated.rows_affected;
-    }
+            .await?
+            .rows_affected
+    };
 
     Ok(UsageReconciliationResult {
         older_than_minutes,

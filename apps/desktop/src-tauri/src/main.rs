@@ -11,6 +11,8 @@ include!("application.rs");
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    remove_webkit_adaptive_streaming_overrides();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.iter().any(|arg| {
         arg == "--flowpilot-workflow-benchmark"
@@ -27,4 +29,18 @@ fn main() {
         }
     }
     run()
+}
+
+/// WebKitGTK's GStreamer HLS and DASH demuxers fetch playlists and segments
+/// outside WebKit's loader, and so outside the widget document CSP; these
+/// variables would promote them. Runs before any thread starts, so mutating
+/// the environment cannot race a reader.
+#[cfg(target_os = "linux")]
+fn remove_webkit_adaptive_streaming_overrides() {
+    for name in [
+        "WEBKIT_GST_ENABLE_HLS_SUPPORT",
+        "WEBKIT_GST_ENABLE_DASH_SUPPORT",
+    ] {
+        unsafe { std::env::remove_var(name) };
+    }
 }

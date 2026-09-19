@@ -1,5 +1,8 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { MAX_HOME_LAYOUT_BYTES } from "./home-layout";
+import {
+	MAX_HOME_LAYOUT_BYTES,
+	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
+} from "./home-layout";
 import {
 	formatHomeLayoutJson,
 	homeLayoutFingerprint,
@@ -98,6 +101,24 @@ describe("home layout JSON transfer", () => {
 		});
 	});
 
+	it("keeps widget Tailwind classes through export, import and fingerprinting", () => {
+		const styled = structuredClone(layout);
+		styled.widgets[0].appearance.className = "rounded-3xl [&_h2]:text-lg";
+		expect(parseHomeLayoutJson(serializeHomeLayout(styled))).toEqual({
+			ok: true,
+			layout: styled,
+		});
+		expect(homeLayoutFingerprint(styled)).not.toBe(
+			homeLayoutFingerprint(layout),
+		);
+		const unstyled = structuredClone(styled);
+		unstyled.widgets[0].appearance.className = "   ";
+		const parsed = parseHomeLayoutJson(JSON.stringify(unstyled));
+		expect(parsed.ok && homeLayoutFingerprint(parsed.layout)).toBe(
+			homeLayoutFingerprint(layout),
+		);
+	});
+
 	it("rejects a pasted layout that cannot fit the save limit", () => {
 		const oversized = structuredClone(layout);
 		oversized.widgets[0].config.body = "x".repeat(MAX_HOME_LAYOUT_BYTES);
@@ -135,6 +156,14 @@ describe("home layout JSON transfer", () => {
 					value.widgets[0].appearance.variant = "";
 				},
 				error: "Widget 1 appearance variant must contain 1 to 80 bytes.",
+			},
+			{
+				update: (value) => {
+					value.widgets[0].appearance.className = "p".repeat(
+						MAX_HOME_WIDGET_CLASS_NAME_BYTES + 1,
+					);
+				},
+				error: `Widget 1 appearance className must not exceed ${MAX_HOME_WIDGET_CLASS_NAME_BYTES} bytes.`,
 			},
 			{
 				update: (value) => {

@@ -11,8 +11,8 @@ use axum::{Extension, Json};
 use chrono::{Duration, Utc};
 use sea_orm::sea_query::{Alias, Expr, Order as SeaOrder, Query as SeaQuery};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, Order, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, Statement,
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, Order, QueryFilter,
+    QueryOrder, QuerySelect, Statement,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -56,9 +56,72 @@ struct CountRow {
     cnt: i64,
 }
 
-#[derive(Debug, FromQueryResult)]
-struct ScalarCount {
-    cnt: i64,
+#[derive(Debug, Default, FromQueryResult)]
+struct WindowCounts {
+    total: i64,
+    server: i64,
+    client: i64,
+    previous: i64,
+    users: i64,
+    paths: i64,
+}
+
+/// Every scalar of the dashboard in one pass over `[prev_cutoff, now)`: each
+/// figure is a `COUNT([DISTINCT] CASE WHEN <its window> THEN <column> END)`.
+async fn window_counts<C: ConnectionTrait>(
+    db: &C,
+    cutoff: chrono::DateTime<chrono::FixedOffset>,
+    prev_cutoff: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<WindowCounts, ApiError> {
+    use sea_orm::sea_query::ExprTrait;
+
+    let current = || Expr::col(error_report::Column::CreatedAt).gte(cutoff);
+    let status = || Expr::col(error_report::Column::StatusCode);
+    let when = |condition: sea_orm::sea_query::SimpleExpr, column: error_report::Column| {
+        Expr::expr(Expr::case(condition, Expr::col(column)))
+    };
+
+    let mut q = SeaQuery::select();
+    q.from(error_report::Entity)
+        .expr_as(
+            when(current(), error_report::Column::Id).count(),
+            Alias::new("total"),
+        )
+        .expr_as(
+            when(current().and(status().gte(500)), error_report::Column::Id).count(),
+            Alias::new("server"),
+        )
+        .expr_as(
+            when(
+                current().and(status().gte(400)).and(status().lt(500)),
+                error_report::Column::Id,
+            )
+            .count(),
+            Alias::new("client"),
+        )
+        .expr_as(
+            when(
+                Expr::col(error_report::Column::CreatedAt).lt(cutoff),
+                error_report::Column::Id,
+            )
+            .count(),
+            Alias::new("previous"),
+        )
+        .expr_as(
+            when(current(), error_report::Column::UserId).count_distinct(),
+            Alias::new("users"),
+        )
+        .expr_as(
+            when(current(), error_report::Column::Path).count_distinct(),
+            Alias::new("paths"),
+        )
+        .and_where(Expr::col(error_report::Column::CreatedAt).gte(prev_cutoff));
+
+    let stmt = db.get_database_backend().build(&q);
+    Ok(WindowCounts::find_by_statement(stmt)
+        .one(db)
+        .await?
+        .unwrap_or_default())
 }
 
 async fn group_count<C: ConnectionTrait>(
@@ -86,29 +149,32 @@ async fn group_count<C: ConnectionTrait>(
     Ok(rows)
 }
 
-async fn distinct_count<C: ConnectionTrait>(
+async fn user_count<C: ConnectionTrait>(
     db: &C,
-    column: error_report::Column,
     cutoff: chrono::DateTime<chrono::FixedOffset>,
-    only_non_null: bool,
-) -> Result<i64, ApiError> {
-    use sea_orm::sea_query::ExprTrait;
-
-    let mut q = SeaQuery::select();
-    q.from(error_report::Entity)
-        .expr_as(Expr::col(column).count_distinct(), Alias::new("cnt"))
-        .and_where(Expr::col(error_report::Column::CreatedAt).gte(cutoff));
-    if only_non_null {
-        q.and_where(Expr::col(column).is_not_null());
-    }
-
-    let stmt = db.get_database_backend().build(&q);
-    let row = ScalarCount::find_by_statement(stmt)
-        .one(db)
-        .await?
-        .map(|r| r.cnt)
-        .unwrap_or(0);
-    Ok(row)
+    limit: u64,
+) -> Result<Vec<CountRow>, ApiError> {
+    // Top users: SeaORM doesn't allow easy filtering of NULL keys in group_by helper, do raw SQL
+    let backend = db.get_database_backend();
+    let users_sql = match backend {
+        DbBackend::Postgres => r#"SELECT "userId" AS "key", COUNT(*) AS "cnt"
+FROM "ErrorReport"
+WHERE "createdAt" >= $1 AND "userId" IS NOT NULL
+GROUP BY "userId"
+ORDER BY "cnt" DESC
+LIMIT $2"#
+            .to_string(),
+        _ => r#"SELECT user_id AS key, COUNT(*) AS cnt
+FROM error_report
+WHERE created_at >= $1 AND user_id IS NOT NULL
+GROUP BY user_id
+ORDER BY cnt DESC
+LIMIT $2"#
+            .to_string(),
+    };
+    let stmt =
+        Statement::from_sql_and_values(backend, users_sql, [cutoff.into(), (limit as i64).into()]);
+    Ok(CountRow::find_by_statement(stmt).all(db).await?)
 }
 
 #[utoipa::path(
@@ -138,29 +204,32 @@ pub async fn error_stats(
     let cutoff = now - Duration::hours(hours);
     let prev_cutoff = cutoff - Duration::hours(hours);
 
-    let total_errors = error_report::Entity::find()
-        .filter(error_report::Column::CreatedAt.gte(cutoff))
-        .count(&state.db)
-        .await? as i64;
+    let (counts, recent_models) = flow_like_types::tokio::join!(
+        window_counts(&state.db, cutoff, prev_cutoff),
+        error_report::Entity::find()
+            .filter(error_report::Column::CreatedAt.gte(cutoff))
+            .order_by(error_report::Column::CreatedAt, Order::Desc)
+            .limit(top.min(25))
+            .all(&state.db),
+    );
+    let counts = counts?;
+    let recent_models = recent_models?;
 
-    let server_errors = error_report::Entity::find()
-        .filter(error_report::Column::CreatedAt.gte(cutoff))
-        .filter(error_report::Column::StatusCode.gte(500))
-        .count(&state.db)
-        .await? as i64;
+    let (top_codes_rows, top_paths_rows, user_rows) = flow_like_types::tokio::join!(
+        group_count(&state.db, error_report::Column::PublicCode, cutoff, top),
+        group_count(&state.db, error_report::Column::Path, cutoff, top),
+        user_count(&state.db, cutoff, top),
+    );
+    let top_codes_rows = top_codes_rows?;
+    let top_paths_rows = top_paths_rows?;
+    let user_rows = user_rows?;
 
-    let client_errors = error_report::Entity::find()
-        .filter(error_report::Column::CreatedAt.gte(cutoff))
-        .filter(error_report::Column::StatusCode.gte(400))
-        .filter(error_report::Column::StatusCode.lt(500))
-        .count(&state.db)
-        .await? as i64;
-
-    let previous_window_total = error_report::Entity::find()
-        .filter(error_report::Column::CreatedAt.gte(prev_cutoff))
-        .filter(error_report::Column::CreatedAt.lt(cutoff))
-        .count(&state.db)
-        .await? as i64;
+    let total_errors = counts.total;
+    let server_errors = counts.server;
+    let client_errors = counts.client;
+    let previous_window_total = counts.previous;
+    let unique_users_affected = counts.users;
+    let unique_paths = counts.paths;
 
     let change_percent = if previous_window_total > 0 {
         Some(((total_errors - previous_window_total) as f64 / previous_window_total as f64) * 100.0)
@@ -170,21 +239,8 @@ pub async fn error_stats(
         None
     };
 
-    let unique_users_affected =
-        distinct_count(&state.db, error_report::Column::UserId, cutoff, true).await?;
-
-    let unique_paths = distinct_count(&state.db, error_report::Column::Path, cutoff, false).await?;
-
-    let recent_models = error_report::Entity::find()
-        .filter(error_report::Column::CreatedAt.gte(cutoff))
-        .order_by(error_report::Column::CreatedAt, Order::Desc)
-        .limit(top.min(25))
-        .all(&state.db)
-        .await?;
     let recent: Vec<ErrorReportRecord> = recent_models.into_iter().map(Into::into).collect();
 
-    let top_codes_rows =
-        group_count(&state.db, error_report::Column::PublicCode, cutoff, top).await?;
     let top_codes = top_codes_rows
         .into_iter()
         .map(|r| {
@@ -197,7 +253,6 @@ pub async fn error_stats(
         })
         .collect();
 
-    let top_paths_rows = group_count(&state.db, error_report::Column::Path, cutoff, top).await?;
     let top_paths = top_paths_rows
         .into_iter()
         .map(|r| {
@@ -210,27 +265,6 @@ pub async fn error_stats(
         })
         .collect();
 
-    // Top users: SeaORM doesn't allow easy filtering of NULL keys in group_by helper, do raw SQL
-    let backend = state.db.get_database_backend();
-    let users_sql = match backend {
-        DbBackend::Postgres => r#"SELECT "userId" AS "key", COUNT(*) AS "cnt"
-FROM "ErrorReport"
-WHERE "createdAt" >= $1 AND "userId" IS NOT NULL
-GROUP BY "userId"
-ORDER BY "cnt" DESC
-LIMIT $2"#
-            .to_string(),
-        _ => r#"SELECT user_id AS key, COUNT(*) AS cnt
-FROM error_report
-WHERE created_at >= $1 AND user_id IS NOT NULL
-GROUP BY user_id
-ORDER BY cnt DESC
-LIMIT $2"#
-            .to_string(),
-    };
-    let stmt =
-        Statement::from_sql_and_values(backend, users_sql, [cutoff.into(), (top as i64).into()]);
-    let user_rows = CountRow::find_by_statement(stmt).all(&state.db).await?;
     let top_users = user_rows
         .into_iter()
         .map(|r| {

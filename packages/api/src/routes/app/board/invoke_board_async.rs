@@ -211,6 +211,9 @@ pub async fn invoke_board_async(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),

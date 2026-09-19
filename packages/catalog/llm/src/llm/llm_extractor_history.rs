@@ -28,6 +28,9 @@ use rig::tool::Tool;
 #[cfg(feature = "execute")]
 use std::{fmt, time::Instant};
 
+#[cfg(feature = "execute")]
+use super::llm_extractor::{prepare_schema, validate_extracted_value};
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct LLMExtractHistoryNode {}
@@ -76,7 +79,9 @@ impl Tool for DynamicSubmitTool {
     }
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        jsonschema::validate(&self.output_schema, &args)
+        super::llm_extractor::compile_validator(&self.output_schema)
+            .map_err(|e| SubmitError(format!("{}", e)))?
+            .validate(&args)
             .map_err(|e| SubmitError(format!("{}", e)))?;
         Ok(args)
     }
@@ -84,99 +89,6 @@ impl Tool for DynamicSubmitTool {
     fn name(&self) -> String {
         Self::NAME.to_string()
     }
-}
-
-#[cfg(feature = "execute")]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ExtractionMode {
-    Direct,
-    Wrapped,
-}
-
-#[cfg(feature = "execute")]
-struct PreparedSchema {
-    tool_parameters: Value,
-    output_schema: Value,
-    mode: ExtractionMode,
-    was_inferred: bool,
-}
-
-#[cfg(feature = "execute")]
-fn looks_like_schema(value: &Value) -> bool {
-    const SCHEMA_KEYWORDS: &[&str] = &[
-        "type",
-        "properties",
-        "items",
-        "$schema",
-        "$ref",
-        "allOf",
-        "anyOf",
-        "oneOf",
-        "not",
-        "required",
-        "additionalProperties",
-        "patternProperties",
-        "enum",
-        "const",
-        "minimum",
-        "maximum",
-        "minLength",
-        "maxLength",
-        "pattern",
-        "format",
-        "definitions",
-        "$defs",
-    ];
-
-    value
-        .as_object()
-        .is_some_and(|obj| SCHEMA_KEYWORDS.iter().any(|kw| obj.contains_key(*kw)))
-}
-
-#[cfg(feature = "execute")]
-fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("Schema input cannot be empty"));
-    }
-
-    let user_json = json::from_str::<Value>(trimmed).map_err(|e| {
-        anyhow!(
-            "Schema must be valid JSON (either a JSON Schema or an example JSON). Parse error: {e}"
-        )
-    })?;
-
-    let is_schema = looks_like_schema(&user_json) && jsonschema::meta::is_valid(&user_json);
-    let (inferred, was_inferred) = if is_schema {
-        (user_json, false)
-    } else {
-        let schema = schemars::schema_for_value!(&user_json);
-        let string = json::to_string_pretty(&schema)?;
-        (json::from_str(&string)?, true)
-    };
-
-    let mode = match inferred.get("type").and_then(|t| t.as_str()) {
-        Some("object") => ExtractionMode::Direct,
-        _ => ExtractionMode::Wrapped,
-    };
-
-    let tool_parameters = if mode == ExtractionMode::Direct {
-        inferred.clone()
-    } else {
-        json::json!({
-            "type": "object",
-            "properties": {"value": inferred.clone()},
-            "required": ["value"],
-            "additionalProperties": false
-        })
-    };
-
-    Ok(PreparedSchema {
-        tool_parameters,
-        output_schema: inferred,
-        mode,
-        was_inferred,
-    })
 }
 
 #[async_trait]
@@ -304,7 +216,7 @@ impl NodeLogic for LLMExtractHistoryNode {
             .await?
             .preamble(&preamble)
             .tool(DynamicSubmitTool {
-                parameters: prepared_schema.tool_parameters,
+                parameters: prepared_schema.tool_parameters.clone(),
                 output_schema: prepared_schema.output_schema.clone(),
             })
             .tool_choice(ToolChoice::Required);
@@ -347,13 +259,7 @@ impl NodeLogic for LLMExtractHistoryNode {
             anyhow!("Model did not return a 'submit' tool call. Ensure the model supports function calling.")
         })?;
 
-        let extracted = match prepared_schema.mode {
-            ExtractionMode::Direct => args,
-            ExtractionMode::Wrapped => args
-                .get("value")
-                .cloned()
-                .ok_or_else(|| anyhow!("Tool call missing 'value' field in wrapped mode"))?,
-        };
+        let extracted = validate_extracted_value(&prepared_schema, args)?;
 
         context.log_message("Successfully extracted structured data", LogLevel::Debug);
 

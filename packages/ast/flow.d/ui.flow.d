@@ -163,7 +163,7 @@ declare namespace ui {
     function widgetGetElement({ elementRef: Struct, elementId: string }): { element: Struct, exists: bool };
 
     /**
-     * Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.
+     * Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.
      * @node a2ui_widget_query @alias a2uiWidgetQuery
      * @param elementRef — Package widget reference from Instantiate Widget, or a visual-builder widget from Get Element
      * @param query — Contract query to run on the widget instance
@@ -184,9 +184,9 @@ declare namespace ui {
     function widgetSetText({ elementRef: Struct, elementId: string, text?: string }): Struct;
 
     /**
-     * Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.
+     * Sends a typed input patch to a package widget instance. Select a Page widget, or connect Element Ref from Instantiate Widget or Element from Get Element, to generate one optional pin per contract input. Only set pins are included in the patch.
      * @node a2ui_widget_update_inputs @alias a2uiWidgetUpdateInputs
-     * @param elementRef — Element reference of a package widget instance (from Instantiate Widget)
+     * @param elementRef — Select a Page widget, or connect its reference from Instantiate Widget or Get Element
      * @impure has side effects / drives control flow
      */
     function widgetUpdateInputs({ elementRef: Struct }): void;

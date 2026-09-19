@@ -22,6 +22,32 @@ import type {
 /** Segment id of nodes without a layer. Must match `ROOT_SEGMENT` in the Rust module. */
 export const ROOT_SEGMENT = "__root__";
 
+/**
+ * Ids in a sync payload are chosen by whoever wrote the board. `obj[id] = value` with an id of
+ * `__proto__` would swap the map's prototype and hide the entity from every `Object.keys` walk
+ * while it keeps executing, so entries are always written as own data properties.
+ */
+export function setEntry<T>(
+	target: Record<string, T>,
+	id: string,
+	value: T,
+): void {
+	Object.defineProperty(target, id, {
+		value,
+		enumerable: true,
+		configurable: true,
+		writable: true,
+	});
+}
+
+function assignEntries<T>(
+	target: Record<string, T>,
+	source: Record<string, T> | undefined,
+): void {
+	for (const [id, value] of Object.entries(source ?? {}))
+		setEntry(target, id, value);
+}
+
 /** The effective layer of a node: `""` and `null`/`undefined` are the same thing to the canvas. */
 export function nodeSegment(node: { layer?: string | null }): string {
 	const layer = node.layer ?? "";
@@ -118,7 +144,7 @@ export function toNode(
 	for (const [id, wirePin] of Object.entries(wire.pins ?? {})) {
 		const { pin, missing } = toPin(wirePin, catalogPins?.get(wirePin.name));
 		if (wantsHydration && missing) hydratable = false;
-		pins[id] = pin;
+		setEntry(pins, id, pin);
 	}
 
 	const node: INode = {
@@ -130,6 +156,7 @@ export function toNode(
 		comment: wire.comment ?? null,
 		start: wire.start ?? null,
 		error: wire.error ?? null,
+		pins_collapsed: wire.pins_collapsed ?? null,
 		hash: wire.hash ?? null,
 		fn_refs: wire.fn_refs ?? null,
 		wasm: wire.wasm ?? null,
@@ -175,10 +202,10 @@ export function resolveManifest(
 	const delta = response.manifest_delta ?? {};
 	const layers: Record<string, string> = { ...(request?.layers ?? {}) };
 	for (const id of response.dropped_layers ?? []) delete layers[id];
-	Object.assign(layers, delta.layers ?? {});
+	assignEntries(layers, delta.layers);
 	const segments: Record<string, string> = { ...(request?.segments ?? {}) };
 	for (const id of response.dropped_segments ?? []) delete segments[id];
-	Object.assign(segments, delta.segments ?? {});
+	assignEntries(segments, delta.segments);
 	return {
 		meta: delta.meta ?? request?.meta ?? "",
 		variables: delta.variables ?? request?.variables ?? "",
@@ -254,14 +281,14 @@ export function applyBoardSync(
 		if (replaced.has(segmentId)) continue;
 		const removed = patched.get(segmentId);
 		if (removed?.has(id)) continue;
-		nodes[id] = node;
+		setEntry(nodes, id, node);
 	}
 	for (const [segmentId, segment] of Object.entries(segments)) {
 		if (unpatchable.has(segmentId)) continue;
 		for (const [id, wire] of Object.entries(segment.nodes ?? {})) {
 			const { node, hydratable } = toNode(wire, catalog);
 			if (!hydratable) unhydratable.add(segmentId);
-			nodes[id] = node;
+			setEntry(nodes, id, node);
 		}
 	}
 
@@ -269,10 +296,13 @@ export function applyBoardSync(
 	// take the changed ones, drop the removed ones, keep the rest by identity.
 	const layers: IBoard["layers"] = {};
 	for (const [id, layer] of Object.entries(prev?.layers ?? {})) {
-		if (!droppedLayers.includes(id) && !(id in changedLayers))
-			layers[id] = layer;
+		if (
+			!droppedLayers.includes(id) &&
+			!Object.prototype.hasOwnProperty.call(changedLayers, id)
+		)
+			setEntry(layers, id, layer);
 	}
-	Object.assign(layers, changedLayers);
+	assignEntries(layers, changedLayers);
 
 	const meta = response.meta;
 	const board: IBoard = {

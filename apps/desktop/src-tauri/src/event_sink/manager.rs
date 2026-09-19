@@ -1,12 +1,16 @@
 use anyhow::{Context, Result};
-use flow_like::flow::event::EventExecutionMode;
+use flow_like::app::App;
+use flow_like::flow::event::{Event, EventExecutionMode};
 use flow_like::flow::oauth::OAuthToken;
+use flow_like::state::FlowLikeState;
 use flow_like_types::intercom::BufferedInterComHandler;
+use futures::future::join_all;
 use rusqlite::{Connection, params};
 use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::event_sink::cron::CronSchedule;
@@ -112,6 +116,15 @@ impl RegistrationStorage {
             "personal_access_token TEXT",
         )?;
         Self::ensure_registration_column(&conn, "oauth_tokens", "oauth_tokens TEXT")?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS event_credential_stash (
+                event_id TEXT PRIMARY KEY,
+                personal_access_token TEXT,
+                oauth_tokens TEXT
+            )",
+            [],
+        )?;
 
         Ok(())
     }
@@ -326,6 +339,68 @@ impl RegistrationStorage {
         )?;
         Ok(())
     }
+
+    /// Keeps a registration's credentials after the user declined its trigger,
+    /// so allowing it later does not need the PAT dialog again.
+    fn stash_credentials(&self, registration: &EventRegistration) -> Result<()> {
+        let oauth_tokens_json = if registration.oauth_tokens.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&registration.oauth_tokens)?)
+        };
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO event_credential_stash
+             (event_id, personal_access_token, oauth_tokens)
+             VALUES (?1, ?2, ?3)",
+            params![
+                registration.event_id,
+                registration.personal_access_token,
+                oauth_tokens_json,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Removes and returns the credentials stashed for `event_id`.
+    fn take_stashed_credentials(&self, event_id: &str) -> Result<Option<StashedCredentials>> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn.query_row(
+            "SELECT personal_access_token, oauth_tokens
+               FROM event_credential_stash
+              WHERE event_id = ?1",
+            params![event_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        );
+        let (personal_access_token, oauth_tokens_json) = match row {
+            Ok(row) => row,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        conn.execute(
+            "DELETE FROM event_credential_stash WHERE event_id = ?1",
+            params![event_id],
+        )?;
+        let oauth_tokens = oauth_tokens_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Some(StashedCredentials {
+            personal_access_token,
+            oauth_tokens,
+        }))
+    }
+}
+
+/// Credentials of a declined registration, kept until the trigger is allowed.
+struct StashedCredentials {
+    personal_access_token: Option<String>,
+    oauth_tokens: HashMap<String, OAuthToken>,
 }
 
 /// Manager for all event sinks
@@ -409,8 +484,12 @@ impl EventSinkManager {
         self.db.clone()
     }
 
-    /// Fire an event by retrieving its configuration and pushing it to the event bus
+    /// Fire an event by retrieving its configuration and pushing it to the event bus.
     /// This is a centralized method that handles offline status, personal_access_token, oauth_tokens, etc.
+    ///
+    /// `Ok(false)` means the bus could not take the event right now and a later
+    /// attempt may succeed. `Err` means the registration itself cannot fire (it
+    /// is missing, or online without an access token) until it is saved again.
     pub fn fire_event(
         &self,
         app_handle: &AppHandle,
@@ -418,7 +497,27 @@ impl EventSinkManager {
         payload: Option<flow_like_types::Value>,
         callback: Option<Arc<BufferedInterComHandler>>,
     ) -> Result<bool> {
-        tracing::info!("🔥 [FIRE_EVENT] Starting fire_event for: {}", event_id);
+        match self.fire_event_for_retry(app_handle, event_id, payload, callback)? {
+            Ok(()) => Ok(true),
+            Err(reason) => {
+                // Nothing retries this event: the request that fired it is lost.
+                tracing::error!("Failed to push event {}: {}", event_id, reason);
+                Ok(false)
+            }
+        }
+    }
+
+    /// [`Self::fire_event`] for callers that retry. When the bus does not take
+    /// the event, the reason comes back as `Ok(Err(reason))` without being
+    /// logged, so the caller can log it once rather than on every attempt.
+    pub fn fire_event_for_retry(
+        &self,
+        app_handle: &AppHandle,
+        event_id: &str,
+        payload: Option<flow_like_types::Value>,
+        callback: Option<Arc<BufferedInterComHandler>>,
+    ) -> Result<Result<(), String>> {
+        tracing::debug!("🔥 [FIRE_EVENT] Starting fire_event for: {}", event_id);
 
         let conn = self.db.lock().unwrap();
 
@@ -460,6 +559,12 @@ impl EventSinkManager {
         drop(stmt);
         drop(conn);
 
+        if !offline && personal_access_token.is_none() {
+            return Err(anyhow::anyhow!(
+                "Event {event_id} is registered for online execution but has no access token; it cannot run locally until it is saved again with one"
+            ));
+        }
+
         // Convert oauth_tokens to Option if empty
         let oauth_tokens_opt = if oauth_tokens.is_empty() {
             None
@@ -470,7 +575,7 @@ impl EventSinkManager {
         if let Some(event_bus_state) = app_handle.try_state::<crate::state::TauriEventBusState>() {
             let event_bus = &event_bus_state.0;
 
-            let push_result = event_bus.push_event_with_token(
+            Ok(event_bus.push_event_with_token(
                 payload,
                 app_id.clone(),
                 event_id.to_string(),
@@ -478,18 +583,9 @@ impl EventSinkManager {
                 personal_access_token,
                 callback,
                 oauth_tokens_opt,
-            );
-
-            match push_result {
-                Ok(_) => Ok(true),
-                Err(e) => {
-                    tracing::error!("Failed to push event {}: {:?}", event_id, e);
-                    Ok(false)
-                }
-            }
+            ))
         } else {
-            tracing::error!("EventBus state not available for {}", event_id);
-            Ok(false)
+            Ok(Err("event bus not available".to_owned()))
         }
     }
 
@@ -704,120 +800,125 @@ impl EventSinkManager {
         Ok(())
     }
 
+    /// The sink configuration this device registers for `event`, or the reason
+    /// it must not register one. Remote events run on the server: a local
+    /// registration would fire them here without a token and, for cron, retry
+    /// them forever.
+    pub fn local_sink_config(event: &Event) -> Result<EventConfig, String> {
+        if !Self::supports_sink_registration(&event.event_type) {
+            return Err("event type has no local sink".to_owned());
+        }
+        if !event.active {
+            return Err("event is inactive".to_owned());
+        }
+        if event.execution_mode == EventExecutionMode::Remote {
+            return Err("event runs remotely".to_owned());
+        }
+        let config = Self::parse_event_config(&event.event_type, &event.config)
+            .map_err(|err| format!("sink config could not be parsed: {err:#}"))?;
+        if config.is_remote_only() {
+            return Err("sink is configured for remote execution".to_owned());
+        }
+        Ok(config)
+    }
+
+    /// Why `event` must not have a sink registration on this device, if anything.
+    pub fn local_registration_blocker(event: &Event) -> Option<String> {
+        Self::local_sink_config(event).err()
+    }
+
+    async fn unregister_if_registered(&self, app_handle: &AppHandle, event_id: &str) -> Result<()> {
+        if self.storage.get_registration(event_id)?.is_some() {
+            self.unregister_event(app_handle, event_id).await?;
+        }
+        Ok(())
+    }
+
+    /// Removes the trigger of `event_id` after the user declined it. Its
+    /// credentials are kept, so allowing the trigger later needs no new PAT.
+    pub async fn decline_local_registration(
+        &self,
+        app_handle: &AppHandle,
+        event_id: &str,
+    ) -> Result<()> {
+        let Some(registration) = self.storage.get_registration(event_id)? else {
+            return Ok(());
+        };
+        if registration.personal_access_token.is_some() || !registration.oauth_tokens.is_empty() {
+            self.storage.stash_credentials(&registration)?;
+        }
+        self.unregister_event(app_handle, event_id).await
+    }
+
     /// Automatically register an event from a flow_like Event struct
     /// This parses the event.config bytes and event_type to determine which sink to use
     pub async fn register_from_flow_event(
         &self,
         app_handle: &AppHandle,
         app_id: &str,
-        event: &flow_like::flow::event::Event,
+        event: &Event,
         offline: Option<bool>,
         personal_access_token: Option<String>,
         oauth_tokens: Option<HashMap<String, OAuthToken>>,
     ) -> Result<()> {
-        // Check if this event type supports sink registration
-        if !Self::supports_sink_registration(&event.event_type) {
-            // Clean up if it was previously registered (e.g., type changed)
-            if self.storage.get_registration(&event.id)?.is_some() {
-                self.unregister_event(app_handle, &event.id).await?;
+        let event_config = match Self::local_sink_config(event) {
+            Ok(config) => config,
+            Err(reason) => {
+                tracing::info!(
+                    event_id = %event.id,
+                    event_type = %event.event_type,
+                    reason = %reason,
+                    "Skipping local sink registration"
+                );
+                self.unregister_if_registered(app_handle, &event.id).await?;
+                return Ok(());
             }
-            return Ok(());
-        }
-
-        // Only register active events
-        if !event.active {
-            // If it was previously registered, unregister it
-            if self.storage.get_registration(&event.id)?.is_some() {
-                self.unregister_event(app_handle, &event.id).await?;
-            }
-            return Ok(());
-        }
-
-        if event.event_type == "daemon" && event.execution_mode != EventExecutionMode::Local {
-            tracing::info!(
-                "Event {} is a daemon but not local, skipping local daemon registration",
-                event.id
-            );
-            if self.storage.get_registration(&event.id)?.is_some() {
-                self.unregister_event(app_handle, &event.id).await?;
-            }
-            return Ok(());
-        }
-
-        // Determine which PAT to use based on existing registration
-        let final_pat = if let Some(existing_reg) = self.storage.get_registration(&event.id)? {
-            match (&existing_reg.personal_access_token, &personal_access_token) {
-                (Some(existing), None) => Some(existing.clone()),
-                (None, Some(new_pat)) => Some(new_pat.clone()),
-                (Some(_), Some(new_pat)) => Some(new_pat.clone()),
-                (None, None) => None,
-            }
-        } else {
-            // No existing registration, use whatever was provided
-            personal_access_token
         };
 
-        // Parse config bytes to determine sink type and configuration
-        let config_result = self.parse_event_config(&event.event_type, &event.config);
+        // New credentials win; otherwise those of the existing registration or,
+        // after a decline, the stashed ones carry over.
+        let existing = self.storage.get_registration(&event.id)?;
+        let stashed = match existing {
+            Some(_) => None,
+            None => self.storage.take_stashed_credentials(&event.id)?,
+        };
+        let (stored_pat, stored_oauth_tokens) = match (existing, stashed) {
+            (Some(registration), _) => (
+                registration.personal_access_token,
+                registration.oauth_tokens,
+            ),
+            (None, Some(stash)) => (stash.personal_access_token, stash.oauth_tokens),
+            (None, None) => (None, HashMap::new()),
+        };
+        let final_pat = personal_access_token.or(stored_pat);
+        let mut final_oauth_tokens = stored_oauth_tokens;
+        if let Some(new_tokens) = oauth_tokens {
+            final_oauth_tokens.extend(new_tokens);
+        }
 
         println!("Registering event {} ({})", event.id, event.event_type);
 
-        match config_result {
-            Ok(event_config) => {
-                // If the sink is configured for remote-only execution, skip local registration
-                if event_config.is_remote_only() {
-                    tracing::info!(
-                        "Event {} configured for remote-only execution, skipping local registration",
-                        event.id
-                    );
-                    // Clean up any existing local registration
-                    if self.storage.get_registration(&event.id)?.is_some() {
-                        self.unregister_event(app_handle, &event.id).await?;
-                    }
-                    return Ok(());
-                }
+        let registration = EventRegistration {
+            event_id: event.id.clone(),
+            name: event.name.clone(),
+            r#type: event.event_type.clone(),
+            updated_at: event.updated_at,
+            created_at: event.created_at,
+            config: event_config,
+            offline: offline.unwrap_or(true),
+            app_id: app_id.to_string(),
+            default_payload: None, // TODO: Parse from event if needed
+            personal_access_token: final_pat.clone(),
+            oauth_tokens: final_oauth_tokens,
+        };
 
-                // Merge oauth_tokens from existing registration with new tokens
-                let final_oauth_tokens =
-                    if let Some(existing_reg) = self.storage.get_registration(&event.id)? {
-                        let mut merged = existing_reg.oauth_tokens.clone();
-                        if let Some(new_tokens) = oauth_tokens {
-                            merged.extend(new_tokens);
-                        }
-                        merged
-                    } else {
-                        oauth_tokens.unwrap_or_default()
-                    };
-
-                let registration = EventRegistration {
-                    event_id: event.id.clone(),
-                    name: event.name.clone(),
-                    r#type: event.event_type.clone(),
-                    updated_at: event.updated_at,
-                    created_at: event.created_at,
-                    config: event_config,
-                    offline: offline.unwrap_or(true),
-                    app_id: app_id.to_string(),
-                    default_payload: None, // TODO: Parse from event if needed
-                    personal_access_token: final_pat.clone(),
-                    oauth_tokens: final_oauth_tokens,
-                };
-
-                self.register_event(app_handle, registration).await?;
-            }
-            Err(_e) => {
-                // If it was previously registered, unregister it
-                if self.storage.get_registration(&event.id)?.is_some() {
-                    self.unregister_event(app_handle, &event.id).await?;
-                }
-            }
-        }
+        self.register_event(app_handle, registration).await?;
 
         Ok(())
     }
 
     /// Parse event config bytes based on event_type
-    fn parse_event_config(&self, event_type: &str, config_bytes: &[u8]) -> Result<EventConfig> {
+    fn parse_event_config(event_type: &str, config_bytes: &[u8]) -> Result<EventConfig> {
         // If config is empty, try to create default config based on type
         if config_bytes.is_empty() {
             return Err(anyhow::anyhow!(
@@ -1061,6 +1162,147 @@ impl EventSinkManager {
         )
     }
 
+    /// Upper bound on resolving one app's events during the startup prune,
+    /// which runs while the manager lock blocks every other sink operation.
+    const PRUNE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Ids among `event_ids` whose live event in `app_id` runs remotely. An
+    /// app or event that does not load counts as local, so its registration
+    /// stays untouched.
+    async fn remote_event_ids(
+        state: Arc<FlowLikeState>,
+        app_id: String,
+        event_ids: Vec<String>,
+    ) -> Vec<String> {
+        let app = match App::load(app_id.clone(), state).await {
+            Ok(app) => app,
+            Err(err) => {
+                tracing::debug!(
+                    app_id = %app_id,
+                    error = %err,
+                    "App of sink registrations did not load, keeping them"
+                );
+                return Vec::new();
+            }
+        };
+
+        let mut remote = Vec::new();
+        for event_id in event_ids {
+            match app.get_event(&event_id, None).await {
+                Ok(event) if event.execution_mode == EventExecutionMode::Remote => {
+                    remote.push(event_id)
+                }
+                Ok(_) => {}
+                Err(err) => tracing::debug!(
+                    event_id = %event_id,
+                    error = %err,
+                    "Event of sink registration did not load, keeping it"
+                ),
+            }
+        }
+        remote
+    }
+
+    /// Drops registrations whose live event now runs remotely. Such rows are
+    /// left behind by events switched to Remote elsewhere (the server, another
+    /// device) or saved before Remote events were excluded; the sinks would
+    /// otherwise keep firing them locally. Apps are resolved concurrently,
+    /// each within [`Self::PRUNE_LOOKUP_TIMEOUT`].
+    async fn prune_remote_registrations(
+        &self,
+        app_handle: &AppHandle,
+        registrations: Vec<EventRegistration>,
+    ) -> Vec<EventRegistration> {
+        let state = match crate::state::TauriFlowLikeState::construct(app_handle).await {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "Flow-Like state unavailable, keeping every sink registration"
+                );
+                return registrations;
+            }
+        };
+
+        let mut by_app: HashMap<String, Vec<String>> = HashMap::new();
+        for registration in &registrations {
+            by_app
+                .entry(registration.app_id.clone())
+                .or_default()
+                .push(registration.event_id.clone());
+        }
+
+        let lookups = by_app.into_iter().map(|(app_id, event_ids)| {
+            let state = Arc::clone(&state);
+            async move {
+                match flow_like_types::tokio::time::timeout(
+                    Self::PRUNE_LOOKUP_TIMEOUT,
+                    Self::remote_event_ids(state, app_id.clone(), event_ids),
+                )
+                .await
+                {
+                    Ok(remote) => remote,
+                    Err(_) => {
+                        tracing::warn!(
+                            app_id = %app_id,
+                            "Timed out resolving the events of sink registrations, keeping them"
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+        });
+        let remote: HashSet<String> = join_all(lookups).await.into_iter().flatten().collect();
+
+        let mut kept = Vec::with_capacity(registrations.len());
+        for registration in registrations {
+            if !remote.contains(&registration.event_id) {
+                kept.push(registration);
+                continue;
+            }
+            if let Err(err) = self
+                .remove_remote_registration(app_handle, &registration)
+                .await
+            {
+                tracing::error!(
+                    event_id = %registration.event_id,
+                    error = %err,
+                    "Failed to remove local sink registration of a remote event"
+                );
+                kept.push(registration);
+            }
+        }
+
+        kept
+    }
+
+    /// Unregisters `registration` because its event runs remotely. A failing
+    /// sink cleanup (for example a handler row that was never written) still
+    /// drops the registration row, since the event must not fire here.
+    async fn remove_remote_registration(
+        &self,
+        app_handle: &AppHandle,
+        registration: &EventRegistration,
+    ) -> Result<()> {
+        if let Err(err) = self
+            .unregister_event(app_handle, &registration.event_id)
+            .await
+        {
+            tracing::warn!(
+                event_id = %registration.event_id,
+                error = %err,
+                "Sink cleanup failed for a remote event, dropping its registration anyway"
+            );
+            self.storage.delete_registration(&registration.event_id)?;
+        }
+        tracing::info!(
+            event_id = %registration.event_id,
+            event_type = %registration.r#type,
+            "Removed local sink registration of an event that runs remotely"
+        );
+        Ok(())
+    }
+
     /// Initialize all sinks on app startup
     /// This loads all registrations from the database and starts their infrastructure
     /// NOTE: We only need to start the sink workers, not re-register events
@@ -1079,6 +1321,10 @@ impl EventSinkManager {
                 reg.event_id, reg.r#type
             );
         }
+
+        let registrations = self
+            .prune_remote_registrations(app_handle, registrations)
+            .await;
 
         for registration in &registrations {
             if let EventConfig::Daemon(sink) = &registration.config {
@@ -1275,10 +1521,145 @@ impl EventSinkManager {
 mod tests {
     use super::*;
     use crate::event_sink::daemon::DaemonRestartPolicy;
+    use flow_like::flow::event::EventExposure;
+
+    fn flow_event(event_type: &str, active: bool, execution_mode: EventExecutionMode) -> Event {
+        let now = std::time::SystemTime::now();
+        Event {
+            id: "event".to_string(),
+            name: "Event".to_string(),
+            description: String::new(),
+            board_id: "board".to_string(),
+            board_version: None,
+            node_id: "node".to_string(),
+            variables: HashMap::new(),
+            config: br#"{"expression":"0 9 * * *"}"#.to_vec(),
+            active,
+            canary: None,
+            variants: Vec::new(),
+            priority: 0,
+            event_type: event_type.to_string(),
+            notes: None,
+            event_version: (0, 0, 0),
+            created_at: now,
+            updated_at: now,
+            default_page_id: None,
+            inputs: Vec::new(),
+            route: None,
+            is_default: false,
+            execution_mode,
+            exposure: EventExposure::default(),
+            correlation_mappings: None,
+        }
+    }
 
     #[test]
     fn supports_daemon_sink_registration() {
         assert!(EventSinkManager::supports_sink_registration("daemon"));
+    }
+
+    fn blocker(event: &Event) -> Option<String> {
+        EventSinkManager::local_registration_blocker(event)
+    }
+
+    #[test]
+    fn remote_events_never_register_locally() {
+        for event_type in ["cron", "http", "daemon", "deeplink", "geolocation"] {
+            assert_eq!(
+                blocker(&flow_event(event_type, true, EventExecutionMode::Remote)).as_deref(),
+                Some("event runs remotely"),
+                "{event_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_active_local_sink_events_register_locally() {
+        let registered = EventSinkManager::local_sink_config(&flow_event(
+            "cron",
+            true,
+            EventExecutionMode::Local,
+        ));
+        assert!(
+            matches!(registered, Ok(EventConfig::Cron(_))),
+            "{registered:?}"
+        );
+        assert_eq!(
+            blocker(&flow_event("cron", false, EventExecutionMode::Local)).as_deref(),
+            Some("event is inactive")
+        );
+        assert_eq!(
+            blocker(&flow_event("chat", true, EventExecutionMode::Local)).as_deref(),
+            Some("event type has no local sink")
+        );
+    }
+
+    #[test]
+    fn stashed_credentials_are_returned_once() {
+        let db_path = std::env::temp_dir().join(format!(
+            "flow-like-stash-test-{}.sqlite",
+            flow_like_types::create_id()
+        ));
+        let manager = EventSinkManager::new(db_path.to_str().unwrap()).unwrap();
+        let now = std::time::SystemTime::now();
+        let registration = EventRegistration {
+            event_id: "event".to_string(),
+            name: "Event".to_string(),
+            r#type: "cron".to_string(),
+            updated_at: now,
+            created_at: now,
+            config: EventConfig::Cron(CronSink {
+                schedule: CronSchedule::Expression {
+                    expression: "0 9 * * *".to_string(),
+                },
+                last_fired: None,
+                timezone: None,
+                sink_execution: None,
+            }),
+            offline: false,
+            app_id: "app".to_string(),
+            default_payload: None,
+            personal_access_token: Some("pat-1".to_string()),
+            oauth_tokens: HashMap::new(),
+        };
+
+        manager.storage.stash_credentials(&registration).unwrap();
+
+        let stashed = manager
+            .storage
+            .take_stashed_credentials("event")
+            .unwrap()
+            .expect("credentials were stashed");
+        assert_eq!(stashed.personal_access_token.as_deref(), Some("pat-1"));
+        assert!(stashed.oauth_tokens.is_empty());
+        assert!(
+            manager
+                .storage
+                .take_stashed_credentials("event")
+                .unwrap()
+                .is_none()
+        );
+
+        drop(manager);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn remote_only_or_unparsable_sink_configs_never_register_locally() {
+        let mut remote_sink = flow_event("cron", true, EventExecutionMode::Local);
+        remote_sink.config = br#"{"expression":"0 9 * * *","sink_execution":"REMOTE"}"#.to_vec();
+        assert_eq!(
+            blocker(&remote_sink).as_deref(),
+            Some("sink is configured for remote execution")
+        );
+
+        let mut broken = flow_event("cron", true, EventExecutionMode::Local);
+        broken.config = Vec::new();
+        let reason = blocker(&broken).expect("empty config never registers");
+        assert!(
+            reason.starts_with("sink config could not be parsed"),
+            "{reason}"
+        );
     }
 
     #[test]
@@ -1319,9 +1700,9 @@ mod tests {
         ));
         let manager = EventSinkManager::new(db_path.to_str().unwrap()).unwrap();
 
-        let config = manager
-            .parse_event_config("daemon", br#"{"restart_policy":"always"}"#)
-            .unwrap();
+        let config =
+            EventSinkManager::parse_event_config("daemon", br#"{"restart_policy":"always"}"#)
+                .unwrap();
 
         match config {
             EventConfig::Daemon(sink) => {

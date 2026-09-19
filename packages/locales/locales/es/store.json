@@ -43,6 +43,8 @@
 	"capabilities": "Capacidades",
 	"capabilityA2ui": "",
 	"capabilityCache": "",
+	"capabilityDatabaseRead": "",
+	"capabilityDatabaseWrite": "",
 	"capabilityModels": "",
 	"capabilityNetDns": "",
 	"capabilityNetHttp": "",

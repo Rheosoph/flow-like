@@ -127,6 +127,7 @@ impl ToProto<flow_like_types::proto::Node> for Node {
             namespace: self.namespace.clone(),
             alias: self.alias.clone(),
             receiver: self.receiver.clone(),
+            pins_collapsed: self.pins_collapsed,
         }
     }
 }
@@ -186,6 +187,7 @@ impl FromProto<flow_like_types::proto::Node> for Node {
             namespace: proto.namespace,
             alias: proto.alias,
             receiver: proto.receiver,
+            pins_collapsed: proto.pins_collapsed,
         }
     }
 }

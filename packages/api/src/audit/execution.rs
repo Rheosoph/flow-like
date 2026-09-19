@@ -26,8 +26,7 @@ impl From<&AppState> for ExecutionAuditContext {
         Self {
             db: Arc::new(state.db.clone()),
             dialect: state.db_dialect,
-            enabled: state.platform_config.audit.enabled
-                && state.platform_config.audit.log_executions,
+            enabled: super::records_executions(&state.platform_config.audit),
         }
     }
 }
@@ -125,12 +124,25 @@ pub async fn record_execution_dispatch(
         .one(&state.db)
         .await?
         .ok_or_else(|| flow_like_types::anyhow!("Execution run missing before audit: {run_id}"))?;
-    if let Some(input) = execution_entry(&run, source, AuditActorType::System, false) {
+    record_execution_dispatch_for(state, &run, source).await
+}
+
+/// Same as [`record_execution_dispatch`] for callers that hold the inserted row.
+pub async fn record_execution_dispatch_for(
+    state: &AppState,
+    run: &execution_run::Model,
+    source: &str,
+) -> flow_like_types::Result<()> {
+    let context = ExecutionAuditContext::from(state);
+    if !context.enabled {
+        return Ok(());
+    }
+    if let Some(input) = execution_entry(run, source, AuditActorType::System, false) {
         AuditService::record_once(&state.db, context.dialect, input)
             .await
             .map_err(|error| {
                 super::request::record_failure();
-                tracing::error!(run_id, %error, "AUDIT FAILURE (execution dispatch)");
+                tracing::error!(run_id = %run.id, %error, "AUDIT FAILURE (execution dispatch)");
                 error
             })?;
     }
@@ -160,7 +172,7 @@ pub async fn record_execution_dispatch_failure(
     source: &str,
 ) -> flow_like_types::Result<()> {
     let now = chrono::Utc::now().fixed_offset();
-    execution_run::Entity::update_many()
+    let failed = execution_run::Entity::update_many()
         .set(execution_run::ActiveModel {
             status: Set(RunStatus::Failed),
             completed_at: Set(Some(now)),
@@ -169,9 +181,16 @@ pub async fn record_execution_dispatch_failure(
         })
         .filter(execution_run::Column::Id.eq(run_id))
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
-        .exec(&state.db)
+        .exec_with_returning(&state.db)
         .await?;
-    record_execution_outcome(state, run_id, source).await
+    match failed.first() {
+        Some(run) => {
+            let context = ExecutionAuditContext::from(state);
+            record_execution_result(&context, run, source, AuditActorType::System).await
+        }
+        // Already terminal: the outcome entry belongs to whatever finished it.
+        None => record_execution_outcome(state, run_id, source).await,
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +232,9 @@ mod tests {
             app_id: Set("app-1".into()),
             created_at: Set(now),
             updated_at: Set(now),
+            event_version: Set(None),
+            nodes: Set(None),
+            logs_count: Set(None),
         }
         .try_into_model()
         .unwrap()

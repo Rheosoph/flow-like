@@ -139,7 +139,7 @@ pub mod aws_telemetry;
 '''
 for token, relative in {
     "SPANS_PATH": "packages/api/src/telemetry/spans.rs",
-    "TELEMETRY_ENTITY_PATH": "packages/api/src/entity/telemetry_span.rs",
+    "TELEMETRY_ENTITY_PATH": "packages/api/entity/src/generated/telemetry_span.rs",
     "REQUEST_METRICS_PATH": "packages/api/src/telemetry/request_metrics.rs",
     "TRACE_CONTEXT_PATH": "packages/api/src/middleware/trace_context.rs",
     "LAMBDA_TELEMETRY_PATH": "apps/backend/aws/api/src/telemetry.rs",

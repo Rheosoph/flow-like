@@ -2,6 +2,7 @@ import type { IHomeDefaults, IHomeLayout, IHomeWidget } from "./types";
 
 export const MAX_HOME_WIDGETS = 80;
 export const MAX_HOME_LAYOUT_BYTES = 128 * 1024;
+export const MAX_HOME_WIDGET_CLASS_NAME_BYTES = 1024;
 export const HOME_ROW_HEIGHT = 88;
 export const HOME_GRID_GAP = 16;
 
@@ -18,6 +19,13 @@ export function homeWidgetHeight(widget: IHomeWidget) {
 
 export function homeWidgetAutoHeight(widget: IHomeWidget) {
 	return widget.size.heightMode !== "fixed";
+}
+
+export function normalizeHomeWidgetClassName(
+	value: unknown,
+): string | undefined {
+	if (typeof value !== "string") return undefined;
+	return value.trim().split(/\s+/).join(" ") || undefined;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -47,6 +55,7 @@ export function normalizeHomeLayout(value: unknown): IHomeLayout | null {
 		ids.add(item.id);
 		const size = record(item.size) ? item.size : {};
 		const appearance = record(item.appearance) ? item.appearance : {};
+		const className = normalizeHomeWidgetClassName(appearance.className);
 		widgets.push({
 			id: item.id,
 			type: item.type,
@@ -70,6 +79,7 @@ export function normalizeHomeLayout(value: unknown): IHomeLayout | null {
 					typeof appearance.variant === "string" ? appearance.variant : "card",
 				accent:
 					typeof appearance.accent === "string" ? appearance.accent : "neutral",
+				...(className ? { className } : {}),
 			},
 			config: record(item.config) ? item.config : {},
 		});

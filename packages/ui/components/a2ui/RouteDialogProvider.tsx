@@ -31,7 +31,10 @@ import { shouldRevealProgressively } from "../interfaces/progressive-page-reveal
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { applyA2UIMessage } from "./apply-a2ui-message";
-import { collectRunElements } from "./collect-run-elements";
+import {
+	type RunElementDemand,
+	collectRunElements,
+} from "./collect-run-elements";
 import type { ElementSource } from "./element-materializer";
 import { handleElementsRequestMessage } from "./elements-request-handler";
 import { getFrontendStateStore } from "./frontend-state";
@@ -180,6 +183,8 @@ function RouteDialogRenderer({
 	const [pageExecutionRevision, setPageExecutionRevision] = useState<
 		string | null
 	>(null);
+	const [pageElementDemand, setPageElementDemand] =
+		useState<RunElementDemand | null>(null);
 	const [completedLoadEventKey, setCompletedLoadEventKey] = useState<
 		string | null
 	>(null);
@@ -301,6 +306,7 @@ function RouteDialogRenderer({
 			setPage(null);
 			setPageRevision(null);
 			setPageExecutionRevision(null);
+			setPageElementDemand(null);
 			setRouteEvent(null);
 			setSurface(null);
 			try {
@@ -330,6 +336,7 @@ function RouteDialogRenderer({
 				setPage(bootstrap.page);
 				setPageRevision(bootstrap.revision ?? null);
 				setPageExecutionRevision(bootstrap.executionRevision);
+				setPageElementDemand(bootstrap.elementDemand ?? null);
 				setSurface(buildSurfaceFromPage(bootstrap.page, bootstrap.page.id));
 			} catch {
 				if (cancelled) return;
@@ -434,6 +441,7 @@ function RouteDialogRenderer({
 							backend,
 							appId,
 							boardId: undefined,
+							demand: pageElementDemand,
 							surfaceId: currentSurface.id,
 							components: currentSurface.components,
 							storedValues: {},
@@ -508,6 +516,7 @@ function RouteDialogRenderer({
 		page,
 		frontendStateStore,
 		pageExecutionRevision,
+		pageElementDemand,
 		routeEvent?.id,
 		loadEventExecutionKey,
 		dialog,
@@ -560,6 +569,7 @@ function RouteDialogRenderer({
 							boardVersion={pageExecutionVersion}
 							eventId={routeEvent?.id}
 							governedPage={isGovernedPage}
+							elementDemand={pageElementDemand ?? undefined}
 							onA2UIMessage={handleServerMessage}
 							isPreviewMode={true}
 							openDialog={openDialog}

@@ -90,6 +90,68 @@ node.add_input_pin("config", "Config", "Configuration", VariableType::Struct)
     .set_default_value(json!({"threshold": 0.5, "label": "default"}));
 ```
 
+## LanceDB and DataFusion
+
+Use matching host and SDK builds with database capability support. Database access
+requires package permissions, node permissions, and a wired `Struct` input with
+`NodeDBConnection` or `DataFusionSession` schema. Configure connections in upstream
+nodes. Copying a cache key into a default or retaining it in a package global does
+not grant access on the next invocation.
+
+Declare package permissions in the manifest:
+
+```toml
+[permissions.database]
+read = true
+# Enable write only for nodes that insert, upsert or delete rows.
+write = false
+```
+
+Declare the corresponding pins and permission in `get_node()`:
+
+```rust
+node.add_permission(NodePermission::DatabaseRead);
+node.add_input_pin("database", "Database", "LanceDB connection", VariableType::Struct)
+    .set_schema::<NodeDBConnection>();
+node.add_input_pin("session", "Session", "Optional existing SQL session", VariableType::Struct)
+    .set_schema::<DataFusionSession>();
+node.add_output_pin("session_out", "Session", "Pass to downstream nodes", VariableType::Struct)
+    .set_schema::<DataFusionSession>();
+node.add_output_pin("rows", "Rows", "Query results", VariableType::Struct)
+    .set_schema::<Vec<serde_json::Value>>();
+```
+
+A node can use an incoming session or create one and mount its connected database:
+
+```rust
+fn query_entities(ctx: &mut Context) -> Result<(), String> {
+    let session = match ctx.get_input_as::<DataFusionSession>("session") {
+        Some(session) => session,
+        None => {
+            let database = ctx.require_input_as::<NodeDBConnection>("database")?;
+            let session = ctx.df_create_session().ok_or("Session creation failed")?;
+            if !session.register_lance(ctx, &database, "entities") {
+                return Err("Table registration failed".into());
+            }
+            session
+        }
+    };
+    let rows = session.query(ctx, "SELECT * FROM entities", 1000)
+        .ok_or("Query failed")?;
+    ctx.set_output_json("session_out", &session);
+    ctx.set_output_json("rows", &rows);
+    Ok(())
+}
+```
+
+Wire the session output to each downstream consumer. Queries accept one read-only
+`SELECT` over registered tables, return JSON rows, and preserve native Geometry
+values as GeoJSON. Table functions, file URLs, DDL and DML are unavailable. Query
+results are limited to 10,000 rows and 8 MiB; failed or unauthorized calls return
+`None` or `false`. `NodeDBConnection` also supports list, count, vector, text and
+hybrid search. Its `insert`, `upsert` and `delete` methods additionally require
+`NodePermission::DatabaseWrite` and `permissions.database.write = true`.
+
 ## Multi-Node Package
 
 ```rust

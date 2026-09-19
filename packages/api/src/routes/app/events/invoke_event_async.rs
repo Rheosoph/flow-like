@@ -21,8 +21,8 @@ use crate::{
     error::ApiError,
     execution::{
         DispatchRequest, DispatchTrigger, ExecutionJwtParams, PageExecutionJwtContext, TokenType,
-        fetch_profile_for_dispatch, format_run_version, is_jwt_configured, payload_storage,
-        rejection, resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
+        fetch_profile_for_dispatch, format_run_version, is_jwt_configured, rejection,
+        resolve_wasm_packages, sign_execution_jwt, sign_execution_jwt_with_page_context,
         state::{PostgresStateStore, RunStatus as StateRunStatus, UpdateRunInput},
         variant,
     },
@@ -43,6 +43,7 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use super::db::get_event_from_db;
+use super::invoke_event::store_input_payload;
 
 fn poll_token_ttl_seconds(is_governed_page: bool) -> i64 {
     if is_governed_page {
@@ -412,7 +413,15 @@ pub async fn invoke_event_async(
         )));
     }
 
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
+    // The dispatch inputs do not depend on each other, so they resolve
+    // together. Each result is consumed where it was awaited before, which
+    // keeps the order in which failures surface.
+    let (wasm_packages, input_payload_key, credentials, profile) = flow_like_types::tokio::join!(
+        resolve_wasm_packages(&state, &app_id),
+        store_input_payload(&state, &app_id, &run_id, params.payload.as_ref()),
+        state.scoped_credentials(&sub, &app_id, get_credentials_access()),
+        fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true),
+    );
     let wasm_authority_revision =
         flow_like_types::dispatch::wasm_package_set_revision(wasm_packages.as_ref());
     if resolved_page_trigger
@@ -437,25 +446,8 @@ pub async fn invoke_event_async(
         })
         .unwrap_or(0);
 
-    // Store payload in object storage if present (enables re-run)
-    let input_payload_key = if let Some(ref payload) = params.payload {
-        let payload_bytes = serde_json::to_vec(payload)
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize payload: {}", e)))?;
-        let master_creds = state.master_credentials().await.map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to get master credentials: {}", e))
-        })?;
-        let store = master_creds
-            .to_store(false)
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to get object store: {}", e)))?;
-        let stored =
-            payload_storage::store_payload(store.as_generic(), &app_id, &run_id, &payload_bytes)
-                .await
-                .map_err(|e| ApiError::internal_error(anyhow!("Failed to store payload: {}", e)))?;
-        Some(stored.key)
-    } else {
-        None
-    };
+    // Payload stored in object storage if present (enables re-run)
+    let input_payload_key = input_payload_key?;
 
     // Resolve this run's correlation (inherit trace root & keys, else self).
     let mut correlation = inherited_correlation.unwrap_or_default();
@@ -516,6 +508,9 @@ pub async fn invoke_event_async(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
     let execution_audit = crate::audit::ExecutionAudit {
         run_id: run_id.clone(),
@@ -550,9 +545,8 @@ pub async fn invoke_event_async(
         ApiError::internal_error(anyhow!("Failed to sign user JWT: {}", e))
     })?;
 
-    // Get scoped credentials based on user permissions
-    let access = get_credentials_access();
-    let credentials = state.scoped_credentials(&sub, &app_id, access).await?;
+    // Scoped credentials based on user permissions
+    let credentials = credentials?;
 
     // Convert to SharedCredentials for runtime compatibility
     let shared_credentials = credentials.into_shared_credentials();
@@ -603,9 +597,6 @@ pub async fn invoke_event_async(
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
-
-    let profile =
-        fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true).await;
 
     let request = DispatchRequest {
         run_id: run_id.clone(),

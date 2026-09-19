@@ -78,7 +78,11 @@ pub async fn get_leaderboard(
 
     let rows = leaderboard_opt_in::Entity::find()
         .filter(leaderboard_opt_in::Column::IsOptedIn.eq(true))
+        // DSQL only sorts from an index when ORDER BY spells out its full key order.
+        // All descending, so the plain (isOptedIn, totalPoints, userId) index is read backward.
+        .order_by_desc(leaderboard_opt_in::Column::IsOptedIn)
         .order_by_desc(leaderboard_opt_in::Column::TotalPoints)
+        .order_by_desc(leaderboard_opt_in::Column::UserId)
         .limit(Some(limit))
         .offset(q.offset)
         .all(&state.db)

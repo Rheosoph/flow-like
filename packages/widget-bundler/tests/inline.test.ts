@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, type WidgetContract } from "../src/contract-types";
+import {
+	BASE_CONTRACT_VERSION,
+	type WidgetContract,
+} from "../src/contract-types";
 import { buildCsp, injectCspMeta } from "../src/csp";
 import { injectContractScript, inlineHtml } from "../src/inline";
 
 const ENCODER = new TextEncoder();
 
 const SAMPLE_CONTRACT: WidgetContract = {
-	contractVersion: CONTRACT_VERSION,
+	contractVersion: BASE_CONTRACT_VERSION,
 	id: "sample",
 	inputs: {
 		note: { type: "string", default: "</script><img>" },
@@ -17,21 +20,21 @@ const SAMPLE_CONTRACT: WidgetContract = {
 };
 
 describe("buildCsp", () => {
-	test("includes the serving prefix in every fetch directive", () => {
-		const csp = buildCsp("flow-widget://pkg@abc/", ["https://api.example.com"]);
+	test("includes the serving prefix in every asset directive", () => {
+		const csp = buildCsp("flow-widget://pkg@abc/");
 		expect(csp).toBe(
 			"default-src 'none'; " +
 				"script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"img-src data: blob: 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
 				"font-src data: 'self' flow-widget: http://flow-widget.localhost flow-widget://pkg@abc/; " +
-				"connect-src https://api.example.com",
+				"connect-src data: blob:; worker-src 'none'; media-src data: blob:",
 		);
 	});
 
 	test("null prefix permits only supported bundle asset origins", () => {
-		expect(buildCsp(null, [])).toBe(
-			"default-src 'none'; script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; img-src data: blob: 'self' flow-widget: http://flow-widget.localhost; font-src data: 'self' flow-widget: http://flow-widget.localhost; connect-src 'none'",
+		expect(buildCsp(null)).toBe(
+			"default-src 'none'; script-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; style-src 'unsafe-inline' 'self' flow-widget: http://flow-widget.localhost; img-src data: blob: 'self' flow-widget: http://flow-widget.localhost; font-src data: 'self' flow-widget: http://flow-widget.localhost; connect-src data: blob:; worker-src 'none'; media-src data: blob:",
 		);
 	});
 });

@@ -269,6 +269,15 @@ export interface IBoardState {
 		 */
 		summaryOnly?: boolean,
 	): Promise<ILogMetadata[]>;
+	/**
+	 * The recorded input of one run, for Re-Run. Listings leave `payload` empty, so the replay
+	 * input comes from the run's payload sidecar; `undefined` when the run recorded none.
+	 */
+	getRunPayload?(
+		appId: string,
+		boardId: string,
+		runId: string,
+	): Promise<object | undefined>;
 	queryRun(
 		logMeta: ILogMetadata,
 		query: string,

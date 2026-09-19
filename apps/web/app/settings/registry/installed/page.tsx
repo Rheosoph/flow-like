@@ -14,6 +14,8 @@ import {
 	useBackend,
 	useSearch,
 } from "@flow-like/flow-like-ui";
+import { ClearWidgetPermissionsButton } from "@flow-like/flow-like-ui/components/store/widget-permissions";
+import { readManifestWidgets } from "@flow-like/flow-like-ui/lib/package-widgets";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -37,7 +39,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../../../../lib/api";
@@ -61,6 +63,7 @@ function InstalledPackageCard({
 	isLoading: boolean;
 }) {
 	const { t } = useTranslation("common");
+	const hasWidgets = usePackageHasWidgets(pkg);
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 10 }}
@@ -106,6 +109,12 @@ function InstalledPackageCard({
 							{new Date(pkg.installedAt).toLocaleDateString()}
 						</span>
 						<div className="flex items-center gap-2">
+							{hasWidgets && (
+								<ClearWidgetPermissionsButton
+									packageId={pkg.id}
+									packageName={pkg.manifest.name}
+								/>
+							)}
 							{hasUpdate && (
 								<Button
 									size="sm"
@@ -160,6 +169,7 @@ function LocalPackageCard({
 	isLoading: boolean;
 }) {
 	const { t } = useTranslation("common");
+	const hasWidgets = usePackageHasWidgets(pkg);
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 10 }}
@@ -187,25 +197,40 @@ function LocalPackageCard({
 				<CardContent>
 					<div className="flex items-center justify-between">
 						<span className="text-xs text-muted-foreground">{`v${pkg.version}`}</span>
-						<Button
-							size="sm"
-							variant="destructive"
-							onClick={(e) => {
-								e.stopPropagation();
-								onRemove(pkg.id);
-							}}
-							disabled={isLoading}
-						>
-							{isLoading ? (
-								<Loader2 className="h-4 w-4 animate-spin" />
-							) : (
-								<Trash2 className="h-4 w-4" />
+						<div className="flex items-center gap-2">
+							{hasWidgets && (
+								<ClearWidgetPermissionsButton
+									packageId={pkg.id}
+									packageName={pkg.manifest.name}
+								/>
 							)}
-						</Button>
+							<Button
+								size="sm"
+								variant="destructive"
+								onClick={(e) => {
+									e.stopPropagation();
+									onRemove(pkg.id);
+								}}
+								disabled={isLoading}
+							>
+								{isLoading ? (
+									<Loader2 className="h-4 w-4 animate-spin" />
+								) : (
+									<Trash2 className="h-4 w-4" />
+								)}
+							</Button>
+						</div>
 					</div>
 				</CardContent>
 			</Card>
 		</motion.div>
+	);
+}
+
+function usePackageHasWidgets(pkg: InstalledPackage): boolean {
+	return useMemo(
+		() => readManifestWidgets(pkg.manifest).length > 0,
+		[pkg.manifest],
 	);
 }
 

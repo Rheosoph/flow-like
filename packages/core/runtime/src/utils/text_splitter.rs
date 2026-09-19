@@ -16,7 +16,7 @@ pub fn split_text(
     } else if let Some(splitter) = splitter {
         splitter.chunks(text).map(|item| item.to_string()).collect()
     } else {
-        println!("No splitter found");
+        tracing::warn!("No splitter found");
         vec![]
     }
 }

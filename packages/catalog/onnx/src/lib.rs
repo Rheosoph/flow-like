@@ -22,6 +22,7 @@ pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 #[path = "onnx.rs"]
 pub mod onnx;
 pub mod teachable_machine;
+pub mod tracking;
 
 pub use onnx::*;
 

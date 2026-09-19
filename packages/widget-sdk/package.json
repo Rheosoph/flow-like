@@ -1,15 +1,20 @@
 {
 	"name": "@flow-like/widget-sdk",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"type": "module",
 	"description": "Flow-Like micro widget SDK: typed contracts, flw/1 host bridge, and framework adapters.",
 	"license": "MIT",
+	"files": ["src"],
+	"publishConfig": {
+		"access": "public"
+	},
 	"exports": {
 		".": "./src/index.ts",
 		"./react": "./src/react.ts",
 		"./vanilla": "./src/vanilla.ts",
 		"./protocol": "./src/protocol.ts",
-		"./validate": "./src/validate.ts"
+		"./validate": "./src/validate.ts",
+		"./llm": "./src/llm.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc -p tsconfig.json --noEmit",

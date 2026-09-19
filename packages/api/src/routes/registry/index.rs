@@ -76,16 +76,19 @@ pub async fn get_package(
         }
     }
 
-    // Access / visibility control is done above; fetch with correct version visibility.
-    let mut entry = registry
-        .get_package_as_viewer(&id, sub.as_deref())
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("Package '{}' not found", id)))?;
+    let access = match sub.as_ref() {
+        Some(uid) => crate::check_wasm_access!(state, uid, &id),
+        None => None,
+    };
+    let can_manage = access.is_some_and(|permission| {
+        permission.has_permission(
+            crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer,
+        )
+    });
 
-    if let Some(ref uid) = sub {
-        let access = crate::check_wasm_access!(state, uid, &id);
-        entry.current_user_permission = access.map(|a| a.bits() as i32);
-    }
+    // Access / visibility control is done above; build with correct version visibility.
+    let mut entry = registry.entry_for_viewer(package, can_manage).await?;
+    entry.current_user_permission = access.map(|a| a.bits() as i32);
 
     Ok(Json(entry))
 }

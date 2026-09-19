@@ -107,6 +107,8 @@ pub struct ContractQuery {
     pub result_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mutation: bool,
 }
 
 /// Sizing hints for the host iframe. Mirror of `WidgetSizing` in `packages/wasm/schema/src/widget.rs`.
@@ -159,6 +161,8 @@ pub struct WidgetContract {
     pub queries: BTreeMap<String, ContractQuery>,
     #[serde(default)]
     pub sizing: WidgetSizing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<BTreeMap<String, bool>>,
 }
 
 /// A resolvable package widget entry, sourced from an installed package manifest.
@@ -402,7 +406,12 @@ mod tests {
                 "refreshRequested": { "payloadSchema": null }
             },
             "queries": {
-                "getValue": { "argsSchema": null, "resultSchema": { "type": "string" } }
+                "getValue": { "argsSchema": null, "resultSchema": { "type": "string" } },
+                "setValue": {
+                    "argsSchema": { "type": "object" },
+                    "resultSchema": { "type": "object" },
+                    "mutation": true
+                }
             },
             "sizing": { "defaultHeight": 320, "resizable": true }
         });
@@ -430,6 +439,8 @@ mod tests {
         assert!(contract.events["pointSelected"].payload_schema.is_some());
         assert!(contract.events["refreshRequested"].payload_schema.is_none());
         assert!(contract.queries["getValue"].result_schema.is_some());
+        assert!(!contract.queries["getValue"].mutation);
+        assert!(contract.queries["setValue"].mutation);
         assert_eq!(contract.sizing.default_height, 320);
     }
 

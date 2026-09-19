@@ -11,6 +11,7 @@ pub mod get_board_versions;
 pub mod get_boards;
 pub mod get_execution_elements;
 pub mod get_flowscript;
+pub mod get_run_payload;
 pub mod get_runs;
 pub mod invoke_board;
 pub mod invoke_board_async;
@@ -101,6 +102,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/{board_id}/runs", get(get_runs::get_runs))
         .route("/{board_id}/runs/report", post(report_run::report_run))
+        .route(
+            "/{board_id}/runs/{run_id}/payload",
+            get(get_run_payload::get_run_payload),
+        )
         .route("/{board_id}/logs", get(query_logs::query_logs))
         .route(
             "/{board_id}/elements",

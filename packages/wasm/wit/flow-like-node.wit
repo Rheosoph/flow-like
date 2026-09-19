@@ -88,6 +88,9 @@ interface image {
 }
 
 interface db {
+    /// 1-8: Lance search/write/list/count; 20: create SQL session;
+    /// 21: register a granted Lance handle; 22: read-only SQL query.
+    /// Database permission is required; existing resources also require pin authority.
     query: func(op: u32, connection-json: string, payload-json: string) -> option<string>;
 }
 

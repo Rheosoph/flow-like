@@ -124,6 +124,12 @@ pub enum NodePermission {
     /// Write to node/user storage
     #[serde(rename = "storage:write")]
     StorageWrite,
+    /// Read from explicitly wired database and SQL session pins.
+    #[serde(rename = "database:read")]
+    DatabaseRead,
+    /// Modify rows through explicitly wired database pins.
+    #[serde(rename = "database:write")]
+    DatabaseWrite,
     /// Access flow variables
     #[serde(rename = "variables")]
     Variables,
@@ -201,6 +207,10 @@ pub struct Node {
     /// (`flowscript_receiver`); `Some("")` opts out: the node is callable statically only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver: Option<String>,
+    /// The editor hides this node's unconnected data pins behind its latch.
+    /// Presentation only; execution never reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pins_collapsed: Option<bool>,
 }
 
 impl Node {
@@ -232,6 +242,7 @@ impl Node {
             namespace: None,
             alias: None,
             receiver: None,
+            pins_collapsed: None,
         }
     }
 
@@ -367,6 +378,13 @@ impl Node {
 
     pub fn set_start(&mut self, start: bool) {
         self.start = Some(start);
+    }
+
+    /// Event nodes are entry points users name and describe for whoever calls them — function
+    /// references, agents that expose them as tools, API consumers. Their description and the
+    /// names/descriptions of their pins are instance data, never catalog wording to refresh.
+    pub fn owns_descriptive_text(&self) -> bool {
+        self.start.unwrap_or(false)
     }
 
     pub fn set_event_callback(&mut self, callback: bool) {
@@ -819,6 +837,10 @@ impl Node {
 
         if let Some(wasm) = &self.wasm {
             hasher.append(wasm.package_id.as_bytes());
+        }
+
+        if let Some(pins_collapsed) = &self.pins_collapsed {
+            hasher.append(&[*pins_collapsed as u8]);
         }
 
         self.hash = Some(hasher.finalize64());

@@ -273,41 +273,42 @@ pub async fn upsert_profile(
                     None => profile::Column::Thumbnail.is_null(),
                 });
             }
-            let result = update.exec(&state.db).await?;
-            let latest = find_profile_for_user(&state.db, &sub, &profile_id)
-                .await?
-                .ok_or(ApiError::NOT_FOUND)?;
-            if latest.deleted_at.is_some() {
-                return Err(ApiError::gone("Profile has been deleted"));
-            }
-            if result.rows_affected != 1
-                && !mutation_matches(
+            let mut rows = update.exec_with_returning(&state.db).await?;
+            if rows.len() == 1
+                && let Some(latest) = rows.pop()
+            {
+                latest
+            } else {
+                let latest = find_profile_for_user(&state.db, &sub, &profile_id)
+                    .await?
+                    .ok_or(ApiError::NOT_FOUND)?;
+                if latest.deleted_at.is_some() {
+                    return Err(ApiError::gone("Profile has been deleted"));
+                }
+                if !mutation_matches(
                     &intended,
                     &latest.clone().into(),
                     profile::Column::UpdatedAt,
-                )
-            {
-                return Err(ApiError::conflict(
-                    "The profile image changed during upload. Please try again",
-                ));
+                ) {
+                    return Err(ApiError::conflict(
+                        "The profile image changed during upload. Please try again",
+                    ));
+                }
+                latest
             }
-            latest
         } else {
-            let result = super::update_profile_revision(&found_profile, active_model)
-                .exec(&state.db)
+            let mut rows = super::update_profile_revision(&found_profile, active_model)
+                .exec_with_returning(&state.db)
                 .await?;
-            if result.rows_affected != 1 {
+            if rows.len() == 1
+                && let Some(latest) = rows.pop()
+            {
+                latest
+            } else {
                 return Err(ApiError::conflict(
                     "The profile changed while saving. Please try again",
                 ));
             }
-            let latest = find_profile_for_user(&state.db, &sub, &profile_id)
-                .await?
-                .ok_or(ApiError::NOT_FOUND)?;
-            if latest.deleted_at.is_some() {
-                return Err(ApiError::gone("Profile has been deleted"));
-            }
-            latest
         };
         if let Some(upload_id) = &profile_body.icon_upload_id {
             cleanup_upload(&state, &sub, upload_id, found_profile.icon.as_deref()).await;

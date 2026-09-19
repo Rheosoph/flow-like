@@ -1,5 +1,5 @@
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::execution::{ExecutionMode, RunStatus, UserExecutionContext};
+use flow_like::flow::execution::{ExecutionMode, LogMeta, RunStatus, UserExecutionContext};
 use flow_like::flow::variable::Variable;
 use flow_like_types::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,32 @@ pub struct ExecutionResult {
     pub error: Option<String>,
     /// Execution duration in milliseconds
     pub duration_ms: u64,
+}
+
+/// The run-summary fields of a terminal report (`POST /execution/progress`
+/// body, streaming `completed` payload). An absent field means unknown to the
+/// reader, never empty.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RunSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<(String, u8)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logs: Option<u64>,
+}
+
+impl From<&LogMeta> for RunSummary {
+    fn from(meta: &LogMeta) -> Self {
+        RunSummary {
+            log_level: Some(meta.log_level),
+            event_version: meta.event_version.clone(),
+            nodes: meta.nodes.clone(),
+            logs: meta.logs,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -250,6 +276,25 @@ mod tests {
         assert_eq!(
             ExecutionStatus::from_final_run_status(&RunStatus::Running),
             ExecutionStatus::Failed
+        );
+    }
+
+    #[test]
+    fn rejected_run_summary_reports_a_fatal_run_with_one_log_and_no_nodes() {
+        use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
+
+        let meta = RejectedRun::new("app-1", "board-1", RejectionStage::Setup, "no channel")
+            .with_event("event-1", Some("1.0.3".to_string()))
+            .log_meta();
+
+        assert_eq!(
+            serde_json::to_value(RunSummary::from(&meta)).unwrap(),
+            serde_json::json!({
+                "log_level": 4,
+                "event_version": "1.0.3",
+                "nodes": [],
+                "logs": 1
+            })
         );
     }
 

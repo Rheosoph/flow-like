@@ -102,6 +102,21 @@ async fn try_claim(
     owner: &str,
     ensure_row: bool,
 ) -> Result<bool, ApiError> {
+    // A retained, free row is claimed by one statement. Only a missing row needs
+    // the insert, and only then does the claim have to share its transaction.
+    if ensure_row {
+        let claimed = state
+            .db
+            .execute_raw(statement(
+                &state.db,
+                CLAIM_LEASE_SQL,
+                [lock_id.into(), owner.to_owned().into()],
+            ))
+            .await?;
+        if claimed.rows_affected() == 1 {
+            return Ok(true);
+        }
+    }
     let owner = owner.to_owned();
     state
         .transaction(move |txn| {

@@ -33,19 +33,79 @@ pub fn public_fork_source(visibility: &Visibility, source_id: &str) -> Option<St
     .then(|| source_id.to_owned())
 }
 
+/// COALESCE arms that resolve the payer of app `$1`, shared so every statement
+/// charges the same account.
+const APP_PAYER_ARMS: &str = r#"(SELECT "payerId" FROM "ProjectCapacity" WHERE "appId" = $1),
+             (SELECT m."userId" FROM "Membership" m JOIN "App" a ON a."ownerRoleId" = m."roleId" AND a."id" = m."appId" WHERE a."id" = $1 ORDER BY m."userId" LIMIT 1)"#;
+
 /// Resolve the retained owner snapshot before consulting live memberships. An app's
 /// user-scoped objects are included in its owner's storage, just like shared files.
 pub async fn payer_for_app<C: ConnectionTrait>(
     db: &C,
     app_id: &str,
 ) -> Result<Option<String>, ApiError> {
-    let row = db.query_one_raw(Statement::from_sql_and_values(db.get_database_backend(),
-        r#"SELECT COALESCE((SELECT "payerId" FROM "ProjectCapacity" WHERE "appId" = $1),
-             (SELECT m."userId" FROM "Membership" m JOIN "App" a ON a."ownerRoleId" = m."roleId" AND a."id" = m."appId" WHERE a."id" = $1 ORDER BY m."userId" LIMIT 1)) AS "payerId""#,
-        [app_id.into()])).await?;
+    let row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            format!(r#"SELECT COALESCE({APP_PAYER_ARMS}) AS "payerId""#),
+            [app_id.into()],
+        ))
+        .await?;
     row.map(|row| row.try_get("", "payerId").map_err(ApiError::from))
         .transpose()
         .map(Option::flatten)
+}
+
+struct StorageAccount {
+    payer_id: String,
+    plan: String,
+    max_total_size: i64,
+    /// Absent until the account baseline is initialized.
+    usage: Option<CapacityUsage>,
+}
+
+/// The payer of a storage write, falling back to the caller, with its plan and
+/// initialized occupancy in one statement.
+async fn storage_account(
+    state: &AppState,
+    app_id: &str,
+    fallback_payer: &str,
+) -> Result<StorageAccount, ApiError> {
+    let row = state
+        .db
+        .query_one_raw(Statement::from_sql_and_values(
+            state.db.get_database_backend(),
+            format!(
+                r#"SELECT u.id,u.tier,c."storageBytes",c."reservedStorageBytes",c."projectCount"
+        FROM (SELECT COALESCE({APP_PAYER_ARMS}, $2) AS id) p
+        JOIN "User" u ON u.id = p.id
+        LEFT JOIN "AccountCapacity" c ON c."payerId" = u.id AND c.initialized = true"#
+            ),
+            [app_id.into(), fallback_payer.into()],
+        ))
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    let plan = row.try_get::<String>("", "tier")?.to_uppercase();
+    let max_total_size = state
+        .platform_config
+        .tiers
+        .get(&plan)
+        .map(|tier| tier.max_total_size)
+        .ok_or_else(|| ApiError::internal(format!("missing entitlement for {plan}")))?;
+    let usage = match row.try_get::<Option<i64>>("", "storageBytes")? {
+        Some(storage_bytes) => Some(CapacityUsage {
+            storage_bytes,
+            reserved_storage_bytes: row.try_get("", "reservedStorageBytes")?,
+            project_count: row.try_get("", "projectCount")?,
+        }),
+        None => None,
+    };
+    Ok(StorageAccount {
+        payer_id: row.try_get("", "id")?,
+        plan,
+        max_total_size,
+        usage,
+    })
 }
 
 const BASELINE_PAGE: usize = 250;
@@ -533,27 +593,27 @@ pub async fn check_storage_write(
     if requested_bytes < 0 {
         return Err(ApiError::bad_request("Upload size cannot be negative."));
     }
-    let payer_id = payer_for_app(&state.db, app_id)
-        .await?
-        .unwrap_or_else(|| fallback_payer.to_owned());
-    let (plan, tier) = crate::quota::payer_plan(state, &payer_id).await?;
-    let usage = usage(state, &payer_id).await?;
+    let account = storage_account(state, app_id, fallback_payer).await?;
+    let usage = match account.usage {
+        Some(initialized) => initialized,
+        None => usage(state, &account.payer_id).await?,
+    };
+    let limit = account.max_total_size;
     let occupied = usage
         .storage_bytes
         .saturating_add(usage.reserved_storage_bytes);
     if crate::quota::enforcing()
-        && tier.max_total_size >= 0
-        && (occupied >= tier.max_total_size
-            || requested_bytes > tier.max_total_size.saturating_sub(occupied))
+        && limit >= 0
+        && (occupied >= limit || requested_bytes > limit.saturating_sub(occupied))
     {
         return Err(capacity_error(
             "storage_bytes",
-            &payer_id,
-            &plan,
+            &account.payer_id,
+            &account.plan,
             usage.storage_bytes,
             usage.reserved_storage_bytes,
             requested_bytes,
-            tier.max_total_size,
+            limit,
         ));
     }
     Ok(())
@@ -580,11 +640,15 @@ pub async fn reserve_uploads(
     if uploads.is_empty() {
         return Ok(());
     }
-    let payer_id = payer_for_app(&state.db, app_id)
-        .await?
-        .unwrap_or_else(|| fallback_payer.to_owned());
-    prepare_account(state, &payer_id).await?;
-    let (plan, tier) = crate::quota::payer_plan(state, &payer_id).await?;
+    let StorageAccount {
+        payer_id,
+        plan,
+        max_total_size,
+        usage,
+    } = storage_account(state, app_id, fallback_payer).await?;
+    if usage.is_none() {
+        prepare_account(state, &payer_id).await?;
+    }
     state
         .transaction(|txn| {
             let payer_id = payer_id.clone();
@@ -599,7 +663,7 @@ pub async fn reserve_uploads(
                     uploads,
                     expires_at,
                     &plan,
-                    tier.max_total_size,
+                    max_total_size,
                 )
                 .await
             })

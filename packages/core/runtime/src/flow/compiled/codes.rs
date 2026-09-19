@@ -203,6 +203,8 @@ pub fn node_permission_code(v: &NodePermission) -> u8 {
         NodePermission::A2ui => 11,
         NodePermission::OAuth => 12,
         NodePermission::Functions => 13,
+        NodePermission::DatabaseRead => 14,
+        NodePermission::DatabaseWrite => 15,
     }
 }
 
@@ -222,6 +224,8 @@ pub fn node_permission_from(code: u8) -> Result<NodePermission> {
         11 => NodePermission::A2ui,
         12 => NodePermission::OAuth,
         13 => NodePermission::Functions,
+        14 => NodePermission::DatabaseRead,
+        15 => NodePermission::DatabaseWrite,
         _ => {
             return Err(anyhow!(
                 "invalid NodePermission code {code} in compiled board"

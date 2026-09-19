@@ -1,15 +1,34 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useCallback, useId, useMemo, useRef } from "react";
+import {
+	createContext,
+	memo,
+	useCallback,
+	useContext,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+} from "react";
 import type { BoardVersion } from "../../lib/schema/flow/board-version";
 import { useRuntimeTailwindStyles } from "../../lib/use-runtime-tailwind";
 import { cn } from "../../lib/utils";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import { ActionProvider } from "./ActionHandler";
-import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
+import {
+	type ComponentProps,
+	type RenderChildFn,
+	getComponentRenderer,
+} from "./ComponentRegistry";
 import { DataProvider, DataScopeProvider, useData } from "./DataContext";
 import { type IWidgetRef, WidgetRefsProvider } from "./WidgetRefsContext";
+import type { RunElementDemand } from "./collect-run-elements";
+import {
+	type ComponentStore,
+	createComponentStore,
+	useSurfaceComponent,
+} from "./component-store";
 import type { A2UINavigationMessageInterceptor } from "./navigation-message";
 import { resolveHidden } from "./resolve-hidden";
 import type {
@@ -52,28 +71,69 @@ function resolveStyleBindings(
 	};
 }
 
-interface A2UIComponentNodeProps {
-	surfaceComponent: SurfaceComponent;
-	componentId: string;
+interface SurfaceRenderContextValue {
+	store: ComponentStore;
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
 	handleAction: (message: A2UIClientMessage) => void;
-	renderScopedComponent: (
-		componentId: string,
-		dataScope?: DataScope,
-	) => React.ReactNode;
 }
 
-function A2UIComponentNode({
-	surfaceComponent,
+const SurfaceRenderContext = createContext<SurfaceRenderContextValue | null>(
+	null,
+);
+
+function useSurfaceRender(): SurfaceRenderContextValue {
+	const context = useContext(SurfaceRenderContext);
+	if (!context) {
+		throw new Error("A2UIComponentNode rendered outside an A2UIRenderer");
+	}
+	return context;
+}
+
+interface A2UIComponentNodeProps {
+	componentId: string;
+	/** Scope the parent rendered this node in; children rendered without one inherit it. */
+	inheritedScope?: DataScope;
+}
+
+/**
+ * Element for one surface component. Everything a node needs comes from
+ * context or the store, so the element's props never change for an unchanged
+ * component — a parent can re-render without touching it.
+ */
+function renderScopedComponent(
+	componentId: string,
+	dataScope?: DataScope,
+): React.ReactNode {
+	const node = (
+		<A2UIComponentNode
+			key={componentId}
+			componentId={componentId}
+			inheritedScope={dataScope}
+		/>
+	);
+	return dataScope ? (
+		<DataScopeProvider key={componentId} scope={dataScope}>
+			{node}
+		</DataScopeProvider>
+	) : (
+		node
+	);
+}
+
+/**
+ * Memoized and subscribed to its own component only: a surface update
+ * re-renders the nodes whose entries changed, not the whole tree. A node still
+ * re-renders when a context it reads changes (data model, actions, widget
+ * refs), which is exactly when its output can differ.
+ */
+const A2UIComponentNode = memo(function A2UIComponentNode({
 	componentId,
-	surfaceId,
-	appId,
-	boardId,
-	handleAction,
-	renderScopedComponent,
+	inheritedScope,
 }: A2UIComponentNodeProps) {
+	const { store, surfaceId, appId, boardId, handleAction } = useSurfaceRender();
+	const surfaceComponent = useSurfaceComponent(store, componentId);
 	const { resolve } = useData();
 	const elementRef = useCallback(
 		(element: HTMLElement | SVGElement | null) => {
@@ -84,9 +144,18 @@ function A2UIComponentNode({
 		},
 		[surfaceId, componentId],
 	);
-	const { component, style } = surfaceComponent;
+	const renderChild = useCallback<RenderChildFn>(
+		(childId, childScope) =>
+			renderScopedComponent(childId, childScope ?? inheritedScope),
+		[inheritedScope],
+	);
+
+	const component = surfaceComponent?.component;
 	if (!component || resolveHidden(component.hidden, resolve)) return null;
-	const resolvedStyle = resolveStyleBindings(style ?? component.style, resolve);
+	const resolvedStyle = resolveStyleBindings(
+		surfaceComponent.style ?? component.style,
+		resolve,
+	);
 
 	const Renderer = getComponentRenderer(component.type);
 	if (!Renderer) {
@@ -103,12 +172,11 @@ function A2UIComponentNode({
 		style: resolvedStyle,
 		elementRef,
 		onAction: handleAction,
-		renderChild: (childId, childScope) =>
-			renderScopedComponent(childId, childScope),
+		renderChild,
 	};
 
 	return <Renderer {...props} />;
-}
+});
 
 export interface A2UIRendererProps {
 	surface: Surface;
@@ -122,6 +190,8 @@ export interface A2UIRendererProps {
 	eventId?: string;
 	/** True when workflow routes must come from the Page Event projection. */
 	governedPage?: boolean;
+	/** Page elements the Page Event's board reads, from its bootstrap. */
+	elementDemand?: RunElementDemand;
 	isPreviewMode?: boolean;
 	openDialog?: (
 		route: string,
@@ -147,6 +217,7 @@ export function A2UIRenderer({
 	boardVersion,
 	eventId,
 	governedPage = false,
+	elementDemand,
 	isPreviewMode = false,
 	openDialog,
 	closeDialog,
@@ -161,6 +232,15 @@ export function A2UIRenderer({
 		() => surface.components ?? {},
 		[surface.components],
 	);
+	// Nodes read the record during this render; the changed ids are notified
+	// once the tree has committed (see component-store.ts).
+	const storeRef = useRef<ComponentStore | null>(null);
+	if (!storeRef.current) storeRef.current = createComponentStore(components);
+	const store = storeRef.current;
+	store.replace(components);
+	useLayoutEffect(() => {
+		store.commit(components);
+	}, [store, components]);
 	const canvasSettings = surface.canvasSettings;
 	const dataModel = surface.dataModel ?? EMPTY_DATA_MODEL;
 	const backgroundClass = isBackgroundClass(canvasSettings?.backgroundColor)
@@ -191,32 +271,9 @@ export function A2UIRenderer({
 		[onMessage],
 	);
 
-	const renderScopedComponent = useCallback(
-		(componentId: string, dataScope?: DataScope): React.ReactNode => {
-			const surfaceComponent = components[componentId];
-			if (!surfaceComponent?.component) return null;
-			const node = (
-				<A2UIComponentNode
-					key={componentId}
-					surfaceComponent={surfaceComponent}
-					componentId={componentId}
-					surfaceId={surface.id}
-					appId={appId}
-					boardId={boardId}
-					handleAction={handleAction}
-					renderScopedComponent={(childId, childScope) =>
-						renderScopedComponent(childId, childScope ?? dataScope)
-					}
-				/>
-			);
-
-			return dataScope ? (
-				<DataScopeProvider scope={dataScope}>{node}</DataScopeProvider>
-			) : (
-				node
-			);
-		},
-		[components, surface.id, appId, boardId, handleAction],
+	const renderContext = useMemo<SurfaceRenderContextValue>(
+		() => ({ store, surfaceId: surface.id, appId, boardId, handleAction }),
+		[store, surface.id, appId, boardId, handleAction],
 	);
 
 	const rootComponent = surface.rootComponentId
@@ -245,6 +302,7 @@ export function A2UIRenderer({
 					boardVersion={boardVersion}
 					eventId={eventId}
 					governedPage={governedPage}
+					elementDemand={elementDemand}
 					components={components}
 					isPreviewMode={isPreviewMode}
 					openDialog={openDialog}
@@ -262,7 +320,9 @@ export function A2UIRenderer({
 						data-surface-canvas-id={canvasId}
 						style={canvasStyle}
 					>
-						{renderScopedComponent(surface.rootComponentId)}
+						<SurfaceRenderContext.Provider value={renderContext}>
+							{renderScopedComponent(surface.rootComponentId)}
+						</SurfaceRenderContext.Provider>
 					</div>
 				</ActionProvider>
 			</WidgetRefsProvider>

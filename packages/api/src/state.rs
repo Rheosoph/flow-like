@@ -485,6 +485,11 @@ pub struct State {
     /// are far more frequent than execution-state reads, and rebuilding a Redis
     /// connection on every call would dominate the latency the cache exists to avoid.
     pub cache: crate::cache::CacheBackendHandle,
+    /// Execution state backend (`EXECUTION_STATE_BACKEND`), built on first use and shared
+    /// by every executor callback and poll. A failed build is not memoized.
+    pub(crate) execution_state_store: flow_like_types::tokio::sync::OnceCell<
+        Arc<dyn crate::execution::state::ExecutionStateStore>,
+    >,
     /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
     pub secrets: Arc<SecretStore>,
     /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
@@ -727,7 +732,7 @@ impl State {
             .load(&secrets)
             .await
             .unwrap_or_else(|error| panic!("{error}"));
-        let platform_config = effective_config.hub;
+        let mut platform_config = effective_config.hub;
         let oauth_providers = effective_config.oauth_providers;
         let openid_validation_overrides = effective_config.openid;
         if platform_config
@@ -821,7 +826,23 @@ impl State {
                 backend_pub.as_deref(),
                 backend_kid.clone(),
             );
-            crate::audit::sign::init(backend_key.as_deref(), backend_kid);
+            // A dedicated key keeps audit forgery out of reach of the token issuers.
+            let audit_key = secrets
+                .get_secret_string(&SecretRef::new("AUDIT_SIGNING_KEY"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            match audit_key {
+                Some(audit_key) => {
+                    let audit_kid = secrets
+                        .get_secret_string(&SecretRef::new("AUDIT_KID"))
+                        .await
+                        .ok()
+                        .map(|s| s.expose_secret().to_string());
+                    crate::audit::sign::init_dedicated(&audit_key, audit_kid);
+                }
+                None => crate::audit::sign::init(backend_key.as_deref(), backend_kid),
+            }
             let audit_verifying_keys = secrets
                 .get_secret_string(&SecretRef::new("AUDIT_VERIFYING_KEYS"))
                 .await
@@ -860,6 +881,10 @@ impl State {
                 .expect("Failed to create meta store from master credentials"),
         );
         let storage_identity = crate::storage_identity::from_credentials(&master_creds);
+        crate::routes::registry::widget_policy::init_widget_policy(
+            &mut platform_config,
+            &storage_identity.content,
+        );
 
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
@@ -890,6 +915,15 @@ impl State {
 
         let db_dialect = DbDialect::resolve(dialect, &db).await;
         tracing::info!(dialect = %db_dialect, "database dialect resolved");
+
+        if platform_config.audit.enabled
+            && let Err(error) = crate::audit::AuditService::check_signing_key_continuity(&db).await
+        {
+            if platform_config.audit.require_signing {
+                panic!("AUDIT SIGNING KEY MISMATCH: {error}");
+            }
+            tracing::error!("AUDIT SIGNING KEY MISMATCH: {error}");
+        }
 
         let stripe_client = if platform_config.features.premium {
             let stripe_key = secrets
@@ -1146,6 +1180,7 @@ impl State {
             wasm_registry,
             sink_scheduler,
             cache: cache_backend,
+            execution_state_store: flow_like_types::tokio::sync::OnceCell::new(),
             secrets,
             encryption_key,
             sink_secret,
@@ -1462,7 +1497,8 @@ impl State {
             ConditionalRead::Fresh(proto, meta) => (proto, meta),
         };
 
-        let board = Board::from_loaded_proto(proto, storage_root, app_state).await?;
+        let board =
+            Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
         let entry = Arc::new(CachedBoard {
             e_tag: meta.e_tag.clone().unwrap_or_default(),
             board: Arc::new(board),

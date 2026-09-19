@@ -456,3 +456,67 @@ declare namespace onnx {
      */
     function depthToPointCloud({ depthMap: Struct, focalLength?: float, scale?: float }): { points: any, pointCount: int };
 }
+
+declare namespace tracking {
+    // === AI/ML/Tracking ===
+
+    /**
+     * Gives local tracks from one or more cameras a global identity by comparing appearance embeddings. A track is collected for a few observations before it creates a new entity; later tracks that look like a known entity are matched to it, even on another camera. Every board and user of this app using the same task id shares the identities. They live in this process's memory only: after an hour without calls or a restart the task starts over and entity ids begin again at 1. An app can have at most 16 active tasks (64 per process); an idle task is released after an hour.
+     * @node tracking_associate_entities @receiver observations @alias trackingAssociateEntities
+     * @param observations (optional) — Observations with appearance embeddings, e.g. from Extract Appearance. Observations with a track id accumulate evidence per track; ones without are only matched to known entities, and lost tracks only report the entity they already have. Timestamps are Unix milliseconds from one clock shared by all cameras of the task; a missing timestamp means now, and one further ahead of this machine's clock than a minute (or half the entity lifetime, if shorter) is clamped. (receiver: `this` in `x.associateEntities(...)`)
+     * @param taskId (optional) — Identities are shared by every board, user and camera of this app using the same task id
+     * @param minSimilarity (optional) — Lowest cosine similarity for matching an observation to an entity
+     * @param ambiguityMargin (optional) — A match is left unresolved when the next best entity is at most this much less similar
+     * @param minObservations (optional) — Observations a new track needs before it is matched or creates an entity (at least 1)
+     * @param entityTtlMs (optional) — Entities, track bindings and pending tracks unseen for this long, measured by observation timestamps, are forgotten
+     * @returns associations — Observations with their global entity id, in input order
+     * @returns unresolved — Observations without an entity yet, with the reason and the closest entities
+     * @returns entityCount — Number of entities currently known to this task
+     * @impure has side effects / drives control flow
+     */
+    function associateEntities(this: Struct[], { observations?: Struct[], taskId?: string, minSimilarity?: float, ambiguityMargin?: float, minObservations?: int, entityTtlMs?: int }): { associations: Struct[], unresolved: Struct[], entityCount: int };
+
+    /**
+     * Crops every detection from the frame and runs a re-identification model on the crops in batches. The built-in models are Intel OpenVINO person re-identification models (Apache-2.0): the chosen one is downloaded into Cache Dir on first use, checked against its SHA-256 and read from there afterwards. With Model set to custom, connect your own session from Load ONNX and set Normalization to match its export: imagenet for torchreid/OSNet exports, raw for FastReID onnx_export.py exports, which normalize inside the model. Each detection becomes an observation with an L2-normalized appearance embedding, keeping its box, camera, session, tracker id, track id and state (track-only fields such as hits and velocity are not carried). Lost tracks from Track Detections (Include Lost) carry a predicted box, so they are passed through with their existing embedding instead of being cropped. Feed the result into Track Detections for appearance-aware tracking or into Associate Entities to recognize the same object across cameras. Boxes that are not finite or smaller than Min Box Size are left out.
+     * @node tracking_extract_appearance @receiver image_in @alias trackingExtractAppearance
+     * @param model (optional) — person-openvino-0270 (6 MB, default) or person-openvino-0265 (9.6 MB): Intel OpenVINO person re-identification models, Apache-2.0, downloaded into Cache Dir on first use. custom uses the Custom Model pin.
+     * @param cacheDir — Folder the built-in model is downloaded to when missing and loaded from when present. Not used with a custom model.
+     * @param customModel — Session from Load ONNX, used when Model is custom. Takes an RGB float tensor [N,3,H,W] or [N,H,W,3] and returns one embedding per crop, shaped [N,D] or [N,D,1,1].
+     * @param imageIn — Frame the detections were found in (receiver: `this` in `x.extractAppearance(...)`)
+     * @param detections (optional) — Boxes in image pixel coordinates, from Object Detection or tracks from Track Detections
+     * @param cameraId (optional) — Camera stamped on every observation; empty keeps the incoming value
+     * @param sessionId (optional) — Camera session stamped on every observation; empty keeps the incoming value
+     * @param timestampMs (optional) — Frame capture time in Unix milliseconds; 0 keeps the incoming value, or uses the current time when there is none
+     * @param normalization (optional) — Pixel scaling a custom model expects (the built-in models normalize their input themselves, so any value works for them): imagenet ((x/255 - mean) / std) for torchreid/OSNet exports, raw (0–255 unchanged) for FastReID onnx_export.py exports that normalize inside the model, zero_one (x/255) or minus_one_one (x/127.5 - 1)
+     * @param inputWidth (optional) — Crop width in pixels, used only when the model's input width is dynamic
+     * @param inputHeight (optional) — Crop height in pixels, used only when the model's input height is dynamic
+     * @param padding (optional) — Fraction of the box width and height added on each side before cropping
+     * @param minBoxSize (optional) — Boxes narrower or shorter than this many pixels after padding and clipping to the image are skipped
+     * @param batchSize (optional) — Crops per inference call, used only when the model's batch dimension is dynamic
+     * @returns observations — One observation per cropped detection with its new embedding, plus every lost track with its existing one; each carries its index in Detections
+     * @returns dimensions — Embedding length of the model output; 0 when no detection was cropped
+     * @impure has side effects / drives control flow
+     */
+    function extractAppearance(this: NodeImage, { model?: string, cacheDir: Struct, customModel: Struct, imageIn: Struct, detections?: Struct[], cameraId?: string, sessionId?: string, timestampMs?: int, normalization?: string, inputWidth?: int, inputHeight?: int, padding?: float, minBoxSize?: float, batchSize?: int }): { observations: Struct[], dimensions: int };
+
+    /**
+     * Follows detected objects across the frames of one camera and gives each a stable track id (ByteTrack, with BoT-SORT appearance matching when detections carry embeddings). Run it once per frame: the tracker is kept in memory per user, board, node, Camera pin and Session pin between runs and uses frame timestamps for motion and expiry. Track ids are only unique per tracker instance, named by each track's tracker_id: a new Camera or Session pin value, 10 minutes without frames, eviction when too many trackers are open, or a process restart starts a new tracker with a new tracker_id (a session carried by the detections does not). Deployments that spread runs over several processes keep one independent tracker per process.
+     * @node tracking_track_detections @receiver detections @alias trackingTrackDetections
+     * @param detections (optional) — Boxes detected in this frame. Embeddings from Extract Appearance are used for appearance matching when present. Elements in the lost state (predicted boxes of lost tracks fed back in) are ignored. (receiver: `this` in `x.trackDetections(...)`)
+     * @param cameraId (optional) — Camera the frame comes from. Empty keeps the camera carried by the detections, or the last one seen. Every value of this pin gets its own tracker, so set it when one node tracks several cameras.
+     * @param sessionId (optional) — Stream session of the camera. Empty keeps the session carried by the detections, or the last one seen. A new value of this pin starts a fresh tracker with a new tracker_id.
+     * @param timestampMs (optional) — Frame capture time in Unix milliseconds; 0 uses the current time, never earlier than the last processed frame. A frame up to Max Lost older than the last processed one is skipped; one further back is taken as a clock reset that drops all tracks.
+     * @param highThreshold (optional) — Detections scoring at least this take part in the first association
+     * @param lowThreshold (optional) — Detections scoring at least this, but below the high threshold, can only keep existing tracks alive
+     * @param newTrackThreshold (optional) — Minimum score for an unmatched detection to start a new track
+     * @param matchThreshold (optional) — Maximum matching cost (1 - IoU × score, or appearance distance) of the first association; higher matches more loosely
+     * @param maxLostMs (optional) — How long a track that lost its object can be re-acquired with the same id
+     * @param minAppearanceSimilarity (optional) — Minimum cosine similarity of embeddings for appearance to count as a match
+     * @param classAware (optional) — Never match a track with a detection of another class
+     * @param includeLost (optional) — Also output tracks that lost their object. Their boxes are Kalman predictions, not detections: Extract Appearance and Associate Entities treat them as passive, and this node ignores them when they are fed back in.
+     * @returns tracks — Confirmed tracks matched in this frame (plus lost tracks if enabled), sorted by track id. Track ids are unique per tracker_id.
+     * @returns skipped — True when the frame was older than the last processed one and was ignored
+     * @impure has side effects / drives control flow
+     */
+    function trackDetections(this: Struct[], { detections?: Struct[], cameraId?: string, sessionId?: string, timestampMs?: int, highThreshold?: float, lowThreshold?: float, newTrackThreshold?: float, matchThreshold?: float, maxLostMs?: int, minAppearanceSimilarity?: float, classAware?: bool, includeLost?: bool }): { tracks: Struct[], skipped: bool };
+}

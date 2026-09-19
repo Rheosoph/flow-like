@@ -1,4 +1,10 @@
 import type {
+	WidgetGrantRequest,
+	WidgetGrantResponse,
+	WidgetPolicyDescriptor,
+	WidgetPolicyRequest,
+} from "../../components/a2ui/micro-widget-policy";
+import type {
 	AccessRequest,
 	CachedPackage,
 	InstalledPackage,
@@ -56,4 +62,22 @@ export interface IRegistryState {
 		body: UpsertPackageCommentRequest,
 	): Promise<UpsertPackageCommentResponse>;
 	deletePackageComment(packageId: string, commentId: string): Promise<void>;
+	/**
+	 * Authoritative policy of a package widget. Absent on backends that predate
+	 * widget grants. With `runtimeSources` the descriptor also covers addresses
+	 * the host extracted from the widget's props; a refused request shape
+	 * rejects with a `WidgetRuntimeSourcesError`.
+	 */
+	describeWidgetPolicy?(
+		request: WidgetPolicyRequest,
+	): Promise<WidgetPolicyDescriptor>;
+	/**
+	 * Mint a grant for the approved `policyDigest`, with the same
+	 * `runtimeSources` the approved descriptor was described with. Rejects with
+	 * an error that `isPolicyChangedError` recognizes when the backend now
+	 * derives another policy. Web grants with runtime sources carry `runtime`.
+	 */
+	mintWidgetGrant?(request: WidgetGrantRequest): Promise<WidgetGrantResponse>;
+	/** Drop issued grants so remounts run at baseline. Desktop only; web tokens expire. */
+	revokeWidgetGrants?(packageId: string, widgetId?: string): Promise<void>;
 }

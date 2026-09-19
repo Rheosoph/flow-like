@@ -9,7 +9,7 @@ import { validateBundle, validateProject } from "./validate-cmd";
 const USAGE = `flow-like-widgets — Flow-Like widget bundler
 
 Usage:
-  flow-like-widgets pack --project <dir> --out <file> [--serving-prefix <url>] [--connect <host> ...] [--created-at <iso>]
+  flow-like-widgets pack --project <dir> --out <file> [--serving-prefix <url>] [--created-at <iso>]
   flow-like-widgets dev [--project <dir>] [--port <n>]
   flow-like-widgets validate <project-dir | file.flwb>
   flow-like-widgets add <widget-id> [--group <dir>]
@@ -26,21 +26,25 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
+const CONNECT_FLAG_REMOVED =
+	'The --connect flag was removed: declare network sources per widget in widget.config.ts "csp"';
+
 async function runPack(args: string[]): Promise<void> {
+	if (args.some((arg) => arg === "--connect" || arg.startsWith("--connect="))) {
+		fail(CONNECT_FLAG_REMOVED);
+	}
 	const { values } = parseArgs({
 		args,
 		options: {
 			project: { type: "string", default: "." },
 			out: { type: "string" },
 			"serving-prefix": { type: "string" },
-			connect: { type: "string", multiple: true },
 			"created-at": { type: "string" },
 		},
 	});
 	const result = await pack(values.project, {
 		out: values.out,
 		servingPrefix: values["serving-prefix"] ?? null,
-		connectHosts: values.connect ?? [],
 		createdAt: values["created-at"],
 	});
 	for (const warning of result.warnings) {

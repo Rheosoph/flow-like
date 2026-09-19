@@ -3,6 +3,7 @@ import { errorMessage } from "../../lib/channel/util";
 import type { IChannelHandle } from "../../lib/schema/channel";
 import {
 	type ElementSource,
+	MAX_ELEMENTS_BYTES,
 	materializeSurfaceElements,
 } from "./element-materializer";
 
@@ -72,9 +73,6 @@ export function parseElementsRequestMessage(
 	};
 }
 
-/** Channel transports cap a push well below this; a bigger answer would only time out. */
-const MAX_REPLY_BYTES = 512 * 1024;
-
 const inFlight = new Set<string>();
 
 /**
@@ -112,10 +110,10 @@ export function handleElementsRequestMessage(
 				const elements = materialize(live, request.selectors, live.widgetScope);
 				const bytes = JSON.stringify(elements).length;
 				response =
-					bytes > MAX_REPLY_BYTES
+					bytes > MAX_ELEMENTS_BYTES
 						? {
 								ok: false,
-								error: `answer too large (${bytes} bytes, limit ${MAX_REPLY_BYTES}) — narrow the selectors`,
+								error: `answer too large (${bytes} bytes, limit ${MAX_ELEMENTS_BYTES}) — narrow the selectors`,
 							}
 						: { ok: true, elements };
 			} else {

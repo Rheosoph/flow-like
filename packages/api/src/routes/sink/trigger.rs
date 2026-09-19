@@ -34,8 +34,11 @@ use flow_like_types::{
     Bytes, Result as FlResult, anyhow, create_id, tokio, utils::constant_time_eq,
 };
 use ipnetwork::IpNetwork;
-use sea_orm::sea_query::ExprTrait;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::sea_query::{Expr, ExprTrait, IntoCondition};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, JoinType, QueryFilter,
+    QuerySelect, RelationDef,
+};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use utoipa::ToSchema;
@@ -165,17 +168,40 @@ pub(crate) async fn resolve_sink_pat_user_id(
     hasher.update(pat_secret.as_bytes());
     let secret_hash = hasher.finalize().to_hex().to_string().to_lowercase();
 
+    // LEFT JOIN keeps "PAT invalid" and "owner is not a member" distinguishable
+    // in a single round trip.
+    let app_id = sink.app_id.clone();
+    let membership_of_app: RelationDef = pat::Entity::belongs_to(membership::Entity)
+        .from(pat::Column::UserId)
+        .to(membership::Column::UserId)
+        .on_condition(move |_pat, member| {
+            Expr::col((member, membership::Column::AppId))
+                .eq(app_id.clone())
+                .into_condition()
+        })
+        .into();
+
     let db_pat = pat::Entity::find()
+        .select_only()
+        .column(pat::Column::UserId)
+        .column(pat::Column::ValidUntil)
+        .column(membership::Column::Id)
+        .join(JoinType::LeftJoin, membership_of_app)
         .filter(
             pat::Column::Id
                 .eq(pat_id)
                 .and(pat::Column::Key.eq(secret_hash)),
         )
+        .into_tuple::<(
+            String,
+            Option<sea_orm::prelude::DateTimeWithTimeZone>,
+            Option<String>,
+        )>()
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to validate sink PAT: {}", e)))?;
 
-    let Some(db_pat) = db_pat else {
+    let Some((user_id, valid_until, membership_id)) = db_pat else {
         tracing::warn!(
             sink_id = %sink.id,
             event_id = %sink.event_id,
@@ -186,29 +212,19 @@ pub(crate) async fn resolve_sink_pat_user_id(
         ));
     };
 
-    if let Some(valid_until) = db_pat.valid_until
+    if let Some(valid_until) = valid_until
         && valid_until < chrono::Utc::now().fixed_offset()
     {
         tracing::warn!(
             sink_id = %sink.id,
             event_id = %sink.event_id,
-            user_id = %db_pat.user_id,
+            user_id = %user_id,
             "Stored sink PAT is expired; refusing sink execution"
         );
         return Err(ApiError::unauthorized("Stored sink PAT is expired"));
     }
 
-    let user_id = db_pat.user_id;
-    let member = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(sink.app_id.clone()))
-        .filter(membership::Column::UserId.eq(user_id.clone()))
-        .one(&state.db)
-        .await
-        .map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to validate sink PAT membership: {}", e))
-        })?;
-
-    if member.is_none() {
+    if membership_id.is_none() {
         tracing::warn!(
             sink_id = %sink.id,
             event_id = %sink.event_id,
@@ -670,6 +686,8 @@ async fn record_trigger_rejection(
 /// Utility function to trigger an event programmatically.
 ///
 /// Use this in Lambda handlers, SQS processors, cron job workers, etc.
+/// The caller resolves the active sink and its event (validated against the
+/// sink's app) and hands both rows in, so they are loaded once per fire.
 ///
 /// If the sink has stored PAT and/or OAuth tokens, they will be decrypted and
 /// passed to the executor, enabling access to models and personal files.
@@ -677,7 +695,7 @@ async fn record_trigger_rejection(
 /// # Example
 /// ```ignore
 /// // In a Lambda handler
-/// let result = trigger_event(&state, TriggerEventInput {
+/// let result = trigger_event(&state, sink, event, TriggerEventInput {
 ///     event_id: "event_123".to_string(),
 ///     payload: Some(json!({"key": "value"})),
 ///     idempotency_key: None,
@@ -685,20 +703,12 @@ async fn record_trigger_rejection(
 /// ```
 pub async fn trigger_event(
     state: &AppState,
+    sink: event_sink::Model,
+    event: flow_like::flow::event::Event,
     input: TriggerEventInput,
 ) -> FlResult<TriggerResponse> {
     use crate::routes::app::events::db::decrypt_token;
     let encryption_key = &state.encryption_key;
-    // Look up sink by event_id
-    let sink = event_sink::Entity::find()
-        .filter(event_sink::Column::EventId.eq(&input.event_id))
-        .filter(event_sink::Column::Active.eq(true))
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| anyhow!("No active sink found for event {}", input.event_id))?;
-
-    // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id).await?;
 
     // Check JWT is configured
     if !is_jwt_configured() {
@@ -714,8 +724,11 @@ pub async fn trigger_event(
         .as_ref()
         .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
-    let pat_actor_user_id = resolve_sink_pat_user_id(state, &sink, token.as_deref()).await?;
-    let actor_user_id = pat_actor_user_id;
+    let (pat_actor_user_id, wasm_packages) = tokio::join!(
+        resolve_sink_pat_user_id(state, &sink, token.as_deref()),
+        resolve_wasm_packages(state, &sink.app_id),
+    );
+    let actor_user_id = pat_actor_user_id?;
     let executor_subject = actor_user_id
         .clone()
         .unwrap_or_else(|| format!("sink:{}", sink.id));
@@ -783,8 +796,6 @@ pub async fn trigger_event(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(state, &sink.app_id).await;
-
     // Build dispatch request
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -848,11 +859,14 @@ pub async fn trigger_event(
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
 
     // Insert run record
-    run.insert(&state.db).await?;
-    crate::audit::record_execution_dispatch(state, &run_id, "sink").await?;
+    let run_model = run.insert(&state.db).await?;
+    crate::audit::record_execution_dispatch_for(state, &run_model, "sink").await?;
 
     // Dispatch (fire and forget for programmatic triggers)
     // Use async dispatch which respects ASYNC_EXECUTION_BACKEND config
@@ -1003,7 +1017,12 @@ pub async fn trigger_http(
         .as_ref()
         .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
 
-    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let (actor_user_id, event_result, wasm_packages) = tokio::join!(
+        resolve_sink_pat_user_id(&state, &sink, token.as_deref()),
+        get_event_from_db(&state.db, &sink.event_id, &sink.app_id),
+        resolve_wasm_packages(&state, &app_id),
+    );
+    let actor_user_id = actor_user_id?;
     let executor_subject = actor_user_id
         .clone()
         .unwrap_or_else(|| format!("sink:{}", sink.id));
@@ -1038,9 +1057,8 @@ pub async fn trigger_http(
     .await?;
     let payload = parsed_payload.payload;
 
-    // Get the event from database (config lives in Event)
-    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
-        .await
+    // Config lives in Event
+    let event = event_result
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
     // Check JWT configured
@@ -1106,8 +1124,6 @@ pub async fn trigger_http(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
-
     // Build dispatch request
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -1171,6 +1187,9 @@ pub async fn trigger_http(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
 
     tracing::info!(run_id = %run_id, "Dispatching HTTP sink");
@@ -1178,20 +1197,23 @@ pub async fn trigger_http(
     // Persist the run record BEFORE dispatch so infrastructure failures
     // (executor crashes, network drops, timeouts) leave a visible Pending
     // row that can be reconciled, rather than a silently lost workflow.
-    if let Err(e) = run.insert(&state.db).await {
-        tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
-        return Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(TriggerResponse {
-                triggered: false,
-                run_id: Some(run_id),
-                message: format!("Failed to create run record: {}", e),
-            }),
-        )
-            .into_response());
-    }
+    let run_model = match run.insert(&state.db).await {
+        Ok(run_model) => run_model,
+        Err(e) => {
+            tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
+            return Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TriggerResponse {
+                    triggered: false,
+                    run_id: Some(run_id),
+                    message: format!("Failed to create run record: {}", e),
+                }),
+            )
+                .into_response());
+        }
+    };
 
-    crate::audit::record_execution_dispatch(&state, &run_id, "sink:http").await?;
+    crate::audit::record_execution_dispatch_for(&state, &run_model, "sink:http").await?;
 
     // Match the desktop HTTP sink: wait for the first `generic_result`
     // event and return it as a single JSON response. External callers of
@@ -1415,9 +1437,19 @@ pub async fn trigger_telegram(
         None
     };
 
-    // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
-        .await
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let (pat_result, event_result, wasm_packages) = tokio::join!(
+        resolve_sink_pat_user_id(&state, &sink, token.as_deref()),
+        get_event_from_db(&state.db, &sink.event_id, &sink.app_id),
+        resolve_wasm_packages(&state, &sink.app_id),
+    );
+
+    let event = event_result
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
     // Check JWT configured
@@ -1448,13 +1480,7 @@ pub async fn trigger_telegram(
     let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
-
-    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let actor_user_id = pat_result?;
     let executor_subject = actor_user_id
         .clone()
         .unwrap_or_else(|| format!("sink:{}", sink.id));
@@ -1504,8 +1530,6 @@ pub async fn trigger_telegram(
         Some(tokens) => Some(maybe_refresh_oauth_tokens(&state, &sink.id, tokens).await),
         None => None,
     };
-
-    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1570,17 +1594,20 @@ pub async fn trigger_telegram(
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
 
     tracing::info!(run_id = %run_id, "Dispatching Telegram webhook (async)");
 
     // Insert run record
-    run.insert(&state.db).await.map_err(|e| {
+    let run_model = run.insert(&state.db).await.map_err(|e| {
         tracing::error!(error = %e, "Failed to create run record");
         ApiError::internal_error(anyhow!("Failed to create run record"))
     })?;
 
-    crate::audit::record_execution_dispatch(&state, &run_id, "sink:telegram").await?;
+    crate::audit::record_execution_dispatch_for(&state, &run_model, "sink:telegram").await?;
 
     // Dispatch async (fire and forget) - Telegram expects fast response
     // Wait only for durable queue acceptance. A Lambda must not return while its
@@ -1778,9 +1805,19 @@ pub async fn trigger_discord(
     }
 
     // For other interaction types (commands, components, etc.), dispatch async
-    // Get the event from database
-    let event = get_event_from_db(&state.db, &sink.event_id, &sink.app_id)
-        .await
+    // Decrypt PAT from sink if available
+    let token = sink
+        .pat_encrypted
+        .as_ref()
+        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
+
+    let (pat_result, event_result, wasm_packages) = tokio::join!(
+        resolve_sink_pat_user_id(&state, &sink, token.as_deref()),
+        get_event_from_db(&state.db, &sink.event_id, &sink.app_id),
+        resolve_wasm_packages(&state, &sink.app_id),
+    );
+
+    let event = event_result
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get event: {}", e)))?;
 
     // Check JWT configured
@@ -1806,13 +1843,7 @@ pub async fn trigger_discord(
     let event_json = variant::dispatch_event_json(&event, &target)
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to serialize event: {}", e)))?;
 
-    // Decrypt PAT from sink if available
-    let token = sink
-        .pat_encrypted
-        .as_ref()
-        .and_then(|encrypted| decrypt_token(encrypted, encryption_key));
-
-    let actor_user_id = resolve_sink_pat_user_id(&state, &sink, token.as_deref()).await?;
+    let actor_user_id = pat_result?;
     let executor_subject = actor_user_id
         .clone()
         .unwrap_or_else(|| format!("sink:{}", sink.id));
@@ -1862,8 +1893,6 @@ pub async fn trigger_discord(
         Some(tokens) => Some(maybe_refresh_oauth_tokens(&state, &sink.id, tokens).await),
         None => None,
     };
-
-    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
 
     // Build dispatch request (async - no streaming)
     let request = DispatchRequest {
@@ -1928,17 +1957,20 @@ pub async fn trigger_discord(
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
+        event_version: Set(None),
+        nodes: Set(None),
+        logs_count: Set(None),
     };
 
     tracing::info!(run_id = %run_id, "Dispatching Discord webhook (async)");
 
     // Insert run record
-    run.insert(&state.db).await.map_err(|e| {
+    let run_model = run.insert(&state.db).await.map_err(|e| {
         tracing::error!(error = %e, "Failed to create run record");
         ApiError::internal_error(anyhow!("Failed to create run record"))
     })?;
 
-    crate::audit::record_execution_dispatch(&state, &run_id, "sink:discord").await?;
+    crate::audit::record_execution_dispatch_for(&state, &run_model, "sink:discord").await?;
 
     // Dispatch async (fire and forget) - Discord expects response within 3 seconds
     // Wait only for durable queue acceptance. A Lambda must not return while its
@@ -2204,10 +2236,20 @@ fn validate_sink_trigger_jwt(token: &str, secret: &str) -> Result<SinkTriggerCla
     Ok(token_data.claims)
 }
 
+/// Tokens known to be revoked. Revocation is permanent, so remembering it is
+/// always safe; a token that is still valid is re-checked on every trigger so a
+/// revocation takes effect at once on every replica.
+static REVOKED_SINK_TOKENS: std::sync::LazyLock<moka::sync::Cache<String, ()>> =
+    std::sync::LazyLock::new(|| moka::sync::Cache::builder().max_capacity(1_000).build());
+
 /// Check if a sink token has been revoked
 async fn is_token_revoked(db: &sea_orm::DatabaseConnection, jti: &str) -> Result<bool, ApiError> {
     use crate::entity::sink_token;
     use sea_orm::EntityTrait;
+
+    if REVOKED_SINK_TOKENS.contains_key(jti) {
+        return Ok(true);
+    }
 
     let token = sink_token::Entity::find_by_id(jti)
         .one(db)
@@ -2215,7 +2257,12 @@ async fn is_token_revoked(db: &sea_orm::DatabaseConnection, jti: &str) -> Result
         .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?;
 
     match token {
-        Some(t) => Ok(t.revoked),
+        Some(t) => {
+            if t.revoked {
+                REVOKED_SINK_TOKENS.insert(jti.to_string(), ());
+            }
+            Ok(t.revoked)
+        }
         // If token not found in DB, it's either an old token (pre-registration system)
         // or an invalid jti. We allow it for backward compatibility but log a warning.
         None => {
@@ -2428,6 +2475,8 @@ pub async fn trigger_service(
     // Use the existing trigger_event utility
     let response = match trigger_event(
         &state,
+        sink,
+        event,
         TriggerEventInput {
             event_id: request.event_id.clone(),
             payload: merged_payload.clone(),
@@ -2555,24 +2604,32 @@ pub async fn get_cron_sinks(
 
     // Get all active cron sinks
     let sinks = event_sink::Entity::find()
+        .select_only()
+        .columns([
+            event_sink::Column::EventId,
+            event_sink::Column::AppId,
+            event_sink::Column::Active,
+            event_sink::Column::CronExpression,
+        ])
         .filter(event_sink::Column::SinkType.eq("cron"))
         .filter(event_sink::Column::Active.eq(true))
+        .into_tuple::<(String, String, bool, Option<String>)>()
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?;
 
     let schedules: Vec<CronScheduleInfo> = sinks
         .into_iter()
-        .filter_map(|s| {
-            s.cron_expression.map(|expr| CronScheduleInfo {
+        .filter_map(|(event_id, app_id, active, cron_expression)| {
+            cron_expression.map(|expr| CronScheduleInfo {
                 // The docker-compose cron worker keys its in-memory and Redis
                 // state by this id. Keep it equal to event_id so last-triggered
                 // updates address the same record that schedule sync stores.
-                id: s.event_id.clone(),
-                event_id: s.event_id,
+                id: event_id.clone(),
+                event_id,
                 cron_expression: expr,
-                app_id: s.app_id,
-                enabled: s.active,
+                app_id,
+                enabled: active,
                 last_triggered: None,
                 next_trigger: None,
             })
@@ -2663,34 +2720,51 @@ pub async fn get_sink_configs(
 
     // Get all active sinks of the requested type
     let sinks = event_sink::Entity::find()
+        .select_only()
+        .columns([
+            event_sink::Column::EventId,
+            event_sink::Column::AppId,
+            event_sink::Column::SinkType,
+            event_sink::Column::Active,
+        ])
         .filter(event_sink::Column::SinkType.eq(&query.sink_type))
         .filter(event_sink::Column::Active.eq(true))
+        .into_tuple::<(String, String, String, bool)>()
         .all(&state.db)
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?;
+
+    if sinks.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
 
     // Fetch events to get config data
-    let event_ids: Vec<String> = sinks.iter().map(|s| s.event_id.clone()).collect();
-    let events = event::Entity::find()
-        .filter(event::Column::Id.is_in(event_ids))
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?;
-
-    let event_configs: std::collections::HashMap<String, serde_json::Value> = events
-        .into_iter()
-        .filter_map(|e| e.config.map(|c| (e.id, c)))
+    let event_ids: Vec<String> = sinks
+        .iter()
+        .map(|(event_id, ..)| event_id.clone())
         .collect();
+    let mut event_configs: std::collections::HashMap<String, serde_json::Value> =
+        event::Entity::find()
+            .select_only()
+            .columns([event::Column::Id, event::Column::Config])
+            .filter(event::Column::Id.is_in(event_ids))
+            .into_tuple::<(String, Option<serde_json::Value>)>()
+            .all(&state.db)
+            .await
+            .map_err(|e| ApiError::internal_error(anyhow!("Database error: {}", e)))?
+            .into_iter()
+            .filter_map(|(id, config)| config.map(|config| (id, config)))
+            .collect();
 
     let configs: Vec<SinkConfigInfo> = sinks
         .into_iter()
-        .map(|s| {
-            let config = event_configs.get(&s.event_id).cloned();
+        .map(|(event_id, app_id, sink_type, active)| {
+            let config = event_configs.remove(&event_id);
             SinkConfigInfo {
-                event_id: s.event_id,
-                app_id: s.app_id,
-                sink_type: s.sink_type,
-                active: s.active,
+                event_id,
+                app_id,
+                sink_type,
+                active,
                 config,
             }
         })

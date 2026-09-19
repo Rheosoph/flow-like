@@ -1,14 +1,20 @@
-use chrono::Utc;
-use flow_like_types::{Value, create_id};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
+use std::time::Duration;
+
+use chrono::{DateTime, FixedOffset, Utc};
+use flow_like_types::{Value, create_id, tokio};
 use sea_orm::{
-    ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection,
-    DatabaseTransaction, DbErr, EntityTrait, IsolationLevel, Order, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait, sea_query::NullOrdering,
+    ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait,
+    DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, IsolationLevel, Order,
+    QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait, sea_query::NullOrdering,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::db::{DbDialect, RetryPolicy, retry_transaction};
+use crate::db::{AsDbConflict, DbDialect, RetryPolicy, retry_transaction};
 use crate::entity::{audit_entry, sea_orm_active_enums::AuditActorType};
 
 use super::chain::{
@@ -33,6 +39,40 @@ pub struct AuditEntryInput {
     pub summary: String,
     #[schema(value_type = Option<Object>)]
     pub details: Option<Value>,
+}
+
+impl AuditEntryInput {
+    /// An entry for a change no authenticated caller made, such as one applied
+    /// from a verified provider webhook. Lands on the root chain unless moved.
+    pub fn system(
+        actor_id: &str,
+        action: &str,
+        resource_type: &str,
+        resource_id: &str,
+        summary: impl Into<String>,
+    ) -> Self {
+        Self {
+            actor_id: actor_id.to_owned(),
+            actor_type: AuditActorType::System,
+            actor_ip: None,
+            action: action.to_owned(),
+            resource_type: resource_type.to_owned(),
+            resource_id: resource_id.to_owned(),
+            chain_id: None,
+            summary: summary.into(),
+            details: None,
+        }
+    }
+
+    pub fn on_chain(mut self, chain_id: &str) -> Self {
+        self.chain_id = Some(chain_id.to_owned());
+        self
+    }
+
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
+        self
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
@@ -92,6 +132,25 @@ pub struct ChainVerification {
     pub unsigned_entries: u64,
     pub unverifiable_signatures: u64,
     pub legacy_entries: u64,
+    /// The chain or requested range holds no entries. A deleted chain looks the same.
+    #[serde(default)]
+    pub empty: bool,
+    /// Root sequence a branch verified from its first entry is anchored to.
+    /// None for the root chain, a partial range, or a branch anchored to genesis.
+    #[serde(default)]
+    pub anchor_sequence: Option<i64>,
+}
+
+/// The newest entry of a chain. Retain it outside the database to detect later
+/// truncation with the `expected_head_*` verification parameters.
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct ChainHead {
+    pub chain_id: Option<String>,
+    pub sequence: i64,
+    pub timestamp: String,
+    pub entry_hash: String,
+    pub signature: Option<String>,
+    pub kid: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, ToSchema)]
@@ -101,9 +160,29 @@ pub struct AuditFilter {
     pub actor_id: Option<String>,
     pub resource_type: Option<String>,
     pub resource_id: Option<String>,
+    /// Keyset cursor: only entries with a lower sequence. Prefer it over `offset`.
+    pub before_sequence: Option<i64>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
 }
+
+/// Appends lose commit races on a shared lock row by design, so they get a
+/// longer budget than the request default before a mutation is failed.
+const APPEND_RETRY: RetryPolicy = RetryPolicy {
+    max_attempts: 24,
+    base_delay: Duration::from_millis(5),
+    max_delay: Duration::from_millis(250),
+    max_total: Duration::from_secs(10),
+    idempotent: true,
+};
+const APPEND_DEADLINE: Duration = Duration::from_secs(15);
+/// `SET LOCAL`: a stalled writer holding the chain's lock row must not block
+/// every other append indefinitely. A timeout surfaces as a retryable `55P03`.
+const APPEND_LOCK_TIMEOUT_SQL: &str = "SELECT set_config('lock_timeout', '3s', true)";
+const VERIFY_BATCH: u64 = 1_000;
+const MAX_QUERY_OFFSET: u64 = 10_000;
+
+type TailRow = (String, Option<String>, i64, DateTime<FixedOffset>);
 
 pub struct AuditService;
 
@@ -134,37 +213,60 @@ impl AuditService {
     async fn record_internal(
         db: &DatabaseConnection,
         dialect: DbDialect,
-        input: AuditEntryInput,
+        mut input: AuditEntryInput,
         once: bool,
     ) -> flow_like_types::Result<audit_entry::Model> {
+        sanitize_input(&mut input);
         let id = create_id();
-        // Match timestamptz(3) before hashing: PostgreSQL rounds finer precision
-        // on insert, which would otherwise change the signed timestamp.
-        let now = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
-            .expect("the current time fits in milliseconds")
-            .fixed_offset();
-        let entry = retry_transaction::<_, audit_entry::Model, DbErr>(
+        let attempts = Arc::new(AtomicU32::new(0));
+        let append = retry_transaction::<_, audit_entry::Model, DbErr>(
             db,
             dialect,
             None,
-            &RetryPolicy::idempotent(),
+            &APPEND_RETRY,
             move |txn| {
                 let input = input.clone();
                 let id = id.clone();
-                Box::pin(async move { Self::append_entry(txn, input, now, id, once).await })
+                // Only a re-run can find its own id already committed.
+                let replay = attempts.fetch_add(1, Ordering::Relaxed) > 0;
+                Box::pin(
+                    async move { Self::append_entry(txn, dialect, input, id, once, replay).await },
+                )
             },
-        )
-        .await?;
-        Ok(entry)
+        );
+        match tokio::time::timeout(APPEND_DEADLINE, append).await {
+            Ok(Ok(entry)) => Ok(entry),
+            Ok(Err(error)) => {
+                if let Some(conflict) = error.db_conflict() {
+                    tracing::error!(
+                        conflict = conflict.as_str(),
+                        "audit append exhausted its retry budget"
+                    );
+                }
+                Err(error.into())
+            }
+            Err(_) => Err(flow_like_types::anyhow!(
+                "audit append did not finish within {}s",
+                APPEND_DEADLINE.as_secs()
+            )),
+        }
     }
 
     async fn append_entry(
         txn: &DatabaseTransaction,
+        dialect: DbDialect,
         input: AuditEntryInput,
-        now: chrono::DateTime<chrono::FixedOffset>,
         id: String,
         once: bool,
+        replay: bool,
     ) -> Result<audit_entry::Model, DbErr> {
+        if dialect.supports_set_config_timeouts() {
+            txn.execute_raw(Statement::from_string(
+                txn.get_database_backend(),
+                APPEND_LOCK_TIMEOUT_SQL,
+            ))
+            .await?;
+        }
         match input.chain_id.as_deref() {
             Some(chain_id) => {
                 crate::db::coordination::coordinate(txn, "audit-branch", &[chain_id]).await?;
@@ -173,7 +275,9 @@ impl AuditService {
         }
 
         // Reuse the committed result if a previous attempt lost its acknowledgement.
-        if let Some(existing) = audit_entry::Entity::find_by_id(id.clone()).one(txn).await? {
+        if replay
+            && let Some(existing) = audit_entry::Entity::find_by_id(id.clone()).one(txn).await?
+        {
             return Ok(existing);
         }
         if once {
@@ -190,39 +294,29 @@ impl AuditService {
             }
         }
 
-        let last_entry = newest_first(
-            audit_entry::Entity::find().filter(chain_filter(input.chain_id.as_deref())),
-        )
-        .one(txn)
-        .await?;
-
-        let (prev_hash, prev_signature, next_seq) = match last_entry {
-            Some(ref entry) => (
-                entry.entry_hash.clone(),
-                entry.signature.clone(),
-                entry
-                    .sequence
+        // First entry of a branch anchors to the current root tail so branches are
+        // cryptographically linked to the global timeline. The root uses genesis.
+        let tail = match chain_tail(txn, input.chain_id.as_deref()).await? {
+            Some((hash, signature, sequence, timestamp)) => Some((
+                hash,
+                signature,
+                sequence
                     .checked_add(1)
                     .ok_or_else(|| DbErr::Custom("audit sequence overflow".into()))?,
-            ),
-            None => {
-                // First entry in this chain. For branch chains, anchor to the
-                // current tail of the root chain so branches are cryptographically
-                // linked to the global timeline. Root chain uses genesis.
-                if input.chain_id.is_some() {
-                    let root_tail =
-                        newest_first(audit_entry::Entity::find().filter(chain_filter(None)))
-                            .one(txn)
-                            .await?;
-                    match root_tail {
-                        Some(entry) => (entry.entry_hash.clone(), entry.signature.clone(), 1),
-                        None => (GENESIS_HASH.to_string(), None, 1),
-                    }
-                } else {
-                    (GENESIS_HASH.to_string(), None, 1)
-                }
-            }
+                timestamp,
+            )),
+            None if input.chain_id.is_some() => chain_tail(txn, None)
+                .await?
+                .map(|(hash, signature, _, timestamp)| (hash, signature, 1, timestamp)),
+            None => None,
         };
+        let (prev_hash, prev_signature, next_seq, floor) = match tail {
+            Some((hash, signature, sequence, timestamp)) => {
+                (hash, signature, sequence, Some(timestamp))
+            }
+            None => (GENESIS_HASH.to_string(), None, 1, None),
+        };
+        let now = entry_timestamp(floor);
 
         let kid = is_signing_configured().then(|| current_kid().to_owned());
         let entry_hash = compute_entry_hash_v2(&EntryHashFields {
@@ -271,6 +365,7 @@ impl AuditService {
 
     /// Verify hashes, sequence continuity, anchors and every available signature.
     /// One database snapshot keeps the range and its predecessors consistent.
+    /// Entries stream through in batches so a long chain never sits in memory.
     pub async fn verify_chain(
         db: &DatabaseConnection,
         dialect: DbDialect,
@@ -290,18 +385,9 @@ impl AuditService {
                 None,
             )
             .await?;
-        let mut query = audit_entry::Entity::find().filter(chain_filter(chain_id));
-        if from_seq.is_some() {
-            query = query.filter(audit_entry::Column::Sequence.gte(from));
-        }
-        if let Some(to) = to_seq {
-            query = query.filter(audit_entry::Column::Sequence.lte(to));
-        }
-        let entries = query
-            .order_by(audit_entry::Column::Sequence, Order::Asc)
-            .all(&txn)
-            .await?;
+        let mut batch = verification_batch(&txn, chain_id, from_seq, to_seq).await?;
         let mut anchor_missing = false;
+        let mut anchor_sequence = None;
         let previous = if from > 1 {
             let previous = audit_entry::Entity::find()
                 .filter(chain_filter(chain_id))
@@ -310,28 +396,58 @@ impl AuditService {
                 .await?;
             anchor_missing = previous.len() != 1;
             previous.into_iter().next()
-        } else if chain_id.is_some() && entries.first().is_some_and(|e| e.prev_hash != GENESIS_HASH)
-        {
+        } else if chain_id.is_some() && batch.first().is_some_and(|e| e.prev_hash != GENESIS_HASH) {
             // A branch's initial hash and previous signature come from the same root entry.
             // Never trust an arbitrary prev_hash stored on the branch itself.
             let anchors = audit_entry::Entity::find()
                 .filter(audit_entry::Column::ChainId.is_null())
-                .filter(audit_entry::Column::EntryHash.eq(entries[0].prev_hash.clone()))
+                .filter(audit_entry::Column::EntryHash.eq(batch[0].prev_hash.clone()))
                 .all(&txn)
                 .await?;
             anchor_missing = anchors.len() != 1;
+            anchor_sequence = anchors.first().map(|anchor| anchor.sequence);
             anchors.into_iter().next()
         } else {
             None
         };
-        let mut result = verify_entries(
-            &entries,
+
+        let empty = batch.is_empty();
+        let mut verifier = ChainVerifier::new(
             chain_id,
             from,
-            to_seq,
             previous.as_ref(),
             verify_entry_signature_for_kid,
         );
+        // The unique index does not cover the root chain, so a sequence can repeat.
+        // Re-reading from the last sequence and skipping the consumed row keeps a
+        // duplicate at a batch boundary visible.
+        let mut consumed: Option<(i64, String)> = None;
+        'chain: loop {
+            let full = batch.len() as u64 == VERIFY_BATCH;
+            let mut advanced = false;
+            for entry in &batch {
+                if consumed
+                    .as_ref()
+                    .is_some_and(|(sequence, id)| entry.sequence == *sequence && entry.id == *id)
+                {
+                    continue;
+                }
+                advanced = true;
+                if !verifier.push(entry) {
+                    break 'chain;
+                }
+            }
+            if !full || !advanced {
+                break;
+            }
+            consumed = batch.pop().map(|entry| (entry.sequence, entry.id));
+            let lower = consumed.as_ref().map(|(sequence, _)| *sequence);
+            batch = verification_batch(&txn, chain_id, lower, to_seq).await?;
+        }
+        let mut result = verifier.finish(to_seq);
+        result.empty = empty;
+        result.anchor_sequence = anchor_sequence;
+
         if let Some(previous) = previous.as_ref() {
             // Authenticate the boundary too. A current-key branch cannot establish
             // the authenticity of an anchor whose historical key is unavailable.
@@ -378,11 +494,83 @@ impl AuditService {
             result.mark_broken(from);
         }
         // A requested range is evidence only when its boundaries exist.
-        if entries.is_empty() && from_seq.is_some() {
+        if empty && from_seq.is_some() {
             result.mark_broken(from);
         }
         txn.commit().await?;
         Ok(result)
+    }
+
+    /// The configured key must reproduce the newest signature made under its id.
+    /// A rotated key that kept its id, or a replica with a different key, would
+    /// otherwise turn every earlier entry into an apparent forgery.
+    pub async fn check_signing_key_continuity(db: &DatabaseConnection) -> Result<(), String> {
+        if !is_signing_configured() {
+            return Ok(());
+        }
+        let tail = match newest_first(audit_entry::Entity::find().filter(chain_filter(None)))
+            .one(db)
+            .await
+        {
+            Ok(Some(tail)) => tail,
+            Ok(None) => return Ok(()),
+            // A database that is not migrated or reachable yet is not a key mismatch.
+            Err(error) => {
+                tracing::warn!(%error, "audit signing key continuity was not checked");
+                return Ok(());
+            }
+        };
+        match (tail.kid.as_deref(), tail.signature.as_deref()) {
+            (Some(kid), Some(signature))
+                if kid == current_kid()
+                    && verify_entry_signature_for_kid(&tail.entry_hash, signature, kid)
+                        != SignatureVerification::Valid =>
+            {
+                Err(format!(
+                    "audit entry {} was signed under key id {kid} by a different key; \
+                     a rotated signing key needs a new key id",
+                    tail.sequence
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The newest entry of a chain, for retention outside this database.
+    pub async fn head(
+        db: &DatabaseConnection,
+        chain_id: Option<&str>,
+    ) -> flow_like_types::Result<Option<ChainHead>> {
+        let tail = newest_first(audit_entry::Entity::find().filter(chain_filter(chain_id)))
+            .one(db)
+            .await?;
+        Ok(tail.map(|entry| ChainHead {
+            chain_id: entry.chain_id,
+            sequence: entry.sequence,
+            timestamp: entry.timestamp.to_rfc3339(),
+            entry_hash: entry.entry_hash,
+            signature: entry.signature,
+            kid: entry.kid,
+        }))
+    }
+
+    /// Whether a previously retained head is still part of the chain. A missing
+    /// or different entry at that sequence means the chain was truncated or rewritten.
+    pub async fn contains_head(
+        db: &DatabaseConnection,
+        chain_id: Option<&str>,
+        sequence: i64,
+        entry_hash: &str,
+    ) -> flow_like_types::Result<bool> {
+        let hashes: Vec<String> = audit_entry::Entity::find()
+            .select_only()
+            .column(audit_entry::Column::EntryHash)
+            .filter(chain_filter(chain_id))
+            .filter(audit_entry::Column::Sequence.eq(sequence))
+            .into_tuple()
+            .all(db)
+            .await?;
+        Ok(hashes.len() == 1 && hashes[0] == entry_hash)
     }
 
     /// Query audit entries with filters.
@@ -411,8 +599,12 @@ impl AuditService {
             query = query.filter(audit_entry::Column::ResourceId.eq(rid.clone()));
         }
 
+        if let Some(before) = filter.before_sequence {
+            query = query.filter(audit_entry::Column::Sequence.lt(before));
+        }
+
         let limit = filter.limit.unwrap_or(50).min(200);
-        let offset = filter.offset.unwrap_or(0);
+        let offset = filter.offset.unwrap_or(0).min(MAX_QUERY_OFFSET);
 
         let entries = newest_first(query)
             .offset(offset)
@@ -441,6 +633,107 @@ pub(crate) fn chain_filter(chain_id: Option<&str>) -> sea_orm::sea_query::Simple
     match chain_id {
         Some(cid) => audit_entry::Column::ChainId.eq(cid),
         None => audit_entry::Column::ChainId.is_null(),
+    }
+}
+
+/// Forward scan of the same `(chainId, sequence)` index key.
+fn oldest_first<Q: QueryOrder>(query: Q) -> Q {
+    query
+        .order_by_with_nulls(audit_entry::Column::ChainId, Order::Asc, NullOrdering::Last)
+        .order_by(audit_entry::Column::Sequence, Order::Asc)
+}
+
+async fn verification_batch(
+    txn: &DatabaseTransaction,
+    chain_id: Option<&str>,
+    lower: Option<i64>,
+    upper: Option<i64>,
+) -> Result<Vec<audit_entry::Model>, DbErr> {
+    let mut query = audit_entry::Entity::find().filter(chain_filter(chain_id));
+    if let Some(lower) = lower {
+        query = query.filter(audit_entry::Column::Sequence.gte(lower));
+    }
+    if let Some(upper) = upper {
+        query = query.filter(audit_entry::Column::Sequence.lte(upper));
+    }
+    oldest_first(query).limit(VERIFY_BATCH).all(txn).await
+}
+
+/// Only the fields the next entry links to. `details` stays out of the
+/// serialized append transaction.
+async fn chain_tail(
+    txn: &DatabaseTransaction,
+    chain_id: Option<&str>,
+) -> Result<Option<TailRow>, DbErr> {
+    newest_first(
+        audit_entry::Entity::find()
+            .select_only()
+            .columns([
+                audit_entry::Column::EntryHash,
+                audit_entry::Column::Signature,
+                audit_entry::Column::Sequence,
+                audit_entry::Column::Timestamp,
+            ])
+            .filter(chain_filter(chain_id)),
+    )
+    .into_tuple::<TailRow>()
+    .one(txn)
+    .await
+}
+
+/// Taken under the chain lock and never earlier than the entry it links to, so
+/// sequence order and time order agree within a chain and with its anchor.
+/// Milliseconds match `timestamptz(3)`; PostgreSQL would otherwise round the
+/// stored value away from the hashed one.
+fn entry_timestamp(floor: Option<DateTime<FixedOffset>>) -> DateTime<FixedOffset> {
+    let now = DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
+        .expect("the current time fits in milliseconds")
+        .fixed_offset();
+    floor.map_or(now, |floor| now.max(floor))
+}
+
+fn strip_nul(text: &mut String) {
+    if text.contains('\0') {
+        *text = text.replace('\0', "\u{fffd}");
+    }
+}
+
+fn strip_nul_value(value: &mut Value) {
+    match value {
+        Value::String(text) => strip_nul(text),
+        Value::Array(items) => items.iter_mut().for_each(strip_nul_value),
+        Value::Object(map) => {
+            for (mut key, mut item) in std::mem::take(map) {
+                strip_nul(&mut key);
+                strip_nul_value(&mut item);
+                map.insert(key, item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// PostgreSQL rejects U+0000 in TEXT and JSONB. Replacing it before hashing keeps
+/// the stored row equal to the signed one, and a hostile string cannot make the
+/// entry for an already committed mutation fail.
+fn sanitize_input(input: &mut AuditEntryInput) {
+    for text in [
+        &mut input.actor_id,
+        &mut input.action,
+        &mut input.resource_type,
+        &mut input.resource_id,
+        &mut input.summary,
+    ] {
+        strip_nul(text);
+    }
+    for text in [&mut input.actor_ip, &mut input.chain_id]
+        .into_iter()
+        .flatten()
+    {
+        strip_nul(text);
+    }
+    if let Some(details) = input.details.as_mut() {
+        strip_nul_value(details);
     }
 }
 
@@ -479,13 +772,131 @@ fn model_hash(entry: &audit_entry::Model, prev_signature: Option<&str>) -> Strin
 }
 
 impl ChainVerification {
-    fn mark_broken(&mut self, sequence: i64) {
+    pub(crate) fn mark_broken(&mut self, sequence: i64) {
         self.valid = false;
         self.fully_authenticated = false;
         self.first_broken_at = Some(
             self.first_broken_at
                 .map_or(sequence, |old| old.min(sequence)),
         );
+    }
+}
+
+/// Carries only the link state between entries, so a chain can be verified in
+/// batches without holding it in memory.
+struct ChainVerifier<'a, F> {
+    chain_id: Option<&'a str>,
+    verify_signature: F,
+    result: ChainVerification,
+    expected_hash: String,
+    prev_signature: Option<String>,
+    expected_sequence: Option<i64>,
+    last_sequence: Option<i64>,
+    seen_v2: bool,
+    seen_signed: bool,
+    broken: bool,
+}
+
+impl<'a, F: Fn(&str, &str, &str) -> SignatureVerification> ChainVerifier<'a, F> {
+    fn new(
+        chain_id: Option<&'a str>,
+        from: i64,
+        previous: Option<&audit_entry::Model>,
+        verify_signature: F,
+    ) -> Self {
+        Self {
+            chain_id,
+            verify_signature,
+            result: ChainVerification {
+                valid: true,
+                entries_checked: 0,
+                first_broken_at: None,
+                fully_authenticated: false,
+                signatures_verified: 0,
+                unsigned_entries: 0,
+                unverifiable_signatures: 0,
+                legacy_entries: 0,
+                empty: false,
+                anchor_sequence: None,
+            },
+            expected_hash: previous.map_or_else(
+                || GENESIS_HASH.to_string(),
+                |entry| entry.entry_hash.clone(),
+            ),
+            prev_signature: previous.and_then(|entry| entry.signature.clone()),
+            expected_sequence: Some(from),
+            last_sequence: None,
+            seen_v2: previous.is_some_and(|entry| entry.entry_hash.starts_with(HASH_V2_PREFIX)),
+            seen_signed: previous.is_some_and(|entry| entry.signature.is_some()),
+            broken: false,
+        }
+    }
+
+    fn fail(&mut self, sequence: i64) -> bool {
+        self.result.mark_broken(sequence);
+        self.broken = true;
+        false
+    }
+
+    /// Returns false once the chain is broken; later entries prove nothing.
+    fn push(&mut self, entry: &audit_entry::Model) -> bool {
+        self.result.entries_checked += 1;
+        let v2 = entry.entry_hash.starts_with(HASH_V2_PREFIX);
+        if !v2 {
+            self.result.legacy_entries += 1;
+        }
+        if self.expected_sequence != Some(entry.sequence)
+            || entry.chain_id.as_deref() != self.chain_id
+            || entry.prev_hash != self.expected_hash
+            || (self.seen_v2 && !v2)
+            || model_hash(entry, self.prev_signature.as_deref()) != entry.entry_hash
+        {
+            return self.fail(
+                self.expected_sequence
+                    .unwrap_or(entry.sequence)
+                    .min(entry.sequence),
+            );
+        }
+        match (entry.signature.as_deref(), entry.kid.as_deref()) {
+            (Some(signature), Some(kid)) => {
+                match (self.verify_signature)(&entry.entry_hash, signature, kid) {
+                    SignatureVerification::Valid => self.result.signatures_verified += 1,
+                    SignatureVerification::Invalid => return self.fail(entry.sequence),
+                    SignatureVerification::Unavailable => {
+                        self.result.unverifiable_signatures += 1;
+                        self.result.valid = false;
+                    }
+                }
+            }
+            // Hashes need no key, so an unsigned entry after signed history is
+            // what a rewrite without the signing key looks like.
+            (None, None) if self.seen_signed => return self.fail(entry.sequence),
+            (None, None) => self.result.unsigned_entries += 1,
+            _ => return self.fail(entry.sequence),
+        }
+        self.expected_hash.clone_from(&entry.entry_hash);
+        self.prev_signature.clone_from(&entry.signature);
+        self.expected_sequence = entry.sequence.checked_add(1);
+        self.last_sequence = Some(entry.sequence);
+        self.seen_v2 |= v2;
+        self.seen_signed |= entry.signature.is_some();
+        true
+    }
+
+    fn finish(mut self, to: Option<i64>) -> ChainVerification {
+        if !self.broken
+            && let Some(to) = to
+            && self.last_sequence != Some(to)
+        {
+            self.result
+                .mark_broken(self.expected_sequence.unwrap_or(to));
+        }
+        self.result.empty = self.result.entries_checked == 0;
+        self.result.fully_authenticated = self.result.valid
+            && self.result.entries_checked > 0
+            && self.result.signatures_verified == self.result.entries_checked
+            && self.result.legacy_entries == 0;
+        self.result
     }
 }
 
@@ -497,74 +908,13 @@ fn verify_entries(
     previous: Option<&audit_entry::Model>,
     verify_signature: impl Fn(&str, &str, &str) -> SignatureVerification,
 ) -> ChainVerification {
-    let mut result = ChainVerification {
-        valid: true,
-        entries_checked: 0,
-        first_broken_at: None,
-        fully_authenticated: false,
-        signatures_verified: 0,
-        unsigned_entries: 0,
-        unverifiable_signatures: 0,
-        legacy_entries: 0,
-    };
-    let mut expected_hash = previous.map_or(GENESIS_HASH, |entry| entry.entry_hash.as_str());
-    let mut prev_signature = previous.and_then(|entry| entry.signature.as_deref());
-    let mut expected_sequence = Some(from);
-    let mut seen_v2 = previous.is_some_and(|entry| entry.entry_hash.starts_with(HASH_V2_PREFIX));
+    let mut verifier = ChainVerifier::new(chain_id, from, previous, verify_signature);
     for entry in entries {
-        result.entries_checked += 1;
-        let v2 = entry.entry_hash.starts_with(HASH_V2_PREFIX);
-        if !v2 {
-            result.legacy_entries += 1;
-        }
-        if expected_sequence != Some(entry.sequence)
-            || entry.chain_id.as_deref() != chain_id
-            || entry.prev_hash != expected_hash
-            || (seen_v2 && !v2)
-            || model_hash(entry, prev_signature) != entry.entry_hash
-        {
-            result.mark_broken(
-                expected_sequence
-                    .unwrap_or(entry.sequence)
-                    .min(entry.sequence),
-            );
-            return result;
-        }
-        match (entry.signature.as_deref(), entry.kid.as_deref()) {
-            (Some(signature), Some(kid)) => {
-                match verify_signature(&entry.entry_hash, signature, kid) {
-                    SignatureVerification::Valid => result.signatures_verified += 1,
-                    SignatureVerification::Invalid => {
-                        result.mark_broken(entry.sequence);
-                        return result;
-                    }
-                    SignatureVerification::Unavailable => {
-                        result.unverifiable_signatures += 1;
-                        result.valid = false;
-                    }
-                }
-            }
-            (None, None) => result.unsigned_entries += 1,
-            _ => {
-                result.mark_broken(entry.sequence);
-                return result;
-            }
-        }
-        expected_hash = &entry.entry_hash;
-        prev_signature = entry.signature.as_deref();
-        expected_sequence = entry.sequence.checked_add(1);
-        seen_v2 |= v2;
-    }
-    if let Some(to) = to {
-        if entries.last().map(|entry| entry.sequence) != Some(to) {
-            result.mark_broken(expected_sequence.unwrap_or(to));
+        if !verifier.push(entry) {
+            break;
         }
     }
-    result.fully_authenticated = result.valid
-        && !entries.is_empty()
-        && result.signatures_verified == result.entries_checked
-        && result.legacy_entries == 0;
-    result
+    verifier.finish(to)
 }
 
 #[cfg(test)]
@@ -750,6 +1100,77 @@ mod tests {
             assert!(!result.valid);
             assert_eq!(result.first_broken_at, Some(2));
         }
+    }
+
+    #[test]
+    fn nul_bytes_are_replaced_in_every_stored_string() {
+        let mut input = AuditEntryInput {
+            actor_id: "actor\0".into(),
+            actor_type: AuditActorType::User,
+            actor_ip: Some("192.0.2.1\0".into()),
+            action: "app.create".into(),
+            resource_type: "App".into(),
+            resource_id: "app\0".into(),
+            chain_id: Some("chain\0".into()),
+            summary: "Created \0 an app".into(),
+            details: Some(serde_json::json!({"ke\0y": ["va\0lue", {"nested": "\0"}], "n": 1})),
+        };
+        sanitize_input(&mut input);
+        let stored = serde_json::to_string(&input).unwrap();
+        assert!(!stored.contains("\\u0000"), "{stored}");
+        assert_eq!(input.summary, "Created \u{fffd} an app");
+        assert_eq!(input.details.unwrap()["ke\u{fffd}y"][0], "va\u{fffd}lue");
+    }
+
+    #[test]
+    fn timestamps_never_precede_the_entry_they_link_to() {
+        let future = Utc::now().fixed_offset() + chrono::Duration::hours(1);
+        assert_eq!(entry_timestamp(Some(future)), future);
+        let past = Utc::now().fixed_offset() - chrono::Duration::hours(1);
+        let now = entry_timestamp(Some(past));
+        assert!(now > past);
+        assert_eq!(now.timestamp_subsec_nanos() % 1_000_000, 0);
+    }
+
+    #[test]
+    fn batched_verification_matches_a_single_pass() {
+        let first = entry(1, None, None);
+        let second = entry(2, None, Some(&first));
+        let third = entry(3, None, Some(&second));
+        let mut verifier = ChainVerifier::new(None, 1, None, verify_test_signature);
+        assert!(verifier.push(&first));
+        assert!(verifier.push(&second));
+        assert!(verifier.push(&third));
+        let batched = verifier.finish(Some(3));
+        assert!(batched.fully_authenticated && !batched.empty);
+        assert_eq!(batched.entries_checked, 3);
+        let mut broken = ChainVerifier::new(None, 1, None, verify_test_signature);
+        assert!(broken.push(&first));
+        assert!(!broken.push(&third));
+        assert_eq!(broken.finish(None).first_broken_at, Some(2));
+        assert!(verify(&[], None, 1, None, None).empty);
+    }
+
+    #[test]
+    fn unsigned_entries_after_signed_history_break_the_chain() {
+        let first = entry(1, None, None);
+        let mut stripped = entry(2, None, Some(&first));
+        stripped.kid = None;
+        seal(&mut stripped, Some(&first));
+        let result = verify(&[first.clone(), stripped.clone()], None, 1, None, None);
+        assert!(!result.valid);
+        assert_eq!(result.first_broken_at, Some(2));
+        assert_eq!(
+            verify(&[stripped], None, 2, None, Some(&first)).first_broken_at,
+            Some(2)
+        );
+        let mut unsigned = entry(1, None, None);
+        unsigned.kid = None;
+        seal(&mut unsigned, None);
+        let signed = entry(2, None, Some(&unsigned));
+        let upgraded = verify(&[unsigned, signed], None, 1, None, None);
+        assert!(upgraded.valid && !upgraded.fully_authenticated);
+        assert_eq!(upgraded.unsigned_entries, 1);
     }
 
     #[test]

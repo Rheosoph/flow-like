@@ -1,0 +1,19 @@
+{
+	"name": "widget-csp-probe-widgets-vanilla",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Widget CSP probe framework group (vanilla TypeScript)",
+	"scripts": {
+		"dev": "bun --bun vite",
+		"build": "bun --bun vite build"
+	},
+	"dependencies": {
+		"@flow-like/widget-sdk": "workspace:*"
+	},
+	"devDependencies": {
+		"@flow-like/widget-bundler": "workspace:*",
+		"typescript": "^5.7.3",
+		"vite": "^7.3.6"
+	}
+}

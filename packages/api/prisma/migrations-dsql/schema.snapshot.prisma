@@ -613,7 +613,7 @@ model Feedback {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([appId, eventId])
-  @@index([appId])
+  @@index([appId, createdAt])
   @@index([createdAt])
   @@index([userId])
   @@index([templateId])
@@ -642,7 +642,7 @@ model Comment {
 
   @@unique([userId, appId])
   @@unique([userId, packageId])
-  @@index([appId])
+  @@index([appId, createdAt])
   @@index([packageId])
   @@index([userId])
   @@index([templateId])
@@ -1342,7 +1342,7 @@ model AuditEntry {
   details Json?
 
   // Cryptographic integrity
-  entryHash String // blake3(sequence || timestamp || actorId || action || resourceType || resourceId || details || prevHash || prevSignature)
+  entryHash String // "v2:" + blake3 over canonical JSON of every column except entryHash and signature (audit/chain.rs); entries without the prefix use the legacy concatenated hash
   prevHash  String // hash of previous entry in this chain (genesis = "0000...0000")
   signature String? // raw P-256 ECDSA signature (base64 DER) over entryHash
   kid       String? // key identifier used for the signature — enables key rotation auditing
@@ -1353,6 +1353,8 @@ model AuditEntry {
   @@index([actorId, timestamp])
   @@index([resourceType, resourceId])
   @@index([action])
+  @@index([entryHash])
+  @@index([timestamp])
 }
 
 // ---- capacity.prisma
@@ -1507,6 +1509,8 @@ model ErrorReport {
   details    Json?
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([createdAt])
 }
 
 // ---- file-accounting.prisma
@@ -2084,6 +2088,7 @@ model Certificate {
   @@unique([userId, courseId])
   @@index([userId])
   @@index([courseId])
+  @@index([hash])
 }
 
 model LeaderboardOptIn {
@@ -2092,6 +2097,8 @@ model LeaderboardOptIn {
   isOptedIn   Boolean  @default(true)
   totalPoints Int      @default(0)
   updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([isOptedIn, totalPoints, userId])
 }
 
 model WeeklyChallenge {
@@ -2583,6 +2590,7 @@ model TelemetryErrorEvent {
   @@index([issueId, createdAt])
   @@index([createdAt])
   @@index([anonId, createdAt])
+  @@index([issueId, anonId])
 }
 
 model TelemetryRelease {
@@ -2628,6 +2636,7 @@ model TelemetrySession {
   @@index([startedAt])
   @@index([release, startedAt])
   @@index([anonId, startedAt])
+  @@index([createdAt])
 }
 
 model TelemetrySpan {
@@ -3001,6 +3010,7 @@ model User {
 
   // User search resolves a pasted address exactly before it falls back to a scan.
   @@index([email])
+  @@index([createdAt])
 }
 
 model Profile {
@@ -3324,7 +3334,7 @@ model ExecutionEvent {
   /// to keep in the row; `payload` then holds a marked placeholder
   payloadRef String?
 
-  @@index([runId, delivered, sequence])
+  @@index([runId, sequence])
   @@index([expiresAt])
 }
 
@@ -3406,6 +3416,15 @@ model ExecutionRun {
   /// REGRESSION runs only: the suite run that scheduled this replay
   regressionRunId String?
 
+  /// Run summary reported by the executor on completion. NULL means the
+  /// executor never reported it (older senders), not an empty run.
+  /// Dotted `MAJOR.MINOR.PATCH` of the event that triggered the run
+  eventVersion String?
+  /// Visited nodes with their highest log level: `[["node_id", level], …]`
+  nodes        Json?
+  /// Number of log messages the run wrote
+  logsCount    BigInt?
+
   /// Streaming events for this run
   events ExecutionEvent[]
 
@@ -3414,7 +3433,9 @@ model ExecutionRun {
 
   @@index([appId, status])
   @@index([userId, status])
-  @@index([boardId])
+  @@index([boardId, createdAt])
+  @@index([eventId, createdAt, id])
+  @@index([status])
   @@index([expiresAt])
   @@index([parentRunId])
   @@index([traceId])
@@ -3507,6 +3528,7 @@ model WasmPackage {
   @@index([primaryCategory])
   @@index([secondaryCategory])
   @@index([price])
+  @@index([updatedAt])
 }
 
 model WasmPackageVersion {

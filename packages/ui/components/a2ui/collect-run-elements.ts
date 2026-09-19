@@ -1,11 +1,15 @@
 import type { BoardVersion } from "../../lib/schema/flow/board-version";
 import type { IElementDemand } from "../../lib/schema/flow/element-demand";
-import { materializeSurfaceElements } from "./element-materializer";
+import {
+	MAX_ELEMENTS_BYTES,
+	materializeSurfaceElements,
+} from "./element-materializer";
 import type { SurfaceComponent } from "./types";
 import {
 	type WidgetElementScope,
 	flattenSurfaceComponentsForElements,
 	mergeStoredElementValues,
+	withoutWidgetHosts,
 } from "./workflow-elements";
 
 export interface ElementDemandBoardState {
@@ -16,11 +20,15 @@ export interface ElementDemandBoardState {
 	): Promise<IElementDemand>;
 }
 
+export type RunElementDemand = Pick<IElementDemand, "selectors">;
+
 export interface CollectRunElementsInput {
 	backend: { boardState: ElementDemandBoardState };
 	appId?: string;
 	boardId?: string;
 	boardVersion?: BoardVersion;
+	/** A Page contract's demand (from its bootstrap), used instead of asking the Board endpoint. */
+	demand?: RunElementDemand | null;
 	surfaceId: string;
 	components: Record<string, SurfaceComponent> | undefined;
 	storedValues: Record<string, unknown>;
@@ -53,7 +61,8 @@ function demandKey(
  */
 async function resolveElementDemand(
 	input: CollectRunElementsInput,
-): Promise<IElementDemand | undefined> {
+): Promise<RunElementDemand | undefined> {
+	if (input.demand) return input.demand;
 	const { backend, appId, boardId, boardVersion, refresh } = input;
 	const { boardState } = backend;
 	const getElementDemand = boardState.getElementDemand;
@@ -98,27 +107,29 @@ async function resolveElementDemand(
 	return entry.demand;
 }
 
+function triggerSelectors(input: CollectRunElementsInput): string[] {
+	const { surfaceId, widgetScope, triggeringComponentId } = input;
+	if (!triggeringComponentId) return [];
+	// A widget run may be triggered by the instance's own child or by a host-level
+	// component; unresolvable candidates contribute nothing.
+	return widgetScope?.instanceId
+		? [
+				`${surfaceId}/${triggeringComponentId}`,
+				`${widgetScope.instanceId}/${triggeringComponentId}`,
+			]
+		: [`${surfaceId}/${triggeringComponentId}`];
+}
+
 /**
- * The `_elements` map a run starts with: the elements its board reads statically plus
- * the element that triggered it. Without a reachable demand the full surface is sent,
- * as before the manifest existed.
+ * A widget run's own scope is its instance. A page run's is the page without widget
+ * instances: every runtime-built list row would otherwise add its host and a copy of its
+ * definition.
  */
-export async function collectRunElements(
+function ownScopeElements(
 	input: CollectRunElementsInput,
-): Promise<Record<string, unknown>> {
+): Record<string, unknown> {
 	const { surfaceId, components, storedValues, widgetScope } = input;
-
-	let demand: IElementDemand | undefined;
-	try {
-		demand = await resolveElementDemand(input);
-	} catch (error) {
-		console.warn(
-			"[A2UI] Failed to fetch element demand, sending every element:",
-			error,
-		);
-	}
-
-	if (!demand) {
+	if (widgetScope) {
 		return mergeStoredElementValues(
 			flattenSurfaceComponentsForElements(components, surfaceId, widgetScope),
 			storedValues,
@@ -127,23 +138,58 @@ export async function collectRunElements(
 			widgetScope,
 		);
 	}
+	const pageComponents = withoutWidgetHosts(components);
+	return {
+		...mergeStoredElementValues(
+			flattenSurfaceComponentsForElements(pageComponents, surfaceId),
+			storedValues,
+			pageComponents,
+			surfaceId,
+		),
+		...materializeSurfaceElements(
+			{ surfaceId, components, storedValues },
+			triggerSelectors(input),
+		),
+	};
+}
 
-	const selectors = [...demand.selectors];
-	if (input.triggeringComponentId) {
-		// A widget run may be triggered by the instance's own child or by a host-level
-		// component; unresolvable candidates contribute nothing.
-		selectors.push(`${surfaceId}/${input.triggeringComponentId}`);
-		if (widgetScope?.instanceId) {
-			selectors.push(
-				`${widgetScope.instanceId}/${input.triggeringComponentId}`,
-			);
-		}
+/**
+ * The `_elements` map a run starts with: the elements its board reads statically plus
+ * the element that triggered it.
+ *
+ * Without a demand, or when a broad selector (`type:`, `glob:`) selects more than an
+ * invocation can carry, the run sends its own scope. It asks the live page for anything
+ * else it reads (`_elements_mode: "demand"`).
+ */
+export async function collectRunElements(
+	input: CollectRunElementsInput,
+): Promise<Record<string, unknown>> {
+	const { surfaceId, components, storedValues, widgetScope } = input;
+
+	let demand: RunElementDemand | undefined;
+	try {
+		demand = await resolveElementDemand(input);
+	} catch (error) {
+		console.warn(
+			"[A2UI] Failed to fetch element demand, sending the run's own scope:",
+			error,
+		);
 	}
-	return materializeSurfaceElements(
+	if (!demand) return ownScopeElements(input);
+
+	const selected = materializeSurfaceElements(
 		{ surfaceId, components, storedValues },
-		selectors,
+		[...demand.selectors, ...triggerSelectors(input)],
 		widgetScope,
 	);
+	const selectedBytes = JSON.stringify(selected).length;
+	if (selectedBytes <= MAX_ELEMENTS_BYTES) return selected;
+
+	const own = ownScopeElements(input);
+	console.warn(
+		`[A2UI] The element demand selects ${selectedBytes} bytes (limit ${MAX_ELEMENTS_BYTES}); sending the run's own scope instead`,
+	);
+	return JSON.stringify(own).length < selectedBytes ? own : selected;
 }
 
 export function resetRunElementDemandCache(): void {

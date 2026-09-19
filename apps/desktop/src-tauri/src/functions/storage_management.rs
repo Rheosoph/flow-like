@@ -6,12 +6,16 @@ use crate::{
 use flow_like::app::App;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
+
+/// The per-board Lance summary table earlier releases wrote next to the run
+/// logs. Nothing reads it any more; it is listed so it can be deleted.
+const LEGACY_RUN_INDEX: &str = "runs";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,27 +187,43 @@ fn log_items(logs_dir: &Path, active_runs: &HashSet<String>) -> Vec<StorageItem>
             let Ok(runs) = fs::read_dir(board.path()) else {
                 continue;
             };
+            // A run is one `{run_id}.lance` table plus an optional
+            // `{run_id}.payload` sidecar; the sidecar folds into the run's item.
+            let mut payloads: HashMap<String, PathStats> = HashMap::new();
+            let mut tables: Vec<(String, String, PathStats)> = Vec::new();
             for run in runs.flatten() {
                 let file_name = run.file_name().to_string_lossy().to_string();
-                let run_id = file_name.strip_suffix(".lance").unwrap_or(&file_name);
+                if let Some(run_id) = file_name.strip_suffix(".payload") {
+                    payloads.insert(run_id.to_string(), path_stats(&run.path()));
+                    continue;
+                }
+                let Some(run_id) = file_name.strip_suffix(".lance") else {
+                    continue;
+                };
                 if run_id.is_empty() {
                     continue;
                 }
-                // `runs.lance` is the shared per-board metadata/index table, not
-                // an individual run log. Skip it so it isn't shown as a
-                // deletable run (deleting it would wipe the board's run index).
-                if run_id == "runs" {
-                    continue;
-                }
                 let stats = path_stats(&run.path());
+                tables.push((file_name.clone(), run_id.to_string(), stats));
+            }
+            for (file_name, run_id, mut stats) in tables {
+                if let Some(payload) = payloads.remove(&run_id) {
+                    stats.merge(payload);
+                }
+                let legacy = run_id == LEGACY_RUN_INDEX;
+                let scope = format!("App {} · Board {}", short_id(&app_id), short_id(&board_id));
                 items.push(StorageItem {
                     id: format!("{app_id}/{board_id}/{file_name}"),
-                    name: run_id.to_string(),
-                    detail: format!("App {} · Board {}", short_id(&app_id), short_id(&board_id)),
+                    name: run_id.clone(),
+                    detail: if legacy {
+                        format!("Legacy run index · {scope}")
+                    } else {
+                        scope
+                    },
                     size_bytes: stats.size_bytes,
                     file_count: stats.file_count,
                     updated_at_ms: to_ms(stats.updated_at),
-                    deletable: !active_runs.contains(run_id),
+                    deletable: legacy || !active_runs.contains(&run_id),
                 });
             }
         }
@@ -449,6 +469,67 @@ fn run_id_from_item_id(id: &str) -> Option<&str> {
         .map(|value| value.strip_suffix(".lance").unwrap_or(value))
 }
 
+/// `(app_id, run_id)` of a run log item — the row the run index must forget
+/// once the table is gone. `None` for the legacy per-board index table.
+fn indexed_run_from_item_id(id: &str) -> Option<(String, String)> {
+    let app_id = id.split('/').next()?;
+    let run_id = run_id_from_item_id(id)?;
+    if run_id == LEGACY_RUN_INDEX {
+        return None;
+    }
+    Some((app_id.to_string(), run_id.to_string()))
+}
+
+/// Removes a run's log table and its payload sidecar, then prunes emptied
+/// board and app directories. Returns the index row to forget.
+fn delete_log_item(
+    paths: &StoragePaths,
+    item: &StorageItem,
+    result: &mut StorageDeleteResult,
+) -> Option<(String, String)> {
+    let Some(path) = item_path(paths, "logs", &item.id) else {
+        result.skipped_items.push(item.id.clone());
+        return None;
+    };
+    if remove_path(&path).is_err() {
+        result.skipped_items.push(item.id.clone());
+        return None;
+    }
+    if let Err(error) = fs::remove_file(path.with_extension("payload"))
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, item = %item.id, "Failed to remove a run's payload sidecar");
+    }
+    result.deleted_items += 1;
+    result.freed_bytes = result.freed_bytes.saturating_add(item.size_bytes);
+    prune_empty_parents(&path, &paths.logs_dir.join("runs"));
+    indexed_run_from_item_id(&item.id)
+}
+
+/// Drops the index rows of runs whose tables were just deleted. A stale row
+/// only means a listing entry whose logs are gone, so failures are logged.
+async fn forget_indexed_runs(app_handle: &AppHandle, runs: &[(String, String)]) {
+    if runs.is_empty() {
+        return;
+    }
+    let index = match TauriFlowLikeState::construct(app_handle).await {
+        Ok(state) => crate::run_index::registered_run_index(&state).await,
+        Err(error) => Err(error),
+    };
+    let index = match index {
+        Ok(index) => index,
+        Err(error) => {
+            tracing::warn!(%error, "Run index unavailable; deleted runs keep their index rows");
+            return;
+        }
+    };
+    for (app_id, run_id) in runs {
+        if let Err(error) = index.delete(app_id, run_id).await {
+            tracing::warn!(%error, app_id, run_id, "Failed to remove a deleted run from the run index");
+        }
+    }
+}
+
 fn active_run_ids(app_handle: &AppHandle) -> HashSet<String> {
     app_handle
         .try_state::<TauriFlowLikeState>()
@@ -467,12 +548,12 @@ fn cleanup_logs(
     paths: &StoragePaths,
     active_runs: &HashSet<String>,
     days: u32,
-) -> StorageDeleteResult {
+) -> (StorageDeleteResult, Vec<(String, String)>) {
     let cutoff = SystemTime::now()
         .checked_sub(Duration::from_secs(u64::from(days.max(1)) * 86_400))
         .unwrap_or(UNIX_EPOCH);
-    let runs_root = paths.logs_dir.join("runs");
     let mut result = StorageDeleteResult::default();
+    let mut deleted_runs = Vec::new();
     for item in log_items(&paths.logs_dir, active_runs) {
         let is_expired = item
             .updated_at_ms
@@ -481,19 +562,9 @@ fn cleanup_logs(
         if !is_expired || !item.deletable {
             continue;
         }
-        let Some(path) = item_path(paths, "logs", &item.id) else {
-            continue;
-        };
-        match remove_path(&path) {
-            Ok(()) => {
-                result.deleted_items += 1;
-                result.freed_bytes = result.freed_bytes.saturating_add(item.size_bytes);
-                prune_empty_parents(&path, &runs_root);
-            }
-            Err(_) => result.skipped_items.push(item.id),
-        }
+        deleted_runs.extend(delete_log_item(paths, &item, &mut result));
     }
-    result
+    (result, deleted_runs)
 }
 
 pub async fn run_configured_log_cleanup(
@@ -514,11 +585,12 @@ pub async fn run_configured_log_cleanup(
         return Ok(StorageDeleteResult::default());
     }
     let active_runs = active_run_ids(app_handle);
-    let result = flow_like_types::tokio::task::spawn_blocking(move || {
+    let (result, deleted_runs) = flow_like_types::tokio::task::spawn_blocking(move || {
         cleanup_logs(&paths, &active_runs, days)
     })
     .await
     .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+    forget_indexed_runs(app_handle, &deleted_runs).await;
 
     let mut settings = settings_state.lock().await;
     settings.log_retention.last_cleanup_ms = to_ms(Some(SystemTime::now()));
@@ -592,13 +664,20 @@ pub async fn run_log_cleanup(
     run_configured_log_cleanup(&app_handle).await
 }
 
+#[derive(Default)]
+struct DeleteOutcome {
+    result: StorageDeleteResult,
+    deleted_apps: Vec<String>,
+    deleted_runs: Vec<(String, String)>,
+}
+
 fn delete_items_blocking(
     paths: &StoragePaths,
     log_retention: &LogRetentionSettings,
     category: &str,
     ids: Vec<String>,
     active_runs: &HashSet<String>,
-) -> Result<(StorageDeleteResult, Vec<String>), TauriFunctionError> {
+) -> Result<DeleteOutcome, TauriFunctionError> {
     let overview = build_overview(paths, log_retention, active_runs);
     let Some(inventory) = overview
         .categories
@@ -611,41 +690,44 @@ fn delete_items_blocking(
         .items
         .iter()
         .map(|item| (item.id.as_str(), item))
-        .collect::<std::collections::HashMap<_, _>>();
-    let runs_root = paths.logs_dir.join("runs");
-    let mut result = StorageDeleteResult::default();
-    let mut deleted_apps = Vec::new();
+        .collect::<HashMap<_, _>>();
+    let mut outcome = DeleteOutcome::default();
 
     for id in ids {
         let Some(item) = known.get(id.as_str()) else {
-            result.skipped_items.push(id);
+            outcome.result.skipped_items.push(id);
             continue;
         };
         if !item.deletable
             || (category == "logs"
                 && run_id_from_item_id(&id).is_some_and(|run| active_runs.contains(run)))
         {
-            result.skipped_items.push(id);
+            outcome.result.skipped_items.push(id);
+            continue;
+        }
+        if category == "logs" {
+            outcome
+                .deleted_runs
+                .extend(delete_log_item(paths, item, &mut outcome.result));
             continue;
         }
         let Some(path) = item_path(paths, category, &id) else {
-            result.skipped_items.push(id);
+            outcome.result.skipped_items.push(id);
             continue;
         };
         match remove_path(&path) {
             Ok(()) => {
-                result.deleted_items += 1;
-                result.freed_bytes = result.freed_bytes.saturating_add(item.size_bytes);
-                if category == "logs" {
-                    prune_empty_parents(&path, &runs_root);
-                } else if category == "apps" {
-                    deleted_apps.push(id);
+                outcome.result.deleted_items += 1;
+                outcome.result.freed_bytes =
+                    outcome.result.freed_bytes.saturating_add(item.size_bytes);
+                if category == "apps" {
+                    outcome.deleted_apps.push(id);
                 }
             }
-            Err(_) => result.skipped_items.push(id),
+            Err(_) => outcome.result.skipped_items.push(id),
         }
     }
-    Ok((result, deleted_apps))
+    Ok(outcome)
 }
 
 #[tauri::command(async)]
@@ -669,7 +751,7 @@ pub async fn delete_local_storage_items(
         )
     };
     let category_for_task = category.clone();
-    let (result, deleted_apps) = flow_like_types::tokio::task::spawn_blocking(move || {
+    let outcome = flow_like_types::tokio::task::spawn_blocking(move || {
         delete_items_blocking(
             &paths,
             &log_retention,
@@ -680,17 +762,18 @@ pub async fn delete_local_storage_items(
     })
     .await
     .map_err(|error| TauriFunctionError::new(&error.to_string()))??;
+    forget_indexed_runs(&app_handle, &outcome.deleted_runs).await;
 
-    if !deleted_apps.is_empty() {
+    if !outcome.deleted_apps.is_empty() {
         let mut settings = settings_state.lock().await;
         for profile in settings.profiles.values_mut() {
             if let Some(apps) = &mut profile.hub_profile.apps {
-                apps.retain(|app| !deleted_apps.contains(&app.app_id));
+                apps.retain(|app| !outcome.deleted_apps.contains(&app.app_id));
             }
         }
         Settings::serialize(&mut settings);
     }
-    Ok(result)
+    Ok(outcome.result)
 }
 
 #[cfg(test)]
@@ -750,5 +833,82 @@ mod tests {
         assert!(runs.exists());
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn scratch_logs_dir(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "flow-like-storage-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let board = root.join("runs").join("app").join("board");
+        fs::create_dir_all(board.join("run1.lance")).unwrap();
+        fs::write(board.join("run1.lance").join("data.bin"), [0_u8; 10]).unwrap();
+        fs::write(board.join("run1.payload"), b"{\"a\":1}").unwrap();
+        fs::create_dir_all(board.join("runs.lance")).unwrap();
+        fs::write(board.join("runs.lance").join("data.bin"), [0_u8; 3]).unwrap();
+        fs::write(board.join("orphan.payload"), b"{}").unwrap();
+        root
+    }
+
+    #[test]
+    fn log_items_fold_sidecars_and_expose_the_legacy_index() {
+        let logs_dir = scratch_logs_dir("list");
+        let items = log_items(&logs_dir, &HashSet::new());
+        assert_eq!(items.len(), 2);
+
+        let run = items.iter().find(|item| item.name == "run1").unwrap();
+        assert_eq!(run.id, "app/board/run1.lance");
+        assert_eq!(run.size_bytes, 10 + 7);
+        assert_eq!(run.file_count, 2);
+        assert!(run.deletable);
+
+        let legacy = items.iter().find(|item| item.name == "runs").unwrap();
+        assert_eq!(legacy.id, "app/board/runs.lance");
+        assert!(legacy.detail.starts_with("Legacy run index"));
+        assert!(legacy.deletable);
+
+        assert!(!items.iter().any(|item| item.name == "orphan"));
+        assert_eq!(
+            indexed_run_from_item_id(&run.id),
+            Some(("app".to_string(), "run1".to_string()))
+        );
+        assert_eq!(indexed_run_from_item_id(&legacy.id), None);
+
+        fs::remove_dir_all(logs_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_run_removes_its_table_and_sidecar() {
+        let logs_dir = scratch_logs_dir("delete");
+        let paths = StoragePaths {
+            project_dir: logs_dir.join("apps"),
+            bit_dir: logs_dir.join("bits"),
+            logs_dir: logs_dir.clone(),
+            user_dir: logs_dir.join("user"),
+            temporary_dir: logs_dir.join("tmp"),
+        };
+        let items = log_items(&logs_dir, &HashSet::new());
+        let run = items.iter().find(|item| item.name == "run1").unwrap();
+        let mut result = StorageDeleteResult::default();
+
+        let forgotten = delete_log_item(&paths, run, &mut result);
+        assert_eq!(forgotten, Some(("app".to_string(), "run1".to_string())));
+        assert_eq!(result.deleted_items, 1);
+        assert_eq!(result.freed_bytes, 17);
+        let board = logs_dir.join("runs").join("app").join("board");
+        assert!(!board.join("run1.lance").exists());
+        assert!(!board.join("run1.payload").exists());
+        assert!(board.join("runs.lance").exists());
+
+        let legacy = items.iter().find(|item| item.name == "runs").unwrap();
+        assert_eq!(delete_log_item(&paths, legacy, &mut result), None);
+        assert!(!board.join("runs.lance").exists());
+        assert_eq!(result.deleted_items, 2);
+        assert!(result.skipped_items.is_empty());
+
+        fs::remove_dir_all(logs_dir).unwrap();
     }
 }

@@ -68,6 +68,8 @@ interface IChainVerification {
 	unsigned_entries: number;
 	legacy_entries: number;
 	unverifiable_signatures: number;
+	empty?: boolean;
+	anchor_sequence?: number | null;
 }
 
 function HashChip({ hash }: { hash?: string | null }) {
@@ -94,14 +96,24 @@ function ChainHealthBadge({
 	fullyAuthenticated,
 	firstBrokenAt,
 	unverifiableSignatures,
+	empty,
 }: {
 	signed: boolean;
 	valid?: boolean | null;
 	fullyAuthenticated?: boolean | null;
 	firstBrokenAt?: number | null;
 	unverifiableSignatures?: number | null;
+	empty?: boolean;
 }) {
 	const { t } = useTranslation("admin");
+	if (empty && valid !== false) {
+		return (
+			<Badge variant="outline" className="gap-1">
+				<ShieldEllipsis className="h-3 w-3" />{" "}
+				{t("auditNoEntries", "No entries")}
+			</Badge>
+		);
+	}
 	if (valid === false) {
 		if (firstBrokenAt == null && (unverifiableSignatures ?? 0) > 0) {
 			return (
@@ -127,16 +139,23 @@ function ChainHealthBadge({
 			</Badge>
 		);
 	}
+	const unchecked = valid == null;
 	if (signed) {
 		return (
 			<Badge variant="secondary" className="gap-1">
-				<Shield className="h-3 w-3" /> {t("signed", "Signed")}
+				<Shield className="h-3 w-3" />{" "}
+				{unchecked
+					? t("auditSignedNotChecked", "Signed, not checked")
+					: t("signed", "Signed")}
 			</Badge>
 		);
 	}
 	return (
 		<Badge variant="outline" className="gap-1">
-			<ShieldEllipsis className="h-3 w-3" /> {t("unsigned", "Unsigned")}
+			<ShieldEllipsis className="h-3 w-3" />{" "}
+			{unchecked
+				? t("auditUnsignedNotChecked", "Unsigned, not checked")
+				: t("unsigned", "Unsigned")}
 		</Badge>
 	);
 }
@@ -449,6 +468,7 @@ export function AuditChainExplorer({
 										unverifiableSignatures={
 											verification.data.unverifiable_signatures
 										}
+										empty={verification.data.empty}
 									/>
 									<p className="text-muted-foreground">
 										{t("verificationSnapshot", "Verification snapshot")}:{" "}
@@ -524,8 +544,12 @@ export function AuditChainExplorer({
 												<Cpu className="h-3 w-3" />
 												{e.actor_type}
 											</span>
-											{e.actor_type === "USER" ? (
-												<UserPill userId={e.actor_id} compact muted />
+											{e.actor_type.toUpperCase() === "USER" ? (
+												<UserPill
+													userId={e.actor_id.split(":")[1] || e.actor_id}
+													compact
+													muted
+												/>
 											) : (
 												<code className="rounded bg-muted px-1.5 py-0.5 font-mono">
 													{e.actor_id}

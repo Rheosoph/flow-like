@@ -308,6 +308,16 @@ pub struct LoadedPages {
     pub unreadable: Vec<UnreadablePage>,
 }
 
+/// Where editor metadata may read page contracts for this loaded board.
+/// Unspecified or exact-receipt loads retain their persisted node contracts.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum PageMetadataSource {
+    Draft,
+    Version((u32, u32, u32)),
+    #[default]
+    Persisted,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 pub struct Board {
     /// Minimum document format understood by readers and writers. Missing versions mean 1.
@@ -348,6 +358,9 @@ pub struct Board {
 
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
+
+    #[serde(skip)]
+    pub(crate) page_metadata_source: PageMetadataSource,
 
     /// Pin id to owning container, populated only while [`Board::node_updates`] runs.
     ///
@@ -472,6 +485,7 @@ impl Board {
             board_dir,
             logic_nodes: HashMap::new(),
             app_state: None,
+            page_metadata_source: PageMetadataSource::Draft,
             pin_index: None,
         };
         board.hash();
@@ -747,9 +761,49 @@ impl Board {
         let registry = state.node_registry().clone();
         let registry = registry.read().await;
 
+        // Catalog refresh clears dynamic dropdown choices. Exact-receipt loads
+        // cannot read newer pages to recreate them, so retain their saved choices.
+        let persisted_widget_options: HashMap<String, Option<Vec<String>>> =
+            if self.page_metadata_source == PageMetadataSource::Persisted {
+                self.nodes
+                    .values()
+                    .chain(self.layers.values().flat_map(|layer| layer.nodes.values()))
+                    .filter(|node| node.name == "events_widget_action")
+                    .map(|node| {
+                        (
+                            node.id.clone(),
+                            node.get_pin_by_name("action_id")
+                                .and_then(|pin| pin.options.as_ref())
+                                .and_then(|options| options.valid_values.clone()),
+                        )
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
+
         // First, sync node schemas for any version mismatches
         // This runs BEFORE on_update so dynamic nodes can still add their pins
         cleanup::sync_node_schema::sync_board_node_schemas(self, &registry.node_registry).await;
+        if !persisted_widget_options.is_empty() {
+            for node in self.nodes.values_mut().chain(
+                self.layers
+                    .values_mut()
+                    .flat_map(|layer| layer.nodes.values_mut()),
+            ) {
+                if let Some(values) = persisted_widget_options.get(&node.id)
+                    && let Some(pin) = node.get_pin_mut_by_name("action_id")
+                {
+                    if values.is_some() {
+                        pin.options
+                            .get_or_insert_with(super::pin::PinOptions::new)
+                            .valid_values = values.clone();
+                    } else if let Some(options) = pin.options.as_mut() {
+                        options.valid_values = None;
+                    }
+                }
+            }
+        }
 
         // The schema sync above expands compact schema refs onto every pin, and `Node::hash`
         // covers `pin.schema`. Without re-baselining, roughly half the nodes on a real board
@@ -2276,6 +2330,34 @@ impl Board {
         board_dir: Path,
         app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Self> {
+        Self::from_loaded_proto_with_page_source(
+            proto,
+            board_dir,
+            app_state,
+            PageMetadataSource::Persisted,
+        )
+        .await
+    }
+
+    /// Load a known draft or published version without mixing its page contracts.
+    pub async fn from_loaded_proto_for_version(
+        proto: flow_like_types::proto::Board,
+        board_dir: Path,
+        app_state: Arc<FlowLikeState>,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Self> {
+        let source = version
+            .map(PageMetadataSource::Version)
+            .unwrap_or(PageMetadataSource::Draft);
+        Self::from_loaded_proto_with_page_source(proto, board_dir, app_state, source).await
+    }
+
+    async fn from_loaded_proto_with_page_source(
+        proto: flow_like_types::proto::Board,
+        board_dir: Path,
+        app_state: Arc<FlowLikeState>,
+        source: PageMetadataSource,
+    ) -> flow_like_types::Result<Self> {
         Self::validate_proto_types(&proto)?;
         let mut board = Board::from_proto(proto);
         board.ensure_supported_format()?;
@@ -2284,6 +2366,7 @@ impl Board {
         board.board_dir = board_dir;
         board.app_state = Some(app_state.clone());
         board.logic_nodes = HashMap::new();
+        board.page_metadata_source = source;
 
         board.node_updates(app_state).await;
         board.cleanup();
@@ -2321,7 +2404,7 @@ impl Board {
             .as_generic();
 
         let proto = Self::load_proto(store, &path, id, version).await?;
-        Self::from_loaded_proto(proto, path, app_state).await
+        Self::from_loaded_proto_for_version(proto, path, app_state, version).await
     }
 
     /// Persist the floating draft. Returns the store's [`PutResult`] so a caller that keeps this
@@ -2497,6 +2580,40 @@ impl Board {
         Ok(loaded)
     }
 
+    pub fn page_metadata_source(&self) -> PageMetadataSource {
+        self.page_metadata_source
+    }
+
+    /// Load contracts from the same page revision as the board being inspected.
+    pub async fn load_pages_for_metadata(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<LoadedPages> {
+        match self.page_metadata_source {
+            PageMetadataSource::Draft => self.load_all_pages(store).await,
+            PageMetadataSource::Version(version) => {
+                let store = self.get_store(store).await?;
+                let mut loaded = LoadedPages::default();
+                for page_id in &self.page_ids {
+                    match self
+                        .load_versioned_page(page_id, version, Some(store.clone()))
+                        .await
+                    {
+                        Ok(page) => loaded.pages.push(page),
+                        Err(error) => loaded.unreadable.push(UnreadablePage {
+                            page_id: page_id.clone(),
+                            reason: error.to_string(),
+                        }),
+                    }
+                }
+                Ok(loaded)
+            }
+            PageMetadataSource::Persisted => Err(flow_like_types::anyhow!(
+                "Preserve persisted page event metadata for this board snapshot"
+            )),
+        }
+    }
+
     /// Load a page from the canonical board-scoped binary-proto path,
     /// falling back to the legacy app-level JSON path written by the
     /// removed `App::save_page`. On a successful fallback the page is
@@ -2560,6 +2677,7 @@ impl Board {
         page: &Page,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
+        let refresh_live_nodes = store.is_none();
         let store = self.get_store(store).await?;
         let path = self.page_path(&page.id);
         let page_proto: proto::Page = page.clone().into();
@@ -2567,6 +2685,9 @@ impl Board {
 
         if !self.page_ids.contains(&page.id) {
             self.page_ids.push(page.id.clone());
+        }
+        if refresh_live_nodes {
+            self.refresh_page_event_nodes().await;
         }
         self.mark_changed();
         Ok(())
@@ -2577,6 +2698,7 @@ impl Board {
         page_id: &str,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> flow_like_types::Result<()> {
+        let refresh_live_nodes = store.is_none();
         let store = self.get_store(store).await?;
         // Best-effort delete on the canonical path; missing files
         // (e.g. data only ever written via the legacy `App::save_page`)
@@ -2587,8 +2709,26 @@ impl Board {
         let legacy = self.board_dir.clone().join(format!("{}.page", page_id));
         let _ = store.delete(&legacy).await;
         self.page_ids.retain(|id| id != page_id);
+        if refresh_live_nodes {
+            self.refresh_page_event_nodes().await;
+        }
         self.mark_changed();
         Ok(())
+    }
+
+    /// Page bindings are external inputs to event-node schemas. A page edit has
+    /// no graph edges to seed, so refresh the registered board readers and their
+    /// dependants. Explicit store writes may target exports or snapshots; those
+    /// must not derive live metadata from a different store.
+    async fn refresh_page_event_nodes(&mut self) {
+        if self.page_metadata_source != PageMetadataSource::Draft {
+            return;
+        }
+        if let Some(state) = self.app_state.clone() {
+            self.node_updates_scoped(state, Some(&Touched::default()))
+                .await;
+            self.cleanup();
+        }
     }
 
     pub fn get_required_element_ids(&self) -> std::collections::HashSet<String> {
@@ -3270,6 +3410,110 @@ mod tests {
         assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
         assert_eq!(board.updated_at, updated_at);
         assert_eq!(board.hash, Some(0xdead_beef));
+    }
+
+    struct DescribedEventLogic;
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for DescribedEventLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            let mut node = crate::flow::node::Node::new(
+                "described_event_test",
+                "Event",
+                "Catalog description",
+                "Events",
+            );
+            node.set_start(true);
+            node.add_output_pin(
+                "exec_out",
+                "Exec Out",
+                "Catalog pin description",
+                crate::flow::variable::VariableType::Execution,
+            );
+            node
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn user_written_event_text_survives_the_command_and_a_reload() {
+        use crate::flow::node::NodeLogic;
+
+        let state = flow_state().await;
+        let logic: Arc<dyn NodeLogic> = Arc::new(DescribedEventLogic);
+        state.node_registry().write().await.push_node(logic.clone());
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let mut node = logic.get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node.clone());
+
+        node.description = "Fires when an order arrives".to_string();
+        let exec_out = node.pins.values_mut().next().expect("exec_out");
+        exec_out.friendly_name = "Order".to_string();
+        exec_out.description = "Begins order handling".to_string();
+        board
+            .execute_command(
+                super::GenericCommand::UpdateNode(super::UpdateNodeCommand::new(node)),
+                state.clone(),
+            )
+            .await
+            .expect("update");
+
+        let assert_user_text = |board: &super::Board| {
+            let text = |value: &str| board.refs.get(value).cloned().unwrap_or_default();
+            let node = &board.nodes[&node_id];
+            assert_eq!(text(&node.description), "Fires when an order arrives");
+            let exec_out = node.get_pin_by_name("exec_out").expect("exec_out");
+            assert_eq!(exec_out.friendly_name, "Order");
+            assert_eq!(text(&exec_out.description), "Begins order handling");
+        };
+        assert_user_text(&board);
+
+        let mut reloaded = super::Board::from_proto(board.to_proto());
+        reloaded.refresh_node_definitions(state).await;
+        assert_user_text(&reloaded);
+    }
+
+    #[tokio::test]
+    async fn undo_restores_a_description_whose_ref_was_pruned() {
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let mut node = crate::flow::node::Node::new("undo_description_test", "Node", "", "test");
+        node.add_input_pin(
+            "value",
+            "Value",
+            "Customer id",
+            crate::flow::variable::VariableType::String,
+        );
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board.cleanup();
+
+        let mut edited = board.nodes[&node_id].clone();
+        edited.pins.values_mut().next().expect("value").description = "Customer UUID".to_string();
+        let command = board
+            .execute_command(
+                super::GenericCommand::UpdateNode(super::UpdateNodeCommand::new(edited)),
+                state.clone(),
+            )
+            .await
+            .expect("update");
+        board.undo(vec![command], state).await.expect("undo");
+
+        let pin = board.nodes[&node_id]
+            .get_pin_by_name("value")
+            .expect("value");
+        assert_eq!(
+            board.refs.get(&pin.description).map(String::as_str),
+            Some("Customer id")
+        );
     }
 
     struct GeoReceiptDefinition(crate::flow::node::Node);
@@ -4329,6 +4573,261 @@ mod tests {
             .unwrap()
             .schema = Some("[]".to_string());
         assert!(board.action_parameter_schema(&start_id).is_err());
+    }
+
+    struct PageMetadataReader(std::sync::atomic::AtomicUsize);
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for PageMetadataReader {
+        fn get_node(&self) -> crate::flow::node::Node {
+            use crate::flow::{node::Node, variable::VariableType};
+            let mut node = Node::new("events_widget_action", "Page metadata reader", "", "test");
+            node.add_input_pin("action_id", "Action ID", "", VariableType::String);
+            node.add_output_pin("action_context", "Action Context", "", VariableType::Struct)
+                .set_open_schema();
+            node
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, board: &super::Board) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if board.page_metadata_source() == super::PageMetadataSource::Persisted {
+                return;
+            }
+            let mut events = Vec::new();
+            let mut schema = None;
+            for page in board.load_pages_for_metadata(None).await.unwrap().pages {
+                for component in page.components {
+                    let value = component.component;
+                    for (name, actions) in value["eventHandlers"].as_object().into_iter().flatten()
+                    {
+                        if actions
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|action| action["context"]["nodeId"] == node.id)
+                        {
+                            events.push(name.clone());
+                            schema = Some(
+                                value["contract"]["events"][name]["payloadSchema"].to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            events.sort();
+            let options = crate::flow::pin::PinOptions::new()
+                .set_valid_values(events)
+                .build();
+            node.get_pin_mut_by_name("action_id")
+                .unwrap()
+                .set_options(options);
+            let pin = node.get_pin_mut_by_name("action_context").unwrap();
+            match schema {
+                Some(schema) => pin.schema = Some(schema),
+                None => {
+                    pin.set_open_schema();
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn saving_rebinding_and_deleting_pages_refreshes_live_event_metadata() {
+        use crate::{
+            a2ui::{SurfaceComponent, widget::Page},
+            flow::{node::NodeLogic, pin::resolve_schema},
+        };
+        use flow_like_types::json::json;
+        let state = flow_state().await;
+        let logic = Arc::new(PageMetadataReader(std::sync::atomic::AtomicUsize::new(0)));
+        state.node_registry().write().await.push_node(logic.clone());
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        let first = logic.get_node();
+        let second = logic.get_node();
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        board.nodes.insert(first_id.clone(), first);
+        board.nodes.insert(second_id.clone(), second);
+        let expected = json!({"type":"object","properties":{"entityId":{"type":"string"}}});
+        let mut page = Page::new("page-events", "Map", "/map").with_component(SurfaceComponent::new("map", json!({
+            "type":"microWidgetInstance", "contract":{"events":{"selected":{"payloadSchema":expected}}},
+            "eventHandlers":{"selected":[{"name":"workflow_event","context":{"nodeId":first_id}}]}
+        })));
+        let action_ids = |board: &super::Board, id: &str| {
+            board.nodes[id]
+                .get_pin_by_name("action_id")
+                .unwrap()
+                .options
+                .as_ref()
+                .unwrap()
+                .valid_values
+                .clone()
+                .unwrap_or_default()
+        };
+        let schema = |board: &super::Board, id: &str| {
+            let pin = board.nodes[id].get_pin_by_name("action_context").unwrap();
+            flow_like_types::json::from_str::<flow_like_types::Value>(
+                resolve_schema(pin.schema.as_deref().unwrap(), &board.refs).unwrap(),
+            )
+            .unwrap()
+        };
+        board.save_page(&page, None).await.unwrap();
+        assert_eq!(action_ids(&board, &first_id), vec!["selected"]);
+        assert_eq!(schema(&board, &first_id), expected);
+        assert!(action_ids(&board, &second_id).is_empty());
+
+        page.components[0].component["eventHandlers"]["selected"][0]["context"]["nodeId"] =
+            json!(second_id);
+        board.save_page(&page, None).await.unwrap();
+        assert!(action_ids(&board, &first_id).is_empty());
+        assert_ne!(schema(&board, &first_id), expected);
+        assert_eq!(action_ids(&board, &second_id), vec!["selected"]);
+        assert_eq!(schema(&board, &second_id), expected);
+        let persisted = super::Board::from_proto(board.to_proto());
+        assert_eq!(schema(&persisted, &second_id), expected);
+
+        board.delete_page(&page.id, None).await.unwrap();
+        assert!(action_ids(&board, &second_id).is_empty());
+        assert_ne!(schema(&board, &second_id), expected);
+        let persisted = super::Board::from_proto(board.to_proto());
+        assert!(action_ids(&persisted, &second_id).is_empty());
+    }
+
+    #[tokio::test]
+    async fn page_metadata_uses_published_snapshots_and_preserves_unknown_receipts() {
+        use crate::{
+            a2ui::{SurfaceComponent, widget::Page},
+            flow::{node::NodeLogic, pin::resolve_schema},
+        };
+        use flow_like_storage::object_store::ObjectStoreExt;
+        use flow_like_types::json::json;
+        let state = flow_state().await;
+        let logic = Arc::new(PageMetadataReader(std::sync::atomic::AtomicUsize::new(0)));
+        state.node_registry().write().await.push_node(logic.clone());
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let node = logic.get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        let published_schema =
+            json!({"type":"object","properties":{"published":{"type":"boolean"}}});
+        let draft_schema = json!({"type":"object","properties":{"draft":{"type":"string"}}});
+        let mut page = Page::new("map-page", "Map", "/").with_component(SurfaceComponent::new("map", json!({
+            "type":"microWidgetInstance", "contract":{"events":{"selected":{"payloadSchema":published_schema}}},
+            "eventHandlers":{"selected":[{"name":"workflow_event","context":{"nodeId":node_id}}]}
+        })));
+        board.save_page(&page, None).await.unwrap();
+        let version = board.version;
+        board.snapshot_at_version(version, None).await.unwrap();
+        page.components[0].component["contract"]["events"]["selected"]["payloadSchema"] =
+            draft_schema.clone();
+        board.save_page(&page, None).await.unwrap();
+        board.save(None).await.unwrap();
+        let schema = |board: &super::Board| {
+            let raw = board.nodes[&node_id]
+                .get_pin_by_name("action_context")
+                .unwrap()
+                .schema
+                .as_deref()
+                .unwrap();
+            flow_like_types::json::from_str::<flow_like_types::Value>(
+                resolve_schema(raw, &board.refs).unwrap(),
+            )
+            .unwrap()
+        };
+        let published = super::Board::load(
+            board.board_dir.clone(),
+            &board.id,
+            state.clone(),
+            Some(version),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            published.page_metadata_source(),
+            super::PageMetadataSource::Version(version)
+        );
+        assert_eq!(schema(&published), published_schema);
+        let draft = super::Board::load(board.board_dir.clone(), &board.id, state.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            draft.page_metadata_source(),
+            super::PageMetadataSource::Draft
+        );
+        assert_eq!(schema(&draft), draft_schema);
+        let persisted =
+            super::Board::from_loaded_proto(published.to_proto(), board.board_dir.clone(), state)
+                .await
+                .unwrap();
+        assert_eq!(
+            persisted.page_metadata_source(),
+            super::PageMetadataSource::Persisted
+        );
+        assert_eq!(schema(&persisted), published_schema);
+        assert!(persisted.load_pages_for_metadata(None).await.is_err());
+        assert!(
+            flow_like_types::json::to_value(&published)
+                .unwrap()
+                .get("page_metadata_source")
+                .is_none()
+        );
+
+        // A missing published page must never fall back to newer draft bindings.
+        let store = published.get_store(None).await.unwrap();
+        store
+            .delete(&published.versioned_page_path(version, &page.id))
+            .await
+            .unwrap();
+        let missing = published.load_pages_for_metadata(None).await.unwrap();
+        assert!(missing.pages.is_empty());
+        assert_eq!(missing.unreadable.len(), 1);
+        assert_eq!(missing.unreadable[0].page_id, page.id);
+    }
+
+    #[tokio::test]
+    async fn page_writes_to_an_explicit_store_do_not_refresh_live_store_metadata() {
+        use crate::{a2ui::widget::Page, flow::node::NodeLogic};
+        use std::sync::atomic::Ordering;
+        let state = flow_state().await;
+        let logic = Arc::new(PageMetadataReader(std::sync::atomic::AtomicUsize::new(0)));
+        state.node_registry().write().await.push_node(logic.clone());
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        let node = logic.get_node();
+        board.nodes.insert(node.id.clone(), node);
+        let isolated_store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        board
+            .save_page(
+                &Page::new("export-page", "Export", "/"),
+                Some(isolated_store.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logic.0.load(Ordering::SeqCst), 0);
+        board
+            .delete_page("export-page", Some(isolated_store.clone()))
+            .await
+            .unwrap();
+        assert_eq!(logic.0.load(Ordering::SeqCst), 0);
+        board.app_state = None;
+        board
+            .save_page(
+                &Page::new("detached", "Detached", "/"),
+                Some(isolated_store.clone()),
+            )
+            .await
+            .unwrap();
+        board
+            .delete_page("detached", Some(isolated_store))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

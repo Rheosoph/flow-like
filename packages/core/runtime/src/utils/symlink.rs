@@ -54,7 +54,7 @@ pub async fn create_symlink_or_junction(src: PathBuf, target_dir: PathBuf) -> io
         Ok(_) => Ok(()),
         Err(_) => {
             // probably a different drive
-            println!("Falling back to copying the file");
+            tracing::debug!("Falling back to copying the file");
             match copy_large_file(src, target_dir).await {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),

@@ -381,12 +381,12 @@ pub async fn load_custom_bits_for_profile(
 
     let models = user_bit::Entity::find()
         .filter(user_bit::Column::UserId.eq(sub))
+        .filter(user_bit::Column::Id.is_in(wanted))
         .all(&state.db)
         .await?;
 
     Ok(models
         .into_iter()
-        .filter(|model| wanted.contains(model.id.as_str()))
         .map(|model| user_bit_to_core(model, state, include_secrets))
         .collect())
 }

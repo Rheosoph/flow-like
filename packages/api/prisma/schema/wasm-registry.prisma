@@ -69,6 +69,7 @@ model WasmPackage {
   @@index([primaryCategory])
   @@index([secondaryCategory])
   @@index([price])
+  @@index([updatedAt])
 }
 
 model WasmPackageVersion {

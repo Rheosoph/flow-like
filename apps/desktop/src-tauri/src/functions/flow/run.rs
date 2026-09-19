@@ -9,19 +9,17 @@ use flow_like::flow::compiled::{
 };
 use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
+use flow_like::flow::execution::run_index::{RunQuery, read_run_payload};
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
 use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase, Select};
-use flow_like::flow_like_storage::{Path, serde_arrow};
 use flow_like::hub::Hub;
 use flow_like::state::{FlowLikeState, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
-use flow_like_types::{json, tokio};
-use futures::TryStreamExt;
+use flow_like_types::{Value, json, tokio};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -336,6 +334,12 @@ struct ReportRunRequest {
     start: u64,
     end: u64,
     error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nodes: Option<Vec<(String, u8)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logs: Option<u64>,
 }
 
 #[derive(Default)]
@@ -404,6 +408,9 @@ async fn report_run_to_backend(
         start: meta.start,
         end: meta.end,
         error_message,
+        event_version: meta.event_version.clone(),
+        nodes: meta.nodes.clone(),
+        logs: meta.logs,
     };
 
     let auth_val = if token.starts_with("Bearer ") {
@@ -957,36 +964,6 @@ async fn execute_prepared(
         println!("Error flushing buffered sender: {}", err);
     }
 
-    let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
-        let (db_fn, write_options) = {
-            let guard = flow_like_state.config.read().await;
-            (
-                guard.callbacks.build_logs_database.clone(),
-                guard.callbacks.lance_write_options.clone(),
-            )
-        };
-        async {
-            let db_fn = db_fn
-                .as_ref()
-                .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-            let base_path = Path::from("runs").join(app_id).join(board_id);
-            let db = flow_like_state
-                .with_lance_session(db_fn(base_path.clone()))
-                .execute()
-                .await
-                .map_err(|e| {
-                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-                })?;
-            meta.flush(db, write_options.as_ref()).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
-            })?;
-            Ok(())
-        }
-        .await
-    } else {
-        Ok(())
-    };
-
     // Report online local runs so backend analytics can count executions.
     if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
         let app_handle = app_handle_for_report.clone();
@@ -998,11 +975,10 @@ async fn execute_prepared(
         });
     }
 
-    // Always release the finished run from the registry, even if flushing its
-    // logs failed. Otherwise the run stays flagged "in use" and its logs can
-    // never be deleted from storage management until the app restarts.
+    // Release the finished run from the registry; otherwise it stays flagged
+    // "in use" and its logs can never be deleted from storage management
+    // until the app restarts.
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);
-    flush_result?;
 
     Ok(meta)
 }
@@ -1183,93 +1159,6 @@ pub async fn cancel_execution(
     Ok(())
 }
 
-/// Open a board's local LanceDB log-store connection. Shared by the board run
-/// listing and the event timeline's run telemetry.
-pub(crate) async fn open_runs_db(
-    state: &Arc<FlowLikeState>,
-    app_id: &str,
-    board_id: &str,
-) -> flow_like_types::Result<flow_like::flow_like_storage::lancedb::Connection> {
-    let db = {
-        let guard = state.config.read().await;
-        guard.callbacks.build_logs_database.clone()
-    };
-    let db_fn = db
-        .as_ref()
-        .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-    let base_path = Path::from("runs").join(app_id).join(board_id);
-    db_fn(base_path.clone())
-        .execute()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to open database: {}", base_path))
-}
-
-/// Open a board's LanceDB `runs` summary table from the local log store.
-pub(crate) async fn open_runs_table(
-    state: &Arc<FlowLikeState>,
-    app_id: &str,
-    board_id: &str,
-) -> flow_like_types::Result<flow_like::flow_like_storage::lancedb::Table> {
-    let db = open_runs_db(state, app_id, board_id).await?;
-    db.open_table("runs")
-        .execute()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to open table: runs"))
-}
-
-/// Columns backing [`StoredRunSummary`] — everything a run listing needs except
-/// the two heavy ones (`payload`, `nodes`). Must stay in sync with the struct.
-const RUN_SUMMARY_COLUMNS: [&str; 11] = [
-    "app_id",
-    "run_id",
-    "board_id",
-    "start",
-    "end",
-    "log_level",
-    "version",
-    "logs",
-    "node_id",
-    "event_version",
-    "event_id",
-];
-
-/// A run row without `payload`/`nodes`, for callers that only aggregate.
-#[derive(Deserialize)]
-struct StoredRunSummary {
-    app_id: String,
-    run_id: String,
-    board_id: String,
-    start: u64,
-    end: u64,
-    log_level: u8,
-    version: String,
-    logs: Option<u64>,
-    node_id: String,
-    event_version: Option<String>,
-    event_id: String,
-}
-
-impl From<StoredRunSummary> for LogMeta {
-    fn from(stored: StoredRunSummary) -> Self {
-        LogMeta {
-            app_id: stored.app_id,
-            run_id: stored.run_id,
-            board_id: stored.board_id,
-            start: stored.start,
-            end: stored.end,
-            log_level: stored.log_level,
-            version: stored.version,
-            nodes: None,
-            logs: stored.logs,
-            node_id: stored.node_id,
-            event_version: stored.event_version,
-            event_id: stored.event_id,
-            payload: Vec::new(),
-            is_remote: false,
-        }
-    }
-}
-
 #[tauri::command(async)]
 pub async fn list_runs(
     app_handle: AppHandle,
@@ -1284,125 +1173,54 @@ pub async fn list_runs(
     _last_meta: Option<LogMeta>,
     summary_only: Option<bool>,
 ) -> Result<Vec<LogMeta>, TauriFunctionError> {
-    let summary_only = summary_only.unwrap_or(false);
-    let limit = limit.unwrap_or(100);
-    let offset = offset.unwrap_or(0);
     let state = TauriFlowLikeState::construct(&app_handle).await?;
-    let db = open_runs_table(&state, &app_id, &board_id).await?;
+    let index = crate::run_index::registered_run_index(&state).await?;
+    // `nodes` is the per-node visit trace; aggregation callers never read it,
+    // so summary listings leave it out of the IPC payload. `payload` is never
+    // listed — Re-Run fetches the sidecar through `get_run_payload`.
+    let runs = index
+        .list(&RunQuery {
+            app_id,
+            board_ids: vec![board_id],
+            node_id,
+            event_id: None,
+            from,
+            to,
+            status,
+            limit: limit.unwrap_or(100),
+            offset: offset.unwrap_or(0),
+            include_nodes: !summary_only.unwrap_or(false),
+        })
+        .await?;
+    Ok(runs)
+}
 
-    let mut query_string = String::from("");
-
-    if let Some(node_id) = node_id {
-        query_string.push_str(&format!("node_id = '{}'", node_id));
-    }
-
-    if let Some(from) = from {
-        if !query_string.is_empty() {
-            query_string.push_str(" AND ");
-        }
-        query_string.push_str(&format!("start >= {}", from));
-    }
-
-    if let Some(to) = to {
-        if !query_string.is_empty() {
-            query_string.push_str(" AND ");
-        }
-        query_string.push_str(&format!("start <= {}", to));
-    }
-
-    if let Some(status) = status {
-        if !query_string.is_empty() {
-            query_string.push_str(" AND ");
-        }
-
-        let status = status.to_u8();
-        if status == 0 {
-            query_string.push_str("log_level <= 1");
-        } else {
-            query_string.push_str(&format!("log_level = {}", status));
-        }
-    }
-
-    let mut query = db.query();
-
-    if !query_string.is_empty() {
-        query = query.only_if(&query_string);
-    }
-
-    // `payload` carries the run's whole serialized input and `nodes` its per-node
-    // visit trace. Aggregation callers read neither, so projecting them away keeps
-    // megabytes per listing out of the IPC boundary and the JS heap.
-    if summary_only {
-        query = query.select(Select::Columns(
-            RUN_SUMMARY_COLUMNS.iter().map(|c| c.to_string()).collect(),
+/// The recorded input of a run, for Re-Run. `None` when the run had no
+/// payload or predates the sidecar.
+#[tauri::command(async)]
+pub async fn get_run_payload(
+    app_handle: AppHandle,
+    app_id: String,
+    board_id: String,
+    run_id: String,
+) -> Result<Option<Value>, TauriFunctionError> {
+    if !super::event::is_safe_id(&board_id) || !super::event::is_safe_id(&run_id) {
+        return Err(TauriFunctionError::new(
+            "IDs may only contain alphanumeric characters, '-' and '_'",
         ));
     }
-
-    let runs = query
-        .limit(limit)
-        .offset(offset)
-        .execute()
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    let log_store = FlowLikeState::stores(&state)
         .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to execute query"))?;
-    let results = runs
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to collect results"))?;
-    let mut log_meta = Vec::with_capacity(results.len() * 10);
-    for result in results {
-        if summary_only {
-            let stored: Vec<StoredRunSummary> =
-                serde_arrow::from_record_batch(&result).unwrap_or_default();
-            log_meta.extend(stored.into_iter().map(LogMeta::from));
-        } else {
-            let stored: Vec<flow_like::flow::execution::StoredLogMeta> =
-                serde_arrow::from_record_batch(&result).unwrap_or_default();
-            log_meta.extend(stored.into_iter().map(LogMeta::from));
-        }
-    }
-    Ok(log_meta)
-
-    // let mut stream = db
-    //     .query()
-    //     .execute()
-    //     .await
-    //     .map_err(|_| flow_like_types::anyhow!("Failed to execute query on table: runs"))?;
-
-    // let client = ClientBuilder::new().open().await?;
-    // let out = client.conn(move |conn| {
-    //     conn.execute_batch("
-    //         CREATE TABLE runs (
-    //             start     UBIGINT,
-    //             run_id    VARCHAR,
-    //             log_level UTINYINT,
-    //             node_id   VARCHAR
-    //         )
-    //     ")?;
-    //     let mut appender = conn.appender("runs").unwrap();
-    //     let (tx, rx) = std::sync::mpsc::channel();
-    //     tokio::spawn(async move {
-    //         while let Some(item_res) = stream.next().await {
-    //             if let Ok(item) = item_res {
-    //                 let _ = tx.send(item);
-    //             }
-    //         }
-    //     });
-
-    //     for meta in rx {
-    //         appender.append_record_batch(meta)?;
-    //     }
-    //     appender.flush()?;
-    //     let mut stmt = conn.prepare("SELECT start, run_id, log_level, node_id FROM runs ORDER BY start DESC LIMIT ?, ?")?;
-    //     let mut rows = stmt.query(params![offset as i64, limit as i64])?;
-    //     let mut out = Vec::new();
-    //     while let Some(r) = rows.next()? {
-    //         let start: u64 = r.get(0)?;
-    //         println!("Row: {:?}", start);
-    //     }
-    //     Ok(out)
-    // }).await?;
-
-    // return Ok(out);
+        .log_store
+        .ok_or_else(|| flow_like_types::anyhow!("No log store configured"))?;
+    let Some(payload) = read_run_payload(&log_store, &app_id, &board_id, &run_id).await? else {
+        return Ok(None);
+    };
+    let value = json::from_slice(&payload).map_err(|error| {
+        flow_like_types::anyhow!("Run {run_id} has an unreadable payload sidecar: {error}")
+    })?;
+    Ok(Some(value))
 }
 
 #[tauri::command(async)]

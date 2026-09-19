@@ -1,8 +1,9 @@
 //! Regression-suite surfaces: corpus listing, fixture promotion, suite config.
 //!
-//! The corpus is the plaintext `LogMeta.payload` column of the event board's
-//! Lance runs table — never the encrypted `ExecutionRun.inputPayloadKey`
-//! blobs. Storage authority split (do not add dual writes): the bucket under
+//! The corpus is the event board's `ExecutionRun` rows joined with their
+//! plaintext payload sidecars in the logs bucket — never the encrypted
+//! `ExecutionRun.inputPayloadKey` blobs. Storage authority split (do not add
+//! dual writes): the bucket under
 //! `apps/{app_id}/regression/` owns the suite config + fixtures (via the core
 //! helpers, shared with desktop); the Postgres `RegressionSuite` row is a
 //! *projection* written by the same PUT; suite runs live in
@@ -20,7 +21,8 @@ use axum::{
 };
 use flow_like::app::App;
 use flow_like::flow::event::Event as CoreEvent;
-use flow_like::flow::execution::{LogLevel, LogMeta, StoredLogMeta};
+use flow_like::flow::execution::run_index::read_run_payload;
+use flow_like::flow::execution::{LogLevel, LogMeta};
 use flow_like::flow::regression::{
     CAVEAT_CALLER_OAUTH_TOKENS, CAVEAT_GRADING_BLIND, CorpusCandidate, FIXTURE_PAYLOAD_CAP_BYTES,
     FixtureBaseline, GateMode, REPLAY_EXCLUSION_SUITE_RUNS, RegressionFixture,
@@ -28,11 +30,9 @@ use flow_like::flow::regression::{
     error_class_of, grade_run, payload_preview, prepare_fixture_payload, redact_by_key_name,
     select_corpus_window, shape_hash,
 };
-use flow_like_storage::arrow_array::RecordBatch;
-use flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
-use flow_like_storage::serde_arrow;
+use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::{Value, anyhow, create_id};
-use futures::TryStreamExt;
+use futures::StreamExt;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect,
@@ -47,9 +47,10 @@ use crate::{
     },
     error::ApiError,
     execution::regression::{
-        CandidateVersion, SuiteRunActor, SuiteRunTrigger, collect_lance_evidence, datetime_micros,
-        gate_mode_as_str, load_core_suite, open_runs_db, parse_gate_mode, spawn_suite_run,
+        CandidateVersion, SuiteRunActor, SuiteRunTrigger, collect_lance_evidence, gate_mode_as_str,
+        load_core_suite, open_runs_db, parse_gate_mode, spawn_suite_run,
     },
+    execution::run_summary::{log_meta_from_run, logs_store},
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
@@ -60,6 +61,8 @@ use super::get_event::map_missing_event_artifact;
 use super::get_event_runs::is_safe_id;
 
 const DEFAULT_CORPUS_LIMIT: usize = 25;
+/// Payload sidecars read concurrently per corpus scan.
+const SIDECAR_READ_CONCURRENCY: usize = 16;
 
 /// Corpus-entry caveat: the recorded row is a rejected trigger (`start == end`
 /// and an empty visited-node set — the two markers `RejectedRun` writes).
@@ -172,9 +175,10 @@ async fn replay_exclusion_set(
     board_id: &str,
     suite_id: Option<&str>,
 ) -> Result<HashSet<String>, ApiError> {
-    let mut excluded = HashSet::new();
-
-    if let Some(suite_id) = suite_id {
+    let suite_replays = async {
+        let Some(suite_id) = suite_id else {
+            return Ok::<Vec<String>, ApiError>(Vec::new());
+        };
         let suite_run_ids: Vec<String> = regression_suite_run::Entity::find()
             .select_only()
             .column(regression_suite_run::Column::Id)
@@ -186,38 +190,44 @@ async fn replay_exclusion_set(
             .all(db)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to load suite runs: {e}")))?;
-        if !suite_run_ids.is_empty() {
-            let replay_ids: Vec<String> = regression_case_result::Entity::find()
-                .select_only()
-                .column(regression_case_result::Column::ReplayRunId)
-                .filter(regression_case_result::Column::SuiteRunId.is_in(suite_run_ids))
-                .filter(regression_case_result::Column::ReplayRunId.is_not_null())
-                .into_tuple()
-                .all(db)
-                .await
-                .map_err(|e| {
-                    ApiError::internal_error(anyhow!("Failed to load suite case results: {e}"))
-                })?;
-            excluded.extend(replay_ids);
+        if suite_run_ids.is_empty() {
+            return Ok(Vec::new());
         }
-    }
+        regression_case_result::Entity::find()
+            .select_only()
+            .column(regression_case_result::Column::ReplayRunId)
+            .filter(regression_case_result::Column::SuiteRunId.is_in(suite_run_ids))
+            .filter(regression_case_result::Column::ReplayRunId.is_not_null())
+            .into_tuple::<String>()
+            .all(db)
+            .await
+            .map_err(|e| {
+                ApiError::internal_error(anyhow!("Failed to load suite case results: {e}"))
+            })
+    };
 
-    let tagged: Vec<String> = execution_run::Entity::find()
-        .select_only()
-        .column(execution_run::Column::Id)
-        .filter(execution_run::Column::AppId.eq(app_id))
-        .filter(execution_run::Column::BoardId.eq(board_id))
-        .filter(execution_run::Column::RegressionRunId.is_not_null())
-        .order_by_desc(execution_run::Column::CreatedAt)
-        .limit(REGRESSION_RUN_ID_SCAN_CAP)
-        .into_tuple()
-        .all(db)
-        .await
-        .map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to load regression-tagged runs: {e}"))
-        })?;
-    excluded.extend(tagged);
+    let tagged = async {
+        execution_run::Entity::find()
+            .select_only()
+            .column(execution_run::Column::Id)
+            .filter(execution_run::Column::AppId.eq(app_id))
+            .filter(execution_run::Column::BoardId.eq(board_id))
+            .filter(execution_run::Column::RegressionRunId.is_not_null())
+            .order_by_desc(execution_run::Column::CreatedAt)
+            .limit(REGRESSION_RUN_ID_SCAN_CAP)
+            .into_tuple::<String>()
+            .all(db)
+            .await
+            .map_err(|e| {
+                ApiError::internal_error(anyhow!("Failed to load regression-tagged runs: {e}"))
+            })
+    };
 
+    let (suite_replays, tagged) = flow_like_types::tokio::join!(suite_replays, tagged);
+
+    let mut excluded = HashSet::new();
+    excluded.extend(suite_replays?);
+    excluded.extend(tagged?);
     Ok(excluded)
 }
 
@@ -336,6 +346,106 @@ struct CorpusRowMeta {
     payload_len: usize,
 }
 
+/// What the ladder's narrower rungs already loaded. A rung is only widened
+/// when it came back under its cap, so it holds every row newer than `cutoff`
+/// and the next rung needs just the older delta, not a second read of the same
+/// rows and sidecars.
+#[derive(Default)]
+struct CorpusScanCache {
+    cutoff: Option<chrono::DateTime<chrono::FixedOffset>>,
+    candidates: Vec<CorpusCandidate>,
+}
+
+#[derive(Clone)]
+struct CorpusScope {
+    db: sea_orm::DatabaseConnection,
+    log_store: FlowLikeStore,
+    app_id: String,
+    board_id: String,
+    event_id: String,
+}
+
+impl CorpusScope {
+    /// One scan: the event's run rows on the board recorded within `window`,
+    /// newest first, each joined with its payload sidecar. A run without a
+    /// sidecar recorded no input and carries an empty payload.
+    async fn scan(
+        &self,
+        window: Duration,
+        cap: usize,
+        side_meta: &Mutex<HashMap<String, CorpusRowMeta>>,
+        narrower: &Mutex<CorpusScanCache>,
+    ) -> flow_like_types::Result<Vec<CorpusCandidate>> {
+        let cutoff = chrono::Utc::now().fixed_offset()
+            - chrono::Duration::from_std(window)
+                .map_err(|e| anyhow!("Corpus window out of range: {e}"))?;
+        let (known_cutoff, known_rows) = {
+            let mut cache = narrower.lock().expect("corpus scan cache lock");
+            if cache.cutoff.is_some_and(|known| known < cutoff) {
+                *cache = CorpusScanCache::default();
+            }
+            (cache.cutoff, cache.candidates.len())
+        };
+        let mut query = execution_run::Entity::find()
+            .filter(execution_run::Column::AppId.eq(&self.app_id))
+            .filter(execution_run::Column::BoardId.eq(&self.board_id))
+            .filter(execution_run::Column::EventId.eq(&self.event_id))
+            .filter(execution_run::Column::CreatedAt.gte(cutoff));
+        if let Some(known_cutoff) = known_cutoff {
+            query = query.filter(execution_run::Column::CreatedAt.lt(known_cutoff));
+        }
+        let rows = query
+            .order_by_desc(execution_run::Column::CreatedAt)
+            .limit(cap.saturating_sub(known_rows) as u64)
+            .all(&self.db)
+            .await
+            .map_err(|e| anyhow!("Failed to scan the corpus window: {e}"))?;
+
+        let loaded: Vec<(LogMeta, Vec<u8>)> = futures::stream::iter(
+            rows.iter()
+                .map(log_meta_from_run)
+                .map(|meta| self.with_payload(meta)),
+        )
+        .buffer_unordered(SIDECAR_READ_CONCURRENCY)
+        .collect()
+        .await;
+
+        let mut candidates = Vec::with_capacity(loaded.len());
+        for (meta, payload) in loaded {
+            side_meta.lock().expect("corpus meta lock").insert(
+                meta.run_id.clone(),
+                CorpusRowMeta {
+                    version: meta.version.clone(),
+                    event_version: meta.event_version.clone(),
+                    log_level: meta.log_level,
+                    payload_len: payload.len(),
+                },
+            );
+            candidates.push(CorpusCandidate::from_log_meta(&LogMeta { payload, ..meta }));
+        }
+
+        let mut cache = narrower.lock().expect("corpus scan cache lock");
+        cache.cutoff = Some(cutoff);
+        cache.candidates.extend(candidates);
+        let mut candidates = cache.candidates.clone();
+        drop(cache);
+        candidates.sort_by(|a, b| b.start.cmp(&a.start));
+        Ok(candidates)
+    }
+
+    /// The run joined with its payload sidecar; an empty payload when it
+    /// recorded no input, so the scan still counts every row it fetched.
+    async fn with_payload(&self, meta: LogMeta) -> (LogMeta, Vec<u8>) {
+        match read_run_payload(&self.log_store, &self.app_id, &self.board_id, &meta.run_id).await {
+            Ok(payload) => (meta, payload.unwrap_or_default()),
+            Err(error) => {
+                tracing::warn!(run_id = %meta.run_id, %error, "Failed to read a corpus payload sidecar; treating the run as payload-less");
+                (meta, Vec::new())
+            }
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/apps/{app_id}/events/{event_id}/corpus",
@@ -399,58 +509,22 @@ pub async fn get_event_corpus(
     )
     .await?;
 
-    let (_db, table) = open_runs_db(&state, &sub, &app_id, &board_id).await?;
-    let Some(table) = table else {
-        // No run has ever flushed for this board — an empty corpus, not an error.
-        return Ok(Json(EventCorpusResponse {
-            entries: Vec::new(),
-            board_id,
-            window_secs: 0,
-            scanned_rows: 0,
-            scan_capped: false,
-        }));
+    let scope = CorpusScope {
+        db: state.db.clone(),
+        log_store: logs_store(&state, &sub, &app_id).await?,
+        app_id: app_id.clone(),
+        board_id: board_id.clone(),
+        event_id: event_id.clone(),
     };
-
     let side_meta: Arc<Mutex<HashMap<String, CorpusRowMeta>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let scan_event_id = event_id.clone();
     let scan_meta = side_meta.clone();
+    let narrower_rungs = Arc::new(Mutex::new(CorpusScanCache::default()));
     let selection = select_corpus_window(target, &excluded, move |window: Duration, cap: usize| {
-        let table = table.clone();
-        let event_id = scan_event_id.clone();
+        let scope = scope.clone();
         let side_meta = scan_meta.clone();
-        async move {
-            let cutoff = now_micros().saturating_sub(window.as_micros() as u64);
-            let filter = format!("event_id = '{event_id}' AND start >= {cutoff}");
-            let batches: Vec<RecordBatch> = table
-                .query()
-                .only_if(&filter)
-                .limit(cap)
-                .execute()
-                .await
-                .map_err(|e| anyhow!("Failed to scan the corpus window: {e}"))?
-                .try_collect()
-                .await
-                .map_err(|e| anyhow!("Failed to collect corpus rows: {e}"))?;
-            let mut rows = Vec::new();
-            for batch in &batches {
-                let stored: Vec<StoredLogMeta> =
-                    serde_arrow::from_record_batch(batch).unwrap_or_default();
-                for row in stored {
-                    side_meta.lock().expect("corpus meta lock").insert(
-                        row.run_id.clone(),
-                        CorpusRowMeta {
-                            version: row.version.clone(),
-                            event_version: row.event_version.clone(),
-                            log_level: row.log_level,
-                            payload_len: row.payload.len(),
-                        },
-                    );
-                    rows.push(CorpusCandidate::from_log_meta(&LogMeta::from(row)));
-                }
-            }
-            Ok(rows)
-        }
+        let narrower_rungs = narrower_rungs.clone();
+        async move { scope.scan(window, cap, &side_meta, &narrower_rungs).await }
     })
     .await
     .map_err(ApiError::internal_error)?;
@@ -524,34 +598,38 @@ pub struct CorpusPayloadResponse {
     pub payload: Value,
 }
 
-/// Load one run's summary row from the runs table, newest first (a double
-/// flush writes the same run twice). The `event_id` filter scopes the lookup
-/// to the event being queried.
+/// One run row of the event on its board. The `event_id` filter scopes the
+/// lookup to the event being queried.
 async fn load_corpus_row(
-    table: &flow_like_storage::lancedb::Table,
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
     event_id: &str,
     run_id: &str,
-) -> Result<Option<StoredLogMeta>, ApiError> {
-    let filter = format!("run_id = '{run_id}' AND event_id = '{event_id}'");
-    let batches: Vec<RecordBatch> = table
-        .query()
-        .only_if(&filter)
-        .limit(4)
-        .execute()
+) -> Result<Option<execution_run::Model>, ApiError> {
+    execution_run::Entity::find_by_id(run_id)
+        .filter(execution_run::Column::AppId.eq(app_id))
+        .filter(execution_run::Column::BoardId.eq(board_id))
+        .filter(execution_run::Column::EventId.eq(event_id))
+        .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Failed to query run {run_id}: {e}")))?
-        .try_collect()
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to load run {run_id}: {e}")))
+}
+
+/// The recorded input of a run from its payload sidecar; `Null` when the run
+/// recorded none.
+async fn corpus_payload(
+    log_store: &FlowLikeStore,
+    app_id: &str,
+    board_id: &str,
+    run_id: &str,
+) -> Result<Value, ApiError> {
+    let payload = read_run_payload(log_store, app_id, board_id, run_id)
         .await
         .map_err(|e| {
-            ApiError::internal_error(anyhow!("Failed to collect run row for {run_id}: {e}"))
+            ApiError::internal_error(anyhow!("Failed to read the payload of run {run_id}: {e}"))
         })?;
-    let mut rows: Vec<StoredLogMeta> = Vec::new();
-    for batch in &batches {
-        rows.extend(
-            serde_arrow::from_record_batch::<Vec<StoredLogMeta>>(batch).unwrap_or_default(),
-        );
-    }
-    Ok(rows.into_iter().max_by_key(|row| row.start))
+    Ok(payload.as_deref().map(payload_value).unwrap_or(Value::Null))
 }
 
 #[utoipa::path(
@@ -603,21 +681,20 @@ pub async fn get_corpus_payload(
     ensure_regression_capable_event(&event)?;
     let board_id = event_board_id(&app, &event)?;
 
-    let (_db, table) = open_runs_db(&state, &sub, &app_id, &board_id).await?;
-    let table = table.ok_or_else(|| ApiError::not_found("No runs recorded for this board"))?;
-    let row = load_corpus_row(&table, &event_id, &run_id)
+    let row = load_corpus_row(&state, &app_id, &board_id, &event_id, &run_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Run {run_id} not found for this event")))?;
+    let log_store = logs_store(&state, &sub, &app_id).await?;
 
-    let mut payload = payload_value(&row.payload);
+    let mut payload = corpus_payload(&log_store, &app_id, &board_id, &row.id).await?;
     redact_by_key_name(&mut payload);
     // Raw-body duplicates (body_bytes / body_text) defeat key-name redaction;
     // the parsed `body` object is the redacted, replayable form.
     drop_raw_body_duplicates(&mut payload);
 
     Ok(Json(CorpusPayloadResponse {
-        run_id: row.run_id,
-        node_id: row.node_id,
+        run_id: row.id,
+        node_id: row.node_id.unwrap_or_default(),
         board_id,
         payload,
     }))
@@ -760,13 +837,12 @@ pub async fn promote_regression_fixture(
         ));
     }
 
-    let (db, table) = open_runs_db(&state, &sub, &app_id, &board_id).await?;
-    let table = table.ok_or_else(|| ApiError::not_found("No runs recorded for this board"))?;
-    let row = load_corpus_row(&table, &event_id, &body.run_id)
+    let row = load_corpus_row(&state, &app_id, &board_id, &event_id, &body.run_id)
         .await?
         .ok_or_else(|| {
             ApiError::not_found(format!("Run {} not found for this event", body.run_id))
         })?;
+    let row = log_meta_from_run(&row);
 
     let visited_node_ids: Vec<String> = row
         .nodes
@@ -781,12 +857,15 @@ pub async fn promote_regression_fixture(
         ));
     }
 
-    let payload = prepare_fixture_payload(payload_value(&row.payload))
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let log_store = logs_store(&state, &sub, &app_id).await?;
+    let payload =
+        prepare_fixture_payload(corpus_payload(&log_store, &app_id, &board_id, &row.run_id).await?)
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     // Grade the recorded run from its stored Lance artifacts — the baseline
     // future replays are compared against. A missing or unreadable log table
     // yields an `error` baseline, never a green light.
+    let db = open_runs_db(&state, &sub, &app_id, &board_id).await?;
     let grade = grade_run(collect_lance_evidence(&db, &body.run_id).await);
     let verdict = expectation.unwrap_or(grade.verdict);
     let error_class = if verdict == TestVerdict::Pass {
@@ -1085,12 +1164,14 @@ pub async fn put_regression_suite(
         .unwrap_or_else(create_id);
 
     let mut fixtures = Vec::new();
+    let mut stored_created_at = None;
     if let Some(row) = &existing {
         let current = load_core_suite(&app, row).await;
         fixtures = current
             .list_fixtures(&app)
             .await
             .map_err(ApiError::internal_error)?;
+        stored_created_at = Some(current.created_at);
     }
     if schedule.is_some()
         && fixtures.iter().any(|fixture| {
@@ -1106,13 +1187,7 @@ pub async fn put_regression_suite(
     }
 
     let now = now_micros();
-    let created_at_micros = match &existing {
-        Some(row) => match CoreRegressionSuite::load(&app, &row.id).await {
-            Ok(stored) => stored.created_at,
-            Err(_) => datetime_micros(row.created_at),
-        },
-        None => now,
-    };
+    let created_at_micros = stored_created_at.unwrap_or(now);
     let suite = CoreRegressionSuite {
         id: suite_id.clone(),
         board_id: board_id.clone(),

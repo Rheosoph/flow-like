@@ -14,7 +14,8 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, JoinType,
+    QueryFilter, QuerySelect, RelationTrait,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -54,36 +55,51 @@ impl From<user_lesson_progress::Model> for UserLessonProgressView {
     }
 }
 
-pub async fn lesson_challenges_completed(
+async fn lessons_challenges_completed(
     state: &AppState,
     user_id: &str,
-    lesson_id: &str,
+    lesson_ids: &[String],
 ) -> Result<bool, ApiError> {
+    if lesson_ids.is_empty() {
+        return Ok(true);
+    }
+
     let challenge_ids: Vec<String> = challenge::Entity::find()
-        .filter(challenge::Column::LessonId.eq(lesson_id))
+        .select_only()
+        .column(challenge::Column::Id)
+        .filter(challenge::Column::LessonId.is_in(lesson_ids.iter().cloned()))
+        .into_tuple()
         .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|challenge| challenge.id)
-        .collect();
+        .await?;
 
     if challenge_ids.is_empty() {
         return Ok(true);
     }
 
     let completed_challenge_ids: HashSet<String> = user_challenge_attempt::Entity::find()
+        .select_only()
+        .column(user_challenge_attempt::Column::ChallengeId)
+        .distinct()
         .filter(user_challenge_attempt::Column::UserId.eq(user_id))
-        .filter(user_challenge_attempt::Column::ChallengeId.is_in(challenge_ids.clone()))
+        .filter(user_challenge_attempt::Column::ChallengeId.is_in(challenge_ids.iter().cloned()))
         .filter(user_challenge_attempt::Column::IsCorrect.eq(true))
+        .into_tuple::<String>()
         .all(&state.db)
         .await?
         .into_iter()
-        .map(|attempt| attempt.challenge_id)
         .collect();
 
     Ok(challenge_ids
         .iter()
         .all(|challenge_id| completed_challenge_ids.contains(challenge_id)))
+}
+
+pub async fn lesson_challenges_completed(
+    state: &AppState,
+    user_id: &str,
+    lesson_id: &str,
+) -> Result<bool, ApiError> {
+    lessons_challenges_completed(state, user_id, &[lesson_id.to_string()]).await
 }
 
 pub async fn required_lessons_completed(
@@ -92,50 +108,50 @@ pub async fn required_lessons_completed(
     course_id: &str,
 ) -> Result<bool, ApiError> {
     let module_ids: Vec<String> = course_module::Entity::find()
+        .select_only()
+        .column(course_module::Column::Id)
         .filter(course_module::Column::CourseId.eq(course_id))
+        .into_tuple()
         .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|m| m.id)
-        .collect();
+        .await?;
 
     if module_ids.is_empty() {
         return Ok(false);
     }
 
     let required_lesson_ids: Vec<String> = lesson::Entity::find()
+        .select_only()
+        .column(lesson::Column::Id)
         .filter(lesson::Column::ModuleId.is_in(module_ids))
+        .filter(lesson::Column::IsOptional.eq(false))
+        .into_tuple()
         .all(&state.db)
-        .await?
-        .into_iter()
-        .filter(|l| !l.is_optional)
-        .map(|l| l.id)
-        .collect();
+        .await?;
 
     if required_lesson_ids.is_empty() {
         return Ok(true);
     }
 
     let completed_lesson_ids: HashSet<String> = user_lesson_progress::Entity::find()
+        .select_only()
+        .column(user_lesson_progress::Column::LessonId)
         .filter(user_lesson_progress::Column::UserId.eq(user_id))
-        .filter(user_lesson_progress::Column::LessonId.is_in(required_lesson_ids.clone()))
+        .filter(user_lesson_progress::Column::LessonId.is_in(required_lesson_ids.iter().cloned()))
         .filter(user_lesson_progress::Column::Status.eq(LessonStatus::Completed))
+        .into_tuple::<String>()
         .all(&state.db)
         .await?
         .into_iter()
-        .map(|progress| progress.lesson_id)
         .collect();
 
-    for lesson_id in &required_lesson_ids {
-        if !completed_lesson_ids.contains(lesson_id) {
-            return Ok(false);
-        }
-        if !lesson_challenges_completed(state, user_id, lesson_id).await? {
-            return Ok(false);
-        }
+    if !required_lesson_ids
+        .iter()
+        .all(|lesson_id| completed_lesson_ids.contains(lesson_id))
+    {
+        return Ok(false);
     }
 
-    Ok(true)
+    lessons_challenges_completed(state, user_id, &required_lesson_ids).await
 }
 
 async fn refresh_course_enrollment_completion(
@@ -249,33 +265,14 @@ pub async fn get_my_course_progress(
     let sub = user.sub()?;
     ensure_course_readable(&state, &user, &course_id).await?;
 
-    let module_ids: Vec<String> = course_module::Entity::find()
-        .filter(course_module::Column::CourseId.eq(&course_id))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|m| m.id)
-        .collect();
-
-    if module_ids.is_empty() {
-        return Ok(Json(vec![]));
-    }
-
-    let lesson_ids: Vec<String> = lesson::Entity::find()
-        .filter(lesson::Column::ModuleId.is_in(module_ids))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|l| l.id)
-        .collect();
-
-    if lesson_ids.is_empty() {
-        return Ok(Json(vec![]));
-    }
-
     let rows = user_lesson_progress::Entity::find()
+        .join(
+            JoinType::InnerJoin,
+            user_lesson_progress::Relation::Lesson.def(),
+        )
+        .join(JoinType::InnerJoin, lesson::Relation::CourseModule.def())
+        .filter(course_module::Column::CourseId.eq(&course_id))
         .filter(user_lesson_progress::Column::UserId.eq(sub))
-        .filter(user_lesson_progress::Column::LessonId.is_in(lesson_ids))
         .all(&state.db)
         .await?;
 

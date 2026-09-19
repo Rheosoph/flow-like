@@ -1,4 +1,4 @@
-use sea_orm::sea_query::ExprTrait;
+use sea_orm::sea_query::{Expr, ExprTrait};
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -75,12 +75,27 @@ pub fn viewer_authorization(headers: &HeaderMap) -> Option<&str> {
     Some(value)
 }
 
-fn extract_client_ip(request: &Request) -> Option<String> {
+/// Proxies append to `X-Forwarded-For`, so only the entries written by the
+/// deployment's own proxies are trustworthy: the client address is the one
+/// `trusted_hops` from the right. Without that setting the leftmost entry is
+/// used, which the client chooses.
+fn forwarded_client_ip(header: &str, trusted_hops: Option<u32>) -> Option<&str> {
+    let mut hops = header.split(',').map(str::trim).filter(|ip| !ip.is_empty());
+    match trusted_hops {
+        None => hops.next(),
+        Some(0) => None,
+        Some(hops_from_right) => hops.rev().nth(hops_from_right as usize - 1),
+    }
+}
+
+fn extract_client_ip(request: &Request, trusted_hops: Option<u32>) -> Option<String> {
     if let Some(forwarded) = request.headers().get("x-forwarded-for")
         && let Ok(val) = forwarded.to_str()
     {
-        // X-Forwarded-For can contain multiple IPs; the first is the original client
-        return val.split(',').next().map(|ip| ip.trim().to_string());
+        return forwarded_client_ip(val, trusted_hops).map(str::to_string);
+    }
+    if trusted_hops.is_some() {
+        return None;
     }
     if let Some(real_ip) = request.headers().get("x-real-ip")
         && let Ok(val) = real_ip.to_str()
@@ -512,11 +527,13 @@ impl AppUser {
         state: &AppState,
     ) -> Result<Option<String>, AuthorizationError> {
         let sub = self.effective_user_id()?;
-        let user = user::Entity::find_by_id(&sub)
+        user::Entity::find_by_id(&sub)
+            .select_only()
+            .column(user::Column::TrackingId)
+            .into_tuple::<Option<String>>()
             .one(&state.db)
             .await?
-            .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))?;
-        Ok(user.tracking_id)
+            .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))
     }
 
     pub async fn tier(&self, state: &AppState) -> Result<UserTier, AuthorizationError> {
@@ -553,8 +570,7 @@ impl AppUser {
             .and_then(|o| o.user_info_url.as_deref())
             .ok_or_else(|| anyhow!("User info URL not configured"))?;
 
-        let client = flow_like_types::reqwest::Client::new();
-        let res = match client
+        let res = match user_info_http_client()
             .get(endpoint)
             .bearer_auth(&user.access_token)
             .send()
@@ -578,11 +594,14 @@ impl AppUser {
 
     pub async fn global_permission(&self, state: AppState) -> Result<GlobalPermission, ApiError> {
         let sub = self.sub()?;
-        let user = user::Entity::find_by_id(&sub)
+        let permission_bits = user::Entity::find_by_id(&sub)
+            .select_only()
+            .column(user::Column::Permission)
+            .into_tuple::<i64>()
             .one(&state.db)
             .await?
             .ok_or_else(|| anyhow!("User not found"))?;
-        let permission = GlobalPermission::from_bits(user.permission)
+        let permission = GlobalPermission::from_bits(permission_bits)
             .ok_or_else(|| anyhow!("Invalid permission bits"))?;
         Ok(permission)
     }
@@ -955,6 +974,12 @@ pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, Autho
         .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))
 }
 
+fn user_info_http_client() -> &'static flow_like_types::reqwest::Client {
+    static CLIENT: std::sync::OnceLock<flow_like_types::reqwest::Client> =
+        std::sync::OnceLock::new();
+    CLIENT.get_or_init(flow_like_types::reqwest::Client::new)
+}
+
 fn hash_token(token: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(token.as_bytes());
@@ -1142,11 +1167,26 @@ async fn resolve_legacy_api_key_creator_user_id(
         }
     }
 
-    let members_with_roles = membership::Entity::find()
+    let role_permissions = || Expr::col((role::Entity, role::Column::Permissions));
+    let oldest_owner = membership::Entity::find()
+        .select_only()
+        .column(membership::Column::UserId)
+        .join(JoinType::InnerJoin, membership::Relation::Role.def())
         .filter(membership::Column::AppId.eq(app_id))
+        .filter(
+            role_permissions()
+                .bit_and(RolePermissions::Owner.bits())
+                .ne(0),
+        )
+        // Roles with unknown permission bits never counted as owners.
+        .filter(
+            role_permissions()
+                .bit_and(!RolePermissions::all().bits())
+                .eq(0),
+        )
         .order_by_asc(membership::Column::CreatedAt)
-        .find_also_related(role::Entity)
-        .all(&state.db)
+        .into_tuple::<String>()
+        .one(&state.db)
         .instrument(tracing::info_span!(
             target: "flow_like::observability",
             "db.query",
@@ -1155,16 +1195,7 @@ async fn resolve_legacy_api_key_creator_user_id(
         ))
         .await?;
 
-    for (member, role) in members_with_roles {
-        if let Some(role) = role
-            && let Some(permissions) = RolePermissions::from_bits(role.permissions)
-            && permissions.contains(RolePermissions::Owner)
-        {
-            return Ok(Some(member.user_id));
-        }
-    }
-
-    Ok(None)
+    Ok(oldest_owner)
 }
 
 pub async fn jwt_middleware(
@@ -1187,7 +1218,10 @@ async fn authenticate_request(
 ) -> Result<Request, AuthorizationError> {
     let mut request = request;
 
-    let client_ip = ClientIp(extract_client_ip(&request));
+    let client_ip = ClientIp(extract_client_ip(
+        &request,
+        state.platform_config.audit.trusted_proxy_hops,
+    ));
     request.extensions_mut().insert(client_ip);
 
     // Try OpenID/JWT or Executor JWT auth
@@ -1576,6 +1610,17 @@ async fn authenticate_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwarded_ip_counts_trusted_hops_from_the_right() {
+        let header = "203.0.113.9, 198.51.100.4 , 10.0.0.2";
+        assert_eq!(forwarded_client_ip(header, None), Some("203.0.113.9"));
+        assert_eq!(forwarded_client_ip(header, Some(1)), Some("10.0.0.2"));
+        assert_eq!(forwarded_client_ip(header, Some(2)), Some("198.51.100.4"));
+        assert_eq!(forwarded_client_ip(header, Some(4)), None);
+        assert_eq!(forwarded_client_ip(header, Some(0)), None);
+        assert_eq!(forwarded_client_ip(" , ", None), None);
+    }
     use axum::{http::StatusCode, response::IntoResponse};
 
     #[flow_like_types::tokio::test]

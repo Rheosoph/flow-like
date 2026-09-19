@@ -203,12 +203,17 @@ pub async fn board_summaries(
         metrics: query.wants("metrics"),
     };
 
-    let app = state.master_app(&sub, &app_id, &state).await?;
-
-    let all_pages: Vec<page::Model> = page::Entity::find()
-        .filter(page::Column::AppId.eq(&app_id))
-        .all(&state.db)
-        .await?;
+    let (app, all_pages, score_rows) = flow_like_types::tokio::join!(
+        state.master_app(&sub, &app_id, &state),
+        page::Entity::find()
+            .filter(page::Column::AppId.eq(&app_id))
+            .all(&state.db),
+        app_board_score::Entity::find()
+            .filter(app_board_score::Column::AppId.eq(&app_id))
+            .all(&state.db)
+    );
+    let app = app?;
+    let all_pages: Vec<page::Model> = all_pages?;
 
     let mut pages_by_board: HashMap<String, Vec<PageInfo>> = HashMap::new();
     for p in &all_pages {
@@ -222,10 +227,7 @@ pub async fn board_summaries(
 
     // Cached board metadata (scores + summary) avoids reading every board from
     // object storage. Rows missing the cached `summary` fall back to S3.
-    let mut cached: HashMap<String, app_board_score::Model> = app_board_score::Entity::find()
-        .filter(app_board_score::Column::AppId.eq(&app_id))
-        .all(&state.db)
-        .await?
+    let mut cached: HashMap<String, app_board_score::Model> = score_rows?
         .into_iter()
         .map(|row| (row.board_id.clone(), row))
         .collect();

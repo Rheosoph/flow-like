@@ -16,12 +16,16 @@ mod event_sink;
 mod execution_identity;
 mod functions;
 mod local_page_actions;
+#[cfg(any(test, not(debug_assertions)))]
+mod logging;
 mod profile;
+mod run_index;
 mod settings;
 mod state;
 #[cfg(desktop)]
 mod tray;
 pub mod utils;
+mod widget_grants;
 mod widget_protocol;
 
 // Stub for tray_update_state on non-desktop platforms
@@ -279,13 +283,10 @@ fn ios_safe_area_js(native_top: i64, native_bottom: i64) -> String {
 // --- iOS Release logging -----------------------------------------------------
 #[cfg(all(target_os = "ios", not(debug_assertions)))]
 mod ios_release_logging {
-    use tracing_subscriber::{
-        EnvFilter, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
-    };
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     pub fn init() {
         use std::sync::OnceLock;
-        use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
         static INIT_GUARD: OnceLock<()> = OnceLock::new();
 
         // If we've already run (or someone else set a global subscriber), bail quietly.
@@ -296,24 +297,9 @@ mod ios_release_logging {
         // Prefer Apple unified logging so you can see everything in Console.app
         let oslog = tracing_oslog::OsLogger::new("com.flow-like.app", "default");
 
-        // Keep third-party noise down; raise your own crate(s). Never panic on parse errors.
-        let builder = EnvFilter::builder().with_default_directive(LevelFilter::INFO.into());
-        let mut filter = builder.from_env_lossy();
-        for d in [
-            "tao=warn",
-            "wry=warn",
-            "tauri=info",
-            "flow_like=info",
-            "flow_like_types=info",
-        ] {
-            if let Ok(dir) = d.parse() {
-                filter = filter.add_directive(dir);
-            }
-        }
-
         // Don't panic if a global subscriber is already installed.
         let _ = tracing_subscriber::registry()
-            .with(filter)
+            .with(crate::logging::release_filter())
             .with(oslog)
             .try_init(); // <- returns Err if someone else initialized first; we ignore it.
     }
@@ -496,6 +482,9 @@ pub fn run() {
     config.register_app_meta_store(build_store(project_dir.clone()));
 
     config.register_log_store(build_store(logs_dir.clone()));
+    config.register_run_index(Arc::new(run_index::SqliteRunIndex::open(
+        logs_dir.join("runs.db"),
+    )));
 
     config.register_temporary_store(build_store(temporary_dir.clone()));
 
@@ -567,12 +556,18 @@ pub fn run() {
         let file_layer = settings::open_log_file().map(|file| {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
-                .with_writer(std::sync::Arc::new(file))
+                .with_writer(file)
         });
 
+        // One filter in front of both layers: INFO by default, noisy
+        // dependencies at WARN, overridable through FLOW_LIKE_LOG_LEVEL.
+        // The file layer goes first: the first fmt layer to see a span caches
+        // its formatted fields for the others, and the file must not inherit
+        // stderr's ANSI colour codes.
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
+            .with(logging::release_filter())
             .with(file_layer)
+            .with(tracing_subscriber::fmt::layer())
             .init();
     }
 
@@ -1204,6 +1199,7 @@ pub fn run() {
             functions::flow::run::execute_board,
             functions::flow::run::execute_event,
             functions::flow::run::list_runs,
+            functions::flow::run::get_run_payload,
             functions::flow::run::query_run,
             functions::flow::run::cancel_execution,
             functions::flow::event::validate_event,
@@ -1223,6 +1219,7 @@ pub fn run() {
             functions::flow::regression::list_regression_suite_runs,
             functions::flow::regression::get_regression_suite_run,
             functions::flow::event::upsert_event,
+            functions::flow::event::local_sink_registration_plan,
             functions::flow::event::restore_event,
             functions::flow::event::delete_event,
             functions::flow::template::get_template,
@@ -1336,6 +1333,9 @@ pub fn run() {
             functions::registry::registry_load_local,
             functions::registry::registry_init,
             functions::registry::registry_set_auth_token,
+            functions::registry::registry_describe_widget_policy,
+            functions::registry::registry_mint_widget_grant,
+            functions::registry::registry_revoke_widget_grants,
             functions::permissions::check_rpa_permissions,
             functions::permissions::request_rpa_permission,
             functions::recording::start_recording,

@@ -371,6 +371,36 @@ impl Context {
     // Vector DB
     // ========================================================================
 
+    /// Creates an empty session owned by this execution; requires database:read.
+    pub fn df_create_session(&self) -> Option<crate::DataFusionSession> {
+        let result = crate::host::db_call(20, "{}", "{}")?;
+        serde_json::from_str(&result).ok()
+    }
+
+    pub fn df_register_lance(
+        &self,
+        session: &crate::DataFusionSession,
+        database: &NodeDBConnection,
+        table_name: &str,
+    ) -> bool {
+        let connection = serde_json::to_string(session).unwrap_or_default();
+        let payload =
+            serde_json::json!({"database": database, "table_name": table_name}).to_string();
+        crate::host::db_call(21, &connection, &payload).is_some()
+    }
+
+    /// Executes one read-only SELECT over tables granted by the session pin.
+    pub fn df_query(
+        &self,
+        session: &crate::DataFusionSession,
+        sql: &str,
+        max_rows: u64,
+    ) -> Option<Vec<Value>> {
+        let connection = serde_json::to_string(session).ok()?;
+        let payload = serde_json::json!({"sql": sql, "max_rows": max_rows}).to_string();
+        serde_json::from_str(&crate::host::db_call(22, &connection, &payload)?).ok()
+    }
+
     pub fn db_vector_search(
         &self,
         conn: &NodeDBConnection,

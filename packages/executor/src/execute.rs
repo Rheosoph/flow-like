@@ -6,13 +6,15 @@ use crate::config::ExecutorConfig;
 use crate::error::ExecutorError;
 use crate::jwt::{ExecutorClaims, ExecutorPageExecutionClaims, verify_jwt_async};
 use crate::resolve::{fetch_bounded, max_remote_payload_bytes};
-use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus};
+use crate::types::{
+    EventType, ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus, RunSummary,
+};
 use crate::widgets::{HubAccess, HubWidgetSource};
 use flow_like::credentials::StoreType;
 use flow_like::flow::compiled::{CompiledRunTemplate, TemplateCache, template_from_bytes};
 use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
-use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
+use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, LogLevel, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
@@ -377,14 +379,15 @@ pub(crate) async fn record_claims_rejection(
 
 /// A run the API already created but the executor never started leaves the run
 /// row carrying a reason and no logs at all, so opening it in the UI explains
-/// nothing. Write the same per-run log table a real run would have produced.
+/// nothing. Write the same per-run log table a real run would have produced
+/// and hand back its summary for whatever terminal report follows.
 pub(crate) async fn record_executor_rejection(
     state: &Arc<FlowLikeState>,
     request: &ExecutionRequest,
     run_id: &str,
     stage: RejectionStage,
     reason: String,
-) {
+) -> Option<RunSummary> {
     let mut rejection = RejectedRun::new(
         request.app_id.clone(),
         request.board_id.clone(),
@@ -404,13 +407,70 @@ pub(crate) async fn record_executor_rejection(
         rejection = rejection.with_event_definition(&event);
     }
 
-    if let Err(error) = state.record_rejected_run(&rejection).await {
-        tracing::warn!(
-            error = %error,
-            run_id = %run_id,
-            app_id = %request.app_id,
-            "Failed to record a run that never started"
-        );
+    match state.record_rejected_run(&rejection).await {
+        Ok(meta) => Some(RunSummary::from(&meta)),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                run_id = %run_id,
+                app_id = %request.app_id,
+                "Failed to record a run that never started"
+            );
+            None
+        }
+    }
+}
+
+/// The non-terminal update that stamps a refused run's row with its rejection
+/// stage and summary; the caller still reports the failure itself.
+fn rejection_progress_update(stage: RejectionStage, summary: RunSummary) -> ProgressUpdateRequest {
+    ProgressUpdateRequest {
+        progress: None,
+        current_step: Some(stage.operation_id()),
+        status: None,
+        output_len: None,
+        error: None,
+        job_id: None,
+        lease_token: None,
+        lease_duration_ms: None,
+        summary,
+    }
+}
+
+/// Records a run the executor refused and marks its row as rejected so
+/// listings keep the rejection markers. A strict queue delivery stays
+/// retryable and only accepts lease-protected terminal writes, so it is left
+/// unmarked.
+async fn report_executor_rejection(
+    state: &Arc<FlowLikeState>,
+    request: &ExecutionRequest,
+    claims: &ExecutorClaims,
+    config: &ExecutorConfig,
+    queue_lease: Option<&QueueLeaseContext>,
+    stage: RejectionStage,
+    error: &ExecutorError,
+) {
+    let summary =
+        record_executor_rejection(state, request, &claims.run_id, stage, error.to_string())
+            .await
+            .unwrap_or_default();
+    if queue_lease.is_some() {
+        return;
+    }
+    let url = format!(
+        "{}/api/v1/execution/progress",
+        claims.callback_url.trim_end_matches('/')
+    );
+    if let Err(error) = send_progress(
+        &url,
+        &request.executor_jwt,
+        &rejection_progress_update(stage, summary),
+        config,
+        &callback_client(),
+    )
+    .await
+    {
+        tracing::warn!(error = %error, run_id = %claims.run_id, "Failed to mark a run that never started as rejected");
     }
 }
 
@@ -452,6 +512,8 @@ struct ProgressUpdateRequest {
     lease_token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lease_duration_ms: Option<i64>,
+    #[serde(flatten)]
+    summary: RunSummary,
 }
 
 /// API acknowledgement returned only after the execution state store has
@@ -735,12 +797,14 @@ async fn execute_inner(
         }) {
         Ok(template) => template,
         Err(error) => {
-            record_executor_rejection(
+            report_executor_rejection(
                 &state,
                 &request,
-                &claims.run_id,
+                &claims,
+                &config,
+                queue_lease.as_ref(),
                 RejectionStage::Resolution,
-                error.to_string(),
+                &error,
             )
             .await;
             return Err(error);
@@ -757,12 +821,14 @@ async fn execute_inner(
             board_id,
             unavailable_wasm_packages.join(", ")
         ));
-        record_executor_rejection(
+        report_executor_rejection(
             &state,
             &request,
-            &claims.run_id,
+            &claims,
+            &config,
+            queue_lease.as_ref(),
             RejectionStage::Setup,
-            error.to_string(),
+            &error,
         )
         .await;
         return Err(error);
@@ -878,12 +944,14 @@ async fn execute_inner(
         Ok(channel) => channel,
         Err(error) => {
             let error = ExecutorError::RunInit(error.to_string());
-            record_executor_rejection(
+            report_executor_rejection(
                 &state,
                 &request,
-                &claims.run_id,
+                &claims,
+                &config,
+                queue_lease.as_ref(),
                 RejectionStage::Setup,
-                error.to_string(),
+                &error,
             )
             .await;
             return Err(error);
@@ -916,12 +984,14 @@ async fn execute_inner(
         Ok(run) => run,
         Err(error) => {
             channel.close().await;
-            record_executor_rejection(
+            report_executor_rejection(
                 &state,
                 &request,
-                &claims.run_id,
+                &claims,
+                &config,
+                queue_lease.as_ref(),
                 RejectionStage::Setup,
-                error.to_string(),
+                &error,
             )
             .await;
             return Err(error);
@@ -950,7 +1020,7 @@ async fn execute_inner(
         run.set_cancellation_token(token.clone());
         run.set_cancellation_log(
             "Execution cancelled or its deadline was reached",
-            flow_like::flow::execution::LogLevel::Error,
+            LogLevel::Error,
         );
     }
 
@@ -1067,56 +1137,17 @@ async fn execute_inner(
 
     let duration_ms = workflow_duration_ms;
 
-    let (status, output, error) = match &execution_result {
+    let (status, output, error, summary) = match &execution_result {
         Ok(log_meta) => {
-            // Flush logs to database if we have metadata
-            tracing::debug!(
-                has_log_meta = log_meta.is_some(),
-                "Execution completed, checking for log metadata"
-            );
-            if let Some(meta) = log_meta {
-                let (db_fn, write_options) = {
-                    let guard = state.config.read().await;
-                    (
-                        guard.callbacks.build_logs_database.clone(),
-                        guard.callbacks.lance_write_options.clone(),
-                    )
-                };
-                tracing::debug!(
-                    has_db_builder = db_fn.is_some(),
-                    "Retrieved log database builder from state"
-                );
-                if let Some(db_fn) = db_fn.as_ref() {
-                    let base_path = Path::from("runs")
-                        .join(request.app_id.as_str())
-                        .join(request.board_id.as_str());
-                    tracing::info!(path = %base_path, "Opening log database to flush run metadata");
-                    match state
-                        .with_lance_session(db_fn(base_path.clone()))
-                        .execute()
-                        .await
-                    {
-                        Ok(db) => {
-                            if let Err(e) = meta.flush(db, write_options.as_ref()).await {
-                                tracing::error!(error = %e, "Failed to flush run logs");
-                            } else {
-                                tracing::info!("Successfully flushed run logs to {}", base_path);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, path = %base_path, "Failed to open log database");
-                        }
-                    }
-                } else {
+            let summary = match log_meta {
+                Some(meta) => RunSummary::from(meta),
+                None => {
                     tracing::warn!(
-                        "No log database builder configured in state - run metadata will not be persisted"
+                        "No log metadata returned from execution - logs may not have been flushed"
                     );
+                    RunSummary::default()
                 }
-            } else {
-                tracing::warn!(
-                    "No log metadata returned from execution - logs may not have been flushed"
-                );
-            }
+            };
 
             let status = ExecutionStatus::from_final_run_status(&run.get_status().await);
             let (event_type, message, error) = match &status {
@@ -1139,7 +1170,7 @@ async fn execute_inner(
                 event_type,
                 serde_json::json!({ "message": message }),
             );
-            (status, None, error)
+            (status, None, error, summary)
         }
         Err(_) => {
             send_event(
@@ -1153,6 +1184,10 @@ async fn execute_inner(
                 ExecutionStatus::Failed,
                 None,
                 Some("Execution timeout".to_string()),
+                RunSummary {
+                    log_level: Some(LogLevel::Fatal.to_u8()),
+                    ..RunSummary::default()
+                },
             )
         }
     };
@@ -1219,6 +1254,7 @@ async fn execute_inner(
         job_id: queue_lease.as_ref().map(|lease| lease.job_id.clone()),
         lease_token: queue_lease.as_ref().map(|lease| lease.token.clone()),
         lease_duration_ms: None,
+        summary,
     };
 
     let progress_url = format!(
@@ -1537,6 +1573,7 @@ fn lease_progress_update(
         job_id: Some(lease.job_id.clone()),
         lease_token: Some(lease.token.clone()),
         lease_duration_ms: Some(lease_duration_ms),
+        summary: RunSummary::default(),
     }
 }
 
@@ -1594,6 +1631,7 @@ pub async fn report_queue_failure(
         job_id: Some(lease.job_id.clone()),
         lease_token: Some(lease.token.clone()),
         lease_duration_ms: None,
+        summary: RunSummary::default(),
     };
     let acknowledgement =
         send_progress(&progress_url, executor_jwt, &update, config, &client).await?;
@@ -1988,6 +2026,74 @@ mod page_request_binding_tests {
 #[cfg(test)]
 mod callback_acknowledgement_tests {
     use super::*;
+
+    #[test]
+    fn terminal_progress_update_carries_the_run_summary_as_flat_keys() {
+        let update = ProgressUpdateRequest {
+            progress: Some(100),
+            current_step: None,
+            status: Some("failed".to_string()),
+            output_len: None,
+            error: Some("Execution failed".to_string()),
+            job_id: None,
+            lease_token: None,
+            lease_duration_ms: None,
+            summary: RunSummary {
+                log_level: Some(3),
+                event_version: Some("1.0.3".to_string()),
+                nodes: Some(vec![("n1".to_string(), 1), ("n2".to_string(), 3)]),
+                logs: Some(7),
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(&update).unwrap(),
+            serde_json::json!({
+                "progress": 100,
+                "status": "failed",
+                "error": "Execution failed",
+                "log_level": 3,
+                "event_version": "1.0.3",
+                "nodes": [["n1", 1], ["n2", 3]],
+                "logs": 7
+            })
+        );
+
+        let lease = QueueLeaseContext {
+            job_id: "job-1".into(),
+            token: "token-1".into(),
+        };
+        let renewal = serde_json::to_value(lease_progress_update(&lease, 1_000)).unwrap();
+        for key in ["log_level", "event_version", "nodes", "logs"] {
+            assert!(
+                renewal.get(key).is_none(),
+                "{key} leaked into a lease renewal"
+            );
+        }
+    }
+
+    #[test]
+    fn rejection_update_stamps_the_stage_without_a_terminal_status() {
+        let update = rejection_progress_update(
+            RejectionStage::Resolution,
+            RunSummary {
+                log_level: Some(4),
+                event_version: None,
+                nodes: Some(Vec::new()),
+                logs: Some(1),
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(&update).unwrap(),
+            serde_json::json!({
+                "current_step": "rejected:resolution",
+                "log_level": 4,
+                "nodes": [],
+                "logs": 1
+            })
+        );
+    }
 
     fn acknowledgement(accepted: bool, status: &str) -> ProgressUpdateResponse {
         ProgressUpdateResponse {

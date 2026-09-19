@@ -18,6 +18,7 @@ import {
 } from "../../lib/schema/flow/board";
 import { CommentDialog } from "./comment-dialog";
 import { FlowPin } from "./flow-pin";
+import { PIN_LABEL_CAP_SOLO } from "./flow-pin/pin-label-caps";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { NameDialog } from "./name-dialog";
@@ -159,6 +160,7 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 							pin={pin}
 							key={pin.id}
 							skipOffset={true}
+							labelMaxWidth={PIN_LABEL_CAP_SOLO}
 							onPinRemove={async () => {}}
 							selectorDataRef={props.data.selectorDataRef}
 							selectorDataVersion={props.data.selectorDataVersion}
@@ -181,6 +183,7 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 							pin={pin}
 							key={pin.id}
 							skipOffset={true}
+							labelMaxWidth={PIN_LABEL_CAP_SOLO}
 							onPinRemove={async () => {}}
 							selectorDataRef={props.data.selectorDataRef}
 							selectorDataVersion={props.data.selectorDataVersion}

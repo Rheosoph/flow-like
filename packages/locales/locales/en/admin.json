@@ -919,5 +919,8 @@
 	"aiCost": "AI cost",
 	"compute": "Compute",
 	"computeIsEstimatedFromRunDuration": "Compute is estimated from run duration and is not covered by limits.",
-	"runtimeCost": "Runtime cost"
+	"runtimeCost": "Runtime cost",
+	"auditNoEntries": "No entries",
+	"auditSignedNotChecked": "Signed, not checked",
+	"auditUnsignedNotChecked": "Unsigned, not checked"
 }

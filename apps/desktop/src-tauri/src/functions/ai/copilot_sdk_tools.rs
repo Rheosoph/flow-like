@@ -3452,8 +3452,8 @@ text-foreground, text-muted-foreground, text-primary-foreground
 border-border
 
 STYLING TRUTH:
-- className renders STANDARD Tailwind utilities only — there is no runtime Tailwind engine, arbitrary values like w-[437px] or bg-[#ff00aa] silently render nothing.
-- Typed style fields (background gradients, border, shadow, exact sizes, transform, filter, backdropFilter, animation, typography, responsiveOverrides) always render — use them for custom values.
+- className is Tailwind v4 compiled at runtime against the app theme: standard utilities, variants, text-5xl and arbitrary values (w-[437px]) render. Never literal colours (bg-[#ff00aa], bg-white); shadow-sm/md/lg are transparent (use shadow-floating). Not applied inside iframe srcdoc HTML.
+- Typed style fields (background gradients, border, shadow, exact sizes, transform, filter, backdropFilter, animation, typography, responsiveOverrides) always render — use them for structured values.
 - canvasSettings.customCss (scoped to the surface) covers keyframes, hover/focus, pseudo-elements:
 {"canvasSettings": {"backgroundColor": "bg-background", "customCss": ".animated { animation: fade 1s; } @keyframes fade { from{opacity:0} to{opacity:1} }"}}
 - customCss is capped at 40,000 characters — room for a real design system, so write one when the

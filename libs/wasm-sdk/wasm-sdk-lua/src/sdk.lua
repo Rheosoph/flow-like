@@ -34,13 +34,14 @@ M.ValueType = {
     HashSet = "HashSet",
 }
 
+-- Host numbering: DEBUG = 0 through CRITICAL = 4. TRACE shares DEBUG's level.
 M.LogLevel = {
     TRACE    = 0,
-    DEBUG    = 1,
-    INFO     = 2,
-    WARN     = 3,
-    ERROR    = 4,
-    CRITICAL = 5,
+    DEBUG    = 0,
+    INFO     = 1,
+    WARN     = 2,
+    ERROR    = 3,
+    CRITICAL = 4,
 }
 
 -- ============================================================================
@@ -664,19 +665,19 @@ function M.newContext(input)
     -- Level-gated logging
 
     function ctx:debug(msg)
-        if self.input.log_level <= 1 then M.logDebug(msg) end
+        if self.input.log_level <= M.LogLevel.DEBUG then M.logDebug(msg) end
     end
 
     function ctx:info(msg)
-        if self.input.log_level <= 2 then M.logInfo(msg) end
+        if self.input.log_level <= M.LogLevel.INFO then M.logInfo(msg) end
     end
 
     function ctx:warn(msg)
-        if self.input.log_level <= 3 then M.logWarn(msg) end
+        if self.input.log_level <= M.LogLevel.WARN then M.logWarn(msg) end
     end
 
     function ctx:error(msg)
-        if self.input.log_level <= 4 then M.logError(msg) end
+        if self.input.log_level <= M.LogLevel.ERROR then M.logError(msg) end
     end
 
     -- Conditional streaming

@@ -190,7 +190,7 @@ urlencoding = []
 db-chaos = []
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 dotenv = { workspace = true }
 flow-like-wasm.workspace = true
 flow-like-aws-data.workspace = true
