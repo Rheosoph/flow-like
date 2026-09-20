@@ -35,6 +35,7 @@ export function StoreHero({
 	canUseApp,
 	price,
 	isPurchasing,
+	purchasingAllowed = true,
 	onUse,
 	onSettings,
 	onBuy,
@@ -56,6 +57,7 @@ export function StoreHero({
 	canUseApp: boolean;
 	price: number;
 	isPurchasing: boolean;
+	purchasingAllowed?: boolean;
 	onUse: () => void;
 	onSettings: () => void;
 	onBuy: () => void;
@@ -171,6 +173,13 @@ export function StoreHero({
 									{t("settings", "Settings")}
 								</Button>
 							</>
+						) : price > 0 && !purchasingAllowed ? (
+							<p className="text-sm text-muted-foreground">
+								{t(
+									"purchaseUnavailable",
+									"Purchasing is unavailable in this app distribution.",
+								)}
+							</p>
 						) : price > 0 ? (
 							<Button
 								size={primarySize}
@@ -206,6 +215,17 @@ export function StoreHero({
 									: "Request access"}
 							</Button>
 						)}
+						{!isMember &&
+							purchasingAllowed &&
+							price > 0 &&
+							visibility === AppVis.PublicRequestAccess && (
+								<Button variant="outline" onClick={onJoinOrRequest}>
+									{t(
+										"requestAccessBeforePurchase",
+										"Request purchase approval",
+									)}
+								</Button>
+							)}
 						<div className="flex items-center gap-2 sm:contents">
 							{actionsExtra}
 							<ShareButton

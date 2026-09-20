@@ -692,6 +692,7 @@ pub async fn finish_cloud(
 
 /// A stop request does not imply that the worker has stopped or that its cost is zero.
 pub async fn request_cloud_cancellation(state: &AppState, run_id: &str) -> Result<bool, ApiError> {
+    crate::payments::node::cancel_run(state, run_id, "RUN_CANCELED").await?;
     let result = state.db.execute_raw(sql("UPDATE \"QuotaOperation\" SET \"cancelRequested\"=TRUE,\"updatedAt\"=$2 WHERE id=$1 AND kind='workflow' AND status IN ('reserved','running','unknown')", vec![run_id.into(),Utc::now().timestamp_millis().into()])).await?;
     Ok(result.rows_affected() > 0)
 }

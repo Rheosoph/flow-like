@@ -12,6 +12,8 @@ import {
 import type { AuthContextProps } from "react-oidc-context";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
+	"payments",
+	"marketplace",
 	"analytics",
 	"api",
 	"board",

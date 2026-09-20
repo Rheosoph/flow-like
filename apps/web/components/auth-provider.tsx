@@ -28,6 +28,7 @@ import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
 const PUBLIC_PATHS = [
+	"/payments/return",
 	"/callback",
 	"/thirdparty/callback",
 	"/store",

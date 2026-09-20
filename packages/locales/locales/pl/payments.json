@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "Odstąp od umowy",
+	"withdrawConfirmation": "Dostęp z tego zakupu zakończy się po zarejestrowaniu odstąpienia. Nie trzeba podawać powodu.",
+	"withdrawDeclaration": "Odstępuję od zakupu wskazanego powyżej.",
+	"withdrawConsumerName": "Imię i nazwisko",
+	"withdrawConfirmationEmail": "Adres e-mail do potwierdzenia odstąpienia",
+	"withdrawConfirmationEmailHelp": "Na ten adres wyślemy oświadczenie oraz datę i godzinę jego otrzymania.",
+	"findPurchase": "Znajdź zakup",
+	"findPurchaseHelp": "Wpisz numer zamówienia z e-maila potwierdzającego, aby otworzyć dowolny zakup, także starszy.",
+	"purchaseOrderReference": "Numer zamówienia",
+	"openPurchase": "Otwórz zakup"
+}

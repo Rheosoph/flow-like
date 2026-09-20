@@ -81,6 +81,16 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(queue["REDIS_EXECUTION_QUEUE"]["value"], api["REDIS_EXECUTION_QUEUE"]["value"])
         self.assertFalse(any(x["metadata"]["name"] == "flow-like-executor-pool" for x in self.docs))
 
+    def test_stripe_api_secret_is_not_inherited_by_other_workloads(self):
+        api_secret = {"secretRef": {"name": self.values["api"]["existingSecret"]}}
+        api = self.resource("Deployment", "api")["spec"]["template"]["spec"]
+        self.assertIn(api_secret, api["containers"][0]["envFrom"])
+        for resource in self.docs:
+            if resource["kind"] not in {"Deployment", "StatefulSet", "Job"} or resource["metadata"]["name"] == "flow-like-api":
+                continue
+            for container in resource["spec"]["template"]["spec"]["containers"]:
+                self.assertNotIn(api_secret, container.get("envFrom", []))
+
     def test_namespace_reaches_api_without_sink_services(self):
         env = self.env("api", self.render("--set", "sinkServices.enabled=false"))
         self.assertEqual(env["K8S_NAMESPACE"]["valueFrom"]["fieldRef"]["fieldPath"], "metadata.namespace")

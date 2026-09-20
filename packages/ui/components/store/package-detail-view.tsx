@@ -1,5 +1,7 @@
 "use client";
 
+import { usePaymentDistribution } from "../payments/use-payments";
+
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -457,6 +459,7 @@ export interface PackageDetailViewProps {
 }
 
 export function PackageDetailView(props: PackageDetailViewProps) {
+	const purchasingAllowed = usePaymentDistribution();
 	const { t } = useTranslation("store");
 	const {
 		pkg,
@@ -837,6 +840,16 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											{t("uninstall", "Uninstall")}
 										</Button>
 									</>
+								) : hasAccess === false &&
+									price != null &&
+									price > 0 &&
+									!purchasingAllowed ? (
+									<p className="text-sm text-muted-foreground">
+										{t(
+											"purchaseUnavailable",
+											"Purchasing is unavailable in this app distribution.",
+										)}
+									</p>
 								) : hasAccess === false && price != null && price > 0 ? (
 									<Button onClick={onBuy} disabled={isPurchasing}>
 										{isPurchasing ? (

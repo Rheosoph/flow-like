@@ -59,6 +59,10 @@ async fn run_maintenance_job(
     tracing::Span::current().record("idempotency_key", idempotency_key);
 
     match request {
+        MaintenanceRunRequest::Payments => {
+            let result = crate::payments::worker::run_once(&state, 10).await?;
+            Ok(Json(MaintenanceRunResponse::Payments(result)))
+        }
         MaintenanceRunRequest::TelemetryAlerts => {
             let config = TelemetryAlertConfig::from_env();
             let result = evaluate_once(&state, &config).await.map_err(|error| {

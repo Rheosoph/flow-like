@@ -654,3 +654,42 @@ describe("marks", () => {
 		expect(Object.keys(report.marks)).toHaveLength(0);
 	});
 });
+
+describe("payment readiness", () => {
+	test("only payment requests carry the unverified admission warning", () => {
+		const payment = node("pay", [], { name: "request_payment" });
+		const report = analyzeBoardQuality(board([payment, node("other", [])]));
+		const findings = ofRule(report, "payment-readiness");
+		expect(findings).toHaveLength(1);
+		expect(findings[0].target.id).toBe("pay");
+		expect(findings[0].severity).toBe("warning");
+		expect(findings[0].detail).toEqual({
+			kind: "payment-readiness",
+			simulation: false,
+		});
+	});
+
+	test("a local simulation setting is informational, not an account-ready claim", () => {
+		const payment = node(
+			"pay",
+			[
+				{
+					id: "simulation",
+					name: "simulation",
+					direction: IPinType.Input,
+					value: "paid",
+				},
+			],
+			{ name: "request_payment" },
+		);
+		const finding = ofRule(
+			analyzeBoardQuality(board([payment])),
+			"payment-readiness",
+		)[0];
+		expect(finding.severity).toBe("info");
+		expect(finding.detail).toEqual({
+			kind: "payment-readiness",
+			simulation: true,
+		});
+	});
+});

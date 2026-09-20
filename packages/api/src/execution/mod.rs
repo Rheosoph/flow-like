@@ -9,6 +9,7 @@ mod dispatch;
 #[cfg(feature = "lambda")]
 pub mod dispatch_intent;
 mod jwt;
+pub(crate) use jwt::bind_attended_payer;
 mod page_action_jwt;
 mod page_action_sealer;
 pub mod payload_storage;

@@ -80,6 +80,19 @@ last and have it call the finished logic. The entry must never be an empty shell
 also makes the intended graph transaction explicit: function layers and body nodes are created
 before the entry node is exposed for app-level Event registration.
 
+## ATTENDED PAYMENT REQUESTS
+`payments::request` asks the signed-in payer to pay the current app owner. Use integer EUR minor
+units and handle its paid, canceled, expired, and failed execution branches. A paid result comes
+from the server's verified payment; a browser return, checkout URL, or emitted prompt proves nothing.
+The beta supports streamed remote board and Event runs attended by a signed-in user. Scheduled,
+headless, isolated, API-key, personal-token, app-to-app, and local runs cannot request real payments.
+The owner must enable payments, accept current terms, and finish connected-account onboarding.
+The payer sees the amount and recipient, confirms, then opens hosted Checkout. Eligible card wallets
+are offered by Checkout. Never insert a payer identity, Stripe key, Customer ID, or recipient account.
+For local Board Test only, set `simulation` to paid, canceled, expired, or failed; reset it to empty
+for real runs. Simulation proves branch behavior only. Keep payment calls out of cached functions.
+Report account readiness as unverified unless the payment settings API confirms it.
+
 ## RUNTIME VERIFICATION BOUNDARY
 Reconciliation validates graph structure; it does not prove runtime behavior.
 - `test_flowscript` executes an exact retained revision in isolation before commit when the whole

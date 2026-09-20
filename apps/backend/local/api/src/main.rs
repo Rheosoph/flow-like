@@ -126,6 +126,7 @@ async fn main() {
         RunSweeperConfig::from_env(),
     );
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
+    let _payments_worker = flow_like_api::payments::worker::spawn(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),

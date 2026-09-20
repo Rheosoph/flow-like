@@ -74,8 +74,6 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub tier: crate::sea_orm_active_enums::UserTier,
     #[sea_orm(has_many)]
-    pub app_purchases: HasMany<super::app_purchase::Entity>,
-    #[sea_orm(has_many)]
     pub comments: HasMany<super::comment::Entity>,
     #[sea_orm(has_many)]
     pub embedding_usage_trackings: HasMany<super::embedding_usage_tracking::Entity>,
@@ -117,8 +115,6 @@ pub struct Model {
     pub wasm_package_authors: HasMany<super::wasm_package_author::Entity>,
     #[sea_orm(has_many)]
     pub wasm_package_join_queues: HasMany<super::wasm_package_join_queue::Entity>,
-    #[sea_orm(has_many)]
-    pub wasm_package_purchases: HasMany<super::wasm_package_purchase::Entity>,
     #[sea_orm(has_many)]
     pub wasm_package_reviews: HasMany<super::wasm_package_review::Entity>,
     #[sea_orm(has_many)]

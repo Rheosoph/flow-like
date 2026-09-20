@@ -770,6 +770,14 @@ async fn invoke_event_impl(
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
 
+    let executor_jwt = match &user {
+        AppUser::OpenID(oidc) if !query.isolated => {
+            crate::execution::bind_attended_payer(&executor_jwt, &oidc.sub)
+                .map_err(|error| ApiError::internal_error(anyhow!(error)))?
+        }
+        _ => executor_jwt,
+    };
+
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: app_id.clone(),

@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
+    #[sea_orm(column_name = "paymentOrderId", column_type = "Text", nullable)]
+    pub payment_order_id: Option<String>,
+    #[sea_orm(column_name = "chargeType", column_type = "Text", nullable)]
+    pub charge_type: Option<String>,
     #[sea_orm(column_name = "userId", column_type = "Text")]
     pub user_id: String,
     #[sea_orm(column_name = "appId", column_type = "Text")]
@@ -39,30 +43,6 @@ pub struct Model {
     pub updated_at: DateTimeWithTimeZone,
     #[sea_orm(column_type = "Text")]
     pub status: crate::sea_orm_active_enums::PurchaseStatus,
-    #[sea_orm(
-        belongs_to,
-        from = "app_id",
-        to = "id",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    pub app: BelongsTo<super::app::Entity>,
-    #[sea_orm(
-        belongs_to,
-        from = "discount_id",
-        to = "id",
-        on_update = "Cascade",
-        on_delete = "SetNull"
-    )]
-    pub app_discount: BelongsTo<Option<super::app_discount::Entity>>,
-    #[sea_orm(
-        belongs_to,
-        from = "user_id",
-        to = "id",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    pub user: BelongsTo<super::user::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

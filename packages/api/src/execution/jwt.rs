@@ -50,6 +50,9 @@ pub struct PageExecutionJwtContext {
 pub struct ExecutionClaims {
     /// Subject - the user ID who initiated the execution
     pub sub: String,
+    /// Authenticated payer of an attended stream; absent for every background invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payer_sub: Option<String>,
     /// Optional technical user/API key that initiated the execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub technical_user_id: Option<String>,
@@ -164,6 +167,7 @@ fn sign_inner(
 
     let claims = ExecutionClaims {
         sub: params.user_id,
+        payer_sub: None,
         technical_user_id: params.technical_user_id,
         run_id: params.run_id,
         app_id: params.app_id,
@@ -187,6 +191,28 @@ fn sign_inner(
     };
 
     backend_jwt::sign(&claims)
+}
+
+pub(crate) fn bind_attended_payer(token: &str, payer: &str) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
+    if !attended_payer_allowed(&claims, payer) {
+        return Err(BackendJwtError::EncodingError(
+            "Payment payer must be the attended user".into(),
+        ));
+    }
+    claims.payer_sub = Some(payer.to_owned());
+    backend_jwt::sign(&claims)
+}
+
+fn attended_payer_allowed(claims: &ExecutionClaims, payer: &str) -> bool {
+    claims.sub == payer
+        && claims.technical_user_id.is_none()
+        && claims
+            .app_chain
+            .as_ref()
+            .is_none_or(|chain| chain.is_empty())
+        && !claims.shadow.unwrap_or(false)
+        && claims.token_type == TokenType::Executor
 }
 
 pub(super) fn bind_dispatch(token: &str, hash: String) -> Result<String, ExecutionJwtError> {
@@ -275,6 +301,7 @@ mod tests {
         let token = sign(params.clone()).expect("Failed to sign JWT");
         let claims = verify(&token).expect("Failed to verify JWT");
 
+        assert!(claims.payer_sub.is_none());
         assert_eq!(claims.sub, params.user_id);
         assert_eq!(claims.run_id, params.run_id);
         assert_eq!(claims.app_id, params.app_id);
@@ -283,6 +310,39 @@ mod tests {
         assert_eq!(claims.callback_url, params.callback_url);
         assert!(claims.page_execution.is_none());
         assert!(claims.shadow.is_none());
+    }
+
+    #[test]
+    fn legacy_claims_do_not_infer_a_payer() {
+        let value = serde_json::json!({"sub":"user","run_id":"run","app_id":"app","board_id":"board","callback_url":"https://api.example","typ":"executor","iss":"flow-like","aud":"flow-like-executor","iat":1,"nbf":1,"exp":100,"jti":"token"});
+        let claims: ExecutionClaims = serde_json::from_value(value).unwrap();
+        assert!(claims.payer_sub.is_none());
+        assert!(
+            serde_json::to_value(claims)
+                .unwrap()
+                .get("payer_sub")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn payer_authority_cannot_follow_a_technical_shadow_or_chained_subject() {
+        let value = serde_json::json!({"sub":"user","run_id":"run","app_id":"app","board_id":"board","callback_url":"https://api.example","typ":"executor","iss":"flow-like","aud":"flow-like-executor","iat":1,"nbf":1,"exp":100,"jti":"token"});
+        let claims: ExecutionClaims = serde_json::from_value(value).unwrap();
+        assert!(attended_payer_allowed(&claims, "user"));
+        assert!(!attended_payer_allowed(&claims, "someone-else"));
+        let mut changed = claims.clone();
+        changed.technical_user_id = Some("technical".into());
+        assert!(!attended_payer_allowed(&changed, "user"));
+        let mut changed = claims.clone();
+        changed.app_chain = Some(vec!["calling-app".into()]);
+        assert!(!attended_payer_allowed(&changed, "user"));
+        let mut changed = claims.clone();
+        changed.shadow = Some(true);
+        assert!(!attended_payer_allowed(&changed, "user"));
+        let mut changed = claims;
+        changed.token_type = TokenType::User;
+        assert!(!attended_payer_allowed(&changed, "user"));
     }
 
     #[test]

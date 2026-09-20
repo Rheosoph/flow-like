@@ -51,7 +51,6 @@ model WasmPackage {
   reviews     WasmPackageReview[]
   invitations WasmPackageInvitation[]
   joinQueue   WasmPackageJoinQueue[]
-  purchases   WasmPackagePurchase[]
   authors     WasmPackageAuthor[]
   comments    Comment[]
 
@@ -230,10 +229,10 @@ model WasmPackageJoinQueue {
 model WasmPackagePurchase {
   id String @id
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Durable payment identity; legacy rows remain unassigned until reconciliation.
+  paymentOrderId String?
+  chargeType String?
   userId String
-
-  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
   packageId String
 
   /// Price paid in cents at time of purchase
@@ -268,4 +267,5 @@ model WasmPackagePurchase {
   @@index([packageId, status])
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
+  @@index([paymentOrderId])
 }

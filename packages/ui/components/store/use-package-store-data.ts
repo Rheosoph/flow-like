@@ -9,6 +9,7 @@ import type {
 	RequestAccessResponse,
 	WasmPurchaseResponse,
 } from "../../lib/schema/wasm";
+import { usePaymentDistribution } from "../payments/use-payments";
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 
@@ -20,6 +21,7 @@ export function usePackageStoreData(
 	onAccessChanged?: () => void,
 ) {
 	const backend = useBackend();
+	const purchasingAllowed = usePaymentDistribution();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -38,14 +40,19 @@ export function usePackageStoreData(
 	const priceLabel = formatPrice(pkg?.price ?? null);
 
 	const onBuy = useCallback(async () => {
-		if (!packageId || !profile.data || isPurchasing) return;
+		if (!packageId || !profile.data || isPurchasing || !purchasingAllowed)
+			return;
 
 		setIsPurchasing(true);
 		try {
 			const result = await fetcher<WasmPurchaseResponse>(
 				profile.data.hub_profile,
 				`registry/package/${packageId}/purchase`,
-				{ method: "POST" },
+				{
+					method: "POST",
+					body: JSON.stringify({}),
+					headers: { "Content-Type": "application/json" },
+				},
 				auth,
 			);
 
@@ -67,7 +74,15 @@ export function usePackageStoreData(
 		} finally {
 			setIsPurchasing(false);
 		}
-	}, [packageId, profile.data, isPurchasing, fetcher, auth, onAccessChanged]);
+	}, [
+		packageId,
+		profile.data,
+		isPurchasing,
+		purchasingAllowed,
+		fetcher,
+		auth,
+		onAccessChanged,
+	]);
 
 	const onRequestAccess = useCallback(async () => {
 		if (!packageId || !profile.data || isRequesting) return;

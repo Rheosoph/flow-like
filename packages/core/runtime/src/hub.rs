@@ -12,6 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+mod payments;
+pub use payments::{
+    PaymentFeeBasis, PaymentLegalText, PaymentTaxMode, PaymentsConfig, valid_product_tax_code,
+};
+
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MailProviderType {
@@ -290,6 +295,9 @@ pub struct Hub {
     /// Audit trail configuration
     #[serde(default)]
     pub audit: AuditConfig,
+
+    #[serde(default)]
+    pub payments: PaymentsConfig,
 
     /// Push notification provider configuration
     #[serde(default)]

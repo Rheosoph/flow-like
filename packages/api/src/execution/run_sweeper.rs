@@ -180,12 +180,11 @@ pub async fn sweep_once(
         // a run that became active in that window.
         .filter(execution_run::Column::UpdatedAt.lt(threshold));
 
-    if !context.enabled {
-        return Ok(update.exec(db).await?.rows_affected);
-    }
-
     let timed_out = update.exec_with_returning(db).await?;
     for run in &timed_out {
+        crate::payments::node::cancel_run_database(db, context.dialect, &run.id, "RUN_TIMEOUT")
+            .await
+            .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
         record_execution_result(context, run, "run-sweeper", AuditActorType::System)
             .await
             .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;

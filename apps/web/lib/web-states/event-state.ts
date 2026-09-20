@@ -1,3 +1,4 @@
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	type IBoard,
 	type IEvent,
@@ -654,6 +655,7 @@ export class WebEventState implements IEventState {
 							}
 
 							// Handle toast events
+							dispatchPaymentRequest(event);
 							if (event.event_type === "toast") {
 								handleToastEvent(event);
 							}

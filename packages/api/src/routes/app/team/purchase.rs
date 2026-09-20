@@ -11,15 +11,14 @@ use axum::{
 use flow_like_types::anyhow;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use stripe::CustomerId;
+use serde_json::json;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PurchaseParams {
-    /// Optional success URL override (frontend will append receipt info)
+    /// Accepted for older clients. Return URLs are built by the server.
     pub success_url: Option<String>,
-    /// Optional cancel URL override
+    /// Accepted for older clients. Return URLs are built by the server.
     pub cancel_url: Option<String>,
 }
 
@@ -35,7 +34,7 @@ pub struct PurchaseResponse {
 ///
 /// Initiates a Stripe checkout session for purchasing a paid app.
 /// - If user is already a member, returns already_member=true with no checkout URL
-/// - Creates an idempotent checkout session (same user+app = same session if not expired)
+/// - Reuses the persisted open checkout for this buyer and offer
 /// - Returns the checkout URL for the frontend to redirect to
 #[utoipa::path(
     post,
@@ -58,12 +57,12 @@ pub struct PurchaseResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/team/purchase", skip(state, user, params))]
+#[tracing::instrument(name = "POST /apps/{app_id}/team/purchase", skip(state, user, _params))]
 pub async fn purchase(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
-    Json(params): Json<PurchaseParams>,
+    _params: Option<Json<PurchaseParams>>,
 ) -> Result<Json<PurchaseResponse>, ApiError> {
     let sub = user.sub()?;
 
@@ -110,8 +109,15 @@ pub async fn purchase(
         ));
     }
 
+    if app.visibility == Visibility::PublicRequestAccess {
+        return Err(crate::payments::error(
+            "APPROVAL_REQUIRED",
+            "Paid access requests are not available for checkout yet.",
+        ));
+    }
+
     // Get Stripe client
-    let stripe_client = state
+    let _stripe_client = state
         .stripe_client
         .as_ref()
         .ok_or(anyhow!("Stripe not configured"))?;
@@ -122,9 +128,9 @@ pub async fn purchase(
         .and_then(|u| u.stripe_id)
         .ok_or(anyhow!("User does not have a Stripe customer ID"))?;
 
-    let customer_id: CustomerId = stripe_id
-        .parse()
-        .map_err(|e| anyhow!("Invalid Stripe customer ID for user {}: {}", sub, e))?;
+    if !crate::stripe_connect::request::valid_id(&stripe_id, "cus_") {
+        return Err(ApiError::internal("Invalid Stripe customer ID"));
+    }
 
     // Get app metadata for display name (try to fetch from database)
     let app_name = meta::Entity::find()
@@ -135,69 +141,21 @@ pub async fn purchase(
         .map(|m| m.name)
         .unwrap_or_else(|| format!("App {}", &app_id[..8.min(app_id.len())]));
 
-    // Build URLs
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "https://app.flow-like.com".to_string());
-    let success_url = params
-        .success_url
-        .unwrap_or_else(|| format!("{}/store?id={}&purchase=success", frontend_url, app_id));
-    let cancel_url = params
-        .cancel_url
-        .unwrap_or_else(|| format!("{}/store?id={}&purchase=canceled", frontend_url, app_id));
-
-    // Build metadata for webhook processing
-    let mut metadata = HashMap::new();
-    metadata.insert("type".to_string(), "app_purchase".to_string());
-    metadata.insert("app_id".to_string(), app_id.clone());
-    metadata.insert("user_id".to_string(), sub.clone());
-    metadata.insert("price_cents".to_string(), app.price.to_string());
-
-    // Create checkout session
-    let mut params = stripe::CreateCheckoutSession::new();
-    params.success_url = Some(&success_url);
-    params.cancel_url = Some(&cancel_url);
-    params.mode = Some(stripe::CheckoutSessionMode::Payment);
-    params.customer = Some(customer_id);
-
-    // client_reference_id is used to identify this purchase in the webhook
-    // Format: "app_purchase:{user_id}:{app_id}"
-    let client_ref = format!("app_purchase:{}:{}", sub, app_id);
-    params.client_reference_id = Some(&client_ref);
-
-    // Create line item for the app
-    let line_item = stripe::CreateCheckoutSessionLineItems {
-        price_data: Some(stripe::CreateCheckoutSessionLineItemsPriceData {
-            currency: stripe::Currency::EUR,
-            product_data: Some(stripe::CreateCheckoutSessionLineItemsPriceDataProductData {
-                name: app_name.clone(),
-                description: Some(format!("One-time purchase of {}", app_name)),
-                ..Default::default()
-            }),
-            unit_amount: Some(app.price),
-            ..Default::default()
-        }),
-        quantity: Some(1),
-        ..Default::default()
-    };
-    params.line_items = Some(vec![line_item]);
-    params.metadata = Some(metadata);
-
-    // Create the checkout session
-    let session = stripe::CheckoutSession::create(stripe_client, params)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to create Stripe checkout session");
-            anyhow!("Failed to create checkout session: {}", e)
-        })?;
-
-    let checkout_url = session.url;
-
-    tracing::info!(
-        user_id = %sub,
-        app_id = %app_id,
-        session_id = %session.id,
-        "Created checkout session for app purchase"
-    );
+    let (success_url, cancel_url) =
+        crate::payments::legacy_checkout::checkout_urls(&frontend_url, false, &app_id)?;
+    let client_ref = format!("app_purchase:{sub}:{app_id}");
+    let parameters = json!({
+        "success_url": success_url, "cancel_url": cancel_url, "mode": "payment", "customer": stripe_id,
+        "client_reference_id": client_ref, "payment_method_types": ["card"],
+        "metadata": {"type": "app_purchase", "app_id": app_id, "user_id": sub, "price_cents": app.price.to_string()},
+        "line_items": [{"quantity": 1, "price_data": {"currency": "eur", "unit_amount": app.price,
+            "product_data": {"name": app_name, "description": format!("One-time purchase of {app_name}")}}}]
+    });
+    let checkout_url =
+        crate::payments::legacy_checkout::start(&state, "app_purchase", &sub, &app_id, parameters)
+            .await?;
 
     Ok(Json(PurchaseResponse {
         checkout_url,

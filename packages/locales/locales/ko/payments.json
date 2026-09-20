@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "계약 철회",
+	"withdrawConfirmation": "철회가 기록되면 이 구매로 얻은 이용 권한이 종료됩니다. 이유를 밝힐 필요는 없습니다.",
+	"withdrawDeclaration": "위에 표시된 구매 계약을 철회합니다.",
+	"withdrawConsumerName": "성명",
+	"withdrawConfirmationEmail": "철회 확인을 받을 이메일 주소",
+	"withdrawConfirmationEmailHelp": "이 주소로 철회 의사표시와 접수 날짜 및 시간을 보내드립니다.",
+	"findPurchase": "구매 찾기",
+	"findPurchaseHelp": "확인 이메일의 주문 번호를 입력하면 이전 주문을 포함한 구매 내역을 열 수 있습니다.",
+	"purchaseOrderReference": "주문 번호",
+	"openPurchase": "구매 열기"
+}

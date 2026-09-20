@@ -7,6 +7,7 @@ import {
 	CircleCheckIcon,
 	CircleXIcon,
 	CornerDownLeftIcon,
+	CreditCardIcon,
 	EyeIcon,
 	EyeOffIcon,
 	GhostIcon,
@@ -37,6 +38,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const RULE_ICONS: Record<IQualityRule, LucideIcon> = {
 	"hardcoded-secret": KeyRoundIcon,
+	"payment-readiness": CreditCardIcon,
 	cycle: InfinityIcon,
 	"no-return": CornerDownLeftIcon,
 	"missing-input": UnplugIcon,

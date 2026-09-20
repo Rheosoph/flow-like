@@ -13598,6 +13598,15 @@
     "class": null,
     "category": "Utils/JSON"
   },
+  "request_payment": {
+    "qualified": "payments::request",
+    "namespace": "payments",
+    "alias": "request",
+    "flat": "requestPayment",
+    "receiver": null,
+    "class": null,
+    "category": "Payments"
+  },
   "reroute": {
     "qualified": "control::reroute",
     "namespace": "control",

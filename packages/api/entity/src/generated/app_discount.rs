@@ -49,8 +49,6 @@ pub struct Model {
         on_delete = "Cascade"
     )]
     pub app: BelongsTo<super::app::Entity>,
-    #[sea_orm(has_many)]
-    pub app_purchases: HasMany<super::app_purchase::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

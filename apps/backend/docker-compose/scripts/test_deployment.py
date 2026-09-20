@@ -85,6 +85,20 @@ class DeploymentTest(unittest.TestCase):
         config = json.loads(process.stdout)
         return values, config
 
+    def test_stripe_credentials_survive_setup_and_only_reach_api(self):
+        supplied = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
+        self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", stripe=supplied)
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            _, config = self.render(compose_file=compose_file)
+            for key, value in supplied.items():
+                self.assertEqual(config["services"]["api"]["environment"][key], value)
+                for name, service in config["services"].items():
+                    if name != "api":
+                        self.assertNotIn(key, service.get("environment", {}))
+        with self.assertRaises(ValueError) as error:
+            setup.generate("STRIPE_SECRET_KEY=", "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", stripe={"STRIPE_SECRET_KEY": "secret_marker\nINJECTED=1"})
+        self.assertNotIn("secret_marker", str(error.exception))
+
     def test_api_runtime_file_mount_and_explicit_source_switches(self):
         for compose_file in ("docker-compose.yml", "docker-stack.yml"):
             with self.subTest(compose_file=compose_file):

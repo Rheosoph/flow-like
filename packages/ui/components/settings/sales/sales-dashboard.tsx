@@ -1,5 +1,6 @@
 "use client";
 
+import { EuroAmountInput } from "../../payments/euro-amount-input";
 import { useTranslation } from "@flow-like/locales";
 import { ResponsiveBar } from "@nivo/bar";
 import { ResponsiveLine } from "@nivo/line";
@@ -576,6 +577,7 @@ function PriceEditorDialog({
 }) {
 	const { t } = useTranslation("settings");
 	const [price, setPrice] = useState(currentPrice);
+	const [priceValid, setPriceValid] = useState(true);
 	const [saving, setSaving] = useState(false);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Reset price when dialog opens/closes
@@ -606,20 +608,19 @@ function PriceEditorDialog({
 				<DialogHeader>
 					<DialogTitle>{t("updatePrice", "Update Price")}</DialogTitle>
 					<DialogDescription>
-						{`Set a new price for your app (in cents)`}
+						{t("setEuroPrice", "Set a new price for your app in euros.")}
 					</DialogDescription>
 				</DialogHeader>
 
 				<div className="grid gap-4 py-4">
 					<div className="grid gap-2">
-						<Label htmlFor="price">{t("priceCents", "Price (cents)")}</Label>
+						<Label htmlFor="price">{t("priceEur", "Price (EUR)")}</Label>
 						<div className="flex items-center gap-2">
-							<Input
+							<EuroAmountInput
 								id="price"
-								type="number"
-								min={0}
 								value={price}
-								onChange={(e) => setPrice(Number.parseInt(e.target.value) || 0)}
+								onChange={setPrice}
+								onValidityChange={setPriceValid}
 							/>
 							<span className="text-muted-foreground whitespace-nowrap">
 								= {formatCurrency(price)}
@@ -632,7 +633,7 @@ function PriceEditorDialog({
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
 						{t("cancel", "Cancel")}
 					</Button>
-					<Button onClick={handleSave} disabled={saving}>
+					<Button onClick={handleSave} disabled={saving || !priceValid}>
 						{saving ? "Saving..." : t("updatePrice", "Update Price")}
 					</Button>
 				</DialogFooter>

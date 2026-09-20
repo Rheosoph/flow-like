@@ -96,6 +96,7 @@ async fn serve(config: &config::Config) -> Result<(), bootstrap::BootstrapError>
         .dsql
         .as_ref()
         .map(|database| database.spawn_background_refresh());
+    let _payments_worker = flow_like_api::payments::worker::spawn(api.state.clone());
     let router = match cors {
         Some(cors) => construct_router_with_cors(api.state, cors),
         None => construct_router(api.state),

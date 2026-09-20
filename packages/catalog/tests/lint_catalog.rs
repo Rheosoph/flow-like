@@ -934,3 +934,37 @@ fn flowscript_names_snapshot_is_current() {
         diff.join("\n")
     );
 }
+
+#[test]
+fn payment_node_declarations_match_its_registered_contract() {
+    let nodes = selected_logic_nodes(&["request_payment"]);
+    assert_eq!(nodes.len(), 1, "Request Payment must be registered once");
+    let node = nodes[0].1.get_node();
+    let signature = flow_like::flow::ast::node_to_signature(&node);
+    let root = workspace_root();
+    let committed: flow_like::flow::ast::SignatureSet = flow_like_types::json::from_str(
+        &std::fs::read_to_string(root.join("packages/ast/signatures.json")).unwrap(),
+    )
+    .unwrap();
+    let expected = committed
+        .signatures
+        .iter()
+        .find(|signature| signature.node_type == "request_payment")
+        .expect("payment signature is committed");
+    assert_eq!(
+        flow_like_types::json::to_value(&signature).unwrap(),
+        flow_like_types::json::to_value(expected).unwrap()
+    );
+    let declaration = flow_like::flow::ast::declarations_by_category(&[signature]);
+    assert_eq!(declaration.len(), 1);
+    assert_eq!(
+        declaration[0].content,
+        std::fs::read_to_string(root.join("packages/ast/flow.d/payments.flow.d")).unwrap()
+    );
+    let names: BTreeMap<String, NodeNames> =
+        flow_like_types::json::from_str(&std::fs::read_to_string(names_snapshot_path()).unwrap())
+            .unwrap();
+    assert_eq!(names["request_payment"], node_names(&node));
+    assert_eq!(node.flowscript_namespace(), "payments");
+    assert_eq!(node.flowscript_alias(), "request");
+}

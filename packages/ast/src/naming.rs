@@ -104,6 +104,7 @@ pub const NAMESPACES: &[(&str, NamespaceSpec)] = &[
     ("Events/Remote", spec("remote", &[], true)),
     ("Events", spec("events", &[], true)),
     ("Notifications", spec("notify", &[], true)),
+    ("Payments", spec("payments", &[], true)),
     ("UI", spec("ui", &["a2ui"], true)),
     // Web
     ("Web/API", spec("http", &["web"], true)),

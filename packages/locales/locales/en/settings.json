@@ -1989,5 +1989,13 @@
 	"roleHidden": "Role hidden",
 	"manageMember": "Manage member",
 	"template": "Template",
-	"templateSourceIsLocked": "Template source is locked"
+	"templateSourceIsLocked": "Template source is locked",
+	"priceEur": "Price (EUR)",
+	"paidApprovalDescription": "Approving allows checkout. Access starts after payment. Only the owner can approve or grant complimentary access.",
+	"onlyProjectAdminsCanReviewWhoAsksToJoin": "Only project admins can review who asks to join.",
+	"purchaseApproved": "Purchase approved",
+	"approvePurchase": "Approve purchase",
+	"compFailed": "Complimentary access could not be granted.",
+	"confirmComp": "Confirm free access",
+	"grantComp": "Grant complimentary access"
 }

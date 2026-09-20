@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "撤回合同",
+	"withdrawConfirmation": "撤回记录完成后，通过本次购买获得的访问权限将终止。您无需说明理由。",
+	"withdrawDeclaration": "我撤回上述购买合同。",
+	"withdrawConsumerName": "您的全名",
+	"withdrawConfirmationEmail": "接收撤回确认的电子邮箱",
+	"withdrawConfirmationEmailHelp": "我们将向此邮箱发送您的撤回声明及其接收日期和时间。",
+	"findPurchase": "查找购买记录",
+	"findPurchaseHelp": "输入确认邮件中的订单编号，即可打开任何购买记录，包括较早的订单。",
+	"purchaseOrderReference": "订单编号",
+	"openPurchase": "打开购买记录"
+}

@@ -77,8 +77,6 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub app_process_notes: HasMany<super::app_process_note::Entity>,
     #[sea_orm(has_many)]
-    pub app_purchases: HasMany<super::app_purchase::Entity>,
-    #[sea_orm(has_many)]
     pub app_sales_dailies: HasMany<super::app_sales_daily::Entity>,
     #[sea_orm(has_many)]
     pub app_usage_limits: HasMany<super::app_usage_limit::Entity>,

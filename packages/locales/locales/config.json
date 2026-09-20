@@ -9,7 +9,9 @@
 		"store",
 		"chat",
 		"interfaces",
-		"admin"
+		"admin",
+		"audit",
+		"payments"
 	],
 	"languages": ["de", "en", "es", "fr", "ja", "ko", "pl", "pt-BR", "zh"]
 }

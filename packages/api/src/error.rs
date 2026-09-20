@@ -225,6 +225,10 @@ impl ApiError {
         )
     }
 
+    pub fn coded(status: StatusCode, code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(status, code, Some(message.into()), ReportPolicy::Ignore)
+    }
+
     /// A named resource is held by another writer for a bounded time. Distinct from
     /// [`Self::conflict`] on purpose: 409 says "your write lost a race, resubmit", 423 says
     /// "nothing was attempted, wait and retry the same request".
