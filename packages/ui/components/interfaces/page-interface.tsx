@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
 	useCallback,
 	useEffect,
@@ -17,6 +17,7 @@ import {
 	readAppQuery,
 	setAppQueryParam,
 } from "../../lib/app-route-url";
+import { useClientRouter } from "../../lib/client-navigation";
 import { nativeWidgetPageQuery } from "../../lib/native-widget-page";
 import {
 	type PageSurfaceIdentity,
@@ -150,7 +151,7 @@ function PageInterfaceInner({
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const frontendStateStore = getFrontendStateStore(appId);
-	const router = useRouter();
+	const router = useClientRouter();
 	const hostSearch = useSearchParams().toString();
 	const runtimeQueryContext = useMemo(() => {
 		if (providedQueryParams)

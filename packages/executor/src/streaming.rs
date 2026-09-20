@@ -291,6 +291,9 @@ async fn execute_inner(
         Some(crate::widgets::HubAccess {
             callback_url: callback_url.to_string(),
             jwt: request.executor_jwt.clone(),
+            hosted_frontend: verify_jwt_async(&request.executor_jwt)
+                .await?
+                .hosted_frontend,
         }),
     )
     .await?;

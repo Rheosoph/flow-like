@@ -14,6 +14,7 @@ mod e2e_runtime;
 mod event_bus;
 mod event_sink;
 mod execution_identity;
+mod frontend_assets;
 mod functions;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
@@ -1381,7 +1382,7 @@ pub fn run() {
         .join()
         .expect("context thread");
 
-    builder
+    frontend_assets::register(builder, &context)
         .run(context)
         .expect("error while running tauri application");
 }

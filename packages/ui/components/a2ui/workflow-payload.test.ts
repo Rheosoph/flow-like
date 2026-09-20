@@ -99,6 +99,37 @@ describe("buildFrontendContextPayload", () => {
 		});
 	});
 
+	test("uses the web app path with isolated app query data", () => {
+		stubLocation(
+			"/use/caf%C3%A9/encoded%2520path",
+			"?id=app&route=%2Fstale&sessionId=chat&appQuery=id%3Drecord%26tag%3Da%26tag%3Db",
+		);
+		expect(buildFrontendContextPayload("page", {}, {})).toMatchObject({
+			_route: "/café/encoded%20path",
+			_query_params: { id: "record", tag: "b" },
+			_query_params_format: "app",
+			_query_param_values: { id: ["record"], tag: ["a", "b"] },
+		});
+	});
+
+	test("uses explicit web root and deep paths with legacy flattened query data", () => {
+		for (const [pathname, route] of [
+			["/use/", "/"],
+			["/use/orders", "/orders"],
+		]) {
+			stubLocation(pathname, "?id=app&tag=one&tag=two");
+			expect(buildFrontendContextPayload("page", {}, {})).toMatchObject({
+				_route: route,
+				_query_params: { id: "app", tag: "two" },
+			});
+		}
+	});
+
+	test("rejects malformed deep routes instead of executing with a default route", () => {
+		stubLocation("/use/a%2Fb", "?id=app");
+		expect(() => buildFrontendContextPayload("page", {}, {})).toThrow();
+	});
+
 	test("falls back to defaults without a page id or state", () => {
 		stubLocation("/use", "");
 		expect(buildFrontendContextPayload(null, undefined, undefined)).toEqual({

@@ -498,6 +498,12 @@ pub struct FlowLikeState {
     #[cfg(feature = "model")]
     pub embedding_factory: Arc<Mutex<EmbeddingFactory>>,
 
+    /// Run-scoped credential for hosted model calls. A trusted server executor
+    /// sets this for a public frontend so model billing can use the app's
+    /// authority while the flow retains the visitor's own integration token.
+    #[cfg(feature = "model")]
+    pub hosted_model_token: Option<String>,
+
     #[cfg(feature = "flow-metadata")]
     pub node_registry: Arc<RwLock<FlowNodeRegistry>>,
     #[cfg(feature = "flow-metadata")]
@@ -560,6 +566,9 @@ impl FlowLikeState {
             #[cfg(feature = "model")]
             embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
 
+            #[cfg(feature = "model")]
+            hosted_model_token: None,
+
             #[cfg(feature = "flow-metadata")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
             #[cfg(feature = "flow-metadata")]
@@ -597,6 +606,7 @@ impl FlowLikeState {
             model_provider_config: Arc::new(model_provider_config),
             model_factory: Arc::new(Mutex::new(ModelFactory::new())),
             embedding_factory: Arc::new(Mutex::new(EmbeddingFactory::new())),
+            hosted_model_token: None,
 
             #[cfg(feature = "flow-metadata")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
@@ -715,6 +725,8 @@ impl FlowLikeState {
             model_factory: self.model_factory.clone(),
             #[cfg(feature = "model")]
             embedding_factory: self.embedding_factory.clone(),
+            #[cfg(feature = "model")]
+            hosted_model_token: self.hosted_model_token.clone(),
 
             #[cfg(feature = "flow-metadata")]
             node_registry: self.node_registry.clone(),

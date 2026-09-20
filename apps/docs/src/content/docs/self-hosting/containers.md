@@ -162,6 +162,116 @@ still uses the hosted `flow-like.com/thirdparty/callback` relay and may select
 the stored profile's Hub. These runtime variables do not configure that separate
 relay or its provider registrations.
 
+## Host chat, form and page frontends
+
+The existing `apps/web` application includes the hosted chat, form and custom
+page routes. Deploy the normal Compose or Kubernetes `web` image, or publish
+the normal web static export. The browser resolves Event IDs and aliases through
+the API at runtime, so publishing an Event does not require another web build.
+
+Container images use the [runtime web settings](#runtime-web-configuration)
+above. For a static host, build the web application from a checkout with the
+workspace dependencies installed:
+
+```sh
+NEXT_PUBLIC_API_URL=https://api.example.com \
+NEXT_PUBLIC_REDIRECT_URL=https://app.example.com/callback \
+NEXT_PUBLIC_REDIRECT_LOGOUT_URL=https://app.example.com/ \
+bun --cwd apps/web run build
+```
+
+Upload `apps/web/out` to the web host. These static-build settings use the same
+API and login callback as the rest of the web application. `NEXT_PUBLIC_API_URL`
+is the browser-reachable API origin, without `/api/v1`. Changing these build
+settings requires another export; container runtime settings do not.
+
+Set `FRONTEND_BASE_URL` on the API to the existing web origin, for example
+`https://app.example.com`. Compose setup derives it from `--web-origin`;
+Kubernetes setup derives `api.frontendBaseUrl` from `PUBLIC_WEB_URL`. Both
+local defaults use `http://localhost:3001`. Update this value when moving the
+web application to another domain and restart the API. If `FRONTEND_BASE_URL`
+is unset or blank, the API can reuse a configured `FRONTEND_URL`.
+
+### Browser access and sign-in
+
+Keep the web origin in the API's `CORS_ALLOWED_ORIGINS`, preserving desktop and
+other application origins. Helm uses `api.corsAllowedOrigins`. Hosted frontends
+use the web application's existing OpenID client and `/callback` route. Keep
+the deployed callback registered with that identity provider. No separate
+OpenID application or callback is needed for `/c`, `/f` or `/u`.
+
+Hosting starts disabled. Enabling it requires sign-in by default: the web
+application uses its normal login and returns to the original Event link.
+**Allow anonymous access** is a separate opt-in with a confirmation warning
+that anyone with the link can execute workflows and the App owner pays for
+usage. Disabling hosting clears that choice in the editor. Save the Event to
+apply hosting and access changes. It must also use Remote execution and Public
+exposure, and be active. See
+[Events](/apps/events/#publish-a-hosted-chat-form-or-page).
+
+The API permits anonymous use only when the Event's decoded configuration
+explicitly sets `frontend_hosting.allow_anonymous` to `true`. A legacy
+`auth_proxy: false` or a missing `allow_anonymous` value never enables anonymous
+access.
+
+Micro-widgets follow the registry's existing access rules. Anonymous pages can
+load public widget packages when the registry allows anonymous reads. Private
+packages still require package access. Custom Page actions use the published
+page contract; hosted chat does not execute raw board widget actions.
+
+### Static routes and API front doors
+
+The web export includes `_redirects` rules for hosts that support that format.
+Both container web images include equivalent Nginx routing. On other static
+hosts, rewrite these request paths to the corresponding export file while
+preserving the requested browser URL and query string:
+
+| Web host request | Export file |
+| --- | --- |
+| `/c/<alias-or-event-id>` | `/c.html` |
+| `/f/<alias-or-event-id>` | `/f.html` |
+| `/u/<alias-or-event-id>` | `/u.html` |
+| `/use/<app-route>?id=<app-id>` | `/use.html` |
+| `/callback` | `/callback.html` |
+
+The query form, such as `/c?event=support`, also works when the host resolves
+`/c` to `/c.html`. Configure clean URLs for the exported pages. An `index.html`
+fallback alone does not load the requested interface entry point.
+
+App routes also need the `/use/*` rewrite for direct links
+such as `/use/orders/123?id=my-app`. Serve existing exported files first, including
+`/use/__next.*.txt` route payloads used when entering the App. Preserve `id` and other query parameters
+when serving `/use.html`. `/use/?id=my-app` selects the App's root route;
+event-only links remain `/use?id=my-app&eventId=event`. Legacy
+`/use?id=my-app&route=/orders/123` links are converted to the path form by the
+web application through browser history replacement. Desktop uses the same
+path format and resolves deep links through its bundled assets.
+
+With **separate API and web origins**, the API's `/c/*`, `/f/*` and `/u/*`
+shortlinks redirect to the same paths on the web origin. Forward those API
+shortlinks to the API along with `/frontend/*`, `/api/v1/*`, `/r/*` and `/m/*`.
+The bundled Compose API proxy and default Helm API ingress already forward
+every API path.
+
+With **one shared origin**, route `/c`, `/f`, `/u` and `/use`, including their
+subpaths, directly to the **web** service. Route `/frontend/*`, `/api/v1/*`, `/r/*` and
+`/m/*` to the **API** service. The Helm values include this path-based example.
+Sending the shared origin's `/c/*`, `/f/*` or `/u/*` paths to the API would
+redirect them back to themselves.
+
+For API requests, preserve `Authorization`, `X-Flow-Like-Session`, query strings
+and request bodies, allow CORS preflight requests, disable response caching,
+and stream execution responses without proxy buffering. An edge that replaces
+`Authorization` with its origin signature must preserve the viewer token using
+the existing `X-Flow-Like-Authorization` contract.
+
+After deployment, open a saved Event's direct link in a fresh browser session
+and submit a form or send a chat message. Test a sign-in-protected Event and
+confirm the normal callback returns to it. A `503` mentioning
+`FRONTEND_BASE_URL` means the API shortlink destination is missing or invalid.
+A disabled, inactive, Local or Internal Event returns `404` from the hosted API;
+the web host may still serve the static entry page that displays that error.
+
 ## Tags and visibility
 
 Each repository receives three kinds of references. Every tag of one release

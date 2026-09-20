@@ -13,6 +13,37 @@ enum NativeActivityBridge {
         return "https://\(host)" + (url.port.map { ":\($0)" } ?? "")
     }
 
+    static func appRoutePath(percentEncodedPath: String) throws -> String? {
+        if percentEncodedPath == "/use" { return nil }
+        guard percentEncodedPath.hasPrefix("/use/") else { throw NativeIntegrationError.invalidRoute }
+        let encodedSegments = percentEncodedPath.dropFirst("/use/".count)
+            .split(separator: "/", omittingEmptySubsequences: false)
+        let segments = try encodedSegments.map { segment in
+            guard let decoded = String(segment).removingPercentEncoding,
+                  !decoded.contains("/"), !decoded.contains("\\"),
+                  !decoded.contains("?"), !decoded.contains("#"),
+                  decoded != ".", decoded != "..",
+                  !decoded.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else {
+                throw NativeIntegrationError.invalidRoute
+            }
+            return decoded
+        }
+        let route = ("/" + segments.joined(separator: "/")).trimmingCharacters(in: .whitespaces)
+        guard !route.hasPrefix("//") else { throw NativeIntegrationError.invalidRoute }
+        try NativeAppRoute.validate(path: route, queryParams: nil)
+        let normalized = route.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        return normalized.isEmpty ? "/" : normalized
+    }
+
+    static func isUsePathname(_ percentEncodedPath: String) -> Bool {
+        do {
+            _ = try appRoutePath(percentEncodedPath: percentEncodedPath)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     @MainActor static func install() {
         #if os(iOS)
         let className = "AppDelegate"
@@ -28,9 +59,10 @@ enum NativeActivityBridge {
     static func handle(_ activity: NSUserActivity, store: NativeStore = .shared) -> Bool {
         if NativeSystemIntegration.handleSearchActivity(activity, store: store) != nil { return true }
         guard activity.activityType == NativeSystemIntegration.activityType,
-              let url = activity.webpageURL, url.path == "/use", url.user == nil, url.password == nil,
+              let url = activity.webpageURL, url.user == nil, url.password == nil,
               url.fragment == nil, url.absoluteString.utf8.count <= 131_072,
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              isUsePathname(parts.percentEncodedPath),
               let snapshot = store.catalog(),
               activity.userInfo?["scope"] as? String == snapshot.scope,
               let origin = origin(url), origin == snapshot.webOrigin else { return false }
@@ -40,7 +72,8 @@ enum NativeActivityBridge {
         guard ["id", "eventId", "route", "appQuery"].allSatisfy({ key in query.filter { $0.name == key }.count <= 1 }),
               let appId = query.first(where: { $0.name == "id" })?.value,
               snapshot.apps.contains(where: { $0.id == appId }) else { return false }
-        let route = query.first(where: { $0.name == "route" })?.value
+        let route = (try? appRoutePath(percentEncodedPath: parts.percentEncodedPath))
+            ?? query.first(where: { $0.name == "route" })?.value
         let appQuery = query.first(where: { $0.name == "appQuery" })?.value
         let action: NativeAction
         if route != nil || appQuery != nil {

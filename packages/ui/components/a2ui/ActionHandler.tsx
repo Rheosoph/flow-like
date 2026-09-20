@@ -1,7 +1,7 @@
 "use client";
 
 import { i18n as i18next } from "@flow-like/locales";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
 	type ReactNode,
 	createContext,
@@ -15,6 +15,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { setAppQueryParam } from "../../lib/app-route-url";
+import { useClientRouter } from "../../lib/client-navigation";
 import { getCurrentPageContext } from "../../lib/page-context";
 import { classifyPageContractError } from "../../lib/page-contract-drift";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
@@ -794,7 +795,7 @@ export function useComponentEventTrigger(componentId: string | undefined) {
 }
 
 export function useExecuteAction() {
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();

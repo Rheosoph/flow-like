@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import { useInvoke } from "@flow-like/flow-like-ui/hooks/use-invoke";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import {
@@ -20,7 +22,7 @@ import { useGlobalChatStore } from "@flow-like/flow-like-ui/state/global-chat/gl
 import { useQuery } from "@tanstack/react-query";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -62,7 +64,7 @@ export function NativeIntegrationProvider() {
 	const ready = useBackendReady();
 	const auth = useAuth();
 	const engine = useExecutionEngine();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const query = useSearchParams().toString();
 	// Observe the same query as ProfileSyncer. Its pushProfile mutates the backend

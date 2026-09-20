@@ -1,3 +1,4 @@
+import { getHostedFrontendKind } from "./frontend-hosting";
 import type { IEvent } from "./schema/flow/event";
 
 /**
@@ -10,7 +11,7 @@ import type { IEvent } from "./schema/flow/event";
  */
 
 /**
- * Shared sections exist on every event. Type-specific sections use their own
+ * Shared sections render centrally when applicable. Type-specific sections use their own
  * ids (`connection`, `permissions`, …) and are declared in TRIGGER_SECTIONS,
  * which is why this is a string rather than a closed union.
  */
@@ -25,6 +26,7 @@ export const SHARED_SECTION_IDS = [
 	"quality",
 	"history",
 	"identity",
+	"hosting",
 ] as const;
 
 /** True for sections whose content comes from the event type's config component. */
@@ -401,17 +403,28 @@ const SHARED_SECTIONS: IEventSection[] = [
 ];
 
 export function getEventSections(event: IEvent): IEventSection[] {
-	// Page-target events have no type-specific config component — there is no
-	// `configInterfaces["page"]` — and their page/version fields live in the
-	// shared Flow & target section. Giving them a trigger section produces a tab
-	// that can never render anything. Quality is dropped too: page payloads are
-	// sealed to their page session, so regression suites exclude page events.
+	const hosting: IEventSection[] = getHostedFrontendKind(event)
+		? [
+				{
+					id: "hosting",
+					label: "Hosting",
+					icon: "globe",
+					blurb:
+						"Share a hosted frontend, choose who can use it and manage its alias.",
+				},
+			]
+		: [];
+	// Page targets have no trigger config. Their sealed sessions also exclude
+	// them from workflow regression suites.
 	if (event.default_page_id)
-		return SHARED_SECTIONS.filter((section) => section.id !== "quality");
+		return [
+			...SHARED_SECTIONS.filter((section) => section.id !== "quality"),
+			...hosting,
+		];
 	const split = TRIGGER_SECTIONS[event.event_type];
-	if (split) return [...split, ...SHARED_SECTIONS];
+	if (split) return [...split, ...hosting, ...SHARED_SECTIONS];
 	const trigger = TRIGGER_LABELS[event.event_type] ?? DEFAULT_TRIGGER;
-	return [{ id: "trigger", ...trigger }, ...SHARED_SECTIONS];
+	return [{ id: "trigger", ...trigger }, ...hosting, ...SHARED_SECTIONS];
 }
 
 /* ------------------------------------------------------------------ guides */
@@ -776,6 +789,11 @@ export function getEventGuide(event: IEvent): IEventGuideStep[] {
 /* -------------------------------------------------------------- guidance */
 
 const SHARED_GUIDANCE: Record<string, ISectionGuidance> = {
+	hosting: {
+		what: "Visitors open this frontend through its direct link or public alias.",
+		mistake:
+			"Sharing an alias before saving and activating the event. Hosted links require Remote execution and Public exposure.",
+	},
 	flow: {
 		what: "What runs when this fires, and which snapshot of it.",
 		mistake:

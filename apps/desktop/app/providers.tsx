@@ -21,6 +21,7 @@ import {
 	cleanupLegacyQueryCacheBlob,
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
+import { UseNavigationProvider } from "@flow-like/flow-like-ui/lib/use-navigation-provider";
 import { I18nProvider } from "@flow-like/locales";
 import dynamic from "next/dynamic";
 import { Suspense, useEffect } from "react";
@@ -138,66 +139,68 @@ export function Providers({
 	children: React.ReactNode;
 }>) {
 	return (
-		<IdbMigrationGate>
-			<ReactFlowProvider>
-				<QueryClientProvider client={queryClient}>
-					<NetworkAwareProvider>
-						<IOSWebviewHardening />
-						<NetworkStatusIndicator />
-						<UpdateProvider />
-						<TrayProvider />
-						<GlobalAnchorHandler />
-						<I18nProvider>
-							<ThemeProvider
-								attribute="class"
-								defaultTheme="system"
-								enableSystem
-								storageKey="theme"
-								disableTransitionOnChange
-							>
-								<TooltipProvider>
-									<ToastProvider />
-									<TauriProvider>
-										<DownloadNotificationProvider />
-										<RpaPermissionProvider />
-										<LocalSinkConsentProvider />
-										<DeeplinkNavigationHandler>
-											<OAuthCallbackHandler>
-												<OAuthExecutionProvider>
-													<DesktopAuthProvider>
-														<Toaster />
-														<PendingInviteRedeemer />
-														<NotificationProvider />
-														<RuntimeVariablesProviderComponent>
-															<ExecutionServiceProvider>
-																<ExecutionEngineProviderComponent>
-																	<SpotlightWrapper>
-																		<TelemetryProvider>
-																			<ThemeLoader />
-																			<Suspense fallback={null}>
-																				<NativeIntegrationProvider />
-																			</Suspense>
-																			<AppSidebar>{children}</AppSidebar>
-																			<GlobalToolBridge />
-																			<GlobalChatOverlay />
-																			<FlowPilotBubbleButton />
-																			<GlobalUpgradeDialog />
-																		</TelemetryProvider>
-																	</SpotlightWrapper>
-																</ExecutionEngineProviderComponent>
-															</ExecutionServiceProvider>
-														</RuntimeVariablesProviderComponent>
-													</DesktopAuthProvider>
-												</OAuthExecutionProvider>
-											</OAuthCallbackHandler>
-										</DeeplinkNavigationHandler>
-									</TauriProvider>
-								</TooltipProvider>
-							</ThemeProvider>
-						</I18nProvider>
-					</NetworkAwareProvider>
-				</QueryClientProvider>
-			</ReactFlowProvider>
-		</IdbMigrationGate>
+		<UseNavigationProvider>
+			<IdbMigrationGate>
+				<ReactFlowProvider>
+					<QueryClientProvider client={queryClient}>
+						<NetworkAwareProvider>
+							<IOSWebviewHardening />
+							<NetworkStatusIndicator />
+							<UpdateProvider />
+							<TrayProvider />
+							<GlobalAnchorHandler />
+							<I18nProvider>
+								<ThemeProvider
+									attribute="class"
+									defaultTheme="system"
+									enableSystem
+									storageKey="theme"
+									disableTransitionOnChange
+								>
+									<TooltipProvider>
+										<ToastProvider />
+										<TauriProvider>
+											<DownloadNotificationProvider />
+											<RpaPermissionProvider />
+											<LocalSinkConsentProvider />
+											<DeeplinkNavigationHandler>
+												<OAuthCallbackHandler>
+													<OAuthExecutionProvider>
+														<DesktopAuthProvider>
+															<Toaster />
+															<PendingInviteRedeemer />
+															<NotificationProvider />
+															<RuntimeVariablesProviderComponent>
+																<ExecutionServiceProvider>
+																	<ExecutionEngineProviderComponent>
+																		<SpotlightWrapper>
+																			<TelemetryProvider>
+																				<ThemeLoader />
+																				<Suspense fallback={null}>
+																					<NativeIntegrationProvider />
+																				</Suspense>
+																				<AppSidebar>{children}</AppSidebar>
+																				<GlobalToolBridge />
+																				<GlobalChatOverlay />
+																				<FlowPilotBubbleButton />
+																				<GlobalUpgradeDialog />
+																			</TelemetryProvider>
+																		</SpotlightWrapper>
+																	</ExecutionEngineProviderComponent>
+																</ExecutionServiceProvider>
+															</RuntimeVariablesProviderComponent>
+														</DesktopAuthProvider>
+													</OAuthExecutionProvider>
+												</OAuthCallbackHandler>
+											</DeeplinkNavigationHandler>
+										</TauriProvider>
+									</TooltipProvider>
+								</ThemeProvider>
+							</I18nProvider>
+						</NetworkAwareProvider>
+					</QueryClientProvider>
+				</ReactFlowProvider>
+			</IdbMigrationGate>
+		</UseNavigationProvider>
 	);
 }

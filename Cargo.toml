@@ -14,6 +14,7 @@ members = [
     "apps/schema-gen",
     "apps/backend/aws/api",
     "apps/backend/aws/api-ecs",
+    "apps/backend/aws/audit-worker",
     "apps/backend/aws/executor",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
@@ -221,6 +222,7 @@ aws-config = "1.11.0"
 aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }
 aws-sdk-cloudwatch = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-dynamodb = { version = "1.80.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-kms = { version = "1.117.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-lambda = { version = "1.120", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "1.93.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a", "http-1x"] }
 aws-sdk-sesv2 = { version = "1.85.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }

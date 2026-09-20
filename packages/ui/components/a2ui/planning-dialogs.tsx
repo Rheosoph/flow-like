@@ -25,7 +25,6 @@ import {
 	UsersIcon,
 	XIcon,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import {
 	Fragment,
 	type ReactNode,
@@ -34,6 +33,7 @@ import {
 	useState,
 } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import { useClientRouter } from "../../lib/client-navigation";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -388,7 +388,7 @@ function LinkRow({
 	link,
 	onNavigate,
 }: { link: string; onNavigate: () => void }) {
-	const router = useRouter();
+	const router = useClientRouter();
 	const { appId } = useActionContext();
 
 	if (isExternalLink(link)) {

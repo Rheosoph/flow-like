@@ -1,4 +1,5 @@
 "use client";
+
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -71,6 +72,11 @@ import {
 	workspaceProfileDraftScope,
 } from "@flow-like/flow-like-ui/components/settings/profile/profile-draft";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
+import {
+	useClientHref,
+	useClientRouter,
+} from "@flow-like/flow-like-ui/lib/client-navigation";
+import { isUsePathname } from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
@@ -90,9 +96,10 @@ import {
 	Trash2Icon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import NextLink from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
+	type ComponentProps,
 	type ComponentType,
 	useCallback,
 	useEffect,
@@ -320,7 +327,7 @@ function IOSQuickMenuTrigger() {
 }
 
 function InnerSidebar() {
-	const router = useRouter();
+	const router = useClientRouter();
 	const { open, toggleSidebar } = useSidebar();
 	const { setTheme } = useTheme();
 	const { t } = useTranslation(["common", "settings"]);
@@ -773,6 +780,38 @@ interface INavItem {
 	}[];
 }
 
+function Link({ href, onClick, ...props }: ComponentProps<typeof NextLink>) {
+	const resolveHref = useClientHref();
+	const router = useClientRouter();
+	const destination = typeof href === "string" ? resolveHref(href) : href;
+	const usePath =
+		typeof destination === "string" &&
+		isUsePathname(destination.split(/[?#]/, 1)[0]);
+	return (
+		<NextLink
+			{...props}
+			href={destination}
+			prefetch={usePath ? false : props.prefetch}
+			onClick={(event) => {
+				onClick?.(event);
+				if (
+					!usePath ||
+					event.defaultPrevented ||
+					event.button !== 0 ||
+					event.metaKey ||
+					event.ctrlKey ||
+					event.shiftKey ||
+					event.altKey ||
+					(props.target && props.target !== "_self")
+				)
+					return;
+				event.preventDefault();
+				router.push(destination as string);
+			}}
+		/>
+	);
+}
+
 const MotionLink = motion.create(Link);
 const MotionSidebarMenuButton = motion.create(SidebarMenuButton);
 
@@ -833,6 +872,7 @@ function NavCollapsible({
 	sidebarOpen: boolean;
 	onNavigate: (url: string) => void;
 }>) {
+	const clientHref = useClientHref();
 	const active = isItemActive(item, pathname);
 	return (
 		<Collapsible
@@ -863,9 +903,16 @@ function NavCollapsible({
 							if (e.button === 1) {
 								e.preventDefault();
 								try {
-									const parsed = new URL(item.url, window.location.href);
+									const parsed = new URL(
+										clientHref(item.url),
+										window.location.href,
+									);
+									const current = new URL(window.location.href);
 									const resolvedUrl =
-										parsed.origin === window.location.origin
+										parsed.protocol === current.protocol &&
+										parsed.host === current.host &&
+										parsed.username === current.username &&
+										parsed.password === current.password
 											? `${parsed.pathname}${parsed.search}${parsed.hash}`
 											: parsed.toString();
 									const webview = new WebviewWindow(`sidebar-${createId()}`, {
@@ -947,7 +994,7 @@ function NavMain({
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
 	const { developerMode } = useDeveloperMode();
@@ -1169,7 +1216,7 @@ export function NavUser({
 function Flows() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const params = useSearchParams();
 	const openBoards = useInvoke(

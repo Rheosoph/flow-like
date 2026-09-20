@@ -54,6 +54,7 @@ import {
 	getEventSections,
 	isTriggerSection,
 } from "@flow-like/flow-like-ui/lib/event-sections";
+import { getHostedFrontendKind } from "@flow-like/flow-like-ui/lib/frontend-hosting";
 import {
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
@@ -106,6 +107,7 @@ import { toast } from "sonner";
 import { EventAttentionStrip } from "./event-attention-strip";
 import { EventCanary } from "./event-canary";
 import { EventHistory } from "./event-history";
+import { EventHosting } from "./event-hosting";
 import { EventQuality } from "./event-quality";
 import { EventSaveBar } from "./event-save-bar";
 import { EventSectionRail } from "./event-section-rail";
@@ -1538,7 +1540,9 @@ function EventConfiguration({
 							</div>
 						);
 					})()}
-					{(formData.event_type === "rest" || formData.event_type === "mcp") &&
+					{(formData.event_type === "rest" ||
+						formData.event_type === "mcp" ||
+						getHostedFrontendKind(formData)) &&
 						(() => {
 							const currentExposure =
 								formData.exposure ?? IEventExposure.Public;
@@ -1631,7 +1635,8 @@ function EventConfiguration({
 						</Button>
 					</div>
 					{(formData.event_type === "rest" ||
-						formData.event_type === "mcp") && (
+						formData.event_type === "mcp" ||
+						getHostedFrontendKind(formData)) && (
 						<p className="basis-full text-[0.7rem] leading-tight text-muted-foreground">
 							{(formData.exposure ?? IEventExposure.Public) ===
 							IEventExposure.Internal
@@ -2561,6 +2566,27 @@ function EventConfiguration({
 									)}
 								</CardContent>
 							</Card>
+						)}
+
+						{activeSection === "hosting" && (
+							<EventHosting
+								key={event.id}
+								appId={appId}
+								event={formData}
+								config={parsedConfig}
+								canWrite={canWriteEvents}
+								hasUnsavedChanges={isDirty}
+								onUpdate={(frontend_hosting) => {
+									if (!isEditing) setIsEditing(true);
+									handleInputChange(
+										"config",
+										convertJsonToUint8Array({
+											...parsedConfig,
+											frontend_hosting,
+										}),
+									);
+								}}
+							/>
 						)}
 
 						{/* Node Specific Configuration - Full width due to potential size */}

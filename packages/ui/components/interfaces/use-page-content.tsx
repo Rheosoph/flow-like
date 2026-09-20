@@ -2,11 +2,12 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { isEqual } from "lodash-es";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
 	type JSX,
 	type ReactNode,
 	useCallback,
+	useContext,
 	useEffect,
 	useMemo,
 	useRef,
@@ -15,24 +16,28 @@ import {
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useNetworkStatus } from "../../hooks/use-network-status";
+import { getApiOrigin } from "../../lib/api-url";
 import {
 	boardReadinessKey,
 	trackBoardReadiness,
 } from "../../lib/board-readiness";
+import { escapeCssAttributeValue } from "../../lib/chat-appearance";
+import {
+	ClientNavigationContext,
+	useClientRouter,
+} from "../../lib/client-navigation";
 import {
 	isPageContractDriftFor,
 	subscribeToPageContractDrift,
 } from "../../lib/page-contract-drift";
+import { recordRecentApp } from "../../lib/recent-apps";
 import {
 	deriveRouteMappings,
 	isUsableRuntimeEvent,
 	resolveRouteMapping,
 } from "../../lib/runtime-route";
-import { getApiOrigin } from "../../lib/api-url";
-import { recordRecentApp } from "../../lib/recent-apps";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
-import { escapeCssAttributeValue } from "../../lib/chat-appearance";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
@@ -306,7 +311,8 @@ export function UsePageContent({
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
-	const router = useRouter();
+	const router = useClientRouter();
+	const clientNavigation = useContext(ClientNavigationContext);
 	const auth = useAuth();
 	const isOnline = useNetworkStatus();
 	const hasAccessToken = Boolean(auth.user?.access_token);
@@ -899,7 +905,7 @@ export function UsePageContent({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef is a stable ref
 	const switchEvent = useCallback(
-		(newEventId: string, replace = false) => {
+		(newEventId: string, replace = false, preserveRoute = false) => {
 			if (!appId || !newEventId || eventId === newEventId) return;
 			headerRef.current?.pushToolbarElements([]);
 			headerRef.current?.pushNavElements([]);
@@ -907,9 +913,26 @@ export function UsePageContent({
 				onNavigate?.({ eventId: newEventId });
 				return;
 			}
+			if (clientNavigation && !preserveRoute) {
+				const params = new URLSearchParams(window.location.search);
+				params.delete("route");
+				params.set("eventId", newEventId);
+				const href = `/use?${params.toString()}`;
+				if (replace) router.replace(href);
+				else router.push(href);
+				return;
+			}
 			setQueryParams("eventId", newEventId, { replace });
 		},
-		[appId, eventId, embedded, onNavigate, setQueryParams],
+		[
+			appId,
+			eventId,
+			embedded,
+			onNavigate,
+			clientNavigation,
+			router,
+			setQueryParams,
+		],
 	);
 
 	// --- Config ---
@@ -1173,14 +1196,14 @@ export function UsePageContent({
 
 		if (!resolvedCurrentEvent) {
 			if (rerouteEvent) {
-				switchEvent(rerouteEvent.id, true);
+				switchEvent(rerouteEvent.id, true, true);
 				return;
 			}
 			return;
 		}
 
 		if (eventId && !canUseEvent(resolvedCurrentEvent)) {
-			switchEvent(rerouteEvent?.id ?? "", true);
+			switchEvent(rerouteEvent?.id ?? "", true, true);
 			return;
 		}
 
@@ -1217,9 +1240,9 @@ export function UsePageContent({
 			const params = new URLSearchParams(window.location.search);
 			params.set("route", path);
 			params.delete("eventId");
-			router.push(`?${params.toString()}`);
+			router.push(`${clientNavigation ? "/use" : ""}?${params.toString()}`);
 		},
-		[appId, embedded, onNavigate, router],
+		[appId, embedded, onNavigate, clientNavigation, router],
 	);
 
 	const handleEmbeddedNavigation = useCallback(

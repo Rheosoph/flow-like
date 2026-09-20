@@ -21,6 +21,12 @@ export interface IUseInterfaceProps {
 	config?: Partial<IEventPayload>;
 	toolbarRef?: RefObject<IToolBarActions | null>;
 	sidebarRef?: RefObject<ISidebarActions | null>;
+	/** A standalone host resolves app routes to its own published URLs. */
+	onNavigate?: (
+		route: string,
+		replace: boolean,
+		queryParams?: Record<string, string>,
+	) => void;
 }
 
 export interface IConfigInterfaceProps {

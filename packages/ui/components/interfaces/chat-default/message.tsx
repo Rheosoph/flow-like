@@ -10,7 +10,16 @@ import EditIcon from "lucide-react/dist/esm/icons/square-pen.js";
 import ThumbsDownIcon from "lucide-react/dist/esm/icons/thumbs-down.js";
 import ThumbsUpIcon from "lucide-react/dist/esm/icons/thumbs-up.js";
 import XIcon from "lucide-react/dist/esm/icons/x.js";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createContext,
+	memo,
+	useCallback,
+	useContext,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
@@ -339,8 +348,12 @@ const FeedbackDialog = ({
 	);
 };
 
+/** Hosts without a feedback endpoint hide rating controls. */
+export const ChatFeedbackEnabledContext = createContext(true);
+
 const MessageActions = ({
 	isUser,
+	feedbackEnabled,
 	hasFooterContent,
 	compact = false,
 	rating,
@@ -352,6 +365,7 @@ const MessageActions = ({
 	onCopy,
 }: {
 	isUser: boolean;
+	feedbackEnabled: boolean;
 	hasFooterContent: boolean;
 	compact?: boolean;
 	rating: number;
@@ -379,7 +393,7 @@ const MessageActions = ({
 					),
 		)}
 	>
-		{!isUser && (
+		{!isUser && feedbackEnabled && (
 			<>
 				<FeedbackButton
 					onClick={onThumbsUp}
@@ -401,7 +415,7 @@ const MessageActions = ({
 				</FeedbackButton>
 			</>
 		)}
-		{rating !== 0 && (
+		{feedbackEnabled && rating !== 0 && (
 			<button onClick={onFeedbackClick}>
 				<Badge
 					variant={gaveMoreFeedback ? "outline" : "default"}
@@ -441,6 +455,7 @@ export const MessageComponent = memo(
 		widgetSnapshots = true,
 	}: Readonly<MessageProps>) {
 		const { t } = useTranslation("chat");
+		const feedbackEnabled = useContext(ChatFeedbackEnabledContext);
 		const isUser = message.inner.role === IRole.User;
 		const [isExpanded, setIsExpanded] = useState(false);
 		const [showToggle, setShowToggle] = useState(false);
@@ -907,6 +922,7 @@ export const MessageComponent = memo(
 						{!loading && (
 							<MessageActions
 								isUser={isUser}
+								feedbackEnabled={feedbackEnabled}
 								hasFooterContent={hasFooterContent}
 								compact={compactUserActions}
 								rating={message.rating ?? 0}

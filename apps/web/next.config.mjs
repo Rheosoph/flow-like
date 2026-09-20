@@ -1,3 +1,5 @@
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
 	reactStrictMode: false,
@@ -25,4 +27,14 @@ const nextConfig = {
 	},
 };
 
-export default nextConfig;
+export default (phase) => {
+	if (phase !== PHASE_DEVELOPMENT_SERVER) return nextConfig;
+	return {
+		...nextConfig,
+		output: undefined,
+		// Keep /use/ distinct from an Event-only /use link during development.
+		skipTrailingSlashRedirect: true,
+		// Production serves these paths through the static host or Tauri assets.
+		rewrites: async () => [{ source: "/use/:path*", destination: "/use" }],
+	};
+};

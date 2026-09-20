@@ -387,8 +387,10 @@ impl ModelFactory {
             self.cached_models.remove(&bit.id);
             self.ttl_list.remove(&bit.id);
 
-            let access_token = access_token
+            let access_token = app_state
+                .hosted_model_token
                 .as_deref()
+                .or(access_token.as_deref())
                 .map(str::trim)
                 .filter(|token| !token.is_empty())
                 .ok_or_else(|| {
@@ -853,6 +855,15 @@ mod tests {
 
     #[tokio::test]
     async fn hosted_openrouter_streams_to_chat_completions_with_the_bit_id_and_current_token() {
+        assert_hosted_openrouter_token(None, "current-jwt").await;
+    }
+
+    #[tokio::test]
+    async fn frontend_models_use_run_authority_while_retaining_the_visitor_token() {
+        assert_hosted_openrouter_token(Some("scoped-executor-jwt"), "scoped-executor-jwt").await;
+    }
+
+    async fn assert_hosted_openrouter_token(model_token: Option<&str>, expected_token: &str) {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind mock proxy");
@@ -862,10 +873,12 @@ mod tests {
         let store = FlowLikeStore::Memory(Arc::new(
             flow_like_storage::object_store::memory::InMemory::new(),
         ));
-        let state = Arc::new(FlowLikeState::new(
+        let mut state = FlowLikeState::new(
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
-        ));
+        );
+        state.hosted_model_token = model_token.map(ToOwned::to_owned);
+        let state = Arc::new(state.for_execution_run());
         let mut factory = ModelFactory::new();
         let model = factory
             .build(
@@ -896,7 +909,7 @@ mod tests {
             "POST /api/v1/chat/completions HTTP/1.1"
         );
         let headers = request.headers.to_ascii_lowercase();
-        assert!(headers.contains("authorization: bearer current-jwt\r\n"));
+        assert!(headers.contains(&format!("authorization: bearer {expected_token}\r\n")));
         assert!(headers.contains("x-flow-like-app-id: app-123\r\n"));
         assert!(headers.contains("x-flow-like-run-id: run-456\r\n"));
         assert_eq!(request.body["model"], "bit_opaque_123");
