@@ -538,7 +538,7 @@ mod tests {
                 c.nbf += 120;
                 c.exp += 120;
             },
-            |c| c.policy_digest = "sha256:".to_string() + &"A".repeat(64),
+            |c| c.policy_digest = format!("sha256:{}", "A".repeat(64)),
             |c| c.jti = String::new(),
         ];
         for mutate in cases {

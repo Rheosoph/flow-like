@@ -110,6 +110,19 @@ DNS endpoints, and removes the temporary CA file on exit. It stops the child
 before the token expires. Static database passwords and credential overrides are
 rejected; the old `--database-secret` argument is no longer supported.
 
+The private-IP example requires the per-instance `GOOGLE_MANAGED_INTERNAL_CA` CA
+mode. For `GOOGLE_MANAGED_CAS_CA` or `CUSTOMER_MANAGED_CAS_CA`, use the instance
+certificate DNS name so the launcher applies `verify-full`; verifying a shared
+CA alone does not establish which instance answered. The helper reads
+`settings.ipConfiguration.serverCaMode` and accepts an omitted mode as the API's
+legacy per-instance default. For DNS connections it checks the `dnsNames` entry
+with `dnsScope=INSTANCE` and `connectionType=PRIVATE_SERVICES_ACCESS`, normalizing
+a trailing dot before passing the hostname to the launcher. Create its private
+DNS record in the worker's VPC. This helper supports private services access;
+Private Service Connect requires separate endpoint setup. See Google's
+[server identity verification guide](https://docs.cloud.google.com/sql/docs/postgres/configure-ssl-instance#server-identity-verification)
+and [Cloud SQL instance API](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances).
+
 To avoid fetching the KMS public key at every startup, also supply
 `--audit-kid <current-key-id> --verifying-keys-secret <public-keys-secret-id>`.
 The secret contains the shared `AUDIT_VERIFYING_KEYS` JSON map of key IDs to public

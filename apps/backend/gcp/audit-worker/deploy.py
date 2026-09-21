@@ -47,11 +47,7 @@ def plan(args):
             raise ValueError("resource names must not contain whitespace, commas, equals signs or start with '-' ")
     if bool(args.audit_kid) != bool(args.verifying_keys_secret):
         raise ValueError("--audit-kid and --verifying-keys-secret must be supplied together")
-    try:
-        ipaddress.ip_address(args.database_host)
-    except ValueError:
-        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", args.database_host):
-            raise ValueError("--database-host must be a Cloud SQL private IP or certificate hostname")
+    database_host = normalize_database_host(args.database_host)
 
     def command(*parts, project=None):
         return ["gcloud", *parts, f"--project={project or args.project}", "--quiet", "--format=json"]
@@ -108,7 +104,7 @@ def plan(args):
         deny_api(f"//secretmanager.googleapis.com/projects/{args.project}/secrets/{secret}",
                  "secretmanager.versions.access", "secretmanager.versions.add", "secretmanager.secrets.setIamPolicy")
     # SQL identity and grants are provisioned by the database owner before this job.
-    steps.append({"validate_database": {"host": args.database_host},
+    steps.append({"validate_database": {"host": database_host},
                   "inspect": command("sql", "instances", "describe", args.database_instance)})
     steps.append({"validate_database_user": database_user,
                   "inspect": command("sql", "users", "list", f"--instance={args.database_instance}")})
@@ -151,7 +147,7 @@ def plan(args):
     deny_worker("//cloudkms.googleapis.com/" + args.key_version.rsplit("/cryptoKeyVersions/", 1)[0],
                 "cloudkms.cryptoKeys.setIamPolicy", "cloudkms.cryptoKeyVersions.destroy", "cloudkms.cryptoKeyVersions.update")
     environment = {"GCP_PROJECT_ID": args.project, "GCP_AUDIT_BUCKET": args.bucket,
-                   "GCP_POSTGRES_HOST": args.database_host, "GCP_POSTGRES_DATABASE": args.database_name,
+                   "GCP_POSTGRES_HOST": database_host, "GCP_POSTGRES_DATABASE": args.database_name,
                    "GCP_POSTGRES_USER": database_user,
                    "AUDIT_KMS_PROVIDER": "gcp", "AUDIT_KMS_KEY_ID": args.key_version,
                    "AUDIT_WORKER": "on"}
@@ -201,6 +197,18 @@ def validate_lock(metadata, minimum_days):
     return policy.get("isLocked") is True
 
 
+def normalize_database_host(host):
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        # Cloud SQL's DNS mappings are absolute names with a trailing dot.
+        hostname = host.removesuffix(".").lower()
+        if len(hostname) > 253 or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                                      for label in hostname.split(".")):
+            raise ValueError("--database-host must be a Cloud SQL private IP or certificate hostname")
+        return hostname
+
+
 def validate_database(metadata, host):
     if not metadata.get("databaseVersion", "").startswith("POSTGRES_"):
         raise ValueError("the audit database must be a Cloud SQL PostgreSQL instance")
@@ -208,12 +216,36 @@ def validate_database(metadata, host):
     flags = {item.get("name"): item.get("value") for item in settings.get("databaseFlags", [])}
     if flags.get("cloudsql.iam_authentication") != "on":
         raise ValueError("enable cloudsql.iam_authentication on the database before deployment")
-    if settings.get("ipConfiguration", {}).get("sslMode") != "ENCRYPTED_ONLY":
+    ip_configuration = settings.get("ipConfiguration", {})
+    if ip_configuration.get("sslMode") != "ENCRYPTED_ONLY":
         raise ValueError("the IAM launcher requires ENCRYPTED_ONLY TLS; client-certificate-only mode is unsupported")
-    private_addresses = {item.get("ipAddress") for item in metadata.get("ipAddresses", [])
+    # The API defines CA_MODE_UNSPECIFIED as GOOGLE_MANAGED_INTERNAL_CA.
+    ca_mode = ip_configuration.get("serverCaMode", "CA_MODE_UNSPECIFIED")
+    internal_ca = ca_mode in {"GOOGLE_MANAGED_INTERNAL_CA", "CA_MODE_UNSPECIFIED"}
+    if not internal_ca and ca_mode not in {"GOOGLE_MANAGED_CAS_CA", "CUSTOMER_MANAGED_CAS_CA"}:
+        raise ValueError("the Cloud SQL server CA mode must be known before deployment")
+    private_addresses = {normalize_database_host(item["ipAddress"]) for item in metadata.get("ipAddresses", [])
                          if item.get("type") == "PRIVATE" and item.get("ipAddress")}
-    if not private_addresses or host not in private_addresses | {metadata.get("dnsName")}:
-        raise ValueError("--database-host must match this instance's private IP or certificate DNS name")
+    host = normalize_database_host(host)
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        # Per-instance CA certificates lack DNS SANs for private services access.
+        if internal_ca:
+            raise ValueError("use this instance's private IP with its per-instance CA; DNS over private services access requires a shared or customer-managed CA")
+        names = {normalize_database_host(item["name"]) for item in metadata.get("dnsNames", [])
+                 if item.get("name") and item.get("dnsScope") == "INSTANCE"
+                 and item.get("connectionType") == "PRIVATE_SERVICES_ACCESS"}
+        # Older instance responses expose only the instance-level dnsName.
+        if "dnsNames" not in metadata and metadata.get("dnsName"):
+            names.add(normalize_database_host(metadata["dnsName"]))
+        if not private_addresses or host not in names:
+            raise ValueError("--database-host must match this instance's private services access certificate DNS name")
+    else:
+        if not internal_ca:
+            raise ValueError("shared or customer-managed Cloud SQL CAs require the certificate DNS hostname and verify-full; raw IP would verify only the CA")
+        if host not in private_addresses:
+            raise ValueError("--database-host must match this instance's private IP")
 
 
 def validate_database_user(users, expected_user):

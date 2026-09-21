@@ -28,7 +28,7 @@
 		"@astrojs/starlight": "0.41.7",
 		"@types/react": "^19.2.6",
 		"@types/react-dom": "^19.2.3",
-		"astro": "^7.2.2",
+		"astro": "7.2.4",
 		"react": "^19.2.1",
 		"react-dom": "^19.2.1",
 		"sharp": "^0.35.3"

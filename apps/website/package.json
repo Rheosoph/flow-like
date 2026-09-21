@@ -29,7 +29,7 @@
 		"@types/react": "^19.2.6",
 		"@types/react-dom": "^19.2.3",
 		"@xyflow/react": "^12.10.0",
-		"astro": "^7.2.2",
+		"astro": "7.2.4",
 		"cookie": "^2.0.1",
 		"astro-robots-txt": "^1.0.0",
 		"react": "^19.2.1",
