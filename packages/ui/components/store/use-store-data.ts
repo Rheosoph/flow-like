@@ -5,6 +5,8 @@ import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
+import { usePaymentDistribution, usePayments } from "../payments/use-payments";
+import { apiErrorMessage } from "../../lib/api-error";
 import { openExternalUrl } from "../../lib/open-external";
 import type { IApp } from "../../lib/schema/app/app";
 import { IAppVisibility } from "../../lib/schema/app/app";
@@ -25,6 +27,9 @@ export function useStoreData(
 	const auth = useAuth();
 	const invalidate = useInvalidateInvoke();
 	const [isPurchasing, setIsPurchasing] = useState(false);
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
+	const payments = usePayments();
+	const purchasingAllowed = usePaymentDistribution();
 
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
 	const app = useInvoke<IApp, [appId: string]>(
@@ -146,8 +151,13 @@ export function useStoreData(
 	}, [backend, id, invalidate]);
 
 	const onBuy = useCallback(async () => {
-		if (!id || isPurchasing) return;
+		if (!id || isPurchasing || !purchasingAllowed) return;
 		if (!(await ensureAuthenticated())) return;
+
+		if (payments.config?.marketplace_enabled) {
+			setCheckoutOpen(true);
+			return;
+		}
 
 		setIsPurchasing(true);
 		try {
@@ -171,13 +181,17 @@ export function useStoreData(
 			}
 		} catch (e) {
 			console.error("Purchase error:", e);
-			toast.error("Failed to start purchase. Please try again later.");
+			toast.error(
+				apiErrorMessage(e, "Failed to start purchase. Please try again later."),
+			);
 		} finally {
 			setIsPurchasing(false);
 		}
 	}, [
 		id,
 		isPurchasing,
+		purchasingAllowed,
+		payments.config?.marketplace_enabled,
 		ensureAuthenticated,
 		backend,
 		registerAppInProfile,
@@ -192,11 +206,6 @@ export function useStoreData(
 		if (!(await ensureAuthenticated())) return;
 
 		try {
-			if (appData.price && appData.price > 0) {
-				await onBuy();
-				return;
-			}
-
 			if (appData.visibility === IAppVisibility.PublicRequestAccess) {
 				await backend.appState.requestJoinApp(
 					appData.id,
@@ -206,6 +215,11 @@ export function useStoreData(
 					"Request to join app sent! The author will review your request.",
 				);
 				await apps.refetch?.();
+				return;
+			}
+
+			if (appData.price && appData.price > 0) {
+				await onBuy();
 				return;
 			}
 
@@ -269,6 +283,9 @@ export function useStoreData(
 		metaData,
 		isMember,
 		isPurchasing,
+		checkoutOpen,
+		setCheckoutOpen,
+		purchasingAllowed,
 		isLoading,
 		isError,
 		notFound,

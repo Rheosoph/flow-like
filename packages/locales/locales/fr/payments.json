@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "Se rétracter du contrat",
+	"withdrawConfirmation": "L’accès lié à cet achat prend fin dès l’enregistrement de la rétractation. Aucun motif n’est nécessaire.",
+	"withdrawDeclaration": "Je me rétracte de l’achat indiqué ci-dessus.",
+	"withdrawConsumerName": "Votre nom complet",
+	"withdrawConfirmationEmail": "Adresse e-mail pour la confirmation de rétractation",
+	"withdrawConfirmationEmailHelp": "Nous enverrons votre déclaration ainsi que sa date et son heure de réception à cette adresse.",
+	"findPurchase": "Retrouver un achat",
+	"findPurchaseHelp": "Saisissez la référence de commande de votre e-mail de confirmation pour ouvrir un achat, même ancien.",
+	"purchaseOrderReference": "Référence de commande",
+	"openPurchase": "Ouvrir l’achat"
+}

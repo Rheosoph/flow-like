@@ -15,6 +15,7 @@ import {
 	ZapIcon,
 } from "lucide-react";
 import Link from "next/link";
+import { useHub } from "../../hooks/use-hub";
 import { userInitials } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
@@ -61,6 +62,8 @@ export function AccountMenu({
 	onOpenBilling,
 }: Readonly<AccountMenuProps>) {
 	const { t } = useTranslation("common");
+	const { t: paymentText } = useTranslation("payments");
+	const { hub } = useHub();
 	const count = notificationCount > 99 ? "99+" : notificationCount;
 	const avatarContent = (
 		<Avatar className="size-7 shrink-0 rounded-lg ring-1 ring-border/60">
@@ -162,6 +165,21 @@ export function AccountMenu({
 									{t("account", "Account")}
 								</Link>
 							</DropdownMenuItem>
+							<DropdownMenuItem asChild className={itemClass}>
+								<Link href="/account/purchases">
+									<CreditCard />
+									{paymentText("purchases", "Purchases")}
+								</Link>
+							</DropdownMenuItem>
+							{(hub?.payments?.onboarding_enabled ||
+								hub?.payments?.servicing_enabled) && (
+								<DropdownMenuItem asChild className={itemClass}>
+									<Link href="/account/payouts">
+										<CreditCard />
+										{paymentText("payouts", "Payments and payouts")}
+									</Link>
+								</DropdownMenuItem>
+							)}
 							{onOpenBilling && (
 								<DropdownMenuItem
 									className={itemClass}

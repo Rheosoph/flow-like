@@ -177,7 +177,6 @@ pub async fn setup_event(
             "event.setup",
             "Event",
             event_id,
-            "Event setup run",
             json!({
                 "variant": variant,
                 "event_version": response.event_version,

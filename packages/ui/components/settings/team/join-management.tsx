@@ -8,7 +8,7 @@ import {
 	UsersIcon,
 	XIcon,
 } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
 	Avatar,
@@ -30,6 +30,7 @@ import {
 	userHandle,
 	userInitials,
 } from "../../../lib/user-display";
+import { usePayments } from "../../payments/use-payments";
 import { SectionLockedPanel } from "../permission";
 import {
 	SectionHeading,
@@ -48,6 +49,8 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const access = useTeamAccess(appId);
+	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
+	const paid = (app.data?.price ?? 0) > 0;
 	const {
 		data: requestsPages,
 		isLoading,
@@ -68,10 +71,17 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 		return (
 			<SectionLockedPanel
 				feature={t("joinRequests", "Join requests")}
-				description={t(
-					"onlyProjectAdminsCanReviewWhoAsksToJoin",
-					"Only project admins can review who asks to join.",
-				)}
+				description={
+					paid
+						? t(
+								"paidApprovalDescription",
+								"Approving allows checkout. Access starts after payment. Only the owner can approve or grant complimentary access.",
+							)
+						: t(
+								"onlyProjectAdminsCanReviewWhoAsksToJoin",
+								"Only project admins can review who asks to join.",
+							)
+				}
 				missing={[RolePermissions.Admin]}
 				roleName={access.roleName}
 			/>
@@ -108,6 +118,8 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 							key={request.id}
 							request={request}
 							appId={appId}
+							paid={paid}
+							canOwn={access.canOwn}
 							refresh={async () => {
 								await refetch();
 							}}
@@ -135,9 +147,20 @@ function RequestRow({
 	appId,
 	request,
 	refresh,
-}: Readonly<{ appId: string; request: IJoinRequest; refresh: () => void }>) {
+	paid,
+	canOwn,
+}: Readonly<{
+	appId: string;
+	request: IJoinRequest;
+	refresh: () => void;
+	paid: boolean;
+	canOwn: boolean;
+}>) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
+	const payments = usePayments();
+	const [confirmComp, setConfirmComp] = useState(false);
+	const [compBusy, setCompBusy] = useState(false);
 	const user = useInvoke(backend.userState.lookupUser, backend.userState, [
 		request.user_id,
 	]);
@@ -211,7 +234,9 @@ function RequestRow({
 					<span className="truncate">{evaluatedName}</span>
 					<span className={`${TEAM_ROW_HANDLE} truncate`}>{contact}</span>
 					<StatusChip tone="attention" pip>
-						{t("wantsToJoin", "Wants to join")}
+						{paid && request.approved_at
+							? t("purchaseApproved", "Purchase approved")
+							: t("wantsToJoin", "Wants to join")}
 					</StatusChip>
 				</div>
 
@@ -233,10 +258,54 @@ function RequestRow({
 			</div>
 
 			<TeamRowActions always>
-				<Button size="sm" onClick={acceptRequest}>
+				<Button
+					size="sm"
+					onClick={acceptRequest}
+					disabled={paid && (!canOwn || !!request.approved_at)}
+				>
 					<CheckIcon className="size-3.5" />
-					{t("approve", "Approve")}
+					{paid
+						? t("approvePurchase", "Approve purchase")
+						: t("approve", "Approve")}
 				</Button>
+				{paid && canOwn && (
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={compBusy}
+						onClick={async () => {
+							if (!confirmComp) {
+								setConfirmComp(true);
+								return;
+							}
+							setCompBusy(true);
+							try {
+								await payments.request(
+									`apps/${encodeURIComponent(appId)}/marketplace/comp/${encodeURIComponent(request.user_id)}`,
+									"POST",
+									{ confirm: true },
+								);
+								refresh();
+							} catch (error) {
+								toast.error(
+									apiErrorMessage(
+										error,
+										t(
+											"compFailed",
+											"Complimentary access could not be granted.",
+										),
+									),
+								);
+							} finally {
+								setCompBusy(false);
+							}
+						}}
+					>
+						{confirmComp
+							? t("confirmComp", "Confirm free access")
+							: t("grantComp", "Grant complimentary access")}
+					</Button>
+				)}
 				<Button size="sm" variant="outline" onClick={declineRequest}>
 					<XIcon className="size-3.5" />
 					{t("decline", "Decline")}

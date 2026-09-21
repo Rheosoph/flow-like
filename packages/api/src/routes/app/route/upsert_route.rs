@@ -83,7 +83,6 @@ pub async fn create_route(
         "route.create",
         "Route",
         updated.id,
-        "Created an event route mapping",
         serde_json::json!({ "is_default": updated.is_default })
     );
 
@@ -169,7 +168,6 @@ pub async fn update_route(
             "route.reassign",
             "Route",
             updated.id,
-            "Reassigned an event route mapping",
             serde_json::json!({
                 "previous_event_id": route_id,
                 "is_default": updated.is_default,
@@ -196,7 +194,6 @@ pub async fn update_route(
         "route.update",
         "Route",
         updated.id,
-        "Updated an event route mapping",
         serde_json::json!({ "is_default": updated.is_default })
     );
 

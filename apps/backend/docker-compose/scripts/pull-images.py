@@ -51,7 +51,8 @@ def main():
     updates = {}
     try:
         for key, workload in IMAGE_WORKLOADS.items():
-            updates[key] = pull(f"{registry}/flow-like-docker-compose-{workload}", tag)
+            repository = "flow-like-audit-worker" if workload == "audit-worker" else f"flow-like-docker-compose-{workload}"
+            updates[key] = pull(f"{registry}/{repository}", tag)
     except (RuntimeError, OSError, ValueError) as error:
         print(f"Pull failed: {error}", file=sys.stderr)
         return 1

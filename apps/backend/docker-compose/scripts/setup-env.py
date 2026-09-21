@@ -14,10 +14,24 @@ import time
 from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+AUDIT_KMS_SETTINGS = ("AUDIT_KMS_KEY_ID", "AUDIT_KMS_PROVIDER", "AUDIT_KMS_REGION", "AUDIT_KID",
+                      "AUDIT_KMS_AWS_ACCESS_KEY_ID", "AUDIT_KMS_AWS_SECRET_ACCESS_KEY",
+                      "AUDIT_VAULT_ADDR", "AUDIT_VAULT_TOKEN", "AUDIT_VAULT_TOKEN_FILE",
+                      "AUDIT_VAULT_CA_FILE")
+VAULT_PROVIDERS = {"vault", "openbao", "transit"}
+STRIPE_SETTINGS = ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_CONNECT_WEBHOOK_SECRET",
+                   "STRIPE_CONNECT_WEBHOOK_SECRET_PREVIOUS", "STRIPE_MARKETPLACE_WEBHOOK_SECRET",
+                   "STRIPE_MARKETPLACE_WEBHOOK_SECRET_PREVIOUS")
 
 
 def encoded(value):
     return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def p256_private_key():
+    """PKCS#8 PEM, the form both BACKEND_KEY and AUDIT_SIGNING_KEY expect."""
+    return subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"],
+                          capture_output=True, check=True).stdout
 
 
 def unique_json_keys(pairs):
@@ -29,8 +43,73 @@ def unique_json_keys(pairs):
     return result
 
 
-def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=None):
+def audit_key_values(audit_kms):
+    """A key in a key service replaces the generated AUDIT_SIGNING_KEY; the worker refuses both."""
+    audit_kms = {key: value for key, value in (audit_kms or {}).items() if value}
+    for key, value in audit_kms.items():
+        if not re.fullmatch(r"[^\s'\"$\\]+", value):
+            raise ValueError(f"{key} must be a single value without whitespace, quotes, '$' or '\\'")
+    if not audit_kms.get("AUDIT_KMS_KEY_ID"):
+        if set(audit_kms) - {"AUDIT_KID"}:
+            raise ValueError("AUDIT_KMS_* settings require AUDIT_KMS_KEY_ID")
+        # A separate key: the audit worker signs epochs with it, never tokens.
+        private = p256_private_key()
+        public = subprocess.run(["openssl", "pkey", "-pubout"], input=private, capture_output=True, check=True).stdout.decode()
+        kid = audit_kms.get("AUDIT_KID") or "audit-es256-" + secrets.token_hex(8)
+        return {**audit_kms, "AUDIT_SIGNING_KEY": base64.b64encode(private).decode(), "AUDIT_KID": kid,
+                "AUDIT_VERIFYING_KEYS": "'" + json.dumps({kid: public}, separators=(",", ":")) + "'"}
+    if audit_kms.get("AUDIT_VAULT_ADDR") or audit_kms.get("AUDIT_KMS_PROVIDER", "").lower() in VAULT_PROVIDERS:
+        if not audit_kms.get("AUDIT_VAULT_ADDR", "").startswith(("http://", "https://")):
+            raise ValueError("A Vault audit key needs AUDIT_VAULT_ADDR, for example https://vault:8200")
+        if not (audit_kms.get("AUDIT_VAULT_TOKEN") or audit_kms.get("AUDIT_VAULT_TOKEN_FILE")):
+            raise ValueError("A Vault audit key needs AUDIT_VAULT_TOKEN or AUDIT_VAULT_TOKEN_FILE")
+        return audit_kms
+    if bool(audit_kms.get("AUDIT_KMS_AWS_ACCESS_KEY_ID")) != bool(audit_kms.get("AUDIT_KMS_AWS_SECRET_ACCESS_KEY")):
+        raise ValueError("Set both AUDIT_KMS_AWS_ACCESS_KEY_ID and AUDIT_KMS_AWS_SECRET_ACCESS_KEY or neither")
+    return audit_kms
+
+
+def audit_worker_config(runtime):
+    """Copy only audit policy into the worker, never the API's provider configuration."""
+    supplied = runtime.get("AUDIT_WORKER_CONFIG_JSON", "")
+    reference = runtime.get("FLOW_LIKE_CONFIG_SECRET_REF", "")
+    try:
+        explicit = json.loads(supplied, object_pairs_hook=unique_json_keys) if supplied else None
+        if explicit is not None and (not isinstance(explicit, dict) or set(explicit) != {"audit"} or not isinstance(explicit["audit"], dict)):
+            raise ValueError()
+        if reference:
+            if explicit is None:
+                raise ValueError("A remote API config needs explicit AUDIT_WORKER_CONFIG_JSON containing only its audit policy")
+            audit = explicit["audit"]
+        else:
+            if runtime.get("FLOW_LIKE_CONFIG_JSON"):
+                source = json.loads(runtime["FLOW_LIKE_CONFIG_JSON"], object_pairs_hook=unique_json_keys)
+            else:
+                path = Path(runtime.get("FLOW_LIKE_RUNTIME_CONFIG_FILE") or ROOT / "flow-like.config.example.json")
+                if not path.is_absolute():
+                    path = ROOT / path
+                source = json.loads(path.read_text(), object_pairs_hook=unique_json_keys)
+            if not isinstance(source, dict) or not isinstance(source.get("audit", {}), dict):
+                raise ValueError()
+            audit = source.get("audit", {})
+            if explicit is not None and explicit["audit"] != audit:
+                raise ValueError("AUDIT_WORKER_CONFIG_JSON must match the API audit policy")
+        if audit.get("enabled") is False:
+            raise ValueError("The dedicated audit worker requires audit to be enabled")
+        return {"AUDIT_WORKER_CONFIG_JSON": json.dumps({"audit": audit}, separators=(",", ":")),
+                "AUDIT_WORKER_CONFIG_SECRET_REF": reference}
+    except (json.JSONDecodeError, TypeError, OSError):
+        raise ValueError("Cannot derive the worker audit policy; use a readable JSON API config or explicit AUDIT_WORKER_CONFIG_JSON for a remote source") from None
+
+
+def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=None, audit_kms=None, stripe=None):
     values = {}
+    for key in STRIPE_SETTINGS:
+        value = (stripe or {}).get(key, "")
+        if value and not re.fullmatch(r"[A-Za-z0-9_]+", value):
+            raise ValueError(f"{key} must contain only letters, digits and underscores")
+        if value:
+            values[key] = value
     runtime_config = dict(runtime_config or {})
     for key, value in runtime_config.items():
         if value and not value.strip():
@@ -50,22 +129,26 @@ def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=No
         runtime_config["FLOW_LIKE_CONFIG_JSON"] = json.dumps(parsed, separators=(",", ":"))
     if any(key in sources for key in ("FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF")):
         runtime_config["FLOW_LIKE_CONFIG_FILE"] = ""
+    runtime_config.update(audit_worker_config(runtime_config))
     # Single-quoted dotenv values preserve dollar signs and JSON quotes as data.
     values.update({key: "'" + value.replace("'", "\\'") + "'" if value else "" for key, value in runtime_config.items()})
     for key in ["POSTGRES_PASSWORD", "REDIS_API_PASSWORD", "REDIS_RUNTIME_PASSWORD",
                 "REDIS_SIGNALING_PASSWORD", "REDIS_SINK_PASSWORD", "REDIS_METRICS_PASSWORD",
                 "RUSTFS_ROOT_PASSWORD", "AWS_SECRET_ACCESS_KEY", "STS_ISSUER_SECRET_KEY",
-                "EXECUTION_MANAGER_TOKEN", "SINK_SECRET", "MAINTENANCE_TOKEN", "GRAFANA_ADMIN_PASSWORD"]:
+                "AUDIT_BUCKET_SECRET_ACCESS_KEY", "EXECUTION_MANAGER_TOKEN", "SINK_SECRET", "MAINTENANCE_TOKEN", "GRAFANA_ADMIN_PASSWORD"]:
         values[key] = secrets.token_hex(32)
     values["SINK_TOKEN_ENCRYPTION_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode()
-    for key in ["RUSTFS_ROOT_USER", "AWS_ACCESS_KEY_ID", "STS_ISSUER_ACCESS_KEY"]:
+    for key in ["RUSTFS_ROOT_USER", "AWS_ACCESS_KEY_ID", "STS_ISSUER_ACCESS_KEY", "AUDIT_BUCKET_ACCESS_KEY_ID"]:
         values[key] = secrets.token_hex(10)
-    private = subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256"],
-                             capture_output=True, check=True).stdout
+    private = p256_private_key()
     public = subprocess.run(["openssl", "pkey", "-pubout"], input=private, capture_output=True, check=True).stdout
     values["BACKEND_KEY"] = base64.b64encode(private).decode()
     values["BACKEND_PUB"] = base64.b64encode(public).decode()
-    values["DATABASE_URL"] = f"postgresql://flowlike:{quote(values['POSTGRES_PASSWORD'], safe='')}@postgres:5432/flowlike"
+    values.update(audit_key_values(audit_kms))
+    values["AUDIT_ENTRY_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode()
+    values["MIGRATION_DATABASE_URL"] = f"postgresql://flowlike:{quote(values['POSTGRES_PASSWORD'], safe='')}@postgres:5432/flowlike"
+    values["DATABASE_URL"] = f"postgresql://flowlike_api:{secrets.token_hex(32)}@postgres:5432/flowlike"
+    values["AUDIT_DATABASE_URL"] = f"postgresql://flowlike_audit:{secrets.token_hex(32)}@postgres:5432/flowlike"
     header = encoded(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
     payload = encoded(json.dumps({"sub": "sink-trigger", "iss": "flow-like", "sink_types": ["cron", "discord", "telegram"],
                                  "iat": int(time.time())}, separators=(",", ":")).encode())
@@ -73,6 +156,7 @@ def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=No
     signature = encoded(hmac.new(values["SINK_SECRET"].encode(), message.encode(), hashlib.sha256).digest())
     values["SINK_TRIGGER_JWT"] = f"{message}.{signature}"
     values.update({"NEXT_PUBLIC_API_URL": api_url, "PUBLIC_API_URL": api_url,
+                   "FRONTEND_BASE_URL": web_origin.rstrip("/"),
                    "NEXT_PUBLIC_REDIRECT_URL": web_origin.rstrip("/") + "/callback",
                    "NEXT_PUBLIC_REDIRECT_LOGOUT_URL": web_origin.rstrip("/") + "/",
                    "REALTIME_ALLOWED_ORIGINS": web_origin, "CORS_ALLOWED_ORIGINS": web_origin, "S3_PUBLIC_ENDPOINT": s3_endpoint,
@@ -98,9 +182,11 @@ def main():
             parser.error("URLs must be HTTP(S) origins without credentials, query, or path")
     if args.output.exists() or args.output.is_symlink():
         parser.error("Output already exists; refusing to replace deployment secrets")
-    runtime_config = {key: os.environ[key] for key in ("FLOW_LIKE_RUNTIME_CONFIG_FILE", "FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF") if key in os.environ}
+    runtime_config = {key: os.environ[key] for key in ("FLOW_LIKE_RUNTIME_CONFIG_FILE", "FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF", "AUDIT_WORKER_CONFIG_JSON") if key in os.environ}
+    audit_kms = {key: os.environ[key] for key in AUDIT_KMS_SETTINGS if key in os.environ}
+    stripe = {key: os.environ[key] for key in STRIPE_SETTINGS if key in os.environ}
     try:
-        data = generate((ROOT / ".env.example").read_text(), args.mode, args.web_origin.rstrip("/"), args.api_url.rstrip("/"), args.s3_endpoint.rstrip("/"), runtime_config)
+        data = generate((ROOT / ".env.example").read_text(), args.mode, args.web_origin.rstrip("/"), args.api_url.rstrip("/"), args.s3_endpoint.rstrip("/"), runtime_config, audit_kms, stripe)
     except ValueError as error:
         parser.error(str(error))
     fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

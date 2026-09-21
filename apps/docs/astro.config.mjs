@@ -176,6 +176,7 @@ export default defineConfig({
 								{ label: "Templates", slug: "apps/templates" },
 								{ label: "Storage", slug: "apps/storage" },
 								{ label: "Sharing", slug: "apps/share" },
+								{ label: "Audit Trail & Export", slug: "apps/audit-trail" },
 								{ label: "Offline & Online", slug: "apps/offline-online" },
 							],
 						},
@@ -383,6 +384,7 @@ export default defineConfig({
 						{ label: "Desktop Client", slug: "self-hosting/desktop-client" },
 						{ label: "Container Releases", slug: "self-hosting/containers" },
 						{ label: "Signaling", slug: "self-hosting/signaling" },
+						{ label: "Audit Trail Storage", slug: "self-hosting/audit-trail" },
 						{
 							label: "Local Backend Development",
 							slug: "self-hosting/local-development",

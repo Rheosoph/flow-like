@@ -159,7 +159,7 @@ Database secret name
 */}}
 {{- define "flow-like.databaseSecretName" -}}
 {{- if eq (include "flow-like.databaseMode" .) "internal" -}}
-{{- printf "%s-cockroachdb" (include "flow-like.fullname" .) -}}
+{{- required "database.apiExistingSecret is required; run scripts/setup-config.py" .Values.database.apiExistingSecret -}}
 {{- else -}}
 {{- if (ne (default "" .Values.database.external.existingSecret) "") -}}
 {{- .Values.database.external.existingSecret -}}

@@ -43,6 +43,77 @@ for source handling and optional custom compiled defaults. A default compiled
 through a BuildKit secret is still embedded in the binary and must contain no
 credentials.
 
+## Deploy the audit worker separately
+
+The API records pending audit events. A separate Cloud Run Job seals and signs them,
+writes daily signed checkpoints and archives, and prunes archived database rows. The API image
+does not run that job. Deploy it before directing traffic to the new API version.
+
+Use `apps/backend/gcp/audit-worker/deploy.py` from the repository root. It prints
+the proposed commands unless `--apply` is supplied. It creates separate worker and
+scheduler service accounts, a bucket with locked retention, and a minute-by-minute
+schedule. The worker has object creation/read access and permission to sign with
+one Cloud KMS key. The scheduler can only invoke the job.
+
+Prepare these resources first:
+
+- A versioned Cloud KMS `EC_SIGN_P256_SHA256` signing key. Keep key administration
+  outside the API identity. Enable Cloud Run, Cloud Scheduler, Secret Manager,
+  Cloud KMS, and Policy Troubleshooter APIs in the relevant projects.
+- Secret Manager secrets for the worker's dedicated PostgreSQL `DATABASE_URL`, the
+  shared base64 `AUDIT_ENTRY_KEY`, and the audit configuration JSON. A minimal
+  configuration is `{"audit":{"enabled":true,"require_signing":true}}`. The API
+  must resolve the same entry key through its secret store. Its database identity
+  must differ from the worker login. Use TLS certificate verification in the
+  database URL and the [database grants below](#database-bootstrap-and-token-rotation).
+- A private network/subnet that reaches PostgreSQL and an immutable digest of
+  `ghcr.io/rheosoph/flow-like-gcp-audit-worker`. Mirror the image to an Artifact
+  Registry repository accessible to Cloud Run before deployment and set
+  `AUDIT_WORKER_IMAGE` to its complete `@sha256:` reference.
+
+```sh
+python3 apps/backend/gcp/audit-worker/deploy.py \
+  --project audit-project --region europe-west1 \
+  --bucket organization-audit-evidence \
+  --api-service-account api@app-project.iam.gserviceaccount.com \
+  --image "$AUDIT_WORKER_IMAGE" \
+  --key-version projects/audit-project/locations/europe-west1/keyRings/audit/cryptoKeys/timeline/cryptoKeyVersions/1 \
+  --database-secret audit-database-url \
+  --entry-key-secret audit-entry-key --config-secret audit-config \
+  --network audit-network --subnet audit-database
+```
+
+For a Cloud SQL instance CA, add `--database-ca-secret cloud-sql-server-ca` and
+include `sslmode=verify-full&sslrootcert=/etc/audit-db/server-ca.pem` in the worker
+database URL. The secret contains the PEM certificate and is mounted as a file.
+Use the instance hostname covered by its certificate and resolve it through the
+private network.
+
+Review the output, then repeat with `--apply`. That operation locks retention;
+the bucket's retention period cannot subsequently be shortened. The default of
+1461 days covers the default archive horizon. Increase `--retention-days` when
+raising `archive_years_after_year_end`. Existing buckets must already have at
+least the requested retention, uniform bucket-level access, and public access
+prevention. The script checks the effective lock before deploying the job.
+
+The script requires Policy Troubleshooter to establish that the API cannot sign,
+access the audit bucket or worker database/configuration secrets, impersonate the
+worker, or change its job/IAM policies. Inherited access or an inconclusive check
+stops deployment. The deployment identity needs visibility into ancestor policies;
+remove broad API grants rather than bypassing the checks. The entry key and the
+optional `--encryption-secret` are intentionally shared with the API. Supply the
+latter for webhook exports as the same `SINK_TOKEN_ENCRYPTION_KEY` used by the API.
+The script also rejects inherited worker permissions to delete evidence, change
+retention, administer signing keys/secrets, or modify its own job.
+
+Set `AUDIT_WORKER=off` on the API and remove its `AUDIT_KMS_*`, audit bucket, and
+signing-key settings. API startup rejects worker settings. Give it public
+`AUDIT_VERIFYING_KEYS` for verification. After applying the deployment, verify a
+signed checkpoint from `checkpoints/YYYY/MM/DD.json` and copy checkpoints to
+storage controlled independently of this project. Use the worker binary's
+`--verify-checkpoint FILE` mode with public verifying keys and a database account
+that can only read evidence. Alert on failed jobs and missing or stale checkpoints.
+
 ## Required API environment
 
 ```text
@@ -195,6 +266,31 @@ Run existing-table grants after the initial schema push. Default privileges
 cover future objects created by the migration role. Keep DDL, role
 administration, and database ownership off the API identity. The file-tracking
 worker needs its own IAM user with update rights on `App` and `User`.
+
+Those broad runtime grants need a final audit-specific restriction after every
+schema migration. Create a separate password login for the audit worker and store
+its TLS-enabled URL only in the worker's Secret Manager secret. Create this role
+with SQL `CREATE ROLE ... LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`, without role
+memberships. Cloud SQL's default built-in user creation grants `cloudsqlsuperuser`,
+which is unsuitable for this worker. See [Cloud SQL's system roles](https://docs.cloud.google.com/sql/docs/postgres/users).
+With the schema owner's `DATABASE_URL`
+available to Bun, run:
+
+```sh
+AUDIT_DB_GRANTS_ONLY=true \
+API_DATABASE_ROLE='<api-account>@<project>.iam' \
+AUDIT_DATABASE_ROLE=flow_like_audit \
+bun apps/backend/shared/audit_database_roles.ts
+```
+
+This mode preserves the IAM login and does not set its password. It restricts API
+audit access to reading evidence and inserting pending records; the worker owns
+sealing, signing state, archives, and its lease. Run it before starting either
+workload, with the `pg` dependency available to Bun. Worker and API roles must not
+inherit an application owner or other role that restores those privileges.
+Grant-only mode preserves the non-group `cloudsqliamserviceaccount` and
+`cloudsqliamuser` login markers and checks them for inherited audit write or DDL
+rights before committing the grants.
 
 The API and file tracker request a token scoped to
 `https://www.googleapis.com/auth/sqlservice.login` and use SQL connection

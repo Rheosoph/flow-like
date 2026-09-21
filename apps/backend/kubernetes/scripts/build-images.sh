@@ -10,7 +10,7 @@ OUTPUT_FILE="${IMAGE_VALUES_FILE:-$BACKEND_DIR/.generated/values-images.yaml}"
 export DOCKER_BUILDKIT=1
 records=$(mktemp)
 trap 'rm -f "$records"' EXIT
-for component in ${COMPONENTS:-api executor execution-manager sink-trigger runtime compiler signaling migration object-store-init web}; do
+for component in ${COMPONENTS:-api executor execution-manager sink-trigger runtime compiler signaling migration object-store-init audit-worker web}; do
   context="$REPO_DIR"
   case "$component" in
     api|executor|execution-manager|migration|web|sink-trigger)
@@ -19,6 +19,9 @@ for component in ${COMPONENTS:-api executor execution-manager sink-trigger runti
     runtime|compiler|signaling)
       dockerfile="$BACKEND_DIR/../docker-compose/$component/Dockerfile"
       repository="$REGISTRY/flow-like-docker-compose-$component" ;;
+    audit-worker)
+      dockerfile="$BACKEND_DIR/../audit-worker/Dockerfile"
+      repository="$REGISTRY/flow-like-audit-worker" ;;
     object-store-init)
       dockerfile="$BACKEND_DIR/../docker-compose/object-store/Dockerfile"
       repository="$REGISTRY/flow-like-docker-compose-$component" ;;
@@ -43,7 +46,7 @@ mkdir -p "$(dirname "$OUTPUT_FILE")"
 python3 - "$records" "$OUTPUT_FILE" <<'PY'
 import json,sys
 from pathlib import Path
-mapping={'api':[('api','image')],'web':[('web','image')],'signaling':[('signaling','image')],'compiler':[('compiler','image')],'migration':[('database','migration','image')],'runtime':[('executionManager','queueBridge','image')],'execution-manager':[('executionManager','image')],'object-store-init':[('rustfs','bootstrap','image')],'sink-trigger':[('sinkServices','image')],'executor':[('executor','image'),('executorPool','image')]}
+mapping={'audit-worker':[('audit','image')],'api':[('api','image')],'web':[('web','image')],'signaling':[('signaling','image')],'compiler':[('compiler','image')],'migration':[('database','migration','image')],'runtime':[('executionManager','queueBridge','image')],'execution-manager':[('executionManager','image')],'object-store-init':[('rustfs','bootstrap','image')],'sink-trigger':[('sinkServices','image')],'executor':[('executor','image'),('executorPool','image')]}
 values=json.loads(Path(sys.argv[2]).read_text()) if Path(sys.argv[2]).exists() else {}
 values.setdefault('global',{})['imageRegistry']=''
 for line in open(sys.argv[1]):

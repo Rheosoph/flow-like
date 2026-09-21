@@ -304,7 +304,7 @@ pub async fn restore_event(
         "event.restore",
         "Event",
         event_id,
-        "Event restored from an archived version"
+        serde_json::json!({ "restored_version": super::dotted_version_key(body.version) })
     );
 
     // Forward-only: a failed re-setup never rolls the restore back — inbound

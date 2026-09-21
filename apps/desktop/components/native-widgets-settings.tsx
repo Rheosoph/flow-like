@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import { classifyAppEventInterface } from "@flow-like/flow-like-ui/components/global-chat/app-event-interface";
 import { HomeDataWidgetSettings } from "@flow-like/flow-like-ui/components/home/data-widget-settings";
 import { normalizeHomeDataConfig } from "@flow-like/flow-like-ui/components/home/home-data-query";
@@ -42,7 +44,6 @@ import {
 	Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -306,7 +307,7 @@ function WidgetEditor({
 	onClose: () => void;
 }) {
 	const backend = useBackend();
-	const router = useRouter();
+	const router = useClientRouter();
 	const [draft, setDraft] = useState(initial);
 	const [preview, setPreview] = useState<NativeCustomWidget>();
 	const [error, setError] = useState<string>();

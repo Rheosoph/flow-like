@@ -116240,6 +116240,183 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
+    "slug": "nodes/payments/request-payment",
+    "packageName": "std",
+    "name": "request_payment",
+    "friendlyName": "Request Payment",
+    "description": "Ask the signed-in user to pay the app owner and wait for the verified result",
+    "category": "Payments",
+    "categoryPath": [
+      "Payments"
+    ],
+    "categorySlug": "nodes/payments",
+    "icon": "/flow/icons/credit-card.svg",
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Start payment",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "currency",
+        "friendlyName": "Currency",
+        "description": "Supported three-letter currency",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "eur",
+        "index": 2
+      },
+      {
+        "name": "product_name",
+        "friendlyName": "Product",
+        "description": "Plain-text product name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "Payment",
+        "index": 3
+      },
+      {
+        "name": "description",
+        "friendlyName": "Description",
+        "description": "Plain-text description",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "product_tax_code",
+        "friendlyName": "Product Tax Code",
+        "description": "Required Stripe tax code for the product or service, selected from Stripe's tax code list",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "shipping_countries",
+        "friendlyName": "Shipping Countries",
+        "description": "For shipped goods, comma-separated delivery country codes such as DE,FR. Leave empty when no delivery address is needed.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 6
+      },
+      {
+        "name": "reference",
+        "friendlyName": "Reference",
+        "description": "Optional application reference",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 7
+      },
+      {
+        "name": "simulation",
+        "friendlyName": "Board Test Result",
+        "description": "Local Board Test only: paid, canceled, expired or failed. Empty requests a real payment.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 8
+      },
+      {
+        "name": "amount_minor",
+        "friendlyName": "Amount",
+        "description": "Total including applicable tax in integer minor units, for example 119 for EUR 1.19",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 100,
+        "index": 9
+      },
+      {
+        "name": "ttl_seconds",
+        "friendlyName": "Timeout",
+        "description": "Requested timeout in seconds, limited by the remaining run quota",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 300,
+        "index": 10
+      },
+      {
+        "name": "paid",
+        "friendlyName": "paid",
+        "description": "Authoritative payment result",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "canceled",
+        "friendlyName": "canceled",
+        "description": "Authoritative payment result",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "expired",
+        "friendlyName": "expired",
+        "description": "Authoritative payment result",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "failed",
+        "friendlyName": "failed",
+        "description": "Authoritative payment result",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "payment_id",
+        "friendlyName": "Payment ID",
+        "description": "Server payment request identifier, or a sim_ identifier in Board Test",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "reason",
+        "friendlyName": "Reason",
+        "description": "Machine-readable outcome reason",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 6
+      }
+    ],
+    "inputCount": 10,
+    "outputCount": 6,
+    "flags": [
+      "Long running"
+    ],
+    "docs": "https://docs.flow-like.com/nodes/payments/",
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
     "slug": "nodes/processing/privacy/processing-pii-detection-options",
     "packageName": "processing",
     "name": "processing_pii_detection_options",
@@ -162253,6 +162430,14 @@ export const catalogCategories: CatalogCategory[] = [
     "depth": 2,
     "count": 2,
     "description": "Browse 2 generated Flow-Like node references in AI/Preprocessing with pin details and available schema, package, and risk-rating metadata."
+  },
+  {
+    "label": "Payments",
+    "path": "Payments",
+    "slug": "nodes/payments",
+    "depth": 1,
+    "count": 1,
+    "description": "Browse 1 generated Flow-Like node reference in Payments with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Processing",

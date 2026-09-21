@@ -154,7 +154,7 @@ pub async fn change_group_visibility(
             "app_group.visibility",
             "AppGroup",
             group_id,
-            format!("Suite visibility changed to {:?}", target_visibility)
+            serde_json::json!({ "visibility": target_visibility })
         );
 
         return Ok(Json(ChangeGroupVisibilityResponse {
@@ -230,7 +230,7 @@ pub async fn change_group_visibility(
         "app_group.visibility.request",
         "AppGroup",
         group_id,
-        format!("Publication review requested for {:?}", target_visibility)
+        serde_json::json!({ "visibility": target_visibility })
     );
 
     Ok(Json(ChangeGroupVisibilityResponse {

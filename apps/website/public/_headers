@@ -5,3 +5,30 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.github.com https://api.flow-like.com https://650afa0c.sibforms.com; img-src 'self' data: https:; font-src 'self' data:; media-src 'self'; frame-src https://challenges.cloudflare.com; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://650afa0c.sibforms.com; upgrade-insecure-requests
+
+/parallax/optimized/v2/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/legal/payments/owner-terms/2026-09-20-draft-1/en/text.txt
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: text/plain; charset=utf-8
+
+/legal/payments/owner-terms/2026-09-20-draft-1/de/text.txt
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: text/plain; charset=utf-8
+
+/legal/payments/seller-terms/2026-09-20-draft-1/en/text.txt
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: text/plain; charset=utf-8
+
+/legal/payments/seller-terms/2026-09-20-draft-1/de/text.txt
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: text/plain; charset=utf-8
+
+/legal/payments/purchase-terms/2026-09-20-draft-1/en/text.txt
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: text/plain; charset=utf-8
+
+/legal/payments/purchase-terms/2026-09-20-draft-1/de/text.txt
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: text/plain; charset=utf-8

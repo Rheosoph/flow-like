@@ -28,6 +28,7 @@ pub mod list_tables;
 pub mod list_tables_user;
 pub mod optimize;
 pub mod presign_db_access;
+pub mod references;
 pub mod saved_queries;
 pub mod table_view;
 
@@ -121,6 +122,21 @@ impl ScopedPaginationParams {
             scope: self.scope.clone(),
         }
     }
+}
+
+pub fn validate_writable_selector(
+    selector: &flow_like_storage::contracts::database::DatabaseSelector,
+) -> Result<(), ApiError> {
+    selector
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if selector.is_read_only() {
+        return Err(ApiError::bad_request(
+            "This reference is read-only. Select the latest version of a branch before editing it."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
@@ -223,6 +239,11 @@ pub fn routes() -> Router<AppState> {
                 .get(db_list::list_items),
         )
         .route("/{table}/table", delete(drop_table::drop_table))
+        .route("/{table}/compare", post(references::compare))
+        .route(
+            "/{table}/references",
+            get(references::history).post(references::reference_action),
+        )
         .route("/{table}/update", put(db_update::update_table))
         .route("/{table}/optimize", post(optimize::optimize_table))
         .route(

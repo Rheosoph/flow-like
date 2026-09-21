@@ -81,8 +81,6 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub wasm_package_join_queues: HasMany<super::wasm_package_join_queue::Entity>,
     #[sea_orm(has_many)]
-    pub wasm_package_purchases: HasMany<super::wasm_package_purchase::Entity>,
-    #[sea_orm(has_many)]
     pub wasm_package_reviews: HasMany<super::wasm_package_review::Entity>,
     #[sea_orm(has_many)]
     pub wasm_package_users: HasMany<super::wasm_package_user::Entity>,

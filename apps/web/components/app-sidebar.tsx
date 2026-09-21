@@ -67,6 +67,7 @@ import {
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { motion } from "framer-motion";
@@ -80,7 +81,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
 	type ComponentType,
 	useCallback,
@@ -243,7 +244,7 @@ function GlobalChrome({ chromeless }: Readonly<{ chromeless: boolean }>) {
 }
 
 function InnerSidebar() {
-	const router = useRouter();
+	const router = useClientRouter();
 	const { open, toggleSidebar } = useSidebar();
 	const { setTheme } = useTheme();
 	const { t } = useTranslation(["common", "settings"]);
@@ -830,7 +831,7 @@ function NavMain({
 }>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
 	const { developerMode } = useDeveloperMode();
@@ -1046,7 +1047,7 @@ export function NavUser({
 function Flows() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const params = useSearchParams();
 	const openBoards = useInvoke(

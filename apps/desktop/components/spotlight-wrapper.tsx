@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import {
 	CrashReportDialog,
 	IBitTypes,
@@ -28,7 +30,7 @@ import {
 	Users,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -67,7 +69,7 @@ function isDevOnlyPath(path: string): boolean {
 
 export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const { t } = useTranslation("common");
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const { setTheme } = useTheme();

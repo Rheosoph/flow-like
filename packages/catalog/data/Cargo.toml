@@ -86,7 +86,7 @@ flow-like-types.workspace = true
 flow-like-ast.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage = { workspace = true, default-features = false }
-flow-like-storage-contracts = { workspace = true, features = ["graph"] }
+flow-like-storage-contracts = { workspace = true, features = ["graph", "database"] }
 flow-like-catalog-macros.workspace = true
 ahash.workspace = true
 blake3.workspace = true

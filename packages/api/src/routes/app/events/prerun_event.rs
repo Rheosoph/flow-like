@@ -86,7 +86,7 @@ pub struct PrerunEventResponse {
     pub manifest_revision: Option<String>,
 }
 
-fn build_response(
+pub(crate) fn build_response(
     board_id: String,
     payload: PrerunPayload,
     event_execution_mode: EventExecutionMode,

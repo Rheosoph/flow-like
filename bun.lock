@@ -276,6 +276,7 @@
         "@floating-ui/react": "^0.27.14",
         "@flow-like/flow-like-ui": "workspace:*",
         "@flow-like/locales": "workspace:*",
+        "@tanstack/react-query": "^5.63.0",
         "@paralleldrive/cuid2": "^2.2.2",
         "@radix-ui/react-accordion": "^1.2.11",
         "@radix-ui/react-alert-dialog": "^1.1.14",

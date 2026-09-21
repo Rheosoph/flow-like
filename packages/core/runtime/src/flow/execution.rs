@@ -313,7 +313,28 @@ pub struct LogMeta {
 }
 
 #[derive(Clone)]
+pub struct ExecutorPaymentAuth {
+    token: String,
+    callback_url: String,
+}
+impl ExecutorPaymentAuth {
+    pub fn new(token: String, callback_url: String) -> Self {
+        Self {
+            token,
+            callback_url,
+        }
+    }
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+    pub fn callback_url(&self) -> &str {
+        &self.callback_url
+    }
+}
+
+#[derive(Clone)]
 pub struct Run {
+    pub executor_payment_auth: Option<ExecutorPaymentAuth>,
     pub id: String,
     pub app_id: String,
     /// Server-backed app ID used for hosted-model usage attribution.
@@ -763,6 +784,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 /// Cached immutable fields from Run to avoid locking during hot path execution
 #[derive(Clone)]
 pub struct RunMeta {
+    pub executor_payment_auth: Option<ExecutorPaymentAuth>,
     pub run_id: String,
     pub app_id: String,
     pub model_usage_app_id: Option<String>,
@@ -1051,6 +1073,7 @@ impl InternalRun {
         )));
         let resources = Arc::new(resources::RunResources::default());
         let run = Run {
+            executor_payment_auth: None,
             id: run_id.clone(),
             app_id: app_id.to_string(),
             model_usage_app_id: Some(app_id.to_string()),
@@ -1259,6 +1282,7 @@ impl InternalRun {
             cancellation_log_message: "Run cancelled".to_string(),
             // Cached immutable fields from Run
             meta: RunMeta {
+                executor_payment_auth: None,
                 run_id: run_id.clone(),
                 app_id: app_id.to_string(),
                 model_usage_app_id: Some(app_id.to_string()),
@@ -1302,6 +1326,11 @@ impl InternalRun {
         run.log_spill_threshold = spill_threshold;
 
         Ok(())
+    }
+
+    pub async fn set_executor_payment_auth(&mut self, auth: ExecutorPaymentAuth) {
+        self.run.lock().await.executor_payment_auth = Some(auth.clone());
+        self.meta.executor_payment_auth = Some(auth);
     }
 
     pub fn set_cancellation_token(&mut self, token: CancellationToken) {

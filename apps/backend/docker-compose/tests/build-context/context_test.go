@@ -46,6 +46,7 @@ func TestRequiredWorkspaceInputsRemainInContext(t *testing.T) {
 	paths := []string{
 		"Cargo.toml", "Cargo.lock", ".cargo/config.toml", "package.json", "bun.lock", "LICENSE",
 		"flow-like.config.json", "assets/mcp-inspector.html",
+		"apps/website/src/content/legal/payments/2026-09-20-draft-1.json",
 		"apps/backend/aws/api/Dockerfile", "apps/backend/aws/api/Cargo.toml",
 		"apps/backend/aws/api-ecs/Dockerfile", "apps/backend/aws/api-ecs/Cargo.toml",
 		"apps/backend/aws/shared/api_bootstrap.rs", "apps/backend/aws/shared/span_export.rs",
@@ -68,6 +69,9 @@ func TestRequiredWorkspaceInputsRemainInContext(t *testing.T) {
 		"apps/backend/execution-manager/src/docker/engine.rs",
 		"apps/backend/execution-manager/src/gateway/proxy.rs",
 		"apps/backend/shared/api_hardening.rs",
+		"apps/backend/shared/audit_database_roles.ts",
+		"apps/backend/audit-worker/Dockerfile",
+		"apps/backend/audit-worker/Cargo.toml",
 		"apps/backend/kubernetes/api/src/main.rs",
 		"apps/backend/execution-manager/src/kubernetes/mod.rs",
 		"apps/backend/execution-manager/src/kubernetes/slot.rs",

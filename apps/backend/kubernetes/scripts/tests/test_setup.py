@@ -15,6 +15,28 @@ setup = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(setup)
 
 class SetupTest(unittest.TestCase):
+    def test_hosted_frontends_reuse_the_web_origin_for_separate_and_shared_hosts(self):
+        web = "https://app.example.test"
+        for api in ["https://api.example.test", web]:
+            with self.subTest(api=api), patch.dict(os.environ, {"PUBLIC_WEB_URL": web, "PUBLIC_API_URL": api}, clear=True):
+                _, values = setup.generate("flow-like", "flow-like")
+            self.assertEqual(values["api"]["frontendBaseUrl"], web)
+            self.assertIn(web, values["api"]["corsAllowedOrigins"])
+
+    def test_stripe_credentials_are_private_api_secret_values(self):
+        environment = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
+        with patch.dict(os.environ, environment, clear=True):
+            objects, values = setup.generate("flow-like", "flow-like")
+        api_name = values["api"]["existingSecret"]
+        api_secret = next(item for item in objects["items"] if item["metadata"]["name"] == api_name)
+        for key, value in environment.items():
+            self.assertEqual(api_secret["stringData"][key], value)
+            self.assertNotIn(value, json.dumps(values))
+            self.assertFalse(any(key in item["stringData"] for item in objects["items"] if item != api_secret))
+        with patch.dict(os.environ, {}, clear=True):
+            objects, _ = setup.generate("flow-like", "flow-like")
+        self.assertFalse(any(key in item["stringData"] for item in objects["items"] for key in setup.STRIPE_SETTINGS))
+
     def test_hub_file_and_json_are_private_objects_not_image_build_inputs(self):
         marker = {"name": "runtime-only", "domain": "configured.example.test"}
         with tempfile.TemporaryDirectory() as directory:
@@ -132,6 +154,7 @@ if sys.argv[1:3]==['image','inspect']:
             values = json.loads(output.read_text())
             expected = {
                 ("api", "image"): "flow-like-kubernetes-api",
+                ("audit", "image"): "flow-like-audit-worker",
                 ("web", "image"): "flow-like-kubernetes-web",
                 ("executor", "image"): "flow-like-kubernetes-executor",
                 ("executorPool", "image"): "flow-like-kubernetes-executor",

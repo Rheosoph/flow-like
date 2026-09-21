@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::create_id;
-use sea_orm::ActiveModelTrait;
+use sea_orm::{ActiveModelTrait, EntityTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -49,6 +49,17 @@ pub async fn create_invite_link(
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
 
+    let app = crate::entity::app::Entity::find_by_id(&app_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    if app.price > 0 {
+        return Err(crate::payments::error(
+            "PURCHASE_REQUIRED",
+            "Use the owner's complimentary access action for a paid app",
+        ));
+    }
+
     let nonce = create_id();
     let link_id = create_id();
 
@@ -77,14 +88,6 @@ pub async fn create_invite_link(
     let new_link: invite_link::ActiveModel = new_link.into();
     new_link.insert(&state.db).await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "invite.create",
-        "InviteLink",
-        link_id,
-        "Invite link created"
-    );
+    audit_branch!(state, user, app_id, "invite.create", "InviteLink", link_id);
     Ok(Json(()))
 }

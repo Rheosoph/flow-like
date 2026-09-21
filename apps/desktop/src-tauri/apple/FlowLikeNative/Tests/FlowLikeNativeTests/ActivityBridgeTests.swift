@@ -99,6 +99,104 @@ private final class ActivityDelegateFixture: NSObject {
     }
 }
 
+@Test func handoffCleanPathsDecodeOnceAndKeepNestedQueries() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try handoffStore(directory)
+    let activity = NSUserActivity(activityType: NativeSystemIntegration.activityType)
+    activity.userInfo = ["scope": "alice"]
+    activity.webpageURL = URL(string: "https://hub.example/use/caf%C3%A9%20sale/encoded%2520path/50%25?id=app&route=%2Fstale&eventId=unknown&appQuery=tag%3Done%26tag%3Dtwo%26id%3Drecord&token=secret")!
+    #expect(NativeActivityBridge.handle(activity, store: store))
+    let action = try #require(store.takeActions().first?.action)
+    #expect(action.kind == "open_app")
+    #expect(action.appId == "app")
+    #expect(action.path == "/café sale/encoded%20path/50%")
+    #expect(action.queryParams == [
+        NativeQueryParameter(name: "tag", value: "one"),
+        NativeQueryParameter(name: "tag", value: "two"),
+        NativeQueryParameter(name: "id", value: "record"),
+    ])
+}
+
+@Test func handoffCleanRootIsExplicitWhileBareUseKeepsEventSelection() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try handoffStore(directory)
+    var snapshot = try #require(store.catalog())
+    snapshot.events = [NativeEvent(id: "app:page", appId: "app", eventId: "page", title: "Page",
+                                  eventType: "page", action: NativeAction(kind: "open_event", appId: "app", eventId: "page"),
+                                  surfaces: ["siri"])]
+    try store.publish(JSONEncoder().encode(snapshot))
+    let activity = NSUserActivity(activityType: NativeSystemIntegration.activityType)
+    activity.userInfo = ["scope": "alice"]
+    activity.webpageURL = URL(string: "https://hub.example/use/?id=app&eventId=page&route=%2Fstale")!
+    #expect(NativeActivityBridge.handle(activity, store: store))
+    let root = try #require(store.takeActions().first?.action)
+    #expect(root.kind == "open_app")
+    #expect(root.path == "/")
+    activity.webpageURL = URL(string: "https://hub.example/use?id=app&eventId=page")!
+    #expect(NativeActivityBridge.handle(activity, store: store))
+    let event = try #require(store.takeActions().first?.action)
+    #expect(event.kind == "open_event")
+    #expect(event.eventId == "page")
+    #expect(event.path == nil)
+}
+
+@Test func handoffCleanPathsRetainOriginScopeAndShellValidation() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try handoffStore(directory)
+    for (url, scope) in [
+        ("https://other.example/use/orders?id=app", "alice"),
+        ("https://hub.example/use/orders?id=app", "bob"),
+        ("https://user:password@hub.example/use/orders?id=app", "alice"),
+        ("https://hub.example/use/orders?id=app#fragment", "alice"),
+        ("https://hub.example/use/orders?id=missing", "alice"),
+        ("https://hub.example/use/orders?id=app&id=app", "alice"),
+        ("https://hub.example/use/orders?id=app&eventId=one&eventId=two", "alice"),
+        ("https://hub.example/use/orders?id=app&route=%2Fone&route=%2Ftwo", "alice"),
+        ("https://hub.example/use/orders?id=app&appQuery=x%3Da&appQuery=x%3Db", "alice"),
+        ("https://hub.example/users?id=app&route=%2Forders", "alice"),
+        ("https://hub.example/use%2Forders?id=app", "alice"),
+        ("https://hub.example/use/a%2Fb?id=app&route=%2Fsafe", "alice"),
+        ("https://hub.example/use/%5Corders?id=app", "alice"),
+        ("https://hub.example/use/%00?id=app", "alice"),
+        ("https://hub.example/use/%0A?id=app", "alice"),
+        ("https://hub.example/use/%3Fquery?id=app", "alice"),
+        ("https://hub.example/use/%23fragment?id=app", "alice"),
+        ("https://hub.example/use/%E0%A4?id=app", "alice"),
+        ("https://hub.example/use/../orders?id=app", "alice"),
+        ("https://hub.example/use/%2e%2e/orders?id=app", "alice"),
+        ("https://hub.example/use//orders?id=app", "alice"),
+    ] {
+        let activity = NSUserActivity(activityType: NativeSystemIntegration.activityType)
+        activity.userInfo = ["scope": scope]
+        activity.webpageURL = URL(string: url)!
+        #expect(!NativeActivityBridge.handle(activity, store: store), "Rejected \(url)")
+        #expect(try store.takeActions().isEmpty)
+    }
+    #expect(throws: NativeIntegrationError.self) {
+        try NativeActivityBridge.appRoutePath(percentEncodedPath: "/use/%invalid")
+    }
+}
+
+@Test func publishedHandoffAcceptsValidatedCleanAppPaths() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try handoffStore(directory)
+    var snapshot = try #require(store.catalog())
+    for path in ["/use/orders", "/use/", "/use/caf%C3%A9/encoded%2520path"] {
+        snapshot.activePage = NativePage(title: "Orders", url: "https://hub.example\(path)?id=app&appQuery=")
+        let activity = try #require(NativeSystemIntegration.handoffActivity(snapshot))
+        #expect(activity.webpageURL?.absoluteString == snapshot.activePage?.url)
+        #expect(activity.userInfo?["scope"] as? String == "alice")
+    }
+    for path in ["/users", "/use/a%2Fb", "/use/../orders", "/use/%2e%2e/orders", "/use/%5Corders"] {
+        snapshot.activePage = NativePage(title: "Orders", url: "https://hub.example\(path)?id=app")
+        #expect(NativeSystemIntegration.handoffActivity(snapshot) == nil)
+    }
+}
+
 @Test func handoffRestoresAnExpiredReceiverCatalogWithoutExposingStaleWidgets() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

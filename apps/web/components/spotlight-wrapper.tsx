@@ -13,6 +13,7 @@ import {
 	useInvoke,
 	useSpotlightStore,
 } from "@flow-like/flow-like-ui";
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -22,7 +23,7 @@ import {
 	ExternalLink,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -39,7 +40,7 @@ interface SpotlightWrapperProps {
 
 export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const { t } = useTranslation("common");
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const { setTheme } = useTheme();

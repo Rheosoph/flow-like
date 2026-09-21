@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     metrics::init_telemetry();
+    flow_like_api::audit::worker::bucket::ensure_api_only()?;
 
     tracing::info!("Starting Flow-Like Kubernetes API Service");
 
@@ -79,6 +80,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         RunSweeperConfig::from_env(),
     );
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
+    let _payments_worker = flow_like_api::payments::worker::spawn(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),

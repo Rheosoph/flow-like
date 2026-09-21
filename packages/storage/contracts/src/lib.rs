@@ -6,5 +6,7 @@
 
 #[cfg(feature = "graph")]
 pub mod graph;
+#[cfg(feature = "database")]
+pub mod database;
 #[cfg(feature = "vector")]
 pub mod vector;

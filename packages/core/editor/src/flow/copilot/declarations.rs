@@ -478,6 +478,11 @@ static DECLARATION_FILES: &[DeclarationFileSource] = &[
         content: include_str!("../../../../../ast/flow.d/notifications.flow.d"),
     },
     DeclarationFileSource {
+        path: "payments.flow.d",
+        stem: "payments",
+        content: include_str!("../../../../../ast/flow.d/payments.flow.d"),
+    },
+    DeclarationFileSource {
         path: "processing.flow.d",
         stem: "processing",
         content: include_str!("../../../../../ast/flow.d/processing.flow.d"),

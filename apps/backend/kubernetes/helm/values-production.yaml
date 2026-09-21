@@ -97,12 +97,31 @@ jwt:
   existingSecret: flow-like-backend-jwt
 
 # Use an external PostgreSQL or CockroachDB service for production.
+audit:
+  worker: true
+  entrySecret: flow-like-audit-entry
+  existingSecret: flow-like-audit
+  bucketSecret: flow-like-audit-bucket
+  bucket: flow-like-audit
+  lockMode: COMPLIANCE
+  retentionYears: 4
+  database:
+    existingSecret: flow-like-database-audit
+  runtimeConfig:
+    existingSecret: flow-like-audit-config
+  image:
+    repository: flow-like-audit-worker
+    tag: "1.0.0"
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    pullPolicy: IfNotPresent
+
 database:
   type: external
   external:
     # Required key: DATABASE_URL
     existingSecret: flow-like-database
   migration:
+    existingSecret: flow-like-database-migration
     image:
       repository: flow-like-kubernetes-migration
       tag: "1.0.0"

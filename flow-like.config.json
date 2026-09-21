@@ -25,6 +25,70 @@
 			}
 		}
 	},
+	"payments": {
+		"onboarding_enabled": true,
+		"marketplace_enabled": true,
+		"node_payments_enabled": true,
+		"servicing_enabled": true,
+		"livemode": true,
+		"live_approved": false,
+		"platform_account_id": "acct_1MH2NGEApaAD9lV4",
+		"frontend_url": "https://app.flow-like.com",
+		"node_tax_mode": "seller_supplier",
+		"marketplace_tax_mode": "platform_supplier",
+		"seller_allowlist": [],
+		"node_fee_bps": 100,
+		"marketplace_fee_bps": 1000,
+		"marketplace_fee_basis": "gross",
+		"withdrawal_days": 14,
+		"owner_terms_version": "2026-09-20-draft-1",
+		"seller_terms_version": "2026-09-20-draft-1",
+		"purchase_terms_version": "2026-09-20-draft-1",
+		"legal_texts": [
+			{
+				"kind": "PAYMENTS_OWNER_TERMS",
+				"version": "2026-09-20-draft-1",
+				"locale": "en",
+				"url": "https://flow-like.com/legal/payments/owner-terms/2026-09-20-draft-1/en/",
+				"hash": "16991d96d4ef055c598d88282ba8945d50d1792477627f68d9a4ec1968480968"
+			},
+			{
+				"kind": "PAYMENTS_OWNER_TERMS",
+				"version": "2026-09-20-draft-1",
+				"locale": "de",
+				"url": "https://flow-like.com/legal/payments/owner-terms/2026-09-20-draft-1/de/",
+				"hash": "606a810df07979f5910d3e62611913ac42e011879bada19d176b8619f9dda3f4"
+			},
+			{
+				"kind": "SELLER_TERMS",
+				"version": "2026-09-20-draft-1",
+				"locale": "en",
+				"url": "https://flow-like.com/legal/payments/seller-terms/2026-09-20-draft-1/en/",
+				"hash": "1a40fddbc27b1f21abbe8480268f8bbfe757d91796f9a3d6d94606732407c7e0"
+			},
+			{
+				"kind": "SELLER_TERMS",
+				"version": "2026-09-20-draft-1",
+				"locale": "de",
+				"url": "https://flow-like.com/legal/payments/seller-terms/2026-09-20-draft-1/de/",
+				"hash": "31eed3ca14105ed08bff1385daed3ceb395bd86e2d8861c9160dae4b7c032b33"
+			},
+			{
+				"kind": "PURCHASE_TERMS",
+				"version": "2026-09-20-draft-1",
+				"locale": "en",
+				"url": "https://flow-like.com/legal/payments/purchase-terms/2026-09-20-draft-1/en/",
+				"hash": "c04cc866b00360d0cb9277a0f184581ec01e2039981c9f3f266b8ea2ff330701"
+			},
+			{
+				"kind": "PURCHASE_TERMS",
+				"version": "2026-09-20-draft-1",
+				"locale": "de",
+				"url": "https://flow-like.com/legal/payments/purchase-terms/2026-09-20-draft-1/de/",
+				"hash": "10610cfaab44a6fae12cd8dc34b60994235a32620983cdf6af4b2a15cc98ffc5"
+			}
+		]
+	},
 	"features": {
 		"model_hosting": true,
 		"flow_hosting": true,
@@ -43,7 +107,6 @@
 		"enabled": true,
 		"level": "standard",
 		"log_ip": false,
-		"ip_retention_days": null,
 		"require_signing": true,
 		"log_executions": false
 	},

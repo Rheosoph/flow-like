@@ -1,0 +1,63 @@
+---
+import LegalLayout from "../../../../../../layouts/Legal-Layout.astro";
+import {
+	paymentLegalPath,
+	paymentLegalPaths,
+	type PaymentLegalDocument,
+} from "../../../../../../lib/payment-legal";
+
+export const prerender = true;
+export const getStaticPaths = paymentLegalPaths;
+
+interface Props {
+	document: PaymentLegalDocument;
+}
+
+const { document } = Astro.props;
+const [title, ...paragraphs] = document.text.split("\n\n");
+const german = document.locale === "de";
+const draft = document.version.toLowerCase().includes("draft");
+const path = paymentLegalPath(document);
+---
+
+<LegalLayout title={title} locale={document.locale}>
+	<div class="info-card">
+		<p>
+			<strong>Version:</strong> {document.version}<br />
+			<strong>{german ? "Sprache:" : "Language:"}</strong> {document.locale}
+		</p>
+		{draft && (
+			<p class="font-medium text-foreground">
+				{german
+					? "Entwurf. Diese Fassung ist nicht für Live-Zahlungen freigegeben."
+					: "Draft. This version is not approved for live payments."}
+			</p>
+		)}
+		<a href={`${path}text.txt`} download>
+			{german ? "Vertragstext herunterladen" : "Download agreement text"}
+		</a>
+	</div>
+
+	<div class="agreement-text">
+		{paragraphs.map((paragraph) => {
+			const heading = paragraph.match(/^(\d+\. [^\n]+)\n([\s\S]*)$/);
+			const body = heading?.[2] ?? paragraph;
+			return (
+				<>
+					{heading && <h2>{heading[1]}</h2>}
+					<p>
+						{body.split("\n").map((line, index) => (
+							<>{index > 0 && <br />}{line}</>
+						))}
+					</p>
+				</>
+			);
+		})}
+	</div>
+
+	<p class="mt-12 border-t border-border/40 pt-6">
+		<a href="/legal/payments/">
+			{german ? "Alle Zahlungsvereinbarungen und Fassungen" : "All payment agreements and versions"}
+		</a>
+	</p>
+</LegalLayout>

@@ -218,10 +218,10 @@ pub async fn ensure_wasm_artifacts(
         "admin.package.ensure_wasm_artifacts",
         "WasmPackageVersion",
         target_platform.clone(),
-        format!(
-            "Checked {} active package versions and started {} compilation jobs",
-            checked_versions, jobs_started
-        )
+        serde_json::json!({
+            "checked_versions": checked_versions,
+            "jobs_started": jobs_started,
+        })
     );
 
     Ok(Json(EnsureWasmArtifactsResponse {

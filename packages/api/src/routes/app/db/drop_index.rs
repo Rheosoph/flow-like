@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 
 #[utoipa::path(
@@ -42,6 +43,7 @@ pub async fn drop_index(
     Extension(user): Extension<AppUser>,
     Path((app_id, table, index_name)): Path<(String, String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
 ) -> Result<Json<()>, ApiError> {
     ensure_any_permission!(
         user,
@@ -51,6 +53,7 @@ pub async fn drop_index(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    super::validate_writable_selector(&selector)?;
 
     // Validate index_name with the same rules as table names
     if index_name.is_empty() || index_name.len() > 256 {
@@ -77,7 +80,7 @@ pub async fn drop_index(
     }
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector).await?;
 
     db.drop_index(&index_name).await?;
 

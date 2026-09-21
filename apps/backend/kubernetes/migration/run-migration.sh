@@ -25,4 +25,5 @@ esac
 
 bun prisma/pre-push.ts
 bun --no-install node_modules/prisma/build/index.js db push --schema="$schema" --accept-data-loss
+bun /workspace/audit_database_roles.ts
 echo "Database schema applied"

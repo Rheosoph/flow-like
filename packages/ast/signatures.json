@@ -85407,6 +85407,119 @@
       "alias": "repairParse"
     },
     {
+      "node_type": "request_payment",
+      "display": "requestPayment",
+      "friendly": "Request Payment",
+      "category": "Payments",
+      "inputs": [
+        {
+          "name": "currency",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Supported three-letter currency"
+        },
+        {
+          "name": "product_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Plain-text product name"
+        },
+        {
+          "name": "description",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Plain-text description"
+        },
+        {
+          "name": "product_tax_code",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Required Stripe tax code for the product or service, selected from Stripe's tax code list"
+        },
+        {
+          "name": "shipping_countries",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "For shipped goods, comma-separated delivery country codes such as DE,FR. Leave empty when no delivery address is needed."
+        },
+        {
+          "name": "reference",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional application reference"
+        },
+        {
+          "name": "simulation",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Local Board Test only: paid, canceled, expired or failed. Empty requests a real payment."
+        },
+        {
+          "name": "amount_minor",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Total including applicable tax in integer minor units, for example 119 for EUR 1.19"
+        },
+        {
+          "name": "ttl_seconds",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Requested timeout in seconds, limited by the remaining run quota"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "payment_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Server payment request identifier, or a sim_ identifier in Board Test"
+        },
+        {
+          "name": "reason",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Machine-readable outcome reason"
+        }
+      ],
+      "impure": true,
+      "doc": "Ask the signed-in user to pay the app owner and wait for the verified result",
+      "namespace": "payments",
+      "alias": "request"
+    },
+    {
       "node_type": "reroute",
       "display": "reroute",
       "friendly": "Reroute",

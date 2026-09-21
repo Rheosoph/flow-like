@@ -56,8 +56,7 @@ pub async fn delete_package(
         user,
         "admin.package.delete",
         "WasmPackage",
-        package_id,
-        "Package deleted"
+        package_id
     );
     Ok(deleted)
 }

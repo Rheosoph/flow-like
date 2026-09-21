@@ -23,6 +23,7 @@ app_group_member	kind	crate::sea_orm_active_enums::AppGroupMemberKind
 app_group_member	status	crate::sea_orm_active_enums::AppGroupMemberStatus
 app_purchase	status	crate::sea_orm_active_enums::PurchaseStatus
 audit_entry	actor_type	crate::sea_orm_active_enums::AuditActorType
+audit_record	actor_type	crate::sea_orm_active_enums::AuditActorType
 bit	authors	crate::json_types::StringList
 bit	dependencies	crate::json_types::StringList
 bit	type	crate::sea_orm_active_enums::BitType

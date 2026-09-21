@@ -117,8 +117,7 @@ impl CachedDBRefresher for RemoteDatabaseRefresher {
             self.write_access,
         )
         .await?;
-        let mut lance_store =
-            LanceDBVectorStore::from_connection(lease.connection, self.table.clone()).await;
+        let mut lance_store = store.inner().reopen(lease.connection).await?;
         if let Some(options) = &context
             .app_state
             .config
@@ -161,7 +160,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         );
         node.set_flowscript_name("db", "openRemote");
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -193,6 +192,9 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         )
         .set_default_value(Some(json!(1000)));
 
+        super::references::add_selector_pins(&mut node);
+        super::references::add_reference_output(&mut node);
+
         node.add_output_pin(
             "exec_out",
             "Opened Database",
@@ -219,6 +221,8 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         let write_access: bool = context.evaluate_pin("write_access").await.unwrap_or(false);
         let batch_size: i64 = context.evaluate_pin("batch_size").await.unwrap_or(1000);
         let batch_size = batch_size.max(0) as usize;
+        let mut selector = super::references::read_selector(context).await?;
+        selector.read_only |= !write_access;
 
         let remote_app_id = crate::remote_util::validate_path_id(&remote_app_id, "remote project")?;
         let table = table.trim().to_string();
@@ -232,7 +236,8 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         let access_mode = if write_access { "write" } else { "read" };
         // "::" cannot appear in table names, so this key can never collide
         // with the local Open Database keys (db_{table} / db_user_{table}).
-        let cache_key = format!("db::remote::{}::{}::{}", remote_app_id, access_mode, table);
+        let base_key = format!("db::remote::{}::{}::{}", remote_app_id, access_mode, table);
+        let cache_key = super::references::selection_cache_key(&base_key, &selector)?;
         let initialization_key = format!("{cache_key}::initialize");
         let initialization_slot = {
             let existing = context.cache.read().await.get(&initialization_key).cloned();
@@ -275,8 +280,20 @@ impl NodeLogic for OpenRemoteDatabaseNode {
             let lease =
                 open_remote_project_database_lease(context, &remote_app_id, &table, write_access)
                     .await?;
-            let mut lance_store =
-                LanceDBVectorStore::from_connection(lease.connection, table.clone()).await;
+            let mut lance_store = if selector.branch == "main"
+                && selector.version.is_none()
+                && selector.tag.is_none()
+                && !selector.read_only
+            {
+                LanceDBVectorStore::from_connection(lease.connection, table.clone()).await
+            } else {
+                LanceDBVectorStore::from_connection_with_selector(
+                    lease.connection,
+                    table.clone(),
+                    selector,
+                )
+                .await?
+            };
             if let Some(opts) = &context
                 .app_state
                 .config
@@ -355,6 +372,10 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         }
 
         let db = NodeDBConnection { cache_key };
+        let cached = db.load(context).await?;
+        let reference =
+            super::references::optional_reference(cached.db.read().await.inner()).await?;
+        context.set_pin_value("reference", json!(reference)).await?;
         let db: Value = flow_like_types::json::to_value(&db)?;
 
         context.set_pin_value("database", db).await?;

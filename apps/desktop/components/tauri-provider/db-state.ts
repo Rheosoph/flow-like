@@ -1,4 +1,3 @@
-import { indexTypeToString } from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import type {
 	IAddColumnPayload,
 	ICreateTableResult,
@@ -10,6 +9,15 @@ import type {
 	IQueryTablePayload,
 	ITableSummary,
 } from "@flow-like/flow-like-ui";
+import {
+	type IDatabaseAction,
+	type IDatabaseActionResult,
+	type IDatabaseDiff,
+	type IDatabaseHistory,
+	type IDatabaseSelector,
+	databaseQueryParams,
+} from "@flow-like/flow-like-ui/state/backend-state/db-state";
+import { indexTypeToString } from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -18,13 +26,14 @@ function parseTableName(name: string): string {
 	return encodeURIComponent(name);
 }
 
-function scopeQuery(userScoped?: boolean): string {
-	return userScoped ? "scope=user" : "";
-}
-
-function appendScope(url: string, userScoped?: boolean): string {
-	if (!userScoped) return url;
-	return url.includes("?") ? `${url}&scope=user` : `${url}?scope=user`;
+function appendScope(
+	url: string,
+	userScoped?: boolean,
+	selector?: IDatabaseSelector,
+): string {
+	const params = databaseQueryParams(userScoped, selector).toString();
+	if (!params) return url;
+	return `${url}${url.includes("?") ? "&" : "?"}${params}`;
 }
 
 export class DatabaseState implements IDatabaseState {
@@ -70,6 +79,7 @@ export class DatabaseState implements IDatabaseState {
 		indexType: IIndexType,
 		optimize?: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -79,6 +89,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/index`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -99,6 +110,7 @@ export class DatabaseState implements IDatabaseState {
 			indexType: indexTypeToString(indexType),
 			optimize,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -107,6 +119,7 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		items: any[],
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -116,6 +129,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "PUT",
@@ -132,6 +146,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			items,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -140,6 +155,7 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		query: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -149,6 +165,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "DELETE",
@@ -165,6 +182,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			query,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -174,6 +192,7 @@ export class DatabaseState implements IDatabaseState {
 		offset?: number,
 		limit?: number,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -183,6 +202,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "GET",
@@ -197,6 +217,7 @@ export class DatabaseState implements IDatabaseState {
 			offset,
 			limit,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -207,6 +228,7 @@ export class DatabaseState implements IDatabaseState {
 		offset?: number,
 		limit?: number,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -216,6 +238,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -232,6 +255,7 @@ export class DatabaseState implements IDatabaseState {
 			offset,
 			limit,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -239,6 +263,7 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -248,6 +273,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/schema`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "GET",
@@ -260,6 +286,7 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -267,12 +294,14 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any> {
 		if (await this.backend.isLocalOnly(appId)) {
 			return invoke<any>("db_schema", {
 				appId,
 				tableName,
 				userScoped: userScoped ?? false,
+				...(selector ? { selector } : {}),
 			});
 		}
 		if (
@@ -289,6 +318,7 @@ export class DatabaseState implements IDatabaseState {
 			appendScope(
 				`apps/${appId}/db/${parseTableName(tableName)}/schema`,
 				userScoped,
+				selector,
 			),
 			{ method: "GET" },
 			this.backend.auth,
@@ -299,6 +329,7 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<IIndexConfig[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -308,6 +339,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/indices`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "GET",
@@ -320,6 +352,7 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -328,6 +361,7 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		indexName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -337,6 +371,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/index/${encodeURIComponent(indexName)}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "DELETE",
@@ -351,6 +386,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			indexName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -436,6 +472,7 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<number> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -445,6 +482,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/count`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "GET",
@@ -457,6 +495,7 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -465,6 +504,7 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		keepVersions?: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -474,6 +514,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/optimize`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -488,6 +529,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			keepVersions: keepVersions ?? true,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -497,6 +539,7 @@ export class DatabaseState implements IDatabaseState {
 		filter: string,
 		updates: Record<string, any>,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -506,6 +549,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/update`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "PUT",
@@ -521,6 +565,7 @@ export class DatabaseState implements IDatabaseState {
 			filter,
 			updates,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -529,6 +574,7 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		columns: string[],
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -538,6 +584,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "DELETE",
@@ -552,6 +599,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			columns,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -560,6 +608,7 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		column: IAddColumnPayload,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -569,6 +618,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -583,6 +633,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			column,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -592,6 +643,7 @@ export class DatabaseState implements IDatabaseState {
 		column: string,
 		nullable: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -601,6 +653,7 @@ export class DatabaseState implements IDatabaseState {
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "PUT",
@@ -616,6 +669,7 @@ export class DatabaseState implements IDatabaseState {
 			column,
 			nullable,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -645,5 +699,92 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			userScoped: userScoped ?? false,
 		});
+	}
+	async databaseHistory(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseHistory> {
+		if (await this.backend.isOffline(appId)) {
+			return invoke("db_history", {
+				appId,
+				tableName,
+				userScoped: userScoped ?? false,
+				selector,
+			});
+		}
+		return fetcher(
+			this.backend.profile!,
+			appendScope(
+				`apps/${appId}/db/${parseTableName(tableName)}/references`,
+				userScoped,
+				selector,
+			),
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async databaseAction(
+		appId: string,
+		tableName: string,
+		action: IDatabaseAction,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseActionResult> {
+		if (await this.backend.isOffline(appId)) {
+			return invoke("db_reference_action", {
+				appId,
+				tableName,
+				action,
+				userScoped: userScoped ?? false,
+				selector,
+			});
+		}
+		return fetcher(
+			this.backend.profile!,
+			appendScope(
+				`apps/${appId}/db/${parseTableName(tableName)}/references`,
+				userScoped,
+				selector,
+			),
+			{ method: "POST", body: JSON.stringify(action) },
+			this.backend.auth,
+		);
+	}
+	async databaseCompare(
+		appId: string,
+		tableName: string,
+		otherSelector: IDatabaseSelector,
+		key: string,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseDiff> {
+		if (await this.backend.isOffline(appId)) {
+			return invoke("db_compare", {
+				appId,
+				tableName,
+				other: otherSelector,
+				key,
+				limit,
+				userScoped: userScoped ?? false,
+				selector,
+			});
+		}
+		return fetcher(
+			this.backend.profile!,
+			appendScope(
+				`apps/${appId}/db/${parseTableName(tableName)}/compare`,
+				userScoped,
+				selector,
+			),
+			{
+				method: "POST",
+				body: JSON.stringify({ other: otherSelector, key, limit }),
+			},
+			this.backend.auth,
+		);
 	}
 }

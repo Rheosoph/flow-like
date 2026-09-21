@@ -1,3 +1,4 @@
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowIrCommitDisposition,
@@ -760,6 +761,7 @@ export class WebBoardState implements IBoardState {
 							}
 
 							// Handle toast events globally
+							dispatchPaymentRequest(event);
 							if (event.event_type === "toast") {
 								handleToastEvent(event);
 							}

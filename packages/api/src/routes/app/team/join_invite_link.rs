@@ -106,6 +106,13 @@ pub async fn join_invite_link(
 
                 let app = app.ok_or(ApiError::NOT_FOUND)?;
 
+                if app.price > 0 {
+                    return Err(crate::payments::error(
+                        "PURCHASE_REQUIRED",
+                        "Use the owner's complimentary access action for a paid app",
+                    ));
+                }
+
                 if matches!(app.visibility, Visibility::Private | Visibility::Offline) {
                     tracing::warn!(
                         "User {} is trying to join app {} but the app is not public",
@@ -133,8 +140,6 @@ pub async fn join_invite_link(
                     }
                 }
 
-                // Invite links intentionally bypass the purchase flow: a link is a team
-                // grant from an admin, not a storefront entry point.
                 let new_membership = membership::ActiveModel {
                     id: Set(membership_id),
                     user_id: Set(sub.clone()),
@@ -209,8 +214,7 @@ pub async fn join_invite_link(
         app_id,
         "membership.join",
         "InviteLink",
-        link_id,
-        "User joined via invite link"
+        link_id
     );
     Ok(Json(()))
 }

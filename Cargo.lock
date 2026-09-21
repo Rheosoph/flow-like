@@ -1474,6 +1474,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-audit-worker"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flow-like-api",
+ "flow-like-aws-data",
+ "flow-like-catalog",
+ "flow-like-secrets",
+ "flow-like-storage",
+ "lambda_runtime 1.1.2",
+ "mimalloc",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aws-compiler-ecs"
 version = "0.1.0"
 dependencies = [
@@ -1800,6 +1817,32 @@ name = "aws-sdk-iotdataplane"
 version = "1.109.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b25af990b664493ae4c90161f021dce47125b11962fbbe5ddba65a58ec385333"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand 2.4.1",
+ "http 0.2.12",
+ "http 1.4.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-kms"
+version = "1.117.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83b602641be84ebe5f96606cfefe4b96efaae1fd947c1b34ea8513b8ac0d2d8d"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -8040,6 +8083,7 @@ dependencies = [
  "aws-sdk-cognitoidentityprovider",
  "aws-sdk-dynamodb",
  "aws-sdk-iotdataplane",
+ "aws-sdk-kms",
  "aws-sdk-lambda",
  "aws-sdk-s3",
  "aws-sdk-sesv2",
@@ -8119,6 +8163,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.23.1",
  "webp",
+ "zstd",
 ]
 
 [[package]]
@@ -8139,6 +8184,23 @@ dependencies = [
  "flow-like-types-contracts",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flow-like-audit-worker"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "flow-like",
+ "flow-like-api",
+ "flow-like-types",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

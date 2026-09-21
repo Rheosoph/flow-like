@@ -49,6 +49,7 @@
 		"@tanstack/react-table": "^8.20.6",
 		"@flow-like/flow-like-ui": "workspace:*",
 		"@flow-like/locales": "workspace:*",
+		"@tanstack/react-query": "^5.63.0",
 		"@udecode/cmdk": "^0.2.1",
 		"@udecode/cn": "^49.0.15",
 		"@uidotdev/usehooks": "^2.4.1",

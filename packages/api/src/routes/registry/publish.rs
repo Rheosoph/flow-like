@@ -5,6 +5,7 @@
 //! 3. Server fetches WASM from tmp, hashes, moves to final path, compiles in parallel
 
 use super::types::PublishResponse;
+use crate::audit::record::package_scope;
 use crate::audit_branch;
 use crate::entity::wasm_package_version;
 use crate::error::ApiError;
@@ -118,14 +119,11 @@ pub async fn publish(
     audit_branch!(
         state,
         user,
-        request.manifest.id,
+        package_scope(&request.manifest.id),
         "registry.publish",
         "WasmPackage",
         request.manifest.id,
-        format!(
-            "Package {} v{} published",
-            request.manifest.name, request.manifest.version
-        )
+        serde_json::json!({ "version": request.manifest.version })
     );
 
     Ok(Json(response))

@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "Vertrag widerrufen",
+	"withdrawConfirmation": "Der Zugang aus diesem Kauf endet, sobald der Widerruf erfasst ist. Sie müssen keinen Grund angeben.",
+	"withdrawDeclaration": "Ich widerrufe den oben bezeichneten Kauf.",
+	"withdrawConsumerName": "Ihr vollständiger Name",
+	"withdrawConfirmationEmail": "E-Mail-Adresse für Ihre Widerrufsbestätigung",
+	"withdrawConfirmationEmailHelp": "Wir senden Ihre Erklärung sowie Datum und Uhrzeit ihres Eingangs an diese Adresse.",
+	"findPurchase": "Kauf finden",
+	"findPurchaseHelp": "Geben Sie die Auftragsnummer aus Ihrer Bestätigungs-E-Mail ein, um auch ältere Käufe zu öffnen.",
+	"purchaseOrderReference": "Auftragsnummer",
+	"openPurchase": "Kauf öffnen"
+}

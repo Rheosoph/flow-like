@@ -459,6 +459,10 @@ pub async fn update_run_on_completion_with_runtime(
     summary: &RunSummary,
 ) -> Result<(), sea_orm::DbErr> {
     let db = context.db.as_ref();
+    crate::payments::node::cancel_run_database(db, context.dialect, run_id, "RUN_ENDED")
+        .await
+        .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+
     if let Some(existing) = without_nodes(ExecutionRun::find_by_id(run_id))
         .one(db)
         .await?

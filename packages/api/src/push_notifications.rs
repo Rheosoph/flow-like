@@ -278,6 +278,48 @@ pub async fn dispatch_notification_with_status(
     })
 }
 
+/// Persist a stable notification identity for a durable delivery job. Push retries
+/// carry that same id so receiving clients can deduplicate repeated delivery.
+pub async fn dispatch_notification_idempotent(
+    state: &AppState,
+    notification_id: &str,
+    mut input: DispatchNotificationInput,
+) -> Result<DispatchNotificationResult, sea_orm::DbErr> {
+    let prepared_icon = prepare_notification_icon(state, &input.user_id, input.icon.as_deref())
+        .await
+        .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+    notification::Entity::insert(notification::ActiveModel {
+        id: Set(notification_id.to_owned()),
+        user_id: Set(input.user_id.clone()),
+        app_id: Set(input.app_id.clone()),
+        title: Set(input.title.clone()),
+        description: Set(input.description.clone()),
+        icon: Set(prepared_icon.stored_icon),
+        link: Set(input.link.clone()),
+        r#type: Set(input.notification_type.clone()),
+        read: Set(false),
+        source_run_id: Set(input.source_run_id.clone()),
+        source_node_id: Set(input.source_node_id.clone()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        read_at: Set(None),
+    })
+    .on_conflict(
+        sea_orm::sea_query::OnConflict::column(notification::Column::Id)
+            .do_nothing()
+            .to_owned(),
+    )
+    .exec_without_returning(&state.db)
+    .await?;
+    input.icon = prepared_icon.push_icon;
+    let push_status = push_to_user(state, notification_id, &input)
+        .await
+        .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
+    Ok(DispatchNotificationResult {
+        id: notification_id.to_owned(),
+        push_status,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_provider_target_registration(
     state: &AppState,

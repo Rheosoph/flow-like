@@ -1,7 +1,12 @@
 import type {
 	IAddColumnPayload,
 	ICreateTableResult,
+	IDatabaseAction,
+	IDatabaseActionResult,
+	IDatabaseDiff,
+	IDatabaseHistory,
 	IDatabaseSchemaField,
+	IDatabaseSelector,
 	IDatabaseState,
 	IDropTableResult,
 	IIndexConfig,
@@ -11,6 +16,23 @@ import type {
 } from "../db-state";
 
 export class EmptyDatabaseState implements IDatabaseState {
+	databaseHistory(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseHistory> {
+		throw new Error("Database history is not available on this backend.");
+	}
+	databaseAction(
+		appId: string,
+		tableName: string,
+		action: IDatabaseAction,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseActionResult> {
+		throw new Error("Database references are not available on this backend.");
+	}
 	createTable(
 		appId: string,
 		tableName: string,
@@ -124,5 +146,16 @@ export class EmptyDatabaseState implements IDatabaseState {
 	}
 	dropTable(appId: string, tableName: string): Promise<IDropTableResult> {
 		throw new Error("Method not implemented.");
+	}
+	async databaseCompare(
+		appId: string,
+		tableName: string,
+		otherSelector: IDatabaseSelector,
+		key: string,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseDiff> {
+		throw new Error("Database comparison is not available on this backend.");
 	}
 }

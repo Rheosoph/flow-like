@@ -10,24 +10,18 @@ import {
 	decodeJWT,
 } from "aws-amplify/auth";
 import { usePathname } from "next/navigation";
-import {
-	UserManager,
-	type UserManagerSettings,
-	WebStorageStateStore,
-} from "oidc-client-ts";
+import { UserManager, type UserManagerSettings } from "oidc-client-ts";
 import { useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "react-oidc-context";
 import { get } from "../lib/api";
-import {
-	type PublicWebConfig,
-	getPublicApiUrl,
-	getPublicWebConfig,
-} from "../lib/public-config";
+import { getWebOidcSettings } from "../lib/oidc-settings";
+import { getPublicApiUrl, getPublicWebConfig } from "../lib/public-config";
 import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
 import { SignInRequired } from "./sign-in-required";
 import { WebBackend } from "./web-provider";
 
 const PUBLIC_PATHS = [
+	"/payments/return",
 	"/callback",
 	"/thirdparty/callback",
 	"/store",
@@ -74,9 +68,8 @@ export function WebAuthProvider({
 
 	useEffect(() => {
 		(async () => {
-			let publicConfig: PublicWebConfig;
 			try {
-				publicConfig = getPublicWebConfig();
+				getPublicWebConfig();
 			} catch {
 				setConfigurationError(true);
 				return;
@@ -85,17 +78,8 @@ export function WebAuthProvider({
 			const response = await get<any>(defaultProfile(), "auth/openid");
 			if (response) {
 				setLoadingProgress(60);
-				if (publicConfig.redirectUrl)
-					response.redirect_uri = publicConfig.redirectUrl;
-				if (publicConfig.logoutUrl)
-					response.post_logout_redirect_uri = publicConfig.logoutUrl;
-				const store = new WebStorageStateStore({
-					store: localStorage,
-				});
-				response.userStore = store;
-				response.automaticSilentRenew = true;
-				const userManagerInstance = new UserManager(response);
-				response.userManager = userManagerInstance;
+				const settings = getWebOidcSettings(response);
+				const userManagerInstance = new UserManager(settings);
 				const tokenProvider = new OIDCTokenProvider(userManagerInstance);
 				if (response.cognito)
 					Amplify.configure(
@@ -115,7 +99,7 @@ export function WebAuthProvider({
 					);
 				setLoadingProgress(90);
 				setUserManager(userManagerInstance);
-				setOpenIdAuthConfig(response);
+				setOpenIdAuthConfig(settings);
 			}
 		})();
 	}, []);
@@ -136,12 +120,7 @@ export function WebAuthProvider({
 		<AuthProvider
 			key={openIdAuthConfig.client_id}
 			{...openIdAuthConfig}
-			automaticSilentRenew={true}
-			userStore={
-				new WebStorageStateStore({
-					store: localStorage,
-				})
-			}
+			userManager={userManager}
 		>
 			<AuthInner>{children}</AuthInner>
 		</AuthProvider>

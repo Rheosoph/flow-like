@@ -1,4 +1,4 @@
-# Configure DATABASE_URL and each service Redis URL before enabling.
+# Configure DATABASE_URL, MIGRATION_DATABASE_URL, AUDIT_DATABASE_URL and Redis URLs.
 # Apply schema updates explicitly: docker compose run --rm db-init.
 services:
   postgres:
@@ -13,6 +13,9 @@ services:
     depends_on:
       postgres: !reset null
       redis: !reset null
+      db-init: !reset null
+  audit-worker:
+    depends_on:
       db-init: !reset null
   signaling:
     depends_on:

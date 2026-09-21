@@ -90,7 +90,6 @@ pub async fn undo_board(
             "board.commands.undo",
             "Board",
             board_id,
-            "Undid board commands",
             serde_json::json!({ "command_count": command_count })
         );
     }
@@ -162,7 +161,6 @@ pub async fn redo_board(
             "board.commands.redo",
             "Board",
             board_id,
-            "Redid board commands",
             serde_json::json!({ "command_count": command_count })
         );
     }

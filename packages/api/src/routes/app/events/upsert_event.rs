@@ -141,15 +141,7 @@ pub async fn upsert_event(
     )
     .await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "event.upsert",
-        "Event",
-        event_id,
-        "Event created or updated"
-    );
+    audit_branch!(state, user, app_id, "event.upsert", "Event", event_id);
 
     // Run remote setup synchronously for event types that publish
     // registrations (REST endpoints, MCP servers). The user-facing

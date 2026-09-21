@@ -14,12 +14,13 @@ files and apply credentials as existing Kubernetes Secrets.
 | Component | Default |
 | --- | --- |
 | API and web | One replica each |
+| Audit worker | Separate Deployment, database role and service account |
 | Rust execution manager | One replica, ten active runs, two additional warm slots |
 | Queue bridge | One Redis consumer with concurrency ten |
 | Single-use runner and gateway | Created dynamically for each warm slot |
 | RustFS | One persistent Pod, initializer and two public data gateway replicas |
 | Redis | Authenticated single instance with persistence |
-| Internal CockroachDB | One evaluation node |
+| Internal CockroachDB | One evaluation node with TLS and password authentication |
 | Database migration | Release-specific Job |
 | Prometheus, Grafana and Tempo | Enabled |
 | Compiler, signaling, sink services and public ingress | Optional |
@@ -85,6 +86,13 @@ All referenced Secrets must exist in the release namespace.
 | `redis.auth.existingSecret` | `REDIS_PASSWORD` and complete URL-encoded `REDIS_URL` |
 | `redis.externalExistingSecret` | Complete authenticated `REDIS_URL` |
 | `database.external.existingSecret` | `DATABASE_URL` |
+| `database.apiExistingSecret` | API `DATABASE_URL` for bundled SQL |
+| `database.migration.existingSecret` | Schema-owner `DATABASE_URL` |
+| `audit.database.existingSecret` | Worker `DATABASE_URL` |
+| `audit.entrySecret` | `AUDIT_ENTRY_KEY`, optionally `AUDIT_ENTRY_KEY_PREVIOUS` |
+| `audit.existingSecret` | `AUDIT_SIGNING_KEY`, or the chosen key service's credentials |
+| `audit.bucketSecret` | `AUDIT_BUCKET_ACCESS_KEY_ID`, `AUDIT_BUCKET_SECRET_ACCESS_KEY` |
+| `audit.runtimeConfig.existingSecret` | `audit.config.json`, containing the hub's `audit` object |
 
 Setup generates these contracts together. `BACKEND_KEY` and `BACKEND_PUB`
 contain base64-encoded ES256 PEM material; Kubernetes Secret encoding is a
@@ -93,6 +101,43 @@ separate layer. Executors receive the public material only.
 External Redis requires `redis.enabled=false`. External SQL requires
 `database.type=external`; set `database.external.provider` to `postgresql`
 or `cockroachdb`. The default bundled database must remain one node.
+
+### Audit worker and SQL isolation
+
+The API ingests audit records and verifies public signatures. The separate worker
+seals records, signs checkpoints and writes archives. Its signing key or transit
+token, bucket credentials and SQL login never enter the API Pod. The object-store
+initializer receives only the bucket credentials. New bundled audit buckets use
+Object Lock in `COMPLIANCE` mode with four years of retention.
+
+Setup generates a shared entry key and separate API, worker and migration SQL
+credentials. The migration Job applies the schema, then grants the API read access
+to audit evidence and permission to insert new records. Only the worker can change
+existing evidence. For external SQL, provide `DATABASE_URL` for the schema owner,
+`API_DATABASE_URL` and `AUDIT_DATABASE_URL` with distinct users and passwords, all
+using `sslmode=verify-full`. A private CA can be supplied through `DATABASE_CA_FILE`;
+include `sslrootcert=/etc/database/ca.crt` in those URLs.
+
+Bundled CockroachDB requires the generated TLS Secrets. The node key is mounted
+only by the database, and the root client key only by its initialization Job. API
+and worker Pods receive the public CA certificate. Node and root client
+certificates expire after one year. Retain the generated `database-ca-admin`
+Secret, which contains the CA signing key and is never mounted by a workload,
+for operator-led certificate renewal.
+
+An existing installation using `--insecure` needs a planned change to TLS before
+this chart can start its database. Preserve the database volume and existing
+credentials, provision the separate TLS and runtime-role Secrets, and review the
+rendered migration and database workloads before upgrading. Removing TLS settings
+does not restore insecure mode.
+
+`audit.worker=false` stops the dedicated worker; it does not start one inside the
+API. The chart rejects `sinkServices.enabled` while the worker is enabled because
+the API's CronJob creation permission could otherwise mount the worker's Secrets.
+Isolate that scheduler before combining these features. An external key service
+on a private address or nonstandard port needs a matching `audit.extraEgress`
+rule. See [Audit trail](/self-hosting/audit-trail/) for checkpoint retention and
+independent verification.
 
 ### Object storage
 
@@ -122,6 +167,7 @@ Every first-party image is a map with `repository`, `tag`, `digest` and
 | Value | Published repository |
 | --- | --- |
 | `api.image` | `ghcr.io/rheosoph/flow-like-kubernetes-api` |
+| `audit.image` | `ghcr.io/rheosoph/flow-like-audit-worker` |
 | `web.image` | `ghcr.io/rheosoph/flow-like-kubernetes-web` |
 | `executor.image`, `executorPool.image` | `ghcr.io/rheosoph/flow-like-kubernetes-executor` |
 | `executionManager.image` | `ghcr.io/rheosoph/flow-like-kubernetes-execution-manager` |

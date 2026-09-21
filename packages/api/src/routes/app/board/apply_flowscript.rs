@@ -232,7 +232,6 @@ pub async fn apply_flowscript(
             "board.flowscript.apply",
             "Board",
             board_id,
-            "Applied FlowScript to a board",
             serde_json::json!({
                 "command_count": result.commands.len(),
                 "origin": origin,

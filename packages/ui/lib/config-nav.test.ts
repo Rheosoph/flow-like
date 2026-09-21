@@ -74,11 +74,11 @@ describe("resolveNavigationItems", () => {
 		expect(denied.filter((item) => item.lock).length).toBeGreaterThan(5);
 	});
 
-	it("still hides sections gated by developer mode, the paywall and visibility", () => {
+	it("keeps sales history visible at a zero price while hiding developer tools", () => {
 		const hidden = resolve({ developerMode: false, isPaid: false });
 		expect(
 			hidden.find((item) => item.href === "/library/config/sales"),
-		).toBeUndefined();
+		).toBeDefined();
 		expect(
 			hidden.find((item) => item.href === "/library/config/flows"),
 		).toBeUndefined();

@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "契約を撤回する",
+	"withdrawConfirmation": "撤回が記録されると、この購入によるアクセスは終了します。理由を示す必要はありません。",
+	"withdrawDeclaration": "上記の購入契約を撤回します。",
+	"withdrawConsumerName": "氏名",
+	"withdrawConfirmationEmail": "撤回確認の送信先メールアドレス",
+	"withdrawConfirmationEmailHelp": "このアドレスに撤回の申告内容と受信日時を送信します。",
+	"findPurchase": "購入を検索",
+	"findPurchaseHelp": "確認メールに記載された注文番号を入力すると、過去の注文を含む購入を開けます。",
+	"purchaseOrderReference": "注文番号",
+	"openPurchase": "購入を開く"
+}

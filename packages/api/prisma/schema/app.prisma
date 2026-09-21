@@ -92,7 +92,6 @@ model App {
   regressionSuiteRuns RegressionSuiteRun[]
 
   packages       AppPackage[]
-  purchases      AppPurchase[]
   discounts      AppDiscount[]
   salesDaily     AppSalesDaily[]
   analyticsDaily AppAnalyticsDaily[]
@@ -743,10 +742,10 @@ model SinkToken {
 model AppPurchase {
   id String @id
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Durable payment identity; legacy rows remain unassigned until reconciliation.
+  paymentOrderId String?
+  chargeType String?
   userId String
-
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
   /// Price paid in cents at time of purchase
@@ -755,8 +754,6 @@ model AppPurchase {
   originalPrice  BigInt
   /// Discount amount in cents (0 if none)
   discountAmount BigInt @default(0)
-
-  discount   AppDiscount? @relation(fields: [discountId], references: [id], onDelete: SetNull)
   discountId String?
 
   /// Currency code (e.g., "EUR", "USD")
@@ -786,6 +783,7 @@ model AppPurchase {
   @@index([stripeSessionId])
 
   @@index([discountId])
+  @@index([paymentOrderId])
 }
 
 /// Discount codes for apps
@@ -819,9 +817,6 @@ model AppDiscount {
   expiresAt DateTime? @db.Timestamptz(3)
   /// Whether the discount is currently active
   isActive  Boolean   @default(true)
-
-  purchases AppPurchase[]
-
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 

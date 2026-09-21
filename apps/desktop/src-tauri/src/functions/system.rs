@@ -13,6 +13,7 @@ use crate::functions::TauriFunctionError;
 pub struct SystemInfo {
     ram: u64,
     cores: u64,
+    payments_allowed: bool,
 }
 
 #[tauri::command(async)]
@@ -20,7 +21,11 @@ pub fn get_system_info() -> SystemInfo {
     let ram = get_ram().unwrap_or(0);
     let cores = get_cores().unwrap_or(0);
 
-    SystemInfo { ram, cores }
+    SystemInfo {
+        ram,
+        cores,
+        payments_allowed: !cfg!(any(target_os = "ios", target_os = "android")),
+    }
 }
 
 /// Whether this build target can host Apple MLX models.

@@ -10,7 +10,7 @@ import {
 	Loader2Icon,
 	SquarePenIcon,
 } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
 	type MutableRefObject,
 	type RefObject,
@@ -29,6 +29,7 @@ import {
 	IRole,
 	Response,
 } from "../../lib";
+import { useClientRouter } from "../../lib/client-navigation";
 import type { ExecutionEngineProvider } from "../../lib/execution-engine";
 import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
@@ -568,9 +569,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	config = {},
 	toolbarRef,
 	sidebarRef,
+	onNavigate,
 }: Readonly<IUseInterfaceProps>) {
 	const { t } = useTranslation("interfaces");
-	const router = useRouter();
+	const router = useClientRouter();
 	const backend = useBackend();
 	const executionEngine = useExecutionEngine();
 	const searchParams = useSearchParams();
@@ -710,6 +712,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	const handleNavigateTo = useCallback(
 		(route: string, replace: boolean, queryParams?: Record<string, string>) => {
+			if (onNavigate) {
+				onNavigate(route, replace, queryParams);
+				return;
+			}
 			const navUrl = buildUseNavigationUrl(route, queryParams);
 			if (replace) {
 				router.replace(navUrl);
@@ -717,7 +723,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				router.push(navUrl);
 			}
 		},
-		[buildUseNavigationUrl, router],
+		[buildUseNavigationUrl, router, onNavigate],
 	);
 
 	const handleNavigationEvents = useCallback(
@@ -1933,6 +1939,7 @@ export function ChatInterface({
 	config = {},
 	toolbarRef,
 	sidebarRef,
+	onNavigate,
 }: Readonly<IUseInterfaceProps>) {
 	return (
 		<ChatInterfaceMemoized
@@ -1941,6 +1948,7 @@ export function ChatInterface({
 			config={config}
 			toolbarRef={toolbarRef}
 			sidebarRef={sidebarRef}
+			onNavigate={onNavigate}
 		/>
 	);
 }

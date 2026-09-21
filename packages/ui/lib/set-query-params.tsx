@@ -1,7 +1,12 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback } from "react";
+import { createContext, useCallback, useContext } from "react";
+import { useClientRouter } from "./client-navigation";
+
+/** Static hosts update query state without requesting an unexported route. */
+export const QueryParamNavigationContext = createContext<
+	((href: string, replace: boolean) => void) | undefined
+>(undefined);
 
 export interface ISetQueryParamsOptions {
 	/** Rewrite the current history entry instead of pushing a new one. */
@@ -84,7 +89,8 @@ export function nextQueryParamRequest(
 let inFlight: IQueryParamRequest | null = null;
 
 export function useSetQueryParams(): ISetQueryParams {
-	const router = useRouter();
+	const router = useClientRouter();
+	const navigate = useContext(QueryParamNavigationContext);
 
 	return useCallback(
 		(key, value, options) => {
@@ -100,12 +106,16 @@ export function useSetQueryParams(): ISetQueryParams {
 
 			inFlight = request;
 			const href = `?${request.to}`;
+			if (navigate) {
+				navigate(href, Boolean(options?.replace));
+				return;
+			}
 			if (options?.replace) {
 				router.replace(href);
 			} else {
 				router.push(href);
 			}
 		},
-		[router],
+		[router, navigate],
 	);
 }

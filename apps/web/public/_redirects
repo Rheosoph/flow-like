@@ -2,3 +2,9 @@
 # static export only ships /store/packages with an ?id= query. Translate the path form so the
 # link works in a browser when the app is not installed.
 /store/packages/:id  /store/packages?id=:id  302
+
+# Event aliases are resolved by the API after the static interface loads.
+/c/*  /c.html  200
+/f/*  /f.html  200
+/u/*  /u.html  200
+/use/*  /use.html  200

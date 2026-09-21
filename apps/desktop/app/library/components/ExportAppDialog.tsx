@@ -207,11 +207,9 @@ function SecretsWarning({
 
 function CompactionOption({
 	checked,
-	reclaimableBytes,
 	onCheckedChange,
 }: {
 	checked: boolean;
-	reclaimableBytes: number;
 	onCheckedChange: (checked: boolean) => void;
 }) {
 	const { t } = useTranslation("common");
@@ -225,13 +223,12 @@ function CompactionOption({
 			/>
 			<div className="grid gap-1">
 				<Label htmlFor="export-compact" className="text-sm font-medium">
-					{t("compactTablesBeforeExport", "Compact tables before export")}
+					{t("compactTablesBeforeExport", "Optimize tables before export")}
 				</Label>
 				<p className="text-xs text-muted-foreground">
 					{t(
 						"freesAboutValOfVersionHistoryThisRemovesTheVersionHistoryFromTheLocalTablesAndCannotBeUndone",
-						"Frees about {{val}} of version history. This removes the version history from the local tables and cannot be undone.",
-						{ val: humanFileSize(reclaimableBytes) },
+						"Optimize table fragments and indexes while preserving branches, tags, and version history. This can increase the export size because historical files are retained.",
 					)}
 				</p>
 			</div>
@@ -404,10 +401,10 @@ const ExportAppDialog: React.FC<ExportAppDialogProps> = ({
 
 	const secrets =
 		preflight.status === "ready" ? preflight.data.secret_variables : [];
-	const reclaimableBytes =
-		preflight.status === "ready" && preflight.data.compaction_available
-			? preflight.data.reclaimable_bytes
-			: 0;
+	const compactionAvailable =
+		preflight.status === "ready" &&
+		preflight.data.compaction_available &&
+		preflight.data.tables.length > 0;
 	const passValid = !encrypt || isPasswordValid(password, confirmPassword);
 
 	const handleOpenChange = useCallback(
@@ -449,7 +446,7 @@ const ExportAppDialog: React.FC<ExportAppDialogProps> = ({
 			const report = await invoke<IExportReport>("export_app_to_file", {
 				appId,
 				...(encrypt && password ? { password } : {}),
-				compact,
+				compact: compact && compactionAvailable,
 				operationId,
 			});
 			const compaction = report.compaction;
@@ -457,13 +454,14 @@ const ExportAppDialog: React.FC<ExportAppDialogProps> = ({
 				t("appExportedSuccessfully", "App exported successfully!"),
 				{
 					id: loader,
-					description: compaction
-						? t("compactionFreedVal", "Compaction freed {{val}}", {
-								val: humanFileSize(
-									Math.max(0, compaction.bytes_before - compaction.bytes_after),
-								),
-							})
-						: undefined,
+					description:
+						compaction && compaction.bytes_before > compaction.bytes_after
+							? t("compactionFreedVal", "Compaction freed {{val}}", {
+									val: humanFileSize(
+										compaction.bytes_before - compaction.bytes_after,
+									),
+								})
+							: undefined,
 				},
 			);
 			const failedTables =
@@ -495,7 +493,7 @@ const ExportAppDialog: React.FC<ExportAppDialogProps> = ({
 			setCancelling(false);
 			setProgress(null);
 		}
-	}, [appId, encrypt, password, compact, onOpenChange, t]);
+	}, [appId, encrypt, password, compact, compactionAvailable, onOpenChange, t]);
 
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
@@ -575,12 +573,8 @@ const ExportAppDialog: React.FC<ExportAppDialogProps> = ({
 						/>
 					)}
 
-					{reclaimableBytes > 0 && (
-						<CompactionOption
-							checked={compact}
-							reclaimableBytes={reclaimableBytes}
-							onCheckedChange={setCompact}
-						/>
+					{compactionAvailable && (
+						<CompactionOption checked={compact} onCheckedChange={setCompact} />
 					)}
 
 					{exporting && <ArchiveProgressView progress={progress} />}

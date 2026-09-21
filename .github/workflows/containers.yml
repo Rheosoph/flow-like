@@ -21,6 +21,7 @@ on:
       - 'packages/**'
       - 'apps/backend/**'
       - 'apps/web/**'
+      - 'apps/website/src/content/legal/payments/**'
   workflow_dispatch:
     inputs:
       cloud:
@@ -207,6 +208,7 @@ jobs:
           build-args: |
             CARGO_BUILD_JOBS=2
             CRDB_CA_URL=
+            AUDIT_FEATURES=${{ matrix.audit_features || 'aws' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

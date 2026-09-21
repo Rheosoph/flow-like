@@ -95,8 +95,7 @@ pub async fn accept_connection_request(
         app_id,
         "app_connection.accept",
         "AppConnection",
-        connection_id,
-        "App connection request approved"
+        connection_id
     );
 
     Ok(Json(()))
@@ -165,8 +164,7 @@ pub async fn reject_connection_request(
         app_id,
         "app_connection.reject",
         "AppConnection",
-        connection_id,
-        "App connection request rejected"
+        connection_id
     );
 
     Ok(Json(()))

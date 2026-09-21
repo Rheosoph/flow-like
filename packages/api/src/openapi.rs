@@ -128,9 +128,45 @@ impl Modify for SecurityAddon {
         (name = "tmp", description = "Temporary file operations"),
         (name = "courses", description = "Flow-Like University: courses, lessons, challenges, leaderboard"),
         (name = "ai-act", description = "EU AI Act conformity assessment and model governance"),
-        (name = "telemetry", description = "Anonymous, opt-in product telemetry")
+        (name = "audit", description = "Audit trail: records, verification, heads and per-app export"),
+        (name = "telemetry", description = "Anonymous, opt-in product telemetry"),
+        (name = "payments", description = "Payment accounts, purchases, flow payments and recovery")
     ),
     paths(
+        crate::payments::accounts::get_account,
+        crate::payments::admin::queue,
+        crate::payments::admin::block_seller,
+        crate::payments::admin::retry_effect,
+        crate::payments::earnings::history,
+        crate::payments::earnings::balance,
+        crate::payments::legacy_checkout::history,
+        crate::payments::legacy_checkout::receipt,
+        crate::payments::accounts::countries,
+        crate::payments::accounts::onboarding,
+        crate::payments::accounts::resume,
+        crate::payments::accounts::disconnect,
+        crate::payments::accounts::reconnect,
+        crate::payments::accounts::readiness,
+        crate::payments::accounts::get_settings,
+        crate::payments::accounts::update_settings,
+        crate::payments::accounts::terms,
+        crate::payments::node::create,
+        crate::payments::node::executor_get,
+        crate::payments::node::executor_cancel,
+        crate::payments::node::payer_get,
+        crate::payments::node::checkout,
+        crate::payments::node::decline,
+        crate::payments::node::report,
+        crate::payments::marketplace::checkout,
+        crate::payments::marketplace::get_purchase,
+        crate::payments::marketplace::list_purchases,
+        crate::payments::marketplace::list_sales,
+        crate::payments::marketplace::cancel,
+        crate::payments::marketplace::withdraw,
+        crate::payments::marketplace::refund_sale,
+        crate::payments::marketplace::accept_seller_terms,
+        crate::payments::marketplace::approve,
+        crate::payments::marketplace::comp,
         // Health routes
         crate::routes::health::health,
         crate::routes::health::db_health,
@@ -461,6 +497,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::build_index::build_index,
         crate::routes::app::db::drop_index::drop_index,
         crate::routes::app::db::drop_table::drop_table,
+        crate::routes::app::db::references::history,
+        crate::routes::app::db::references::reference_action,
+        crate::routes::app::db::references::compare,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
         crate::routes::app::db::presign_db_access::presign_project_db_access,
@@ -612,6 +651,18 @@ impl Modify for SecurityAddon {
         crate::routes::admin::runs::sweep_runs,
         crate::routes::admin::cache::sweep_cache,
         crate::routes::admin::resources::get_resources,
+        // Audit trail
+        crate::routes::audit::records::list_records,
+        crate::routes::audit::verify::verify_chain,
+        crate::routes::audit::verify::verify_epochs,
+        crate::routes::audit::head::chain_head,
+        crate::routes::audit::head::check_head,
+        crate::routes::admin::logs::chain_status::chain_status,
+        crate::routes::app::audit::export::export_records,
+        crate::routes::app::audit::webhook::get_webhook,
+        crate::routes::app::audit::webhook::put_webhook,
+        crate::routes::app::audit::webhook::rotate_webhook_secret,
+        crate::routes::app::audit::webhook::delete_webhook,
         // Course routes (University)
         crate::routes::course::courses::list_courses,
         crate::routes::course::courses::get_course,
@@ -659,6 +710,19 @@ impl Modify for SecurityAddon {
         crate::routes::course::weekly::rotate_weekly,
     ),
     components(schemas(
+        crate::payments::accounts::ConnectView,
+        crate::payments::admin::BlockInput,
+        crate::payments::admin::RetryInput,
+        crate::payments::accounts::OnboardingInput,
+        crate::payments::accounts::ResumeInput,
+        crate::payments::accounts::SettingsInput,
+        crate::payments::node::CreatePayment,
+        crate::payments::node::PaymentView,
+        crate::payments::node::ReportInput,
+        crate::payments::marketplace::CheckoutInput,
+        crate::payments::marketplace::RefundInput,
+        crate::payments::marketplace::Confirmation,
+        crate::payments::marketplace::WithdrawalInput,
         // User schedule schemas
         crate::routes::user::schedules::ScheduleConfig,
         crate::routes::user::schedules::UserSchedule,
@@ -696,6 +760,26 @@ impl Modify for SecurityAddon {
         crate::routes::admin::resources::ConnectionStateCount,
         crate::routes::admin::resources::DatabaseCounters,
         crate::routes::admin::resources::DatabaseRates,
+        // Audit trail schemas
+        crate::routes::audit::records::AuditRecordPage,
+        crate::routes::audit::records::AuditRecordView,
+        crate::routes::audit::records::AuditRecordCursor,
+        crate::routes::audit::records::AuditRecordStatus,
+        crate::routes::audit::head::AuditHead,
+        crate::routes::audit::head::HeadCheckBody,
+        crate::routes::audit::head::HeadCheckResponse,
+        crate::audit::verify::ChainReport,
+        crate::audit::verify::EpochReport,
+        crate::audit::verify::HeadCheck,
+        crate::audit::wire::SealLine,
+        crate::audit::wire::EpochLine,
+        crate::routes::admin::logs::chain_status::ChainStatusResponse,
+        crate::routes::admin::logs::chain_status::LatestArchive,
+        crate::routes::admin::logs::chain_status::RecentChain,
+        crate::routes::app::audit::export::AuditExportClass,
+        crate::routes::app::audit::webhook::AuditWebhookView,
+        crate::routes::app::audit::webhook::PutAuditWebhookBody,
+        crate::routes::app::audit::webhook::AuditWebhookSecret,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,
         crate::routes::oauth::TokenRefreshRequest,
@@ -1351,6 +1435,39 @@ mod tests {
             ("/admin/deletions/{job_id}", "get"),
             ("/admin/deletions/{job_id}/retry", "post"),
             ("/apps/fork/jobs/{job_id}", "get"),
+        ] {
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing OpenAPI path '{path}'"));
+            assert!(
+                entry.contains_key(method),
+                "OpenAPI path '{path}' has no '{method}' operation"
+            );
+        }
+    }
+
+    /// The admin dashboard, the app audit page and the SDKs read these shapes.
+    #[test]
+    fn audit_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let paths = spec
+            .get("paths")
+            .and_then(|p| p.as_object())
+            .expect("spec exposes paths");
+
+        for (path, method) in [
+            ("/audit/records", "get"),
+            ("/audit/verify", "get"),
+            ("/audit/verify/epochs", "get"),
+            ("/audit/head", "get"),
+            ("/audit/head/check", "post"),
+            ("/admin/logs/chain-status", "get"),
+            ("/apps/{app_id}/audit/export", "get"),
+            ("/apps/{app_id}/audit/webhook", "get"),
+            ("/apps/{app_id}/audit/webhook", "put"),
+            ("/apps/{app_id}/audit/webhook", "delete"),
+            ("/apps/{app_id}/audit/webhook/rotate", "post"),
         ] {
             let entry = paths
                 .get(path)

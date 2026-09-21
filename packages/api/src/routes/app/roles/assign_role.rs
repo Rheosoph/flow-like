@@ -105,6 +105,7 @@ pub async fn assign_role(
                 }
 
                 if target_permission.contains(RolePermissions::Owner) {
+                    crate::db::coordination::coordinate(txn, "payments-app", &[&app_id]).await?;
                     let new_payer = crate::entity::user::Entity::find_by_id(&sub)
                         .one(txn).await?.ok_or(ApiError::NOT_FOUND)?;
                     if new_payer.status != crate::entity::sea_orm_active_enums::UserStatus::Active {
@@ -190,6 +191,7 @@ pub async fn assign_role(
                         )));
                     }
 
+                    crate::payments::accounts::owner_transferred(txn, &app_id, &sub, &caller_sub).await?;
                     return Ok(Assignment::OwnerTransferred);
                 }
 
@@ -216,10 +218,17 @@ pub async fn assign_role(
         })
         .await?;
 
-    let summary = match assignment {
-        Assignment::OwnerTransferred => format!("Owner transferred to {}", sub),
-        Assignment::Assigned => format!("Role assigned to {}", sub),
-    };
-    audit_branch!(state, user, app_id, "role.assign", "Role", role_id, summary);
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "role.assign",
+        "Role",
+        role_id,
+        serde_json::json!({
+            "user_id": sub,
+            "owner_transferred": matches!(assignment, Assignment::OwnerTransferred),
+        })
+    );
     Ok(Json(()))
 }

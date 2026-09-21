@@ -28,9 +28,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
 #[cfg(test)]
 use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 
 /// Cached prepared registry - initialized once on first access.
@@ -339,6 +339,9 @@ pub(crate) async fn build_flow_state(
         FlowLikeState::new_with_model_config(flow_config, http_client, model_provider_config);
     state.execution_environment = ExecutionEnvironment::server_default();
     if let Some(hub) = hub {
+        if hub.hosted_frontend {
+            state.hosted_model_token = Some(hub.jwt.clone());
+        }
         state
             .register_app_widget_source(Arc::new(HubWidgetSource::new(&hub.callback_url, hub.jwt)))
             .await;
@@ -712,6 +715,7 @@ async fn execute_inner(
         Some(HubAccess {
             callback_url: claims.callback_url.clone(),
             jwt: request.executor_jwt.clone(),
+            hosted_frontend: claims.hosted_frontend,
         }),
     )
     .await?;

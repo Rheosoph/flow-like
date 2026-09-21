@@ -95,7 +95,9 @@ services:
         condition: service_healthy
     working_dir: /workspace
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Run scripts/setup-env.py and configure .env}
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?Configure the schema owner database URL}
+      API_DATABASE_URL: ${DATABASE_URL:?Configure the restricted API database URL}
+      AUDIT_DATABASE_URL: ${AUDIT_DATABASE_URL:?Configure the audit worker database URL}
       MIGRATION_LOCK_TIMEOUT_SECONDS: ${MIGRATION_LOCK_TIMEOUT_SECONDS:-120}
     command:
       - bun
@@ -125,6 +127,68 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
     pids_limit: ${DB_INIT_PIDS:-256}
+  audit-worker:
+    image: ${AUDIT_WORKER_IMAGE:-ghcr.io/rheosoph/flow-like-audit-worker:${FLOW_LIKE_IMAGE_TAG:-dev}}
+    build:
+      context: ../../..
+      dockerfile: apps/backend/audit-worker/Dockerfile
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      object-store-init:
+        condition: service_completed_successfully
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      FLOW_LIKE_CONFIG_JSON: ${AUDIT_WORKER_CONFIG_JSON:?Generate the audit worker policy from the API config}
+      DATABASE_URL: ${AUDIT_DATABASE_URL:?Configure the audit worker database URL}
+      SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_USE_PATH_STYLE: ${AWS_USE_PATH_STYLE:-true}
+      AUDIT_BUCKET: ${AUDIT_BUCKET:-}
+      AUDIT_BUCKET_ENDPOINT: ${AUDIT_BUCKET_ENDPOINT:-}
+      AUDIT_BUCKET_ACCESS_KEY_ID: ${AUDIT_BUCKET_ACCESS_KEY_ID:-}
+      AUDIT_BUCKET_SECRET_ACCESS_KEY: ${AUDIT_BUCKET_SECRET_ACCESS_KEY:-}
+      AUDIT_BUCKET_KMS_KEY_ARN: ${AUDIT_BUCKET_KMS_KEY_ARN:-}
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:-}
+      AUDIT_KID: ${AUDIT_KID:-}
+      AUDIT_ENTRY_KEY: ${AUDIT_ENTRY_KEY:?Configure a shared audit entry key}
+      AUDIT_ENTRY_KEY_PREVIOUS: ${AUDIT_ENTRY_KEY_PREVIOUS:-}
+      AUDIT_KMS_KEY_ID: ${AUDIT_KMS_KEY_ID:-}
+      AUDIT_KMS_PROVIDER: ${AUDIT_KMS_PROVIDER:-}
+      AUDIT_KMS_REGION: ${AUDIT_KMS_REGION:-}
+      AUDIT_KMS_AWS_ACCESS_KEY_ID: ${AUDIT_KMS_AWS_ACCESS_KEY_ID:-}
+      AUDIT_KMS_AWS_SECRET_ACCESS_KEY: ${AUDIT_KMS_AWS_SECRET_ACCESS_KEY:-}
+      AUDIT_VAULT_ADDR: ${AUDIT_VAULT_ADDR:-}
+      AUDIT_VAULT_TOKEN: ${AUDIT_VAULT_TOKEN:-}
+      AUDIT_VAULT_TOKEN_FILE: ${AUDIT_VAULT_TOKEN_FILE:-}
+      AUDIT_VAULT_CA_FILE: ${AUDIT_VAULT_CA_FILE:-}
+      AUDIT_VERIFYING_KEYS: ${AUDIT_VERIFYING_KEYS:-}
+    healthcheck:
+      test: [CMD, /app/flow-like-audit-worker, --health-check]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          cpus: ${AUDIT_WORKER_CPUS:-1}
+          memory: ${AUDIT_WORKER_MEMORY:-512M}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - database
+      - storage
+      - app
+    restart: unless-stopped
   api:
     image: ${API_IMAGE:-ghcr.io/rheosoph/flow-like-docker-compose-api:${FLOW_LIKE_IMAGE_TAG:-dev}}
     configs:
@@ -234,6 +298,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_ENDPOINT: ${OPENAI_ENDPOINT:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_CONNECT_WEBHOOK_SECRET: ${STRIPE_CONNECT_WEBHOOK_SECRET:-}
+      STRIPE_CONNECT_WEBHOOK_SECRET_PREVIOUS: ${STRIPE_CONNECT_WEBHOOK_SECRET_PREVIOUS:-}
+      STRIPE_MARKETPLACE_WEBHOOK_SECRET: ${STRIPE_MARKETPLACE_WEBHOOK_SECRET:-}
+      STRIPE_MARKETPLACE_WEBHOOK_SECRET_PREVIOUS: ${STRIPE_MARKETPLACE_WEBHOOK_SECRET_PREVIOUS:-}
       OTEL_SERVICE_NAME: flow-like-api
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
@@ -249,10 +318,16 @@ services:
       META_BUCKET_ENDPOINT: ${META_BUCKET_ENDPOINT:-}
       CONTENT_BUCKET_ENDPOINT: ${CONTENT_BUCKET_ENDPOINT:-}
       LOGS_BUCKET_ENDPOINT: ${LOGS_BUCKET_ENDPOINT:-}
+      AUDIT_WORKER: "off"
+      AUDIT_KID: ${AUDIT_KID:-}
+      AUDIT_ENTRY_KEY: ${AUDIT_ENTRY_KEY:?Configure a shared audit entry key}
+      AUDIT_ENTRY_KEY_PREVIOUS: ${AUDIT_ENTRY_KEY_PREVIOUS:-}
+      AUDIT_VERIFYING_KEYS: ${AUDIT_VERIFYING_KEYS:-}
       EXECUTION_MANAGER_TOKEN: ${EXECUTION_MANAGER_TOKEN:?Run scripts/setup-env.py and configure .env}
       EXECUTION_ISOLATION_MODE: ${EXECUTION_ISOLATION_MODE:-per_run}
       METRICS_PORT: "9090"
       PUBLIC_API_URL: ${PUBLIC_API_URL:?Set the browser-reachable API origin}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3001}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Set allowed browser origins}
       EXECUTION_QUEUE_MAX_DEPTH: ${EXECUTION_QUEUE_MAX_DEPTH:-10000}
       EXECUTION_QUEUE_MAX_WAIT_SECONDS: ${EXECUTION_QUEUE_MAX_WAIT_SECONDS:-300}
@@ -998,6 +1073,11 @@ services:
       CONTENT_BUCKET: ${CONTENT_BUCKET:-flow-like-content}
       LOG_BUCKET: ${LOG_BUCKET:-flow-like-logs}
       S3_CORS_ALLOWED_ORIGINS: ${REALTIME_ALLOWED_ORIGINS:?Run scripts/setup-env.py and configure .env}
+      AUDIT_BUCKET: ${AUDIT_BUCKET:-}
+      AUDIT_BUCKET_ACCESS_KEY_ID: ${AUDIT_BUCKET_ACCESS_KEY_ID:-}
+      AUDIT_BUCKET_SECRET_ACCESS_KEY: ${AUDIT_BUCKET_SECRET_ACCESS_KEY:-}
+      AUDIT_BUCKET_LOCK_MODE: ${AUDIT_BUCKET_LOCK_MODE:-COMPLIANCE}
+      AUDIT_BUCKET_RETENTION_YEARS: ${AUDIT_BUCKET_RETENTION_YEARS:-4}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?Set the signed storage origin}
       STS_ENDPOINT_URL: ${STS_ENDPOINT_URL:-http://object-store:9000}
     depends_on:

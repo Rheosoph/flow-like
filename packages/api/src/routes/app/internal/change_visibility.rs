@@ -173,6 +173,7 @@ pub async fn change_visibility(
             let plan = plan.clone();
             Box::pin(async move {
                 flow_like_db::coordination::app_capacity(txn, &app_id).await?;
+                crate::db::coordination::coordinate(txn, "payments-app", &[&app_id]).await?;
                 let app = app::Entity::find_by_id(&app_id)
                     .one(txn)
                     .await?
@@ -244,17 +245,19 @@ pub async fn change_visibility(
         purge_memberships(&state, &other_members).await?;
     }
 
-    let (action, summary) = match transition {
-        Transition::Toggle | Transition::PublicSwap => (
-            "app.visibility",
-            format!("Visibility changed to {:?}", body.visibility),
-        ),
-        Transition::Review => (
-            "app.visibility.request",
-            format!("Publication review requested for {:?}", body.visibility),
-        ),
+    let action = match transition {
+        Transition::Toggle | Transition::PublicSwap => "app.visibility",
+        Transition::Review => "app.visibility.request",
     };
-    audit_branch!(state, user, app_id, action, "App", app_id, summary);
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        action,
+        "App",
+        app_id,
+        serde_json::json!({ "visibility": body.visibility })
+    );
     Ok(Json(()))
 }
 

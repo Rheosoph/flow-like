@@ -17,7 +17,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 # Bracket classes instead of backslash escapes: awk -v rewrites escapes.
-FORBIDDEN='master_credentials|to_store[(]|[.]sign[(]|delete_stream|get_state_store|reqwest|sleep[(]|Client::|audit_branch!'
+FORBIDDEN='master_credentials|to_store[(]|[.]sign[(]|delete_stream|get_state_store|reqwest|sleep[(]|Client::|audit_branch!|gateway[.]execute|StripeGateway::execute|operations::execute[(]|operations::execute_prepared[(]'
 # `state.transaction(` on one line, or `.transaction(` opening a line whose
 # previous line ends in `state` (how rustfmt breaks the chain).
 START_INLINE='(state[.]transaction(_with)?[(]|[.]transaction_with[(]|retry_transaction(::<[^>]*>)?[(])'
@@ -33,6 +33,7 @@ ALLOWED=(
     # Live-cluster test of the wrapper itself: two writers deliberately overlap
     # inside their transactions to force the 40001 the retry policy absorbs.
     packages/api/tests/dsql_live.rs
+    packages/api/tests/dsql_smoke.rs
 )
 
 is_allowed() {

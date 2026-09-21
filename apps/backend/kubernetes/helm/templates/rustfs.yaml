@@ -132,6 +132,24 @@ spec:
               value: {{ .Values.storage.s3.logBucket | quote }}
             - name: S3_CORS_ALLOWED_ORIGINS
               value: {{ .Values.api.corsAllowedOrigins | join "," | quote }}
+            {{- if .Values.audit.bucket }}
+            - name: AUDIT_BUCKET
+              value: {{ .Values.audit.bucket | quote }}
+            - name: AUDIT_BUCKET_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.bucketSecret | quote }}
+                  key: AUDIT_BUCKET_ACCESS_KEY_ID
+            - name: AUDIT_BUCKET_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.bucketSecret | quote }}
+                  key: AUDIT_BUCKET_SECRET_ACCESS_KEY
+            - name: AUDIT_BUCKET_LOCK_MODE
+              value: {{ .Values.audit.lockMode | quote }}
+            - name: AUDIT_BUCKET_RETENTION_YEARS
+              value: {{ .Values.audit.retentionYears | quote }}
+            {{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532

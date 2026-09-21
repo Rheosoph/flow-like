@@ -10,6 +10,7 @@ export interface IHub {
 	domain: string;
 	environment: IEnvironment;
 	features: IFeatures;
+	payments?: IPaymentsConfig;
 	hubs: string[];
 	icon?: null | string;
 	legal_notice: string;
@@ -268,4 +269,15 @@ export interface IUserTier {
 	max_total_size: number;
 	product_id?: string | null;
 	[property: string]: any;
+}
+
+export interface IPaymentsConfig {
+	onboarding_enabled: boolean;
+	marketplace_enabled: boolean;
+	node_payments_enabled: boolean;
+	servicing_enabled: boolean;
+	livemode: boolean;
+	currencies: string[];
+	marketplace_min_amount: number;
+	max_payment_amount: number;
 }

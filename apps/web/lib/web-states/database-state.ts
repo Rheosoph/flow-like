@@ -1,5 +1,13 @@
 import type { IDatabaseState } from "@flow-like/flow-like-ui";
 import {
+	type IDatabaseAction,
+	type IDatabaseActionResult,
+	type IDatabaseDiff,
+	type IDatabaseHistory,
+	type IDatabaseSelector,
+	databaseQueryParams,
+} from "@flow-like/flow-like-ui/state/backend-state/db-state";
+import {
 	type IAddColumnPayload,
 	type ICreateTableResult,
 	type IDatabaseSchemaField,
@@ -35,12 +43,12 @@ export class WebDatabaseState implements IDatabaseState {
 		);
 	}
 
-	private scopeParam(userScoped?: boolean): string {
-		return userScoped ? "scope=user" : "";
-	}
-
-	private scopeQuery(userScoped?: boolean): string {
-		return userScoped ? "?scope=user" : "";
+	private scopeQuery(
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): string {
+		const params = databaseQueryParams(userScoped, selector).toString();
+		return params ? `?${params}` : "";
 	}
 
 	async buildIndex(
@@ -50,9 +58,10 @@ export class WebDatabaseState implements IDatabaseState {
 		indexType: IIndexType,
 		optimize?: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${encodeURIComponent(tableName)}/index${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/index${this.scopeQuery(userScoped, selector)}`,
 			{
 				column,
 				index_type: indexTypeToString(indexType),
@@ -67,9 +76,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		items: any[],
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiPut(
-			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped, selector)}`,
 			{ items },
 			this.backend.auth,
 		);
@@ -80,9 +90,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		query: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiDelete(
-			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped, selector)}`,
 			this.backend.auth,
 			{ query },
 		);
@@ -94,18 +105,19 @@ export class WebDatabaseState implements IDatabaseState {
 		offset?: number,
 		limit?: number,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const params = new URLSearchParams();
+		const params = databaseQueryParams(userScoped, selector);
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
-		if (userScoped) params.set("scope", "user");
 
 		try {
 			return await apiGet<any[]>(
-				`apps/${appId}/db/${tableName}?${params}`,
+				`apps/${appId}/db/${encodeURIComponent(tableName)}?${params}`,
 				this.backend.auth,
 			);
-		} catch {
+		} catch (error) {
+			if (selector) throw error;
 			return [];
 		}
 	}
@@ -117,19 +129,20 @@ export class WebDatabaseState implements IDatabaseState {
 		offset?: number,
 		limit?: number,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const params = new URLSearchParams();
+		const params = databaseQueryParams(userScoped, selector);
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
-		if (userScoped) params.set("scope", "user");
 
 		try {
 			return await apiPost<any[]>(
-				`apps/${appId}/db/${tableName}/query?${params}`,
+				`apps/${appId}/db/${encodeURIComponent(tableName)}/query?${params}`,
 				{ ...query },
 				this.backend.auth,
 			);
-		} catch {
+		} catch (error) {
+			if (selector) throw error;
 			return [];
 		}
 	}
@@ -138,14 +151,16 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<number> {
 		try {
 			const result = await apiGet<number>(
-				`apps/${appId}/db/${tableName}/count${this.scopeQuery(userScoped)}`,
+				`apps/${appId}/db/${encodeURIComponent(tableName)}/count${this.scopeQuery(userScoped, selector)}`,
 				this.backend.auth,
 			);
 			return result ?? 0;
-		} catch {
+		} catch (error) {
+			if (selector) throw error;
 			return 0;
 		}
 	}
@@ -154,9 +169,10 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any> {
 		return apiGet<any>(
-			`apps/${appId}/db/${tableName}/schema${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/schema${this.scopeQuery(userScoped, selector)}`,
 			this.backend.auth,
 		);
 	}
@@ -165,9 +181,10 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any> {
 		return apiGet<any>(
-			`apps/${appId}/db/${encodeURIComponent(tableName)}/schema${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/schema${this.scopeQuery(userScoped, selector)}`,
 			this.backend.auth,
 		);
 	}
@@ -176,13 +193,15 @@ export class WebDatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<IIndexConfig[]> {
 		try {
 			return await apiGet<IIndexConfig[]>(
-				`apps/${appId}/db/${tableName}/indices${this.scopeQuery(userScoped)}`,
+				`apps/${appId}/db/${encodeURIComponent(tableName)}/indices${this.scopeQuery(userScoped, selector)}`,
 				this.backend.auth,
 			);
-		} catch {
+		} catch (error) {
+			if (selector) throw error;
 			return [];
 		}
 	}
@@ -192,9 +211,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		indexName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiDelete(
-			`apps/${appId}/db/${tableName}/index/${indexName}${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/index/${encodeURIComponent(indexName)}${this.scopeQuery(userScoped, selector)}`,
 			this.backend.auth,
 		);
 	}
@@ -238,9 +258,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		keepVersions?: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/optimize${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/optimize${this.scopeQuery(userScoped, selector)}`,
 			{ keep_versions: keepVersions ?? true },
 			this.backend.auth,
 		);
@@ -252,9 +273,10 @@ export class WebDatabaseState implements IDatabaseState {
 		filter: string,
 		updates: Record<string, any>,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiPut(
-			`apps/${appId}/db/${tableName}/update${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/update${this.scopeQuery(userScoped, selector)}`,
 			{ filter, updates },
 			this.backend.auth,
 		);
@@ -265,9 +287,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		columns: string[],
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiDelete(
-			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/columns${this.scopeQuery(userScoped, selector)}`,
 			this.backend.auth,
 			{ columns },
 		);
@@ -278,9 +301,10 @@ export class WebDatabaseState implements IDatabaseState {
 		tableName: string,
 		column: IAddColumnPayload,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiPost(
-			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/columns${this.scopeQuery(userScoped, selector)}`,
 			column,
 			this.backend.auth,
 		);
@@ -292,9 +316,10 @@ export class WebDatabaseState implements IDatabaseState {
 		column: string,
 		nullable: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
 		await apiPut(
-			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/columns${this.scopeQuery(userScoped, selector)}`,
 			{ column, nullable },
 			this.backend.auth,
 		);
@@ -306,7 +331,47 @@ export class WebDatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 	): Promise<IDropTableResult> {
 		return apiDelete<IDropTableResult>(
-			`apps/${appId}/db/${tableName}/table${this.scopeQuery(userScoped)}`,
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/table${this.scopeQuery(userScoped)}`,
+			this.backend.auth,
+		);
+	}
+	async databaseHistory(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseHistory> {
+		return apiGet(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/references${this.scopeQuery(userScoped, selector)}`,
+			this.backend.auth,
+		);
+	}
+
+	async databaseAction(
+		appId: string,
+		tableName: string,
+		action: IDatabaseAction,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseActionResult> {
+		return apiPost(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/references${this.scopeQuery(userScoped, selector)}`,
+			action,
+			this.backend.auth,
+		);
+	}
+	async databaseCompare(
+		appId: string,
+		tableName: string,
+		otherSelector: IDatabaseSelector,
+		key: string,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseDiff> {
+		return apiPost(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/compare${this.scopeQuery(userScoped, selector)}`,
+			{ other: otherSelector, key, limit },
 			this.backend.auth,
 		);
 	}

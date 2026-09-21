@@ -242,6 +242,9 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
     })?;
 
     match (payload.job, parsed) {
+        (MaintenanceJob::Payments, MaintenanceRunResponse::Payments(result)) => {
+            tracing::info!(inbox_completed = result.inbox_completed, effects_completed = result.effects_completed, deferred = result.deferred, "Payment recovery completed");
+        }
         (MaintenanceJob::TelemetryAlerts, MaintenanceRunResponse::TelemetryAlerts(result)) => {
             tracing::info!(
                 evaluated = result.evaluated,

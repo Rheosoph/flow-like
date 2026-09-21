@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppCategoryLabel } from "../../../lib/app-category";
 import type { IApp, IMetadata } from "../../../types";
 import { IAppCategory, IAppStatus } from "../../../types";
+import { EuroAmountInput } from "../../payments/euro-amount-input";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
@@ -75,6 +76,7 @@ export function AppGeneralSettings({
 	const { t } = useTranslation("settings");
 	const categoryLabel = useAppCategoryLabel();
 	const [newTag, setNewTag] = useState("");
+	const [priceValid, setPriceValid] = useState(true);
 	const [isLongDescEditorOpen, setLongDescEditorOpen] = useState(false);
 	const [longDescInit, setLongDescInit] = useState<string>("");
 	const [longDescDraft, setLongDescDraft] = useState<string>("");
@@ -150,7 +152,11 @@ export function AppGeneralSettings({
 										<RotateCcwIcon className="w-4 h-4" />
 										{t("reset", "Reset")}
 									</Button>
-									<Button onClick={onSave} className="gap-2">
+									<Button
+										onClick={onSave}
+										disabled={!priceValid}
+										className="gap-2"
+									>
 										<SaveIcon className="w-4 h-4" />
 										{t("saveChanges", "Save Changes")}
 									</Button>
@@ -662,21 +668,13 @@ export function AppGeneralSettings({
 							</Select>
 						</div>
 						<div className="space-y-2">
-							<Label htmlFor="price">{t("price", "Price ($)")}</Label>
-							<Input
+							<Label htmlFor="price">{t("priceEur", "Price (EUR)")}</Label>
+							<EuroAmountInput
 								id="price"
-								type="number"
-								placeholder="0.00"
-								value={app?.price ?? ""}
+								value={app?.price}
 								disabled={!canEdit}
-								onChange={(e) => {
-									if (canEdit) {
-										onAppChange({
-											...app,
-											price: Number.parseFloat(e.target.value) || null,
-										});
-									}
-								}}
+								onValidityChange={setPriceValid}
+								onChange={(price) => onAppChange({ ...app, price })}
 							/>
 						</div>
 					</div>

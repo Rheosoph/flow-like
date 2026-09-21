@@ -170,6 +170,63 @@ const featuresJson = JSON.stringify(
 </style>
 
 <script>
+  const warmedParallaxImages = new Map<string, HTMLImageElement>();
+
+  function warmV5PlatformImages() {
+    const section = document.querySelector<HTMLElement>(".v5-platform");
+    if (!section || section.dataset.parallaxImagesReady === "true") return;
+
+    let observer: IntersectionObserver | undefined;
+    const queueImages = () => {
+      if (section.dataset.parallaxImagesReady === "true") return;
+      section.dataset.parallaxImagesReady = "true";
+      observer?.disconnect();
+
+      const images = section.querySelectorAll<HTMLImageElement>(
+        "img[data-parallax-image]",
+      );
+      images.forEach((image) => {
+        const key = image.dataset.parallaxImage;
+        if (!key || warmedParallaxImages.has(key)) return;
+
+        const preload = new Image();
+        preload.decoding = "async";
+        preload.fetchPriority = "low";
+        preload.sizes = image.sizes;
+        preload.srcset = image.srcset;
+        preload.src = image.src;
+        warmedParallaxImages.set(key, preload);
+        void preload.decode().catch(() => undefined);
+      });
+    };
+
+    const connection = (
+      navigator as Navigator & { connection?: { saveData?: boolean } }
+    ).connection;
+    if (connection?.saveData) return;
+
+    if ("IntersectionObserver" in window) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) queueImages();
+        },
+        { rootMargin: "150% 0px" },
+      );
+      observer.observe(section);
+    }
+
+    const queueWhenIdle = () => {
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(queueImages, { timeout: 2_000 });
+      } else {
+        setTimeout(queueImages, 500);
+      }
+    };
+
+    if (document.readyState === "complete") queueWhenIdle();
+    else window.addEventListener("load", queueWhenIdle, { once: true });
+  }
+
   function initV5Platform() {
     const story = document.querySelector<HTMLElement>("[data-v5-story]");
     if (!story || story.dataset.ready === "true") return;
@@ -302,5 +359,7 @@ const featuresJson = JSON.stringify(
     update();
     drawConnectors(section);
   }
+  warmV5PlatformImages();
   initV5Platform();
+  document.addEventListener("astro:page-load", warmV5PlatformImages);
 </script>

@@ -142,7 +142,7 @@ pub async fn update_solution(
         "admin.solution.update",
         "solution",
         solution_id,
-        format!("Solution updated: {}", status_to_string(&updated.status))
+        serde_json::json!({ "status": status_to_string(&updated.status) })
     );
     Ok(Json(UpdateSolutionResponse {
         success: true,

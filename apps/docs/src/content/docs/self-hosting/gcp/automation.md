@@ -116,12 +116,12 @@ token. Set these values:
 | --- | --- |
 | `API_BASE_URL` | HTTPS API URL, without credentials, query, or fragment; `API_URL` is a fallback |
 | `MAINTENANCE_TOKEN` | Same value as the API, at least 32 bytes after trimming, injected from Secret Manager |
-| `MAINTENANCE_JOB` | `telemetry_alerts`, `cache_cleanup`, `run_sweep`, `state_cleanup`, or `all` (default, case-insensitive) |
+| `MAINTENANCE_JOB` | `telemetry_alerts`, `cache_cleanup`, `run_sweep`, `state_cleanup`, `payments`, or `all` (default, case-insensitive) |
 | `ALLOW_INSECURE_API_BASE_URL` | `1`/`true` permits HTTP for trusted development; leave unset for the public API URL |
 
 The maintenance image also rejects the shared credential, metadata override,
 and proxy settings, and its HTTP client disables proxy lookup. In `all` mode
-it makes four independent requests, in the order listed above, and attempts
+it makes five independent requests, in the order listed above, and attempts
 later jobs even if an earlier one fails.
 
 A daily cleanup schedule, for example 03:00 UTC, provides only daily run
@@ -132,6 +132,13 @@ legitimate queue delay plus `EXECUTOR_TIMEOUT_SECS` to avoid classifying active
 runs as stale. Run sweep updates canonical SQL rows; it leaves separately
 configured execution state backends unchanged.
 
+When payment servicing is enabled, schedule a separate `MAINTENANCE_JOB=payments`
+execution at least once per minute. A daily `all` job does not provide timely
+payment recovery when the API has no continuous CPU. See
+[Payments rollout and recovery](/dev/platform-administration/#payments-rollout-and-recovery)
+for configuration and alert requirements. Provider sandbox validation remains a
+rollout prerequisite.
+
 Set `FLOW_LIKE_TELEMETRY_ALERTS_DISABLED=1` on the API when scheduled
 maintenance owns alert evaluation. Transactional rule updates and conditional
 sweeps make repeats safe. `Idempotency-Key: <job>:<CLOUD_RUN_EXECUTION>` is
@@ -139,7 +146,7 @@ stable across task retries and used for correlation by the API. A fresh job
 execution gets a new key. Local runs use the UTC start minute as the suffix.
 
 Each request has a five-second connect timeout and a 300-second overall
-timeout. Four sequential requests can consume roughly 20 minutes; configure
+timeout. Five sequential requests can consume roughly 25 minutes; configure
 a job timeout with margin, such as 1800 seconds, and keep the API's request
 timeout compatible with the client. Cloud Run task retries repeat all
 selected jobs, including earlier successes.

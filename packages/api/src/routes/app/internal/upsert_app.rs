@@ -82,6 +82,19 @@ pub async fn upsert_app(
             return Err(ApiError::FORBIDDEN);
         }
 
+        let new_price = i64::from(app_updates.price.unwrap_or(0));
+        if new_price != app.price && new_price > 0 {
+            crate::payments::domain::listing_price(
+                new_price,
+                &app.visibility,
+                state.platform_config.payments.marketplace_min_amount,
+                state.platform_config.payments.max_payment_amount,
+            )?;
+            if state.platform_config.payments.marketplace_enabled {
+                crate::payments::accounts::require_can_sell(&state, &user.sub()?).await?;
+            }
+        }
+
         {
             let mut bucket_app = state
                 .scoped_app(
@@ -115,16 +128,35 @@ pub async fn upsert_app(
         app.version = sea_orm::ActiveValue::Set(app_updates.version);
         app.execution_mode = sea_orm::ActiveValue::Set(app_updates.execution_mode);
         app.updated_at = sea_orm::ActiveValue::Set(now);
-        let app: app::Model = app.save(&state.db).await?.try_into()?;
-        audit_branch!(
-            state,
-            user,
-            app_id,
-            "app.update",
-            "App",
-            app_id,
-            "Application updated"
-        );
+        let actor = user.sub()?;
+        let expected_price = app_updates.price;
+        let app: app::Model = state
+            .transaction(|txn| {
+                let app = app.clone();
+                let app_id = app_id.clone();
+                let actor = actor.clone();
+                let minimum = state.platform_config.payments.marketplace_min_amount;
+                let maximum = state.platform_config.payments.max_payment_amount;
+                Box::pin(async move {
+                    crate::db::coordination::coordinate(txn, "payments-app", &[&app_id]).await?;
+                    crate::payments::ensure_app_owner(txn, &app_id, &actor).await?;
+                    let current = app::Entity::find_by_id(&app_id)
+                        .one(txn)
+                        .await?
+                        .ok_or(ApiError::NOT_FOUND)?;
+                    if current.price != expected_price && expected_price > 0 {
+                        crate::payments::domain::listing_price(
+                            expected_price,
+                            &current.visibility,
+                            minimum,
+                            maximum,
+                        )?;
+                    }
+                    Ok::<app::Model, ApiError>(app.save(txn).await?.try_into()?)
+                })
+            })
+            .await?;
+        audit_branch!(state, user, app_id, "app.update", "App", app_id);
         return Ok(Json(App::from(app)));
     }
 
@@ -302,14 +334,6 @@ pub async fn upsert_app(
         }
     };
 
-    audit_branch!(
-        state,
-        user,
-        drive_app.id,
-        "app.create",
-        "App",
-        drive_app.id,
-        "Application created"
-    );
+    audit_branch!(state, user, drive_app.id, "app.create", "App", drive_app.id);
     Ok(Json(drive_app))
 }

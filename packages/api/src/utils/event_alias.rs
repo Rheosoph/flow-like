@@ -31,6 +31,10 @@ const RESERVED_SLUGS: &[&str] = &[
     "api",
     "r",
     "m",
+    "c",
+    "u",
+    "f",
+    "frontend",
     "health",
     "metrics",
     "swagger",
@@ -143,11 +147,30 @@ const ADMIN_RESERVED_PREFIXES: &[&str] = &["flow-like", "flowlike", "flow_like"]
 
 const REST_ALIAS_PREFIX: &str = "rest_";
 const MCP_ALIAS_PREFIX: &str = "mcp_";
+const CHAT_ALIAS_PREFIX: &str = "simple_chat_";
+const FORM_ALIAS_PREFIX: &str = "generic_form_";
+const PAGE_ALIAS_PREFIX: &str = "page_";
+
+/// A custom page owns its UI alias independently of its workflow's trigger type.
+pub fn alias_event_type<'a>(event_type: &'a str, page_id: Option<&str>) -> &'a str {
+    if matches!(event_type, "rest" | "mcp") {
+        event_type
+    } else if page_id.is_some() {
+        "page"
+    } else if event_type == "quick_action" {
+        "generic_form"
+    } else {
+        event_type
+    }
+}
 
 pub fn storage_slug_for_event_type(event_type: &str, slug: &str) -> String {
     match event_type {
         "rest" => format!("{REST_ALIAS_PREFIX}{slug}"),
         "mcp" => format!("{MCP_ALIAS_PREFIX}{slug}"),
+        "simple_chat" => format!("{CHAT_ALIAS_PREFIX}{slug}"),
+        "generic_form" | "quick_action" => format!("{FORM_ALIAS_PREFIX}{slug}"),
+        "page" => format!("{PAGE_ALIAS_PREFIX}{slug}"),
         _ => slug.to_string(),
     }
 }
@@ -155,6 +178,9 @@ pub fn storage_slug_for_event_type(event_type: &str, slug: &str) -> String {
 pub fn public_slug_from_storage(slug: &str) -> String {
     slug.strip_prefix(REST_ALIAS_PREFIX)
         .or_else(|| slug.strip_prefix(MCP_ALIAS_PREFIX))
+        .or_else(|| slug.strip_prefix(CHAT_ALIAS_PREFIX))
+        .or_else(|| slug.strip_prefix(FORM_ALIAS_PREFIX))
+        .or_else(|| slug.strip_prefix(PAGE_ALIAS_PREFIX))
         .unwrap_or(slug)
         .to_string()
 }
@@ -270,6 +296,9 @@ pub async fn resolve(
         slug_or_id.to_string(),
         storage_slug_for_event_type("rest", slug_or_id),
         storage_slug_for_event_type("mcp", slug_or_id),
+        storage_slug_for_event_type("simple_chat", slug_or_id),
+        storage_slug_for_event_type("generic_form", slug_or_id),
+        storage_slug_for_event_type("page", slug_or_id),
     ];
     let mut matches = event_alias::Entity::find()
         .filter(event_alias::Column::Slug.is_in(candidate_storage_slugs))
@@ -284,7 +313,7 @@ pub async fn resolve(
 
     if matches.len() > 1 {
         return Err(ApiError::conflict(format!(
-            "alias '{slug_or_id}' exists for multiple interfaces; use the REST or MCP route"
+            "alias '{slug_or_id}' exists for multiple interfaces; use its interface route"
         )));
     }
 
@@ -319,7 +348,91 @@ pub async fn resolve_for_event_type(
         return resolved_from_alias_model(model, slug_or_id, app_hint);
     }
 
+    // Older frontend aliases used the unscoped key. Service events retain
+    // their REST/MCP alias even when they also own a hosted custom page.
+    if matches!(event_type, "simple_chat" | "generic_form" | "page") {
+        let mut candidates = vec![slug_or_id.to_string()];
+        for previous_interface in ["simple_chat", "generic_form", "page"] {
+            if previous_interface != event_type {
+                candidates.push(storage_slug_for_event_type(previous_interface, slug_or_id));
+            }
+        }
+        if event_type == "page" {
+            candidates.push(storage_slug_for_event_type("rest", slug_or_id));
+            candidates.push(storage_slug_for_event_type("mcp", slug_or_id));
+        }
+        let aliases = event_alias::Entity::find()
+            .filter(event_alias::Column::Slug.is_in(candidates))
+            .all(db)
+            .await
+            .map_err(ApiError::from)?;
+        let mut matches = Vec::new();
+        for alias in aliases {
+            if app_hint.is_some_and(|app_id| app_id != alias.app_id) {
+                continue;
+            }
+            let Some(row) = event::Entity::find_by_id(&alias.event_id)
+                .one(db)
+                .await
+                .map_err(ApiError::from)?
+            else {
+                continue;
+            };
+            let interface = if row.page_id.is_some() {
+                "page"
+            } else {
+                alias_event_type(&row.event_type, None)
+            };
+            if interface == event_type && row.app_id == alias.app_id {
+                matches.push(ResolvedAlias {
+                    event_id: row.id.clone(),
+                    app_id: row.app_id.clone(),
+                    event: Some(row),
+                });
+            }
+        }
+        if matches.len() > 1 {
+            return Err(ApiError::conflict(
+                "This alias names multiple hosted pages; use the event ID",
+            ));
+        }
+        if let Some(resolved) = matches.pop() {
+            return Ok(resolved);
+        }
+    }
+
     resolve_event_id(db, slug_or_id, app_hint).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontend_aliases_have_independent_namespaces() {
+        let types = ["rest", "mcp", "simple_chat", "generic_form", "page"];
+        let keys: std::collections::HashSet<_> = types
+            .iter()
+            .map(|kind| storage_slug_for_event_type(kind, "support-demo"))
+            .collect();
+        assert_eq!(keys.len(), types.len());
+        for key in keys {
+            assert_eq!(public_slug_from_storage(&key), "support-demo");
+        }
+        assert_eq!(
+            storage_slug_for_event_type("quick_action", "support-demo"),
+            "generic_form_support-demo"
+        );
+    }
+
+    #[test]
+    fn pages_keep_service_aliases_and_use_ui_namespace_otherwise() {
+        assert_eq!(alias_event_type("rest", Some("page")), "rest");
+        assert_eq!(alias_event_type("mcp", Some("page")), "mcp");
+        assert_eq!(alias_event_type("simple_chat", Some("page")), "page");
+        assert_eq!(alias_event_type("quick_action", None), "generic_form");
+        assert!(validate_slug("frontend").is_err());
+    }
 }
 
 async fn resolve_event_id(

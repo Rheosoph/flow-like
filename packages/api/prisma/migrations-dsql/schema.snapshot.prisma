@@ -127,6 +127,9 @@ model InviteLink {
 model JoinQueue {
   id String @id
 
+  approvedAt BigInt?
+  approvedBy String?
+
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
@@ -483,7 +486,6 @@ model App {
   regressionSuiteRuns RegressionSuiteRun[]
 
   packages       AppPackage[]
-  purchases      AppPurchase[]
   discounts      AppDiscount[]
   salesDaily     AppSalesDaily[]
   analyticsDaily AppAnalyticsDaily[]
@@ -1129,10 +1131,10 @@ model SinkToken {
 model AppPurchase {
   id String @id
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Durable payment identity; legacy rows remain unassigned until reconciliation.
+  paymentOrderId String?
+  chargeType String?
   userId String
-
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
   /// Price paid in cents at time of purchase
@@ -1141,8 +1143,6 @@ model AppPurchase {
   originalPrice  BigInt
   /// Discount amount in cents (0 if none)
   discountAmount BigInt @default(0)
-
-  discount   AppDiscount? @relation(fields: [discountId], references: [id], onDelete: SetNull)
   discountId String?
 
   /// Currency code (e.g., "EUR", "USD")
@@ -1171,6 +1171,7 @@ model AppPurchase {
   @@index([appId, completedAt])
   @@index([stripeSessionId])
   @@index([discountId])
+  @@index([paymentOrderId])
 }
 
 /// Discount codes for apps
@@ -1204,9 +1205,6 @@ model AppDiscount {
   expiresAt DateTime? @db.Timestamptz(3)
   /// Whether the discount is currently active
   isActive  Boolean   @default(true)
-
-  purchases AppPurchase[]
-
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -1318,6 +1316,9 @@ model AppPackage {
 // Cryptographic Audit Trail — blake3 hash chains with ES256 server signatures
 // Branching chain architecture: platform root chain + per-app/per-package sub-chains
 
+/// Legacy hash chain from before the 2026-09 redesign. Nothing writes to it; the audit
+/// worker exports it once, raw, to the audit bucket and then deletes its rows. Drop the
+/// table in a later migration.
 model AuditEntry {
   id       String @id @default(cuid())
   sequence BigInt
@@ -1355,6 +1356,160 @@ model AuditEntry {
   @@index([action])
   @@index([entryHash])
   @@index([timestamp])
+}
+
+/// One audited change. Rows without a seal id are pending; the audit worker verifies their
+/// MAC and seals them. The row holds no chain fields: the chain lives in AuditSeal.
+model AuditRecord {
+  id                String   @id
+  /// "platform", an app or package id, or "<scope>#activity" for verbose-only actions
+  chainId           String
+  timestamp         DateTime @db.Timestamptz(3)
+  actorId           String
+  actorType         String
+  action            String
+  resourceType      String
+  resourceId        String
+  /// Salted BLAKE3 commitments to the personal fields; the record hash covers these
+  ipCommitment      Bytes?
+  detailsCommitment Bytes?
+  /// Raw personal values and their salts, set to NULL when they expire
+  actorIp           String?
+  ipSalt            Bytes?
+  details           Json?
+  detailsSalt       Bytes?
+  /// Keyed BLAKE3 MAC with the API entry key while pending, cleared once sealed
+  mac               Bytes?
+  /// Seal id, or "invalid" for a pending record whose MAC failed
+  sealId            String?
+
+  @@index([chainId, timestamp, id])
+  @@index([sealId, chainId, timestamp, id])
+}
+
+/// A sealed batch of one chain's records. Seals of a chain link by prevHash.
+model AuditSeal {
+  id             String   @id
+  chainId        String
+  seq            BigInt
+  /// "evidence" or "activity"
+  class          String
+  prevHash       Bytes
+  recordCount    Int
+  /// RFC 6962 Merkle root over the record hashes in (timestamp, id) order
+  recordsRoot    Bytes
+  firstAt        DateTime @db.Timestamptz(3)
+  lastAt         DateTime @db.Timestamptz(3)
+  sealedAt       DateTime @db.Timestamptz(3)
+  hash           Bytes
+  /// Set once an epoch commits to this seal
+  epochSeq       BigInt?
+  epochIndex     Int?
+  /// RFC 6962 inclusion proof of this seal in its epoch
+  epochProof     Bytes?
+  /// Keyed BLAKE3 of the seal hash with the entry key, protecting the seal until an
+  /// epoch anchors it; cleared on anchoring
+  mac            Bytes?
+  /// Some record still holds a raw value of that kind awaiting expiry
+  ipPending      Boolean  @default(false)
+  detailsPending Boolean  @default(false)
+
+  @@unique([chainId, seq])
+  @@index([epochSeq, epochIndex])
+  @@index([class, lastAt])
+  @@index([ipPending, lastAt])
+  @@index([detailsPending, lastAt])
+}
+
+/// Platform-wide timeline: each epoch commits to the seals it covers and is signed
+/// with the audit key.
+model AuditEpoch {
+  seq       BigInt   @id
+  prevHash  Bytes
+  sealCount Int
+  sealsRoot Bytes
+  createdAt DateTime @db.Timestamptz(3)
+  hash      Bytes
+  kid       String
+  /// Raw 64-byte P-256 ECDSA signature (r || s) over the epoch hash
+  signature Bytes
+
+  @@index([createdAt])
+}
+
+/// Last pruned seal of a chain ("~epochs" for the epoch chain), signed so verification
+/// can start there.
+model AuditWatermark {
+  chainId    String   @id
+  seq        BigInt
+  hash       Bytes
+  prunedAt   DateTime @db.Timestamptz(3)
+  /// One signature covers every watermark of a prune run: the Merkle root over their
+  /// hashes is signed, and each row carries its inclusion proof
+  batchRoot  Bytes
+  batchSize  Int
+  batchIndex Int
+  batchProof Bytes
+  kid        String
+  signature  Bytes
+  /// Seals at or below `seq` may still exist and wait for deletion
+  pendingDelete Boolean @default(false)
+
+  @@index([prunedAt])
+  @@index([pendingDelete])
+}
+
+/// Archive objects written to the audit bucket. Part 0 is the signed manifest that
+/// completes a period ("YYYY-MM" or "legacy").
+model AuditArchive {
+  period      String
+  part        Int
+  objectKey   String
+  sha256      Bytes
+  byteSize    BigInt
+  firstEpoch  BigInt?
+  lastEpoch   BigInt?
+  epochCount  BigInt
+  sealCount   BigInt
+  recordCount BigInt
+  createdAt   DateTime @db.Timestamptz(3)
+  kid         String?
+  signature   Bytes?
+  /// Part 0 only: the manifest without its signature, so the signed manifest can be
+  /// verified and re-uploaded without reading the bucket or signing again
+  manifest    Json?
+  /// When the object was confirmed written; a part 0 row without it still waits for
+  /// its upload
+  uploadedAt  DateTime? @db.Timestamptz(3)
+
+  @@id([period, part])
+}
+
+/// A chain with a seal that failed its hash or MAC before an epoch signed it. Its seals
+/// are never signed, archived or pruned until an operator resolves the incident.
+model AuditHeldChain {
+  chainId String   @id
+  seq     BigInt
+  sealId  String
+  heldAt  DateTime @db.Timestamptz(3)
+  reason  String
+}
+
+/// Per-app webhook that receives the app's sealed audit records.
+model AuditExportTarget {
+  appId           String    @id
+  url             String
+  /// Signing secret, encrypted with the platform encryption key
+  secret          String
+  active          Boolean   @default(true)
+  evidenceCursor  BigInt    @default(0)
+  activityCursor  BigInt    @default(0)
+  failures        Int       @default(0)
+  nextAttemptAt   DateTime? @db.Timestamptz(3)
+  lastDeliveredAt DateTime? @db.Timestamptz(3)
+  lastError       String?
+  createdAt       DateTime  @db.Timestamptz(3)
+  updatedAt       DateTime  @db.Timestamptz(3)
 }
 
 // ---- capacity.prisma
@@ -2992,9 +3147,7 @@ model User {
   wasmInvitesSent             WasmPackageInvitation[]  @relation("WasmInviter")
   wasmInvitesReceived         WasmPackageInvitation[]  @relation("WasmInvitee")
   wasmPackageJoinQueue        WasmPackageJoinQueue[]
-  wasmPackagePurchases        WasmPackagePurchase[]
   wasmPackagesAuthored        WasmPackageAuthor[]
-  purchases                   AppPurchase[]
   technicalUsersCreated       TechnicalUser[]          @relation("TechnicalUserCreator")
 
   status String @default("ACTIVE")
@@ -3510,7 +3663,6 @@ model WasmPackage {
   reviews     WasmPackageReview[]
   invitations WasmPackageInvitation[]
   joinQueue   WasmPackageJoinQueue[]
-  purchases   WasmPackagePurchase[]
   authors     WasmPackageAuthor[]
   comments    Comment[]
 
@@ -3688,10 +3840,10 @@ model WasmPackageJoinQueue {
 model WasmPackagePurchase {
   id String @id
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Durable payment identity; legacy rows remain unassigned until reconciliation.
+  paymentOrderId String?
+  chargeType String?
   userId String
-
-  package   WasmPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
   packageId String
 
   /// Price paid in cents at time of purchase
@@ -3726,4 +3878,480 @@ model WasmPackagePurchase {
   @@index([packageId, status])
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
+  @@index([paymentOrderId])
+}
+
+/// Financial references intentionally have no foreign keys to deletable product or user rows.
+model PaymentAccountBinding {
+  id String @id
+  userId String
+  livemode Boolean
+  purpose String
+  activeAccountId String?
+  candidateAccountId String?
+  generation BigInt @default(0)
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([userId, livemode, purpose], map: "PaymentAccountBinding_userId_livemode_purpose_key")
+  @@index([activeAccountId], map: "PaymentAccountBinding_activeAccountId_idx")
+  @@index([candidateAccountId], map: "PaymentAccountBinding_candidateAccountId_idx")
+}
+
+model ConnectedAccount {
+  id String @id
+  userId String
+  platformAccountId String
+  livemode Boolean
+  purpose String
+  generation BigInt
+  stripeAccountId String?
+  creationParams Json
+  state String @default("creating")
+  country String
+  defaultCurrency String?
+  business Json?
+  requirements Json?
+  capabilities Json?
+  chargesEnabled Boolean @default(false)
+  payoutsEnabled Boolean @default(false)
+  canAcceptPayments Boolean @default(false)
+  canSell Boolean @default(false)
+  disabledReason String?
+  retiredAt BigInt?
+  retiredReason String?
+  consentId String?
+  resumeNonceHash String?
+  resumeExpiresAt BigInt?
+  resumeUsedAt BigInt?
+  syncedAt BigInt?
+  syncRevision BigInt @default(0)
+  syncLeaseUntil BigInt?
+  syncNextAt BigInt @default(0)
+  syncAttempts Int @default(0)
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([platformAccountId, livemode, stripeAccountId], map: "ConnectedAccount_platformAccountId_livemode_stripeAccountId_key")
+  @@unique([userId, livemode, purpose, generation], map: "ConnectedAccount_userId_livemode_purpose_generation_key")
+  @@index([userId, livemode, retiredAt], map: "ConnectedAccount_userId_livemode_retiredAt_idx")
+  @@index([state, syncedAt], map: "ConnectedAccount_state_syncedAt_idx")
+}
+
+model AppPaymentSettings {
+  appId String @id
+  ownerUserId String
+  paymentsEnabled Boolean @default(false)
+  refundsFromFlows Boolean @default(false)
+  maxPaymentAmount Json?
+  refundsDailyCap Json?
+  adminBlockedAt BigInt?
+  adminBlockedReason String?
+  revision BigInt @default(0)
+  updatedBy String
+  createdAt BigInt
+  updatedAt BigInt
+}
+
+model PaymentsBlock {
+  userId String @id
+  reason String
+  blockedBy String
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+}
+
+model PaymentRequest {
+  id String @id
+  runId String
+  nodeId String
+  nonce String
+  requestDigest String
+  appId String
+  boardId String?
+  eventId String?
+  payerUserId String
+  payeeUserId String
+  connectedAccountId String?
+  platformAccountId String
+  livemode Boolean
+  amount BigInt
+  currency String
+  applicationFeeAmount BigInt
+  feeBps Int
+  productName String
+  description String
+  reference String?
+  snapshot Json
+  status String @default("CREATED")
+  reason String?
+  cancelRequested Boolean @default(false)
+  acceptedAttemptId String?
+  runRevision BigInt?
+  settingsRevision BigInt?
+  bindingRevision BigInt?
+  expiresAt BigInt
+  nextCheckAt BigInt
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([runId, nodeId, nonce], map: "PaymentRequest_runId_nodeId_nonce_key")
+  @@index([runId, status], map: "PaymentRequest_runId_status_idx")
+  @@index([appId, createdAt], map: "PaymentRequest_appId_createdAt_idx")
+  @@index([payerUserId, appId, reference], map: "PaymentRequest_payerUserId_appId_reference_idx")
+  @@index([payeeUserId, createdAt], map: "PaymentRequest_payeeUserId_createdAt_idx")
+  @@index([status, nextCheckAt], map: "PaymentRequest_status_nextCheckAt_idx")
+  @@index([status, expiresAt], map: "PaymentRequest_status_expiresAt_idx")
+}
+
+model PaymentOrder {
+  id String @id
+  kind String
+  userId String
+  itemId String
+  payeeUserId String
+  connectedAccountId String?
+  platformAccountId String
+  livemode Boolean
+  openKey String?
+  status String @default("CREATED")
+  chargeType String
+  amount BigInt
+  currency String
+  applicationFeeAmount BigInt
+  feeBps Int
+  snapshot Json
+  consentId String?
+  acceptedAttemptId String?
+  cancelRequested Boolean @default(false)
+  withdrawnAt BigInt?
+  expiresAt BigInt
+  nextCheckAt BigInt
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([openKey], map: "PaymentOrder_openKey_key")
+  @@index([userId, createdAt], map: "PaymentOrder_userId_createdAt_idx")
+  @@index([payeeUserId, createdAt], map: "PaymentOrder_payeeUserId_createdAt_idx")
+  @@index([kind, itemId, createdAt], map: "PaymentOrder_kind_itemId_createdAt_idx")
+  @@index([status, nextCheckAt], map: "PaymentOrder_status_nextCheckAt_idx")
+  @@index([status, expiresAt], map: "PaymentOrder_status_expiresAt_idx")
+}
+
+model LegacyCheckout {
+  id String @id
+  openKey String?
+  kind String
+  userId String
+  itemId String
+  parameters Json
+  requestDigest String
+  stripeSessionId String?
+  checkoutUrl String?
+  status String @default("OPENING")
+  failureReason String?
+  expiresAt BigInt
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([openKey], map: "LegacyCheckout_openKey_key")
+  @@index([status, expiresAt], map: "LegacyCheckout_status_expiresAt_idx")
+  @@index([userId, createdAt], map: "LegacyCheckout_userId_createdAt_idx")
+  @@index([stripeSessionId], map: "LegacyCheckout_stripeSessionId_idx")
+}
+
+model PaymentAttempt {
+  id String @id
+  sourceType String
+  sourceId String
+  attempt Int
+  platformAccountId String
+  scopeKey String
+  connectedAccountId String?
+  livemode Boolean
+  operationId String
+  stripeSessionId String?
+  stripePaymentIntentId String?
+  stripeChargeId String?
+  checkoutUrl String?
+  payerUserId String?
+  payeeUserId String
+  appId String?
+  packageId String?
+  amount BigInt
+  currency String
+  applicationFeeAmount BigInt
+  feeBps Int
+  status String @default("OPENING")
+  capturedAmount BigInt @default(0)
+  refundedAmount BigInt @default(0)
+  reservedRefundAmount BigInt @default(0)
+  orphaned Boolean @default(false)
+  hydrationStatus String?
+  snapshot Json
+  expiresAt BigInt?
+  nextCheckAt BigInt?
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([sourceType, sourceId, attempt], map: "PaymentAttempt_sourceType_sourceId_attempt_key")
+  @@unique([platformAccountId, scopeKey, livemode, stripeSessionId], map: "PaymentAttempt_9706843f2745_key")
+  @@unique([platformAccountId, scopeKey, livemode, stripePaymentIntentId], map: "PaymentAttempt_b8a3abb70bb8_key")
+  @@unique([platformAccountId, scopeKey, livemode, stripeChargeId], map: "PaymentAttempt_7786bca3b3a0_key")
+  @@index([status, nextCheckAt], map: "PaymentAttempt_status_nextCheckAt_idx")
+  @@index([operationId], map: "PaymentAttempt_operationId_idx")
+  @@index([payeeUserId, createdAt], map: "PaymentAttempt_payeeUserId_createdAt_idx")
+  @@index([payerUserId, createdAt], map: "PaymentAttempt_payerUserId_createdAt_idx")
+  @@index([appId, createdAt], map: "PaymentAttempt_appId_createdAt_idx")
+  @@index([packageId, createdAt], map: "PaymentAttempt_packageId_createdAt_idx")
+}
+
+model StripeOperation {
+  id String @id
+  sourceType String
+  sourceId String
+  operation String
+  platformAccountId String
+  scopeKey String
+  connectedAccountId String?
+  livemode Boolean
+  requestParams Json
+  requestDigest String
+  idempotencyKey String
+  status String @default("PENDING")
+  response Json?
+  stripeObjectId String?
+  requestId String?
+  error Json?
+  firstAttemptAt BigInt
+  lastAttemptAt BigInt
+  nextAttemptAt BigInt
+  attempts Int @default(0)
+  revision BigInt @default(0)
+  leaseOwner String?
+  leaseExpiresAt BigInt?
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([platformAccountId, scopeKey, livemode, idempotencyKey], map: "StripeOperation_01a7fa2fb2c7_key")
+  @@index([status, nextAttemptAt], map: "StripeOperation_status_nextAttemptAt_idx")
+  @@index([sourceType, sourceId], map: "StripeOperation_sourceType_sourceId_idx")
+  @@index([requestId], map: "StripeOperation_requestId_idx")
+}
+
+model PaymentWebhookInbox {
+  id String @id
+  endpoint String
+  platformAccountId String
+  scopeKey String
+  livemode Boolean
+  stripeEventId String
+  eventType String
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt BigInt
+  leaseOwner String?
+  leaseExpiresAt BigInt?
+  revision BigInt @default(0)
+  quarantineReason String?
+  lastError String?
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([endpoint, platformAccountId, scopeKey, livemode, stripeEventId], map: "PaymentWebhookInbox_5b980572a4ec_key")
+  @@index([status, nextAttemptAt], map: "PaymentWebhookInbox_status_nextAttemptAt_idx")
+}
+
+model PaymentOutbox {
+  id String @id
+  sourceType String
+  sourceId String
+  effect String
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt BigInt
+  leaseOwner String?
+  leaseExpiresAt BigInt?
+  revision BigInt @default(0)
+  lastError String?
+  createdAt BigInt
+  updatedAt BigInt
+  @@index([status, nextAttemptAt], map: "PaymentOutbox_status_nextAttemptAt_idx")
+  @@index([sourceType, sourceId], map: "PaymentOutbox_sourceType_sourceId_idx")
+}
+
+model PaymentRefund {
+  id String @id
+  attemptId String
+  commandId String
+  platformAccountId String
+  scopeKey String
+  livemode Boolean
+  stripeRefundId String?
+  amount BigInt
+  currency String
+  status String @default("RESERVED")
+  reason String
+  requestedBy String
+  operationId String?
+  refundApplicationFee Boolean @default(false)
+  reverseTransfer Boolean @default(false)
+  failureReason String?
+  pendingReason String?
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([commandId], map: "PaymentRefund_commandId_key")
+  @@unique([platformAccountId, scopeKey, livemode, stripeRefundId], map: "PaymentRefund_1ab912bc982b_key")
+  @@index([attemptId, status], map: "PaymentRefund_attemptId_status_idx")
+  @@index([status, updatedAt], map: "PaymentRefund_status_updatedAt_idx")
+}
+
+model PaymentAdjustment {
+  id String @id
+  attemptId String
+  purpose String
+  platformAccountId String
+  scopeKey String
+  livemode Boolean
+  parentObjectId String?
+  stripeObjectId String?
+  operationId String
+  amount BigInt
+  currency String
+  status String @default("PENDING")
+  error String?
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([operationId], map: "PaymentAdjustment_operationId_key")
+  @@unique([platformAccountId, scopeKey, livemode, stripeObjectId], map: "PaymentAdjustment_ade2a1ddd843_key")
+  @@index([attemptId, purpose], map: "PaymentAdjustment_attemptId_purpose_idx")
+  @@index([status, updatedAt], map: "PaymentAdjustment_status_updatedAt_idx")
+}
+
+model PaymentLedgerEntry {
+  id String @id
+  attemptId String?
+  sourceType String
+  sourceId String
+  platformAccountId String
+  scopeKey String
+  livemode Boolean
+  perspective String
+  kind String
+  amount BigInt
+  currency String
+  payeeUserId String?
+  payerUserId String?
+  appId String?
+  packageId String?
+  stripeObjectId String
+  stripeBalanceTransactionId String?
+  stripeEventId String?
+  occurredAt BigInt
+  createdAt BigInt
+  @@unique([platformAccountId, scopeKey, livemode, stripeObjectId, perspective, kind], map: "PaymentLedgerEntry_c3ec49d08e8a_key")
+  @@index([payeeUserId, occurredAt], map: "PaymentLedgerEntry_payeeUserId_occurredAt_idx")
+  @@index([appId, occurredAt], map: "PaymentLedgerEntry_appId_occurredAt_idx")
+  @@index([packageId, occurredAt], map: "PaymentLedgerEntry_packageId_occurredAt_idx")
+  @@index([sourceType, sourceId], map: "PaymentLedgerEntry_sourceType_sourceId_idx")
+  @@index([attemptId], map: "PaymentLedgerEntry_attemptId_idx")
+}
+
+model AccessGrant {
+  id String @id
+  userId String
+  itemKind String
+  itemId String
+  sourceType String
+  sourceId String
+  status String @default("ACTIVE")
+  reason String?
+  grantedBy String?
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([userId, itemKind, itemId, sourceType, sourceId], map: "AccessGrant_userId_itemKind_itemId_sourceType_sourceId_key")
+  @@index([userId, itemKind, itemId, status], map: "AccessGrant_userId_itemKind_itemId_status_idx")
+  @@index([sourceType, sourceId], map: "AccessGrant_sourceType_sourceId_idx")
+}
+
+model PaymentEntitlement {
+  id String @id
+  userId String
+  itemKind String
+  itemId String
+  revision BigInt @default(0)
+  blocked Boolean @default(false)
+  blockReason String?
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([userId, itemKind, itemId], map: "PaymentEntitlement_userId_itemKind_itemId_key")
+}
+
+model LegalConsent {
+  id String @id
+  userId String
+  kind String
+  subjectType String?
+  subjectId String?
+  textVersion String
+  textHash String
+  locale String
+  accepted Boolean
+  evidence Json?
+  createdAt BigInt
+  @@index([userId, kind, createdAt], map: "LegalConsent_userId_kind_createdAt_idx")
+  @@index([subjectType, subjectId], map: "LegalConsent_subjectType_subjectId_idx")
+}
+
+model PaymentLimitCounter {
+  key String @id
+  count BigInt @default(0)
+  amount BigInt @default(0)
+  currency String?
+  windowEnd BigInt
+  revision BigInt @default(0)
+  createdAt BigInt
+  updatedAt BigInt
+  @@index([windowEnd], map: "PaymentLimitCounter_windowEnd_idx")
+}
+
+model PaymentLimitReservation {
+  id String @id
+  counterKey String
+  sourceType String
+  sourceId String
+  amount BigInt
+  count BigInt @default(1)
+  status String @default("RESERVED")
+  expiresAt BigInt
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([counterKey, sourceType, sourceId], map: "PaymentLimitReservation_counterKey_sourceType_sourceId_key")
+  @@index([status, expiresAt], map: "PaymentLimitReservation_status_expiresAt_idx")
+  @@index([counterKey, status], map: "PaymentLimitReservation_counterKey_status_idx")
+}
+
+model PaymentLegacyArchive {
+  id String @id
+  sourceType String
+  sourceId String
+  canonicalId String?
+  originalRow Json
+  evidence Json?
+  status String @default("REVIEW")
+  reviewedBy String?
+  createdAt BigInt
+  updatedAt BigInt
+  @@unique([sourceType, sourceId], map: "PaymentLegacyArchive_sourceType_sourceId_key")
+  @@index([status, createdAt], map: "PaymentLegacyArchive_status_createdAt_idx")
+  @@index([canonicalId], map: "PaymentLegacyArchive_canonicalId_idx")
+}
+
+/// Worker coordination is separate from API mutation locks. Only the worker role can write it.
+model AuditWorkerLease {
+  id        BigInt    @id
+  owner     String?
+  expiresAt DateTime? @db.Timestamptz(3)
+  updatedAt DateTime  @default(now()) @db.Timestamptz(3)
 }

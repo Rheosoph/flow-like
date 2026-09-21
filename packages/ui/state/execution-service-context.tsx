@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { NodePaymentPrompt } from "../components/payments/node-payment";
 import { RuntimeVariablesPrompt } from "../components/flow/runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "../components/flow/wasm-sandbox-warning-dialog";
 import type { IIntercomEvent, ILogMetadata, IRunPayload } from "../lib";
@@ -1092,6 +1093,7 @@ export function ExecutionServiceProvider({
 	return (
 		<ExecutionServiceContext.Provider value={contextValue}>
 			{children}
+			<NodePaymentPrompt />
 			<RuntimeVariablesPrompt
 				open={promptOpen}
 				onOpenChange={setPromptOpen}

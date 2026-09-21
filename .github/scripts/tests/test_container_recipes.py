@@ -16,7 +16,7 @@ class RecipeCoverageTests(unittest.TestCase):
     def test_all_default_recipes_are_published(self):
         recipes = {
             str(path.relative_to(ROOT))
-            for backend in ("aws", "gcp", "azure", "docker-compose", "kubernetes")
+            for backend in ("aws", "gcp", "azure", "docker-compose", "kubernetes", "audit-worker")
             for path in (ROOT / "apps/backend" / backend).rglob("Dockerfile")
         }
         published = {entry["dockerfile"] for entry in containers.matrix("all")["include"]}

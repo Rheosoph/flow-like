@@ -51,13 +51,14 @@ pub async fn accept_join_request(
     let caller_sub = user.sub().ok();
     let membership_id = create_id();
 
-    state
+    let approval_only = state
         .transaction(|txn| {
             let app_id = app_id.clone();
             let request_id = request_id.clone();
             let caller_sub = caller_sub.clone();
             let membership_id = membership_id.clone();
             Box::pin(async move {
+                crate::db::coordination::coordinate(txn, "payments-app", &[&app_id]).await?;
                 let request = join_queue::Entity::find()
                     .filter(join_queue::Column::AppId.eq(app_id.clone()))
                     .filter(join_queue::Column::Id.eq(request_id))
@@ -115,6 +116,16 @@ pub async fn accept_join_request(
                     }
                 }
 
+                if app.price > 0 {
+                    let approver = caller_sub.as_deref().ok_or(ApiError::FORBIDDEN)?;
+                    crate::payments::ensure_app_owner(txn, &app_id, approver).await?;
+                    let mut request: join_queue::ActiveModel = request.into();
+                    request.approved_at = Set(Some(chrono::Utc::now().timestamp_millis()));
+                    request.approved_by = Set(Some(approver.to_owned()));
+                    request.update(txn).await?;
+                    return Ok::<_, ApiError>(true);
+                }
+
                 let default_role_id = app.default_role_id.clone().ok_or(ApiError::NOT_FOUND)?;
 
                 let membership = membership::ActiveModel {
@@ -130,7 +141,7 @@ pub async fn accept_join_request(
                 let request: join_queue::ActiveModel = request.into();
                 request.delete(txn).await?;
                 membership.insert(txn).await?;
-                Ok::<_, ApiError>(())
+                Ok::<_, ApiError>(false)
             })
         })
         .await?;
@@ -146,10 +157,13 @@ pub async fn accept_join_request(
         state,
         user,
         app_id,
-        "membership.accept",
+        if approval_only {
+            "membership.purchase.approve"
+        } else {
+            "membership.accept"
+        },
         "JoinRequest",
-        request_id,
-        "Join request accepted"
+        request_id
     );
     Ok(Json(()))
 }
@@ -218,8 +232,7 @@ pub async fn reject_join_request(
         app_id,
         "membership.reject",
         "JoinRequest",
-        request_id,
-        "Join request rejected"
+        request_id
     );
     Ok(Json(()))
 }

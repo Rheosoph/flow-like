@@ -19,7 +19,7 @@
 use crate::{
     ensure_fresh_permission, ensure_permission,
     entity::{
-        execution_run,
+        event_sink, execution_run,
         sea_orm_active_enums::{RunMode, RunStatus, RunVariant},
     },
     error::ApiError,
@@ -43,6 +43,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use flow_like::flow::execution::UserExecutionContext;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
@@ -301,7 +302,10 @@ pub async fn invoke_event(
     Json(params): Json<InvokeEventRequest>,
 ) -> Result<Response, ApiError> {
     query.variant = variant::pin_from_request(&headers, query.variant.take());
-    invoke_event_impl(state, user, app_id, event_id, query, params, None, false).await
+    invoke_event_impl(
+        state, user, app_id, event_id, query, params, None, false, None,
+    )
+    .await
 }
 
 /// Invokes an event that has already been resolved through another governed
@@ -326,8 +330,175 @@ pub(crate) async fn invoke_resolved_event(
         params,
         Some(event),
         true,
+        None,
     )
     .await
+}
+
+/// Execute the exact public Event authorized by the hosted frontend route.
+/// Authentication identifies the visitor; it does not grant app membership or
+/// transfer the app owner's identity to the flow.
+pub(crate) async fn invoke_hosted_event(
+    state: AppState,
+    app_id: String,
+    event: flow_like::flow::event::Event,
+    caller: Option<AppUser>,
+    anonymous_session_id: &str,
+    query: InvokeEventQuery,
+    mut params: InvokeEventRequest,
+) -> Result<Response, ApiError> {
+    validate_hosted_invocation(&query, &params)?;
+    let user = caller.unwrap_or(AppUser::Unauthorized);
+    let subject = hosted_subject(&event.id, &user, anonymous_session_id)?;
+    if let AppUser::OpenID(visitor) = &user {
+        crate::routes::user::ensure_user_exists(&state, &visitor.sub).await?;
+    }
+    let sink = event_sink::Entity::find()
+        .filter(event_sink::Column::AppId.eq(&app_id))
+        .filter(event_sink::Column::EventId.eq(&event.id))
+        .one(&state.db)
+        .await?;
+    if sink.as_ref().is_some_and(|sink| !sink.active) {
+        return Err(ApiError::not_found("Event sink is inactive"));
+    }
+    params.token = match &user {
+        AppUser::OpenID(user) => Some(user.access_token.clone()),
+        _ => sink
+            .as_ref()
+            .and_then(|sink| sink.pat_encrypted.as_deref())
+            .and_then(|encrypted| super::db::decrypt_token(encrypted, &state.encryption_key)),
+    };
+    // Publication chooses the model profile. Signing into a public frontend
+    // does not disclose the visitor's personal profile or private Bit keys.
+    let mut profile = sink.as_ref().and_then(|sink| sink.profile_json.clone());
+    if let Some(profile) = profile.as_mut() {
+        crate::execution::hydrate_profile_custom_bit_secrets(&state, profile).await;
+    }
+    if let Some(sink) = &sink {
+        if matches!(user, AppUser::Unauthorized) {
+            // A stored PAT is execution configuration, never the visitor's
+            // identity. Apply the same revocation checks as inbound REST/MCP.
+            crate::routes::sink::trigger::resolve_sink_pat_user_id(
+                &state,
+                sink,
+                params.token.as_deref(),
+            )
+            .await?;
+        }
+        let tokens = sink
+            .oauth_tokens_encrypted
+            .as_deref()
+            .and_then(|encrypted| super::db::decrypt_token(encrypted, &state.encryption_key))
+            .and_then(|tokens| serde_json::from_str(&tokens).ok());
+        if let Some(tokens) = tokens {
+            params.oauth_tokens = Some(
+                crate::routes::sink::trigger::maybe_refresh_oauth_tokens(&state, &sink.id, tokens)
+                    .await,
+            );
+        }
+    }
+    let event_id = event.id.clone();
+    invoke_event_impl(
+        state,
+        user,
+        app_id,
+        event_id,
+        query,
+        params,
+        Some(event),
+        true,
+        Some(HostedInvocation { subject, profile }),
+    )
+    .await
+}
+
+struct HostedInvocation {
+    subject: String,
+    profile: Option<serde_json::Value>,
+}
+
+pub(crate) fn hosted_subject(
+    event_id: &str,
+    caller: &AppUser,
+    anonymous_session_id: &str,
+) -> Result<String, ApiError> {
+    match caller {
+        AppUser::OpenID(user) if !user.sub.is_empty() => Ok(user.sub.clone()),
+        AppUser::Unauthorized => {
+            if !(16..=128).contains(&anonymous_session_id.len())
+                || !anonymous_session_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                return Err(ApiError::bad_request(
+                    "A valid frontend session ID is required",
+                ));
+            }
+            Ok(format!("frontend:{event_id}:{anonymous_session_id}"))
+        }
+        _ => Err(ApiError::unauthorized(
+            "Hosted frontends require a platform user token",
+        )),
+    }
+}
+
+fn validate_hosted_invocation(
+    query: &InvokeEventQuery,
+    params: &InvokeEventRequest,
+) -> Result<(), ApiError> {
+    if query.local || query.isolated {
+        return Err(ApiError::bad_request(
+            "Hosted frontends require streaming remote execution",
+        ));
+    }
+    if params.version.is_some()
+        || params.token.is_some()
+        || params.oauth_tokens.is_some()
+        || params.runtime_variables.is_some()
+        || params.profile_id.is_some()
+    {
+        return Err(ApiError::bad_request(
+            "Hosted frontends accept payload and Page triggers without execution credential or configuration overrides",
+        ));
+    }
+    Ok(())
+}
+
+async fn record_invocation_start(
+    state: &AppState,
+    user: &AppUser,
+    execution: crate::audit::ExecutionAudit,
+    hosted_subject: Option<&str>,
+) {
+    if let (AppUser::Unauthorized, Some(subject)) = (user, hosted_subject) {
+        crate::audit::record_entry_once(
+            state,
+            crate::audit::AuditRecordInput {
+                actor_id: subject.to_string(),
+                actor_type: crate::entity::sea_orm_active_enums::AuditActorType::System,
+                actor_ip: crate::audit::request::actor_ip(),
+                action: "execution.event.start".to_string(),
+                resource_type: "ExecutionRun".to_string(),
+                resource_id: execution.run_id,
+                scope: Some(execution.app_id),
+                details: Some(serde_json::json!({
+                    "board_id": execution.board_id,
+                    "event_id": execution.event_id,
+                    "node_id": execution.node_id,
+                    "version": execution.version,
+                    "board_etag": execution.board_etag,
+                    "mode": format!("{:?}", execution.mode),
+                    "status": format!("{:?}", execution.status),
+                    "input_payload_len": execution.input_payload_len,
+                    "technical_user_id": execution.technical_user_id,
+                    "frontend": true,
+                })),
+            },
+        )
+        .await;
+    } else {
+        crate::audit::record_execution_start(state, user, execution).await;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -340,18 +511,49 @@ async fn invoke_event_impl(
     params: InvokeEventRequest,
     resolved_event: Option<flow_like::flow::event::Event>,
     governed_connected_app_call: bool,
+    hosted_invocation: Option<HostedInvocation>,
 ) -> Result<Response, ApiError> {
-    let permission = if params.page_trigger.is_some() {
-        ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
+    let hosted = hosted_invocation.is_some();
+    let hosted_subject = hosted_invocation
+        .as_ref()
+        .map(|context| context.subject.as_str());
+    let (sub, technical_user_id, user_context, actor_user_id) = if let Some(subject) =
+        hosted_subject
+    {
+        let user_context = match &user {
+            AppUser::OpenID(_) => Some(match user.app_permission_fresh(&app_id, &state).await {
+                Ok(permission) => permission.to_user_context(),
+                Err(error)
+                    if matches!(
+                        error.status(),
+                        axum::http::StatusCode::FORBIDDEN | axum::http::StatusCode::UNAUTHORIZED
+                    ) =>
+                {
+                    UserExecutionContext::new(subject)
+                }
+                Err(error) => return Err(error),
+            }),
+            _ => None,
+        };
+        let actor_user_id = user_context.as_ref().map(|_| subject.to_string());
+        (subject.to_string(), None, user_context, actor_user_id)
     } else {
-        ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
-    };
-    let sub = permission.effective_user_id().map_err(|_| {
-        crate::error::ApiError::forbidden(
-            "Invoking requires a caller that is linked to a user account",
+        let permission = if params.page_trigger.is_some() {
+            ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
+        } else {
+            ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
+        };
+        let sub = permission.effective_user_id().map_err(|_| {
+            ApiError::forbidden("Invoking requires a caller that is linked to a user account")
+        })?;
+        let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+        (
+            sub.clone(),
+            technical_user_id,
+            Some(permission.to_user_context()),
+            Some(sub),
         )
-    })?;
-    let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+    };
     // If invoked through an app connection, keep the caller app chain so the
     // run (and any tokens it mints) stays attributable across apps.
     let caller_app_chain = match &user {
@@ -382,13 +584,14 @@ async fn invoke_event_impl(
     let resolved_page_trigger = match (event.default_page_id.as_ref(), params.page_trigger.as_ref())
     {
         (Some(_), Some(trigger)) => Some(
-            super::page_trigger::resolve_page_trigger(
+            super::page_trigger::resolve_authorized_page_trigger(
                 &state,
-                &permission,
                 &app_id,
                 &event,
                 trigger,
                 query.variant.as_deref(),
+                &sub,
+                technical_user_id.as_deref(),
             )
             .await?,
         ),
@@ -493,7 +696,7 @@ async fn invoke_event_impl(
             }
         },
         async {
-            if remote {
+            if remote && !hosted {
                 fetch_profile_for_dispatch(
                     &state,
                     &sub,
@@ -503,7 +706,9 @@ async fn invoke_event_impl(
                 )
                 .await
             } else {
-                None
+                hosted_invocation
+                    .as_ref()
+                    .and_then(|context| context.profile.clone())
             }
         },
     );
@@ -610,7 +815,7 @@ async fn invoke_event_impl(
         started_at: Set(None),
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
-        user_id: Set(Some(sub.clone())),
+        user_id: Set(actor_user_id),
         technical_user_id: Set(technical_user_id.clone()),
         caller_app_chain: Set(caller_app_chain.clone().map(Into::into)),
         trace_id: Set(correlation.trace_id.clone()),
@@ -645,7 +850,7 @@ async fn invoke_event_impl(
                 tracing::error!(error = %e, "Failed to create run record");
                 ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
             })?;
-        crate::audit::record_execution_start(&state, &user, execution_audit).await;
+        record_invocation_start(&state, &user, execution_audit, hosted_subject).await;
 
         let poll_token = sign_execution_jwt(ExecutionJwtParams {
             user_id: sub.clone(),
@@ -770,6 +975,20 @@ async fn invoke_event_impl(
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
 
+    let executor_jwt = if hosted {
+        crate::execution::bind_hosted_frontend(&executor_jwt)
+            .map_err(|error| ApiError::internal_error(anyhow!(error)))?
+    } else {
+        executor_jwt
+    };
+    let executor_jwt = match &user {
+        AppUser::OpenID(oidc) if !query.isolated && !hosted => {
+            crate::execution::bind_attended_payer(&executor_jwt, &oidc.sub)
+                .map_err(|error| ApiError::internal_error(anyhow!(error)))?
+        }
+        _ => executor_jwt,
+    };
+
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: app_id.clone(),
@@ -790,11 +1009,15 @@ async fn invoke_event_impl(
             &event,
         ))),
         runtime_variables: params.runtime_variables,
-        user_context: Some(permission.to_user_context()),
+        user_context,
         profile,
         wasm_packages,
         channel: None,
-        trigger: DispatchTrigger::User,
+        trigger: if hosted {
+            DispatchTrigger::System
+        } else {
+            DispatchTrigger::User
+        },
         shadow: false,
         artifact: None,
     };
@@ -807,7 +1030,7 @@ async fn invoke_event_impl(
                 tracing::error!(error = %e, "Failed to create run record");
                 ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
             })?;
-        crate::audit::record_execution_start(&state, &user, execution_audit).await;
+        record_invocation_start(&state, &user, execution_audit, hosted_subject).await;
 
         let response = match state
             .dispatcher
@@ -844,7 +1067,7 @@ async fn invoke_event_impl(
             tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
             ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
         })?;
-    crate::audit::record_execution_start(&state, &user, execution_audit).await;
+    record_invocation_start(&state, &user, execution_audit, hosted_subject).await;
 
     // Dispatch based on the configured backend
     match backend {
@@ -1061,7 +1284,73 @@ fn extract_sse_event(buffer: &mut Vec<u8>) -> Option<ParsedSseEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::middleware::jwt::OpenIDUser;
     use sea_orm::{DatabaseBackend, QueryTrait};
+
+    #[test]
+    fn hosted_anonymous_subject_is_bound_to_event_and_browser_session() {
+        let first =
+            hosted_subject("event-1", &AppUser::Unauthorized, "anonymous-session-1").unwrap();
+        let other_session =
+            hosted_subject("event-1", &AppUser::Unauthorized, "anonymous-session-2").unwrap();
+        let other_event =
+            hosted_subject("event-2", &AppUser::Unauthorized, "anonymous-session-1").unwrap();
+        assert_eq!(first, "frontend:event-1:anonymous-session-1");
+        assert_ne!(first, other_session);
+        assert_ne!(first, other_event);
+        for session in ["", "short", "anonymous/../session", "anonymous:session:1"] {
+            assert!(hosted_subject("event-1", &AppUser::Unauthorized, session).is_err());
+        }
+        assert!(hosted_subject("event-1", &AppUser::Unauthorized, &"a".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn hosted_authenticated_subject_keeps_the_verified_visitor() {
+        let user = AppUser::OpenID(OpenIDUser {
+            sub: "visitor-1".into(),
+            access_token: "verified-platform-token".into(),
+        });
+        assert_eq!(hosted_subject("event-1", &user, "").unwrap(), "visitor-1");
+        let empty_subject = AppUser::OpenID(OpenIDUser {
+            sub: String::new(),
+            access_token: "token".into(),
+        });
+        assert!(hosted_subject("event-1", &empty_subject, "anonymous-session-1").is_err());
+    }
+
+    #[test]
+    fn hosted_execution_rejects_credential_and_configuration_overrides() {
+        let payload = serde_json::json!({"payload": {"message": "hello"}});
+        let valid: InvokeEventRequest = serde_json::from_value(payload.clone()).unwrap();
+        assert!(validate_hosted_invocation(&InvokeEventQuery::default(), &valid).is_ok());
+        for (field, value) in [
+            ("version", serde_json::json!("1_0_0")),
+            ("token", serde_json::json!("unverified-token")),
+            ("oauth_tokens", serde_json::json!({})),
+            ("runtime_variables", serde_json::json!({})),
+            ("profile_id", serde_json::json!("another-users-profile")),
+        ] {
+            let mut request = payload.clone();
+            request[field] = value;
+            let params = serde_json::from_value(request).unwrap();
+            assert!(
+                validate_hosted_invocation(&InvokeEventQuery::default(), &params).is_err(),
+                "{field}"
+            );
+        }
+        for query in [
+            InvokeEventQuery {
+                local: true,
+                ..Default::default()
+            },
+            InvokeEventQuery {
+                isolated: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(validate_hosted_invocation(&query, &valid).is_err());
+        }
+    }
 
     #[test]
     fn sync_dispatch_failure_keeps_artifact_specific_messaging() {

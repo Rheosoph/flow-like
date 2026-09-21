@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -47,6 +48,8 @@ pub async fn add_to_table(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
+    Query(selector_fields): Query<std::collections::HashMap<String, String>>,
     Json(payload): Json<AddToDBPayload>,
 ) -> Result<Json<()>, ApiError> {
     ensure_any_permission!(
@@ -57,9 +60,18 @@ pub async fn add_to_table(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    super::validate_writable_selector(&selector)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let mut db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
+    let has_selector = ["branch", "version", "tag", "read_only"]
+        .iter()
+        .any(|field| selector_fields.contains_key(*field));
+    let mut db = if !has_selector {
+        LanceDBVectorStore::from_connection(connection, table.clone()).await
+    } else {
+        LanceDBVectorStore::from_connection_with_selector(connection, table.clone(), selector)
+            .await?
+    };
 
     let row_count = payload.items.len();
     db.insert(payload.items).await?;
@@ -71,7 +83,6 @@ pub async fn add_to_table(
         "database.rows.insert",
         "DatabaseTable",
         table,
-        "Inserted database rows",
         serde_json::json!({
             "row_count": row_count,
             "user_scoped": scope.is_user_scoped(),

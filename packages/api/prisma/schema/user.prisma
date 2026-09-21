@@ -48,9 +48,7 @@ model User {
   wasmInvitesSent             WasmPackageInvitation[]  @relation("WasmInviter")
   wasmInvitesReceived         WasmPackageInvitation[]  @relation("WasmInvitee")
   wasmPackageJoinQueue        WasmPackageJoinQueue[]
-  wasmPackagePurchases        WasmPackagePurchase[]
   wasmPackagesAuthored        WasmPackageAuthor[]
-  purchases                   AppPurchase[]
   technicalUsersCreated       TechnicalUser[]          @relation("TechnicalUserCreator")
 
   status String @default("ACTIVE")

@@ -291,6 +291,9 @@ async fn execute_inner(
         Some(crate::widgets::HubAccess {
             callback_url: callback_url.to_string(),
             jwt: request.executor_jwt.clone(),
+            hosted_frontend: verify_jwt_async(&request.executor_jwt)
+                .await?
+                .hosted_frontend,
         }),
     )
     .await?;
@@ -499,6 +502,15 @@ async fn execute_inner(
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+
+    let payment_claims = verify_jwt_async(&request.executor_jwt).await?;
+    if payment_claims.payer_sub.as_deref() == Some(payment_claims.sub.as_str()) && !request.shadow {
+        run.set_executor_payment_auth(flow_like::flow::execution::ExecutorPaymentAuth::new(
+            request.executor_jwt.clone(),
+            payment_claims.callback_url,
+        ))
+        .await;
+    }
 
     run.set_execution_environment(execution_environment);
     if let Some(mode) = request.execution_mode {

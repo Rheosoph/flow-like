@@ -12,6 +12,7 @@ import {
 	type LucideProps,
 	PackageIcon,
 	PaletteIcon,
+	ScrollTextIcon,
 	SendIcon,
 	SparklesIcon,
 	SquarePenIcon,
@@ -35,6 +36,7 @@ export interface INavigationItem {
 	group: string;
 	visibilities?: IAppVisibility[];
 	requiresPaid?: boolean;
+	requiresPayments?: boolean;
 	disabled?: boolean;
 	devOnly?: boolean;
 	/**
@@ -275,6 +277,18 @@ export function buildNavigationItems(
 			permissions: [RolePermissions.ReadRoles],
 		},
 		{
+			href: "/library/config/payments",
+			label: t("payments", "Payments"),
+			icon: DollarSignIcon,
+			description: t(
+				"paymentSettingsDescription",
+				"Connect payouts and set payment limits",
+			),
+			group: groups.general,
+			requiresPayments: true,
+			permissions: [RolePermissions.Owner],
+		},
+		{
 			href: "/library/config/sales",
 			label: t("sales", "Sales"),
 			icon: DollarSignIcon,
@@ -282,10 +296,7 @@ export function buildNavigationItems(
 				"trackSalesManagePricingAndDiscounts",
 				"Track sales, manage pricing and discounts",
 			),
-			visibilities: [IAppVisibility.Public, IAppVisibility.PublicRequestAccess],
-			requiresPaid: true,
 			group: groups.insights,
-			devOnly: true,
 			permissions: [RolePermissions.Owner],
 		},
 		{
@@ -299,6 +310,23 @@ export function buildNavigationItems(
 			group: groups.insights,
 			devOnly: true,
 			permissions: [RolePermissions.ReadAnalytics],
+		},
+		{
+			href: "/library/config/audit",
+			label: t("audit:auditTrail", "Audit trail"),
+			icon: ScrollTextIcon,
+			description: t(
+				"audit:navDescription",
+				"Tamper-evident record of every change, and its export",
+			),
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+				IAppVisibility.Private,
+			],
+			group: groups.insights,
+			permissions: [RolePermissions.Owner],
 		},
 		{
 			href: "/library/config/endpoints",
@@ -340,6 +368,7 @@ export interface ResolveNavOptions {
 	visibility: IAppVisibility;
 	developerMode: boolean;
 	isPaid: boolean;
+	paymentsEnabled?: boolean;
 	/** Falls back to "allowed" while the caller's role is still unknown. */
 	can: (...permissions: RolePermissions[]) => boolean;
 	permissionLockReason: (item: INavigationItem) => string;
@@ -365,7 +394,10 @@ export function resolveNavigationItems(
 	return items
 		.filter(
 			(item) =>
-				(!item.devOnly || developerMode) &&
+				(!item.devOnly ||
+					developerMode ||
+					(item.href === "/library/config/sales" && options.paymentsEnabled)) &&
+				(!item.requiresPayments || options.paymentsEnabled) &&
 				(!item.visibilities ||
 					item.visibilities.includes(visibility) ||
 					item.lockedVisibilities?.includes(visibility)) &&

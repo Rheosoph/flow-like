@@ -139,8 +139,7 @@ pub async fn add_connection(
         app_id,
         "app_connection.create",
         "AppConnection",
-        connection_id,
-        "App connection created"
+        connection_id
     );
 
     Ok(Json(()))

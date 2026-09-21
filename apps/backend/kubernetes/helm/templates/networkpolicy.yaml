@@ -32,7 +32,7 @@ spec:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
 {{- $root := . }}
-{{- $targets := dict "api" (dict "port" 8080 "from" (list "execution-egress" "executor-pool" "queue-bridge" "compiler" "sink-trigger" "sink-services")) "web" (dict "port" 3001 "from" list) "signaling" (dict "port" (int .Values.signaling.service.port) "from" list) "redis" (dict "port" 6379 "from" (list "api" "execution-manager" "queue-bridge" "executor-pool" "signaling" "sink-services" "redis-exporter")) "cockroachdb" (dict "port" 26257 "from" (list "api" "db-migration" "cockroachdb-init")) "rustfs" (dict "port" 9000 "from" (list "api" "object-store-init" "object-gateway")) "object-gateway" (dict "port" 9000 "from" (list "api" "compiler" "execution-egress" "executor-pool" "object-store-init")) "compiler" (dict "port" (int .Values.compiler.service.port) "from" (list "api")) "execution-manager" (dict "port" 9000 "from" (list "api" "queue-bridge")) "executor-pool" (dict "port" (int .Values.executorPool.service.port) "from" (list "api")) }}
+{{- $targets := dict "api" (dict "port" 8080 "from" (list "execution-egress" "executor-pool" "queue-bridge" "compiler" "sink-trigger" "sink-services")) "web" (dict "port" 3001 "from" list) "signaling" (dict "port" (int .Values.signaling.service.port) "from" list) "redis" (dict "port" 6379 "from" (list "api" "execution-manager" "queue-bridge" "executor-pool" "signaling" "sink-services" "redis-exporter")) "cockroachdb" (dict "port" 26257 "from" (list "api" "audit-worker" "db-migration" "cockroachdb-init")) "rustfs" (dict "port" 9000 "from" (list "api" "audit-worker" "object-store-init" "object-gateway")) "object-gateway" (dict "port" 9000 "from" (list "api" "compiler" "execution-egress" "executor-pool" "object-store-init")) "compiler" (dict "port" (int .Values.compiler.service.port) "from" (list "api")) "execution-manager" (dict "port" 9000 "from" (list "api" "queue-bridge")) "executor-pool" (dict "port" (int .Values.executorPool.service.port) "from" (list "api")) }}
 {{- range $component, $target := $targets }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -191,7 +191,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: NotIn
-        values: [execution-sandbox, execution-egress, rustfs, redis, cockroachdb]
+        values: [execution-sandbox, execution-egress, rustfs, redis, cockroachdb, audit-worker]
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -250,4 +250,40 @@ spec:
         - {protocol: TCP, port: 8080}
         - {protocol: TCP, port: 3200}
     - ports: [{protocol: TCP, port: 443}]
+{{- end }}
+
+{{- if and .Values.networkPolicy.enabled .Values.audit.worker }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-audit-worker
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: audit-worker
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: cockroachdb
+      ports: [{protocol: TCP, port: 26257}]
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: rustfs
+      ports: [{protocol: TCP, port: 9000}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16]
+      ports: [{protocol: TCP, port: 443}]
+    {{- with .Values.audit.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

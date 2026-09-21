@@ -181,6 +181,9 @@ impl RejectedRunContext {
 /// caller can hand it back to the client; errors are logged, never propagated.
 pub async fn record(state: &AppState, context: RejectedRunContext) -> String {
     let run_id = context.run_id.clone();
+    if let Err(error) = crate::payments::node::cancel_run(state, &run_id, "RUN_REJECTED").await {
+        tracing::warn!(%run_id,%error,"Payment cancellation after execution rejection deferred");
+    }
 
     match suppression(state, &context).await {
         Ok(Suppression::Fold(existing)) => {
@@ -284,18 +287,16 @@ async fn record_rejection_audit(
         } else {
             "board"
         };
-        crate::audit::AuditService::record_once(
+        crate::audit::record::write(
             &state.db,
-            state.db_dialect,
-            crate::audit::service::AuditEntryInput {
+            crate::audit::AuditRecordInput {
                 actor_id: "execution-admission".to_owned(),
                 actor_type: crate::entity::sea_orm_active_enums::AuditActorType::System,
                 actor_ip: crate::audit::request::actor_ip(),
                 action: format!("execution.{kind}.reject"),
                 resource_type: "ExecutionRun".to_owned(),
                 resource_id: run.id,
-                chain_id: Some(run.app_id),
-                summary: "Execution rejected before dispatch".to_owned(),
+                scope: Some(run.app_id),
                 details: Some(serde_json::json!({
                     "board_id": run.board_id,
                     "event_id": run.event_id,
@@ -305,6 +306,7 @@ async fn record_rejection_audit(
                     "input_payload_len": run.input_payload_len,
                 })),
             },
+            crate::audit::WriteMode::Once,
         )
         .await?;
         Ok(())

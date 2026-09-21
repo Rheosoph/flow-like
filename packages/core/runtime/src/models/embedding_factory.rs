@@ -179,6 +179,7 @@ impl EmbeddingFactory {
 
         #[cfg(feature = "remote-ml")]
         if !prefers_local && supports_remote {
+            let access_token = app_state.hosted_model_token.clone().or(access_token);
             if let Some(access_token) = access_token.filter(|token| !token.trim().is_empty()) {
                 return self
                     .build_text_proxy(bit, access_token, usage_context)

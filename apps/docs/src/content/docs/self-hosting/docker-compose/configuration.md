@@ -20,6 +20,7 @@ shell commands; do not treat the file as a shell script.
 | `BIND_ADDRESS` | `127.0.0.1` | Bind address for published listeners |
 | `WEB_PORT`, `API_PORT`, `SIGNALING_PORT` | `3001`, `8080`, `4444` | Edge proxy ports |
 | `PUBLIC_API_URL`, `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Client-facing API origin |
+| `FRONTEND_BASE_URL` | `http://localhost:3001` | Existing web origin for hosted Event shortlinks; setup uses `--web-origin` |
 | `NEXT_PUBLIC_REDIRECT_URL` | `http://localhost:3001/callback` | OIDC login callback |
 | `NEXT_PUBLIC_REDIRECT_LOGOUT_URL` | `http://localhost:3001/` | Post-logout URL |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3001` | Exact API browser origins |

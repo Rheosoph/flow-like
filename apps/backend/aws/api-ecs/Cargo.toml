@@ -7,7 +7,7 @@ description = "Flow-Like AWS API as a long-running ECS service, alongside the La
 [dependencies]
 flow-like = { workspace = true, features = ["app-runtime"] }
 # Same data plane as the Lambda API, so either can serve one deployment.
-flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "secrets-aws", "dynamodb", "s3", "channel-aws", "otel"] }
+flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "secrets-aws", "dynamodb", "s3", "channel-aws", "otel", "audit-kms-aws"] }
 flow-like-aws-data = { workspace = true }
 flow-like-secrets = { workspace = true, features = ["aws"] }
 flow-like-types.workspace = true

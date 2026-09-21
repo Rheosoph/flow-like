@@ -6,6 +6,11 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@flow-like/flow-like-ui";
+import {
+	useClientHref,
+	useClientRouter,
+} from "@flow-like/flow-like-ui/lib/client-navigation";
+import { isUsePathname } from "@flow-like/flow-like-ui/lib/use-route-url";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -20,7 +25,13 @@ const isHttpish = (href: string) => /^(https?:|mailto:|tel:)/i.test(href);
 const sameOrigin = (href: string) => {
 	try {
 		const u = new URL(href, location.href);
-		return u.origin === location.origin;
+		const current = new URL(location.href);
+		return (
+			u.protocol === current.protocol &&
+			u.host === current.host &&
+			u.username === current.username &&
+			u.password === current.password
+		);
 	} catch {
 		return false;
 	}
@@ -34,7 +45,7 @@ const wantsExternal = (a: HTMLAnchorElement) =>
 const resolveWindowUrl = (href: string) => {
 	try {
 		const parsed = new URL(href, location.href);
-		return parsed.origin === location.origin
+		return sameOrigin(parsed.href)
 			? `${parsed.pathname}${parsed.search}${parsed.hash}`
 			: parsed.toString();
 	} catch {
@@ -73,6 +84,8 @@ const openInBrowser = async (href: string) => {
 
 const GlobalAnchorHandler = () => {
 	const { t } = useTranslation("common");
+	const router = useClientRouter();
+	const clientHref = useClientHref();
 	const [contextMenuData, setContextMenuData] = useState<{
 		x: number;
 		y: number;
@@ -111,7 +124,7 @@ const GlobalAnchorHandler = () => {
 				return;
 			}
 
-			const resolvedUrl = resolveWindowUrl(url);
+			const resolvedUrl = resolveWindowUrl(clientHref(url));
 
 			const windowLabel = `window-${createId()}`;
 			try {
@@ -130,7 +143,7 @@ const GlobalAnchorHandler = () => {
 				console.error("Failed to create new window:", error);
 			}
 		},
-		[IOS, TAURI],
+		[IOS, TAURI, clientHref],
 	);
 
 	useEffect(() => {
@@ -377,6 +390,45 @@ const GlobalAnchorHandler = () => {
 			});
 		};
 
+		// Run after component handlers so workflow actions can consume the click.
+		const handleInternalNavigation = (event: MouseEvent) => {
+			if (
+				event.defaultPrevented ||
+				event.button !== 0 ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.altKey ||
+				event.shiftKey
+			)
+				return;
+			const anchor = findAnchorElement(event.target as HTMLElement);
+			if (
+				!anchor?.href ||
+				anchor.hasAttribute("download") ||
+				wantsExternal(anchor) ||
+				(anchor.target && anchor.target !== "_self")
+			)
+				return;
+			const current = new URL(window.location.href);
+			const destination = new URL(anchor.href, current);
+			if (
+				destination.protocol !== current.protocol ||
+				destination.host !== current.host ||
+				destination.username !== current.username ||
+				destination.password !== current.password ||
+				!isUsePathname(destination.pathname)
+			)
+				return;
+			if (
+				anchor.href.includes("#") &&
+				destination.pathname === current.pathname &&
+				destination.search === current.search
+			)
+				return;
+			event.preventDefault();
+			router.push(destination.pathname + destination.search + destination.hash);
+		};
+
 		document.addEventListener("mousedown", handleMouseDown, true);
 		document.addEventListener("auxclick", handleAuxClick, true);
 		document.addEventListener("touchstart", handleTouchStart, {
@@ -387,6 +439,7 @@ const GlobalAnchorHandler = () => {
 		document.addEventListener("touchend", handleTouchEnd, true);
 		document.addEventListener("pointerup", handlePointerUp as any, true);
 		document.addEventListener("click", handleClick, true);
+		document.addEventListener("click", handleInternalNavigation);
 		document.addEventListener("contextmenu", handleContextMenu, true);
 
 		return () => {
@@ -401,9 +454,10 @@ const GlobalAnchorHandler = () => {
 			document.removeEventListener("touchend", handleTouchEnd, true);
 			document.removeEventListener("pointerup", handlePointerUp as any, true);
 			document.removeEventListener("click", handleClick, true);
+			document.removeEventListener("click", handleInternalNavigation);
 			document.removeEventListener("contextmenu", handleContextMenu, true);
 		};
-	}, [IOS, TAURI, createNewWindow]);
+	}, [IOS, TAURI, createNewWindow, router]);
 
 	return (
 		<>

@@ -102,15 +102,15 @@ pub async fn upsert_role(
         })
         .await?;
 
-    let (action, summary, resource_id) = match written {
-        RoleWrite::Updated => ("role.update", "Role updated", role_id.clone()),
-        RoleWrite::Created => ("role.create", "Role created", new_role_id),
+    let (action, resource_id) = match written {
+        RoleWrite::Updated => ("role.update", role_id.clone()),
+        RoleWrite::Created => ("role.create", new_role_id),
     };
 
     if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
-        tracing::warn!(error = %e, "Failed to invalidate permission cache after {}", summary);
+        tracing::warn!(error = %e, "Failed to invalidate permission cache after {}", action);
     }
 
-    audit_branch!(state, user, app_id, action, "Role", resource_id, summary);
+    audit_branch!(state, user, app_id, action, "Role", resource_id);
     Ok(Json(()))
 }

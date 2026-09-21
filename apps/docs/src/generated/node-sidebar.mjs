@@ -6495,6 +6495,20 @@ export const generatedNodeSidebar = [
     ]
   },
   {
+    "label": "Payments",
+    "collapsed": true,
+    "items": [
+      {
+        "label": "Overview",
+        "slug": "nodes/payments"
+      },
+      {
+        "label": "Request Payment",
+        "slug": "nodes/payments/request-payment"
+      }
+    ]
+  },
+  {
     "label": "Processing",
     "collapsed": true,
     "items": [

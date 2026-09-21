@@ -105,23 +105,16 @@ impl NodeLogic for DropTableLocalDatabaseNode {
             ));
         }
 
+        let existed = db.inner().ensure_can_drop_table().await?;
         let discarded_writes = db.is_dirty();
+
+        let connection = db.inner().connection().clone();
+        db.inner_mut().drop_table().await?;
         if discarded_writes {
             db.discard_buffer();
         }
-
-        let existed = db
-            .inner()
-            .list_tables()
-            .await?
-            .iter()
-            .any(|name| name == &table_name);
-
-        let connection = db.inner().connection().clone();
-        let report = prune_table_references(&connection, &table_name).await;
-
-        db.inner_mut().drop_table().await?;
         drop(db);
+        let report = prune_table_references(&connection, &table_name).await;
 
         if discarded_writes {
             context.log_message(

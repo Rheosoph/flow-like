@@ -8,8 +8,8 @@ from unittest.mock import Mock, patch
 
 from botocore.stub import Stubber
 
-from bootstrap import (base_policy, configuration, ensure_bucket,
-                       ensure_policy, ensure_user, s3_client, secret)
+from bootstrap import (audit_policy, base_policy, configuration, ensure_audit_bucket,
+                       ensure_bucket, ensure_policy, ensure_user, s3_client, secret)
 
 
 class BootstrapTests(unittest.TestCase):
@@ -96,6 +96,78 @@ class BootstrapTests(unittest.TestCase):
                 {"ID": "expire-temporary-content", "Status": "Enabled", "Filter": {"Prefix": "tmp/"}, "Expiration": {"Days": 2}},
             ]}})
             ensure_bucket(client, "flow-like-content", "us-east-1", [], True)
+            stub.assert_no_pending_responses()
+
+    def test_audit_bucket_is_optional_separate_and_has_its_own_identity(self):
+        audit = {"AUDIT_BUCKET": "flow-like-audit", "AUDIT_BUCKET_ACCESS_KEY_ID": "audit-key",
+                 "AUDIT_BUCKET_SECRET_ACCESS_KEY": "audit-password-for-test"}
+        with patch.dict(os.environ, self.env, clear=True):
+            self.assertIsNone(configuration()[7])
+            with patch.dict(os.environ, audit):
+                self.assertEqual(configuration()[7], {"bucket": "flow-like-audit", "mode": "COMPLIANCE", "years": 4,
+                                                      "identity": ("audit-key", "audit-password-for-test")})
+                for change in ({"AUDIT_BUCKET": "flow-like-logs"}, {"AUDIT_BUCKET_ACCESS_KEY_ID": "api-key"},
+                               {"AUDIT_BUCKET_SECRET_ACCESS_KEY": "api-password-for-test"},
+                               {"AUDIT_BUCKET_LOCK_MODE": "legal-hold"}, {"AUDIT_BUCKET_RETENTION_YEARS": "0"}):
+                    with patch.dict(os.environ, change):
+                        self.assertRaises(ValueError, configuration)
+                with patch.dict(os.environ, {"AUDIT_BUCKET_LOCK_MODE": "compliance", "AUDIT_BUCKET_RETENTION_YEARS": "6"}):
+                    self.assertEqual(configuration()[7]["mode"], "COMPLIANCE")
+                    self.assertEqual(configuration()[7]["years"], 6)
+
+    def test_audit_policy_writes_but_never_deletes_or_bypasses_retention(self):
+        policy = audit_policy("flow-like-audit")
+        allowed = {action for statement in policy["Statement"] if statement["Effect"] == "Allow" for action in statement["Action"]}
+        denied = {action for statement in policy["Statement"] if statement["Effect"] == "Deny" for action in statement["Action"]}
+        self.assertIn("s3:PutObject", allowed)
+        self.assertFalse({action for action in allowed if "Delete" in action or "Retention" in action or "Bypass" in action})
+        self.assertTrue({"s3:DeleteObject", "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention"} <= denied)
+        self.assertTrue(all("*" not in statement["Resource"] for statement in policy["Statement"] if statement["Effect"] == "Allow"))
+
+    def test_new_audit_bucket_is_created_with_object_lock_and_default_retention(self):
+        client = s3_client("http://127.0.0.1:1", "us-east-1", "test", "test-secret")
+        bucket = {"Bucket": "flow-like-audit"}
+        with Stubber(client) as stub:
+            stub.add_client_error("head_bucket", service_error_code="404", http_status_code=404, expected_params=bucket)
+            stub.add_response("create_bucket", {}, {**bucket, "ObjectLockEnabledForBucket": True})
+            stub.add_client_error("get_bucket_policy", service_error_code="NoSuchBucketPolicy", http_status_code=404, expected_params=bucket)
+            stub.add_response("put_object_lock_configuration", {}, {**bucket, "ObjectLockConfiguration": {
+                "ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": "GOVERNANCE", "Years": 3}}}})
+            stub.add_response("put_bucket_lifecycle_configuration", {}, {**bucket, "LifecycleConfiguration": {"Rules": [
+                {"ID": "abort-incomplete-uploads", "Status": "Enabled", "Filter": {"Prefix": ""}, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}},
+            ]}})
+            ensure_audit_bucket(client, "flow-like-audit", "us-east-1", "GOVERNANCE", 3)
+            stub.assert_no_pending_responses()
+
+    def test_existing_audit_bucket_retention_is_never_reconfigured(self):
+        client = s3_client("http://127.0.0.1:1", "us-east-1", "test", "test-secret")
+        with Stubber(client) as stub:
+            stub.add_response("head_bucket", {}, {"Bucket": "flow-like-audit"})
+            stub.add_response("get_object_lock_configuration", {"ObjectLockConfiguration": {
+                "ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Years": 5}}}},
+                {"Bucket": "flow-like-audit"})
+            stub.add_client_error("get_bucket_policy", service_error_code="NoSuchBucketPolicy", http_status_code=404,
+                                  expected_params={"Bucket": "flow-like-audit"})
+            ensure_audit_bucket(client, "flow-like-audit", "us-east-1", "COMPLIANCE", 4)
+            stub.assert_no_pending_responses()
+
+    def test_existing_audit_bucket_weaker_retention_is_rejected_without_mutation(self):
+        for retention in ({"Mode": "GOVERNANCE", "Years": 4}, {"Mode": "COMPLIANCE", "Years": 3}, {}):
+            client = s3_client("http://127.0.0.1:1", "us-east-1", "test", "test-secret")
+            with Stubber(client) as stub:
+                stub.add_response("head_bucket", {}, {"Bucket": "flow-like-audit"})
+                stub.add_response("get_object_lock_configuration", {"ObjectLockConfiguration": {
+                    "ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": retention}}}, {"Bucket": "flow-like-audit"})
+                self.assertRaises(ValueError, ensure_audit_bucket, client, "flow-like-audit", "us-east-1", "COMPLIANCE", 4)
+                stub.assert_no_pending_responses()
+
+    def test_existing_audit_bucket_without_object_lock_stops_initialization(self):
+        client = s3_client("http://127.0.0.1:1", "us-east-1", "test", "test-secret")
+        with Stubber(client) as stub:
+            stub.add_response("head_bucket", {}, {"Bucket": "flow-like-audit"})
+            stub.add_client_error("get_object_lock_configuration", service_error_code="ObjectLockConfigurationNotFoundError",
+                                  http_status_code=404, expected_params={"Bucket": "flow-like-audit"})
+            self.assertRaises(ValueError, ensure_audit_bucket, client, "flow-like-audit", "us-east-1", "GOVERNANCE", 3)
             stub.assert_no_pending_responses()
 
 

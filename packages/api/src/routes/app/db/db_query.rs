@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::{
     databases::vector::{
         VectorStore,
@@ -71,6 +72,7 @@ pub async fn query_table(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(params): Query<ScopedPaginationParams>,
+    Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<QueryTablePayload>,
 ) -> Result<Json<Vec<flow_like_types::Value>>, ApiError> {
     ensure_any_permission!(
@@ -81,12 +83,16 @@ pub async fn query_table(
         RolePermissions::ReadDatabase
     );
     validate_table_name(&table)?;
+    selector
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     let offset = params.offset.unwrap_or(0).min(100_000) as usize;
     let limit = params.limit.unwrap_or(25).min(250) as usize;
 
     let connection = resolve_connection(&state, &user, &app_id, &params.scope_params()).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table.clone(), selector)
+        .await?;
 
     if let Some(sql) = payload.sql {
         // The registered provider supports DML, but this endpoint is gated by read

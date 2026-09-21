@@ -639,7 +639,7 @@ async fn compute_daily_stats_from_purchases(
     Ok(stats)
 }
 
-/// Verify the user has owner/admin access to view sales for this app and
+/// Verify the user holds the app's designated owner role and
 /// return the app row the check loaded.
 pub(crate) async fn verify_sales_access(
     state: &AppState,
@@ -672,12 +672,6 @@ pub(crate) async fn verify_sales_access(
 
     // Check if user has owner role
     if app.owner_role_id.as_deref() == Some(role.id.as_str()) {
-        return Ok(app);
-    }
-
-    // For now, only "owner" role name gets access
-    // This can be extended with a proper permission system
-    if role.name.to_lowercase() == "owner" {
         return Ok(app);
     }
 

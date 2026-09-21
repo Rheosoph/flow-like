@@ -28,6 +28,11 @@ import {
 import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type { IExecutionUsageRecord } from "@flow-like/flow-like-ui/lib/schema/usage/tracking";
 import { parseUint8ArrayToJson } from "@flow-like/flow-like-ui/lib/uint8";
+import {
+	isUsePathname,
+	pathUseUrl,
+	readUseRoutePath,
+} from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { IBackendState } from "@flow-like/flow-like-ui/state/backend-state";
 
 export type NativeActionKind =
@@ -631,7 +636,11 @@ export async function dispatchNativeAction(
 			)
 				throw new Error("This app path no longer opens an active interface.");
 		}
-		context.navigate(appRouteUrl(action.appId, target));
+		context.navigate(
+			pathUseUrl(
+				new URL(appRouteUrl(action.appId, target), "https://native.invalid"),
+			),
+		);
 		return;
 	}
 	if (action.kind === "open_run") {
@@ -924,13 +933,24 @@ export function withNativeActivePage(
 	if (
 		!webOrigin ||
 		nativeWebOrigin(webOrigin) !== webOrigin ||
-		pathname !== "/use"
+		!isUsePathname(pathname)
 	)
 		return next;
 	const params = new URLSearchParams(query);
+	if (
+		["id", "eventId", "route", APP_QUERY_PARAM].some(
+			(key) => params.getAll(key).length > 1,
+		)
+	)
+		return next;
 	const appId = params.get("id");
 	if (!snapshot.apps.some((app) => app.id === appId)) return next;
-	const route = params.get("route");
+	let route: string | null;
+	try {
+		route = readUseRoutePath(pathname) ?? params.get("route");
+	} catch {
+		return next;
+	}
 	const event = snapshot.events.find(
 		(event) =>
 			event.appId === appId &&
@@ -962,7 +982,7 @@ export function withNativeActivePage(
 		}
 		next.activePage = {
 			title: event.title,
-			url: new URL(href, webOrigin).href,
+			url: new URL(pathUseUrl(new URL(href, webOrigin)), webOrigin).href,
 		};
 	}
 	return next;

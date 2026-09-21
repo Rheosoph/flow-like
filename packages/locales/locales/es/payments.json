@@ -1,0 +1,12 @@
+{
+	"withdrawPurchase": "Desistir del contrato",
+	"withdrawConfirmation": "El acceso de esta compra finalizará cuando se registre el desistimiento. No tiene que indicar un motivo.",
+	"withdrawDeclaration": "Desisto de la compra indicada arriba.",
+	"withdrawConsumerName": "Su nombre completo",
+	"withdrawConfirmationEmail": "Correo para la confirmación del desistimiento",
+	"withdrawConfirmationEmailHelp": "Enviaremos su declaración y la fecha y hora de recepción a esta dirección.",
+	"findPurchase": "Buscar una compra",
+	"findPurchaseHelp": "Introduzca la referencia del pedido del correo de confirmación para abrir cualquier compra, incluidos los pedidos anteriores.",
+	"purchaseOrderReference": "Referencia del pedido",
+	"openPurchase": "Abrir compra"
+}

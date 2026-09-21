@@ -2,6 +2,10 @@ use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Schema};
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
+pub use flow_like_storage_contracts::database::{
+    DatabaseBranch, DatabaseCleanupStats, DatabaseReference, DatabaseSelector, DatabaseTag,
+    DatabaseVersion,
+};
 use flow_like_types::Cacheable;
 use flow_like_types::async_trait;
 use flow_like_types::{Result, Value, anyhow};
@@ -41,9 +45,13 @@ use crate::arrow_utils::{
     ValueBatchReader, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
-use crate::databases::df_provider::zero_column_safe_writable;
+use crate::databases::df_provider::{zero_column_safe, zero_column_safe_writable};
 
 use super::VectorStore;
+
+#[cfg(test)]
+#[path = "reference_tests.rs"]
+mod reference_tests;
 
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug)]
 pub struct IndexConfigDto {
@@ -175,6 +183,7 @@ pub struct LanceDBVectorStore {
     table: Option<Table>,
     table_name: String,
     write_options: Option<WriteOptions>,
+    selector: DatabaseSelector,
 }
 
 impl Cacheable for LanceDBVectorStore {
@@ -212,6 +221,7 @@ impl LanceDBVectorStore {
             table,
             table_name,
             write_options: None,
+            selector: DatabaseSelector::default(),
         })
     }
 
@@ -231,7 +241,358 @@ impl LanceDBVectorStore {
             table,
             table_name,
             write_options: None,
+            selector: DatabaseSelector::default(),
         }
+    }
+
+    /// Open an existing reference strictly. A missing branch, tag, or version is an error.
+    pub async fn from_connection_with_selector(
+        connection: Connection,
+        table_name: String,
+        mut selector: DatabaseSelector,
+    ) -> Result<Self> {
+        Self::validate_table_name(&table_name)?;
+        selector.validate()?;
+        if let Some(tag) = selector.tag.take() {
+            let root = connection.open_table(&table_name).execute().await?;
+            let tags = root.tags().await?.list().await?;
+            let contents = tags
+                .get(&tag)
+                .ok_or_else(|| anyhow!("Tag '{tag}' does not exist"))?;
+            selector.branch = contents.branch.clone().unwrap_or_else(|| "main".into());
+            selector.version = Some(contents.version);
+        }
+
+        let mut open = connection.open_table(&table_name).branch(&selector.branch);
+        if let Some(version) = selector.version {
+            open = open.version(version);
+        }
+        let table = open.execute().await?;
+        Ok(Self {
+            connection,
+            table: Some(table),
+            table_name,
+            write_options: None,
+            selector,
+        })
+    }
+
+    /// Tags are resolved to immutable branch/version pins before this value is returned.
+    pub fn selector(&self) -> DatabaseSelector {
+        self.selector.clone()
+    }
+
+    pub async fn reference(&self) -> Result<DatabaseReference> {
+        let table = self.raw().await?;
+        Ok(DatabaseReference {
+            table: self.table_name.clone(),
+            branch: table.current_branch().unwrap_or_else(|| "main".into()),
+            version: table.version().await?,
+            read_only: self.selector.is_read_only(),
+            pinned: self.selector.is_pinned(),
+        })
+    }
+
+    /// Open another handle. Never change a shared LanceDB table handle in place.
+    pub async fn checkout(&self, mut selector: DatabaseSelector) -> Result<Self> {
+        // A read-only capability cannot be promoted through checkout.
+        selector.read_only |= self.selector.read_only;
+        let mut store = Self::from_connection_with_selector(
+            self.connection.clone(),
+            self.table_name.clone(),
+            selector,
+        )
+        .await?;
+        store.write_options = self.write_options.clone();
+        Ok(store)
+    }
+
+    /// Replace credentials without moving a branch or a resolved snapshot.
+    pub async fn reopen(&self, connection: Connection) -> Result<Self> {
+        let mut store = if self.table.is_none() && self.selector == DatabaseSelector::default() {
+            Self::from_connection(connection, self.table_name.clone()).await
+        } else {
+            Self::from_connection_with_selector(
+                connection,
+                self.table_name.clone(),
+                self.selector(),
+            )
+            .await?
+        };
+        store.write_options = self.write_options.clone();
+        Ok(store)
+    }
+
+    pub fn ensure_writable(&self) -> Result<()> {
+        if self.selector.is_read_only() {
+            return Err(anyhow!(
+                "Database reference is read-only; open the latest branch to write"
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_reference_management(&self) -> Result<()> {
+        if self.selector.read_only {
+            return Err(anyhow!(
+                "Reference management is disabled for a read-only database"
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn list_versions(&self) -> Result<Vec<DatabaseVersion>> {
+        let mut versions = self
+            .raw()
+            .await?
+            .list_versions()
+            .await?
+            .into_iter()
+            .map(|version| DatabaseVersion {
+                version: version.version,
+                timestamp: version.timestamp.to_rfc3339(),
+                metadata: version.metadata,
+            })
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|version| std::cmp::Reverse(version.version));
+        Ok(versions)
+    }
+
+    pub async fn list_branches(&self) -> Result<Vec<DatabaseBranch>> {
+        let mut branches = self
+            .raw()
+            .await?
+            .list_branches()
+            .await?
+            .into_iter()
+            .map(|(name, branch)| DatabaseBranch {
+                name,
+                parent_branch: Some(branch.parent_branch.unwrap_or_else(|| "main".into())),
+                parent_version: Some(branch.parent_version),
+                created_at: Some(branch.create_at),
+            })
+            .collect::<Vec<_>>();
+        if !branches.iter().any(|branch| branch.name == "main") {
+            branches.push(DatabaseBranch {
+                name: "main".into(),
+                parent_branch: None,
+                parent_version: None,
+                created_at: None,
+            });
+        }
+        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(branches)
+    }
+
+    pub async fn list_tags(&self) -> Result<Vec<DatabaseTag>> {
+        let table = self.raw().await?;
+        let mut tags = table
+            .tags()
+            .await?
+            .list()
+            .await?
+            .into_iter()
+            .map(|(name, tag)| DatabaseTag {
+                name,
+                branch: tag.branch.unwrap_or_else(|| "main".into()),
+                version: tag.version,
+                created_at: tag.created_at.map(|date| date.to_rfc3339()),
+                updated_at: tag.updated_at.map(|date| date.to_rfc3339()),
+            })
+            .collect::<Vec<_>>();
+        tags.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(tags)
+    }
+
+    pub async fn create_branch(&self, name: &str) -> Result<Self> {
+        self.ensure_reference_management()?;
+        if name == "main" {
+            return Err(anyhow!("The main branch already exists"));
+        }
+        let reference = self.reference().await?;
+        let table = self
+            .raw()
+            .await?
+            .create_branch(name, (reference.branch.as_str(), reference.version))
+            .await?;
+        Ok(Self {
+            connection: self.connection.clone(),
+            table: Some(table),
+            table_name: self.table_name.clone(),
+            write_options: self.write_options.clone(),
+            selector: DatabaseSelector {
+                branch: name.into(),
+                ..Default::default()
+            },
+        })
+    }
+
+    pub async fn delete_branch(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        if name == "main" {
+            return Err(anyhow!(
+                "The main branch cannot be deleted; drop the table instead"
+            ));
+        }
+        if name == self.selector.branch {
+            return Err(anyhow!(
+                "Open a different branch before deleting the selected branch"
+            ));
+        }
+        if let Some(tag) = self
+            .list_tags()
+            .await?
+            .into_iter()
+            .find(|tag| tag.branch == name)
+        {
+            return Err(anyhow!(
+                "Branch '{name}' is protected by tag '{}'; remove the tag first",
+                tag.name
+            ));
+        }
+        self.raw().await?.delete_branch(name).await?;
+        Ok(())
+    }
+
+    pub async fn create_tag(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        let table = self.raw().await?;
+        let version = table.version().await?;
+        table.tags().await?.create(name, version).await?;
+        Ok(())
+    }
+
+    pub async fn update_tag(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        self.ensure_clone_tag_unused(name).await?;
+        let table = self.raw().await?;
+        let version = table.version().await?;
+        table.tags().await?.update(name, version).await?;
+        Ok(())
+    }
+
+    pub async fn delete_tag(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        self.ensure_clone_tag_unused(name).await?;
+        self.raw().await?.tags().await?.delete(name).await?;
+        Ok(())
+    }
+
+    /// Restore through a fresh handle, leaving all existing snapshot readers pinned.
+    pub async fn restore(&self) -> Result<DatabaseReference> {
+        self.ensure_reference_management()?;
+        if !self.selector.is_pinned() {
+            return Err(anyhow!(
+                "Select a historical version or tag before restoring"
+            ));
+        }
+        let mut restored = self.checkout(self.selector()).await?;
+        restored
+            .table
+            .as_ref()
+            .ok_or_else(|| anyhow!("Table not initialized"))?
+            .restore()
+            .await?;
+        restored.selector.version = None;
+        restored.selector.tag = None;
+        restored.reference().await
+    }
+
+    /// Remove eligible history while preserving tagged versions and shared branch files.
+    pub async fn cleanup_versions(&self, older_than_days: u64) -> Result<DatabaseCleanupStats> {
+        self.ensure_writable()?;
+        if older_than_days == 0 {
+            return Err(anyhow!("Version retention must be at least one day"));
+        }
+        let days =
+            i64::try_from(older_than_days).map_err(|_| anyhow!("Retention period is too large"))?;
+        let retention =
+            Duration::try_days(days).ok_or_else(|| anyhow!("Retention period is too large"))?;
+        let stats = self
+            .raw()
+            .await?
+            .optimize(lancedb::table::OptimizeAction::Prune {
+                older_than: Some(retention),
+                delete_unverified: Some(false),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await?;
+        let stats = stats.prune.unwrap_or_default();
+        Ok(DatabaseCleanupStats {
+            bytes_removed: stats.bytes_removed,
+            old_versions: stats.old_versions,
+            data_files_removed: stats.data_files_removed,
+            transaction_files_removed: stats.transaction_files_removed,
+            index_files_removed: stats.index_files_removed,
+            deletion_files_removed: stats.deletion_files_removed,
+        })
+    }
+
+    /// A shallow clone shares source files. Its retained source tag protects cleanup.
+    pub async fn clone_table(&self, target: &str) -> Result<Self> {
+        self.ensure_reference_management()?;
+        Self::validate_table_name(target)?;
+        if target == self.table_name {
+            return Err(anyhow!("Choose a different table name for the clone"));
+        }
+        match self.connection.open_table(target).execute().await {
+            Ok(_) => return Err(anyhow!("Table '{target}' already exists")),
+            Err(lancedb::Error::TableNotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let source = self.raw().await?;
+        let source_uri = source.uri().await?;
+        let source_version = source.version().await?;
+        let retention_tag = format!("flow_clone_source_{target}");
+        source
+            .tags()
+            .await?
+            .create(&retention_tag, source_version)
+            .await?;
+        let result = self
+            .connection
+            .clone_table(target, source_uri)
+            .source_tag(&retention_tag)
+            .execute()
+            .await;
+        let table = match result {
+            Ok(table) => table,
+            Err(error) => {
+                // The tag is safe to remove when no target was committed.
+                if matches!(
+                    self.connection.open_table(target).execute().await,
+                    Err(lancedb::Error::TableNotFound { .. })
+                ) {
+                    source.tags().await?.delete(&retention_tag).await?;
+                }
+                return Err(error.into());
+            }
+        };
+        Ok(Self {
+            connection: self.connection.clone(),
+            table: Some(table),
+            table_name: target.into(),
+            write_options: self.write_options.clone(),
+            selector: DatabaseSelector::default(),
+        })
+    }
+
+    async fn ensure_clone_tag_unused(&self, name: &str) -> Result<()> {
+        if let Some(target) = name.strip_prefix("flow_clone_source_") {
+            if Self::validate_table_name(target).is_err() {
+                return Ok(());
+            }
+            match self.connection.open_table(target).execute().await {
+                Ok(_) => {
+                    return Err(anyhow!(
+                        "Table '{target}' shares source files protected by tag '{name}'; drop that clone first"
+                    ));
+                }
+                Err(lancedb::Error::TableNotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 
     pub fn set_write_options(&mut self, options: WriteOptions) {
@@ -258,6 +619,7 @@ impl LanceDBVectorStore {
         schema: Schema,
         if_not_exists: bool,
     ) -> Result<bool> {
+        self.ensure_writable()?;
         for field in schema.fields() {
             crate::geometry::validate_geometry_field(field)?;
         }
@@ -311,9 +673,15 @@ impl LanceDBVectorStore {
         Ok(created)
     }
 
-    /// Drop the whole table (data AND schema). Unlike `purge`, this allows the table to be
-    /// recreated with a different schema (e.g. a new embedding vector dimension) on the next insert.
-    pub async fn drop_table(&mut self) -> Result<()> {
+    /// Check table-wide drop restrictions before callers discard pending writes.
+    /// Returns whether the table currently exists.
+    pub async fn ensure_can_drop_table(&self) -> Result<bool> {
+        self.ensure_writable()?;
+        if self.selector.branch != "main" {
+            return Err(anyhow!(
+                "Dropping a table removes every branch; open the latest main branch first"
+            ));
+        }
         let exists = self
             .connection
             .table_names()
@@ -321,6 +689,24 @@ impl LanceDBVectorStore {
             .await?
             .iter()
             .any(|name| name == &self.table_name);
+        if exists {
+            // The legacy constructor permits an unopened table for lazy creation.
+            // Reopen strictly here so transient read errors cannot bypass dependencies.
+            let table = self
+                .connection
+                .open_table(&self.table_name)
+                .execute()
+                .await?;
+            for tag in table.tags().await?.list().await?.keys() {
+                self.ensure_clone_tag_unused(tag).await?;
+            }
+        }
+        Ok(exists)
+    }
+
+    /// Drop the whole table and every branch. Purge removes rows only.
+    pub async fn drop_table(&mut self) -> Result<()> {
+        let exists = self.ensure_can_drop_table().await?;
         if exists {
             self.connection.drop_table(&self.table_name, &[]).await?;
         }
@@ -333,8 +719,8 @@ impl LanceDBVectorStore {
         Ok(tables)
     }
 
-    /// Compact fragments, rebuild indices and prune every version except the
-    /// current one. Irreversible: time travel to older versions is gone.
+    /// Compact fragments, rebuild indices, and prune unprotected history.
+    /// Tagged versions and branch dependencies remain available.
     pub async fn prune_history(&self) -> Result<()> {
         self.run_optimize_actions(prune_history_actions()).await
     }
@@ -343,6 +729,7 @@ impl LanceDBVectorStore {
         &self,
         actions: Vec<lancedb::table::OptimizeAction>,
     ) -> Result<()> {
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         let scalar_indices = scalar_indices_for_compaction(&table).await?;
 
@@ -362,6 +749,7 @@ impl LanceDBVectorStore {
         transform: NewColumnTransform,
         read_columns: Option<Vec<String>>,
     ) -> Result<AddColumnsResult> {
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -401,6 +789,7 @@ impl LanceDBVectorStore {
     }
 
     pub async fn drop_columns(&self, column_names: &[&str]) -> Result<()> {
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -414,6 +803,7 @@ impl LanceDBVectorStore {
         &self,
         alteration: &[ColumnAlteration],
     ) -> Result<AlterColumnsResult> {
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -445,6 +835,7 @@ impl LanceDBVectorStore {
     }
 
     pub async fn drop_index(&self, name: &str) -> Result<()> {
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -458,6 +849,7 @@ impl LanceDBVectorStore {
         filter: &str,
         updates: std::collections::HashMap<String, Value>,
     ) -> Result<()> {
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -499,6 +891,7 @@ impl LanceDBVectorStore {
     }
 
     pub async fn make_column_nullable(&self, column: &str, nullable: bool) -> Result<()> {
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -521,6 +914,11 @@ impl LanceDBVectorStore {
         let df_table = table.base_table();
         let adapter =
             lancedb::table::datafusion::BaseTableAdapter::try_new(df_table.clone()).await?;
+        if self.selector.is_read_only() {
+            return Ok(Arc::new(ReadOnlyDatabaseProvider {
+                inner: zero_column_safe(Arc::new(adapter)),
+            }));
+        }
         Ok(zero_column_safe_writable(Arc::new(adapter), table))
     }
 
@@ -548,6 +946,7 @@ impl LanceDBVectorStore {
     }
 
     pub async fn insert_record_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        self.ensure_writable()?;
         crate::geometry::validate_batch(&batch)?;
         let items = vec![batch];
 
@@ -599,6 +998,46 @@ impl LanceDBVectorStore {
         }
 
         value_to_batch_reader_with_utc_timestamp_inference(items)
+    }
+}
+
+/// Delegate reads only. Omitting mutation methods makes DataFusion reject SQL writes
+/// even when the underlying latest table is writable.
+#[derive(Debug)]
+struct ReadOnlyDatabaseProvider {
+    inner: Arc<dyn TableProvider>,
+}
+
+#[async_trait]
+impl TableProvider for ReadOnlyDatabaseProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> arrow_schema::SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> datafusion::logical_expr::TableType {
+        self.inner.table_type()
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn datafusion::catalog::Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[datafusion::logical_expr::Expr],
+        limit: Option<usize>,
+    ) -> datafusion::common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        self.inner.scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&datafusion::logical_expr::Expr],
+    ) -> datafusion::common::Result<Vec<datafusion::logical_expr::TableProviderFilterPushDown>>
+    {
+        self.inner.supports_filters_pushdown(filters)
     }
 }
 
@@ -749,8 +1188,7 @@ fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> 
     actions
 }
 
-/// Compact, rebuild indices and drop every version except the current one.
-/// Used before an archive export, where the version history is dead weight.
+/// Compact, rebuild indices, and prune unprotected history before an archive export.
 fn prune_history_actions() -> Vec<lancedb::table::OptimizeAction> {
     vec![
         lancedb::table::OptimizeAction::Compact {
@@ -904,6 +1342,10 @@ fn split_hybrid_fields(
 
 #[async_trait]
 impl VectorStore for LanceDBVectorStore {
+    fn ensure_writable(&self) -> Result<()> {
+        LanceDBVectorStore::ensure_writable(self)
+    }
+
     async fn vector_search(
         &self,
         vector: Vec<f64>,
@@ -1066,6 +1508,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
+        self.ensure_writable()?;
         if self.table.is_none() {
             let reader = self.write_batch_reader(items.clone()).await?;
             let builder = self
@@ -1108,6 +1551,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
+        self.ensure_writable()?;
         if self.table.is_none() {
             let reader = self.write_batch_reader(items.clone()).await?;
             let builder = self
@@ -1152,6 +1596,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn delete(&self, filter: &str) -> Result<()> {
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         table.delete(filter).await?;
         return Ok(());
@@ -1185,6 +1630,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn index(&self, column: &str, index_type: Option<&str>) -> Result<()> {
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         if let Some(kind) = native_scalar_index(index_type) {
             let wrapper = table.dataset().ok_or_else(|| {
@@ -1227,6 +1673,7 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn purge(&self) -> Result<()> {
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         table.delete("1=1").await?;
         Ok(())

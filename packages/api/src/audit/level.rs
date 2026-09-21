@@ -15,6 +15,8 @@ const MINIMAL_PREFIXES: &[&str] = &[
     "apikey.",
     "role.",
     "membership.",
+    "payments.",
+    "marketplace.",
     "invite.",
     "team.",
     "app_connection.",
@@ -34,6 +36,9 @@ const MINIMAL_ACTIONS: &[&str] = &[
     "app_group.delete",
     "app_group.visibility",
     "app_group.visibility.request",
+    "audit.export.webhook.set",
+    "audit.export.webhook.rotate",
+    "audit.export.webhook.delete",
     "registry.publish",
     "registry.access.purchase",
     "board.delete",
@@ -70,9 +75,38 @@ pub fn required_level(action: &str) -> AuditLevel {
     }
 }
 
-/// Whether the deployment records `action`.
+/// Which retention schedule a record follows. Actions only recorded at `verbose` are
+/// operational and age out of the database; everything else is evidence and is archived.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RetentionClass {
+    Evidence,
+    Activity,
+}
+
+impl RetentionClass {
+    pub fn of(action: &str) -> Self {
+        if required_level(action) == AuditLevel::Verbose {
+            Self::Activity
+        } else {
+            Self::Evidence
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Evidence => "evidence",
+            Self::Activity => "activity",
+        }
+    }
+}
+
+/// Whether the deployment records `action`. The execution switch also applies to
+/// custom actors recorded through the generic writer, such as anonymous frontends.
 pub fn records(config: &AuditConfig, action: impl AsRef<str>) -> bool {
-    config.enabled && config.level >= required_level(action.as_ref())
+    let action = action.as_ref();
+    config.enabled
+        && (config.level >= required_level(action)
+            || (config.log_executions && action.starts_with("execution.")))
 }
 
 /// Execution lifecycle records are the largest audit volume. `verbose`
@@ -136,6 +170,9 @@ mod tests {
         ("app_group.visibility.request", AuditLevel::Minimal),
         ("api.request.attempt", AuditLevel::Verbose),
         ("api.request.finish", AuditLevel::Verbose),
+        ("audit.export.webhook.delete", AuditLevel::Minimal),
+        ("audit.export.webhook.rotate", AuditLevel::Minimal),
+        ("audit.export.webhook.set", AuditLevel::Minimal),
         ("board.commands.execute", AuditLevel::Verbose),
         ("board.commands.redo", AuditLevel::Verbose),
         ("board.commands.undo", AuditLevel::Verbose),
@@ -183,6 +220,19 @@ mod tests {
         ("membership.invite.revoke", AuditLevel::Minimal),
         ("membership.join", AuditLevel::Minimal),
         ("membership.purchase", AuditLevel::Minimal),
+        ("membership.comp", AuditLevel::Minimal),
+        ("payments.settings.updated", AuditLevel::Minimal),
+        ("payments.seller.blocked", AuditLevel::Minimal),
+        ("payments.account.deauthorized", AuditLevel::Minimal),
+        ("payments.account.onboarding", AuditLevel::Minimal),
+        ("payments.account.disconnected", AuditLevel::Minimal),
+        ("payments.account.reconnected", AuditLevel::Minimal),
+        ("payments.terms.accepted", AuditLevel::Minimal),
+        ("membership.purchase.approve", AuditLevel::Minimal),
+        ("payments.effect.resumed", AuditLevel::Minimal),
+        ("marketplace.purchase.paid", AuditLevel::Minimal),
+        ("marketplace.purchase.withdrawn", AuditLevel::Minimal),
+        ("marketplace.dispute.updated", AuditLevel::Minimal),
         ("membership.reject", AuditLevel::Minimal),
         ("membership.remove", AuditLevel::Minimal),
         ("membership.request", AuditLevel::Minimal),
@@ -222,6 +272,18 @@ mod tests {
     fn every_known_action_has_its_documented_level() {
         for (action, expected) in CLASSIFIED {
             assert_eq!(required_level(action), *expected, "{action}");
+        }
+    }
+
+    #[test]
+    fn verbose_only_actions_are_activity() {
+        for (action, level) in CLASSIFIED {
+            let expected = if *level == AuditLevel::Verbose {
+                RetentionClass::Activity
+            } else {
+                RetentionClass::Evidence
+            };
+            assert_eq!(RetentionClass::of(action), expected, "{action}");
         }
     }
 
@@ -269,6 +331,33 @@ mod tests {
             false,
             true
         )));
+    }
+
+    #[test]
+    fn execution_switch_covers_generic_writes_without_enabling_other_activity() {
+        for level in [
+            AuditLevel::Minimal,
+            AuditLevel::Standard,
+            AuditLevel::Verbose,
+        ] {
+            let enabled = config(level, true, true);
+            for action in ["execution.event.start", "execution.board.complete"] {
+                assert!(records(&enabled, action), "{level:?}: {action}");
+                assert!(!records(&config(level, false, true), action));
+                assert_eq!(
+                    records(&config(level, true, false), action),
+                    records_executions(&config(level, true, false))
+                );
+            }
+            assert_eq!(
+                records(&enabled, REQUEST_ATTEMPT_ACTION),
+                level == AuditLevel::Verbose
+            );
+            assert_eq!(
+                RetentionClass::of("execution.event.start"),
+                RetentionClass::Activity
+            );
+        }
     }
 
     #[test]

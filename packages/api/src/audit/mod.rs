@@ -1,18 +1,33 @@
-pub mod chain;
-mod execution;
-pub mod level;
-pub mod request;
-pub mod service;
-pub mod sign;
+//! Audit trail.
+//!
+//! A request writes one record with a single insert: no read, no lock, no sequence.
+//! The audit worker later verifies each pending record's MAC, groups each chain's records
+//! into a seal that links to the chain's previous seal, and commits every seal of a run
+//! to an epoch signed with the audit key. Monthly archives go to the audit bucket.
+//! Design: todo/874-audit-retention.md.
 
-pub use chain::{GENESIS_HASH, compute_entry_hash};
+pub mod crypto;
+mod execution;
+pub mod export;
+pub mod keys;
+pub mod kms;
+pub mod level;
+pub mod merkle;
+pub mod record;
+pub mod request;
+pub mod signer;
+pub mod verify;
+pub mod wire;
+pub mod worker;
+
 pub use execution::{
     ExecutionAuditContext, record_execution_dispatch, record_execution_dispatch_failure,
     record_execution_dispatch_for, record_execution_outcome, record_execution_result,
 };
-pub use level::{AuditLevel, records, records_executions, required_level};
-pub use service::AuditService;
-pub use sign::{sign_entry, verify_entry_signature};
+pub use level::{AuditLevel, RetentionClass, records, records_executions, required_level};
+pub use record::{AuditRecordInput, PLATFORM_CHAIN, WriteMode, chain_for, chain_scope};
+
+use flow_like_types::Value;
 
 use crate::entity::sea_orm_active_enums::{AuditActorType, RunMode, RunStatus};
 use crate::middleware::jwt::AppUser;
@@ -44,248 +59,182 @@ pub fn actor_type_from_user(user: &AppUser) -> AuditActorType {
     }
 }
 
-/// Record an entry with the same level gate and failure handling as the
-/// `audit!` macros, for paths that have no `AppUser`: webhooks and background jobs.
-pub async fn record_entry(state: &AppState, input: service::AuditEntryInput) {
+/// Record with the level gate and the request's failure accounting, for paths that
+/// have no `AppUser`: webhooks and background jobs.
+pub async fn record_entry(state: &AppState, input: AuditRecordInput) {
+    write_gated(state, input, WriteMode::Append).await;
+}
+
+/// Like [`record_entry`], once per (chain, action, resource).
+pub async fn record_entry_once(state: &AppState, input: AuditRecordInput) {
+    write_gated(state, input, WriteMode::Once).await;
+}
+
+async fn write_gated(state: &AppState, input: AuditRecordInput, mode: WriteMode) {
     if !records(&state.platform_config.audit, &input.action) {
         return;
     }
     let action = input.action.clone();
-    if let Err(error) = AuditService::record(&state.db, state.db_dialect, input).await {
+    if let Err(error) = record::write(&state.db, input, mode).await {
         request::record_failure();
-        tracing::error!(%error, action, "AUDIT FAILURE (detached)");
+        tracing::error!(%error, action, "AUDIT FAILURE");
     }
+}
+
+/// What the `audit!` and `audit_branch!` macros call.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_for_user(
+    state: &AppState,
+    user: &AppUser,
+    scope: Option<String>,
+    action: String,
+    resource_type: String,
+    resource_id: String,
+    details: Option<Value>,
+) {
+    let actor_id = match user.audit_id().await {
+        Ok(actor_id) => actor_id,
+        Err(error) => {
+            request::record_failure();
+            tracing::error!(%error, action, "AUDIT FAILURE: actor could not be identified");
+            return;
+        }
+    };
+    record_entry(
+        state,
+        AuditRecordInput {
+            actor_id,
+            actor_type: actor_type_from_user(user),
+            actor_ip: request::actor_ip(),
+            action,
+            resource_type,
+            resource_id,
+            scope,
+            details,
+        },
+    )
+    .await;
 }
 
 pub async fn record_execution_start(state: &AppState, user: &AppUser, execution: ExecutionAudit) {
     if !records_executions(&state.platform_config.audit) {
         return;
     }
-
-    let actor_type = actor_type_from_user(user);
     let actor_id = match user.audit_id().await {
         Ok(actor_id) => actor_id,
-        Err(err) => {
+        Err(error) => {
             request::record_failure();
-            tracing::error!("AUDIT FAILURE: Failed to get audit_id: {}", err);
+            tracing::error!(%error, "AUDIT FAILURE: actor could not be identified");
             return;
         }
     };
-
     let is_event = execution.event_id.is_some();
-    let action = if is_event {
-        "execution.event.start"
-    } else {
-        "execution.board.start"
-    };
-    let summary = if is_event {
-        "Event execution started"
-    } else {
-        "Board execution started"
-    };
-
-    let run_id = execution.run_id.clone();
-    let app_id = execution.app_id.clone();
-    let details = serde_json::json!({
-        "run_id": &execution.run_id,
-        "app_id": &execution.app_id,
-        "board_id": &execution.board_id,
-        "event_id": &execution.event_id,
-        "node_id": &execution.node_id,
-        "version": &execution.version,
-        "board_etag": &execution.board_etag,
-        "execution_type": if is_event { "event" } else { "board" },
-        "mode": format!("{:?}", execution.mode),
-        "status": format!("{:?}", execution.status),
-        "input_payload_len": execution.input_payload_len,
-        "technical_user_id": &execution.technical_user_id,
-    });
-
-    let input = service::AuditEntryInput {
+    let input = AuditRecordInput {
         actor_id,
-        actor_type,
+        actor_type: actor_type_from_user(user),
         actor_ip: request::actor_ip(),
-        action: action.to_string(),
-        resource_type: "ExecutionRun".to_string(),
-        resource_id: execution.run_id,
-        chain_id: Some(execution.app_id),
-        summary: summary.to_string(),
-        details: Some(details),
+        action: if is_event {
+            "execution.event.start"
+        } else {
+            "execution.board.start"
+        }
+        .to_owned(),
+        resource_type: "ExecutionRun".to_owned(),
+        resource_id: execution.run_id.clone(),
+        scope: Some(execution.app_id.clone()),
+        details: Some(serde_json::json!({
+            "board_id": execution.board_id,
+            "event_id": execution.event_id,
+            "node_id": execution.node_id,
+            "version": execution.version,
+            "board_etag": execution.board_etag,
+            "mode": format!("{:?}", execution.mode),
+            "status": format!("{:?}", execution.status),
+            "input_payload_len": execution.input_payload_len,
+            "technical_user_id": execution.technical_user_id,
+        })),
     };
-
-    if let Err(err) = AuditService::record(&state.db, state.db_dialect, input).await {
+    if let Err(error) = record::write(&state.db, input, WriteMode::Once).await {
         request::record_failure();
-        tracing::error!(
-            run_id = %run_id,
-            app_id = %app_id,
-            "AUDIT FAILURE (execution): {}",
-            err
-        );
+        tracing::error!(run_id = %execution.run_id, %error, "AUDIT FAILURE (execution start)");
     }
 }
 
-/// Record an audit entry on the platform root chain (chain_id = None).
-/// Records synchronously after the domain mutation. Failures are traced and
-/// counted in the request outcome; the middleware records an attempt before dispatch.
-/// Respects `audit.enabled` and `audit.level` from platform config.
+/// Record a change on the platform chain.
 ///
-/// Usage: `audit!(state, user, action, resource_type, resource_id, summary);`
-/// With details: `audit!(state, user, action, resource_type, resource_id, summary, details);`
+/// `audit!(state, user, action, resource_type, resource_id)`, or with a
+/// `serde_json::Value` of ids and short codes: `audit!(state, user, action,
+/// resource_type, resource_id, details)`. The UI renders the sentence from the action
+/// and resource, so there is no summary. Respects `audit.enabled` and `audit.level`.
 #[macro_export]
 macro_rules! audit {
-    ($state:expr, $user:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr) => {{
+    ($state:expr, $user:expr, $action:expr, $resource_type:expr, $resource_id:expr) => {{
         if $crate::audit::records(&$state.platform_config.audit, &$action) {
-            let user = $user.clone();
-            let actor_type = $crate::audit::actor_type_from_user(&user);
-            let db = $state.db.clone();
-            let dialect = $state.db_dialect;
-            let action = $action.to_string();
-            let resource_type = $resource_type.to_string();
-            let resource_id = $resource_id.to_string();
-            let summary = $summary.to_string();
-            let audit_result = async {
-                let actor_id = user.audit_id().await.map_err(|e| {
-                    tracing::error!("AUDIT FAILURE: Failed to get audit_id: {}", e);
-                    e
-                })?;
-                let input = $crate::audit::service::AuditEntryInput {
-                    actor_id,
-                    actor_type,
-                    actor_ip: $crate::audit::request::actor_ip(),
-                    action,
-                    resource_type,
-                    resource_id,
-                    chain_id: None,
-                    summary,
-                    details: None,
-                };
-                $crate::audit::AuditService::record(&db, dialect, input).await
-            }
+            $crate::audit::record_for_user(
+                &$state,
+                &$user,
+                None,
+                $action.to_string(),
+                $resource_type.to_string(),
+                $resource_id.to_string(),
+                None,
+            )
             .await;
-            if let Err(e) = &audit_result {
-                $crate::audit::request::record_failure();
-                tracing::error!("AUDIT FAILURE (root chain): {}", e);
-            }
         }
     }};
-    ($state:expr, $user:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr, $details:expr) => {{
+    ($state:expr, $user:expr, $action:expr, $resource_type:expr, $resource_id:expr, $details:expr) => {{
         if $crate::audit::records(&$state.platform_config.audit, &$action) {
-            let user = $user.clone();
-            let actor_type = $crate::audit::actor_type_from_user(&user);
-            let db = $state.db.clone();
-            let dialect = $state.db_dialect;
-            let action = $action.to_string();
-            let resource_type = $resource_type.to_string();
-            let resource_id = $resource_id.to_string();
-            let summary = $summary.to_string();
-            let details = $details;
-            let audit_result = async {
-                let actor_id = user.audit_id().await.map_err(|e| {
-                    tracing::error!("AUDIT FAILURE: Failed to get audit_id: {}", e);
-                    e
-                })?;
-                let input = $crate::audit::service::AuditEntryInput {
-                    actor_id,
-                    actor_type,
-                    actor_ip: $crate::audit::request::actor_ip(),
-                    action,
-                    resource_type,
-                    resource_id,
-                    chain_id: None,
-                    summary,
-                    details: Some(details),
-                };
-                $crate::audit::AuditService::record(&db, dialect, input).await
-            }
+            let details: $crate::audit::DetailsValue = $details;
+            $crate::audit::record_for_user(
+                &$state,
+                &$user,
+                None,
+                $action.to_string(),
+                $resource_type.to_string(),
+                $resource_id.to_string(),
+                Some(details),
+            )
             .await;
-            if let Err(e) = &audit_result {
-                $crate::audit::request::record_failure();
-                tracing::error!("AUDIT FAILURE (root chain): {}", e);
-            }
         }
     }};
 }
 
-/// Record an audit entry on a branch chain (app or package).
-/// Records synchronously after the domain mutation. Failures are traced and
-/// counted in the request outcome; the middleware records an attempt before dispatch.
-/// Respects `audit.enabled` and `audit.level` from platform config.
+/// Record a change on an app's or package's chain.
 ///
-/// Usage: `audit_branch!(state, user, chain_id, action, resource_type, resource_id, summary);`
-/// With details: `audit_branch!(state, user, chain_id, action, resource_type, resource_id, summary, details);`
+/// `audit_branch!(state, user, scope_id, action, resource_type, resource_id)`, or with
+/// details as the last argument. Respects `audit.enabled` and `audit.level`.
 #[macro_export]
 macro_rules! audit_branch {
-    ($state:expr, $user:expr, $chain_id:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr) => {{
+    ($state:expr, $user:expr, $scope:expr, $action:expr, $resource_type:expr, $resource_id:expr) => {{
         if $crate::audit::records(&$state.platform_config.audit, &$action) {
-            let user = $user.clone();
-            let actor_type = $crate::audit::actor_type_from_user(&user);
-            let db = $state.db.clone();
-            let dialect = $state.db_dialect;
-            let chain_id = $chain_id.to_string();
-            let action = $action.to_string();
-            let resource_type = $resource_type.to_string();
-            let resource_id = $resource_id.to_string();
-            let summary = $summary.to_string();
-            let audit_result = async {
-                let actor_id = user.audit_id().await.map_err(|e| {
-                    tracing::error!("AUDIT FAILURE: Failed to get audit_id: {}", e);
-                    e
-                })?;
-                let input = $crate::audit::service::AuditEntryInput {
-                    actor_id,
-                    actor_type,
-                    actor_ip: $crate::audit::request::actor_ip(),
-                    action,
-                    resource_type,
-                    resource_id,
-                    chain_id: Some(chain_id),
-                    summary,
-                    details: None,
-                };
-                $crate::audit::AuditService::record(&db, dialect, input).await
-            }
+            $crate::audit::record_for_user(
+                &$state,
+                &$user,
+                Some($scope.to_string()),
+                $action.to_string(),
+                $resource_type.to_string(),
+                $resource_id.to_string(),
+                None,
+            )
             .await;
-            if let Err(e) = &audit_result {
-                $crate::audit::request::record_failure();
-                tracing::error!("AUDIT FAILURE (chain {}): {}", $chain_id, e);
-            }
         }
     }};
-    ($state:expr, $user:expr, $chain_id:expr, $action:expr, $resource_type:expr, $resource_id:expr, $summary:expr, $details:expr) => {{
+    ($state:expr, $user:expr, $scope:expr, $action:expr, $resource_type:expr, $resource_id:expr, $details:expr) => {{
         if $crate::audit::records(&$state.platform_config.audit, &$action) {
-            let user = $user.clone();
-            let actor_type = $crate::audit::actor_type_from_user(&user);
-            let db = $state.db.clone();
-            let dialect = $state.db_dialect;
-            let chain_id = $chain_id.to_string();
-            let action = $action.to_string();
-            let resource_type = $resource_type.to_string();
-            let resource_id = $resource_id.to_string();
-            let summary = $summary.to_string();
-            let details = $details;
-            let audit_result = async {
-                let actor_id = user.audit_id().await.map_err(|e| {
-                    tracing::error!("AUDIT FAILURE: Failed to get audit_id: {}", e);
-                    e
-                })?;
-                let input = $crate::audit::service::AuditEntryInput {
-                    actor_id,
-                    actor_type,
-                    actor_ip: $crate::audit::request::actor_ip(),
-                    action,
-                    resource_type,
-                    resource_id,
-                    chain_id: Some(chain_id),
-                    summary,
-                    details: Some(details),
-                };
-                $crate::audit::AuditService::record(&db, dialect, input).await
-            }
+            let details: $crate::audit::DetailsValue = $details;
+            $crate::audit::record_for_user(
+                &$state,
+                &$user,
+                Some($scope.to_string()),
+                $action.to_string(),
+                $resource_type.to_string(),
+                $resource_id.to_string(),
+                Some(details),
+            )
             .await;
-            if let Err(e) = &audit_result {
-                $crate::audit::request::record_failure();
-                tracing::error!("AUDIT FAILURE (chain {}): {}", $chain_id, e);
-            }
         }
     }};
 }
+
+/// Type of the details argument of the audit macros.
+pub type DetailsValue = Value;

@@ -165,9 +165,22 @@
 				"level": "standard",
 				"log_ip": false,
 				"trusted_proxy_hops": null,
-				"ip_retention_days": null,
 				"require_signing": false,
-				"log_executions": false
+				"log_executions": false,
+				"retention": {
+					"evidence_hot_days": 396,
+					"archive_years_after_year_end": 3,
+					"activity_days": 90,
+					"high_risk_activity_days": 183,
+					"ip_days": 7,
+					"details_days": null,
+					"seal_after_records": 500,
+					"seal_after_seconds": 300,
+					"max_records_per_seal": 1000,
+					"epoch_interval_seconds": 300,
+					"pending_alert_seconds": 900,
+					"archive_grace_days": 3
+				}
 			}
 		},
 		"push_notifications": {
@@ -192,6 +205,42 @@
 				"max_size_bytes": 1073741824,
 				"max_file_count": 10000,
 				"allow_unauthenticated_to_offline": false
+			}
+		},
+		"payments": {
+			"$ref": "#/$defs/PaymentsConfig",
+			"default": {
+				"onboarding_enabled": false,
+				"marketplace_enabled": false,
+				"node_payments_enabled": false,
+				"servicing_enabled": false,
+				"livemode": false,
+				"live_approved": false,
+				"platform_account_id": null,
+				"countries": ["DE"],
+				"seller_allowlist": [],
+				"currencies": ["eur"],
+				"node_payment_methods": ["card", "link"],
+				"marketplace_payment_methods": ["card", "link"],
+				"node_method_configuration": null,
+				"marketplace_method_configuration": null,
+				"node_fee_bps": 100,
+				"marketplace_fee_bps": 1000,
+				"marketplace_fee_basis": "gross",
+				"marketplace_min_amount": 300,
+				"max_payment_amount": 100000,
+				"new_seller_daily_cap": 200000,
+				"node_tax_mode": "unconfigured",
+				"marketplace_tax_mode": "unconfigured",
+				"owner_terms_version": null,
+				"seller_terms_version": null,
+				"purchase_terms_version": null,
+				"withdrawal_days": 14,
+				"purchase_waiver_version": null,
+				"product_tax_code": null,
+				"frontend_url": null,
+				"legacy_checkout_until": null,
+				"legal_texts": []
 			}
 		}
 	},
@@ -818,21 +867,123 @@
 					"minimum": 0,
 					"default": null
 				},
-				"ip_retention_days": {
-					"description": "Reserved retention setting. Stored IPs in signed entries are immutable;\nthis setting does not currently erase them automatically.",
-					"type": ["integer", "null"],
-					"format": "uint32",
-					"minimum": 0
-				},
 				"require_signing": {
-					"description": "If true, the server will refuse to start without signing keys configured",
+					"description": "Refuse to run without keys: the API without an entry key, the audit worker\nwithout an audit signing key.",
 					"type": "boolean",
 					"default": false
 				},
 				"log_executions": {
-					"description": "Record execution lifecycle transitions on the app chain at any level.\nThe `verbose` level records them regardless of this switch.",
+					"description": "Record execution lifecycle transitions at any level.\nThe `verbose` level records them regardless of this switch.",
 					"type": "boolean",
 					"default": false
+				},
+				"retention": {
+					"description": "How long each part of the trail is kept, and when the audit worker seals.",
+					"$ref": "#/$defs/AuditRetention",
+					"default": {
+						"evidence_hot_days": 396,
+						"archive_years_after_year_end": 3,
+						"activity_days": 90,
+						"high_risk_activity_days": 183,
+						"ip_days": 7,
+						"details_days": null,
+						"seal_after_records": 500,
+						"seal_after_seconds": 300,
+						"max_records_per_seal": 1000,
+						"epoch_interval_seconds": 300,
+						"pending_alert_seconds": 900,
+						"archive_grace_days": 3
+					}
+				}
+			}
+		},
+		"AuditRetention": {
+			"description": "Retention, sealing and signing cadence. Evidence is pruned only once its month is\narchived to the audit bucket, so a deployment without `AUDIT_BUCKET` keeps every\nevidence record; activity records are deleted after their window.",
+			"type": "object",
+			"properties": {
+				"evidence_hot_days": {
+					"description": "Days security and content records stay in the database after their month\ncloses. Older months are read from the monthly archive.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 396
+				},
+				"archive_years_after_year_end": {
+					"description": "Informational horizon written into archive manifests: the end of this many\ncalendar years after the month. The bucket's retention lock enforces it.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 3
+				},
+				"activity_days": {
+					"description": "Days records of verbose-only actions stay in the database. They are never\narchived.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 90
+				},
+				"high_risk_activity_days": {
+					"description": "Minimum days for execution records of apps assessed as high-risk AI systems\n(EU AI Act art. 19 and 26(6)).",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 183
+				},
+				"ip_days": {
+					"description": "Days a recorded client IP is kept before it is removed from its record.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 7
+				},
+				"details_days": {
+					"description": "Days record details are kept. Unset keeps them as long as the record.",
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0,
+					"default": null
+				},
+				"seal_after_records": {
+					"description": "Seal a chain once this many records are pending.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 500
+				},
+				"seal_after_seconds": {
+					"description": "Seal a chain once its oldest pending record is this old.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 300
+				},
+				"max_records_per_seal": {
+					"description": "Largest seal the worker writes in one transaction.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 1000
+				},
+				"epoch_interval_seconds": {
+					"description": "Sign an epoch once the oldest unanchored seal is this old, or earlier when 2,000\nseals wait. Each epoch is one request to the key service, so this sets its cost:\n300 s means at most 12 routine signatures an hour.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 300
+				},
+				"pending_alert_seconds": {
+					"description": "Log an alert when the oldest pending record is older than this.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 900
+				},
+				"archive_grace_days": {
+					"description": "Days after a month closes before it is archived.",
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0,
+					"default": 3
 				}
 			}
 		},
@@ -1002,6 +1153,198 @@
 					"default": false
 				}
 			}
+		},
+		"PaymentsConfig": {
+			"type": "object",
+			"properties": {
+				"onboarding_enabled": {
+					"type": "boolean",
+					"default": false
+				},
+				"marketplace_enabled": {
+					"type": "boolean",
+					"default": false
+				},
+				"node_payments_enabled": {
+					"type": "boolean",
+					"default": false
+				},
+				"servicing_enabled": {
+					"type": "boolean",
+					"default": false
+				},
+				"livemode": {
+					"type": "boolean",
+					"default": false
+				},
+				"live_approved": {
+					"type": "boolean",
+					"default": false
+				},
+				"platform_account_id": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"countries": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": ["DE"]
+				},
+				"seller_allowlist": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": []
+				},
+				"currencies": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": ["eur"]
+				},
+				"node_payment_methods": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": ["card", "link"]
+				},
+				"marketplace_payment_methods": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": ["card", "link"]
+				},
+				"node_method_configuration": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"marketplace_method_configuration": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"node_fee_bps": {
+					"type": "integer",
+					"format": "uint16",
+					"minimum": 0,
+					"maximum": 65535,
+					"default": 100
+				},
+				"marketplace_fee_bps": {
+					"type": "integer",
+					"format": "uint16",
+					"minimum": 0,
+					"maximum": 65535,
+					"default": 1000
+				},
+				"marketplace_fee_basis": {
+					"$ref": "#/$defs/PaymentFeeBasis",
+					"default": "gross"
+				},
+				"marketplace_min_amount": {
+					"type": "integer",
+					"format": "int64",
+					"default": 300
+				},
+				"max_payment_amount": {
+					"type": "integer",
+					"format": "int64",
+					"default": 100000
+				},
+				"new_seller_daily_cap": {
+					"type": "integer",
+					"format": "int64",
+					"default": 200000
+				},
+				"node_tax_mode": {
+					"$ref": "#/$defs/PaymentTaxMode",
+					"default": "unconfigured"
+				},
+				"marketplace_tax_mode": {
+					"$ref": "#/$defs/PaymentTaxMode",
+					"default": "unconfigured"
+				},
+				"owner_terms_version": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"seller_terms_version": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"purchase_terms_version": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"withdrawal_days": {
+					"type": "integer",
+					"format": "uint16",
+					"minimum": 0,
+					"maximum": 65535,
+					"default": 14
+				},
+				"purchase_waiver_version": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"product_tax_code": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"frontend_url": {
+					"type": ["string", "null"],
+					"default": null
+				},
+				"legacy_checkout_until": {
+					"type": ["integer", "null"],
+					"format": "int64",
+					"default": null
+				},
+				"legal_texts": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/PaymentLegalText"
+					},
+					"default": []
+				}
+			}
+		},
+		"PaymentFeeBasis": {
+			"type": "string",
+			"enum": ["gross", "net_of_tax"]
+		},
+		"PaymentTaxMode": {
+			"type": "string",
+			"enum": ["unconfigured", "seller_supplier", "platform_supplier"]
+		},
+		"PaymentLegalText": {
+			"type": "object",
+			"properties": {
+				"kind": {
+					"type": "string"
+				},
+				"version": {
+					"type": "string"
+				},
+				"locale": {
+					"type": "string"
+				},
+				"text": {
+					"type": "string"
+				},
+				"url": {
+					"type": ["string", "null"]
+				},
+				"hash": {
+					"type": ["string", "null"]
+				}
+			},
+			"required": ["kind", "version", "locale"]
 		}
 	}
 }

@@ -4,6 +4,10 @@ import {
 	parseAppRouteTarget,
 } from "@flow-like/flow-like-ui/lib/app-route-url";
 import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
+import {
+	pathUseUrl,
+	readUseRoutePath,
+} from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { IBackendState } from "@flow-like/flow-like-ui/state/backend-state";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -121,10 +125,10 @@ describe("native app paths", () => {
 			vi.mocked(ctx.navigate).mock.calls[0][0],
 			"https://app.test",
 		);
-		expect(url.pathname).toBe("/use");
+		expect(url.pathname).toBe("/use/orders/123");
 		expect(url.searchParams.get("id")).toBe("app");
 		expect(url.searchParams.get("eventId")).toBeNull();
-		expect(url.searchParams.get("route")).toBe("/orders/123");
+		expect(url.searchParams.get("route")).toBeNull();
 		expect(appQueryContext(url.search)).toMatchObject({
 			_query_params: {
 				id: "wrong",
@@ -234,10 +238,10 @@ describe("native app paths", () => {
 				"event",
 			);
 			expect(
-				new URL(
-					vi.mocked(ctx.navigate).mock.calls[0][0],
-					"https://app.test",
-				).searchParams.get("route"),
+				readUseRoutePath(
+					new URL(vi.mocked(ctx.navigate).mock.calls[0][0], "https://app.test")
+						.pathname,
+				),
 			).toBe(path);
 		}
 	});
@@ -537,6 +541,104 @@ describe("native snapshots", () => {
 });
 
 describe("native navigation and active runs", () => {
+	test("Handoff uses clean paths before stale route and Event selectors", async () => {
+		const route = "/café sale/encoded%20path/50%";
+		const snapshot = await loadNativeSnapshot(
+			fixture([
+				event({ default_page_id: "page", route }),
+				event({ id: "root", default_page_id: "root-page", is_default: true }),
+			]),
+			"account-a",
+			[],
+			true,
+		);
+		const pathname = "/use/caf%C3%A9%20sale/encoded%2520path/50%25";
+		const shared = withNativeActivePage(
+			snapshot,
+			pathname,
+			"id=app&route=%2F&eventId=root&appQuery=tag%3Done%26tag%3Dtwo%26id%3Drecord&sessionId=private&token=secret",
+			"https://app.example.com",
+		);
+		const continued = new URL(shared.activePage?.url ?? "https://missing.test");
+		expect(continued.pathname).toBe(pathname);
+		expect(readUseRoutePath(continued.pathname)).toBe(route);
+		expect([...continued.searchParams.keys()]).toEqual(["id", "appQuery"]);
+		expect(appQueryContext(continued.search)._query_param_values?.tag).toEqual([
+			"one",
+			"two",
+		]);
+		expect(
+			withNativeActivePage(
+				snapshot,
+				"/use/",
+				"id=app&eventId=event",
+				"https://app.example.com",
+			).activePage?.url,
+		).toBe("https://app.example.com/use/?id=app&appQuery=");
+		expect(
+			withNativeActivePage(
+				snapshot,
+				"/use",
+				"id=app&eventId=event",
+				"https://app.example.com",
+			).activePage?.url,
+		).toBe("https://app.example.com/use?id=app&eventId=event");
+	});
+
+	test("Handoff rejects malformed clean paths and duplicate shell selectors", async () => {
+		const snapshot = await loadNativeSnapshot(
+			fixture([event({ default_page_id: "page", route: "/orders" })]),
+			"account-a",
+			[],
+			true,
+		);
+		for (const pathname of [
+			"/users",
+			"/use/unknown",
+			"/use/../orders",
+			"/use/%2e%2e/orders",
+			"/use/a%2Forders",
+			"/use//orders",
+			"/use/%5Corders",
+			"/use/%00",
+			"/use/%invalid",
+		]) {
+			expect(
+				withNativeActivePage(
+					snapshot,
+					pathname,
+					"id=app&route=%2Forders&eventId=event",
+					"https://app.example.com",
+				).activePage,
+			).toBeUndefined();
+		}
+		for (const key of ["id", "eventId", "route", "appQuery"]) {
+			const query = new URLSearchParams({
+				id: "app",
+				eventId: "event",
+				route: "/orders",
+				appQuery: "tag=a&tag=b",
+			});
+			query.append(key, query.get(key) ?? "");
+			expect(
+				withNativeActivePage(
+					snapshot,
+					"/use/orders",
+					query.toString(),
+					"https://app.example.com",
+				).activePage,
+			).toBeUndefined();
+		}
+		expect(
+			withNativeActivePage(
+				snapshot,
+				"/use/orders",
+				"id=other&eventId=event",
+				"https://app.example.com",
+			).activePage,
+		).toBeUndefined();
+	});
+
 	test("Handoff preserves known app paths and app-owned repeated query values", async () => {
 		const snapshot = await loadNativeSnapshot(
 			fixture([event({ default_page_id: "page", route: "/orders/123" })]),
@@ -560,7 +662,9 @@ describe("native navigation and active runs", () => {
 			outer.search,
 			"https://app.example.com",
 		);
-		expect(shared.activePage?.url).toBe(`https://app.example.com${href}`);
+		expect(shared.activePage?.url).toBe(
+			`https://app.example.com${pathUseUrl(new URL(href, "https://app.example.com"))}`,
+		);
 		const continued = new URL(shared.activePage?.url ?? "https://missing.test");
 		expect(appQueryContext(continued.search)._query_param_values?.tag).toEqual([
 			"one",
@@ -641,7 +745,8 @@ describe("native navigation and active runs", () => {
 			"https://app.example.com",
 		);
 		const continued = new URL(shared.activePage?.url ?? "https://missing.test");
-		expect(continued.searchParams.get("route")).toBe("/");
+		expect(continued.pathname).toBe("/use/");
+		expect(continued.searchParams.get("route")).toBeNull();
 		expect(appQueryContext(continued.search)._query_param_values?.tag).toEqual([
 			"one",
 			"two",

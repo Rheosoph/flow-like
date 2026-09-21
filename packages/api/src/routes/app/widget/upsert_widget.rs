@@ -172,8 +172,7 @@ pub async fn upsert_widget(
             "widget.update"
         },
         "Widget",
-        widget.id,
-        "Saved a widget"
+        widget.id
     );
 
     Ok(Json(widget))

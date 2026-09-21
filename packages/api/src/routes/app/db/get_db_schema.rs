@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::{
     arrow_schema::Schema,
     databases::vector::{VectorStore, lancedb::LanceDBVectorStore},
@@ -44,6 +45,7 @@ pub async fn get_db_schema(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
 ) -> Result<Json<Schema>, ApiError> {
     ensure_any_permission!(
         user,
@@ -53,9 +55,12 @@ pub async fn get_db_schema(
         RolePermissions::ReadDatabase
     );
     validate_table_name(&table)?;
+    selector
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector).await?;
 
     let schema = db.schema().await?;
 

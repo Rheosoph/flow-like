@@ -1,0 +1,24 @@
+[package]
+name = "flow-like-audit-worker"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+aws = ["flow-like-api/audit-kms-aws"]
+azure = ["flow-like-api/audit-kms-azure"]
+gcp = ["flow-like-api/audit-kms-gcp"]
+
+[dependencies]
+flow-like-api = { workspace = true, default-features = false }
+flow-like.workspace = true
+flow-like-types.workspace = true
+sea-orm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+chrono.workspace = true
+blake3.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "time"] }
+

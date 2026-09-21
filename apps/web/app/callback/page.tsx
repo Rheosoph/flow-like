@@ -1,9 +1,11 @@
 "use client";
 
+import { isUsePathname } from "@flow-like/flow-like-ui/lib/use-route-url";
 import { useTranslation } from "@flow-like/locales";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
+import { hostedReturnPath } from "../../lib/hosted-route";
 import { consumeReturnUrl, sanitizeReturnUrl } from "../../lib/return-url";
 
 const AUTH_CHANNEL = "flow-like-auth";
@@ -34,6 +36,19 @@ export default function CallbackPage() {
 			// Consume unconditionally so no stale key outlives this login.
 			const stored = consumeReturnUrl();
 			const returnUrl = sanitizeReturnUrl(auth.user?.url_state) ?? stored;
+			const hostedPath = hostedReturnPath(returnUrl);
+			if (hostedPath) {
+				// The static host resolves runtime aliases to the exported entry page.
+				window.location.replace(hostedPath);
+				return;
+			}
+			if (returnUrl) {
+				const destination = new URL(returnUrl, window.location.origin);
+				if (isUsePathname(destination.pathname)) {
+					window.location.replace(returnUrl);
+					return;
+				}
+			}
 			router.push(returnUrl || "/");
 		}
 	}, [auth.isAuthenticated, auth.user?.url_state, router]);

@@ -100,6 +100,48 @@ Build a stable key before using upsert. After a large write, [Flush Database](/n
 
 Query local records with [(SQL) Filter Database](/nodes/data/database/search/filter-local-db/). Keep result limits and selected fields bounded for interactive workflows.
 
+### Branches, versions, and snapshots
+
+Open Database and Open Remote Database accept a branch and a revision: Latest, Version, or
+Tag. Latest opens the current branch for writes when permissions allow. Version and Tag
+open read-only snapshots. Version numbers belong to a branch; tags resolve to a branch and
+version when opened. A missing branch, version, or tag raises an error.
+
+Use Checkout Database to open another reference without changing a connection already used
+elsewhere in the flow. Snapshot Database flushes pending writes and returns a frozen handle.
+Give the snapshot a retention tag when a model or experiment needs that data after version
+cleanup. Get Database Reference and Flush Database expose the committed version. Save that
+reference with the app, storage scope, selected columns, filter, and split definition when
+recording training provenance.
+
+| Task | Nodes |
+|------|-------|
+| Inspect history | List Database Versions, List Database Branches, List Database Tags |
+| Run an experiment on separate data | Create Database Branch, Checkout Database |
+| Name a retained snapshot | Create Database Tag, Move Database Tag, Delete Database Tag |
+| Restore historical contents | Restore Database Version |
+| Compare two views | Compare Database Views |
+| Create another table sharing source data | Clone Database |
+| Remove a branch | Delete Database Branch |
+| Remove old unprotected versions | Cleanup Database Versions |
+
+Restore Database Version writes a new version on the snapshot's branch. Compare Database
+Views requires a unique, non-null string or integer key and returns full counts with a
+bounded changed-row preview. Clone Database shares source files and retains a source tag;
+it is not an independent backup. Remove the clone before removing its source protection.
+
+Read-only snapshot handles also apply to existing filters, vector searches, schema reads,
+and DataFusion mounts. Writes through these handles fail before queuing rows. The Predict
+node accepts an optional Output Database and a Key Column so a frozen input can write full
+rows with predictions to a separate writable branch or table.
+
+Data Studio's native table viewer provides the same history and reference controls. To
+delete rows, enter a filter, preview its matches, and confirm the table name. The filter
+runs again when deletion executes, so concurrent writes may change the number removed.
+Drop Table removes the whole table, including every branch, and prunes graph references.
+Use row deletion or Purge Database when the schema and history should remain available.
+The multi-source Query Workbench continues to use its own source selection.
+
 ## External sources
 
 DataFusion can register PostgreSQL, MySQL, SQLite, DuckDB, ClickHouse, Oracle, BigQuery, Athena, FlightSQL, and other cataloged sources. Browse [DataFusion databases](/nodes/data/datafusion/databases/) and [DataFusion lakes](/nodes/data/datafusion/lakes/) for the current set.
