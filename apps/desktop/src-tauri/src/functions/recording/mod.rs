@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod capture;
 pub mod fingerprint;
 pub mod generator;
@@ -8,6 +9,7 @@ pub use state::{RecordedAction, RecordingSettings, RecordingStatus};
 
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::hub::Hub;
+use flow_like_types::tokio::sync::OwnedRwLockWriteGuard;
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -19,6 +21,62 @@ use crate::{
 use self::capture::EventCapture;
 use self::state::RecordingState;
 
+fn profile_identity_key(id: &str, hub: &str) -> Result<String, TauriFunctionError> {
+    Ok(blake3::hash(&serde_json::to_vec(&(id, hub))?)
+        .to_hex()
+        .to_string())
+}
+
+async fn recording_identity(handler: &AppHandle) -> Result<String, TauriFunctionError> {
+    let profile = TauriSettingsState::current_profile(handler).await?;
+    profile_identity_key(&profile.hub_profile.id, &profile.hub_profile.hub)
+}
+
+/// The caller holds the recorder lifecycle lock and keeps the hub unchanged.
+pub async fn remap_recording_profile(
+    handler: &AppHandle,
+    local_id: &str,
+    server_id: &str,
+    hub: &str,
+) -> Result<(), TauriFunctionError> {
+    let old = profile_identity_key(local_id, hub)?;
+    let new = profile_identity_key(server_id, hub)?;
+    RecordingState::construct(handler)
+        .await?
+        .inner
+        .write()
+        .await
+        .remap_profile_identity(&old, &new)
+}
+
+/// Acquire before settings so profile changes serialize with recorder start and insertion.
+pub async fn lock_recording_lifecycle(
+    handler: &AppHandle,
+) -> Result<OwnedRwLockWriteGuard<Option<EventCapture>>, TauriFunctionError> {
+    let recording = RecordingState::construct(handler).await?;
+    Ok(recording.capture.write_owned().await)
+}
+
+/// Drain the producer without consulting settings, which the caller may already hold.
+pub async fn stop_for_profile_change(
+    handler: &AppHandle,
+    capture: &mut OwnedRwLockWriteGuard<Option<EventCapture>>,
+) -> Result<(), TauriFunctionError> {
+    if let Some(capture) = capture.take() {
+        capture.finish().await;
+    }
+    let recording = RecordingState::construct(handler).await?;
+    let mut state = recording.inner.write().await;
+    if state.status != RecordingStatus::Idle {
+        state.stop().await?;
+    }
+    drop(state);
+    #[cfg(desktop)]
+    crate::tray::restore_tray_icon(handler).await;
+    crate::utils::emit_to_ui(handler, "recording:reset", ());
+    Ok(())
+}
+
 /// Get the storage store for recording screenshots
 /// For online projects with a token, uses shared credentials from the hub
 /// For offline projects, uses the local app_storage_store
@@ -29,52 +87,23 @@ async fn get_recording_store(
 ) -> Result<Option<FlowLikeStore>, TauriFunctionError> {
     let flow_state = TauriFlowLikeState::construct(handler).await?;
 
-    // If we have a token and app_id, try to get shared credentials for online storage
     if let (Some(token), Some(app_id)) = (token, app_id) {
-        // Get the hub URL from the current profile
         let profile = TauriSettingsState::current_profile(handler).await?;
         let hub_url = &profile.hub_profile.hub;
-
         if !hub_url.is_empty() {
             let http_client = TauriFlowLikeState::http_client(handler).await?;
-            match Hub::new(hub_url, http_client).await {
-                Ok(hub) => {
-                    match hub.shared_credentials(token, app_id).await {
-                        Ok(credentials) => {
-                            // Use the content store for screenshots (StoreType::Content)
-                            match credentials
-                                .to_store_type(flow_like::credentials::StoreType::Content)
-                                .await
-                            {
-                                Ok(store) => {
-                                    tracing::info!(
-                                        "[Recording] Using online storage for screenshots"
-                                    );
-                                    return Ok(Some(store));
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "[Recording] Failed to create online store: {}, falling back to local",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "[Recording] Failed to get shared credentials: {}, falling back to local",
-                                e
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "[Recording] Failed to create hub: {}, falling back to local",
-                        e
-                    );
-                }
-            }
+            let hub = Hub::new(hub_url, http_client)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+            let credentials = hub
+                .shared_credentials(token, app_id)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+            let store = credentials
+                .to_store_type(flow_like::credentials::StoreType::Content)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+            return Ok(Some(store));
         }
     }
 
@@ -95,204 +124,165 @@ pub async fn start_recording(
     settings: Option<RecordingSettings>,
     token: Option<String>,
 ) -> Result<String, TauriFunctionError> {
-    tracing::info!(
-        "[Recording] start_recording called with app_id: {:?}, board_id: {:?}, has_token: {}",
-        app_id,
-        board_id,
-        token.is_some()
-    );
-
+    let mut settings = settings.unwrap_or_default();
+    let browser_recording = settings
+        .browser_debugger_address
+        .as_ref()
+        .is_some_and(|address| !address.trim().is_empty());
+    if browser_recording {
+        settings.capture_screenshots = false;
+        settings.capture_fingerprints = false;
+    } else {
+        if settings.capture_screenshots && (app_id.is_none() || board_id.is_none()) {
+            return Err(TauriFunctionError::new(
+                "Screenshot templates need an application and board. Disable screenshots to record coordinates only.",
+            ));
+        }
+        super::permissions::ensure_recording_permissions(
+            &handler,
+            settings.capture_screenshots,
+            settings.capture_fingerprints,
+        )
+        .await?;
+    }
     let recording_state = RecordingState::construct(&handler).await?;
-    tracing::debug!("[Recording] Got recording state");
-
-    // Get the appropriate store for screenshots (online or local)
-    let store = get_recording_store(&handler, app_id.as_deref(), token.as_deref()).await?;
-
-    // Start the session (window focus is now tracked dynamically during recording)
-    let session_id = {
-        let mut state = recording_state.inner.write().await;
-        let id = state
-            .start_session(app_id, board_id, settings.unwrap_or_default())
-            .await?;
-        tracing::info!("[Recording] Session started with id: {}", id);
-        id
+    let mut capture_guard = recording_state.capture.write().await;
+    let identity = recording_identity(&handler).await?;
+    if recording_state.inner.read().await.status != RecordingStatus::Idle {
+        return Err(TauriFunctionError::new("Recording already in progress"));
+    }
+    let store = if settings.capture_screenshots {
+        get_recording_store(&handler, app_id.as_deref(), token.as_deref()).await?
+    } else {
+        None
     };
-
-    // Create and start the event capture with the store
-    tracing::debug!("[Recording] Creating EventCapture...");
-    let capture = EventCapture::new(
+    let session_id = recording_state
+        .inner
+        .write()
+        .await
+        .start_session(identity, app_id, board_id, settings.clone())
+        .await?;
+    let capture = match EventCapture::new(
         recording_state.inner.clone(),
         handler.clone(),
         store.map(Arc::new),
-    );
-    capture.set_active(true);
-    tracing::info!("[Recording] EventCapture created and set active");
-
-    // Store the capture
+        settings,
+    )
+    .await
     {
-        let mut capture_guard = recording_state.capture.write().await;
-        *capture_guard = Some(capture);
-        tracing::debug!("[Recording] EventCapture stored in state");
-    }
-
+        Ok(capture) => capture,
+        Err(error) => {
+            let _ = recording_state.inner.write().await.stop().await;
+            return Err(error);
+        }
+    };
+    capture.set_active(true);
+    *capture_guard = Some(capture);
     #[cfg(desktop)]
     crate::tray::set_recording_tray_icon(&handler).await;
-
     Ok(session_id)
 }
 
 #[tauri::command(async)]
 pub async fn pause_recording(handler: AppHandle) -> Result<(), TauriFunctionError> {
     let recording_state = RecordingState::construct(&handler).await?;
-
-    // Pause event capture
-    {
-        let capture_guard = recording_state.capture.read().await;
-        if let Some(capture) = capture_guard.as_ref() {
-            capture.set_active(false);
-        }
+    let capture_guard = recording_state.capture.write().await;
+    if recording_state.inner.read().await.status != RecordingStatus::Recording {
+        return Err(TauriFunctionError::new("Not currently recording"));
     }
-
-    let mut state = recording_state.inner.write().await;
-    state.pause().await?;
-    Ok(())
+    if let Some(capture) = capture_guard.as_ref() {
+        capture.set_active(false);
+        capture.flush().await;
+    }
+    recording_state.inner.write().await.pause().await
 }
 
 #[tauri::command(async)]
 pub async fn resume_recording(handler: AppHandle) -> Result<(), TauriFunctionError> {
     let recording_state = RecordingState::construct(&handler).await?;
-
-    // Resume event capture
-    {
-        let capture_guard = recording_state.capture.read().await;
-        if let Some(capture) = capture_guard.as_ref() {
-            capture.set_active(true);
-        }
+    let capture_guard = recording_state.capture.write().await;
+    recording_state.inner.write().await.resume().await?;
+    if let Some(capture) = capture_guard.as_ref() {
+        capture.set_active(true);
     }
-
-    let mut state = recording_state.inner.write().await;
-    state.resume().await?;
     Ok(())
 }
 
 #[tauri::command(async)]
 pub async fn stop_recording(handler: AppHandle) -> Result<Vec<RecordedAction>, TauriFunctionError> {
-    let result = stop_recording_inner(&handler).await;
-
-    // Restore the tray even when stopping fails — otherwise the recording
-    // icon sticks and left-click stays detached from the menu.
+    let recording_state = RecordingState::construct(&handler).await?;
+    let mut capture_guard = recording_state.capture.write().await;
+    if let Some(capture) = capture_guard.take() {
+        // Disconnect the producer, then process every event already accepted by the listener.
+        capture.finish().await;
+    }
+    {
+        let mut state = recording_state.inner.write().await;
+        if state.status != RecordingStatus::Idle {
+            state.stop().await?;
+        }
+    }
     #[cfg(desktop)]
     crate::tray::restore_tray_icon(&handler).await;
-
-    result
-}
-
-async fn stop_recording_inner(
-    handler: &AppHandle,
-) -> Result<Vec<RecordedAction>, TauriFunctionError> {
-    tracing::debug!(" ========== STOP RECORDING CALLED ==========");
-    tracing::info!("[Recording] stop_recording called");
-
-    let recording_state = RecordingState::construct(handler).await?;
-
-    // First, deactivate the capture (stops recording new events)
-    {
-        let capture_guard = recording_state.capture.read().await;
-        if let Some(capture) = capture_guard.as_ref() {
-            capture.set_active(false);
-            tracing::debug!(" EventCapture deactivated");
-            tracing::debug!("[Recording] EventCapture deactivated");
-        } else {
-            tracing::warn!(" No EventCapture found when stopping!");
-            tracing::warn!("[Recording] No EventCapture found when stopping!");
-        }
-    }
-
-    // Wait for pending events to drain by polling action count stability
-    {
-        let mut last_count = 0usize;
-        let mut stable_ticks = 0u32;
-        for _ in 0..20 {
-            flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let state = recording_state.inner.read().await;
-            let current = state.session.as_ref().map(|s| s.actions.len()).unwrap_or(0);
-            if current == last_count {
-                stable_ticks += 1;
-                if stable_ticks >= 3 {
-                    break;
-                }
-            } else {
-                stable_ticks = 0;
-            }
-            last_count = current;
-        }
-    }
-
-    // Get current state info before stopping
-    {
-        let state = recording_state.inner.read().await;
-        tracing::debug!(" Current status: {:?}", state.status);
-        if let Some(session) = &state.session {
-            tracing::debug!(" Session has {} actions", session.actions.len());
-            tracing::debug!(" Target board ID: {:?}", session.target_board_id);
-        } else {
-            tracing::warn!(" No active session!");
-        }
-    }
-
-    // Get the recorded actions
-    tracing::debug!(" Calling state.stop() to collect actions...");
-    let actions = {
-        let mut state = recording_state.inner.write().await;
-        let result = state.stop().await?;
-        tracing::debug!(" state.stop() returned {} actions", result.len());
-        result
-    };
-
-    tracing::debug!(" Final action count: {}", actions.len());
-    for (i, action) in actions.iter().enumerate() {
-        let coords = action
-            .coordinates
-            .map(|(x, y)| format!("({}, {})", x, y))
-            .unwrap_or_else(|| "N/A".to_string());
-        tracing::debug!("  Action {}: {:?} at {}", i, action.action_type, coords);
-    }
-    tracing::info!(
-        "[Recording] Stopped with {} actions recorded",
-        actions.len()
-    );
-
-    // Now drop the capture (closes the channel and stops the processor)
-    tracing::debug!(" Dropping EventCapture...");
-    {
-        let mut capture_guard = recording_state.capture.write().await;
-        *capture_guard = None;
-    }
-    tracing::debug!(" ========== STOP RECORDING COMPLETE ==========");
-
-    Ok(actions)
+    let identity = recording_identity(&handler).await.ok();
+    let state = recording_state.inner.read().await;
+    let visible_actions = identity
+        .as_deref()
+        .map(|identity| state.last_completed_actions(identity))
+        .unwrap_or_default();
+    crate::utils::emit_to_ui(&handler, "recording:stopped", Vec::<RecordedAction>::new());
+    Ok(visible_actions)
 }
 
 #[tauri::command(async)]
 pub async fn get_recording_status(
     handler: AppHandle,
+    app_id: Option<String>,
+    board_id: String,
 ) -> Result<RecordingStatus, TauriFunctionError> {
     let recording_state = RecordingState::construct(&handler).await?;
+    let _capture_guard = recording_state.capture.read().await;
+    let identity = recording_identity(&handler).await?;
     let state = recording_state.inner.read().await;
-    Ok(state.status.clone())
+    Ok(
+        if state.owns_context(&identity, app_id.as_deref(), Some(&board_id)) {
+            state.status.clone()
+        } else {
+            RecordingStatus::Idle
+        },
+    )
 }
 
 #[tauri::command(async)]
 pub async fn get_recorded_actions(
     handler: AppHandle,
+    app_id: Option<String>,
+    board_id: String,
 ) -> Result<Vec<RecordedAction>, TauriFunctionError> {
     let recording_state = RecordingState::construct(&handler).await?;
+    let _capture_guard = recording_state.capture.read().await;
+    let identity = recording_identity(&handler).await?;
     let state = recording_state.inner.read().await;
-    Ok(state
-        .session
-        .as_ref()
-        .map(|s| s.actions.clone())
-        .unwrap_or_default())
+    Ok(state.actions_for_context(&identity, app_id.as_deref(), Some(&board_id)))
+}
+
+#[tauri::command(async)]
+pub async fn clear_recorded_actions(
+    handler: AppHandle,
+    app_id: Option<String>,
+    board_id: String,
+) -> Result<(), TauriFunctionError> {
+    let state = RecordingState::construct(&handler).await?;
+    let _capture_guard = state.capture.write().await;
+    let identity = recording_identity(&handler).await?;
+    let mut state = state.inner.write().await;
+    if state.status != RecordingStatus::Idle {
+        return Err(TauriFunctionError::new(
+            "Stop recording before clearing actions",
+        ));
+    }
+    state.clear_completed(&identity, app_id.as_deref(), Some(&board_id));
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -307,7 +297,17 @@ pub async fn insert_recording_to_board(
     use_pattern_matching: Option<bool>,
     template_confidence: Option<f64>,
     use_fingerprints: Option<bool>,
+    bot_detection_evasion: Option<bool>,
 ) -> Result<Vec<flow_like::flow::board::commands::GenericCommand>, TauriFunctionError> {
+    let recording = RecordingState::construct(&handler).await?;
+    let _capture_guard = recording.capture.write().await;
+    let identity = recording_identity(&handler).await?;
+    recording.inner.read().await.validate_completed_actions(
+        &identity,
+        app_id.as_deref(),
+        Some(&board_id),
+        &actions,
+    )?;
     tracing::info!(
         "insert_recording_to_board called with {} actions",
         actions.len()
@@ -320,11 +320,18 @@ pub async fn insert_recording_to_board(
     let generator_opts = generator::GeneratorOptions {
         use_pattern_matching: use_pattern_matching.unwrap_or(false),
         template_confidence: template_confidence.unwrap_or(0.8),
-        app_id,
+        app_id: app_id.clone(),
         board_id: Some(board_id.clone()),
-        bot_detection_evasion: false,
-        use_fingerprints: use_fingerprints.unwrap_or(true),
+        bot_detection_evasion: bot_detection_evasion.unwrap_or(false),
+        use_fingerprints: use_fingerprints.unwrap_or(false),
     };
+    if !generator_opts.template_confidence.is_finite()
+        || !(0.0..=1.0).contains(&generator_opts.template_confidence)
+    {
+        return Err(TauriFunctionError::new(
+            "Template confidence must be between 0 and 1",
+        ));
+    }
 
     let commands = generator::generate_add_node_commands(
         &actions,
@@ -336,13 +343,13 @@ pub async fn insert_recording_to_board(
     tracing::info!("Generated {} commands", commands.len());
 
     let mut board = board.lock().await;
-    for (i, cmd) in commands.iter().enumerate() {
-        tracing::debug!("Executing command {}/{}", i + 1, commands.len());
-        board
-            .execute_command(cmd.clone(), flow_state.clone())
-            .await?;
-    }
+    let commands = board.execute_commands(commands, flow_state.clone()).await?;
 
     tracing::info!("Successfully inserted {} nodes to board", commands.len());
+    recording
+        .inner
+        .write()
+        .await
+        .clear_completed(&identity, app_id.as_deref(), Some(&board_id));
     Ok(commands)
 }

@@ -25,6 +25,7 @@ impl NodeLogic for DiagnoseFailureNode {
             "Captures diagnostic info when an automation fails",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "diagnoseFailure");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -85,16 +86,16 @@ impl NodeLogic for DiagnoseFailureNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let error_message: String = context.evaluate_pin("error_message").await?;
         let screenshot_path: String = context.evaluate_pin("screenshot_path").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let mut gui = autogui.lock().await;
-
-        let (screen_width, screen_height) = gui.get_screen_size();
-
+        let (screen_width, screen_height) = crate::types::screen_match::screen_dimensions();
         if !screenshot_path.is_empty() {
-            let _ = gui.save_screenshot(&screenshot_path);
+            let bytes = crate::types::screen_match::capture_screen_png().ok_or_else(|| {
+                flow_like_types::anyhow!("Could not capture diagnostic screenshot")
+            })?;
+            tokio::fs::write(&screenshot_path, bytes).await?;
         }
 
         let diagnostic = flow_like_types::json::json!({

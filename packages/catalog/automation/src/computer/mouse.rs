@@ -26,6 +26,7 @@ impl NodeLogic for ComputerMouseMoveNode {
             "Moves the mouse cursor to the specified screen coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "mouseMove");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -87,16 +88,23 @@ impl NodeLogic for ComputerMouseMoveNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
 
-        {
-            let mut enigo = session.create_enigo()?;
+        let mut enigo = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            check_cancellation(cancellation.as_ref())?;
             enigo
-                .move_mouse(x as i32, y as i32, Coordinate::Abs)
+                .move_mouse(i32::try_from(x)?, i32::try_from(y)?, Coordinate::Abs)
                 .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
-        }
 
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -161,6 +169,7 @@ impl NodeLogic for ComputerNaturalMouseMoveNode {
             "Moves the mouse cursor naturally using curved paths with variable speed to avoid bot detection",
             "Automation/Computer/Mouse",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "naturalMouseMove");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -236,23 +245,39 @@ impl NodeLogic for ComputerNaturalMouseMoveNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let target_x: i64 = context.evaluate_pin("x").await?;
         let target_y: i64 = context.evaluate_pin("y").await?;
         let duration_ms: i64 = context.evaluate_pin("duration_ms").await.unwrap_or(300);
         let curve_intensity: f64 = context.evaluate_pin("curve_intensity").await.unwrap_or(0.3);
         let overshoot: bool = context.evaluate_pin("overshoot").await.unwrap_or(false);
 
-        let mut enigo = session.create_enigo()?;
-        let start = enigo.location().unwrap_or((0, 0));
-        let end = (target_x as i32, target_y as i32);
-        let dur = duration_ms.max(0) as u64;
+        let mut enigo = session.create_enigo(context).await?;
+        let start = enigo.location().map_err(|error| {
+            flow_like_types::anyhow!(
+                "Cannot read cursor position for natural movement: {}",
+                error
+            )
+        })?;
+        let end = (i32::try_from(target_x)?, i32::try_from(target_y)?);
+        let dur = duration_ms.clamp(0, 60_000) as u64;
+        let cancellation = context.get_cancellation_token();
 
         flow_like_types::tokio::task::spawn_blocking(move || {
-            perform_natural_move(&mut enigo, start, end, dur, curve_intensity, overshoot)
+            perform_natural_move(
+                &mut enigo,
+                start,
+                end,
+                dur,
+                curve_intensity,
+                overshoot,
+                cancellation.as_ref(),
+            )
         })
         .await
         .map_err(|e| flow_like_types::anyhow!("Natural mouse move task failed: {}", e))??;
 
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -275,8 +300,7 @@ enum ResolvedVia {
     FallbackCoordinates,
 }
 
-/// Outcome of the click-target resolution hierarchy:
-/// template → fingerprint bounding-box → recorded (x, y).
+/// A target resolved from current pixels, accessibility data, or explicit coordinates.
 #[cfg(feature = "execute")]
 struct ResolvedTarget {
     x: i32,
@@ -284,30 +308,12 @@ struct ResolvedTarget {
     via: ResolvedVia,
 }
 
-/// Result of a template matching attempt with full diagnostic info.
-#[cfg(feature = "execute")]
-use crate::types::screen_match::TemplateMatchResult;
-
-/// Try template matching, returning detailed results for diagnostics.
-///
-/// Captures the screen via `xcap` (bypassing rustautogui's broken macOS
-/// screen capture) and runs NCC directly via rustautogui's `dev` API.
-#[cfg(feature = "execute")]
-fn try_template_match(template_bytes: &[u8], min_confidence: f32) -> Option<TemplateMatchResult> {
-    crate::types::screen_match::try_template_match(template_bytes, min_confidence)
-}
-
-/// Resolve the click target using the hierarchy:
-/// 1. Template matching (if `use_template_matching` is true and template provided)
-/// 2. Fingerprint bounding-box center (if fingerprint provided)
-/// 3. Recorded (x, y) coordinates (always available)
-///
-/// Emits log messages for every step so the user can diagnose failures.
+/// Resolve visual and accessibility targets against the current desktop before input.
 #[cfg(feature = "execute")]
 #[allow(clippy::too_many_arguments)]
 async fn resolve_click_target(
     context: &mut ExecutionContext,
-    _session: &AutomationSession,
+    session: &AutomationSession,
     x: i64,
     y: i64,
     use_template: bool,
@@ -316,152 +322,78 @@ async fn resolve_click_target(
     use_fingerprint: bool,
     fingerprint: Option<&crate::types::fingerprints::ElementFingerprint>,
 ) -> flow_like_types::Result<ResolvedTarget> {
-    // ── 1. Template matching ──────────────────────────────────────────
+    context.check_cancelled()?;
+    session.ensure_active(context).await?;
     if use_template {
-        if let Some(bytes) = &template_bytes {
-            context.log_message(
-                &format!(
-                    "Template loaded: {} bytes, confidence threshold: {}",
-                    bytes.len(),
-                    confidence
-                ),
-                flow_like::flow::execution::LogLevel::Debug,
-            );
-
-            match try_template_match(bytes, confidence as f32) {
-                Some(result) => {
-                    context.log_message(
-                        &format!(
-                            "Template {}x{}, screen {}x{} (physical), best match: {:?}",
-                            result.template_dims.0,
-                            result.template_dims.1,
-                            result.screen_dims.0,
-                            result.screen_dims.1,
-                            result
-                                .best_match
-                                .map(|(mx, my, c)| format!("({},{}) conf={:.4}", mx, my, c))
-                                .unwrap_or_else(|| "NONE (zero correlation)".to_string()),
-                        ),
-                        flow_like::flow::execution::LogLevel::Debug,
-                    );
-
-                    if let Some((mx, my, conf)) = result.best_match {
-                        if conf >= confidence as f32 {
-                            // Convert physical (Retina) coordinates to logical mouse coordinates
-                            let (lx, ly) = crate::types::screen_match::physical_to_logical(mx, my);
-                            let dist = (((lx as f64 - x as f64).powi(2)
-                                + (ly as f64 - y as f64).powi(2))
-                            .sqrt()) as i64;
-                            if dist > 500 {
-                                context.log_message(
-                                    &format!(
-                                        "Template found at ({}, {}) is {}px from recorded ({}, {}) – large drift",
-                                        lx, ly, dist, x, y
-                                    ),
-                                    flow_like::flow::execution::LogLevel::Warn,
-                                );
-                            }
-                            context.log_message(
-                                &format!(
-                                    "Template matched at ({}, {}) [logical] confidence {:.4}",
-                                    lx, ly, conf
-                                ),
-                                flow_like::flow::execution::LogLevel::Debug,
-                            );
-                            return Ok(ResolvedTarget {
-                                x: lx,
-                                y: ly,
-                                via: ResolvedVia::Template,
-                            });
-                        }
-                        context.log_message(
-                            &format!(
-                                "Template best match at ({},{}) conf={:.4} < threshold {} — not accepted. Debug images saved.",
-                                mx, my, conf, confidence
-                            ),
-                            flow_like::flow::execution::LogLevel::Warn,
-                        );
-                    } else {
-                        context.log_message(
-                            &format!(
-                                "Template not found on screen (zero correlation). Template {}x{}, screen {}x{}. Debug images saved.",
-                                result.template_dims.0, result.template_dims.1,
-                                result.screen_dims.0, result.screen_dims.1,
-                            ),
-                            flow_like::flow::execution::LogLevel::Warn,
-                        );
-                    }
-                }
-                None => {
-                    context.log_message(
-                        "Template grayscale conversion failed — could not decode template image",
-                        flow_like::flow::execution::LogLevel::Warn,
-                    );
-                }
-            }
-        } else {
-            context.log_message(
-                "Template matching enabled but no template image provided (FlowPath evaluation failed or empty)",
-                flow_like::flow::execution::LogLevel::Warn,
-            );
+        let bytes = template_bytes.ok_or_else(|| {
+            flow_like_types::anyhow!("Template matching requires a template image")
+        })?;
+        let matches =
+            crate::types::screen_match::match_desktop_async(bytes, confidence, -2).await?;
+        let &(x,y,_)=matches.first().ok_or_else(||flow_like_types::anyhow!("The visual target could not be verified. Capture a new template or explicitly use coordinate mode."))?;
+        if matches
+            .get(1)
+            .is_some_and(|other| (matches[0].2 - other.2).abs() < 0.01)
+        {
+            return Err(flow_like_types::anyhow!(
+                "The visual target is ambiguous across the desktop. Use a more specific template."
+            ));
         }
+        return Ok(ResolvedTarget {
+            x,
+            y,
+            via: ResolvedVia::Template,
+        });
     }
-
-    // ── 2. Fingerprint bounding box ───────────────────────────────────
     if use_fingerprint {
-        if let Some(fp) = fingerprint {
-            context.log_message(
-                &format!(
-                    "Fingerprint present: role={:?}, name={:?}, text={:?}, bbox={:?}",
-                    fp.role, fp.name, fp.text, fp.bounding_box
-                ),
-                flow_like::flow::execution::LogLevel::Debug,
-            );
-
-            if let Some(ref bbox) = fp.bounding_box {
-                let cx = ((bbox.x1 + bbox.x2) / 2.0) as i32;
-                let cy = ((bbox.y1 + bbox.y2) / 2.0) as i32;
-                let dist = (((cx as f64 - x as f64).powi(2) + (cy as f64 - y as f64).powi(2))
-                    .sqrt()) as i64;
-                if dist > 500 {
-                    context.log_message(
-                        &format!(
-                            "Fingerprint bbox center ({}, {}) is {}px from recorded ({}, {}) – large drift",
-                            cx, cy, dist, x, y
-                        ),
-                        flow_like::flow::execution::LogLevel::Warn,
-                    );
-                }
-                context.log_message(
-                    &format!("Using fingerprint bounding-box center ({}, {})", cx, cy),
-                    flow_like::flow::execution::LogLevel::Debug,
-                );
-                return Ok(ResolvedTarget {
-                    x: cx,
-                    y: cy,
-                    via: ResolvedVia::Fingerprint,
-                });
-            }
-            context.log_message(
-                "Fingerprint has no bounding box, cannot use for positioning",
-                flow_like::flow::execution::LogLevel::Warn,
-            );
+        let fingerprint = fingerprint.ok_or_else(|| {
+            flow_like_types::anyhow!("Fingerprint matching requires a fingerprint")
+        })?;
+        let role = fingerprint.role.as_deref().unwrap_or_default();
+        let name = fingerprint
+            .name
+            .as_deref()
+            .or(fingerprint.text.as_deref())
+            .unwrap_or_default();
+        if role.is_empty() && name.is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "Fingerprint needs an accessible role or name"
+            ));
         }
-    } else if fingerprint.is_some() {
-        context.log_message(
-            "Fingerprint available but use_fingerprint is disabled, skipping",
-            flow_like::flow::execution::LogLevel::Debug,
-        );
+        let title = fingerprint
+            .attributes
+            .get("window_title")
+            .map(String::as_str)
+            .unwrap_or_default();
+        let tree = super::accessibility::load_tree(title, 32).await?;
+        let mut matches = Vec::new();
+        super::accessibility::find_elements(&tree, role, name, &mut matches);
+        if matches.len() != 1 {
+            return Err(flow_like_types::anyhow!(
+                "Fingerprint matched {} current elements; locate a unique element before clicking",
+                matches.len()
+            ));
+        }
+        let bounds = matches[0]
+            .bounds
+            .as_ref()
+            .filter(|b| b.width > 0 && b.height > 0)
+            .ok_or_else(|| flow_like_types::anyhow!("Accessible target has no visible bounds"))?;
+        return Ok(ResolvedTarget {
+            x: bounds
+                .x
+                .checked_add(bounds.width / 2)
+                .ok_or_else(|| flow_like_types::anyhow!("Element coordinate overflow"))?,
+            y: bounds
+                .y
+                .checked_add(bounds.height / 2)
+                .ok_or_else(|| flow_like_types::anyhow!("Element coordinate overflow"))?,
+            via: ResolvedVia::Fingerprint,
+        });
     }
-
-    // ── 3. Fallback: recorded coordinates ─────────────────────────────
-    context.log_message(
-        &format!("Using recorded coordinates ({}, {})", x, y),
-        flow_like::flow::execution::LogLevel::Debug,
-    );
     Ok(ResolvedTarget {
-        x: x as i32,
-        y: y as i32,
+        x: i32::try_from(x)?,
+        y: i32::try_from(y)?,
         via: ResolvedVia::FallbackCoordinates,
     })
 }
@@ -469,16 +401,23 @@ async fn resolve_click_target(
 /// Performs natural mouse movement using Bezier curves
 #[cfg(feature = "execute")]
 fn perform_natural_move(
-    enigo: &mut enigo::Enigo,
+    enigo: &mut super::native::input::DesktopInput,
     start: (i32, i32),
     end: (i32, i32),
     duration_ms: u64,
     curve_intensity: f64,
     overshoot: bool,
+    cancellation: Option<&flow_like_types::tokio_util::sync::CancellationToken>,
 ) -> flow_like_types::Result<()> {
     use enigo::{Coordinate, Mouse};
     use rand::Rng;
 
+    if !curve_intensity.is_finite() || !(0.0..=1.0).contains(&curve_intensity) {
+        return Err(flow_like_types::anyhow!(
+            "Curve intensity must be between 0 and 1"
+        ));
+    }
+    check_cancellation(cancellation)?;
     let mut rng = rand::rng();
 
     let start_f = (start.0 as f64, start.1 as f64);
@@ -509,8 +448,16 @@ fn perform_natural_move(
     let perp_len = (perpendicular.0 * perpendicular.0 + perpendicular.1 * perpendicular.1).sqrt();
     let perp_norm = (perpendicular.0 / perp_len, perpendicular.1 / perp_len);
 
-    let offset1 = rng.random_range(-curve_offset..curve_offset);
-    let offset2 = rng.random_range(-curve_offset..curve_offset);
+    let offset1 = if curve_offset > 0.0 {
+        rng.random_range(-curve_offset..curve_offset)
+    } else {
+        0.0
+    };
+    let offset2 = if curve_offset > 0.0 {
+        rng.random_range(-curve_offset..curve_offset)
+    } else {
+        0.0
+    };
 
     let ctrl1 = (
         start_f.0 + dx * 0.3 + perp_norm.0 * offset1,
@@ -534,6 +481,9 @@ fn perform_natural_move(
 
     // Move along the bezier curve
     for i in 1..=steps {
+        if cancellation.is_some_and(|token| token.is_cancelled()) {
+            return Err(flow_like_types::anyhow!("Automation cancelled"));
+        }
         let t = ease_in_out_quad(i as f64 / steps as f64);
         let (x, y) = bezier_point(start_f, ctrl1, ctrl2, overshoot_end, t);
 
@@ -549,14 +499,12 @@ fn perform_natural_move(
             .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
 
         let delay_variance = rng.random_range(0.8..1.2);
-        std::thread::sleep(std::time::Duration::from_millis(
-            (step_delay_ms as f64 * delay_variance) as u64,
-        ));
+        interruptible_sleep((step_delay_ms as f64 * delay_variance) as u64, cancellation)?;
     }
 
     // Correct from overshoot
     if overshoot && (overshoot_amount.0.abs() > 0.1 || overshoot_amount.1.abs() > 0.1) {
-        std::thread::sleep(std::time::Duration::from_millis(rng.random_range(30..80)));
+        interruptible_sleep(rng.random_range(30..80), cancellation)?;
 
         let correction_steps = 5;
         for i in 1..=correction_steps {
@@ -568,7 +516,7 @@ fn perform_natural_move(
                 .move_mouse(x as i32, y as i32, Coordinate::Abs)
                 .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
 
-            std::thread::sleep(std::time::Duration::from_millis(rng.random_range(10..20)));
+            interruptible_sleep(rng.random_range(10..20), cancellation)?;
         }
     }
 
@@ -599,6 +547,7 @@ impl NodeLogic for ComputerMouseClickNode {
             "Clicks the mouse at the specified coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "mouseClick");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -700,10 +649,10 @@ impl NodeLogic for ComputerMouseClickNode {
         node.add_input_pin(
             "use_fingerprint",
             "Use Fingerprint",
-            "If enabled, use fingerprint bounding box as fallback before raw coordinates",
+            "Resolve a unique accessible element from the current desktop before clicking",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(true)));
+        .set_default_value(Some(json!(false)));
 
         node.add_input_pin(
             "fingerprint",
@@ -713,6 +662,13 @@ impl NodeLogic for ComputerMouseClickNode {
         )
         .set_schema::<crate::types::fingerprints::ElementFingerprint>();
 
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Comma-separated ctrl, shift, alt, meta",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -728,11 +684,13 @@ impl NodeLogic for ComputerMouseClickNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use enigo::{Button, Coordinate, Mouse};
+        use enigo::{Coordinate, Mouse};
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let modifiers: String = context.evaluate_pin("modifiers").await.unwrap_or_default();
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
         let button_str: String = context.evaluate_pin("button").await?;
@@ -758,7 +716,7 @@ impl NodeLogic for ComputerMouseClickNode {
         let use_fingerprint: bool = context
             .evaluate_pin("use_fingerprint")
             .await
-            .unwrap_or(true);
+            .unwrap_or(false);
         let fingerprint: Option<crate::types::fingerprints::ElementFingerprint> =
             context.evaluate_pin("fingerprint").await.ok();
 
@@ -775,34 +733,42 @@ impl NodeLogic for ComputerMouseClickNode {
         )
         .await?;
 
-        context.log_message(
-            &format!(
-                "Click target resolved to ({}, {}) via {:?}",
-                target.x, target.y, target.via
-            ),
-            flow_like::flow::execution::LogLevel::Debug,
-        );
+        if session.debug_mode {
+            context.log_message(
+                &format!(
+                    "Click target resolved to ({}, {}) via {:?}",
+                    target.x, target.y, target.via
+                ),
+                flow_like::flow::execution::LogLevel::Debug,
+            );
+        }
 
-        let button = match button_str.as_str() {
-            "right" => Button::Right,
-            "middle" => Button::Middle,
-            _ => Button::Left,
-        };
+        let button = parse_button(&button_str)?;
 
-        {
-            let mut enigo = session.create_enigo()?;
+        let mut enigo = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        let click_delay_ms = session.click_delay_ms.min(5000);
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            check_cancellation(cancellation.as_ref())?;
+            enigo.modifiers(&modifiers)?;
 
-            if natural_move {
+            if natural_move && !super::native::input::wayland() {
                 use rand::Rng;
-                let start = enigo.location().unwrap_or((0, 0));
+                let start = enigo.location().map_err(|error| {
+                    flow_like_types::anyhow!(
+                        "Cannot read cursor position for natural movement: {}",
+                        error
+                    )
+                })?;
                 let overshoot = rand::rng().random_bool(0.3);
                 perform_natural_move(
                     &mut enigo,
                     start,
                     (target.x, target.y),
-                    move_duration_ms as u64,
+                    move_duration_ms.clamp(0, 60_000) as u64,
                     0.3,
                     overshoot,
+                    cancellation.as_ref(),
                 )?;
             } else {
                 enigo
@@ -810,13 +776,18 @@ impl NodeLogic for ComputerMouseClickNode {
                     .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(session.click_delay_ms));
+            interruptible_sleep(click_delay_ms, cancellation.as_ref())?;
+            check_cancellation(cancellation.as_ref())?;
 
             enigo
                 .button(button, enigo::Direction::Click)
                 .map_err(|e| flow_like_types::anyhow!("Failed to click mouse: {}", e))?;
-        }
 
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -850,6 +821,7 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
             "Double-clicks the mouse at the specified coordinates",
             "Automation/Computer/Mouse",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "mouseDoubleClick");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -924,10 +896,10 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
         node.add_input_pin(
             "use_fingerprint",
             "Use Fingerprint",
-            "If enabled, use fingerprint bounding box as fallback before raw coordinates",
+            "Resolve a unique accessible element from the current desktop before clicking",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(true)));
+        .set_default_value(Some(json!(false)));
 
         node.add_input_pin(
             "fingerprint",
@@ -937,6 +909,20 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
         )
         .set_schema::<crate::types::fingerprints::ElementFingerprint>();
 
+        node.add_input_pin("button", "Button", "Mouse button", VariableType::String)
+            .set_default_value(Some(json!("left")))
+            .set_options(
+                flow_like::flow::pin::PinOptions::new()
+                    .set_valid_values(vec!["left".into(), "right".into(), "middle".into()])
+                    .build(),
+            );
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Comma-separated ctrl, shift, alt, meta",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -952,11 +938,18 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use enigo::{Button, Coordinate, Mouse};
+        use enigo::{Coordinate, Mouse};
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let modifiers: String = context.evaluate_pin("modifiers").await.unwrap_or_default();
+        let button: String = context
+            .evaluate_pin("button")
+            .await
+            .unwrap_or_else(|_| "left".into());
+        let button = parse_button(&button)?;
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
         let use_template: bool = context
@@ -981,7 +974,7 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
         let use_fingerprint: bool = context
             .evaluate_pin("use_fingerprint")
             .await
-            .unwrap_or(true);
+            .unwrap_or(false);
         let fingerprint: Option<crate::types::fingerprints::ElementFingerprint> =
             context.evaluate_pin("fingerprint").await.ok();
 
@@ -998,28 +991,40 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
         )
         .await?;
 
-        context.log_message(
-            &format!(
-                "DoubleClick target resolved to ({}, {}) via {:?}",
-                target.x, target.y, target.via
-            ),
-            flow_like::flow::execution::LogLevel::Debug,
-        );
+        if session.debug_mode {
+            context.log_message(
+                &format!(
+                    "DoubleClick target resolved to ({}, {}) via {:?}",
+                    target.x, target.y, target.via
+                ),
+                flow_like::flow::execution::LogLevel::Debug,
+            );
+        }
 
-        {
-            let mut enigo = session.create_enigo()?;
+        let mut enigo = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        let click_delay_ms = session.click_delay_ms.min(5000);
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            check_cancellation(cancellation.as_ref())?;
+            enigo.modifiers(&modifiers)?;
 
-            if natural_move {
+            if natural_move && !super::native::input::wayland() {
                 use rand::Rng;
-                let start = enigo.location().unwrap_or((0, 0));
+                let start = enigo.location().map_err(|error| {
+                    flow_like_types::anyhow!(
+                        "Cannot read cursor position for natural movement: {}",
+                        error
+                    )
+                })?;
                 let overshoot = rand::rng().random_bool(0.3);
                 perform_natural_move(
                     &mut enigo,
                     start,
                     (target.x, target.y),
-                    move_duration_ms as u64,
+                    move_duration_ms.clamp(0, 60_000) as u64,
                     0.3,
                     overshoot,
+                    cancellation.as_ref(),
                 )?;
             } else {
                 enigo
@@ -1027,22 +1032,22 @@ impl NodeLogic for ComputerMouseDoubleClickNode {
                     .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(session.click_delay_ms));
+            interruptible_sleep(click_delay_ms, cancellation.as_ref())?;
+            check_cancellation(cancellation.as_ref())?;
 
             enigo
-                .button(Button::Left, enigo::Direction::Click)
+                .button(button, enigo::Direction::Click)
                 .map_err(|e| flow_like_types::anyhow!("Failed to click mouse: {}", e))?;
-        }
-
-        flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-
-        {
-            let mut enigo = session.create_enigo()?;
+            interruptible_sleep(80, cancellation.as_ref())?;
             enigo
-                .button(Button::Left, enigo::Direction::Click)
+                .button(button, enigo::Direction::Click)
                 .map_err(|e| flow_like_types::anyhow!("Failed to double-click mouse: {}", e))?;
-        }
 
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -1076,6 +1081,7 @@ impl NodeLogic for ComputerMouseDragNode {
             "Drags the mouse from one position to another",
             "Automation/Computer/Mouse",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "mouseDrag");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -1136,6 +1142,13 @@ impl NodeLogic for ComputerMouseDragNode {
         )
         .set_default_value(Some(json!("left")));
 
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Comma-separated ctrl, shift, alt, meta",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -1151,38 +1164,48 @@ impl NodeLogic for ComputerMouseDragNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use enigo::{Button, Coordinate, Mouse};
+        use enigo::{Coordinate, Mouse};
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let modifiers: String = context.evaluate_pin("modifiers").await.unwrap_or_default();
         let from_x: i64 = context.evaluate_pin("from_x").await?;
         let from_y: i64 = context.evaluate_pin("from_y").await?;
         let to_x: i64 = context.evaluate_pin("to_x").await?;
         let to_y: i64 = context.evaluate_pin("to_y").await?;
         let button_str: String = context.evaluate_pin("button").await?;
 
-        let button = match button_str.as_str() {
-            "right" => Button::Right,
-            _ => Button::Left,
-        };
+        let button = parse_button(&button_str)?;
 
-        {
-            let mut enigo = session.create_enigo()?;
+        let mut enigo = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            check_cancellation(cancellation.as_ref())?;
+            enigo.modifiers(&modifiers)?;
             enigo
-                .move_mouse(from_x as i32, from_y as i32, Coordinate::Abs)
+                .move_mouse(
+                    i32::try_from(from_x)?,
+                    i32::try_from(from_y)?,
+                    Coordinate::Abs,
+                )
                 .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
             enigo
                 .button(button, enigo::Direction::Press)
                 .map_err(|e| flow_like_types::anyhow!("Failed to press mouse: {}", e))?;
             enigo
-                .move_mouse(to_x as i32, to_y as i32, Coordinate::Abs)
+                .move_mouse(i32::try_from(to_x)?, i32::try_from(to_y)?, Coordinate::Abs)
                 .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
             enigo
                 .button(button, enigo::Direction::Release)
                 .map_err(|e| flow_like_types::anyhow!("Failed to release mouse: {}", e))?;
-        }
 
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -1216,6 +1239,7 @@ impl NodeLogic for ComputerScrollNode {
             "Scrolls the mouse wheel",
             "Automation/Computer/Mouse",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "scroll");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -1277,27 +1301,45 @@ impl NodeLogic for ComputerScrollNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let dx: i64 = context.evaluate_pin("dx").await?;
         let dy: i64 = context.evaluate_pin("dy").await?;
+        if dx.unsigned_abs() > 1000 || dy.unsigned_abs() > 1000 {
+            return Err(flow_like_types::anyhow!(
+                "Scroll amount must be between -1000 and 1000 ticks"
+            ));
+        }
 
         // Send individual scroll ticks with small delays to ensure
         // browsers and other apps process each event correctly.
         // A single large scroll event is often ignored or misinterpreted.
         let tick_delay = std::time::Duration::from_millis(15);
-        let session_clone = session.clone();
+        let mut enigo = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
 
         flow_like_types::tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
-            let mut enigo = session_clone.create_enigo()?;
             let dy_dir: i32 = if dy > 0 { 1 } else { -1 };
             let dx_dir: i32 = if dx > 0 { 1 } else { -1 };
 
             for _ in 0..dy.unsigned_abs() {
+                if cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    return Err(flow_like_types::anyhow!("Automation cancelled"));
+                }
                 enigo
                     .scroll(dy_dir, Axis::Vertical)
                     .map_err(|e| flow_like_types::anyhow!("Failed to scroll vertically: {}", e))?;
                 std::thread::sleep(tick_delay);
             }
             for _ in 0..dx.unsigned_abs() {
+                if cancellation
+                    .as_ref()
+                    .is_some_and(|token| token.is_cancelled())
+                {
+                    return Err(flow_like_types::anyhow!("Automation cancelled"));
+                }
                 enigo.scroll(dx_dir, Axis::Horizontal).map_err(|e| {
                     flow_like_types::anyhow!("Failed to scroll horizontally: {}", e)
                 })?;
@@ -1308,6 +1350,7 @@ impl NodeLogic for ComputerScrollNode {
         .await
         .map_err(|e| flow_like_types::anyhow!("Scroll task failed: {}", e))??;
 
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -1319,5 +1362,40 @@ impl NodeLogic for ComputerScrollNode {
         Err(flow_like_types::anyhow!(
             "Computer automation requires the 'execute' feature"
         ))
+    }
+}
+
+#[cfg(feature = "execute")]
+fn parse_button(value: &str) -> flow_like_types::Result<enigo::Button> {
+    match value.to_lowercase().as_str() {
+        "left" => Ok(enigo::Button::Left),
+        "right" => Ok(enigo::Button::Right),
+        "middle" => Ok(enigo::Button::Middle),
+        _ => Err(flow_like_types::anyhow!("Unknown mouse button: {}", value)),
+    }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn check_cancellation(
+    token: Option<&flow_like_types::tokio_util::sync::CancellationToken>,
+) -> flow_like_types::Result<()> {
+    if token.is_some_and(|token| token.is_cancelled()) {
+        return Err(flow_like_types::anyhow!("Automation cancelled"));
+    }
+    Ok(())
+}
+#[cfg(feature = "execute")]
+pub(crate) fn interruptible_sleep(
+    ms: u64,
+    token: Option<&flow_like_types::tokio_util::sync::CancellationToken>,
+) -> flow_like_types::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        check_cancellation(token)?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(10)));
     }
 }

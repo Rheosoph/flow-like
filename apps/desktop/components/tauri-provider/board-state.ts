@@ -103,10 +103,7 @@ import {
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import { desktopPlatform } from "../../lib/platform";
-import {
-	ensureRpaSystemPermissions,
-	requestRpaAutomationConsent,
-} from "../rpa";
+import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import {
 	getRemoteBoardSkipReason,
@@ -1760,24 +1757,13 @@ export class BoardState implements IBoardState {
 					appId,
 					boardId,
 					context: "execution",
+					version: normalizeBoardVersion(payload.version),
 				});
 				if (!approved) {
 					const error = new Error(
 						"Computer automation was not approved for this board.",
 					) as Error & { isRpaConsentError?: boolean };
 					error.isRpaConsentError = true;
-					throw error;
-				}
-
-				const permissionsGranted = await ensureRpaSystemPermissions({
-					appId,
-					boardId,
-				});
-				if (!permissionsGranted) {
-					const error = new Error(
-						"RPA system permissions were not granted.",
-					) as Error & { isRpaPermissionDeclined?: boolean };
-					error.isRpaPermissionDeclined = true;
 					throw error;
 				}
 			} catch (e) {

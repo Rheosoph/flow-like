@@ -77,7 +77,8 @@ impl NodeLogic for BrowserGotoNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let session: AutomationSession = context.evaluate_pin("session").await?;
+        let mut session: AutomationSession = context.evaluate_pin("session").await?;
+        session.browser_frame_selectors.clear();
         let url: String = context.evaluate_pin("url").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
@@ -170,7 +171,8 @@ impl NodeLogic for BrowserBackNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let session: AutomationSession = context.evaluate_pin("session").await?;
+        let mut session: AutomationSession = context.evaluate_pin("session").await?;
+        session.browser_frame_selectors.clear();
         let driver = session.get_browser_driver_and_switch(context).await?;
 
         driver
@@ -253,7 +255,8 @@ impl NodeLogic for BrowserForwardNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let session: AutomationSession = context.evaluate_pin("session").await?;
+        let mut session: AutomationSession = context.evaluate_pin("session").await?;
+        session.browser_frame_selectors.clear();
         let driver = session.get_browser_driver_and_switch(context).await?;
 
         driver
@@ -336,7 +339,8 @@ impl NodeLogic for BrowserReloadNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let session: AutomationSession = context.evaluate_pin("session").await?;
+        let mut session: AutomationSession = context.evaluate_pin("session").await?;
+        session.browser_frame_selectors.clear();
         let driver = session.get_browser_driver_and_switch(context).await?;
 
         driver

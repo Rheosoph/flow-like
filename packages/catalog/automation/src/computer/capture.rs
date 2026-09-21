@@ -28,6 +28,7 @@ impl NodeLogic for ComputerScreenshotNode {
             "Takes a screenshot of the screen, window, or region",
             "Automation/Computer/Capture",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "screenshot");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -73,7 +74,7 @@ impl NodeLogic for ComputerScreenshotNode {
         node.add_input_pin(
             "display_index",
             "Display Index",
-            "Index of display to capture (when capture_type=display)",
+            "Index of display for display or region capture",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -147,6 +148,7 @@ impl NodeLogic for ComputerScreenshotNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let capture_type: String = context.evaluate_pin("capture_type").await?;
         let display_index: i64 = context.evaluate_pin("display_index").await?;
         let region_x: i64 = context.evaluate_pin("region_x").await?;
@@ -163,34 +165,50 @@ impl NodeLogic for ComputerScreenshotNode {
                     let monitor = monitors.get(display_index as usize).ok_or_else(|| {
                         flow_like_types::anyhow!("Display index {} not found", display_index)
                     })?;
-                    monitor
-                        .capture_image()
+                    crate::types::screen_match::capture_monitor(&monitor)
                         .map_err(|e| flow_like_types::anyhow!("Failed to capture display: {}", e))?
                 }
                 "region" => {
-                    let monitor = monitors
-                        .first()
-                        .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-                    let full_image = monitor
-                        .capture_image()
+                    let monitor = monitors.get(display_index as usize).ok_or_else(|| {
+                        flow_like_types::anyhow!("Display index {} not found", display_index)
+                    })?;
+                    let full_image = crate::types::screen_match::capture_monitor(&monitor)
                         .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
                     let img_w = full_image.width();
                     let img_h = full_image.height();
-                    let x = (region_x.max(0) as u32).min(img_w.saturating_sub(1));
-                    let y = (region_y.max(0) as u32).min(img_h.saturating_sub(1));
-                    let w = (region_width.max(1) as u32).min(img_w.saturating_sub(x));
-                    let h = (region_height.max(1) as u32).min(img_h.saturating_sub(y));
+                    if region_x < 0
+                        || region_y < 0
+                        || region_width <= 0
+                        || region_height <= 0
+                        || region_x
+                            .checked_add(region_width)
+                            .is_none_or(|end| end > img_w as i64)
+                        || region_y
+                            .checked_add(region_height)
+                            .is_none_or(|end| end > img_h as i64)
+                    {
+                        return Err(flow_like_types::anyhow!(
+                            "Capture region must fit within the selected display's screenshot pixels"
+                        ));
+                    }
+                    let (x, y, w, h) = (
+                        region_x as u32,
+                        region_y as u32,
+                        region_width as u32,
+                        region_height as u32,
+                    );
 
                     let cropped = image::imageops::crop_imm(&full_image, x, y, w, h);
                     cropped.to_image()
                 }
                 _ => {
                     let monitor = monitors
-                        .first()
+                        .iter()
+                        .find(|m| m.is_primary().unwrap_or(false))
+                        .or_else(|| monitors.first())
                         .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-                    monitor
-                        .capture_image()
+                    crate::types::screen_match::capture_monitor(&monitor)
                         .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?
                 }
             }
@@ -220,7 +238,11 @@ impl NodeLogic for ComputerScreenshotNode {
             .put(&flow_like_storage::Path::from(path.clone()), payload)
             .await?;
 
-        let flow_path = FlowPath::new(path, "temporary".to_string(), None);
+        let store_ref = format!("automation_screenshot_store_{}", artifact_id);
+        context
+            .set_cache(&store_ref, std::sync::Arc::new(store.clone()))
+            .await;
+        let flow_path = FlowPath::new(path, store_ref, None);
         let artifact = ArtifactRef::new(
             artifact_id,
             ArtifactType::Screenshot,

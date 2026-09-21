@@ -25,6 +25,7 @@ impl NodeLogic for LocateByTemplateNode {
             "Finds an element on screen using template matching",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "locateTemplate");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -59,6 +60,14 @@ impl NodeLogic for LocateByTemplateNode {
         .set_default_value(Some(json!("")));
 
         node.add_input_pin(
+            "template",
+            "Template",
+            "Template image from any FlowPath store; preferred over a local path",
+            VariableType::Struct,
+        )
+        .set_schema::<flow_like_catalog_core::FlowPath>();
+
+        node.add_input_pin(
             "confidence",
             "Confidence",
             "Minimum match confidence (0.0-1.0)",
@@ -87,24 +96,20 @@ impl NodeLogic for LocateByTemplateNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use rustautogui::MatchMode;
-
         context.deactivate_exec_pin("exec_found").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let template_path: String = context.evaluate_pin("template_path").await?;
+        session.ensure_active(context).await?;
+        let template_bytes = crate::types::screen_match::load_template(context).await?;
         let confidence: f64 = context.evaluate_pin("confidence").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let mut gui = autogui.lock().await;
-
-        gui.prepare_template_from_file(&template_path, None, MatchMode::Segmented)
-            .map_err(|e| flow_like_types::anyhow!("Failed to prepare template: {}", e))?;
-
-        match gui.find_image_on_screen(confidence as f32) {
-            Ok(Some(matches)) if !matches.is_empty() => {
-                let (x, y, _conf) = matches[0];
+        let matches =
+            crate::types::screen_match::match_desktop_async(template_bytes.clone(), confidence, -2)
+                .await?;
+        match matches.first() {
+            Some(&(px, py, _)) => {
+                let (x, y) = (px, py);
                 context.set_pin_value("x", json!(x as i64)).await?;
                 context.set_pin_value("y", json!(y as i64)).await?;
                 context.activate_exec_pin("exec_found").await?;
@@ -146,6 +151,7 @@ impl NodeLogic for LocateByColorNode {
             "Finds a pixel on screen matching a specific color",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "locateColor");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -225,42 +231,53 @@ impl NodeLogic for LocateByColorNode {
         context.deactivate_exec_pin("exec_not_found").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let red: i64 = context.evaluate_pin("red").await?;
         let green: i64 = context.evaluate_pin("green").await?;
         let blue: i64 = context.evaluate_pin("blue").await?;
         let tolerance: i64 = context.evaluate_pin("tolerance").await?;
 
-        let found_pos = {
-            let monitors = Monitor::all()
-                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-            let monitor = monitors
-                .first()
-                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-            let image = monitor
-                .capture_image()
-                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
-
-            let mut found: Option<(u32, u32)> = None;
-            'outer: for y in 0..image.height() {
-                for x in 0..image.width() {
-                    let pixel = image.get_pixel(x, y);
-                    let r = pixel[0] as i64;
-                    let g = pixel[1] as i64;
-                    let b = pixel[2] as i64;
-                    if (r - red).abs() <= tolerance
-                        && (g - green).abs() <= tolerance
-                        && (b - blue).abs() <= tolerance
-                    {
-                        found = Some((x, y));
-                        break 'outer;
-                    }
+        if [red, green, blue, tolerance]
+            .iter()
+            .any(|v| !(0..=255).contains(v))
+        {
+            return Err(flow_like_types::anyhow!(
+                "Color channels and tolerance must be between 0 and 255"
+            ));
+        }
+        let mut found_pos = None;
+        'displays: for monitor in Monitor::all()? {
+            let image = crate::types::screen_match::capture_monitor(&monitor)?;
+            let (ox, oy, w, h) = crate::types::screen_match::monitor_input_bounds(&monitor)?;
+            if w == 0 || h == 0 {
+                continue;
+            }
+            for (x, y, pixel) in image.enumerate_pixels() {
+                if (i64::from(pixel[0]) - red).abs() <= tolerance
+                    && (i64::from(pixel[1]) - green).abs() <= tolerance
+                    && (i64::from(pixel[2]) - blue).abs() <= tolerance
+                {
+                    let (dx, _) = crate::types::screen_match::map_capture_point(
+                        x,
+                        0,
+                        (ox as f64, 0.0),
+                        image.width() as f64 / w as f64,
+                    )?;
+                    let (_, dy) = crate::types::screen_match::map_capture_point(
+                        0,
+                        y,
+                        (0.0, oy as f64),
+                        image.height() as f64 / h as f64,
+                    )?;
+                    found_pos = Some((dx, dy));
+                    break 'displays;
                 }
             }
-            found
-        };
+        }
 
         match found_pos {
-            Some((x, y)) => {
+            Some((px, py)) => {
+                let (x, y) = (px, py);
                 context.set_pin_value("x", json!(x as i64)).await?;
                 context.set_pin_value("y", json!(y as i64)).await?;
                 context.activate_exec_pin("exec_found").await?;

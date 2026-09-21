@@ -344,6 +344,7 @@ struct ReportRunRequest {
 
 #[derive(Default)]
 struct ExecutionOverrides {
+    require_remembered_automation_approval: bool,
     cancellation_token: Option<CancellationToken>,
     cancellation_log_level: Option<LogLevel>,
     cancellation_log_message: Option<String>,
@@ -724,6 +725,15 @@ async fn execute_prepared(
     };
 
     let app_handle_for_report = app_handle.clone();
+    crate::functions::automation_approval::ensure_automation_approved(
+        &app_handle,
+        &app_id,
+        &template.board,
+        event_id.as_deref(),
+        !overrides.require_remembered_automation_approval,
+        &profile.hub_profile,
+    )
+    .await?;
     crate::e2e_runtime::require_isolated_run(
         &app,
         &template.board,
@@ -1074,6 +1084,7 @@ pub(crate) async fn execute_daemon_event(
         token,
         oauth_tokens,
         ExecutionOverrides {
+            require_remembered_automation_approval: true,
             cancellation_token: Some(cancellation_token),
             cancellation_log_level: Some(LogLevel::Info),
             cancellation_log_message: Some("Daemon run stopped".to_string()),

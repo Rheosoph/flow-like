@@ -875,6 +875,25 @@ impl EventSinkManager {
             }
         };
 
+        let state = crate::state::TauriFlowLikeState::construct(app_handle).await?;
+        let template = crate::functions::flow::run::resolve_run_template(
+            &state,
+            app_id,
+            &event.board_id,
+            event.board_version,
+        )
+        .await?;
+        let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
+        crate::functions::automation_approval::ensure_automation_approved(
+            app_handle,
+            app_id,
+            &template.board,
+            Some(&event.id),
+            false,
+            &profile.hub_profile,
+        )
+        .await?;
+
         // New credentials win; otherwise those of the existing registration or,
         // after a decline, the stashed ones carry over.
         let existing = self.storage.get_registration(&event.id)?;

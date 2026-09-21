@@ -27,6 +27,7 @@ impl NodeLogic for ClipboardGetTextNode {
             "Gets the current text content from the system clipboard",
             "Automation/Computer/Clipboard",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "clipboardGetText");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -86,6 +87,7 @@ impl NodeLogic for ClipboardGetTextNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
 
         let result = std::thread::spawn(|| {
             let mut clipboard = Clipboard::new()?;
@@ -139,6 +141,7 @@ impl NodeLogic for ClipboardGetImageNode {
             "Gets an image from the system clipboard if available",
             "Automation/Computer/Clipboard",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "clipboardGetImage");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -207,6 +210,7 @@ impl NodeLogic for ClipboardGetImageNode {
         context.deactivate_exec_pin("exec_no_image").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
 
         let result = std::thread::spawn(|| {
             let mut clipboard = Clipboard::new()?;

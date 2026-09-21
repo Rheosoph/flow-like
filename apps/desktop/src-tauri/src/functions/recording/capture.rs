@@ -5,11 +5,14 @@ use flow_like_types::tokio::sync::{RwLock, mpsc};
 use serde::{Deserialize, Serialize};
 
 use super::fingerprint::extract_fingerprint_at;
-use super::screenshot::capture_region;
+use super::screenshot::{capture_region_image, store_region};
+use super::state::RecordingSettings;
 use super::state::{
     ActionMetadata, ActionType, KeyModifier, MouseButton, RecordedAction, RecordingStateInner,
-    RecordingStatus, ScrollDirection,
+    ScrollDirection,
 };
+use crate::functions::TauriFunctionError;
+use chrono::{DateTime, Utc};
 
 /// Push a recorded action to the frontend. The capture loop runs on a tokio worker and fires per
 /// input event, so it must never emit directly: `Emitter::emit` would hold Tauri's `webviews_lock`
@@ -19,15 +22,100 @@ fn emit_recorded_action(app_handle: &tauri::AppHandle, action: &RecordedAction) 
     crate::utils::emit_to_ui(app_handle, "recording:action", action.clone());
 }
 
+struct ClipboardRequest {
+    deadline: std::time::Instant,
+    reply: std::sync::mpsc::SyncSender<Option<String>>,
+}
+
+struct ClipboardReader {
+    requests: std::sync::mpsc::SyncSender<ClipboardRequest>,
+    busy: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ClipboardReader {
+    fn new(mut read: impl FnMut() -> Option<String> + Send + 'static) -> std::io::Result<Self> {
+        let (requests, receiver) = std::sync::mpsc::sync_channel::<ClipboardRequest>(1);
+        let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_busy = busy.clone();
+        std::thread::Builder::new()
+            .name("recording-clipboard".into())
+            .spawn(move || {
+                while let Ok(request) = receiver.recv() {
+                    let value = if std::time::Instant::now() < request.deadline {
+                        read()
+                    } else {
+                        None
+                    };
+                    if std::time::Instant::now() < request.deadline {
+                        let _ = request.reply.try_send(value);
+                    }
+                    worker_busy.store(false, std::sync::atomic::Ordering::Release);
+                }
+            })?;
+        Ok(Self { requests, busy })
+    }
+
+    fn snapshot(&self, timeout: std::time::Duration) -> Option<String> {
+        if self
+            .busy
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return None;
+        }
+        let (reply, receiver) = std::sync::mpsc::sync_channel(1);
+        let deadline = std::time::Instant::now() + timeout;
+        if self
+            .requests
+            .try_send(ClipboardRequest { deadline, reply })
+            .is_err()
+        {
+            self.busy.store(false, std::sync::atomic::Ordering::Release);
+            return None;
+        }
+        let value = receiver.recv_timeout(timeout).ok().flatten();
+        (std::time::Instant::now() < deadline)
+            .then_some(value)
+            .flatten()
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn clipboard_reader() -> Option<&'static ClipboardReader> {
+    static READER: std::sync::OnceLock<Option<ClipboardReader>> = std::sync::OnceLock::new();
+    READER
+        .get_or_init(|| {
+            ClipboardReader::new(|| {
+                arboard::Clipboard::new()
+                    .ok()
+                    .and_then(|mut clipboard| clipboard.get_text().ok())
+            })
+            .ok()
+        })
+        .as_ref()
+}
+
 /// Track the currently focused window
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FocusedWindow {
+    pub id: String,
     pub title: String,
     pub process: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CapturedEvent {
+    Unsupported {
+        message: String,
+    },
+    Browser {
+        action: ActionType,
+    },
     MouseDown {
         x: i32,
         y: i32,
@@ -59,83 +147,439 @@ pub enum CapturedEvent {
     Character {
         ch: char,
     },
+    Text {
+        text: String,
+    },
     WindowFocusChanged {
         title: String,
         process: String,
     },
 }
 
-pub struct EventCapture {
-    _tx: mpsc::Sender<CapturedEvent>,
-    active: Arc<std::sync::atomic::AtomicBool>,
+#[derive(Clone)]
+struct ClickTarget {
+    screenshot: Option<image::DynamicImage>,
+    fingerprint: Option<super::state::RecordedFingerprint>,
 }
 
-/// Shared sender for the singleton rdev listener thread.
-/// The rdev thread is spawned once and reused across recording sessions,
-/// because `rdev::listen()` blocks forever and cannot be cancelled.
-static RDEV_SENDER: std::sync::OnceLock<std::sync::Mutex<Option<mpsc::Sender<CapturedEvent>>>> =
-    std::sync::OnceLock::new();
+struct TargetPreview {
+    coordinates: (i32, i32),
+    focused: Option<FocusedWindow>,
+    captured_at: std::time::Instant,
+    target: ClickTarget,
+}
+
+type PreviewCache = Arc<std::sync::Mutex<Option<TargetPreview>>>;
+type FocusCache = Arc<std::sync::Mutex<Option<(std::time::Instant, Option<FocusedWindow>)>>>;
+
+fn cached_focus(cache: &FocusCache) -> Option<FocusedWindow> {
+    cache
+        .try_lock()
+        .ok()?
+        .as_ref()
+        .filter(|(captured_at, _)| captured_at.elapsed() < std::time::Duration::from_millis(500))
+        .and_then(|(_, focused)| focused.clone())
+}
+
+pub(super) struct InputEvent {
+    event: CapturedEvent,
+    timestamp: DateTime<Utc>,
+    focused: Option<FocusedWindow>,
+    target: Option<ClickTarget>,
+    clipboard: Option<String>,
+}
+
+impl InputEvent {
+    pub(super) fn browser(action: ActionType, timestamp: DateTime<Utc>) -> Self {
+        Self {
+            event: CapturedEvent::Browser { action },
+            timestamp,
+            focused: None,
+            target: None,
+            clipboard: None,
+        }
+    }
+}
+
+pub(super) enum CaptureMessage {
+    Input(InputEvent),
+    Flush(flow_like_types::tokio::sync::oneshot::Sender<()>),
+}
+
+#[derive(Clone)]
+struct CaptureTarget {
+    id: String,
+    tx: mpsc::UnboundedSender<CaptureMessage>,
+    active: Arc<std::sync::atomic::AtomicBool>,
+    settings: RecordingSettings,
+    preview: PreviewCache,
+    focused: FocusCache,
+    app_handle: tauri::AppHandle,
+}
+
+#[derive(Default)]
+struct ListenerState {
+    target: Option<CaptureTarget>,
+    running: bool,
+    error: Option<String>,
+}
+
+static LISTENER: std::sync::OnceLock<std::sync::Mutex<ListenerState>> = std::sync::OnceLock::new();
+
+pub struct EventCapture {
+    id: String,
+    tx: Option<mpsc::UnboundedSender<CaptureMessage>>,
+    active: Arc<std::sync::atomic::AtomicBool>,
+    processor: Option<flow_like_types::tokio::task::JoinHandle<()>>,
+    browser: Option<super::browser::BrowserCapture>,
+    preview_stop: Arc<std::sync::atomic::AtomicBool>,
+    preview_task: Option<flow_like_types::tokio::task::JoinHandle<()>>,
+    focus_task: Option<flow_like_types::tokio::task::JoinHandle<()>>,
+}
 
 impl EventCapture {
-    pub fn new(
+    pub async fn new(
         state: Arc<RwLock<RecordingStateInner>>,
         app_handle: tauri::AppHandle,
         store: Option<Arc<FlowLikeStore>>,
-    ) -> Self {
-        tracing::debug!("Creating new EventCapture instance");
-
-        let (tx, rx) = mpsc::channel::<CapturedEvent>(10000);
+        settings: RecordingSettings,
+    ) -> Result<Self, TauriFunctionError> {
+        let (tx, rx) = mpsc::unbounded_channel();
         let active = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let active_clone = active.clone();
-
-        // Install/replace the sender in the singleton rdev thread.
-        // The first call spawns the thread; subsequent calls just swap the sender.
-        let sender_slot = RDEV_SENDER.get_or_init(|| {
-            let slot = std::sync::Mutex::new(Some(tx.clone()));
-            let slot_ref = &RDEV_SENDER;
-
-            tracing::debug!("Spawning singleton rdev listener thread");
-            std::thread::spawn(move || {
-                // Wait until the slot is initialized by OnceLock
-                loop {
-                    if let Some(s) = slot_ref.get() {
-                        Self::start_event_loop_shared(s, active_clone);
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                tracing::warn!("rdev listener thread exited unexpectedly");
-            });
-
-            slot
-        });
-
-        // Replace the sender for subsequent sessions
-        if let Ok(mut guard) = sender_slot.lock() {
-            *guard = Some(tx.clone());
+        let preview = PreviewCache::default();
+        let focused = FocusCache::default();
+        let preview_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let id = flow_like_types::create_id();
+        let listener = LISTENER.get_or_init(Default::default);
+        let browser_recording = settings
+            .browser_debugger_address
+            .as_ref()
+            .is_some_and(|address| !address.trim().is_empty());
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        if !browser_recording {
+            let _ = clipboard_reader();
         }
-
-        let state_for_processor = state;
-        let active_for_processor = active.clone();
-        tracing::debug!("Spawning event processor task...");
-        flow_like_types::tokio::spawn(async move {
-            Self::process_events(
-                rx,
-                state_for_processor,
-                active_for_processor,
-                app_handle,
-                store,
+        let start_listener = if browser_recording {
+            false
+        } else {
+            let mut listener = listener
+                .lock()
+                .map_err(|_| TauriFunctionError::new("Input listener lock failed"))?;
+            listener.target = Some(CaptureTarget {
+                id: id.clone(),
+                tx: tx.clone(),
+                active: active.clone(),
+                settings: settings.clone(),
+                preview: preview.clone(),
+                focused: focused.clone(),
+                app_handle: app_handle.clone(),
+            });
+            if listener.running {
+                false
+            } else {
+                listener.running = true;
+                listener.error = None;
+                true
+            }
+        };
+        if start_listener {
+            std::thread::spawn(Self::start_event_loop_shared);
+            // Native hook failures return immediately. Permission preflight happens before this call.
+            flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let error = listener
+                .lock()
+                .ok()
+                .and_then(|listener| listener.error.clone());
+            if let Some(error) = error {
+                if let Ok(mut listener) = listener.lock() {
+                    listener.target = None;
+                }
+                return Err(TauriFunctionError::new(&error));
+            }
+        }
+        let browser = if let Some(address) = settings
+            .browser_debugger_address
+            .as_deref()
+            .filter(|address| !address.trim().is_empty())
+        {
+            match super::browser::BrowserCapture::start(
+                address,
+                &settings.browser_webdriver_url,
+                &settings.browser_type,
+                tx.clone(),
+                active.clone(),
+                app_handle.clone(),
             )
-            .await;
-        });
-
-        Self { _tx: tx, active }
+            .await
+            {
+                Ok(browser) => Some(browser),
+                Err(error) => {
+                    if let Ok(mut listener) = listener.lock() {
+                        listener.target = None;
+                    }
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        let focus_task = if !browser_recording {
+            let cache = focused.clone();
+            let stopped = preview_stop.clone();
+            let active = active.clone();
+            let focus_app = app_handle.clone();
+            Some(flow_like_types::tokio::spawn(async move {
+                let mut reported_unavailable = false;
+                while !stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                    if active.load(std::sync::atomic::Ordering::SeqCst) {
+                        let current =
+                            flow_like_types::tokio::task::spawn_blocking(Self::get_focused_window)
+                                .await
+                                .ok()
+                                .flatten();
+                        if !stopped.load(std::sync::atomic::Ordering::SeqCst)
+                            && active.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            if current.is_none() && !reported_unavailable {
+                                crate::utils::emit_to_ui(
+                                    &focus_app,
+                                    "recording:error",
+                                    "Focused window identity is unavailable. Add an explicit Focus Window step before replaying actions in that window.",
+                                );
+                            }
+                            reported_unavailable = current.is_none();
+                        }
+                        if !stopped.load(std::sync::atomic::Ordering::SeqCst)
+                            && let Ok(mut cache) = cache.lock()
+                        {
+                            *cache = Some((std::time::Instant::now(), current));
+                        }
+                    }
+                    flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }))
+        } else {
+            None
+        };
+        let preview_task = if !browser_recording
+            && (settings.capture_screenshots || settings.capture_fingerprints)
+        {
+            let active = active.clone();
+            let stopped = preview_stop.clone();
+            Some(flow_like_types::tokio::spawn(async move {
+                while !stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                    if active.load(std::sync::atomic::Ordering::SeqCst) {
+                        let settings = settings.clone();
+                        let focused = cached_focus(&focused);
+                        let sample = flow_like_types::tokio::task::spawn_blocking(move || {
+                            let coordinates = Self::get_mouse_location()?;
+                            if focused.as_ref().is_some_and(|window| {
+                                is_ignored_process(&window.process, &settings)
+                            }) {
+                                return None;
+                            }
+                            let captured_at = std::time::Instant::now();
+                            let target = ClickTarget {
+                                screenshot: settings
+                                    .capture_screenshots
+                                    .then(|| {
+                                        capture_region_image(
+                                            coordinates.0,
+                                            coordinates.1,
+                                            settings.capture_region_size,
+                                        )
+                                        .ok()
+                                    })
+                                    .flatten(),
+                                fingerprint: settings
+                                    .capture_fingerprints
+                                    .then(|| extract_fingerprint_at(coordinates.0, coordinates.1))
+                                    .flatten(),
+                            };
+                            Some(TargetPreview {
+                                coordinates,
+                                focused,
+                                captured_at,
+                                target,
+                            })
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        if !stopped.load(std::sync::atomic::Ordering::SeqCst)
+                            && active.load(std::sync::atomic::Ordering::SeqCst)
+                            && let Ok(mut cached) = preview.lock()
+                        {
+                            *cached = sample;
+                        }
+                    }
+                    flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(100))
+                        .await;
+                }
+            }))
+        } else {
+            None
+        };
+        let processor =
+            flow_like_types::tokio::spawn(Self::process_events(rx, state, app_handle, store));
+        Ok(Self {
+            id,
+            tx: Some(tx),
+            active,
+            processor: Some(processor),
+            browser,
+            preview_stop,
+            preview_task,
+            focus_task,
+        })
     }
 
     pub fn set_active(&self, active: bool) {
-        tracing::debug!("set_active({})", active);
         self.active
             .store(active, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub async fn flush(&self) {
+        let (tx, rx) = flow_like_types::tokio::sync::oneshot::channel();
+        if self
+            .tx
+            .as_ref()
+            .is_some_and(|sender| sender.send(CaptureMessage::Flush(tx)).is_ok())
+        {
+            let _ = rx.await;
+        }
+    }
+
+    pub async fn finish(mut self) {
+        self.set_active(false);
+        self.preview_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        for mut task in [self.preview_task.take(), self.focus_task.take()]
+            .into_iter()
+            .flatten()
+        {
+            if flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(1), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+            }
+        }
+        if let Some(browser) = self.browser.take() {
+            browser.finish().await;
+        }
+        self.disconnect();
+        if let Some(processor) = self.processor.take() {
+            let _ = processor.await;
+        }
+    }
+
+    fn disconnect(&mut self) {
+        self.set_active(false);
+        self.preview_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        for task in [self.preview_task.take(), self.focus_task.take()]
+            .into_iter()
+            .flatten()
+        {
+            task.abort();
+        }
+        if let Some(listener) = LISTENER.get()
+            && let Ok(mut listener) = listener.lock()
+            && listener
+                .target
+                .as_ref()
+                .is_some_and(|target| target.id == self.id)
+        {
+            listener.target = None;
+        }
+        self.tx.take();
+    }
+
+    fn dispatch(event: CapturedEvent) {
+        if matches!(
+            event,
+            CapturedEvent::KeyUp { .. } | CapturedEvent::MouseMove { .. }
+        ) {
+            return;
+        }
+        let target = LISTENER
+            .get()
+            .and_then(|listener| listener.lock().ok()?.target.clone());
+        let Some(target) = target else {
+            return;
+        };
+        if is_stop_shortcut(&event) {
+            target
+                .active
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            let app_handle = target.app_handle.clone();
+            drop(target);
+            tauri::async_runtime::spawn(async move {
+                let _ = super::stop_recording(app_handle).await;
+            });
+            return;
+        }
+        if !target.active.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        if let CapturedEvent::Unsupported { message } = event {
+            crate::utils::emit_to_ui(&target.app_handle, "recording:error", message);
+            return;
+        }
+        if target
+            .settings
+            .browser_debugger_address
+            .as_ref()
+            .is_some_and(|address| !address.trim().is_empty())
+        {
+            return;
+        }
+        let timestamp = Utc::now();
+        let focused = cached_focus(&target.focused);
+        if focused
+            .as_ref()
+            .is_some_and(|window| is_ignored_process(&window.process, &target.settings))
+        {
+            return;
+        }
+        // Only use a sample completed before MouseDown. The input hook never waits for screen or AX APIs.
+        let click_target = if let CapturedEvent::MouseDown { x, y, .. } = &event {
+            target.preview.lock().ok().and_then(|preview| {
+                preview
+                    .as_ref()
+                    .filter(|preview| {
+                        preview.coordinates == (*x, *y)
+                            && preview.focused == focused
+                            && preview.captured_at.elapsed() < std::time::Duration::from_millis(500)
+                    })
+                    .map(|preview| preview.target.clone())
+            })
+        } else {
+            None
+        };
+        let clipboard = if is_paste_shortcut(&event) {
+            let snapshot = Self::get_clipboard_text();
+            if snapshot.is_none() {
+                crate::utils::emit_to_ui(
+                    &target.app_handle,
+                    "recording:error",
+                    "Clipboard text was unavailable within the recording deadline. The paste shortcut was recorded; replay will use the clipboard available at that step.",
+                );
+            }
+            snapshot
+        } else {
+            None
+        };
+        if target.active.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = target.tx.send(CaptureMessage::Input(InputEvent {
+                event,
+                timestamp,
+                focused,
+                target: click_target,
+                clipboard,
+            }));
+        }
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -257,69 +701,11 @@ impl EventCapture {
         }
     }
 
-    /// Fallback character mapping using physical key positions (US QWERTY).
-    /// Only used when the OS-provided `event.name` is unavailable.
-    /// Note: on non-US layouts some keys (e.g. Y/Z on QWERTZ) may be swapped;
-    /// shift+symbol mappings are intentionally omitted because they are
-    /// layout-dependent.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    fn key_to_char_fallback(key: &rdev::Key, is_shift_held: bool) -> Option<char> {
+    fn key_to_char_fallback(key: &rdev::Key, _is_shift_held: bool) -> Option<char> {
         use rdev::Key;
         match key {
-            // Letters — shift only toggles case (universal across layouts)
-            Key::KeyA => Some(if is_shift_held { 'A' } else { 'a' }),
-            Key::KeyB => Some(if is_shift_held { 'B' } else { 'b' }),
-            Key::KeyC => Some(if is_shift_held { 'C' } else { 'c' }),
-            Key::KeyD => Some(if is_shift_held { 'D' } else { 'd' }),
-            Key::KeyE => Some(if is_shift_held { 'E' } else { 'e' }),
-            Key::KeyF => Some(if is_shift_held { 'F' } else { 'f' }),
-            Key::KeyG => Some(if is_shift_held { 'G' } else { 'g' }),
-            Key::KeyH => Some(if is_shift_held { 'H' } else { 'h' }),
-            Key::KeyI => Some(if is_shift_held { 'I' } else { 'i' }),
-            Key::KeyJ => Some(if is_shift_held { 'J' } else { 'j' }),
-            Key::KeyK => Some(if is_shift_held { 'K' } else { 'k' }),
-            Key::KeyL => Some(if is_shift_held { 'L' } else { 'l' }),
-            Key::KeyM => Some(if is_shift_held { 'M' } else { 'm' }),
-            Key::KeyN => Some(if is_shift_held { 'N' } else { 'n' }),
-            Key::KeyO => Some(if is_shift_held { 'O' } else { 'o' }),
-            Key::KeyP => Some(if is_shift_held { 'P' } else { 'p' }),
-            Key::KeyQ => Some(if is_shift_held { 'Q' } else { 'q' }),
-            Key::KeyR => Some(if is_shift_held { 'R' } else { 'r' }),
-            Key::KeyS => Some(if is_shift_held { 'S' } else { 's' }),
-            Key::KeyT => Some(if is_shift_held { 'T' } else { 't' }),
-            Key::KeyU => Some(if is_shift_held { 'U' } else { 'u' }),
-            Key::KeyV => Some(if is_shift_held { 'V' } else { 'v' }),
-            Key::KeyW => Some(if is_shift_held { 'W' } else { 'w' }),
-            Key::KeyX => Some(if is_shift_held { 'X' } else { 'x' }),
-            Key::KeyY => Some(if is_shift_held { 'Y' } else { 'y' }),
-            Key::KeyZ => Some(if is_shift_held { 'Z' } else { 'z' }),
-
-            // Number row — no shift-symbol mapping (layout-dependent)
-            Key::Num0 => Some('0'),
-            Key::Num1 => Some('1'),
-            Key::Num2 => Some('2'),
-            Key::Num3 => Some('3'),
-            Key::Num4 => Some('4'),
-            Key::Num5 => Some('5'),
-            Key::Num6 => Some('6'),
-            Key::Num7 => Some('7'),
-            Key::Num8 => Some('8'),
-            Key::Num9 => Some('9'),
-
             Key::Space => Some(' '),
-            Key::Comma => Some(','),
-            Key::Dot => Some('.'),
-            Key::SemiColon => Some(';'),
-            Key::Quote => Some('\''),
-            Key::BackQuote => Some('`'),
-            Key::Slash => Some('/'),
-            Key::BackSlash => Some('\\'),
-            Key::LeftBracket => Some('['),
-            Key::RightBracket => Some(']'),
-            Key::Minus => Some('-'),
-            Key::Equal => Some('='),
-
-            // Keypad keys are layout-independent
             Key::Kp0 => Some('0'),
             Key::Kp1 => Some('1'),
             Key::Kp2 => Some('2'),
@@ -334,16 +720,12 @@ impl EventCapture {
             Key::KpPlus => Some('+'),
             Key::KpMultiply => Some('*'),
             Key::KpDivide => Some('/'),
-
             _ => None,
         }
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    fn start_event_loop_shared(
-        _sender_slot: &std::sync::Mutex<Option<mpsc::Sender<CapturedEvent>>>,
-        _active: Arc<std::sync::atomic::AtomicBool>,
-    ) {
+    fn start_event_loop_shared() {
         use rdev::{Event, EventType, Key, listen};
         use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -355,18 +737,12 @@ impl EventCapture {
             tracing::debug!("Set is_main_thread=false for macOS thread safety");
         }
 
-        let mouse_x = Arc::new(AtomicI32::new(0));
-        let mouse_y = Arc::new(AtomicI32::new(0));
+        let (initial_x, initial_y) = Self::get_mouse_location().unwrap_or_default();
+        let mouse_x = Arc::new(AtomicI32::new(initial_x));
+        let mouse_y = Arc::new(AtomicI32::new(initial_y));
         let event_count = Arc::new(AtomicI32::new(0));
         let event_count_clone = event_count.clone();
-        let shift_pressed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let shift_clone = shift_pressed.clone();
-        let ctrl_pressed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let ctrl_clone = ctrl_pressed.clone();
-        let meta_pressed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let meta_clone = meta_pressed.clone();
-        let alt_pressed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let alt_clone = alt_pressed.clone();
+        let mut held_keys = Vec::new();
 
         let callback = move |event: Event| {
             let count = event_count_clone.fetch_add(1, Ordering::Relaxed);
@@ -385,25 +761,16 @@ impl EventCapture {
                         rdev::Button::Left => MouseButton::Left,
                         rdev::Button::Right => MouseButton::Right,
                         rdev::Button::Middle => MouseButton::Middle,
-                        _ => MouseButton::Left,
+                        _ => {
+                            Self::dispatch(CapturedEvent::Unsupported { message: "Extra mouse buttons are not supported by the recorder. Add that action explicitly.".into() });
+                            return;
+                        }
                     };
 
                     let x = mouse_x.load(Ordering::Relaxed);
                     let y = mouse_y.load(Ordering::Relaxed);
 
-                    let mut mods = Vec::new();
-                    if shift_clone.load(Ordering::SeqCst) {
-                        mods.push(KeyModifier::Shift);
-                    }
-                    if ctrl_clone.load(Ordering::SeqCst) {
-                        mods.push(KeyModifier::Control);
-                    }
-                    if alt_clone.load(Ordering::SeqCst) {
-                        mods.push(KeyModifier::Alt);
-                    }
-                    if meta_clone.load(Ordering::SeqCst) {
-                        mods.push(KeyModifier::Meta);
-                    }
+                    let mods = held_modifiers(&held_keys);
 
                     Some(CapturedEvent::MouseDown {
                         x,
@@ -417,7 +784,7 @@ impl EventCapture {
                         rdev::Button::Left => MouseButton::Left,
                         rdev::Button::Right => MouseButton::Right,
                         rdev::Button::Middle => MouseButton::Middle,
-                        _ => MouseButton::Left,
+                        _ => return,
                     };
 
                     let x = mouse_x.load(Ordering::Relaxed);
@@ -439,39 +806,15 @@ impl EventCapture {
                     })
                 }
                 EventType::KeyPress(key) => {
-                    // Track modifier states
-                    match key {
-                        Key::ShiftLeft | Key::ShiftRight => {
-                            shift_clone.store(true, Ordering::SeqCst)
-                        }
-                        Key::ControlLeft | Key::ControlRight => {
-                            ctrl_clone.store(true, Ordering::SeqCst)
-                        }
-                        Key::MetaLeft | Key::MetaRight => meta_clone.store(true, Ordering::SeqCst),
-                        Key::Alt | Key::AltGr => alt_clone.store(true, Ordering::SeqCst),
-                        _ => {}
+                    if !held_keys.contains(&key) {
+                        held_keys.push(key);
                     }
-
                     let key_str = Self::key_to_string(&key);
-                    let is_shift_held = shift_clone.load(Ordering::SeqCst);
-                    let has_ctrl = ctrl_clone.load(Ordering::SeqCst);
-                    let has_meta = meta_clone.load(Ordering::SeqCst);
-                    let has_alt = alt_clone.load(Ordering::SeqCst);
-
-                    // Build modifiers array from current modifier state
-                    let mut modifiers = Vec::new();
-                    if is_shift_held {
-                        modifiers.push(KeyModifier::Shift);
-                    }
-                    if has_ctrl {
-                        modifiers.push(KeyModifier::Control);
-                    }
-                    if has_alt {
-                        modifiers.push(KeyModifier::Alt);
-                    }
-                    if has_meta {
-                        modifiers.push(KeyModifier::Meta);
-                    }
+                    let modifiers = held_modifiers(&held_keys);
+                    let is_shift_held = modifiers.contains(&KeyModifier::Shift);
+                    let has_ctrl = modifiers.contains(&KeyModifier::Control);
+                    let has_meta = modifiers.contains(&KeyModifier::Meta);
+                    let has_alt = modifiers.contains(&KeyModifier::Alt);
 
                     // Check if this is a modifier-only key (don't generate events for these)
                     let is_modifier_key = matches!(
@@ -535,94 +878,74 @@ impl EventCapture {
                         // Try to get character for text input.
                         // event.name from rdev uses UCKeyTranslate dispatched to
                         // the main thread; it respects the active keyboard layout.
-                        let maybe_char = event
-                            .name
-                            .as_ref()
-                            .and_then(|name| {
-                                let mut chars = name.chars();
-                                let first = chars.next();
-                                let second = chars.next();
-                                match (first, second) {
-                                    (Some(ch), None) if !ch.is_control() => Some(ch),
-                                    _ => None,
-                                }
-                            })
-                            .or_else(|| {
-                                tracing::debug!(
-                                    "event.name was {:?} for key {:?}, using fallback",
-                                    event.name,
-                                    key
-                                );
-                                Self::key_to_char_fallback(&key, is_shift_held)
-                            });
-
-                        if let Some(ch) = maybe_char {
+                        if let Some(text) = event.name.filter(|name| {
+                            !name.is_empty() && name.chars().all(|ch| !ch.is_control())
+                        }) {
+                            Some(CapturedEvent::Text { text })
+                        } else if let Some(ch) = Self::key_to_char_fallback(&key, is_shift_held) {
                             // Send ONLY Character event for text input (no KeyDown)
                             Some(CapturedEvent::Character { ch })
                         } else {
-                            // Unknown key without character, send as KeyDown
-                            Some(CapturedEvent::KeyDown {
-                                key: key_str,
-                                modifiers,
-                            })
+                            Some(CapturedEvent::Unsupported { message: "The operating system did not provide text for a key. Review the recorded text or use browser recording for composed input.".into() })
                         }
                     }
                 }
                 EventType::KeyRelease(key) => {
-                    // Track modifier states
-                    match key {
-                        Key::ShiftLeft | Key::ShiftRight => {
-                            shift_clone.store(false, Ordering::SeqCst)
-                        }
-                        Key::ControlLeft | Key::ControlRight => {
-                            ctrl_clone.store(false, Ordering::SeqCst)
-                        }
-                        Key::MetaLeft | Key::MetaRight => meta_clone.store(false, Ordering::SeqCst),
-                        Key::Alt | Key::AltGr => alt_clone.store(false, Ordering::SeqCst),
-                        _ => {}
-                    }
+                    held_keys.retain(|held| *held != key);
 
                     let key_str = Self::key_to_string(&key);
                     Some(CapturedEvent::KeyUp { key: key_str })
                 }
             };
 
-            if let Some(captured) = captured
-                && let Some(slot) = RDEV_SENDER.get()
-                && let Ok(guard) = slot.lock()
-                && let Some(tx) = guard.as_ref()
-            {
-                let _ = tx.blocking_send(captured);
+            if let Some(captured) = captured {
+                Self::dispatch(captured);
             }
         };
 
-        tracing::debug!("Starting rdev::listen...");
-        if let Err(error) = listen(callback) {
-            tracing::warn!("rdev::listen returned error: {:?}", error);
+        let result = listen(callback);
+        let error = format!("The native input listener stopped: {:?}", result.err());
+        let target = LISTENER.get().and_then(|listener| {
+            let mut listener = listener.lock().ok()?;
+            listener.running = false;
+            listener.error = Some(error.clone());
+            listener.target.clone()
+        });
+        if let Some(target) = target {
+            target
+                .active
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::utils::emit_to_ui(&target.app_handle, "recording:error", error);
+            let app_handle = target.app_handle.clone();
+            drop(target);
+            tauri::async_runtime::spawn(async move {
+                let _ = super::stop_recording(app_handle).await;
+            });
         }
-        tracing::warn!("rdev::listen exited unexpectedly");
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    fn start_event_loop_shared(
-        _sender_slot: &std::sync::Mutex<Option<mpsc::Sender<CapturedEvent>>>,
-        _active: Arc<std::sync::atomic::AtomicBool>,
-    ) {
-        tracing::debug!("Event capture not available on this platform");
+    fn start_event_loop_shared() {
+        if let Some(listener) = LISTENER.get()
+            && let Ok(mut listener) = listener.lock()
+        {
+            listener.running = false;
+            listener.error = Some("Recording is unavailable on this platform".to_string());
+        }
     }
 
-    /// Get the currently focused window using xcap
+    /// Read native identity outside the input hook; callers cache the completed result.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     fn get_focused_window() -> Option<FocusedWindow> {
-        use xcap::Window;
-
-        let windows = Window::all().ok()?;
-        let focused = windows.iter().find(|w| w.is_focused().unwrap_or(false))?;
-
-        let title = focused.title().unwrap_or_default();
-        let process = focused.app_name().unwrap_or_default();
-
-        Some(FocusedWindow { title, process })
+        let focused = flow_like_catalog::computer::native::windows()
+            .ok()?
+            .into_iter()
+            .find(|window| window.is_focused)?;
+        Some(FocusedWindow {
+            id: focused.id,
+            title: focused.title,
+            process: focused.app_name.unwrap_or_default(),
+        })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -696,16 +1019,7 @@ impl EventCapture {
     /// Get text content from system clipboard
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     fn get_clipboard_text() -> Option<String> {
-        use arboard::Clipboard;
-
-        std::thread::spawn(|| {
-            Clipboard::new()
-                .ok()
-                .and_then(|mut cb: Clipboard| cb.get_text().ok())
-        })
-        .join()
-        .ok()
-        .flatten()
+        clipboard_reader()?.snapshot(std::time::Duration::from_millis(25))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -714,595 +1028,555 @@ impl EventCapture {
     }
 
     async fn process_events(
-        mut rx: mpsc::Receiver<CapturedEvent>,
+        mut rx: mpsc::UnboundedReceiver<CaptureMessage>,
         state: Arc<RwLock<RecordingStateInner>>,
-        active: Arc<std::sync::atomic::AtomicBool>,
         app_handle: tauri::AppHandle,
         store: Option<Arc<FlowLikeStore>>,
     ) {
-        let mut last_mouse_down: Option<(
-            i32,
-            i32,
-            MouseButton,
-            Vec<KeyModifier>,
-            std::time::Instant,
-        )> = None;
-        let mut drag_start: Option<(i32, i32)> = None;
-        let mut last_focused_window: Option<FocusedWindow> = None;
-
-        // Double-click detection - track completed clicks (not mouse downs)
-        let mut last_completed_click: Option<(i32, i32, MouseButton, std::time::Instant)> = None;
-        const DOUBLE_CLICK_THRESHOLD_MS: u128 = 400; // Standard OS double-click threshold
-
-        // Pending copy detection - copy clipboard content on KeyUp after delay
-        let mut pending_copy_key: Option<String> = None;
-        const DOUBLE_CLICK_DISTANCE: i32 = 10; // Pixels
-
-        tracing::debug!(" process_events: store available: {}", store.is_some());
-        tracing::debug!(" process_events: waiting for events...");
-
-        // Check session info
-        {
-            let state_guard = state.read().await;
-            if let Some(session) = &state_guard.session {
-                tracing::debug!(" Session ID: {}", session.id);
-                tracing::debug!(" Target board ID: {:?}", session.target_board_id);
-            } else {
-                tracing::warn!(" No session in state!");
-            }
-        }
-
-        let mut processed_count = 0u32;
-        let mut action_count = 0u32;
-        let mut last_event_time = std::time::Instant::now();
-        // Reduce dedup interval - only skip very rapid duplicate non-click events
-        let min_event_interval = std::time::Duration::from_millis(5);
-
-        tracing::debug!(" About to enter event loop...");
-        while let Some(event) = rx.recv().await {
-            processed_count += 1;
-
-            // Deduplicate rapid events EXCEPT mouse clicks and key events (to preserve timing)
-            let now = std::time::Instant::now();
-            let is_important_event = matches!(
-                event,
-                CapturedEvent::MouseDown { .. }
-                    | CapturedEvent::MouseUp { .. }
-                    | CapturedEvent::KeyDown { .. }
-                    | CapturedEvent::Character { .. }
-            );
-            if !is_important_event && now.duration_since(last_event_time) < min_event_interval {
-                continue;
-            }
-            last_event_time = now;
-
-            if processed_count % 10 == 1 {
-                tracing::debug!(" Received event #{}: {:?}", processed_count, event);
-            }
-
-            if !active.load(std::sync::atomic::Ordering::SeqCst) {
-                tracing::debug!(" Skipping event #{} - not active", processed_count);
-                continue;
-            }
-
-            {
-                let state_guard = state.read().await;
-                if state_guard.status != RecordingStatus::Recording {
-                    tracing::debug!(
-                        " Skipping event #{} - status is {:?}",
-                        processed_count,
-                        state_guard.status
-                    );
+        let state_for_uploads = state.clone();
+        let mut pending_mouse: Option<InputEvent> = None;
+        let mut last_focus: Option<FocusedWindow> = None;
+        let mut last_click: Option<RecordedAction> = None;
+        let mut uploads = flow_like_types::tokio::task::JoinSet::new();
+        let mut timer =
+            flow_like_types::tokio::time::interval(std::time::Duration::from_millis(100));
+        loop {
+            while uploads.try_join_next().is_some() {}
+            let message = flow_like_types::tokio::select! {
+                message = rx.recv() => match message { Some(message) => message, None => break },
+                _ = timer.tick() => {
+                    let mut state = state.write().await;
+                    if state.should_flush_keystrokes() && let Some(action) = state.flush_keystroke_buffer() {
+                        emit_recorded_action(&app_handle, &action);
+                    }
                     continue;
                 }
-            }
-
-            // Check for window focus changes on any mouse event (user is interacting with something)
-            if matches!(
-                event,
-                CapturedEvent::MouseDown { .. } | CapturedEvent::MouseUp { .. }
-            ) && let Some(current_window) = Self::get_focused_window()
-            {
-                let focus_changed = match &last_focused_window {
-                    Some(last) => {
-                        last.title != current_window.title || last.process != current_window.process
+            };
+            let input = match message {
+                CaptureMessage::Flush(acknowledged) => {
+                    pending_mouse = None;
+                    last_click = None;
+                    let mut state = state.write().await;
+                    if let Some(action) = state.flush_keystroke_buffer() {
+                        emit_recorded_action(&app_handle, &action);
                     }
-                    None => true, // First focus detection
-                };
-
-                if focus_changed
-                    && (!current_window.title.is_empty() || !current_window.process.is_empty())
-                {
-                    tracing::debug!(
-                        " Window focus changed to: {} ({})",
-                        current_window.title,
-                        current_window.process
-                    );
-
-                    // Flush any pending keystrokes before focus change
-                    {
-                        let mut state_guard = state.write().await;
-                        if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            emit_recorded_action(&app_handle, &typed_action);
-                        }
-                    }
-
-                    // Create and emit WindowFocus action
-                    let action = RecordedAction::new(
-                        flow_like_types::create_id(),
-                        ActionType::WindowFocus {
-                            window_title: current_window.title.clone(),
-                            process: current_window.process.clone(),
-                        },
-                    );
-
-                    {
-                        let mut state_guard = state.write().await;
-                        state_guard.add_action(action.clone());
-                    }
-                    emit_recorded_action(&app_handle, &action);
-
-                    last_focused_window = Some(current_window);
+                    let _ = acknowledged.send(());
+                    continue;
                 }
+                CaptureMessage::Input(input) => input,
+            };
+            if !matches!(input.event, CapturedEvent::MouseUp { .. })
+                && let Some(focused) = &input.focused
+                && !last_focus.as_ref().is_some_and(|previous| {
+                    previous.id == focused.id && previous.process == focused.process
+                })
+            {
+                let mut state = state.write().await;
+                if let Some(action) = state.flush_keystroke_buffer() {
+                    emit_recorded_action(&app_handle, &action);
+                }
+                let mut action = RecordedAction::new(
+                    flow_like_types::create_id(),
+                    ActionType::WindowFocus {
+                        window_title: focused.title.clone(),
+                        process: focused.process.clone(),
+                    },
+                );
+                action.timestamp = input.timestamp;
+                action.metadata.window_id = Some(focused.id.clone());
+                state.add_action(action.clone());
+                emit_recorded_action(&app_handle, &action);
+                last_focus = Some(focused.clone());
             }
-
-            match &event {
-                CapturedEvent::MouseDown {
-                    x,
-                    y,
-                    button,
-                    modifiers,
-                } => {
-                    last_mouse_down = Some((
-                        *x,
-                        *y,
-                        button.clone(),
-                        modifiers.clone(),
-                        std::time::Instant::now(),
-                    ));
-                    drag_start = Some((*x, *y));
+            let mut pending_screenshot = None;
+            let mut recorded_focus = input.focused.clone();
+            let mut action = match &input.event {
+                CapturedEvent::Browser { action } => {
+                    let mut recorded =
+                        RecordedAction::new(flow_like_types::create_id(), action.clone());
+                    recorded.timestamp = input.timestamp;
+                    recorded
+                }
+                CapturedEvent::MouseDown { .. } => {
+                    pending_mouse = Some(input);
+                    continue;
                 }
                 CapturedEvent::MouseUp { x, y, button } => {
-                    // Get fresh coordinates from enigo for accuracy (aligns with screenshot capture)
-                    let (fresh_x, fresh_y) = Self::get_mouse_location().unwrap_or((*x, *y));
-                    tracing::debug!(
-                        " MouseUp: rdev coords=({}, {}), fresh coords=({}, {})",
-                        x,
-                        y,
-                        fresh_x,
-                        fresh_y
-                    );
-                    let (x, y) = (fresh_x, fresh_y);
-                    let button = button.clone();
-
-                    {
-                        let mut state_guard = state.write().await;
-                        if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            emit_recorded_action(&app_handle, &typed_action);
-                        }
+                    let Some(mut down) = pending_mouse.take() else {
+                        continue;
+                    };
+                    recorded_focus = down.focused.clone();
+                    let CapturedEvent::MouseDown {
+                        x: start_x,
+                        y: start_y,
+                        button: down_button,
+                        modifiers,
+                    } = &down.event
+                    else {
+                        continue;
+                    };
+                    if down_button != button {
+                        continue;
                     }
-
-                    // Get drag start position, or use current position if MouseDown was missed
-                    let (start_x, start_y) = drag_start.take().unwrap_or((x, y));
-                    let dx = (x - start_x).abs();
-                    let dy = (y - start_y).abs();
-
-                    // Only record as drag if significant movement, otherwise it's a click
-                    if dx > 10 || dy > 10 {
-                        let action = RecordedAction::new(
-                            flow_like_types::create_id(),
+                    let mut action = RecordedAction::new(
+                        flow_like_types::create_id(),
+                        if (x - start_x).abs() > 10 || (y - start_y).abs() > 10 {
                             ActionType::Drag {
-                                start: (start_x, start_y),
-                                end: (x, y),
-                            },
-                        )
-                        .with_coordinates(start_x, start_y);
-
-                        let mut state_guard = state.write().await;
-                        state_guard.add_action(action.clone());
-                        action_count += 1;
-                        tracing::debug!(
-                            " Drag action #{} added from ({}, {}) to ({}, {})",
-                            action_count,
-                            start_x,
-                            start_y,
-                            x,
-                            y
-                        );
-                        emit_recorded_action(&app_handle, &action);
-                    } else {
-                        // This is a click (not a drag)
-                        let click_time = std::time::Instant::now();
-
-                        // Check for double-click against the last completed click
-                        let is_double_click = if let Some((lx, ly, lb, lt)) = &last_completed_click
-                        {
-                            let distance = (x - lx).abs().max((y - ly).abs());
-                            let time_diff = click_time.duration_since(*lt).as_millis();
-                            // Double-click: same button, close position, within time threshold
-                            *lb == button
-                                && distance <= DOUBLE_CLICK_DISTANCE
-                                && time_diff <= DOUBLE_CLICK_THRESHOLD_MS
-                        } else {
-                            false
-                        };
-
-                        let (capture_screenshots, region_size, app_id, board_id) = {
-                            let state_guard = state.read().await;
-                            state_guard
-                                .session
-                                .as_ref()
-                                .map(|s| {
-                                    (
-                                        s.settings.capture_screenshots,
-                                        s.settings.capture_region_size,
-                                        s.app_id.clone(),
-                                        s.target_board_id.clone(),
-                                    )
-                                })
-                                .unwrap_or((false, 150, None, None))
-                        };
-
-                        let screenshot_ref = if capture_screenshots {
-                            if let Some(ref store) = store {
-                                capture_region(
-                                    x,
-                                    y,
-                                    region_size,
-                                    store,
-                                    app_id.as_deref(),
-                                    board_id.as_deref(),
-                                )
-                                .await
-                                .ok()
-                            } else {
-                                None
+                                start: (*start_x, *start_y),
+                                end: (*x, *y),
+                                button: button.clone(),
+                                modifiers: modifiers.clone(),
                             }
                         } else {
-                            None
-                        };
-
-                        // Extract UI element fingerprint at click location
-                        let fingerprint = extract_fingerprint_at(x, y);
-
-                        // Build metadata from current focused window
-                        let click_metadata = if let Some(ref fw) = last_focused_window {
-                            ActionMetadata {
-                                window_title: Some(fw.title.clone()),
-                                process_name: Some(fw.process.clone()),
-                                monitor_index: None,
+                            ActionType::Click {
+                                button: button.clone(),
+                                modifiers: modifiers.clone(),
                             }
-                        } else {
-                            ActionMetadata::default()
-                        };
-
-                        if is_double_click {
-                            // Remove the previous single click and replace with double-click
-                            {
-                                let mut state_guard = state.write().await;
-                                if let Some(session) = &mut state_guard.session
-                                    && let Some(last_action) = session.actions.last()
-                                    && matches!(last_action.action_type, ActionType::Click { .. })
-                                {
-                                    session.actions.pop();
-                                }
-                            }
-
-                            let mut action = RecordedAction::new(
-                                flow_like_types::create_id(),
-                                ActionType::DoubleClick {
-                                    button: button.clone(),
-                                },
-                            )
-                            .with_coordinates(x, y)
-                            .with_metadata(click_metadata.clone());
-
-                            if let Some(ref screenshot_id) = screenshot_ref {
-                                action = action.with_screenshot_ref(screenshot_id);
-                            }
-
-                            if let Some(fp) = fingerprint {
-                                action = action.with_fingerprint(fp);
-                            }
-
-                            let mut state_guard = state.write().await;
-                            state_guard.add_action(action.clone());
-                            action_count += 1;
-                            emit_recorded_action(&app_handle, &action);
-
-                            // Clear to prevent triple-click
-                            last_completed_click = None;
-                        } else {
-                            let click_modifiers = last_mouse_down
-                                .as_ref()
-                                .map(|(_, _, _, mods, _)| mods.clone())
-                                .unwrap_or_default();
-                            let mut action = RecordedAction::new(
-                                flow_like_types::create_id(),
-                                ActionType::Click {
-                                    button: button.clone(),
-                                    modifiers: click_modifiers,
-                                },
-                            )
-                            .with_coordinates(x, y)
-                            .with_metadata(click_metadata);
-
-                            if let Some(ref screenshot_id) = screenshot_ref {
-                                action = action.with_screenshot_ref(screenshot_id);
-                            }
-
-                            if let Some(fp) = fingerprint {
-                                action = action.with_fingerprint(fp);
-                            }
-
-                            let mut state_guard = state.write().await;
-                            state_guard.add_action(action.clone());
-                            action_count += 1;
-                            emit_recorded_action(&app_handle, &action);
-
-                            // Record for double-click detection
-                            last_completed_click = Some((x, y, button.clone(), click_time));
-                        }
+                        },
+                    )
+                    .with_coordinates(*start_x, *start_y);
+                    action.timestamp = down.timestamp;
+                    if let Some(target) = down.target.take() {
+                        action.fingerprint = target.fingerprint;
+                        pending_screenshot = target.screenshot;
                     }
-
-                    last_mouse_down = None;
+                    if matches!(action.action_type, ActionType::Click { .. }) {
+                        if last_click
+                            .as_ref()
+                            .is_some_and(|previous| is_double_click(previous, &action))
+                        {
+                            let previous = last_click.take().unwrap();
+                            let mut state = state.write().await;
+                            if let Some(session) = &mut state.session
+                                && session
+                                    .actions
+                                    .last()
+                                    .is_some_and(|last| last.id == previous.id)
+                            {
+                                let previous = session.actions.pop().unwrap();
+                                action.id = previous.id.clone();
+                                pending_screenshot = None;
+                                action.action_type = ActionType::DoubleClick {
+                                    button: button.clone(),
+                                    modifiers: modifiers.clone(),
+                                };
+                                action.timestamp = previous.timestamp;
+                                action.fingerprint = previous.fingerprint;
+                                action.screenshot_ref = previous.screenshot_ref;
+                            }
+                        } else {
+                            last_click = Some(action.clone());
+                        }
+                    } else {
+                        last_click = None;
+                    }
+                    action
                 }
                 CapturedEvent::Scroll { x, y, dx, dy } => {
-                    // Skip scroll events with no actual movement
-                    if *dx == 0 && *dy == 0 {
-                        continue;
-                    }
-
-                    // Get fresh coordinates for scroll position
-                    let (x, y) = Self::get_mouse_location().unwrap_or((*x, *y));
-
-                    let mut state_guard = state.write().await;
-                    state_guard.flush_keystroke_buffer();
-
-                    // Determine scroll direction and amount.
-                    // rdev convention: positive dy = scroll down, negative dy = scroll up
-                    // (matches macOS "natural" scrolling inverted at driver level).
-                    // Positive dx = scroll right, negative dx = scroll left.
-                    let (direction, amount) = if dy.abs() >= dx.abs() && *dy != 0 {
-                        if *dy > 0 {
-                            (ScrollDirection::Down, *dy)
-                        } else {
-                            (ScrollDirection::Up, -dy)
-                        }
-                    } else if *dx != 0 {
-                        if *dx > 0 {
-                            (ScrollDirection::Right, *dx)
-                        } else {
-                            (ScrollDirection::Left, -dx)
-                        }
-                    } else {
-                        continue; // Both are 0, skip
-                    };
-
-                    let action = RecordedAction::new(
-                        flow_like_types::create_id(),
-                        ActionType::Scroll { direction, amount },
-                    )
-                    .with_coordinates(x, y);
-
-                    state_guard.add_action(action.clone());
-                    emit_recorded_action(&app_handle, &action);
-                }
-                CapturedEvent::KeyDown { key, modifiers } => {
-                    tracing::debug!(" KeyDown: key='{}', modifiers={:?}", key, modifiers);
-
-                    let is_modifier = matches!(
-                        key.as_str(),
-                        "Shift"
-                            | "Ctrl"
-                            | "Alt"
-                            | "Meta"
-                            | "ShiftLeft"
-                            | "ShiftRight"
-                            | "ControlLeft"
-                            | "ControlRight"
-                            | "AltLeft"
-                            | "AltRight"
-                            | "MetaLeft"
-                            | "MetaRight"
-                    );
-
-                    let is_special = matches!(
-                        key.as_str(),
-                        "Return"
-                            | "Enter"
-                            | "Tab"
-                            | "Escape"
-                            | "Backspace"
-                            | "Delete"
-                            | "Up"
-                            | "Down"
-                            | "Left"
-                            | "Right"
-                            | "Home"
-                            | "End"
-                            | "PageUp"
-                            | "PageDown"
-                            | "F1"
-                            | "F2"
-                            | "F3"
-                            | "F4"
-                            | "F5"
-                            | "F6"
-                            | "F7"
-                            | "F8"
-                            | "F9"
-                            | "F10"
-                            | "F11"
-                            | "F12"
-                    );
-
-                    // Check for Copy (Ctrl+C / Cmd+C) or Paste (Ctrl+V / Cmd+V)
-                    let has_cmd_or_ctrl = modifiers.contains(&KeyModifier::Control)
-                        || modifiers.contains(&KeyModifier::Meta);
-                    let is_copy = has_cmd_or_ctrl && key.to_lowercase() == "c";
-                    let is_paste = has_cmd_or_ctrl && key.to_lowercase() == "v";
-
-                    tracing::debug!(
-                        " KeyDown analysis: has_cmd_or_ctrl={}, is_copy={}, is_paste={}",
-                        has_cmd_or_ctrl,
-                        is_copy,
-                        is_paste
-                    );
-
-                    // For Copy, defer clipboard reading until KeyUp (system processes copy after KeyDown)
-                    if is_copy {
-                        tracing::debug!(" Setting pending_copy_key to '{}'", key);
-                        pending_copy_key = Some(key.clone());
-                        continue;
-                    }
-
-                    // Record special keys (Enter, Tab, etc.) OR any key with modifiers (Ctrl+C, etc.)
-                    // Skip pure modifier keys
-                    if !is_modifier && (is_special || !modifiers.is_empty()) {
-                        let mut state_guard = state.write().await;
-                        // Flush any buffered keystrokes before adding the special key
-                        if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            emit_recorded_action(&app_handle, &typed_action);
-                        }
-
-                        let action = if is_paste {
-                            // For paste, clipboard already has content - read immediately
-                            let clipboard_content = Self::get_clipboard_text();
-                            tracing::debug!(
-                                " Paste detected, clipboard: {:?}",
-                                clipboard_content.as_ref().map(|s| if s.len() > 50 {
-                                    format!("{}...", &s[..50])
-                                } else {
-                                    s.clone()
-                                })
-                            );
-                            RecordedAction::new(
-                                flow_like_types::create_id(),
-                                ActionType::Paste { clipboard_content },
-                            )
-                        } else {
-                            // Normalize key name for the workflow
-                            let normalized_key = match key.as_str() {
-                                "Return" => "Enter".to_string(),
-                                other => other.to_string(),
-                            };
-
-                            RecordedAction::new(
-                                flow_like_types::create_id(),
-                                ActionType::KeyPress {
-                                    key: normalized_key.clone(),
-                                    modifiers: modifiers.clone(),
-                                },
-                            )
-                        };
-
-                        state_guard.add_action(action.clone());
-                        action_count += 1;
-                        tracing::debug!(
-                            " KeyPress action #{} added: {:?}",
-                            action_count,
-                            action.action_type
-                        );
+                    let mut state = state.write().await;
+                    if let Some(action) = state.flush_keystroke_buffer() {
                         emit_recorded_action(&app_handle, &action);
                     }
-                }
-                CapturedEvent::KeyUp { key } => {
-                    tracing::debug!(
-                        " KeyUp: key='{}', pending_copy_key={:?}",
-                        key,
-                        pending_copy_key
-                    );
-
-                    // Handle deferred Copy detection - clipboard is now populated
-                    let pending_matches = pending_copy_key.as_ref().map(|k| k.to_lowercase())
-                        == Some(key.to_lowercase());
-                    tracing::debug!(" KeyUp: pending_matches={}", pending_matches);
-
-                    if pending_matches {
-                        pending_copy_key = None;
-
-                        // Retry clipboard read with increasing delay to handle OS clipboard latency
-                        let mut clipboard_content = None;
-                        for delay in [50, 100, 200] {
-                            flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(
-                                delay,
-                            ))
-                            .await;
-                            clipboard_content = Self::get_clipboard_text();
-                            if clipboard_content.is_some() {
-                                break;
-                            }
-                        }
-                        tracing::debug!(
-                            " Copy detected (on KeyUp), clipboard: {:?}",
-                            clipboard_content.as_ref().map(|s| if s.len() > 50 {
-                                format!("{}...", &s[..50])
-                            } else {
-                                s.clone()
-                            })
-                        );
-
-                        let mut state_guard = state.write().await;
-                        if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            emit_recorded_action(&app_handle, &typed_action);
-                        }
-
-                        let action = RecordedAction::new(
+                    for (direction, amount) in scroll_components(*dx, *dy) {
+                        let mut action = RecordedAction::new(
                             flow_like_types::create_id(),
-                            ActionType::Copy { clipboard_content },
-                        );
-
-                        state_guard.add_action(action.clone());
-                        action_count += 1;
-                        tracing::debug!(" Copy action #{} added", action_count);
+                            ActionType::Scroll { direction, amount },
+                        )
+                        .with_coordinates(*x, *y);
+                        action.timestamp = input.timestamp;
+                        state.add_action(action.clone());
                         emit_recorded_action(&app_handle, &action);
                     }
+                    last_click = None;
+                    continue;
                 }
                 CapturedEvent::Character { ch } => {
-                    if ch.is_control() {
-                        continue;
+                    if !ch.is_control() {
+                        let mut state = state.write().await;
+                        state.buffer_keystroke_at(*ch, input.timestamp);
                     }
-                    let mut state_guard = state.write().await;
-                    state_guard.buffer_keystroke(*ch);
-                    // Log every 10th character for debugging without spam
-                    if state_guard.keystroke_buffer_len() % 10 == 1 {
-                        tracing::debug!(
-                            " Buffered char '{}', buffer len: {}",
-                            ch,
-                            state_guard.keystroke_buffer_len()
-                        );
-                    }
+                    last_click = None;
+                    continue;
                 }
-                _ => {}
+                CapturedEvent::Text { text } => {
+                    let mut state = state.write().await;
+                    for ch in text.chars().filter(|ch| !ch.is_control()) {
+                        state.buffer_keystroke_at(ch, input.timestamp);
+                    }
+                    last_click = None;
+                    continue;
+                }
+                CapturedEvent::KeyDown { .. } => {
+                    last_click = None;
+                    let Some(action_type) =
+                        recorded_key_action(&input.event, input.clipboard.clone())
+                    else {
+                        continue;
+                    };
+                    let mut action = RecordedAction::new(flow_like_types::create_id(), action_type);
+                    action.timestamp = input.timestamp;
+                    action
+                }
+                _ => continue,
+            };
+            if let Some(focused) = recorded_focus {
+                action.metadata = ActionMetadata {
+                    window_id: Some(focused.id),
+                    window_title: Some(focused.title),
+                    process_name: Some(focused.process),
+                    monitor_index: None,
+                };
             }
-
-            {
-                let mut state_guard = state.write().await;
-                if state_guard.should_flush_keystrokes()
-                    && let Some(typed_action) = state_guard.flush_keystroke_buffer()
-                {
-                    emit_recorded_action(&app_handle, &typed_action);
+            let mut state = state.write().await;
+            if let Some(typed) = state.flush_keystroke_buffer() {
+                emit_recorded_action(&app_handle, &typed);
+            }
+            state.add_action(action.clone());
+            emit_recorded_action(&app_handle, &action);
+            let (app_id, board_id) = state
+                .session
+                .as_ref()
+                .map(|session| (session.app_id.clone(), session.target_board_id.clone()))
+                .unwrap_or_default();
+            drop(state);
+            if let (Some(image), Some(store)) = (pending_screenshot, store.as_ref()) {
+                if uploads.len() >= 16 {
+                    crate::utils::emit_to_ui(
+                        &app_handle,
+                        "recording:error",
+                        "Some screenshot templates could not be saved. Record those clicks again or disable pattern matching before inserting.",
+                    );
+                } else {
+                    let store = store.clone();
+                    let state = state_for_uploads.clone();
+                    let app_handle = app_handle.clone();
+                    uploads.spawn(async move {
+                        match store_region(image, &store, app_id.as_deref(), board_id.as_deref())
+                            .await
+                        {
+                            Ok(reference) => {
+                                let mut state = state.write().await;
+                                if let Some(session) = &mut state.session
+                                    && let Some(recorded) = session
+                                        .actions
+                                        .iter_mut()
+                                        .find(|recorded| recorded.id == action.id)
+                                {
+                                    recorded.screenshot_ref = Some(reference);
+                                    emit_recorded_action(&app_handle, recorded);
+                                }
+                            }
+                            Err(error) => crate::utils::emit_to_ui(
+                                &app_handle,
+                                "recording:error",
+                                format!("Could not save a screenshot template: {error:?}"),
+                            ),
+                        }
+                    });
                 }
             }
         }
-        tracing::debug!(" ========== PROCESSOR LOOP EXITED ==========");
-        tracing::debug!(" Total events processed: {}", processed_count);
-        tracing::debug!(" Total actions created: {}", action_count);
-
-        let state_guard = state.read().await;
-        if let Some(session) = &state_guard.session {
-            tracing::debug!(
-                " Session has {} actions at processor exit",
-                session.actions.len()
-            );
+        while uploads.join_next().await.is_some() {}
+        let mut state = state.write().await;
+        if let Some(action) = state.flush_keystroke_buffer() {
+            emit_recorded_action(&app_handle, &action);
         }
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn held_modifiers(keys: &[rdev::Key]) -> Vec<KeyModifier> {
+    use rdev::Key;
+    [
+        (KeyModifier::Shift, [Key::ShiftLeft, Key::ShiftRight]),
+        (KeyModifier::Control, [Key::ControlLeft, Key::ControlRight]),
+        (KeyModifier::Alt, [Key::Alt, Key::AltGr]),
+        (KeyModifier::Meta, [Key::MetaLeft, Key::MetaRight]),
+    ]
+    .into_iter()
+    .filter_map(|(modifier, alternatives)| {
+        alternatives
+            .iter()
+            .any(|key| keys.contains(key))
+            .then_some(modifier)
+    })
+    .collect()
+}
+
+fn is_plain_shortcut(event: &CapturedEvent, expected: &str) -> bool {
+    matches!(event, CapturedEvent::KeyDown { key, modifiers } if key.eq_ignore_ascii_case(expected)
+        && modifiers.len() == 1 && modifiers.iter().any(|modifier| matches!(modifier, KeyModifier::Meta | KeyModifier::Control)))
+}
+fn is_copy_shortcut(event: &CapturedEvent) -> bool {
+    is_plain_shortcut(event, "c")
+}
+fn is_paste_shortcut(event: &CapturedEvent) -> bool {
+    is_plain_shortcut(event, "v")
+}
+fn recorded_key_action(event: &CapturedEvent, clipboard: Option<String>) -> Option<ActionType> {
+    let CapturedEvent::KeyDown { key, modifiers } = event else {
+        return None;
+    };
+    if is_copy_shortcut(event) {
+        return Some(ActionType::Copy {
+            clipboard_content: None,
+        });
+    }
+    if is_paste_shortcut(event)
+        && let Some(clipboard_content) = clipboard
+    {
+        return Some(ActionType::Paste {
+            clipboard_content: Some(clipboard_content),
+        });
+    }
+    Some(ActionType::KeyPress {
+        key: if key == "Return" {
+            "Enter".into()
+        } else {
+            key.clone()
+        },
+        modifiers: modifiers.clone(),
+    })
+}
+
+fn is_stop_shortcut(event: &CapturedEvent) -> bool {
+    matches!(event, CapturedEvent::KeyDown { key, modifiers } if key.eq_ignore_ascii_case("s")
+        && modifiers.len() == 2 && modifiers.contains(&KeyModifier::Shift)
+        && modifiers.contains(&if cfg!(target_os = "macos") { KeyModifier::Meta } else { KeyModifier::Control }))
+}
+fn is_ignored_process(process: &str, settings: &RecordingSettings) -> bool {
+    let name = process.to_lowercase();
+    name == "flow-like"
+        || name == "flow like"
+        || name == "flow-like.exe"
+        || settings
+            .ignore_system_apps
+            .iter()
+            .any(|ignored| ignored.eq_ignore_ascii_case(process))
+}
+fn is_double_click(previous: &RecordedAction, current: &RecordedAction) -> bool {
+    let elapsed = current
+        .timestamp
+        .signed_duration_since(previous.timestamp)
+        .num_milliseconds();
+    let same_button = matches!((&previous.action_type, &current.action_type),
+        (ActionType::Click { button: a, modifiers: am }, ActionType::Click { button: b, modifiers: bm }) if a == b && am == bm);
+    same_button
+        && (0..=400).contains(&elapsed)
+        && matches!((previous.coordinates, current.coordinates), (Some((ax, ay)), Some((bx, by))) if (ax-bx).abs() <= 10 && (ay-by).abs() <= 10)
+}
+fn scroll_components(dx: i32, dy: i32) -> Vec<(ScrollDirection, i32)> {
+    let mut result = Vec::new();
+    // rdev preserves native wheel signs. Enigo uses positive vertical values for down.
+    if dy != 0 {
+        result.push((
+            if dy > 0 {
+                ScrollDirection::Up
+            } else {
+                ScrollDirection::Down
+            },
+            dy.saturating_abs(),
+        ));
+    }
+    let dx = if cfg!(target_os = "macos") {
+        dx.saturating_neg()
+    } else {
+        dx
+    };
+    if dx != 0 {
+        result.push((
+            if dx > 0 {
+                ScrollDirection::Right
+            } else {
+                ScrollDirection::Left
+            },
+            dx.saturating_abs(),
+        ));
+    }
+    result
+}
 impl Drop for EventCapture {
     fn drop(&mut self) {
-        self.active
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.disconnect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hung_clipboard_is_single_flight_and_late_replies_are_never_reused() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_calls = calls.clone();
+        let reader = Arc::new(
+            ClipboardReader::new(move || {
+                if worker_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Some("late snapshot".into())
+                } else {
+                    Some("fresh snapshot".into())
+                }
+            })
+            .unwrap(),
+        );
+        let caller = reader.clone();
+        let first =
+            std::thread::spawn(move || caller.snapshot(std::time::Duration::from_millis(100)));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(first.join().unwrap().is_none());
+        for _ in 0..100 {
+            assert!(
+                reader
+                    .snapshot(std::time::Duration::from_millis(25))
+                    .is_none()
+            );
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while reader.busy.load(std::sync::atomic::Ordering::Acquire)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert!(!reader.busy.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(
+            reader
+                .snapshot(std::time::Duration::from_secs(1))
+                .as_deref(),
+            Some("fresh snapshot")
+        );
+    }
+
+    #[test]
+    fn unavailable_clipboard_preserves_the_paste_chord_without_a_clipboard_write() {
+        let event = CapturedEvent::KeyDown {
+            key: "v".into(),
+            modifiers: vec![KeyModifier::Meta],
+        };
+        assert!(
+            matches!(recorded_key_action(&event, None), Some(ActionType::KeyPress { key, modifiers }) if key == "v" && modifiers == [KeyModifier::Meta])
+        );
+        assert!(
+            matches!(recorded_key_action(&event, Some("captured text".into())), Some(ActionType::Paste { clipboard_content: Some(text) }) if text == "captured text")
+        );
+    }
+
+    #[test]
+    fn focus_cache_never_waits_for_a_busy_native_lookup_or_reuses_stale_identity() {
+        let cache = FocusCache::default();
+        let focused = FocusedWindow {
+            id: "42".into(),
+            title: "Editor".into(),
+            process: "editor".into(),
+        };
+        *cache.lock().unwrap() = Some((std::time::Instant::now(), Some(focused.clone())));
+        assert_eq!(cached_focus(&cache), Some(focused.clone()));
+        let mut guard = cache.lock().unwrap();
+        assert!(cached_focus(&cache).is_none());
+        *guard = Some((
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+            Some(focused),
+        ));
+        drop(guard);
+        assert!(cached_focus(&cache).is_none());
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    fn releasing_one_side_does_not_release_the_other_modifier() {
+        let mut held = vec![
+            rdev::Key::ShiftLeft,
+            rdev::Key::ShiftRight,
+            rdev::Key::ControlRight,
+        ];
+        held.retain(|key| *key != rdev::Key::ShiftLeft);
+        assert_eq!(
+            held_modifiers(&held),
+            [KeyModifier::Shift, KeyModifier::Control]
+        );
+        held.retain(|key| *key != rdev::Key::ShiftRight);
+        assert_eq!(held_modifiers(&held), [KeyModifier::Control]);
+    }
+
+    #[test]
+    fn shortcut_classification_preserves_modified_paste() {
+        let plain = CapturedEvent::KeyDown {
+            key: "v".into(),
+            modifiers: vec![KeyModifier::Control],
+        };
+        assert!(is_paste_shortcut(&plain));
+        let special = CapturedEvent::KeyDown {
+            key: "v".into(),
+            modifiers: vec![KeyModifier::Control, KeyModifier::Shift],
+        };
+        assert!(!is_paste_shortcut(&special));
+        assert!(!is_stop_shortcut(&special));
+        assert!(is_stop_shortcut(&CapturedEvent::KeyDown {
+            key: "s".into(),
+            modifiers: vec![
+                KeyModifier::Shift,
+                if cfg!(target_os = "macos") {
+                    KeyModifier::Meta
+                } else {
+                    KeyModifier::Control
+                }
+            ]
+        }));
+    }
+
+    #[test]
+    fn double_click_uses_event_time_and_modifiers() {
+        let first = RecordedAction::new(
+            "first",
+            ActionType::Click {
+                button: MouseButton::Left,
+                modifiers: vec![KeyModifier::Shift],
+            },
+        )
+        .with_coordinates(25, 50);
+        let mut second = first.clone();
+        second.timestamp += chrono::Duration::milliseconds(200);
+        assert!(is_double_click(&first, &second));
+        second.action_type = ActionType::Click {
+            button: MouseButton::Left,
+            modifiers: vec![],
+        };
+        assert!(!is_double_click(&first, &second));
+        second.action_type = first.action_type.clone();
+        second.timestamp += chrono::Duration::milliseconds(250);
+        assert!(!is_double_click(&first, &second));
+    }
+
+    #[test]
+    fn diagonal_scroll_preserves_both_axes_and_native_vertical_sign() {
+        let components = scroll_components(3, -7);
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0], (ScrollDirection::Down, 7));
+        assert_eq!(
+            components[1],
+            (
+                if cfg!(target_os = "macos") {
+                    ScrollDirection::Left
+                } else {
+                    ScrollDirection::Right
+                },
+                3
+            )
+        );
+    }
+
+    #[test]
+    fn ignored_processes_are_case_insensitive_and_include_recorder() {
+        let settings = RecordingSettings::default();
+        assert!(is_ignored_process("systemuiserver", &settings));
+        assert!(is_ignored_process("Flow-Like", &settings));
+        assert!(!is_ignored_process("TextEdit", &settings));
     }
 }

@@ -180,6 +180,17 @@ impl EventBusEvent {
         .await?;
         let profile = TauriSettingsState::current_profile(app_handle).await?;
 
+        crate::functions::automation_approval::ensure_automation_approved(
+            app_handle,
+            &self.app_id,
+            &template.board,
+            Some(&self.event_id),
+            // Background triggers require a remembered grant and cannot spend a manual Run Once.
+            false,
+            &profile.hub_profile,
+        )
+        .await?;
+
         let app_handle_clone = app_handle.clone();
         let buffered_sender = if let Some(callback) = &self.callback {
             callback.clone()
@@ -284,6 +295,7 @@ impl EventBusEvent {
             .await;
 
         let cancellation_token = CancellationToken::new();
+        internal_run.set_cancellation_token(cancellation_token.clone());
         let board_name = internal_run.board.name.clone();
         let run_data = RunData::with_metadata(
             Some(self.app_id.clone()),

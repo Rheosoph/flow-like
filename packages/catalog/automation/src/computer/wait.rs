@@ -25,6 +25,7 @@ impl NodeLogic for ComputerWaitNode {
             "Waits for the specified number of milliseconds",
             "Automation/Computer/Wait",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "wait");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -78,9 +79,20 @@ impl NodeLogic for ComputerWaitNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let ms: i64 = context.evaluate_pin("ms").await?;
 
-        tokio::time::sleep(Duration::from_millis(ms.max(0) as u64)).await;
+        let deadline =
+            std::time::Instant::now() + Duration::from_millis(ms.clamp(0, 3_600_000) as u64);
+        while std::time::Instant::now() < deadline {
+            context.check_cancelled()?;
+            session.ensure_active(context).await?;
+            tokio::time::sleep(
+                Duration::from_millis(50)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            )
+            .await;
+        }
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;

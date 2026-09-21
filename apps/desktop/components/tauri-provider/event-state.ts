@@ -66,10 +66,7 @@ import {
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import { requestLocalSinkConsent } from "../local-sink/local-sink-consent";
-import {
-	ensureRpaSystemPermissions,
-	requestRpaAutomationConsent,
-} from "../rpa";
+import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 import { startRegressionSuiteRun } from "./regression-runner";
@@ -310,25 +307,13 @@ export class EventState implements IEventState {
 			boardId: event.board_id,
 			context,
 			eventId: event.id,
+			version: event.board_version as [number, number, number] | undefined,
 		});
 		if (!approved) {
 			const error = new Error(
 				"Computer automation was not approved for this event.",
 			) as Error & { isRpaConsentError?: boolean };
 			error.isRpaConsentError = true;
-			throw error;
-		}
-
-		const permissionsGranted = await ensureRpaSystemPermissions({
-			appId,
-			boardId: event.board_id,
-			eventId: event.id,
-		});
-		if (!permissionsGranted) {
-			const error = new Error(
-				"RPA system permissions were not granted.",
-			) as Error & { isRpaPermissionDeclined?: boolean };
-			error.isRpaPermissionDeclined = true;
 			throw error;
 		}
 	}
@@ -826,6 +811,21 @@ export class EventState implements IEventState {
 			...args,
 			dryRun: true,
 		});
+		const restored = preview.plan.restored;
+		if (restored.board_id && restored.execution_mode !== "Remote") {
+			const board = await this.backend.boardState.getBoard(
+				appId,
+				restored.board_id,
+				restored.board_version as [number, number, number] | undefined,
+				true,
+			);
+			await this.ensureRpaApprovalForEvent(
+				appId,
+				restored,
+				board,
+				"event_registration",
+			);
+		}
 		const registerSink = await this.confirmLocalSinkRegistration(
 			appId,
 			preview.plan.restored,

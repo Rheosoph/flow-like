@@ -1,15 +1,69 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
-#[cfg(target_os = "macos")]
-use tauri_plugin_opener::OpenerExt;
+
+#[cfg(desktop)]
+use flow_like_catalog::automation_capabilities::capability_status;
+#[cfg(desktop)]
+pub use flow_like_catalog::automation_capabilities::{
+    AutomationCapability, CapabilityState, CapabilityStatus,
+};
+#[cfg(mobile)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationCapability {
+    Browser,
+    Clipboard,
+    ApplicationLaunch,
+    InputControl,
+    InputMonitoring,
+    ScreenCapture,
+    Accessibility,
+    WindowManagement,
+}
 
 use crate::functions::TauriFunctionError;
 
+#[cfg(mobile)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityState {
+    Unsupported,
+}
+#[cfg(mobile)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityStatus {
+    pub capability: AutomationCapability,
+    pub state: CapabilityState,
+    pub detail: String,
+    pub can_request: bool,
+}
+#[cfg(mobile)]
+impl CapabilityStatus {
+    pub fn available(&self) -> bool {
+        false
+    }
+}
+#[cfg(mobile)]
+fn capability_status(capability: AutomationCapability) -> CapabilityStatus {
+    CapabilityStatus {
+        capability,
+        state: CapabilityState::Unsupported,
+        detail: "Desktop automation is not supported on this platform".into(),
+        can_request: false,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionStatus {
+    // Kept for existing clients; capabilities is the authoritative per-resource result.
     pub accessibility: bool,
     pub screen_recording: bool,
+    pub input_monitoring: bool,
     pub executable_path: Option<String>,
+    pub platform: String,
+    pub capabilities: Vec<CapabilityStatus>,
+    pub required: Vec<AutomationCapability>,
+    pub all_granted: bool,
 }
 
 fn current_executable_path() -> Option<String> {
@@ -18,163 +72,84 @@ fn current_executable_path() -> Option<String> {
         .map(|path| path.display().to_string())
 }
 
-#[cfg(target_os = "macos")]
-fn open_macos_privacy_pane(handler: &AppHandle, anchor: &str) -> Result<(), TauriFunctionError> {
-    let url = format!("x-apple.systempreferences:com.apple.preference.security?{anchor}");
+pub fn permission_status(required: Vec<AutomationCapability>) -> PermissionStatus {
+    use AutomationCapability::*;
+    let capabilities: Vec<_> = [
+        Browser,
+        Clipboard,
+        ApplicationLaunch,
+        InputControl,
+        InputMonitoring,
+        ScreenCapture,
+        Accessibility,
+        WindowManagement,
+    ]
+    .into_iter()
+    .map(capability_status)
+    .collect();
+    let available = |capability| {
+        capabilities
+            .iter()
+            .any(|status| status.capability == capability && status.available())
+    };
+    PermissionStatus {
+        accessibility: available(Accessibility),
+        screen_recording: available(ScreenCapture),
+        input_monitoring: available(InputMonitoring),
+        executable_path: current_executable_path(),
+        platform: std::env::consts::OS.into(),
+        all_granted: required.iter().all(|capability| available(*capability)),
+        capabilities,
+        required,
+    }
+}
 
-    if handler
-        .opener()
-        .open_url(url.as_str(), None::<&str>)
-        .is_ok()
-    {
+pub fn ensure_capabilities(required: Vec<AutomationCapability>) -> Result<(), TauriFunctionError> {
+    let status = permission_status(required);
+    if status.all_granted {
         return Ok(());
     }
-
-    std::process::Command::new("open")
-        .arg(&url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| {
-            TauriFunctionError::new(&format!(
-                "Failed to open macOS System Settings privacy pane: {error}"
-            ))
-        })
+    let missing: Vec<_> = status
+        .capabilities
+        .iter()
+        .filter(|entry| status.required.contains(&entry.capability) && !entry.available())
+        .map(|entry| format!("{:?}: {}", entry.capability, entry.detail))
+        .collect();
+    Err(TauriFunctionError::new(&format!(
+        "Automation capabilities unavailable: {}",
+        missing.join("; ")
+    )))
 }
 
-#[cfg(target_os = "macos")]
-mod macos {
-    use super::PermissionStatus;
-    use std::ffi::c_void;
-    use std::ptr;
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        fn AXIsProcessTrusted() -> bool;
-        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+pub async fn ensure_recording_permissions(
+    _handler: &AppHandle,
+    capture_screenshots: bool,
+    capture_fingerprints: bool,
+) -> Result<(), TauriFunctionError> {
+    let mut required = vec![
+        AutomationCapability::InputMonitoring,
+        AutomationCapability::WindowManagement,
+    ];
+    if capture_screenshots {
+        required.push(AutomationCapability::ScreenCapture);
     }
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> bool;
-        fn CGRequestScreenCaptureAccess() -> bool;
+    if capture_fingerprints {
+        required.push(AutomationCapability::Accessibility);
     }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFStringCreateWithCString(
-            allocator: *const c_void,
-            c_str: *const i8,
-            encoding: u32,
-        ) -> *const c_void;
-        fn CFDictionaryCreate(
-            allocator: *const c_void,
-            keys: *const *const c_void,
-            values: *const *const c_void,
-            num_values: isize,
-            key_callbacks: *const c_void,
-            value_callbacks: *const c_void,
-        ) -> *const c_void;
-        fn CFRelease(cf: *const c_void);
-        static kCFBooleanTrue: *const c_void;
-        static kCFTypeDictionaryKeyCallBacks: c_void;
-        static kCFTypeDictionaryValueCallBacks: c_void;
-    }
-
-    const K_CF_STRING_ENCODING_UTF8: u32 = 0x08000100;
-
-    pub fn check_accessibility() -> bool {
-        unsafe { AXIsProcessTrusted() }
-    }
-
-    pub fn check_screen_recording() -> bool {
-        unsafe { CGPreflightScreenCaptureAccess() }
-    }
-
-    pub fn request_accessibility() -> bool {
-        unsafe {
-            let key_str = b"AXTrustedCheckOptionPrompt\0";
-            let key = CFStringCreateWithCString(
-                ptr::null(),
-                key_str.as_ptr() as *const i8,
-                K_CF_STRING_ENCODING_UTF8,
-            );
-
-            if key.is_null() {
-                return AXIsProcessTrustedWithOptions(ptr::null());
-            }
-
-            let keys = [key];
-            let values = [kCFBooleanTrue];
-
-            let options = CFDictionaryCreate(
-                ptr::null(),
-                keys.as_ptr(),
-                values.as_ptr(),
-                1,
-                &kCFTypeDictionaryKeyCallBacks as *const c_void,
-                &kCFTypeDictionaryValueCallBacks as *const c_void,
-            );
-
-            let trusted = AXIsProcessTrustedWithOptions(options);
-
-            if !options.is_null() {
-                CFRelease(options);
-            }
-            CFRelease(key);
-
-            trusted
-        }
-    }
-
-    pub fn request_screen_recording() -> bool {
-        unsafe {
-            CGRequestScreenCaptureAccess();
-            CGPreflightScreenCaptureAccess()
-        }
-    }
-
-    pub fn get_permission_status() -> PermissionStatus {
-        PermissionStatus {
-            accessibility: check_accessibility(),
-            screen_recording: check_screen_recording(),
-            executable_path: super::current_executable_path(),
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-mod other {
-    use super::PermissionStatus;
-
-    pub fn get_permission_status() -> PermissionStatus {
-        PermissionStatus {
-            accessibility: true,
-            screen_recording: true,
-            executable_path: super::current_executable_path(),
-        }
-    }
-
-    pub fn request_accessibility() -> bool {
-        true
-    }
-
-    pub fn request_screen_recording() -> bool {
-        true
-    }
+    ensure_capabilities(required)
 }
 
 #[tauri::command(async)]
 pub async fn check_rpa_permissions(
     _handler: AppHandle,
+    required: Option<Vec<AutomationCapability>>,
 ) -> Result<PermissionStatus, TauriFunctionError> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(macos::get_permission_status())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Ok(other::get_permission_status())
-    }
+    Ok(permission_status(required.unwrap_or_else(|| {
+        vec![
+            AutomationCapability::InputControl,
+            AutomationCapability::ScreenCapture,
+        ]
+    })))
 }
 
 #[tauri::command(async)]
@@ -182,40 +157,20 @@ pub async fn request_rpa_permission(
     handler: AppHandle,
     permission_type: String,
 ) -> Result<bool, TauriFunctionError> {
-    #[cfg(not(target_os = "macos"))]
     let _ = handler;
-
-    #[cfg(target_os = "macos")]
+    let capability = match permission_type.as_str() {
+        "screen_recording" => AutomationCapability::ScreenCapture,
+        _ => serde_json::from_value(serde_json::Value::String(permission_type))?,
+    };
+    #[cfg(desktop)]
     {
-        match permission_type.as_str() {
-            "accessibility" => {
-                let granted = macos::request_accessibility();
-                if !granted {
-                    open_macos_privacy_pane(&handler, "Privacy_Accessibility")?;
-                }
-                Ok(granted || macos::check_accessibility())
-            }
-            "screen_recording" => {
-                let granted = macos::request_screen_recording();
-                if !granted {
-                    open_macos_privacy_pane(&handler, "Privacy_ScreenCapture")?;
-                }
-                Ok(granted || macos::check_screen_recording())
-            }
-            _ => Err(TauriFunctionError::new(&format!(
-                "Unknown permission type: {}",
-                permission_type
-            ))),
-        }
+        Ok(flow_like_catalog::automation_capabilities::request_capability(capability).await?)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(mobile)]
     {
-        match permission_type.as_str() {
-            "accessibility" | "screen_recording" => Ok(true),
-            _ => Err(TauriFunctionError::new(&format!(
-                "Unknown permission type: {}",
-                permission_type
-            ))),
-        }
+        let _ = capability;
+        Err(TauriFunctionError::new(
+            "Desktop automation is not supported on this platform",
+        ))
     }
 }

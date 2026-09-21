@@ -91,39 +91,17 @@ pub struct AutomationSession {
     /// Current page info if a page is open
     pub current_page_ref: Option<String>,
     pub current_window_handle: Option<String>,
+    #[serde(default)]
+    pub browser_frame_selectors: Vec<crate::types::selectors::Selector>,
 }
 
 #[cfg(feature = "execute")]
-pub struct SendSyncRustAutoGui(pub rustautogui::RustAutoGui);
-
-// SAFETY: RustAutoGui contains raw pointers (HDC, HBITMAP on Windows) that are
-// effectively owned resources. All access is protected behind a Mutex, ensuring
-// only one thread accesses the GUI at a time.
-#[cfg(feature = "execute")]
-unsafe impl Send for SendSyncRustAutoGui {}
-#[cfg(feature = "execute")]
-unsafe impl Sync for SendSyncRustAutoGui {}
-
-#[cfg(feature = "execute")]
-impl std::ops::Deref for SendSyncRustAutoGui {
-    type Target = rustautogui::RustAutoGui;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[cfg(feature = "execute")]
-impl std::ops::DerefMut for SendSyncRustAutoGui {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-#[cfg(feature = "execute")]
+#[derive(Clone)]
 pub struct AutomationSessionWrapper {
-    pub autogui: Arc<flow_like_types::sync::Mutex<SendSyncRustAutoGui>>,
-    pub browser_driver: Option<Arc<thirtyfour::WebDriver>>,
-    pub current_window_handle: Option<thirtyfour::WindowHandle>,
+    browser_driver: Arc<tokio::sync::RwLock<Option<Arc<thirtyfour::WebDriver>>>>,
+    browser_lock: Arc<tokio::sync::Mutex<()>>,
+    browser_owned: Arc<std::sync::atomic::AtomicBool>,
+    active: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(feature = "execute")]
@@ -131,9 +109,22 @@ impl Cacheable for AutomationSessionWrapper {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+/// Keeps tab selection and every command in a node in one browser operation.
+#[cfg(feature = "execute")]
+pub struct BrowserOperationGuard {
+    driver: Arc<thirtyfour::WebDriver>,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+#[cfg(feature = "execute")]
+impl std::ops::Deref for BrowserOperationGuard {
+    type Target = thirtyfour::WebDriver;
+    fn deref(&self) -> &Self::Target {
+        &self.driver
     }
 }
 
@@ -153,23 +144,17 @@ impl AutomationSession {
         } else {
             Platform::Linux
         };
-
-        let autogui = rustautogui::RustAutoGui::new(debug_mode)
-            .map_err(|e| flow_like_types::anyhow!("Failed to create RustAutoGui: {}", e))?;
-
         let wrapper = AutomationSessionWrapper {
-            autogui: Arc::new(flow_like_types::sync::Mutex::new(SendSyncRustAutoGui(
-                autogui,
-            ))),
-            browser_driver: None,
-            current_window_handle: None,
+            browser_driver: Arc::new(tokio::sync::RwLock::new(None)),
+            browser_owned: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            browser_lock: Arc::new(tokio::sync::Mutex::new(())),
+            active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         ctx.cache
             .write()
             .await
             .insert(id.clone(), Arc::new(wrapper));
-
-        Ok(AutomationSession {
+        Ok(Self {
             session_ref: id,
             platform,
             default_delay_ms,
@@ -180,37 +165,56 @@ impl AutomationSession {
             browser_user_data_dir: None,
             current_page_ref: None,
             current_window_handle: None,
+            browser_frame_selectors: Vec::new(),
         })
     }
 
-    /// Creates enigo instance for keyboard/mouse control
     #[cfg(feature = "execute")]
-    pub fn create_enigo(&self) -> flow_like_types::Result<enigo::Enigo> {
-        use enigo::{Enigo, Settings};
-        let settings = Settings::default();
-        Enigo::new(&settings).map_err(|e| flow_like_types::anyhow!("Failed to create Enigo: {}", e))
-    }
-
-    /// Get rustautogui for template matching
-    #[cfg(feature = "execute")]
-    pub async fn get_autogui(
+    async fn wrapper(
         &self,
         ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<Arc<flow_like_types::sync::Mutex<SendSyncRustAutoGui>>> {
+    ) -> flow_like_types::Result<AutomationSessionWrapper> {
         let cache = ctx.cache.read().await;
         let wrapper = cache
             .get(&self.session_ref)
-            .ok_or_else(|| flow_like_types::anyhow!("Automation session not found in cache"))?;
-        let wrapper = wrapper
-            .as_any()
-            .downcast_ref::<AutomationSessionWrapper>()
+            .and_then(|value| value.as_any().downcast_ref::<AutomationSessionWrapper>())
             .ok_or_else(|| {
-                flow_like_types::anyhow!("Could not downcast to AutomationSessionWrapper")
+                flow_like_types::anyhow!("Automation session is closed or belongs to another run")
             })?;
-        Ok(wrapper.autogui.clone())
+        if !wrapper.active.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(flow_like_types::anyhow!("Automation session is closed"));
+        }
+        Ok(wrapper.clone())
     }
 
-    /// Attach a browser to this session
+    #[cfg(feature = "execute")]
+    pub async fn ensure_active(&self, ctx: &ExecutionContext) -> flow_like_types::Result<()> {
+        self.wrapper(ctx).await.map(|_| ())
+    }
+
+    #[cfg(feature = "execute")]
+    pub(crate) async fn create_enigo(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> flow_like_types::Result<crate::computer::native::input::DesktopInput> {
+        let wrapper = self.wrapper(ctx).await?;
+        crate::computer::native::input::DesktopInput::new(
+            wrapper.active,
+            ctx.get_cancellation_token(),
+        )
+        .await
+    }
+
+    #[cfg(feature = "execute")]
+    pub async fn apply_delay(&self, ctx: &ExecutionContext) -> flow_like_types::Result<()> {
+        crate::rpa::branch::delay(
+            ctx,
+            std::time::Duration::from_millis(self.default_delay_ms.min(60_000)),
+        )
+        .await?;
+        self.ensure_active(ctx).await
+    }
+
     #[cfg(feature = "execute")]
     pub async fn attach_browser(
         &mut self,
@@ -218,145 +222,205 @@ impl AutomationSession {
         driver: thirtyfour::WebDriver,
         options: &BrowserContextOptions,
     ) -> flow_like_types::Result<()> {
-        let driver_arc = Arc::new(driver);
-
-        {
-            let mut cache = ctx.cache.write().await;
-            if let Some(wrapper) = cache.get_mut(&self.session_ref) {
-                if let Some(wrapper) = Arc::get_mut(wrapper) {
-                    if let Some(auto_wrapper) = wrapper
-                        .as_any_mut()
-                        .downcast_mut::<AutomationSessionWrapper>()
-                    {
-                        auto_wrapper.browser_driver = Some(driver_arc);
-                    }
-                } else {
-                    return Err(flow_like_types::anyhow!(
-                        "Cannot attach browser: session wrapper has multiple references"
-                    ));
-                }
-            }
+        let wrapper = self.wrapper(ctx).await?;
+        let _operation = wrapper.browser_lock.lock().await;
+        let mut current = wrapper.browser_driver.write().await;
+        if current.is_some() {
+            return Err(flow_like_types::anyhow!(
+                "Close the attached browser before replacing it"
+            ));
         }
-
+        wrapper
+            .browser_owned
+            .store(true, std::sync::atomic::Ordering::Release);
+        *current = Some(Arc::new(driver));
         self.browser_type = Some(options.browser_type.clone());
         self.browser_headless = Some(options.headless);
         self.browser_user_data_dir = options.user_data_dir.clone();
-
+        self.clear_current_page();
         Ok(())
     }
 
-    /// Get the browser driver if attached
+    #[cfg(feature = "execute")]
+    pub async fn attach_existing_browser(
+        &mut self,
+        ctx: &mut ExecutionContext,
+        driver: thirtyfour::WebDriver,
+        options: &BrowserContextOptions,
+    ) -> flow_like_types::Result<()> {
+        // Prevent the WebDriver destructor from closing a browser owned by the user.
+        driver.clone().leak()?;
+        self.attach_browser(ctx, driver, options).await?;
+        self.wrapper(ctx)
+            .await?
+            .browser_owned
+            .store(false, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
     #[cfg(feature = "execute")]
     pub async fn get_browser_driver(
         &self,
         ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<Arc<thirtyfour::WebDriver>> {
-        let cache = ctx.cache.read().await;
-        let wrapper = cache
-            .get(&self.session_ref)
-            .ok_or_else(|| flow_like_types::anyhow!("Automation session not found in cache"))?;
-        let wrapper = wrapper
-            .as_any()
-            .downcast_ref::<AutomationSessionWrapper>()
-            .ok_or_else(|| {
-                flow_like_types::anyhow!("Could not downcast to AutomationSessionWrapper")
-            })?;
-        wrapper
+    ) -> flow_like_types::Result<BrowserOperationGuard> {
+        let wrapper = self.wrapper(ctx).await?;
+        let guard = wrapper.browser_lock.clone().lock_owned().await;
+        crate::rpa::branch::delay(
+            ctx,
+            std::time::Duration::from_millis(self.default_delay_ms.min(60_000)),
+        )
+        .await?;
+        if !wrapper.active.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(flow_like_types::anyhow!("Automation session is closed"));
+        }
+        let driver = wrapper
             .browser_driver
+            .read()
+            .await
             .clone()
-            .ok_or_else(|| flow_like_types::anyhow!("No browser attached to this session"))
+            .ok_or_else(|| flow_like_types::anyhow!("No browser attached to this session"))?;
+        Ok(BrowserOperationGuard {
+            driver,
+            _guard: guard,
+        })
     }
 
-    /// Check if browser is attached
     pub fn has_browser(&self) -> bool {
         self.browser_type.is_some()
     }
 
-    /// Set the current page/window handle
+    pub fn clear_current_page(&mut self) {
+        self.current_page_ref = None;
+        self.current_window_handle = None;
+        self.browser_frame_selectors.clear();
+    }
+
     #[cfg(feature = "execute")]
     pub async fn set_current_page(
         &mut self,
         ctx: &mut ExecutionContext,
         window_handle: thirtyfour::WindowHandle,
     ) -> flow_like_types::Result<()> {
-        let page_ref = create_id();
-        let handle_str = window_handle.to_string();
-
-        {
-            let mut cache = ctx.cache.write().await;
-            if let Some(wrapper) = cache.get_mut(&self.session_ref) {
-                if let Some(wrapper) = Arc::get_mut(wrapper) {
-                    if let Some(auto_wrapper) = wrapper
-                        .as_any_mut()
-                        .downcast_mut::<AutomationSessionWrapper>()
-                    {
-                        auto_wrapper.current_window_handle = Some(window_handle);
-                    }
-                } else {
-                    return Err(flow_like_types::anyhow!(
-                        "Cannot set current page: session wrapper has multiple references"
-                    ));
-                }
-            }
-        }
-
-        self.current_page_ref = Some(page_ref);
-        self.current_window_handle = Some(handle_str);
-
+        self.ensure_active(ctx).await?;
+        self.browser_frame_selectors.clear();
+        self.current_page_ref = Some(create_id());
+        self.current_window_handle = Some(window_handle.to_string());
         Ok(())
     }
 
-    /// Get browser driver and switch to current window
     #[cfg(feature = "execute")]
     pub async fn get_browser_driver_and_switch(
         &self,
         ctx: &ExecutionContext,
-    ) -> flow_like_types::Result<Arc<thirtyfour::WebDriver>> {
-        let cache = ctx.cache.read().await;
-        let wrapper = cache
-            .get(&self.session_ref)
-            .ok_or_else(|| flow_like_types::anyhow!("Automation session not found in cache"))?;
-        let wrapper = wrapper
-            .as_any()
-            .downcast_ref::<AutomationSessionWrapper>()
-            .ok_or_else(|| {
-                flow_like_types::anyhow!("Could not downcast to AutomationSessionWrapper")
-            })?;
-
-        let driver = wrapper
-            .browser_driver
-            .clone()
-            .ok_or_else(|| flow_like_types::anyhow!("No browser attached to this session"))?;
-
-        if let Some(window_handle) = &wrapper.current_window_handle {
-            driver
-                .switch_to_window(window_handle.clone())
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to switch window: {}", e))?;
+    ) -> flow_like_types::Result<BrowserOperationGuard> {
+        let driver = self.get_browser_driver(ctx).await?;
+        let handle = self
+            .current_window_handle
+            .as_ref()
+            .ok_or_else(|| flow_like_types::anyhow!("Select or open a browser page first"))?;
+        driver
+            .switch_to_window(thirtyfour::WindowHandle::from(handle.clone()))
+            .await?;
+        driver.enter_default_frame().await?;
+        for selector in &self.browser_frame_selectors {
+            crate::browser::selector::find(&driver, selector)
+                .await?
+                .enter_frame()
+                .await?;
         }
-
         Ok(driver)
     }
 
-    /// Close the session and release resources
     #[cfg(feature = "execute")]
-    pub async fn close(&self, ctx: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        // Close browser if attached
-        {
-            let cache = ctx.cache.read().await;
-            if let Some(wrapper) = cache.get(&self.session_ref)
-                && let Some(auto_wrapper) =
-                    wrapper.as_any().downcast_ref::<AutomationSessionWrapper>()
-                && let Some(driver) = &auto_wrapper.browser_driver
+    pub async fn detach_browser(
+        &mut self,
+        ctx: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        let wrapper = self.wrapper(ctx).await?;
+        let _guard = wrapper.browser_lock.lock().await;
+        let driver = wrapper.browser_driver.write().await.take();
+        self.browser_type = None;
+        self.browser_headless = None;
+        self.browser_user_data_dir = None;
+        self.clear_current_page();
+        if let Some(driver) = driver {
+            if wrapper
+                .browser_owned
+                .load(std::sync::atomic::Ordering::Acquire)
             {
-                let driver_clone = (**driver).clone();
-                let _ = driver_clone.quit().await;
+                ignore_closed_driver((*driver).clone().quit().await)?;
+            } else {
+                // Chromium's remote-debugging backend deletes the driver session without closing the attached browser.
+                ignore_closed_driver(
+                    driver
+                        .handle
+                        .cmd(thirtyfour::common::command::Command::DeleteSession)
+                        .await
+                        .map(|_| ()),
+                )?;
             }
         }
-
-        // Remove from cache
-        ctx.cache.write().await.remove(&self.session_ref);
-
         Ok(())
+    }
+
+    #[cfg(feature = "execute")]
+    pub async fn close(&self, ctx: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let wrapper = self.wrapper(ctx).await?;
+        wrapper
+            .active
+            .store(false, std::sync::atomic::Ordering::Release);
+        let mut cache = ctx.cache.write().await;
+        let prefixes = [
+            "automation:auth:",
+            "automation:network:",
+            "automation:driver:",
+            "automation:download:",
+            "automation:debugger:",
+        ]
+        .map(|prefix| format!("{}{}", prefix, self.session_ref));
+        cache.retain(|key, _| {
+            key != &self.session_ref
+                && !prefixes
+                    .iter()
+                    .any(|prefix| key == prefix || key.starts_with(&format!("{}:", prefix)))
+        });
+        drop(cache);
+        let _guard = wrapper.browser_lock.lock().await;
+        if let Some(driver) = wrapper.browser_driver.write().await.take() {
+            if wrapper
+                .browser_owned
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                ignore_closed_driver((*driver).clone().quit().await)?;
+            } else {
+                // Chromium's remote-debugging backend deletes the driver session without closing the attached browser.
+                ignore_closed_driver(
+                    driver
+                        .handle
+                        .cmd(thirtyfour::common::command::Command::DeleteSession)
+                        .await
+                        .map(|_| ()),
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "execute")]
+fn ignore_closed_driver(
+    result: thirtyfour::error::WebDriverResult<()>,
+) -> flow_like_types::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.as_inner(),
+                thirtyfour::error::WebDriverErrorInner::InvalidSessionId(_)
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
     }
 }

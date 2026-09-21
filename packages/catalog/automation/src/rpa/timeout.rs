@@ -24,6 +24,7 @@ impl NodeLogic for WithTimeoutNode {
             "Executes an action with a timeout constraint",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "withTimeout");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -52,7 +53,7 @@ impl NodeLogic for WithTimeoutNode {
         node.add_input_pin(
             "completed",
             "Completed",
-            "Whether the action completed (wire from action result)",
+            "Legacy input; completion is determined by the action branch",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
@@ -96,19 +97,28 @@ impl NodeLogic for WithTimeoutNode {
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
         let start = Instant::now();
 
-        context.activate_exec_pin("exec_action").await?;
-
-        let elapsed = start.elapsed().as_millis() as i64;
-        context.set_pin_value("elapsed_ms", json!(elapsed)).await?;
-
-        let completed: bool = context.evaluate_pin("completed").await?;
-
-        if elapsed > timeout_ms {
-            context.activate_exec_pin("exec_timeout").await?;
-        } else if completed {
-            context.activate_exec_pin("exec_success").await?;
-        } else {
-            context.activate_exec_pin("exec_timeout").await?;
+        if timeout_ms < 0 {
+            return Err(flow_like_types::anyhow!("Timeout must be nonnegative"));
+        }
+        let outcome = super::branch::run_branch(
+            context,
+            "exec_action",
+            Some(std::time::Duration::from_millis(timeout_ms as u64)),
+        )
+        .await?;
+        context
+            .set_pin_value("elapsed_ms", json!(start.elapsed().as_millis() as i64))
+            .await?;
+        match outcome {
+            super::branch::BranchResult::Completed => {
+                context.activate_exec_pin("exec_success").await?
+            }
+            super::branch::BranchResult::TimedOut => {
+                context.activate_exec_pin("exec_timeout").await?
+            }
+            super::branch::BranchResult::Failed(error) => {
+                return Err(flow_like_types::anyhow!(error));
+            }
         }
 
         Ok(())

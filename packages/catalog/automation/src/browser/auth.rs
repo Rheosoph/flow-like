@@ -5,15 +5,26 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
+#[cfg(feature = "execute")]
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_types::{async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone)]
 pub struct BasicAuthCredentials {
     pub username: String,
     pub password: String,
+}
+
+impl std::fmt::Debug for BasicAuthCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BasicAuthCredentials")
+            .field("username", &self.username)
+            .field("password", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -47,6 +58,7 @@ impl NodeLogic for BrowserSetBasicAuthNode {
             "Configures HTTP Basic Authentication credentials for requests",
             "Automation/Browser/Auth",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "setBasicAuth");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -86,8 +98,26 @@ impl NodeLogic for BrowserSetBasicAuthNode {
             "HTTP Basic Auth password",
             VariableType::String,
         )
+        .set_options(
+            flow_like::flow::pin::PinOptions::new()
+                .set_sensitive(true)
+                .build(),
+        )
         .set_default_value(Some(json!("")));
 
+        node.add_input_pin(
+            "origin",
+            "Origin",
+            "HTTP(S) origin allowed to receive credentials",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "debugger_address",
+            "Debugger Address",
+            "Optional Chrome or Edge debugger address; defaults to the attached browser",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -111,23 +141,17 @@ impl NodeLogic for BrowserSetBasicAuthNode {
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        // Execute CDP command to set basic auth via request interception
-        let script = format!(
-            r#"
-            // Store credentials for basic auth
-            window.__flowlike_basic_auth = {{
-                username: '{}',
-                password: '{}'
-            }};
-            "#,
-            username.replace('\'', "\\'"),
-            password.replace('\'', "\\'")
-        );
-
-        driver
-            .execute(&script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to set basic auth credentials: {}", e))?;
+        let origin: String = context.evaluate_pin("origin").await?;
+        let debugger_address: String = context.evaluate_pin("debugger_address").await?;
+        let origin = super::protocol::normalized_origin(&origin)?;
+        super::protocol::start_listener(
+            context,
+            &session,
+            &driver,
+            &debugger_address,
+            Some((origin, username, password)),
+        )
+        .await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;

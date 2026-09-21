@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
 pub struct AccessibilityNode {
+    #[serde(default)]
+    pub native_id: Option<String>,
     pub role: String,
     pub name: Option<String>,
     pub value: Option<String>,
@@ -47,6 +49,7 @@ impl NodeLogic for ComputerGetAccessibilityTreeNode {
             "Retrieves the accessibility tree for a window (requires platform-specific accessibility APIs)",
             "Automation/Computer/Accessibility",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "getAccessibilityTree");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -75,7 +78,7 @@ impl NodeLogic for ComputerGetAccessibilityTreeNode {
         node.add_input_pin(
             "window_title",
             "Window Title",
-            "Title of the window to inspect (leave empty for focused window)",
+            "Window title; empty uses the focused window, or the desktop accessibility root on Linux",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -83,7 +86,7 @@ impl NodeLogic for ComputerGetAccessibilityTreeNode {
         node.add_input_pin(
             "max_depth",
             "Max Depth",
-            "Maximum tree depth to traverse (-1 for unlimited)",
+            "Maximum tree depth (1–32); results are limited to 2000 elements",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(10)));
@@ -135,44 +138,32 @@ impl NodeLogic for ComputerGetAccessibilityTreeNode {
         context.deactivate_exec_pin("exec_error").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let _window_title: String = context
+        session.ensure_active(context).await?;
+        let window_title: String = context
             .evaluate_pin("window_title")
             .await
             .unwrap_or_default();
-        let _max_depth: i64 = context.evaluate_pin("max_depth").await.unwrap_or(10);
-
-        // Note: Platform-specific accessibility API integration would be needed here
-        // macOS: AXUIElement APIs
-        // Windows: UI Automation (UIA) or MSAA
-        // Linux: AT-SPI2
-
-        // For now, return a placeholder indicating the feature requires platform-specific setup
-        let error_msg = "Accessibility tree retrieval requires platform-specific APIs. \
-                        Consider using browser automation accessibility APIs instead, \
-                        or implement platform-specific bindings."
-            .to_string();
-
-        let placeholder_tree = AccessibilityNode {
-            role: "application".to_string(),
-            name: Some("Accessibility API not implemented".to_string()),
-            value: None,
-            description: Some(error_msg.clone()),
-            bounds: None,
-            states: vec![],
-            actions: vec![],
-            children: vec![],
-        };
-
-        let tree_json = flow_like_types::json::to_string_pretty(&placeholder_tree)
-            .unwrap_or_else(|_| "{}".to_string());
+        let max_depth: i64 = context.evaluate_pin("max_depth").await.unwrap_or(10);
 
         context.set_pin_value("session_out", json!(session)).await?;
-        context
-            .set_pin_value("tree", json!(placeholder_tree))
-            .await?;
-        context.set_pin_value("tree_json", json!(tree_json)).await?;
-        context.set_pin_value("error", json!(error_msg)).await?;
-        context.activate_exec_pin("exec_error").await?;
+        match load_tree(&window_title, max_depth.clamp(1, 32) as usize).await {
+            Ok(tree) => {
+                context
+                    .set_pin_value("tree_json", json!(flow_like_types::json::to_string(&tree)?))
+                    .await?;
+                context.set_pin_value("tree", json!(tree)).await?;
+                context.set_pin_value("error", json!("")).await?;
+                context.activate_exec_pin("exec_out").await?;
+            }
+            Err(error) => {
+                context.set_pin_value("tree", json!(null)).await?;
+                context.set_pin_value("tree_json", json!("")).await?;
+                context
+                    .set_pin_value("error", json!(error.to_string()))
+                    .await?;
+                context.activate_exec_pin("exec_error").await?;
+            }
+        }
 
         Ok(())
     }
@@ -204,6 +195,7 @@ impl NodeLogic for ComputerFindAccessibilityElementNode {
             "Finds an element in the accessibility tree by role, name, or other attributes",
             "Automation/Computer/Accessibility",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "findAccessibilityElement");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -228,6 +220,14 @@ impl NodeLogic for ComputerFindAccessibilityElementNode {
             VariableType::Struct,
         )
         .set_schema::<AutomationSession>();
+
+        node.add_input_pin(
+            "window_title",
+            "Window",
+            "Window title, or empty for the active window",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
 
         node.add_input_pin(
             "role",
@@ -291,17 +291,49 @@ impl NodeLogic for ComputerFindAccessibilityElementNode {
         context.deactivate_exec_pin("exec_not_found").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let _role: String = context.evaluate_pin("role").await.unwrap_or_default();
-        let _name: String = context.evaluate_pin("name").await.unwrap_or_default();
+        session.ensure_active(context).await?;
+        let role: String = context.evaluate_pin("role").await.unwrap_or_default();
+        let name: String = context.evaluate_pin("name").await.unwrap_or_default();
 
-        // Platform-specific implementation would go here
+        let window: String = context
+            .evaluate_pin("window_title")
+            .await
+            .unwrap_or_default();
+        if role.is_empty() && name.is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "Provide a role or name to find an element"
+            ));
+        }
+        let tree = load_tree(&window, 32).await?;
+        let mut matches = Vec::new();
+        find_elements(&tree, &role, &name, &mut matches);
+        if matches.len() > 1 {
+            return Err(flow_like_types::anyhow!(
+                "More than one accessibility element matches; refine role, name, or window"
+            ));
+        }
         context.set_pin_value("session_out", json!(session)).await?;
-        context
-            .set_pin_value("element", json!(AccessibilityNode::default()))
-            .await?;
-        context.set_pin_value("x", json!(0)).await?;
-        context.set_pin_value("y", json!(0)).await?;
-        context.activate_exec_pin("exec_not_found").await?;
+        if let Some(element) = matches.first() {
+            let (x, y) = element
+                .bounds
+                .as_ref()
+                .and_then(|b| {
+                    Some((
+                        b.x.checked_add(b.width / 2)?,
+                        b.y.checked_add(b.height / 2)?,
+                    ))
+                })
+                .unwrap_or((0, 0));
+            context.set_pin_value("element", json!(element)).await?;
+            context.set_pin_value("x", json!(x)).await?;
+            context.set_pin_value("y", json!(y)).await?;
+            context.activate_exec_pin("exec_out").await?;
+        } else {
+            context.set_pin_value("element", json!(null)).await?;
+            context.set_pin_value("x", json!(0)).await?;
+            context.set_pin_value("y", json!(0)).await?;
+            context.activate_exec_pin("exec_not_found").await?;
+        }
 
         Ok(())
     }
@@ -310,6 +342,156 @@ impl NodeLogic for ComputerFindAccessibilityElementNode {
     async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         Err(flow_like_types::anyhow!(
             "Computer automation requires the 'execute' feature"
+        ))
+    }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) async fn load_tree(
+    title: &str,
+    depth: usize,
+) -> flow_like_types::Result<AccessibilityNode> {
+    #[cfg(target_os = "linux")]
+    let id = if title.is_empty() {
+        String::new()
+    } else {
+        super::native::select_window_async("", title, "", false)
+            .await?
+            .ok_or_else(|| flow_like_types::anyhow!("Window not found"))?
+            .id()?
+            .to_string()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let id = super::native::select_window_async("", title, "", false)
+        .await?
+        .ok_or_else(|| flow_like_types::anyhow!("Window not found"))?
+        .id()?
+        .to_string();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        super::native::accessibility_tree(&id, depth),
+    )
+    .await
+    .map_err(|_| flow_like_types::anyhow!("Accessibility query timed out"))?
+}
+
+pub(crate) fn find_elements<'a>(
+    node: &'a AccessibilityNode,
+    role: &str,
+    name: &str,
+    matches: &mut Vec<&'a AccessibilityNode>,
+) {
+    fn canonical(role: &str) -> String {
+        role.strip_prefix("AX")
+            .unwrap_or(role)
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    if (role.is_empty() || canonical(&node.role) == canonical(role))
+        && (name.is_empty()
+            || node
+                .name
+                .as_ref()
+                .is_some_and(|n| n.to_lowercase().contains(&name.to_lowercase())))
+    {
+        matches.push(node);
+    }
+    for child in &node.children {
+        find_elements(child, role, name, matches);
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerAccessibilityActionNode;
+impl ComputerAccessibilityActionNode {
+    pub fn new() -> Self {
+        Self
+    }
+}
+#[async_trait]
+impl NodeLogic for ComputerAccessibilityActionNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_accessibility_action",
+            "Act on Accessibility Element",
+            "Invokes, focuses, selects, expands, collapses, or edits a native accessible element",
+            "Automation/Computer/Accessibility",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "accessibilityAction");
+        node.set_only_offline(true);
+        node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
+        node.add_input_pin(
+            "session",
+            "Session",
+            "Active automation session",
+            VariableType::Struct,
+        )
+        .set_schema::<AutomationSession>();
+        node.add_input_pin(
+            "element",
+            "Element",
+            "Native element returned by Find Accessibility Element",
+            VariableType::Struct,
+        )
+        .set_schema::<AccessibilityNode>();
+        node.add_input_pin("action", "Action", "Native action", VariableType::String)
+            .set_default_value(Some(json!("invoke")))
+            .set_options(
+                flow_like::flow::pin::PinOptions::new()
+                    .set_valid_values(
+                        [
+                            "invoke",
+                            "focus",
+                            "select",
+                            "expand",
+                            "collapse",
+                            "set_value",
+                        ]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    )
+                    .build(),
+            );
+        node.add_input_pin(
+            "value",
+            "Value",
+            "Value to write for set_value",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_output_pin("exec_out", "▶", "Action completed", VariableType::Execution);
+        node.add_output_pin("session_out", "Session", "Session", VariableType::Struct)
+            .set_schema::<AutomationSession>();
+        node
+    }
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let element: AccessibilityNode = context.evaluate_pin("element").await?;
+        let action: String = context.evaluate_pin("action").await?;
+        let value: String = context.evaluate_pin("value").await?;
+        super::native::accessibility_action(
+            &element,
+            &action,
+            &value,
+            context.get_cancellation_token(),
+        )
+        .await?;
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Native accessibility requires execute"
         ))
     }
 }

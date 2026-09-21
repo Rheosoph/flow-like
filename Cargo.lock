@@ -875,6 +875,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashpd"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "618a409b91d5265798a99e3d1d0b226911605e581c4e7255e83c1e397b172bce"
+dependencies = [
+ "async-fs",
+ "async-net",
+ "enumflags2",
+ "futures-channel",
+ "futures-util",
+ "rand 0.9.3",
+ "serde",
+ "serde_repr",
+ "url",
+ "zbus",
+]
+
+[[package]]
 name = "asn1-rs"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -975,6 +993,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-fs"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034a681df4aed8b8edbd7fbe472401ecf009251c8b40556b304567052e294c5"
+dependencies = [
+ "async-lock",
+ "blocking",
+ "futures-lite 2.6.1",
+]
+
+[[package]]
 name = "async-imap"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1024,6 +1053,17 @@ dependencies = [
  "event-listener 5.4.1",
  "event-listener-strategy",
  "pin-project-lite",
+]
+
+[[package]]
+name = "async-net"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b948000fad4873c1c9339d60f2623323a0cfd3816e5181033c6a5cb68b2accf7"
+dependencies = [
+ "async-io",
+ "blocking",
+ "futures-lite 2.6.1",
 ]
 
 [[package]]
@@ -8276,7 +8316,9 @@ version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
  "arboard",
+ "ashpd",
  "async-trait",
+ "atspi",
  "chrono",
  "enigo",
  "flow-like-catalog-build-helper",
@@ -8288,8 +8330,11 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
+ "http 1.4.0",
  "image",
+ "imageproc",
  "jsonschema",
+ "libwayshot-xcap",
  "rdev",
  "rig-core",
  "rustautogui",
@@ -8298,8 +8343,11 @@ dependencies = [
  "serde_json",
  "thirtyfour",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "tracing",
  "uuid 1.23.1",
+ "windows 0.61.3",
+ "x11rb",
  "xcap",
 ]
 
@@ -9191,6 +9239,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "teloxide",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "toml 0.9.12+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
  "tower 0.5.3",
@@ -30272,6 +30321,7 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
+ "url",
  "winnow 0.7.15",
  "zvariant_derive",
  "zvariant_utils",

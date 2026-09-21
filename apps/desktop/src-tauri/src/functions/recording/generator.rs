@@ -10,33 +10,118 @@ use flow_like_types::rand::Rng;
 use crate::functions::TauriFunctionError;
 
 use super::state::{
-    ActionType, KeyModifier, MouseButton, RecordedAction, RecordedFingerprint, ScrollDirection,
+    ActionType, BrowserActionKind, KeyModifier, MouseButton, RecordedAction, RecordedFingerprint,
+    ScrollDirection,
 };
 
-const BROWSER_PROCESSES: &[&str] = &[
-    "safari",
-    "google chrome",
-    "chrome",
-    "chromium",
-    "firefox",
-    "microsoft edge",
-    "msedge",
-    "arc",
-    "brave browser",
-    "brave",
-    "opera",
-    "vivaldi",
-    "orion",
-    "zen",
-    "floorp",
-    "waterfox",
-    "iexplore",
-    "edge",
-];
+fn modifier_names(modifiers: &[KeyModifier]) -> String {
+    modifiers
+        .iter()
+        .map(|modifier| match modifier {
+            KeyModifier::Shift => "shift",
+            KeyModifier::Control => "ctrl",
+            KeyModifier::Alt => "alt",
+            KeyModifier::Meta => "meta",
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
-fn is_browser_process(process_name: &str) -> bool {
-    let lower = process_name.to_lowercase();
-    BROWSER_PROCESSES.iter().any(|b| lower.contains(b))
+fn mouse_button_name(button: &MouseButton) -> &'static str {
+    match button {
+        MouseButton::Left => "left",
+        MouseButton::Right => "right",
+        MouseButton::Middle => "middle",
+    }
+}
+
+fn clipboard_shortcut(key: &str, original: &RecordedAction) -> RecordedAction {
+    let mut action = original.clone();
+    action.id = flow_like_types::create_id();
+    action.screenshot_ref = None;
+    action.fingerprint = None;
+    action.action_type = ActionType::KeyPress {
+        key: key.to_string(),
+        modifiers: vec![if cfg!(target_os = "macos") {
+            KeyModifier::Meta
+        } else {
+            KeyModifier::Control
+        }],
+    };
+    action
+}
+
+/// Expand clipboard operations and pointer-targeted scrolling into executable actions.
+fn replay_actions(actions: &[RecordedAction]) -> Vec<RecordedAction> {
+    let mut result = Vec::new();
+    let mut browser_tab = String::new();
+    let mut browser_frames = Vec::<String>::new();
+    let mut visited_browser_tabs = std::collections::HashSet::new();
+    for action in actions {
+        match &action.action_type {
+            ActionType::Browser { action: browser } => {
+                let mut helper = |kind: BrowserActionKind, selector: String| {
+                    let mut derived = action.clone();
+                    let mut browser = browser.clone();
+                    browser.kind = kind;
+                    browser.selector = selector;
+                    derived.action_type = ActionType::Browser { action: browser };
+                    result.push(derived);
+                };
+                if browser_tab != browser.tab_id || browser_tab.is_empty() {
+                    helper(BrowserActionKind::SelectTab, String::new());
+                    browser_tab = browser.tab_id.clone();
+                    browser_frames.clear();
+                }
+                if visited_browser_tabs.insert(browser.tab_id.clone())
+                    && !matches!(browser.kind, BrowserActionKind::Navigate)
+                {
+                    helper(BrowserActionKind::Navigate, String::new());
+                }
+                if browser_frames != browser.frames {
+                    helper(BrowserActionKind::LeaveFrame, String::new());
+                    for frame in &browser.frames {
+                        helper(BrowserActionKind::WaitForElement, frame.clone());
+                        helper(BrowserActionKind::EnterFrame, frame.clone());
+                    }
+                    browser_frames = browser.frames.clone();
+                }
+                if matches!(
+                    browser.kind,
+                    BrowserActionKind::Click
+                        | BrowserActionKind::DoubleClick
+                        | BrowserActionKind::Type
+                        | BrowserActionKind::Select
+                        | BrowserActionKind::Key
+                        | BrowserActionKind::Scroll
+                ) {
+                    helper(BrowserActionKind::WaitForElement, browser.selector.clone());
+                }
+                result.push(action.clone());
+            }
+            ActionType::Copy { .. } => {
+                result.push(clipboard_shortcut("c", action));
+                let mut wait = action.clone();
+                wait.action_type = ActionType::Wait { milliseconds: 150 };
+                result.push(wait);
+                result.push(action.clone());
+            }
+            ActionType::Paste { .. } => {
+                result.push(action.clone());
+                result.push(clipboard_shortcut("v", action));
+            }
+            ActionType::Scroll { .. } => {
+                if let Some((x, y)) = action.coordinates {
+                    let mut pointer = action.clone();
+                    pointer.action_type = ActionType::MouseMove { x, y };
+                    result.push(pointer);
+                }
+                result.push(action.clone());
+            }
+            _ => result.push(action.clone()),
+        }
+    }
+    result
 }
 
 fn advance_layout(
@@ -80,12 +165,12 @@ pub struct GeneratorOptions {
 impl Default for GeneratorOptions {
     fn default() -> Self {
         Self {
-            use_pattern_matching: true,
+            use_pattern_matching: false,
             template_confidence: 0.8,
             app_id: None,
             board_id: None,
             bot_detection_evasion: false,
-            use_fingerprints: true,
+            use_fingerprints: false,
         }
     }
 }
@@ -211,10 +296,8 @@ pub async fn generate_add_node_commands(
     // Track if last action was an Enter key press (for adding delay before clicks)
     let mut last_was_enter = false;
 
-    // Track the current process name to detect browser context
-    let mut current_process: Option<String> = None;
-
-    for action in actions {
+    let actions = replay_actions(actions);
+    for action in &actions {
         // Calculate delay from previous action
         let delay_ms = if let Some(prev_ts) = last_timestamp {
             let diff = action.timestamp.signed_duration_since(prev_ts);
@@ -360,19 +443,7 @@ pub async fn generate_add_node_commands(
             }
         }
 
-        tracing::debug!(" Processing action: {:?}", action.action_type);
-
-        // Update current_process from action metadata if available
-        if let Some(ref proc) = action.metadata.process_name
-            && !proc.is_empty()
-        {
-            current_process = Some(proc.clone());
-        }
-
-        let in_browser = current_process
-            .as_deref()
-            .map(is_browser_process)
-            .unwrap_or(false);
+        tracing::debug!(action_id = %action.id, "Generating recorded action");
 
         // Track helper nodes needed for pattern matching (path_from_storage_dir, child)
         let mut helper_commands: Vec<GenericCommand> = Vec::new();
@@ -385,7 +456,13 @@ pub async fn generate_add_node_commands(
         let mut fingerprint_exec_out_pin_id: Option<String> = None;
 
         // Create upload_dir → child FlowPath chain whenever a screenshot is available
-        if let Some(ref screenshot_id) = action.screenshot_ref {
+        if opts.use_pattern_matching
+            && matches!(
+                action.action_type,
+                ActionType::Click { .. } | ActionType::DoubleClick { .. }
+            )
+            && let Some(ref screenshot_id) = action.screenshot_ref
+        {
             let screenshot_path = match &opts.board_id {
                 Some(bid) => format!("rpa/{}/screenshots/{}.png", bid, screenshot_id),
                 None => format!("rpa/screenshots/{}.png", screenshot_id),
@@ -465,7 +542,36 @@ pub async fn generate_add_node_commands(
             &action.action_type,
             ActionType::Click { .. } | ActionType::DoubleClick { .. }
         );
+        if is_click
+            && !opts.use_pattern_matching
+            && !opts.use_fingerprints
+            && action.coordinates.is_none()
+        {
+            return Err(TauriFunctionError::new(
+                "The recorded click has no coordinates. Record that action again.",
+            ));
+        }
+        if is_click && opts.use_pattern_matching && action.screenshot_ref.is_none() {
+            return Err(TauriFunctionError::new(
+                "A recorded click has no screenshot template. Record it again or disable pattern matching before inserting.",
+            ));
+        }
+        if is_click && opts.use_pattern_matching && template_path_out_pin_id.is_none() {
+            return Err(TauriFunctionError::new(
+                "The catalog is missing the screenshot path nodes needed for pattern matching",
+            ));
+        }
+        if is_click
+            && !opts.use_pattern_matching
+            && opts.use_fingerprints
+            && action.fingerprint.is_none()
+        {
+            return Err(TauriFunctionError::new(
+                "A recorded click has no element fingerprint. Record it again or disable element fingerprinting before inserting.",
+            ));
+        }
         if opts.use_fingerprints
+            && !opts.use_pattern_matching
             && is_click
             && let Some(fp) = &action.fingerprint
             && let Some(fp_cmds) =
@@ -479,89 +585,207 @@ pub async fn generate_add_node_commands(
                 helper_commands.push(cmd);
             }
         }
+        if is_click
+            && opts.use_fingerprints
+            && !opts.use_pattern_matching
+            && fingerprint_out_pin_id.is_none()
+        {
+            return Err(TauriFunctionError::new(
+                "The catalog is missing the fingerprint node needed for element matching",
+            ));
+        }
 
         let (node_name, extra_pins, _uses_rpa_session) = match &action.action_type {
-            ActionType::Click {
-                button,
-                modifiers: _,
-            } => {
-                let (x, y) = action.coordinates.unwrap_or((0, 0));
-                let button_str = match button {
-                    MouseButton::Left => "Left",
-                    MouseButton::Right => "Right",
-                    MouseButton::Middle => "Middle",
-                };
-
-                // Use vision_click_template if pattern matching mode enabled and screenshot available
-                if opts.use_pattern_matching && action.screenshot_ref.is_some() {
-                    (
-                        "vision_click_template",
+            ActionType::BrowserAttach {
+                debugger_address,
+                webdriver_url,
+                browser_type,
+            } => (
+                "browser_attach",
+                vec![
+                    ("debugger_address", json!(debugger_address)),
+                    ("webdriver_url", json!(webdriver_url)),
+                    ("browser_type", json!(browser_type)),
+                ],
+                false,
+            ),
+            ActionType::Browser { action } => {
+                let selector = ("selector", json!(action.selector));
+                match action.kind {
+                    BrowserActionKind::Navigate => {
+                        ("browser_goto", vec![("url", json!(action.url))], false)
+                    }
+                    BrowserActionKind::Click => (
+                        "browser_click",
                         vec![
-                            ("confidence", json!(opts.template_confidence)),
-                            ("click_type", json!(button_str)),
-                            ("fallback_x", json!(x)),
-                            ("fallback_y", json!(y)),
+                            selector,
+                            ("button", json!(mouse_button_name(&action.button))),
+                            (
+                                "modifiers",
+                                json!(
+                                    action
+                                        .modifiers
+                                        .iter()
+                                        .map(|modifier| modifier_names(std::slice::from_ref(
+                                            modifier
+                                        )))
+                                        .collect::<Vec<_>>()
+                                ),
+                            ),
                         ],
                         false,
-                    )
-                } else {
-                    let mut pins = vec![
-                        ("x", json!(x)),
-                        ("y", json!(y)),
-                        ("button", json!(button_str)),
-                    ];
-
-                    // Add natural movement for bot detection evasion
-                    if opts.bot_detection_evasion {
-                        let mut rng = flow_like_types::rand::rng();
-                        pins.push(("natural_move", json!(true)));
-                        pins.push(("move_duration_ms", json!(rng.random_range(150..350))));
-                    }
-
-                    // Enable template matching when screenshot is available
-                    // (template FlowPath is wired automatically via template_path_node_id)
-                    if action.screenshot_ref.is_some() {
-                        pins.push(("use_template_matching", json!(true)));
-                    }
-
-                    // In browser context: disable fingerprint (template preferred)
-                    if in_browser && action.screenshot_ref.is_some() {
-                        pins.push(("use_fingerprint", json!(false)));
-                    }
-
-                    ("computer_mouse_click", pins, false)
+                    ),
+                    BrowserActionKind::DoubleClick => (
+                        "browser_double_click",
+                        vec![
+                            selector,
+                            ("button", json!(mouse_button_name(&action.button))),
+                            (
+                                "modifiers",
+                                json!(
+                                    action
+                                        .modifiers
+                                        .iter()
+                                        .map(|modifier| modifier_names(std::slice::from_ref(
+                                            modifier
+                                        )))
+                                        .collect::<Vec<_>>()
+                                ),
+                            ),
+                        ],
+                        false,
+                    ),
+                    BrowserActionKind::Type => (
+                        "browser_type_text",
+                        vec![
+                            selector,
+                            ("text", json!(action.value)),
+                            ("clear_first", json!(true)),
+                        ],
+                        false,
+                    ),
+                    BrowserActionKind::Select => (
+                        "browser_select_option",
+                        vec![selector, ("value", json!(action.value))],
+                        false,
+                    ),
+                    BrowserActionKind::Key => (
+                        "browser_press_key",
+                        vec![
+                            selector,
+                            ("key", json!(action.value)),
+                            (
+                                "modifiers",
+                                json!(
+                                    action
+                                        .modifiers
+                                        .iter()
+                                        .map(|modifier| modifier_names(std::slice::from_ref(
+                                            modifier
+                                        )))
+                                        .collect::<Vec<_>>()
+                                ),
+                            ),
+                        ],
+                        false,
+                    ),
+                    BrowserActionKind::SelectTab => (
+                        "browser_select_tab",
+                        vec![
+                            ("target_id", json!(action.tab_id)),
+                            ("url", json!(action.url)),
+                        ],
+                        false,
+                    ),
+                    BrowserActionKind::WaitForUrl => (
+                        "browser_wait_for_url",
+                        vec![
+                            ("expected_url", json!(action.url)),
+                            ("timeout_ms", json!(30000)),
+                        ],
+                        false,
+                    ),
+                    BrowserActionKind::WaitForElement => (
+                        "browser_wait_for",
+                        vec![selector, ("timeout_ms", json!(30000))],
+                        false,
+                    ),
+                    BrowserActionKind::EnterFrame => ("browser_enter_frame", vec![selector], false),
+                    BrowserActionKind::LeaveFrame => (
+                        "browser_leave_frame",
+                        vec![("top_level", json!(true))],
+                        false,
+                    ),
+                    BrowserActionKind::Scroll => (
+                        "browser_execute_js",
+                        vec![(
+                            "script",
+                            json!(format!(
+                                "const element = document.querySelector({}); if (!element) throw new Error('Recorded scroll target is missing'); element.scrollTo({}, {});",
+                                json!(action.selector),
+                                action.scroll_x,
+                                action.scroll_y
+                            )),
+                        )],
+                        false,
+                    ),
                 }
             }
-            ActionType::DoubleClick { button: _ } => {
+            ActionType::Click { button, modifiers }
+            | ActionType::DoubleClick { button, modifiers } => {
                 let (x, y) = action.coordinates.unwrap_or((0, 0));
-                let mut pins = vec![("x", json!(x)), ("y", json!(y))];
-
+                let mut pins = vec![
+                    ("x", json!(x)),
+                    ("y", json!(y)),
+                    ("button", json!(mouse_button_name(button))),
+                    ("modifiers", json!(modifier_names(modifiers))),
+                    (
+                        "use_fingerprint",
+                        json!(opts.use_fingerprints && !opts.use_pattern_matching),
+                    ),
+                    ("use_template_matching", json!(opts.use_pattern_matching)),
+                    ("confidence", json!(opts.template_confidence)),
+                ];
                 if opts.bot_detection_evasion {
                     let mut rng = flow_like_types::rand::rng();
                     pins.push(("natural_move", json!(true)));
                     pins.push(("move_duration_ms", json!(rng.random_range(150..350))));
                 }
-
-                if action.screenshot_ref.is_some() {
-                    pins.push(("use_template_matching", json!(true)));
-                }
-
-                if in_browser && action.screenshot_ref.is_some() {
-                    pins.push(("use_fingerprint", json!(false)));
-                }
-
-                ("computer_mouse_double_click", pins, false)
+                (
+                    if matches!(action.action_type, ActionType::DoubleClick { .. }) {
+                        "computer_mouse_double_click"
+                    } else {
+                        "computer_mouse_click"
+                    },
+                    pins,
+                    false,
+                )
             }
-            ActionType::Drag { start, end } => (
+            ActionType::Drag {
+                start,
+                end,
+                button,
+                modifiers,
+            } => (
                 "computer_mouse_drag",
                 vec![
                     ("start_x", json!(start.0)),
                     ("start_y", json!(start.1)),
                     ("end_x", json!(end.0)),
                     ("end_y", json!(end.1)),
+                    ("button", json!(mouse_button_name(button))),
+                    ("modifiers", json!(modifier_names(modifiers))),
                 ],
                 false,
             ),
+            ActionType::MouseMove { x, y } => (
+                "computer_mouse_move",
+                vec![("x", json!(x)), ("y", json!(y))],
+                false,
+            ),
+            ActionType::Wait { milliseconds } => {
+                ("delay", vec![("time", json!(*milliseconds as f64))], false)
+            }
             ActionType::Scroll { direction, amount } => {
                 // Skip scroll events with 0 amount
                 if *amount == 0 {
@@ -571,10 +795,10 @@ pub async fn generate_add_node_commands(
                 // rdev on macOS reports line-level deltas (typically 1-5 per event).
                 // After consolidation the accumulated amount is already in scroll-line units.
                 // Pass through directly — enigo.scroll(1) sends one line tick.
-                let lines = (*amount).clamp(1, 100);
+                let lines = *amount;
                 let (dx, dy) = match direction {
-                    ScrollDirection::Down => (0, -lines),
-                    ScrollDirection::Up => (0, lines),
+                    ScrollDirection::Down => (0, lines),
+                    ScrollDirection::Up => (0, -lines),
                     ScrollDirection::Left => (-lines, 0),
                     ScrollDirection::Right => (lines, 0),
                 };
@@ -588,16 +812,7 @@ pub async fn generate_add_node_commands(
                 ("computer_key_type", vec![("text", json!(text))], false)
             }
             ActionType::KeyPress { key, modifiers } => {
-                let modifier_str = modifiers
-                    .iter()
-                    .map(|m| match m {
-                        KeyModifier::Shift => "shift",
-                        KeyModifier::Control => "ctrl",
-                        KeyModifier::Alt => "alt",
-                        KeyModifier::Meta => "meta",
-                    })
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let modifier_str = modifier_names(modifiers);
                 (
                     "computer_key_press",
                     vec![("key", json!(key)), ("modifiers", json!(modifier_str))],
@@ -613,19 +828,17 @@ pub async fn generate_add_node_commands(
                 false,
             ),
             ActionType::WindowFocus {
-                window_title: _,
+                window_title,
                 process,
-            } => {
-                // Track current process for browser detection
-                current_process = Some(process.clone());
-                (
-                    "computer_focus_window",
-                    // Use process name (app name) for more reliable matching
-                    // Window titles change with tab/page, but app names stay stable
-                    vec![("window_title", json!(process))],
-                    false,
-                )
-            }
+            } => (
+                "computer_focus_window",
+                vec![
+                    ("window_title", json!(window_title)),
+                    ("process_name", json!(process)),
+                    ("launch_if_not_found", json!(false)),
+                ],
+                false,
+            ),
             ActionType::Copy {
                 clipboard_content: _,
             } => {
@@ -647,9 +860,10 @@ pub async fn generate_add_node_commands(
         tracing::debug!(" Mapped to node: {}", node_name);
         let mut node = match registry.get_node(node_name) {
             Ok(n) => n,
-            Err(_) => {
-                tracing::warn!("Node {} not found, skipping action", node_name);
-                continue;
+            Err(error) => {
+                return Err(TauriFunctionError::new(&format!(
+                    "Cannot replay action: node {node_name} is unavailable: {error}"
+                )));
             }
         };
         node.coordinates = Some((x_offset, y_offset, 0.0));
@@ -670,11 +884,17 @@ pub async fn generate_add_node_commands(
         }
 
         for (pin_name, value) in &extra_pins {
-            if let Some((_, pin)) = node.pins.iter_mut().find(|(_, p)| p.name == *pin_name)
-                && let Ok(bytes) = to_vec(value)
-            {
-                pin.default_value = Some(bytes);
-            }
+            let (_, pin) = node
+                .pins
+                .iter_mut()
+                .find(|(_, p)| p.name == *pin_name)
+                .ok_or_else(|| {
+                    TauriFunctionError::new(&format!(
+                        "Node {node_name} is missing required replay pin {pin_name}"
+                    ))
+                })?;
+            pin.default_value =
+                Some(to_vec(value).map_err(|error| TauriFunctionError::new(&error.to_string()))?);
         }
 
         // Create the AddNodeCommand which generates new IDs
@@ -761,7 +981,7 @@ pub async fn generate_add_node_commands(
         // Add the node command BEFORE trying to connect its pins
         commands.push(GenericCommand::AddNode(add_cmd));
 
-        // Connect template path to vision_click_template if pattern matching
+        // Connect the screenshot template to the computer click node.
         if let (Some(path_node), Some(path_out), Some(template_in)) = (
             &template_path_node_id,
             &template_path_out_pin_id,
@@ -1007,4 +1227,302 @@ fn generate_fingerprint_node(
         exec_out_pin_id: exec_out,
         commands: vec![GenericCommand::AddNode(add_cmd)],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::{
+        flow::{
+            node::Node,
+            pin::{PinType, ValueType},
+            variable::VariableType,
+        },
+        state::{FlowLikeConfig, FlowNodeRegistryInner},
+        utils::http::HTTPClient,
+    };
+    use std::sync::Arc;
+
+    async fn generate(
+        actions: &[RecordedAction],
+        options: GeneratorOptions,
+    ) -> Vec<GenericCommand> {
+        try_generate(actions, options).await.unwrap()
+    }
+
+    async fn try_generate(
+        actions: &[RecordedAction],
+        options: GeneratorOptions,
+    ) -> Result<Vec<GenericCommand>, TauriFunctionError> {
+        let state = FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+        state.node_registry.write().await.node_registry = Arc::new(FlowNodeRegistryInner::prepare(
+            &Arc::new(flow_like_catalog::get_catalog()),
+        ));
+        generate_add_node_commands(actions, (0.0, 0.0), &state, Some(options)).await
+    }
+
+    fn nodes(commands: &[GenericCommand]) -> Vec<&Node> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                GenericCommand::AddNode(command) => Some(&command.node),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pin(node: &Node, name: &str) -> serde_json::Value {
+        let pin = node
+            .pins
+            .values()
+            .find(|pin| pin.name == name && pin.pin_type == PinType::Input)
+            .unwrap();
+        serde_json::from_slice(pin.default_value.as_ref().unwrap()).unwrap()
+    }
+
+    fn verify_connections(commands: &[GenericCommand]) {
+        let nodes = nodes(commands);
+        for command in commands {
+            if let GenericCommand::ConnectPin(connection) = command {
+                let from = nodes
+                    .iter()
+                    .find(|node| node.id == connection.from_node)
+                    .unwrap()
+                    .pins
+                    .get(&connection.from_pin)
+                    .unwrap();
+                let to = nodes
+                    .iter()
+                    .find(|node| node.id == connection.to_node)
+                    .unwrap()
+                    .pins
+                    .get(&connection.to_pin)
+                    .unwrap();
+                assert_eq!(from.pin_type, PinType::Output);
+                assert_eq!(to.pin_type, PinType::Input);
+                assert_eq!(from.data_type, to.data_type, "{} -> {}", from.name, to.name);
+                assert_eq!(from.value_type, to.value_type);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn visual_matching_requires_artifacts_and_never_silently_uses_coordinates() {
+        let action = RecordedAction::new(
+            "click",
+            ActionType::Click {
+                button: MouseButton::Left,
+                modifiers: vec![],
+            },
+        )
+        .with_coordinates(10, 20);
+        assert!(
+            try_generate(
+                &[action.clone()],
+                GeneratorOptions {
+                    use_pattern_matching: true,
+                    ..Default::default()
+                }
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            try_generate(
+                &[action.clone()],
+                GeneratorOptions {
+                    use_pattern_matching: false,
+                    use_fingerprints: true,
+                    ..Default::default()
+                }
+            )
+            .await
+            .is_err()
+        );
+        let mut captured = action;
+        captured.screenshot_ref = Some("snapshot".into());
+        captured.fingerprint = Some(RecordedFingerprint {
+            role: Some("Button".into()),
+            name: Some("Submit".into()),
+            ..Default::default()
+        });
+        let commands = generate(
+            &[captured],
+            GeneratorOptions {
+                board_id: Some("board".into()),
+                use_pattern_matching: true,
+                use_fingerprints: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        let nodes = nodes(&commands);
+        let click = nodes
+            .iter()
+            .find(|node| node.name == "computer_mouse_click")
+            .unwrap();
+        assert_eq!(pin(click, "use_template_matching"), json!(true));
+        assert_eq!(pin(click, "use_fingerprint"), json!(false));
+        assert!(nodes.iter().any(|node| node.name == "path_from_upload_dir"));
+        assert!(!nodes.iter().any(|node| node.name == "fingerprint_create"));
+        verify_connections(&commands);
+    }
+
+    #[tokio::test]
+    async fn default_replay_preserves_mouse_buttons_modifiers_and_disabled_matching() {
+        let mut action = RecordedAction::new(
+            "click",
+            ActionType::Click {
+                button: MouseButton::Right,
+                modifiers: vec![KeyModifier::Shift],
+            },
+        )
+        .with_coordinates(-200, 75);
+        action.screenshot_ref = Some("snapshot".into());
+        action.fingerprint = Some(RecordedFingerprint {
+            id: "fingerprint".into(),
+            ..Default::default()
+        });
+        let commands = generate(
+            &[action],
+            GeneratorOptions {
+                use_pattern_matching: false,
+                use_fingerprints: false,
+                ..Default::default()
+            },
+        )
+        .await;
+        let nodes = nodes(&commands);
+        let click = nodes
+            .iter()
+            .find(|node| node.name == "computer_mouse_click")
+            .unwrap();
+        assert_eq!(pin(click, "button"), json!("right"));
+        assert_eq!(pin(click, "modifiers"), json!("shift"));
+        assert_eq!(pin(click, "x"), json!(-200));
+        assert_eq!(pin(click, "use_template_matching"), json!(false));
+        assert_eq!(pin(click, "use_fingerprint"), json!(false));
+        assert!(
+            !nodes.iter().any(
+                |node| node.name == "fingerprint_create" || node.name == "path_from_upload_dir"
+            )
+        );
+        verify_connections(&commands);
+    }
+
+    #[tokio::test]
+    async fn clipboard_replay_invokes_shortcuts_and_scroll_moves_to_its_hover_target() {
+        let actions = [
+            RecordedAction::new(
+                "copy",
+                ActionType::Copy {
+                    clipboard_content: None,
+                },
+            ),
+            RecordedAction::new(
+                "paste",
+                ActionType::Paste {
+                    clipboard_content: Some("recorded".into()),
+                },
+            ),
+            RecordedAction::new(
+                "scroll",
+                ActionType::Scroll {
+                    direction: ScrollDirection::Down,
+                    amount: 150,
+                },
+            )
+            .with_coordinates(450, 200),
+        ];
+        let commands = generate(&actions, GeneratorOptions::default()).await;
+        let nodes = nodes(&commands);
+        let names: Vec<_> = nodes.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "events_simple",
+                "automation_start_session",
+                "computer_key_press",
+                "delay",
+                "computer_clipboard_get_text",
+                "computer_clipboard_set_text",
+                "computer_key_press",
+                "computer_mouse_move",
+                "computer_scroll"
+            ]
+        );
+        let keys: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.name == "computer_key_press")
+            .map(|node| pin(node, "key"))
+            .collect();
+        assert_eq!(keys, [json!("c"), json!("v")]);
+        let pointer = nodes
+            .iter()
+            .find(|node| node.name == "computer_mouse_move")
+            .unwrap();
+        assert_eq!(pin(pointer, "x"), json!(450));
+        assert_eq!(pin(nodes.last().unwrap(), "dy"), json!(150));
+        let copy = nodes
+            .iter()
+            .find(|node| node.name == "computer_clipboard_get_text")
+            .unwrap();
+        let paste = nodes
+            .iter()
+            .find(|node| node.name == "computer_clipboard_set_text")
+            .unwrap();
+        assert!(commands.iter().any(|command| matches!(command, GenericCommand::ConnectPin(connection) if connection.from_node == copy.id && connection.to_node == paste.id && copy.pins[&connection.from_pin].name == "text" && paste.pins[&connection.to_pin].name == "text")));
+        verify_connections(&commands);
+    }
+
+    #[tokio::test]
+    async fn semantic_browser_replay_connects_real_catalog_nodes_and_frame_context() {
+        let action = serde_json::from_value::<super::super::state::BrowserAction>(json!({ "kind":"click", "tab_id":"tab", "selector":"#submit", "url":"https://example.test/form", "frames":["iframe[name=form]"], "button":"Middle", "modifiers":["Control"] })).unwrap();
+        let actions = [
+            RecordedAction::new(
+                "attach",
+                ActionType::BrowserAttach {
+                    debugger_address: "127.0.0.1:9222".into(),
+                    webdriver_url: "http://127.0.0.1:9515".into(),
+                    browser_type: "Chrome".into(),
+                },
+            ),
+            RecordedAction::new("click", ActionType::Browser { action }),
+        ];
+        let commands = generate(&actions, GeneratorOptions::default()).await;
+        let nodes = nodes(&commands);
+        let names: Vec<_> = nodes.iter().map(|node| node.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "events_simple",
+                "automation_start_session",
+                "browser_attach",
+                "browser_select_tab",
+                "browser_goto",
+                "browser_leave_frame",
+                "browser_wait_for",
+                "browser_enter_frame",
+                "browser_wait_for",
+                "browser_click"
+            ]
+        );
+        let click = nodes.last().unwrap();
+        assert_eq!(pin(click, "button"), json!("middle"));
+        assert_eq!(pin(click, "modifiers"), json!(["ctrl"]));
+        let modifiers = click
+            .pins
+            .values()
+            .find(|pin| pin.name == "modifiers")
+            .unwrap();
+        assert_eq!(modifiers.data_type, VariableType::String);
+        assert_eq!(modifiers.value_type, ValueType::Array);
+        let waited_for: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.name == "browser_wait_for")
+            .map(|node| pin(node, "selector"))
+            .collect();
+        assert_eq!(waited_for, [json!("iframe[name=form]"), json!("#submit")]);
+        verify_connections(&commands);
+    }
 }

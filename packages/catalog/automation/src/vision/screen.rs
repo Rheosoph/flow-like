@@ -26,6 +26,7 @@ impl NodeLogic for ScreenshotToFileNode {
             "Captures a screenshot and saves it to a file",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "screenshotToFile");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -62,7 +63,7 @@ impl NodeLogic for ScreenshotToFileNode {
         node.add_input_pin(
             "monitor",
             "Monitor",
-            "Monitor index (0 = primary)",
+            "Monitor index from List Displays (-1 = primary)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -94,24 +95,23 @@ impl NodeLogic for ScreenshotToFileNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let file_path: Option<FlowPath> = context.evaluate_pin("file_path").await.ok();
-        let _monitor: i64 = context.evaluate_pin("monitor").await?;
+        let monitor_index: i64 = context.evaluate_pin("monitor").await?;
 
         let screenshot = {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-            let monitor = monitors
-                .first()
-                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-            monitor
-                .capture_image()
+            let monitor = select_monitor(&monitors, monitor_index)?;
+            crate::types::screen_match::capture_monitor(&monitor)
                 .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?
         };
 
         let success = if let Some(path) = file_path {
-            let runtime = path.to_runtime(context).await?;
-            let actual_path = runtime.path.to_string();
-            screenshot.save(&actual_path).is_ok()
+            let mut bytes = Vec::new();
+            screenshot.write_with_encoder(image::codecs::png::PngEncoder::new(&mut bytes))?;
+            path.put(context, bytes, false).await?;
+            true
         } else {
             true
         };
@@ -155,6 +155,7 @@ impl NodeLogic for ScreenshotRegionNode {
             "Captures a region of the screen and saves it",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "screenshotRegion");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -200,6 +201,13 @@ impl NodeLogic for ScreenshotRegionNode {
         )
         .set_schema::<FlowPath>();
 
+        node.add_input_pin(
+            "monitor",
+            "Monitor",
+            "Monitor index from List Displays (-1 = primary); coordinates are screenshot pixels",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(-1)));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -227,6 +235,8 @@ impl NodeLogic for ScreenshotRegionNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
+        let monitor_index: i64 = context.evaluate_pin("monitor").await.unwrap_or(-1);
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
         let width: i64 = context.evaluate_pin("width").await?;
@@ -236,12 +246,23 @@ impl NodeLogic for ScreenshotRegionNode {
         let cropped_image = {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-            let monitor = monitors
-                .first()
-                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-            let full_image = monitor
-                .capture_image()
+            let monitor = select_monitor(&monitors, monitor_index)?;
+            let full_image = crate::types::screen_match::capture_monitor(&monitor)
                 .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
+
+            if x < 0
+                || y < 0
+                || width <= 0
+                || height <= 0
+                || x.checked_add(width)
+                    .is_none_or(|end| end > full_image.width() as i64)
+                || y.checked_add(height)
+                    .is_none_or(|end| end > full_image.height() as i64)
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Region must fit inside the selected display's screenshot pixels"
+                ));
+            }
 
             let cropped = image::imageops::crop_imm(
                 &full_image,
@@ -254,9 +275,10 @@ impl NodeLogic for ScreenshotRegionNode {
         };
 
         let success = if let Some(path) = file_path {
-            let runtime = path.to_runtime(context).await?;
-            let actual_path = runtime.path.to_string();
-            cropped_image.save(&actual_path).is_ok()
+            let mut bytes = Vec::new();
+            cropped_image.write_with_encoder(image::codecs::png::PngEncoder::new(&mut bytes))?;
+            path.put(context, bytes, false).await?;
+            true
         } else {
             true
         };
@@ -299,6 +321,7 @@ impl NodeLogic for GetPixelColorNode {
             "Gets the color of a pixel at a screen position",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "getPixelColor");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -330,6 +353,13 @@ impl NodeLogic for GetPixelColorNode {
         node.add_input_pin("y", "Y", "Y position", VariableType::Integer)
             .set_default_value(Some(json!(0)));
 
+        node.add_input_pin(
+            "monitor",
+            "Monitor",
+            "Monitor index from List Displays (-1 = primary); coordinates are screenshot pixels",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(-1)));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin("red", "Red", "Red component (0-255)", VariableType::Integer);
@@ -362,20 +392,19 @@ impl NodeLogic for GetPixelColorNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
+        let monitor_index: i64 = context.evaluate_pin("monitor").await.unwrap_or(-1);
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
 
         let (r, g, b) = {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-            let monitor = monitors
-                .first()
-                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-            let image = monitor
-                .capture_image()
+            let monitor = select_monitor(&monitors, monitor_index)?;
+            let image = crate::types::screen_match::capture_monitor(&monitor)
                 .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
 
-            if x < 0 || y < 0 || (x as u32) >= image.width() || (y as u32) >= image.height() {
+            if x < 0 || y < 0 || x >= i64::from(image.width()) || y >= i64::from(image.height()) {
                 return Err(flow_like_types::anyhow!("Pixel position out of bounds"));
             }
 
@@ -421,6 +450,7 @@ impl NodeLogic for GetScreenSizeNode {
             "Gets the dimensions of a monitor",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "getScreenSize");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -449,7 +479,7 @@ impl NodeLogic for GetScreenSizeNode {
         node.add_input_pin(
             "monitor",
             "Monitor",
-            "Monitor index (0 = primary)",
+            "Monitor index from List Displays (-1 = primary)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -467,12 +497,12 @@ impl NodeLogic for GetScreenSizeNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let _monitor: i64 = context.evaluate_pin("monitor").await?;
+        session.ensure_active(context).await?;
+        let monitor_index: i64 = context.evaluate_pin("monitor").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let mut gui = autogui.lock().await;
-
-        let (width, height) = gui.get_screen_size();
+        let monitors = xcap::Monitor::all()?;
+        let monitor = select_monitor(&monitors, monitor_index)?;
+        let (width, height) = (monitor.width()?, monitor.height()?);
 
         context.set_pin_value("width", json!(width as i64)).await?;
         context
@@ -489,4 +519,20 @@ impl NodeLogic for GetScreenSizeNode {
             "Vision automation requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+fn select_monitor(
+    monitors: &[xcap::Monitor],
+    index: i64,
+) -> flow_like_types::Result<&xcap::Monitor> {
+    if index == -1 {
+        monitors
+            .iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .or_else(|| monitors.first())
+    } else {
+        usize::try_from(index).ok().and_then(|i| monitors.get(i))
+    }
+    .ok_or_else(|| flow_like_types::anyhow!("Monitor index {} is unavailable", index))
 }

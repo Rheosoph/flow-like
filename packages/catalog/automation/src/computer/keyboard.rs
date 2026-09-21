@@ -25,6 +25,7 @@ impl NodeLogic for ComputerKeyPressNode {
             "Presses a keyboard key or key combination",
             "Automation/Computer/Keyboard",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "keyPress");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -86,32 +87,13 @@ impl NodeLogic for ComputerKeyPressNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let key_str: String = context.evaluate_pin("key").await?;
         let modifiers: String = context.evaluate_pin("modifiers").await?;
 
-        {
-            let mut enigo = session.create_enigo()?;
-
-            let mods: Vec<&str> = if modifiers.is_empty() {
-                Vec::new()
-            } else {
-                modifiers.split(',').map(|s| s.trim()).collect()
-            };
-
-            for modifier in &mods {
-                let mod_key = match *modifier {
-                    "ctrl" | "control" => Some(Key::Control),
-                    "shift" => Some(Key::Shift),
-                    "alt" => Some(Key::Alt),
-                    "meta" | "cmd" | "command" | "win" => Some(Key::Meta),
-                    _ => None,
-                };
-                if let Some(k) = mod_key {
-                    enigo
-                        .key(k, Direction::Press)
-                        .map_err(|e| flow_like_types::anyhow!("Failed to press modifier: {}", e))?;
-                }
-            }
+        let mut enigo = session.create_enigo(context).await?;
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            enigo.modifiers(&modifiers)?;
 
             let key = match key_str.to_lowercase().as_str() {
                 "enter" | "return" => Key::Return,
@@ -140,30 +122,19 @@ impl NodeLogic for ComputerKeyPressNode {
                 "f10" => Key::F10,
                 "f11" => Key::F11,
                 "f12" => Key::F12,
-                s if s.len() == 1 => Key::Unicode(s.chars().next().unwrap()),
-                _ => Key::Unicode(key_str.chars().next().unwrap_or(' ')),
+                _ if key_str.chars().count() == 1 => Key::Unicode(key_str.chars().next().unwrap()),
+                _ => return Err(flow_like_types::anyhow!("Unknown key: {}", key_str)),
             };
 
             enigo
                 .key(key, Direction::Click)
                 .map_err(|e| flow_like_types::anyhow!("Failed to press key: {}", e))?;
 
-            for modifier in mods.iter().rev() {
-                let mod_key = match *modifier {
-                    "ctrl" | "control" => Some(Key::Control),
-                    "shift" => Some(Key::Shift),
-                    "alt" => Some(Key::Alt),
-                    "meta" | "cmd" | "command" | "win" => Some(Key::Meta),
-                    _ => None,
-                };
-                if let Some(k) = mod_key {
-                    enigo.key(k, Direction::Release).map_err(|e| {
-                        flow_like_types::anyhow!("Failed to release modifier: {}", e)
-                    })?;
-                }
-            }
-        }
+            Ok(())
+        })
+        .await??;
 
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -197,6 +168,7 @@ impl NodeLogic for ComputerKeyTypeNode {
             "Types text using the keyboard",
             "Automation/Computer/Keyboard",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "typeText");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -245,15 +217,20 @@ impl NodeLogic for ComputerKeyTypeNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let text: String = context.evaluate_pin("text").await?;
 
-        {
-            let mut enigo = session.create_enigo()?;
+        let mut enigo = session.create_enigo(context).await?;
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
             enigo
                 .text(&text)
                 .map_err(|e| flow_like_types::anyhow!("Failed to type text: {}", e))?;
-        }
 
+            Ok(())
+        })
+        .await??;
+
+        session.apply_delay(context).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 

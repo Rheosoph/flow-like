@@ -77,7 +77,7 @@ impl NodeLogic for BrowserNewPageNode {
 
         session.set_current_page(context, window_handle).await?;
 
-        context.set_pin_value("session_out", json!(session)).await?;
+        super::selector::optional_output(context, "session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -110,6 +110,7 @@ impl NodeLogic for BrowserClosePageNode {
             "Closes a browser page/tab",
             "Automation/Browser",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "closePage");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -137,6 +138,13 @@ impl NodeLogic for BrowserClosePageNode {
 
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
+        node.add_output_pin(
+            "session_out",
+            "Session",
+            "Session selecting a remaining tab when available",
+            VariableType::Struct,
+        )
+        .set_schema::<AutomationSession>();
         node
     }
 
@@ -144,11 +152,23 @@ impl NodeLogic for BrowserClosePageNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let session: AutomationSession = context.evaluate_pin("session").await?;
-
-        if let Ok(driver) = session.get_browser_driver_and_switch(context).await {
-            let _ = driver.close_window().await;
+        let mut session: AutomationSession = context.evaluate_pin("session").await?;
+        session.browser_frame_selectors.clear();
+        let driver = session.get_browser_driver_and_switch(context).await?;
+        let remaining: Vec<thirtyfour::WindowHandle> = driver
+            .handle
+            .cmd(thirtyfour::common::command::Command::CloseWindow)
+            .await?
+            .value()?;
+        if let Some(handle) = remaining.first() {
+            driver.switch_to_window(handle.clone()).await?;
+            session.set_current_page(context, handle.clone()).await?;
+        } else {
+            drop(driver);
+            session.detach_browser(context).await?;
+            super::protocol::clear_listeners(context, &session).await;
         }
+        super::selector::optional_output(context, "session_out", json!(session)).await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

@@ -3,6 +3,7 @@
 import {
 	Badge,
 	Button,
+	Input,
 	Label,
 	ScrollArea,
 	Slider,
@@ -42,6 +43,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { type RpaCapability, ensureRpaSystemPermissions } from "./rpa-consent";
 
 const MAX_LABEL_LENGTH = 15;
 const MAX_VISIBLE_ACTIONS = 8;
@@ -57,14 +59,35 @@ interface RecordedAction {
 }
 
 type ActionType =
+	| {
+			BrowserAttach: {
+				debugger_address: string;
+				webdriver_url: string;
+				browser_type: string;
+			};
+	  }
+	| {
+			Browser: {
+				action: { kind: string; selector: string; value: string; url: string };
+			};
+	  }
 	| { Click: { button: string; modifiers: string[] } }
-	| { DoubleClick: { button: string } }
-	| { Drag: { start: [number, number]; end: [number, number] } }
+	| { DoubleClick: { button: string; modifiers?: string[] } }
+	| {
+			Drag: {
+				start: [number, number];
+				end: [number, number];
+				button?: string;
+				modifiers?: string[];
+			};
+	  }
+	| { MouseMove: { x: number; y: number } }
+	| { Wait: { milliseconds: number } }
 	| { Scroll: { direction: string; amount: number } }
 	| { KeyType: { text: string } }
 	| { KeyPress: { key: string; modifiers: string[] } }
-	| { Copy: { content: string | null } }
-	| { Paste: { content: string | null } }
+	| { Copy: { clipboard_content: string | null } }
+	| { Paste: { clipboard_content: string | null } }
 	| { AppLaunch: { app_name: string; app_path: string } }
 	| { WindowFocus: { window_title: string; process: string } };
 
@@ -77,12 +100,16 @@ interface RecordedFingerprint {
 }
 
 interface ActionMetadata {
+	window_id?: string | null;
 	window_title: string | null;
 	process_name: string | null;
 	monitor_index: number | null;
 }
 
 interface RecordingSettings {
+	browser_debugger_address: string | null;
+	browser_webdriver_url: string;
+	browser_type: "Chrome" | "Edge";
 	capture_screenshots: boolean;
 	capture_fingerprints: boolean;
 	aggregate_keystrokes: boolean;
@@ -129,39 +156,106 @@ export function RecordingDock({
 	const [showActions, setShowActions] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [inserting, setInserting] = useState(false);
-	const [isRecordingMode, setIsRecordingMode] = useState(false);
+	const [starting, setStarting] = useState(true);
+	const activeRef = useRef(false);
+	const mountedRef = useRef(true);
+	const recoveryEpochRef = useRef(0);
 	const [settings, setSettings] = useState<RecordingSettings>({
+		browser_debugger_address: null,
+		browser_webdriver_url: "http://127.0.0.1:9515",
+		browser_type: "Chrome",
 		capture_screenshots: true,
-		capture_fingerprints: true,
+		capture_fingerprints: false,
 		aggregate_keystrokes: true,
 		ignore_system_apps: ["SystemUIServer", "loginwindow"],
 		capture_region_size: 150,
 		use_pattern_matching: false,
 		template_confidence: 0.8,
 		bot_detection_evasion: false,
-		use_fingerprints: true,
+		use_fingerprints: false,
 	});
 	const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	useEffect(() => {
+		mountedRef.current = true;
 		let cancelled = false;
-		let unlisten: UnlistenFn | null = null;
-
-		const setupListener = async () => {
-			const stop = await listen<RecordedAction>("recording:action", (event) => {
-				setActions((prev) => [...prev, event.payload]);
-			});
+		const unlisten: UnlistenFn[] = [];
+		const addListener = async <T,>(
+			name: string,
+			callback: (payload: T) => void,
+		) => {
+			const stop = await listen<T>(name, (event) => callback(event.payload));
 			if (cancelled) stop();
-			else unlisten = stop;
+			else unlisten.push(stop);
 		};
-
-		setupListener();
-
+		const hydrate = async () => {
+			const epoch = recoveryEpochRef.current;
+			const [currentStatus, recorded] = await Promise.all([
+				invoke<RecordingStatus>("get_recording_status", {
+					appId: appId || null,
+					boardId,
+				}),
+				invoke<RecordedAction[]>("get_recorded_actions", {
+					appId: appId || null,
+					boardId,
+				}),
+			]);
+			if (cancelled || epoch !== recoveryEpochRef.current) return;
+			activeRef.current =
+				currentStatus === "Recording" || currentStatus === "Paused";
+			setStatus(currentStatus);
+			setActions(recorded);
+		};
+		void addListener<RecordedAction>("recording:action", () => {
+			void hydrate().catch(console.warn);
+		});
+		void addListener<RecordedAction[]>("recording:stopped", () => {
+			if (cancelled) return;
+			const wasActive = activeRef.current;
+			activeRef.current = false;
+			setStatus("Idle");
+			void hydrate().catch(console.warn);
+			if (wasActive)
+				void getCurrentWindow()
+					.unminimize()
+					.then(() => getCurrentWindow().setFocus())
+					.catch(console.warn);
+		});
+		void addListener<null>("recording:reset", () => {
+			if (cancelled) return;
+			recoveryEpochRef.current += 1;
+			activeRef.current = false;
+			setStatus("Idle");
+			setActions([]);
+			setElapsed(0);
+			setError(null);
+			void hydrate().catch(console.warn);
+		});
+		void addListener<string>("recording:error", (message) => {
+			if (!cancelled) setError(message);
+		});
+		void hydrate()
+			.catch((error) => {
+				if (!cancelled) setError(String(error));
+			})
+			.finally(() => {
+				if (!cancelled) setStarting(false);
+			});
+		const refresh = setInterval(() => {
+			if (activeRef.current) void hydrate().catch(console.warn);
+		}, 500);
 		return () => {
 			cancelled = true;
-			unlisten?.();
+			recoveryEpochRef.current += 1;
+			mountedRef.current = false;
+			clearInterval(refresh);
+			for (const stop of unlisten) stop();
+			if (activeRef.current) {
+				activeRef.current = false;
+				void invoke("stop_recording").catch(console.error);
+			}
 		};
-	}, []);
+	}, [appId, boardId]);
 
 	useEffect(() => {
 		if (status === "Recording") {
@@ -183,10 +277,13 @@ export function RecordingDock({
 	}, [status]);
 
 	const stopRecording = useCallback(async () => {
+		const epoch = recoveryEpochRef.current;
 		try {
+			setStatus("Processing");
 			const recordedActions = await invoke<RecordedAction[]>("stop_recording");
+			if (epoch !== recoveryEpochRef.current) return true;
+			activeRef.current = false;
 			setStatus("Idle");
-			setIsRecordingMode(false);
 
 			// Restore the window
 			try {
@@ -197,14 +294,23 @@ export function RecordingDock({
 				console.warn("Could not restore window:", e);
 			}
 
-			if (recordedActions.length > 0) {
-				setActions(recordedActions);
-			}
+			if (epoch === recoveryEpochRef.current) setActions(recordedActions);
+			return true;
 		} catch (err) {
+			if (epoch !== recoveryEpochRef.current) return true;
 			console.error("Failed to stop recording:", err);
 			setError(String(err));
-			setStatus("Idle");
-			setIsRecordingMode(false);
+			try {
+				const currentStatus = await invoke<RecordingStatus>(
+					"get_recording_status",
+					{ appId: appId || null, boardId },
+				);
+				activeRef.current =
+					currentStatus === "Recording" || currentStatus === "Paused";
+				setStatus(currentStatus);
+			} catch (_) {
+				setStatus("Recording");
+			}
 
 			// Try to restore window even on error
 			try {
@@ -212,64 +318,81 @@ export function RecordingDock({
 				await appWindow.unminimize();
 				await appWindow.setFocus();
 			} catch (_) {}
+			return false;
 		}
-	}, []);
+	}, [appId, boardId]);
 
-	// Finalize the session when the user stops recording from the tray
-	useEffect(() => {
-		if (!isRecordingMode) return;
-
-		let cancelled = false;
-		let unlisten: UnlistenFn | null = null;
-
-		const setupListener = async () => {
-			const stop = await listen("recording:stop-from-tray", () => {
-				stopRecording();
-			});
-			if (cancelled) stop();
-			else unlisten = stop;
-		};
-
-		setupListener();
-
-		return () => {
-			cancelled = true;
-			unlisten?.();
-		};
-	}, [isRecordingMode, stopRecording]);
-
-	// Keyboard shortcut listener for stop recording
-	useEffect(() => {
-		if (!isRecordingMode) return;
-
-		const handleKeyDown = (e: KeyboardEvent) => {
-			const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-			const modifierPressed = isMac ? e.metaKey : e.ctrlKey;
-
-			if (modifierPressed && e.shiftKey && e.key.toLowerCase() === "s") {
-				e.preventDefault();
-				stopRecording();
-			}
-		};
-
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [isRecordingMode, stopRecording]);
+	const closeRecording = useCallback(async () => {
+		if (activeRef.current && !(await stopRecording())) return;
+		onClose();
+	}, [onClose, stopRecording]);
 
 	const startRecording = useCallback(async () => {
+		if (starting || activeRef.current || actions.length > 0) return;
+		const epoch = recoveryEpochRef.current;
+		setStarting(true);
 		try {
 			setError(null);
+			const browserRecording = Boolean(
+				settings.browser_debugger_address?.trim(),
+			);
+			const required: RpaCapability[] = browserRecording
+				? ["browser"]
+				: ["input_monitoring", "window_management"];
+			if (settings.capture_screenshots && !browserRecording)
+				required.push("screen_capture");
+			if (settings.use_fingerprints && !browserRecording)
+				required.push("accessibility");
+			if (
+				!(await ensureRpaSystemPermissions({ appId, boardId, required })) ||
+				!mountedRef.current ||
+				epoch !== recoveryEpochRef.current
+			)
+				return;
 			await invoke<string>("start_recording", {
 				appId: appId || null,
 				boardId,
-				settings,
+				settings: {
+					...settings,
+					browser_debugger_address:
+						settings.browser_debugger_address?.trim() || null,
+					capture_screenshots:
+						settings.capture_screenshots && !browserRecording,
+					capture_fingerprints: settings.use_fingerprints && !browserRecording,
+				},
 				token: token || null,
 			});
-			setStatus("Recording");
+			if (!mountedRef.current) {
+				await invoke("stop_recording");
+				return;
+			}
+			if (epoch !== recoveryEpochRef.current) return;
+			activeRef.current = true;
+			const currentStatus = await invoke<RecordingStatus>(
+				"get_recording_status",
+				{ appId: appId || null, boardId },
+			);
+			if (!mountedRef.current) {
+				await invoke("stop_recording");
+				return;
+			}
+			if (epoch !== recoveryEpochRef.current) return;
+			setStatus(currentStatus);
+			if (currentStatus !== "Recording") {
+				activeRef.current = currentStatus === "Paused";
+				const recorded = await invoke<RecordedAction[]>(
+					"get_recorded_actions",
+					{
+						appId: appId || null,
+						boardId,
+					},
+				);
+				if (epoch === recoveryEpochRef.current) setActions(recorded);
+				return;
+			}
 			setElapsed(0);
 			setActions([]);
 			setShowSettings(false);
-			setIsRecordingMode(true);
 
 			// Minimize the main window
 			try {
@@ -281,8 +404,10 @@ export function RecordingDock({
 		} catch (err) {
 			console.error("Failed to start recording:", err);
 			setError(String(err));
+		} finally {
+			setStarting(false);
 		}
-	}, [appId, boardId, settings, token]);
+	}, [appId, boardId, settings, token, starting, actions.length]);
 
 	const pauseRecording = useCallback(async () => {
 		try {
@@ -304,11 +429,16 @@ export function RecordingDock({
 		}
 	}, []);
 
-	const clearRecording = useCallback(() => {
-		setActions([]);
-		setElapsed(0);
-		setError(null);
-	}, []);
+	const clearRecording = useCallback(async () => {
+		try {
+			await invoke("clear_recorded_actions", { appId: appId || null, boardId });
+			setActions([]);
+			setElapsed(0);
+			setError(null);
+		} catch (error) {
+			setError(String(error));
+		}
+	}, [appId, boardId]);
 
 	const insertActions = useCallback(async () => {
 		if (actions.length === 0) return;
@@ -318,12 +448,14 @@ export function RecordingDock({
 			setError(null);
 			await invoke("insert_recording_to_board", {
 				boardId,
+				appId: appId || null,
 				actions,
 				position: [window.innerWidth / 2 - 200, window.innerHeight / 2 - 100],
 				version: version ?? null,
-				usePatternMatching: settings.use_pattern_matching || null,
-				templateConfidence: settings.template_confidence || null,
-				useFingerprints: settings.use_fingerprints || null,
+				usePatternMatching: settings.use_pattern_matching,
+				templateConfidence: settings.template_confidence,
+				useFingerprints: settings.use_fingerprints,
+				botDetectionEvasion: settings.bot_detection_evasion,
 			});
 			// Trigger board refresh to show the new nodes
 			window.dispatchEvent(new CustomEvent("flow:refetch-board"));
@@ -336,7 +468,7 @@ export function RecordingDock({
 		} finally {
 			setInserting(false);
 		}
-	}, [actions, boardId, version, onClose, onInsertActions]);
+	}, [actions, appId, boardId, version, onClose, onInsertActions, settings]);
 
 	const formatTime = (seconds: number) => {
 		const mins = Math.floor(seconds / 60);
@@ -377,6 +509,8 @@ export function RecordingDock({
 				: `"${text}"`;
 		}
 		if ("KeyPress" in type) return type.KeyPress.key;
+		if ("Browser" in type) return `Browser: ${type.Browser.action.kind}`;
+		if ("BrowserAttach" in type) return "Attach browser";
 		if ("Copy" in type) return "Copy";
 		if ("Paste" in type) return "Paste";
 		if ("AppLaunch" in type) return type.AppLaunch.app_name;
@@ -463,7 +597,7 @@ export function RecordingDock({
 									variant="ghost"
 									size="icon"
 									className="h-8 w-8 rounded-full"
-									onClick={onClose}
+									onClick={closeRecording}
 								>
 									<X className="h-4 w-4" />
 								</Button>
@@ -508,6 +642,7 @@ export function RecordingDock({
 										size="lg"
 										className="gap-2 rounded-full px-8 h-12 bg-red-500 hover:bg-red-600 text-white font-medium shadow-lg"
 										onClick={startRecording}
+										disabled={starting || actions.length > 0}
 									>
 										<Circle className="h-4 w-4 fill-current" />
 										{t("startRecording", "Start Recording")}
@@ -618,6 +753,63 @@ export function RecordingDock({
 							className="border-t border-border/50 overflow-hidden"
 						>
 							<div className="px-4 py-4 space-y-4">
+								<div className="space-y-2">
+									<Label htmlFor="browser-debugger-address">
+										Browser recording
+									</Label>
+									<Input
+										id="browser-debugger-address"
+										placeholder="Debugger address (optional), e.g. 127.0.0.1:9222"
+										value={settings.browser_debugger_address ?? ""}
+										onChange={(event) =>
+											setSettings((previous) => ({
+												...previous,
+												browser_debugger_address: event.target.value || null,
+											}))
+										}
+									/>
+									{settings.browser_debugger_address && (
+										<>
+											<Label htmlFor="recording-browser-type">Browser</Label>
+											<select
+												id="recording-browser-type"
+												value={settings.browser_type}
+												className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+												onChange={(event) =>
+													setSettings((previous) => ({
+														...previous,
+														browser_type: event.target.value as
+															| "Chrome"
+															| "Edge",
+													}))
+												}
+											>
+												<option value="Chrome">Chrome</option>
+												<option value="Edge">Edge</option>
+											</select>
+											<Label htmlFor="browser-webdriver-url">
+												Browser driver URL for replay
+											</Label>
+											<Input
+												id="browser-webdriver-url"
+												value={settings.browser_webdriver_url}
+												onChange={(event) =>
+													setSettings((previous) => ({
+														...previous,
+														browser_webdriver_url: event.target.value,
+													}))
+												}
+											/>
+											<p className="text-xs text-muted-foreground">
+												Records elements in a debugging-enabled Chrome or Edge
+												browser. Use its matching WebDriver and keep the
+												recorded tabs open. Replay returns each tab to its first
+												recorded URL. Leave the address empty to record the
+												desktop.
+											</p>
+										</>
+									)}
+								</div>
 								<div className="flex items-center justify-between">
 									<div className="flex items-center gap-2">
 										<Image className="h-4 w-4 text-muted-foreground" />
@@ -705,6 +897,12 @@ export function RecordingDock({
 										}
 									/>
 								</div>
+								<p className="text-xs text-muted-foreground">
+									Pattern matching and element fingerprinting stop replay when
+									the target is missing or ambiguous. Disable both to use
+									recorded coordinates. Pattern matching takes priority when
+									both are enabled.
+								</p>
 								{settings.use_pattern_matching && (
 									<div className="space-y-3 pl-6">
 										<div className="flex items-center justify-between">
@@ -779,9 +977,10 @@ export function RecordingDock({
 											variant="ghost"
 											size="icon"
 											className="h-7 w-7"
+											disabled={status !== "Idle"}
 											onClick={(e) => {
 												e.stopPropagation();
-												clearRecording();
+												void clearRecording();
 											}}
 										>
 											<Trash2 className="h-3.5 w-3.5" />
@@ -841,6 +1040,11 @@ export function RecordingDock({
 				{/* Insert Button */}
 				{status === "Idle" && actions.length > 0 && (
 					<div className="border-t border-border/50 p-4">
+						<p className="mb-3 text-xs text-muted-foreground">
+							Insert or clear this recording before starting another on this
+							board. Recordings stay available across boards while Desktop is
+							open. Insert them before quitting.
+						</p>
 						<Button
 							onClick={insertActions}
 							disabled={inserting}
