@@ -155,10 +155,7 @@ pub async fn change_appearance(
         "app.settings.appearance",
         "App",
         app_id,
-        match next.as_deref() {
-            Some(css) => format!("custom_css = {} bytes", css.len()),
-            None => "custom_css cleared".to_string(),
-        }
+        serde_json::json!({ "custom_css_bytes": next.as_deref().map(str::len) })
     );
 
     Ok(Json(()))

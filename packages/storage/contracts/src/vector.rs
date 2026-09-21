@@ -5,6 +5,11 @@ use serde_json::Value;
 #[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait VectorStore: Send + Sync {
+    /// Reject a write before a buffering wrapper accepts it.
+    fn ensure_writable(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Search for vectors similar to the given vector, potentially filtering results.
     ///
     /// # Arguments

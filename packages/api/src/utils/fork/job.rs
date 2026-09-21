@@ -16,7 +16,7 @@ use super::{
     plan_package_rows, plan_page_rows, plan_roles, plan_template_meta_rows, plan_template_rows,
     plan_widget_meta_rows, plan_widget_rows, policy,
 };
-use crate::audit::service::AuditEntryInput;
+use crate::audit::AuditRecordInput;
 use crate::entity::sea_orm_active_enums::AuditActorType;
 use crate::{
     db::{DEFAULT_WRITE_CHUNK, RetryPolicy, insert_in_chunks, retry_transaction},
@@ -988,15 +988,14 @@ async fn finalize(
 /// A fork is the one creation path that never passes `upsert_app`, so the new
 /// chain would otherwise start without its origin.
 async fn record_fork_audit(state: &AppState, job: &fork_job::Model, ctx: &ForkContext) {
-    let input = AuditEntryInput {
+    let input = AuditRecordInput {
         actor_id: format!("fork:{}:{}", job.user_id, job.id),
         actor_type: AuditActorType::User,
         actor_ip: None,
         action: "app.create".to_string(),
         resource_type: "App".to_string(),
         resource_id: job.dest_app_id.clone(),
-        chain_id: Some(job.dest_app_id.clone()),
-        summary: "Application forked".to_string(),
+        scope: Some(job.dest_app_id.clone()),
         details: Some(serde_json::json!({
             "source_app_id": ctx.src_app_id,
             "fork_job_id": job.id,

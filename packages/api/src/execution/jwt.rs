@@ -53,6 +53,10 @@ pub struct ExecutionClaims {
     /// Authenticated payer of an attended stream; absent for every background invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payer_sub: Option<String>,
+    /// Hosted frontends use run-scoped authority for model proxy requests while
+    /// retaining the visitor's token for workflow integrations.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hosted_frontend: bool,
     /// Optional technical user/API key that initiated the execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub technical_user_id: Option<String>,
@@ -168,6 +172,7 @@ fn sign_inner(
     let claims = ExecutionClaims {
         sub: params.user_id,
         payer_sub: None,
+        hosted_frontend: false,
         technical_user_id: params.technical_user_id,
         run_id: params.run_id,
         app_id: params.app_id,
@@ -204,8 +209,24 @@ pub(crate) fn bind_attended_payer(token: &str, payer: &str) -> Result<String, Ex
     backend_jwt::sign(&claims)
 }
 
+pub(crate) fn bind_hosted_frontend(token: &str) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
+    if claims.token_type != TokenType::Executor
+        || claims.event_id.is_none()
+        || claims.payer_sub.is_some()
+        || claims.shadow.unwrap_or(false)
+    {
+        return Err(BackendJwtError::EncodingError(
+            "Hosted frontend authority requires an owner-funded Event executor".into(),
+        ));
+    }
+    claims.hosted_frontend = true;
+    backend_jwt::sign(&claims)
+}
+
 fn attended_payer_allowed(claims: &ExecutionClaims, payer: &str) -> bool {
     claims.sub == payer
+        && !claims.hosted_frontend
         && claims.technical_user_id.is_none()
         && claims
             .app_chain
@@ -317,6 +338,7 @@ mod tests {
         let value = serde_json::json!({"sub":"user","run_id":"run","app_id":"app","board_id":"board","callback_url":"https://api.example","typ":"executor","iss":"flow-like","aud":"flow-like-executor","iat":1,"nbf":1,"exp":100,"jti":"token"});
         let claims: ExecutionClaims = serde_json::from_value(value).unwrap();
         assert!(claims.payer_sub.is_none());
+        assert!(!claims.hosted_frontend);
         assert!(
             serde_json::to_value(claims)
                 .unwrap()
@@ -331,6 +353,9 @@ mod tests {
         let claims: ExecutionClaims = serde_json::from_value(value).unwrap();
         assert!(attended_payer_allowed(&claims, "user"));
         assert!(!attended_payer_allowed(&claims, "someone-else"));
+        let mut changed = claims.clone();
+        changed.hosted_frontend = true;
+        assert!(!attended_payer_allowed(&changed, "user"));
         let mut changed = claims.clone();
         changed.technical_user_id = Some("technical".into());
         assert!(!attended_payer_allowed(&changed, "user"));

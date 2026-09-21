@@ -113,11 +113,14 @@ pub async fn upsert_meta(
         })
         .await?;
 
-    let summary = if created {
-        format!("Metadata created (lang={})", language)
-    } else {
-        format!("Metadata updated (lang={})", language)
-    };
-    audit_branch!(state, user, app_id, "meta.upsert", "meta", app_id, summary);
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "meta.upsert",
+        "meta",
+        app_id,
+        serde_json::json!({ "language": language, "created": created })
+    );
     Ok(Json(()))
 }

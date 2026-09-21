@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import { GlobalPermission } from "../../../../lib/permission/global-permission";
 import { useBackend } from "../../../../state/backend-state";
+import { PLATFORM_CHAIN } from "../../../audit/types";
 import {
 	Badge,
 	Button,
@@ -114,7 +115,11 @@ interface ReadonlyURLSearchParams {
 	get(name: string): string | null;
 }
 
-function encodeFiltersToSearch(filters: FilterState, tab: string): string {
+function encodeFiltersToSearch(
+	filters: FilterState,
+	tab: string,
+	chainId: string,
+): string {
 	const p = new URLSearchParams();
 	if (filters.query) p.set("q", filters.query);
 	if (filters.error_id) p.set("error_id", filters.error_id);
@@ -125,6 +130,7 @@ function encodeFiltersToSearch(filters: FilterState, tab: string): string {
 	if (filters.severity !== "all") p.set("severity", filters.severity);
 	if (filters.hours !== 24) p.set("hours", String(filters.hours));
 	if (tab !== "errors") p.set("tab", tab);
+	if (tab === "audit" && chainId !== PLATFORM_CHAIN) p.set("chain", chainId);
 	return p.toString();
 }
 
@@ -222,6 +228,7 @@ export function AdminLogsPage({
 	basePath = "/admin/logs",
 }: Readonly<AdminLogsPageProps>) {
 	const { t } = useTranslation("admin");
+	const { t: tAudit } = useTranslation("audit");
 	const backend = useBackend();
 	const auth = useAuth();
 	const router = useRouter();
@@ -249,6 +256,9 @@ export function AdminLogsPage({
 
 	const [filters, setFilters] = useState<FilterState>(initialFilters);
 	const [tab, setTab] = useState(initialTab);
+	const [chainId, setChainId] = useState(
+		() => searchParams?.get("chain")?.trim() || PLATFORM_CHAIN,
+	);
 	const [page, setPage] = useState(1);
 	const [selectedError, setSelectedError] = useState<string | null>(
 		initialFilters.error_id || null,
@@ -326,9 +336,9 @@ export function AdminLogsPage({
 	});
 
 	useEffect(() => {
-		const qs = encodeFiltersToSearch(filters, tab);
+		const qs = encodeFiltersToSearch(filters, tab, chainId);
 		router.replace(qs ? `${basePath}?${qs}` : basePath);
-	}, [filters, tab, router, basePath]);
+	}, [filters, tab, chainId, router, basePath]);
 
 	const totalPages = Math.max(
 		1,
@@ -499,7 +509,7 @@ export function AdminLogsPage({
 							</TabsTrigger>
 							<TabsTrigger value="audit" className="gap-1.5">
 								<Activity className="h-3.5 w-3.5" />{" "}
-								{t("auditChain", "Audit chain")}
+								{tAudit("auditTrail", "Audit trail")}
 							</TabsTrigger>
 						</TabsList>
 
@@ -841,7 +851,11 @@ export function AdminLogsPage({
 						</TabsContent>
 
 						<TabsContent value="audit">
-							<AuditChainExplorer profile={profile.data} />
+							<AuditChainExplorer
+								profile={profile.data}
+								chainId={chainId}
+								onChainChange={setChainId}
+							/>
 						</TabsContent>
 					</Tabs>
 				</div>

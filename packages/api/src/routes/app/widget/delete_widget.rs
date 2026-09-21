@@ -62,15 +62,7 @@ pub async fn delete_widget(
         .exec(&state.db)
         .await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "widget.delete",
-        "Widget",
-        widget_id,
-        "Deleted a widget"
-    );
+    audit_branch!(state, user, app_id, "widget.delete", "Widget", widget_id);
 
     Ok(Json(()))
 }

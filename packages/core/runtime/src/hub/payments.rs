@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -18,12 +19,114 @@ pub enum PaymentFeeBasis {
     NetOfTax,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PaymentLegalText {
     pub kind: String,
     pub version: String,
     pub locale: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+}
+
+// Website pages and payment consent use the same immutable source bytes.
+static BUNDLED_LEGAL_TEXTS: LazyLock<Vec<PaymentLegalText>> = LazyLock::new(|| {
+    // Append new versions and retain existing bundles for historical consent.
+    let sources = [include_str!(
+        "../../../../../apps/website/src/content/legal/payments/2026-09-20-draft-1.json"
+    )];
+    sources
+        .into_iter()
+        .flat_map(|source| {
+            serde_json::from_str::<Vec<PaymentLegalText>>(source)
+                .expect("Bundled payment legal texts must be valid JSON")
+        })
+        .collect()
+});
+
+impl PaymentLegalText {
+    /// Resolve the exact content used for display, consent hashes and evidence.
+    pub fn content(&self) -> Result<&str, String> {
+        if self.kind.trim().is_empty()
+            || self.version.trim().is_empty()
+            || self.locale.trim().is_empty()
+        {
+            return Err("Payment legal texts require kind, version and locale".into());
+        }
+        if let Some(url) = &self.url {
+            let url = url::Url::parse(url).map_err(|_| "Invalid payment legal text URL")?;
+            if url.scheme() != "https"
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err("Payment legal text URLs must use HTTPS without credentials".into());
+            }
+        }
+        let content = if !self.text.trim().is_empty() {
+            self.text.as_str()
+        } else {
+            let url = self
+                .url
+                .as_deref()
+                .ok_or("Payment legal texts require inline content or a bundled URL")?;
+            if self.hash.is_none() {
+                return Err(
+                    "Payment legal text URL references require a pinned BLAKE3 hash".into(),
+                );
+            }
+            let slug = match self.kind.as_str() {
+                "PAYMENTS_OWNER_TERMS" => "owner-terms",
+                "SELLER_TERMS" => "seller-terms",
+                "PURCHASE_TERMS" => "purchase-terms",
+                _ => "",
+            };
+            let expected_url = format!(
+                "https://flow-like.com/legal/payments/{slug}/{}/{}/",
+                self.version, self.locale
+            );
+            let bundled = BUNDLED_LEGAL_TEXTS
+                .iter()
+                .find(|text| {
+                    !slug.is_empty()
+                        && url == expected_url
+                        && text.kind == self.kind
+                        && text.version == self.version
+                        && text.locale == self.locale
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Payment legal text {}/{}/{} is not bundled; custom agreements require inline content",
+                        self.kind, self.version, self.locale
+                    )
+                })?;
+            bundled.text.as_str()
+        };
+        if content.trim().is_empty() {
+            return Err("Payment legal text content must not be empty".into());
+        }
+        if let Some(hash) = &self.hash {
+            if hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(
+                    "Payment legal text hashes must be lowercase BLAKE3 hex digests".into(),
+                );
+            }
+            if blake3::hash(content.as_bytes()).to_hex().as_str() != hash {
+                return Err(format!(
+                    "Payment legal text hash mismatch for {}/{}/{}",
+                    self.kind, self.version, self.locale
+                ));
+            }
+        }
+        Ok(content)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -182,7 +285,7 @@ impl PaymentsConfig {
                 && !self.legal_texts.iter().any(|text| {
                     text.kind == "PURCHASE_WAIVER"
                         && text.version == *version
-                        && !text.text.trim().is_empty()
+                        && text.content().is_ok()
                 })
             {
                 return Err("A purchase waiver requires its approved versioned text".into());
@@ -218,11 +321,11 @@ impl PaymentsConfig {
                 if text.kind.trim().is_empty()
                     || text.version.trim().is_empty()
                     || text.locale.trim().is_empty()
-                    || text.text.trim().is_empty()
                     || !keys.insert((&text.kind, &text.version, &text.locale))
                 {
                     return Err("Payment legal texts must be nonempty and unique by kind, version and locale".into());
                 }
+                text.content()?;
             }
             for (required, kind, version) in [
                 (
@@ -392,6 +495,7 @@ mod tests {
                 version: "v1".into(),
                 locale: "en".into(),
                 text: "Owner agreement".into(),
+                ..Default::default()
             }],
             frontend_url: Some("https://example.com".into()),
             ..Default::default()
@@ -418,9 +522,129 @@ mod tests {
                 version: "v1".into(),
                 locale: "en".into(),
                 text: "Owner agreement".into(),
+                ..Default::default()
             }],
             ..Default::default()
         }
+    }
+
+    fn bundled_reference() -> PaymentLegalText {
+        serde_json::from_value(serde_json::json!({
+            "kind": "PAYMENTS_OWNER_TERMS",
+            "version": "2026-09-20-draft-1",
+            "locale": "en",
+            "url": "https://flow-like.com/legal/payments/owner-terms/2026-09-20-draft-1/en/",
+            "hash": "16991d96d4ef055c598d88282ba8945d50d1792477627f68d9a4ec1968480968"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn configured_website_references_resolve_the_original_content() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../../flow-like.config.json")).unwrap();
+        let payments: PaymentsConfig = serde_json::from_value(config["payments"].clone()).unwrap();
+        assert!(!payments.legal_texts.is_empty());
+        for reference in &payments.legal_texts {
+            assert!(reference.text.is_empty());
+            let content = reference.content().unwrap();
+            let original = BUNDLED_LEGAL_TEXTS
+                .iter()
+                .find(|text| {
+                    text.kind == reference.kind
+                        && text.version == reference.version
+                        && text.locale == reference.locale
+                })
+                .unwrap();
+            assert_eq!(content, original.text);
+            assert_eq!(
+                reference.hash.as_deref(),
+                Some(blake3::hash(content.as_bytes()).to_hex().as_str())
+            );
+            let serialized = serde_json::to_value(reference).unwrap();
+            assert!(serialized.get("text").is_none());
+        }
+    }
+
+    #[test]
+    fn inline_agreements_remain_supported_and_verify_optional_hashes() {
+        let mut text: PaymentLegalText = serde_json::from_value(serde_json::json!({
+            "kind": "PAYMENTS_OWNER_TERMS", "version": "v1", "locale": "en",
+            "text": "Owner agreement\n"
+        }))
+        .unwrap();
+        assert_eq!(text.content().unwrap(), "Owner agreement\n");
+        text.url = Some("https://self-hosted.example/legal/v1/en/".into());
+        text.hash = Some(blake3::hash(text.text.as_bytes()).to_hex().to_string());
+        assert_eq!(text.content().unwrap(), "Owner agreement\n");
+        text.text.pop();
+        assert!(text.content().unwrap_err().contains("hash mismatch"));
+    }
+
+    #[test]
+    fn website_references_require_the_pinned_content_hash() {
+        let mut text = bundled_reference();
+        assert!(text.content().is_ok());
+        text.hash = None;
+        assert!(text.content().unwrap_err().contains("pinned BLAKE3"));
+        text.hash = Some("0".repeat(64));
+        assert!(text.content().unwrap_err().contains("hash mismatch"));
+        for hash in ["short".to_owned(), "F".repeat(64)] {
+            text.hash = Some(hash);
+            assert!(text.content().unwrap_err().contains("lowercase BLAKE3"));
+        }
+    }
+
+    #[test]
+    fn website_references_cannot_substitute_versions_locales_kinds_or_hosts() {
+        for change in ["version", "locale", "kind", "url"] {
+            let mut text = bundled_reference();
+            match change {
+                "version" => text.version = "unavailable-version".into(),
+                "locale" => text.locale = "fr".into(),
+                "kind" => text.kind = "SELLER_TERMS".into(),
+                "url" => text.url = Some("https://example.com/other-terms".into()),
+                _ => unreachable!(),
+            }
+            assert!(text.content().unwrap_err().contains("not bundled"));
+        }
+    }
+
+    #[test]
+    fn legal_urls_require_https_without_credentials_even_with_inline_content() {
+        let mut text = onboarding().legal_texts.remove(0);
+        for url in [
+            "http://example.com/terms",
+            "https://user@example.com/terms",
+            "https://user:password@example.com/terms",
+            "file:///terms.txt",
+            "invalid-url",
+        ] {
+            text.url = Some(url.into());
+            assert!(text.content().is_err(), "{url}");
+        }
+        text.url = Some("https://example.com/terms/v1/en/".into());
+        assert!(text.content().is_ok());
+    }
+
+    #[test]
+    fn bundled_agreements_preserve_creation_and_live_draft_checks() {
+        let mut config = onboarding();
+        let reference = bundled_reference();
+        config.owner_terms_version = Some(reference.version.clone());
+        config.legal_texts = vec![reference];
+        assert!(config.validate().is_ok());
+        config.legal_texts.push(config.legal_texts[0].clone());
+        assert!(config.validate().unwrap_err().contains("unique"));
+        config.legal_texts.pop();
+        config.legal_texts[0].hash = Some("0".repeat(64));
+        assert!(config.validate().unwrap_err().contains("hash mismatch"));
+        config.legal_texts[0] = bundled_reference();
+        config.livemode = true;
+        config.live_approved = true;
+        assert!(config.validate().unwrap_err().contains("Draft"));
+        config.onboarding_enabled = false;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

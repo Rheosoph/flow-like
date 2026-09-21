@@ -85,7 +85,6 @@ pub async fn delete_overlay(
         "graph.overlay.delete",
         "GraphOverlay",
         overlay_id,
-        "Deleted a graph overlay",
         serde_json::json!({
             "user_scoped": scope.is_user_scoped(),
             "action_count": overlay.actions.len(),

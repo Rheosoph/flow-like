@@ -19,6 +19,9 @@ setup = module("setup-env")
 preflight = module("preflight")
 up = module("up")
 
+def image_repository(workload):
+    return "ghcr.io/rheosoph/flow-like-audit-worker" if workload == "audit-worker" else f"ghcr.io/rheosoph/flow-like-docker-compose-{workload}"
+
 DOCKER_STUB = '''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["DOCKER_LOG"], "a") as out:
@@ -85,6 +88,18 @@ class DeploymentTest(unittest.TestCase):
         config = json.loads(process.stdout)
         return values, config
 
+    def test_hosted_frontend_api_settings_reach_compose_and_swarm(self):
+        frontend = "https://app.example.test"
+        self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", frontend, "https://api.example.test", "https://s3.example.test")
+        for compose_file in [None, "docker-stack.yml"]:
+            with self.subTest(compose_file=compose_file):
+                _, config = self.render(compose_file=compose_file)
+                api = config["services"]["api"]["environment"]
+                self.assertEqual(api["FRONTEND_BASE_URL"], frontend)
+                self.assertEqual(api["CORS_ALLOWED_ORIGINS"], frontend)
+                web = config["services"]["web"]["environment"]
+                self.assertEqual(web["FLOW_LIKE_WEB_REDIRECT_URL"], frontend + "/callback")
+
     def test_stripe_credentials_survive_setup_and_only_reach_api(self):
         supplied = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
         self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", stripe=supplied)
@@ -117,12 +132,14 @@ class DeploymentTest(unittest.TestCase):
         values, config = self.render({"FLOW_LIKE_CONFIG_JSON": "{}"})
         self.assertTrue(any("Select one API runtime config source" in error for error in preflight.validate(values, config)))
         values, config = self.render({"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"})
+        self.assertTrue(any("explicit AUDIT_WORKER_CONFIG_JSON" in error for error in preflight.validate(values, config)))
+        values, config = self.render({"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference", "AUDIT_WORKER_CONFIG_SECRET_REF": "hub-reference"})
         self.assertEqual(preflight.validate(values, config), [])
 
     def test_generator_switches_source_and_preserves_json_as_literal_data(self):
         template = (ROOT / ".env.example").read_text()
         for source, value in (("FLOW_LIKE_CONFIG_JSON", "{\"name\":\"Runtime's $PUBLIC_API_URL\"}"), ("FLOW_LIKE_CONFIG_SECRET_REF", "hub-reference")):
-            self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {source: value})
+            self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {source: value, **({"AUDIT_WORKER_CONFIG_JSON": '{"audit":{}}'} if source == "FLOW_LIKE_CONFIG_SECRET_REF" else {})})
             _, config = self.render()
             env = config["services"]["api"]["environment"]
             self.assertEqual(env["FLOW_LIKE_CONFIG_FILE"], "")
@@ -130,6 +147,25 @@ class DeploymentTest(unittest.TestCase):
             self.assertEqual(env[source], value.replace("$", "$$"))
         with self.assertRaisesRegex(ValueError, "Select only one"):
             setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {"FLOW_LIKE_CONFIG_FILE": "/app/config", "FLOW_LIKE_CONFIG_JSON": "{}"})
+
+    def test_worker_policy_excludes_api_credentials_and_rejects_source_drift(self):
+        source = {"name": "Private API", "authentication": {"client_secret": "must-not-reach-worker"},
+                  "audit": {"retention": {"seal_after_seconds": 321}}}
+        runtime = Path(self.tmp.name) / "runtime.json"
+        runtime.write_text(json.dumps(source))
+        for supplied in ({"FLOW_LIKE_RUNTIME_CONFIG_FILE": str(runtime)}, {"FLOW_LIKE_CONFIG_JSON": json.dumps(source)}):
+            self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", supplied)
+            self.text = self.text.replace("SANDBOX_IMAGE=", "SANDBOX_IMAGE=sha256:" + "a" * 64).replace("SANDBOX_GATEWAY_IMAGE=", "SANDBOX_GATEWAY_IMAGE=sha256:" + "b" * 64)
+            values, config = self.render()
+            worker = config["services"]["audit-worker"]
+            self.assertFalse(worker.get("configs"))
+            self.assertEqual(json.loads(worker["environment"]["FLOW_LIKE_CONFIG_JSON"]), {"audit": source["audit"]})
+            self.assertNotIn("must-not-reach-worker", json.dumps(worker))
+            self.assertEqual(preflight.validate(values, config), [])
+            values, config = self.render({"AUDIT_WORKER_CONFIG_JSON": '{"audit":{}}'})
+            self.assertTrue(any("differs from the API audit policy" in error for error in preflight.validate(values, config)))
+        with self.assertRaisesRegex(ValueError, "explicit AUDIT_WORKER_CONFIG_JSON"):
+            setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {"FLOW_LIKE_CONFIG_SECRET_REF": "remote-config"})
 
     def test_generator_rejects_whitespace_and_duplicate_json_keys(self):
         template = (ROOT / ".env.example").read_text()
@@ -224,10 +260,10 @@ class DeploymentTest(unittest.TestCase):
                     name = "object-store-init" if workload == "object-store-init" else workload
                     if name not in services:
                         continue
-                    self.assertEqual(services[name]["image"], f"ghcr.io/rheosoph/flow-like-docker-compose-{workload}:dev", key)
+                    self.assertEqual(services[name]["image"], f"{image_repository(workload)}:dev", key)
                 if compose_file == "docker-compose.yml":
                     self.assertEqual(services["queue-bridge"]["image"], "ghcr.io/rheosoph/flow-like-docker-compose-runtime:dev")
-                    for name in ("api", "queue-bridge", "execution-manager", "object-store-init", "db-init", "compiler", "signaling", "web", "sink-services"):
+                    for name in ("api", "audit-worker", "queue-bridge", "execution-manager", "object-store-init", "db-init", "compiler", "signaling", "web", "sink-services"):
                         self.assertIn("build", services[name], name)
         _, config = self.render({"FLOW_LIKE_IMAGE_TAG": "1.2.3", "API_IMAGE": "registry.example.test/api@sha256:" + "c" * 64})
         self.assertEqual(config["services"]["api"]["image"], "registry.example.test/api@sha256:" + "c" * 64)
@@ -260,7 +296,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         pinned = preflight.read_env(self.path)
         for key, workload in preflight.IMAGE_WORKLOADS.items():
-            repository = f"ghcr.io/rheosoph/flow-like-docker-compose-{workload}"
+            repository = image_repository(workload)
             self.assertEqual(pinned[key], repository + "@sha256:" + format(len(repository + ":1.4.0"), "064x"))
         self.assertEqual(len([call for call in calls() if call[:2] == ["image", "inspect"]]), 0)
         self.assertEqual(pinned["SANDBOX_IMAGE"], pinned["RUNTIME_IMAGE"])
@@ -272,7 +308,7 @@ class DeploymentTest(unittest.TestCase):
             self.assertEqual(pinned[key], value.strip("'"), key)
         self.assertEqual(len(pinned), len(values))
         pulls = [call[-1] for call in calls() if call[0] == "pull"]
-        self.assertEqual(pulls, [f"ghcr.io/rheosoph/flow-like-docker-compose-{workload}:1.4.0" for workload in preflight.IMAGE_WORKLOADS.values()])
+        self.assertEqual(pulls, [f"{image_repository(workload)}:1.4.0" for workload in preflight.IMAGE_WORKLOADS.values()])
         self.assertNotIn(values["BACKEND_KEY"], result.stdout + result.stderr)
         self.assertEqual(preflight.validate(pinned, self.render(pinned)[1]), [])
         immutable = "sha-" + "b" * 40 + "-run-42-1"
@@ -291,10 +327,10 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         pinned = preflight.read_env(self.path)
         for key, workload in preflight.IMAGE_WORKLOADS.items():
-            repository = f"ghcr.io/rheosoph/flow-like-docker-compose-{workload}"
+            repository = image_repository(workload)
             self.assertEqual(pinned[key], repository + "@sha256:" + format(len(repository), "064x"))
         inspected = [call[-1] for call in calls() if call[:2] == ["image", "inspect"]]
-        self.assertEqual(inspected, [f"ghcr.io/rheosoph/flow-like-docker-compose-{workload}:1.4.0" for workload in preflight.IMAGE_WORKLOADS.values()])
+        self.assertEqual(inspected, [f"{image_repository(workload)}:1.4.0" for workload in preflight.IMAGE_WORKLOADS.values()])
 
     def test_pull_images_failure_hints_login_and_changes_nothing(self):
         self.write(self.values())
@@ -385,18 +421,129 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(preflight.validate(values, config), [])
 
     def test_external_store_disables_bootstrap(self):
-        values, config = self.render({"OBJECT_STORE_MODE": "external", "COMPOSE_FILE": "docker-compose.yml:docker-compose.external-store.yml", "S3_INTERNAL_ENDPOINT": "https://s3.example.test", "S3_PUBLIC_ENDPOINT": "https://s3.example.test", "STS_ENDPOINT_URL": "https://sts.example.test", "S3_STS_PROVIDER": "aws", "EXECUTION_OBJECT_STORE_TLS_GATEWAY": "true", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://s3.example.test"})
+        values, config = self.render({"OBJECT_STORE_MODE": "external", "COMPOSE_FILE": "docker-compose.yml:docker-compose.external-store.yml", "S3_INTERNAL_ENDPOINT": "https://s3.example.test", "AUDIT_BUCKET_ENDPOINT": "https://s3.example.test", "S3_PUBLIC_ENDPOINT": "https://s3.example.test", "STS_ENDPOINT_URL": "https://sts.example.test", "S3_STS_PROVIDER": "aws", "EXECUTION_OBJECT_STORE_TLS_GATEWAY": "true", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://s3.example.test"})
         self.assertEqual(preflight.validate(values, config), [])
         for service in ["object-store", "object-store-init", "object-gateway"]:
             self.assertNotIn(service, config["services"])
         self.assertNotIn("object-store-init", config["services"]["api"].get("depends_on", {}))
 
     def test_external_store_and_datastores_compose_together(self):
-        values, config = self.render({"OBJECT_STORE_MODE": "external", "DATASTORE_MODE": "external", "COMPOSE_FILE": "docker-compose.yml:docker-compose.external-store.yml:docker-compose.external-datastores.yml", "S3_INTERNAL_ENDPOINT": "https://s3.example.test", "S3_PUBLIC_ENDPOINT": "https://s3.example.test", "STS_ENDPOINT_URL": "https://sts.example.test", "S3_STS_PROVIDER": "aws", "EXECUTION_OBJECT_STORE_TLS_GATEWAY": "true", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://s3.example.test", "METRICS_REDIS_URL": "redis://metrics@redis.example.test:6379", "DATABASE_URL": "postgresql://test@db.example.test/database", "REDIS_URL": "rediss://api@redis.example.test:6379", "RUNTIME_REDIS_URL": "rediss://runtime@redis.example.test:6379", "SIGNALING_REDIS_URL": "rediss://signaling@redis.example.test:6379", "SINK_REDIS_URL": "rediss://sink@redis.example.test:6379"})
+        values, config = self.render({"OBJECT_STORE_MODE": "external", "DATASTORE_MODE": "external", "COMPOSE_FILE": "docker-compose.yml:docker-compose.external-store.yml:docker-compose.external-datastores.yml", "S3_INTERNAL_ENDPOINT": "https://s3.example.test", "AUDIT_BUCKET_ENDPOINT": "https://s3.example.test", "S3_PUBLIC_ENDPOINT": "https://s3.example.test", "STS_ENDPOINT_URL": "https://sts.example.test", "S3_STS_PROVIDER": "aws", "EXECUTION_OBJECT_STORE_TLS_GATEWAY": "true", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://s3.example.test", "METRICS_REDIS_URL": "redis://metrics@redis.example.test:6379", "DATABASE_URL": "postgresql://api:api-password@db.example.test/database", "MIGRATION_DATABASE_URL": "postgresql://owner:owner-password@db.example.test/database", "AUDIT_DATABASE_URL": "postgresql://audit:audit-password@db.example.test/database", "REDIS_URL": "rediss://api@redis.example.test:6379", "RUNTIME_REDIS_URL": "rediss://runtime@redis.example.test:6379", "SIGNALING_REDIS_URL": "rediss://signaling@redis.example.test:6379", "SINK_REDIS_URL": "rediss://sink@redis.example.test:6379"})
         self.assertEqual(preflight.validate(values, config), [])
         for service in ["object-store", "object-store-init", "object-gateway", "postgres", "redis", "db-init"]:
             self.assertNotIn(service, config["services"])
         self.assertFalse(config["services"]["api"].get("depends_on"))
+
+    def test_audit_credentials_are_confined_to_worker(self):
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            values, config = self.render(compose_file=compose_file)
+            api = config["services"]["api"]["environment"]
+            worker = config["services"]["audit-worker"]["environment"]
+            self.assertEqual(api["AUDIT_WORKER"], "off")
+            self.assertEqual(worker["AUDIT_ENTRY_KEY"], api["AUDIT_ENTRY_KEY"])
+            self.assertNotEqual(worker["DATABASE_URL"], api["DATABASE_URL"])
+            self.assertNotIn("BACKEND_KEY", worker)
+            for key in ["AUDIT_SIGNING_KEY", "AUDIT_BUCKET", "AUDIT_BUCKET_ACCESS_KEY_ID", "AUDIT_BUCKET_SECRET_ACCESS_KEY",
+                        "AUDIT_KMS_KEY_ID", "AUDIT_VAULT_TOKEN", "AUDIT_VAULT_TOKEN_FILE"]:
+                self.assertNotIn(key, api)
+            public = json.loads(api["AUDIT_VERIFYING_KEYS"])
+            self.assertIn(api["AUDIT_KID"], public)
+            self.assertIn("PUBLIC KEY", public[api["AUDIT_KID"]])
+            self.assertNotIn("PRIVATE KEY", json.dumps(public))
+            self.assertFalse(config["services"]["audit-worker"].get("ports"))
+        values, config = self.render()
+        self.assertEqual(preflight.validate(values, config), [])
+        worker = config["services"]["audit-worker"]["environment"]
+        init = config["services"]["object-store-init"]["environment"]
+        self.assertEqual(worker["AUDIT_BUCKET"], "flow-like-audit")
+        self.assertEqual(worker["AUDIT_BUCKET_ENDPOINT"], "http://object-store:9000")
+        self.assertEqual(init["AUDIT_BUCKET_SECRET_ACCESS_KEY"], worker["AUDIT_BUCKET_SECRET_ACCESS_KEY"])
+        self.assertNotIn("AUDIT_SIGNING_KEY", init)
+        self.assertEqual(init["AUDIT_BUCKET_LOCK_MODE"], "COMPLIANCE")
+        self.assertEqual(init["AUDIT_BUCKET_RETENTION_YEARS"], "4")
+        for change in ({"AUDIT_BUCKET_ENDPOINT": "http://s3.localhost:9000"}, {"AUDIT_BUCKET": "flow-like-logs"},
+                       {"AUDIT_BUCKET_ACCESS_KEY_ID": values["AWS_ACCESS_KEY_ID"]}):
+            values, config = self.render(change)
+            self.assertTrue(any("AUDIT_BUCKET" in error for error in preflight.validate(values, config)), change)
+        values, config = self.render({"AUDIT_BUCKET": ""})
+        self.assertTrue(any("requires an immutable AUDIT_BUCKET" in error for error in preflight.validate(values, config)))
+
+    def test_preflight_rejects_missing_worker_or_leaked_authority(self):
+        values, config = self.render()
+        del config["services"]["audit-worker"]
+        self.assertTrue(any("dedicated audit-worker" in error for error in preflight.validate(values, config)))
+        values, config = self.render()
+        config["services"]["api"]["environment"]["AUDIT_SIGNING_KEY"] = "leaked"
+        self.assertTrue(any("API must run without" in error for error in preflight.validate(values, config)))
+        values, config = self.render({"AUDIT_DATABASE_URL": self.values()["DATABASE_URL"]})
+        self.assertTrue(any("distinct database" in error for error in preflight.validate(values, config)))
+
+    def test_swarm_stack_rejects_the_bundled_audit_endpoint(self):
+        for mode in ("bundled", "external"):
+            values, config = self.render({"OBJECT_STORE_MODE": mode}, compose_file="docker-stack.yml")
+            self.assertNotIn("object-store", config["services"])
+            self.assertTrue(any("AUDIT_BUCKET_ENDPOINT names the bundled object store" in error for error in preflight.validate(values, config)), mode)
+        for change in ({"AUDIT_BUCKET": ""}, {"AUDIT_BUCKET_ENDPOINT": "https://s3.example.test"}):
+            values, config = self.render({"OBJECT_STORE_MODE": "external", **change}, compose_file="docker-stack.yml")
+            self.assertFalse(any("AUDIT_BUCKET_ENDPOINT" in error for error in preflight.validate(values, config)), change)
+
+    def test_audit_kms_key_replaces_the_generated_signing_key(self):
+        values = self.values()
+        self.assertTrue(values["AUDIT_SIGNING_KEY"])
+        self.assertEqual(values["AUDIT_KMS_KEY_ID"], "")
+        template = (ROOT / ".env.example").read_text()
+        kms = {"AUDIT_KMS_KEY_ID": "arn:aws:kms:eu-central-1:123456789012:key/0f1e2d3c", "AUDIT_KMS_AWS_ACCESS_KEY_ID": "AKIAKMS", "AUDIT_KMS_AWS_SECRET_ACCESS_KEY": "kms/secret+key"}
+        self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", None, kms)
+        self.text = self.text.replace("SANDBOX_IMAGE=", "SANDBOX_IMAGE=sha256:" + "a" * 64).replace("SANDBOX_GATEWAY_IMAGE=", "SANDBOX_GATEWAY_IMAGE=sha256:" + "b" * 64)
+        values, config = self.render()
+        self.assertEqual(values["AUDIT_SIGNING_KEY"], "")
+        self.assertEqual(preflight.validate(values, config), [])
+        api = config["services"]["audit-worker"]["environment"]
+        for key, value in kms.items():
+            self.assertEqual(api[key], value)
+        for change, problem in (({"AUDIT_SIGNING_KEY": self.values()["BACKEND_KEY"]}, "not both"),
+                                ({"AUDIT_KMS_AWS_ACCESS_KEY_ID": "", "AUDIT_KMS_AWS_SECRET_ACCESS_KEY": ""}, "bundled storage"),
+                                ({"AUDIT_KMS_AWS_SECRET_ACCESS_KEY": ""}, "or neither"),
+                                ({"AUDIT_KMS_PROVIDER": "vault"}, "AUDIT_VAULT_ADDR"),
+                                ({"AUDIT_KMS_PROVIDER": "hsm"}, "aws, gcp, azure or vault")):
+            values, config = self.render(change)
+            self.assertTrue(any(problem in error for error in preflight.validate(values, config)), change)
+        values, config = self.render({"AUDIT_KMS_KEY_ID": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "AUDIT_KMS_AWS_ACCESS_KEY_ID": "", "AUDIT_KMS_AWS_SECRET_ACCESS_KEY": ""})
+        self.assertEqual(preflight.validate(values, config), [])
+        for invalid in ({"AUDIT_KMS_REGION": "eu-central-1"}, {"AUDIT_KMS_KEY_ID": "alias/audit key"},
+                        {"AUDIT_KMS_KEY_ID": "alias/audit", "AUDIT_KMS_AWS_ACCESS_KEY_ID": "AKIAKMS"}):
+            with self.assertRaises(ValueError):
+                setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", None, invalid)
+
+    def test_audit_key_in_a_self_hosted_vault_needs_an_address_and_a_token(self):
+        template = (ROOT / ".env.example").read_text()
+        vault = {"AUDIT_KMS_KEY_ID": "transit/audit", "AUDIT_VAULT_ADDR": "https://vault.internal:8200",
+                 "AUDIT_VAULT_TOKEN": "hvs.exampletoken"}
+        self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", None, vault)
+        self.text = self.text.replace("SANDBOX_IMAGE=", "SANDBOX_IMAGE=sha256:" + "a" * 64).replace("SANDBOX_GATEWAY_IMAGE=", "SANDBOX_GATEWAY_IMAGE=sha256:" + "b" * 64)
+        values, config = self.render()
+        self.assertEqual(values["AUDIT_SIGNING_KEY"], "")
+        # No AWS credentials: transit signs with a key the deployment holds itself.
+        self.assertEqual(preflight.validate(values, config), [])
+        api = config["services"]["audit-worker"]["environment"]
+        for key, value in vault.items():
+            self.assertEqual(api[key], value)
+        for change, problem in (({"AUDIT_VAULT_TOKEN": ""}, "AUDIT_VAULT_TOKEN"),
+                                ({"AUDIT_VAULT_ADDR": "vault.internal:8200"}, "must be a URL"),
+                                ({"AUDIT_KMS_REGION": "eu-central-1"}, "belongs to AWS KMS"),
+                                # A private CA is only consulted over TLS; http:// would
+                                # put the bearer token on the network in the clear.
+                                ({"AUDIT_VAULT_CA_FILE": "/etc/flow-like/vault-ca.pem",
+                                  "AUDIT_VAULT_ADDR": "http://vault.internal:8200"}, "https://")):
+            values, config = self.render(change)
+            self.assertTrue(any(problem in error for error in preflight.validate(values, config)), change)
+        # A token file replaces the token; a Vault Agent renews it in place.
+        values, config = self.render({"AUDIT_VAULT_TOKEN": "", "AUDIT_VAULT_TOKEN_FILE": "/vault/secrets/token"})
+        self.assertEqual(preflight.validate(values, config), [])
+        for invalid in ({"AUDIT_KMS_KEY_ID": "transit/audit", "AUDIT_VAULT_ADDR": "vault.internal"},
+                        {"AUDIT_KMS_KEY_ID": "transit/audit", "AUDIT_VAULT_ADDR": "https://vault.internal:8200"}):
+            with self.assertRaises(ValueError):
+                setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", None, invalid)
 
     def test_rejects_unqualified_tls_storage_and_zero_limits(self):
         values, config = self.render({"S3_PUBLIC_ENDPOINT": "https://storage.example.test", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://storage.example.test", "COMPILER_MAX_PARALLEL_TARGETS": "0"})

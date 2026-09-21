@@ -2697,7 +2697,7 @@ impl App {
         &self,
         reporter: &ProgressReporter,
     ) -> flow_like_types::Result<CompactionReport> {
-        use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
+        use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
         let app_state = self
             .app_state
@@ -2744,7 +2744,8 @@ impl App {
             if let Some(options) = write_options.clone() {
                 store.set_write_options(options);
             }
-            let result = store.prune_history().await;
+            // Export compaction must preserve snapshots used by training runs and branches.
+            let result = store.optimize(true).await;
             let bytes_after = prefix_bytes(&storage, &prefix)
                 .await
                 .unwrap_or(bytes_before);

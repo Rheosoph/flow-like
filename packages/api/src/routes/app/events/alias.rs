@@ -130,8 +130,20 @@ pub async fn get_alias(
             "Ontology action events cannot be published through event aliases",
         ));
     }
-    let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
-    let row = EventAlias::find_by_id(&storage_slug)
+    let storage_slug = alias_util::storage_slug_for_event_type(
+        alias_util::alias_event_type(&event.event_type, event.default_page_id.as_deref()),
+        &slug,
+    );
+    let row = EventAlias::find()
+        .filter(event_alias::Column::Slug.is_in([
+            storage_slug.clone(),
+            slug.clone(),
+            alias_util::storage_slug_for_event_type("simple_chat", &slug),
+            alias_util::storage_slug_for_event_type("generic_form", &slug),
+            alias_util::storage_slug_for_event_type("page", &slug),
+        ]))
+        .filter(event_alias::Column::AppId.eq(&app_id))
+        .filter(event_alias::Column::EventId.eq(&event_id))
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("alias '{slug}' not found")))?;
@@ -191,7 +203,10 @@ pub async fn upsert_alias(
             "Ontology action events cannot be published through event aliases",
         ));
     }
-    let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
+    let storage_slug = alias_util::storage_slug_for_event_type(
+        alias_util::alias_event_type(&event.event_type, event.default_page_id.as_deref()),
+        &slug,
+    );
 
     let sub = permission.sub().ok();
     let now = chrono::Utc::now().fixed_offset();
@@ -249,7 +264,6 @@ pub async fn upsert_alias(
         "event.alias.upsert",
         "Event",
         event_id,
-        "Event alias created or updated",
         serde_json::json!({ "slug": slug })
     );
 
@@ -283,8 +297,20 @@ pub async fn delete_alias(
     let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
-    let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
-    let row = EventAlias::find_by_id(&storage_slug)
+    let storage_slug = alias_util::storage_slug_for_event_type(
+        alias_util::alias_event_type(&event.event_type, event.default_page_id.as_deref()),
+        &slug,
+    );
+    let row = EventAlias::find()
+        .filter(event_alias::Column::Slug.is_in([
+            storage_slug.clone(),
+            slug.clone(),
+            alias_util::storage_slug_for_event_type("simple_chat", &slug),
+            alias_util::storage_slug_for_event_type("generic_form", &slug),
+            alias_util::storage_slug_for_event_type("page", &slug),
+        ]))
+        .filter(event_alias::Column::AppId.eq(&app_id))
+        .filter(event_alias::Column::EventId.eq(&event_id))
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("alias '{slug}' not found")))?;
@@ -293,9 +319,7 @@ pub async fn delete_alias(
             "alias '{slug}' does not belong to this event"
         )));
     }
-    EventAlias::delete_by_id(storage_slug)
-        .exec(&state.db)
-        .await?;
+    EventAlias::delete_by_id(row.slug).exec(&state.db).await?;
 
     audit_branch!(
         state,
@@ -304,7 +328,6 @@ pub async fn delete_alias(
         "event.alias.delete",
         "Event",
         event_id,
-        "Event alias deleted",
         serde_json::json!({ "slug": slug })
     );
 

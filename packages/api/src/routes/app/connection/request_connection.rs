@@ -129,8 +129,7 @@ pub async fn request_connection(
         app_id,
         "app_connection.request",
         "AppConnection",
-        connection_id,
-        "App connection requested"
+        connection_id
     );
 
     Ok(Json(()))

@@ -911,6 +911,7 @@ mod tests {
                 ("FlowScriptApplyFailure", "appId"),
                 ("AppRollingContribution", "appId"),
                 ("AppRollingUsage", "appId"),
+                ("AuditExportTarget", "appId"),
             ]
         );
         assert!(
@@ -1009,8 +1010,12 @@ mod tests {
     }
 
     #[test]
-    fn app_and_user_deletion_preserve_quota_and_billing_rows() {
-        for root in [DeletionRoot::App, DeletionRoot::User] {
+    fn app_user_and_package_deletion_preserve_quota_and_billing_rows() {
+        for root in [
+            DeletionRoot::App,
+            DeletionRoot::User,
+            DeletionRoot::WasmPackage,
+        ] {
             let plan = plan_for(root).unwrap();
             for table in [
                 "AccountCapacity",
@@ -1024,6 +1029,28 @@ mod tests {
                 "QuotaDailyUsage",
                 "ComputeAttempt",
                 "CloudDispatchIntent",
+                "AppPurchase",
+                "WasmPackagePurchase",
+                "PaymentAccountBinding",
+                "ConnectedAccount",
+                "AppPaymentSettings",
+                "PaymentsBlock",
+                "PaymentRequest",
+                "PaymentOrder",
+                "LegacyCheckout",
+                "PaymentAttempt",
+                "StripeOperation",
+                "PaymentWebhookInbox",
+                "PaymentOutbox",
+                "PaymentRefund",
+                "PaymentAdjustment",
+                "PaymentLedgerEntry",
+                "AccessGrant",
+                "PaymentEntitlement",
+                "LegalConsent",
+                "PaymentLimitCounter",
+                "PaymentLimitReservation",
+                "PaymentLegacyArchive",
             ] {
                 assert!(
                     plan.steps.iter().all(|step| step.table() != Some(table)),

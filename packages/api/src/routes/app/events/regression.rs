@@ -912,7 +912,6 @@ pub async fn promote_regression_fixture(
         "event.regression.fixture.promote",
         "Event",
         event_id,
-        "Regression fixture promoted",
         serde_json::json!({
             "suite_id": suite.id,
             "fixture_id": fixture.id,
@@ -989,7 +988,6 @@ pub async fn delete_regression_fixture(
         "event.regression.fixture.delete",
         "Event",
         event_id,
-        "Regression fixture deleted",
         serde_json::json!({
             "suite_id": suite.id,
             "fixture_id": fixture_id,
@@ -1247,7 +1245,6 @@ pub async fn put_regression_suite(
         "event.regression.suite.update",
         "Event",
         event_id,
-        "Regression suite configured",
         serde_json::json!({
             "suite_id": suite.id,
             "board_id": suite.board_id,
@@ -1456,7 +1453,6 @@ pub async fn run_regression_suite(
         "event.regression.run",
         "Event",
         event_id,
-        "Regression suite run started",
         serde_json::json!({
             "suite_run_id": suite_run_id,
             "suite_id": suite_row.id,

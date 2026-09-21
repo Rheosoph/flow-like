@@ -15,6 +15,14 @@ setup = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(setup)
 
 class SetupTest(unittest.TestCase):
+    def test_hosted_frontends_reuse_the_web_origin_for_separate_and_shared_hosts(self):
+        web = "https://app.example.test"
+        for api in ["https://api.example.test", web]:
+            with self.subTest(api=api), patch.dict(os.environ, {"PUBLIC_WEB_URL": web, "PUBLIC_API_URL": api}, clear=True):
+                _, values = setup.generate("flow-like", "flow-like")
+            self.assertEqual(values["api"]["frontendBaseUrl"], web)
+            self.assertIn(web, values["api"]["corsAllowedOrigins"])
+
     def test_stripe_credentials_are_private_api_secret_values(self):
         environment = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
         with patch.dict(os.environ, environment, clear=True):
@@ -146,6 +154,7 @@ if sys.argv[1:3]==['image','inspect']:
             values = json.loads(output.read_text())
             expected = {
                 ("api", "image"): "flow-like-kubernetes-api",
+                ("audit", "image"): "flow-like-audit-worker",
                 ("web", "image"): "flow-like-kubernetes-web",
                 ("executor", "image"): "flow-like-kubernetes-executor",
                 ("executorPool", "image"): "flow-like-kubernetes-executor",

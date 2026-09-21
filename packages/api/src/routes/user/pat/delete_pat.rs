@@ -35,14 +35,7 @@ pub async fn delete_pat(
         .await?;
 
     if deleted.rows_affected > 0 {
-        audit!(
-            state,
-            user,
-            "pat.delete",
-            "PersonalAccessToken",
-            pat_id,
-            "Deleted a personal access token"
-        );
+        audit!(state, user, "pat.delete", "PersonalAccessToken", pat_id);
     }
 
     Ok(Json(()))

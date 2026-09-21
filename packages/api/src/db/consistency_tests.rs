@@ -1,13 +1,15 @@
-//! Real PostgreSQL regressions for transactions that coordinate through a stable row.
-//! Run against a new, empty, disposable database:
+//! Real PostgreSQL regressions for concurrent writers, including transactions that
+//! coordinate through a stable row. Run against a new, empty, disposable database:
 //! `FLOW_LIKE_CONSISTENCY_TEST_DATABASE_URL=... cargo test -p flow-like-api --lib
 //! db::consistency_tests::concurrent_database_operations -- --ignored`
 
 use super::DbDialect;
-use crate::audit::AuditService;
-use crate::audit::service::AuditEntryInput;
+use crate::audit::crypto::mac_matches;
+use crate::audit::keys::entry_key;
+use crate::audit::verify::check_record;
+use crate::audit::{AuditRecordInput, WriteMode, chain_for, record};
 use crate::entity::sea_orm_active_enums::AuditActorType;
-use crate::entity::{audit_entry, board_sync, usage_alert, usage_invocation};
+use crate::entity::{audit_record, board_sync, usage_alert, usage_invocation};
 use crate::routes::app::board::realtime::get_or_rotate_room_key_with_db;
 use crate::usage_accounting::{
     STATUS_COMPLETED, STATUS_FAILED, UsageInvocationSettlement, UsageInvocationStart,
@@ -18,7 +20,7 @@ use flow_like_types::tokio;
 use futures::future::join_all;
 use sea_orm::{
     ColumnTrait, ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Statement,
+    EntityTrait, PaginatorTrait, QueryFilter, Statement,
 };
 
 async fn execute(db: &DatabaseConnection, sql: impl Into<String>) {
@@ -27,32 +29,14 @@ async fn execute(db: &DatabaseConnection, sql: impl Into<String>) {
         .unwrap();
 }
 
-async fn fixture() -> DatabaseConnection {
-    let url = std::env::var("FLOW_LIKE_CONSISTENCY_TEST_DATABASE_URL").expect(
-        "set FLOW_LIKE_CONSISTENCY_TEST_DATABASE_URL to an empty disposable PostgreSQL database",
-    );
-    let mut options = ConnectOptions::new(url);
-    options.max_connections(16).min_connections(1);
-    let db = Database::connect(options).await.unwrap();
-    let tables = [
-        "AuditEntry",
-        "MutationLock",
-        "BoardSync",
-        "AppUsageLimit",
-        "UsageInvocation",
-        "UsageAlert",
-        "LLMUsageTracking",
-        "EmbeddingUsageTracking",
-    ];
-    // Reuse the committed column types and unique indexes; deliberately omit
-    // unrelated application tables and their foreign keys in this isolated fixture.
-    let migration =
-        include_str!("../../prisma/migrations-dsql/20260904112415_initial/migration.sql");
+/// Reuse the committed column types and unique indexes; deliberately omit
+/// unrelated application tables and their foreign keys in this isolated fixture.
+async fn create_tables(db: &DatabaseConnection, migration: &str, tables: &[&str]) {
     for table in tables {
         let needle = format!("CREATE TABLE \"{table}\" (");
         let start = migration.find(&needle).unwrap();
         let end = migration[start..].find("\n);").unwrap() + start + 3;
-        execute(&db, &migration[start..end]).await;
+        execute(db, &migration[start..end]).await;
     }
     for statement in migration.split(';') {
         let statement = statement.trim();
@@ -62,9 +46,38 @@ async fn fixture() -> DatabaseConnection {
                 .iter()
                 .any(|table| statement.contains(&format!(" ON \"{table}\"(")))
         {
-            execute(&db, statement.replace("INDEX ASYNC", "INDEX")).await;
+            execute(db, statement.replace("INDEX ASYNC", "INDEX")).await;
         }
     }
+}
+
+async fn fixture() -> DatabaseConnection {
+    let url = std::env::var("FLOW_LIKE_CONSISTENCY_TEST_DATABASE_URL").expect(
+        "set FLOW_LIKE_CONSISTENCY_TEST_DATABASE_URL to an empty disposable PostgreSQL database",
+    );
+    let mut options = ConnectOptions::new(url);
+    options.max_connections(16).min_connections(1);
+    let db = Database::connect(options).await.unwrap();
+    create_tables(
+        &db,
+        include_str!("../../prisma/migrations-dsql/20260904112415_initial/migration.sql"),
+        &[
+            "MutationLock",
+            "BoardSync",
+            "AppUsageLimit",
+            "UsageInvocation",
+            "UsageAlert",
+            "LLMUsageTracking",
+            "EmbeddingUsageTracking",
+        ],
+    )
+    .await;
+    create_tables(
+        &db,
+        include_str!("../../prisma/migrations-dsql/20260919120001_audit_seals/migration.sql"),
+        &["AuditRecord"],
+    )
+    .await;
     for statement in
         include_str!("../../prisma/migrations/20260913120007_rolling_usage/migration.sql")
             .split(';')
@@ -76,63 +89,77 @@ async fn fixture() -> DatabaseConnection {
     db
 }
 
-fn audit_input(chain_id: Option<String>) -> AuditEntryInput {
-    AuditEntryInput {
+const AUDIT_ACTION: &str = "consistency.append";
+
+fn audit_input(scope: Option<&str>, resource_id: &str) -> AuditRecordInput {
+    AuditRecordInput {
         actor_id: "consistency-user".into(),
         actor_type: AuditActorType::User,
-        actor_ip: None,
-        action: "consistency.append".into(),
+        actor_ip: Some("192.0.2.1".into()),
+        action: AUDIT_ACTION.into(),
         resource_type: "App".into(),
-        resource_id: "consistency-app".into(),
-        chain_id,
-        summary: "Concurrent append regression".into(),
-        details: None,
+        resource_id: resource_id.into(),
+        scope: scope.map(str::to_owned),
+        details: Some(serde_json::json!({ "count": 1 })),
     }
 }
 
+async fn chain_records(db: &DatabaseConnection, scope: Option<&str>) -> Vec<audit_record::Model> {
+    audit_record::Entity::find()
+        .filter(audit_record::Column::ChainId.eq(chain_for(scope, AUDIT_ACTION)))
+        .all(db)
+        .await
+        .unwrap()
+}
+
+/// Writers on one chain share no row, so none of them waits for or aborts another.
 async fn audit_appends(db: &DatabaseConnection) {
-    for chain_id in [None, Some("consistency-branch".to_owned())] {
-        // Exercise both the absent-chain case and a chain whose tail already exists.
-        for expected in [8, 16] {
-            let entries = join_all((0..8).map(|_| {
-                AuditService::record(db, DbDialect::Postgres, audit_input(chain_id.clone()))
+    for scope in [None, Some("consistency-app")] {
+        for expected in [16, 32] {
+            let writes = join_all((0..16).map(|n| {
+                record::write(
+                    db,
+                    audit_input(scope, &format!("resource-{n}")),
+                    WriteMode::Append,
+                )
             }))
             .await;
             assert!(
-                entries.iter().all(Result::is_ok),
-                "every append commits: {entries:?}"
+                writes.iter().all(Result::is_ok),
+                "every append commits: {writes:?}"
             );
-            let rows = audit_entry::Entity::find()
-                .filter(match &chain_id {
-                    Some(id) => audit_entry::Column::ChainId.eq(id),
-                    None => audit_entry::Column::ChainId.is_null(),
-                })
-                .order_by_asc(audit_entry::Column::Sequence)
-                .all(db)
-                .await
-                .unwrap();
-            assert_eq!(
-                rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
-                (1..=expected).collect::<Vec<_>>()
-            );
-            assert!(
-                rows.iter()
-                    .all(|row| row.timestamp.timestamp_subsec_nanos() % 1_000_000 == 0)
-            );
-            assert!(
-                AuditService::verify_chain(
-                    db,
-                    DbDialect::Postgres,
-                    chain_id.as_deref(),
-                    None,
-                    None
-                )
-                .await
-                .unwrap()
-                .valid
-            );
+            let rows = chain_records(db, scope).await;
+            assert_eq!(rows.len(), expected);
+            for row in &rows {
+                assert_eq!(row.timestamp.timestamp_subsec_nanos() % 1_000_000, 0);
+                assert!(row.seal_id.is_none(), "record {} is pending", row.id);
+                let (hash, redacted) = check_record(row).unwrap();
+                assert_eq!(redacted, 0);
+                assert!(
+                    mac_matches(entry_key(), &hash, row.mac.as_deref().unwrap_or_default()),
+                    "record {} keeps a valid MAC through the database round trip",
+                    row.id
+                );
+            }
         }
     }
+}
+
+async fn audit_once(db: &DatabaseConnection) {
+    let scope = Some("consistency-once");
+    let once =
+        |resource_id: &str| record::write(db, audit_input(scope, resource_id), WriteMode::Once);
+    let writes = join_all((0..8).map(|_| once("run-1"))).await;
+    assert!(
+        writes.iter().all(Result::is_ok),
+        "a repeated once-only write is a no-op: {writes:?}"
+    );
+    once("run-2").await.unwrap();
+    once("run-1").await.unwrap();
+    let rows = chain_records(db, scope).await;
+    let mut resources: Vec<&str> = rows.iter().map(|row| row.resource_id.as_str()).collect();
+    resources.sort_unstable();
+    assert_eq!(resources, ["run-1", "run-2"]);
 }
 
 async fn room_keys(db: &DatabaseConnection) {
@@ -463,6 +490,7 @@ async fn rolling_budgets(db: &DatabaseConnection) {
 async fn concurrent_database_operations() {
     let db = fixture().await;
     audit_appends(&db).await;
+    audit_once(&db).await;
     room_keys(&db).await;
     budgets(&db).await;
     rolling_budgets(&db).await;

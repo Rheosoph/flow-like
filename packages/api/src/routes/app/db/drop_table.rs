@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::{
     table_cascade::prune_table_references, vector::lancedb::LanceDBVectorStore,
 };
@@ -54,6 +55,7 @@ pub async fn drop_table(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
 ) -> Result<Json<DropTableResponse>, ApiError> {
     ensure_any_permission!(
         user,
@@ -63,13 +65,18 @@ pub async fn drop_table(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    if selector != DatabaseSelector::default() {
+        return Err(ApiError::bad_request(
+            "This operation applies to the entire table. Omit branch and revision selectors."
+                .to_string(),
+        ));
+    }
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let cascade = prune_table_references(&connection, &table).await;
-
-    let mut db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
+    let mut db = LanceDBVectorStore::from_connection(connection.clone(), table.clone()).await;
     let dropped = db.list_tables().await?.iter().any(|name| name == &table);
     db.drop_table().await?;
+    let cascade = prune_table_references(&connection, &table).await;
 
     audit_branch!(
         state,
@@ -78,7 +85,6 @@ pub async fn drop_table(
         "database.table.drop",
         "DatabaseTable",
         table,
-        "Dropped a database table and pruned its references",
         serde_json::json!({
             "dropped": dropped,
             "user_scoped": scope.is_user_scoped(),

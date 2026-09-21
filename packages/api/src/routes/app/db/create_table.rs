@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::{
     lancedb::LanceDBVectorStore,
     schema::{DatabaseSchemaField, database_fields_to_arrow_schema},
@@ -89,6 +90,7 @@ pub async fn create_table(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<CreateTablePayload>,
 ) -> Result<Json<CreateTableResponse>, ApiError> {
     ensure_any_permission!(
@@ -99,6 +101,12 @@ pub async fn create_table(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    if selector != DatabaseSelector::default() {
+        return Err(ApiError::bad_request(
+            "This operation applies to the entire table. Omit branch and revision selectors."
+                .to_string(),
+        ));
+    }
 
     let if_not_exists = payload.if_not_exists.unwrap_or(true);
     let fields = payload
@@ -131,7 +139,6 @@ pub async fn create_table(
             "database.table.create",
             "DatabaseTable",
             table,
-            "Created a database table",
             serde_json::json!({
                 "column_count": fields.len(),
                 "user_scoped": scope.is_user_scoped(),

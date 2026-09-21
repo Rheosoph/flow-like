@@ -36,6 +36,7 @@ pub mod make_column_optional;
 pub mod open_remote;
 pub mod optimize;
 pub mod purge;
+pub mod references;
 pub mod schema;
 pub mod upsert;
 pub mod vector_search;
@@ -61,7 +62,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
         );
         node.set_flowscript_name("db", "open");
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -85,6 +86,9 @@ impl NodeLogic for CreateLocalDatabaseNode {
             VariableType::Integer,
         )
         .set_default_value(Some(flow_like_types::json::json!(1000)));
+
+        references::add_selector_pins(&mut node);
+        references::add_reference_output(&mut node);
 
         node.add_output_pin(
             "exec_out",
@@ -114,11 +118,13 @@ impl NodeLogic for CreateLocalDatabaseNode {
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
         let batch_size: i64 = context.evaluate_pin("batch_size").await.unwrap_or(1000);
         let batch_size = batch_size.max(0) as usize;
-        let cache_key = if user_scoped {
+        let selector = references::read_selector(context).await?;
+        let base_key = if user_scoped {
             format!("db_user_{}", table)
         } else {
             format!("db_{}", table)
         };
+        let cache_key = references::selection_cache_key(&base_key, &selector)?;
         let cache_set = context.cache.read().await.contains_key(&cache_key);
         if !cache_set {
             let context_cache = context
@@ -166,7 +172,15 @@ impl NodeLogic for CreateLocalDatabaseNode {
             };
 
             let db = context.app_state.with_lance_session(db).execute().await?;
-            let mut lance_store = LanceDBVectorStore::from_connection(db, table).await;
+            let mut lance_store = if selector.branch == "main"
+                && selector.version.is_none()
+                && selector.tag.is_none()
+                && !selector.read_only
+            {
+                LanceDBVectorStore::from_connection(db, table).await
+            } else {
+                LanceDBVectorStore::from_connection_with_selector(db, table, selector).await?
+            };
             if let Some(opts) = &context
                 .app_state
                 .config
@@ -204,6 +218,12 @@ impl NodeLogic for CreateLocalDatabaseNode {
         }
 
         let db = NodeDBConnection { cache_key };
+
+        let cached = db.load(context).await?;
+        let reference = references::optional_reference(cached.db.read().await.inner()).await?;
+        context
+            .set_pin_value("reference", flow_like_types::json::to_value(reference)?)
+            .await?;
 
         let db: Value = flow_like_types::json::to_value(&db)?;
 

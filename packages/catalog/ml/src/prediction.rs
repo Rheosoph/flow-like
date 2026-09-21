@@ -25,7 +25,9 @@ use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::arrow_schema::Schema;
 #[cfg(feature = "execute")]
-use flow_like_storage::databases::vector::VectorStore;
+use flow_like_storage::contracts::database::DatabaseSelector;
+#[cfg(feature = "execute")]
+use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 #[cfg(feature = "execute")]
 use flow_like_storage::lancedb::table::NewColumnTransform;
 use flow_like_types::Value;
@@ -34,6 +36,59 @@ use flow_like_types::anyhow;
 use flow_like_types::{Result, async_trait, json::json};
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
+
+#[cfg(feature = "execute")]
+async fn snapshot_prediction_source(
+    source: &LanceDBVectorStore,
+    explicit_key: Option<&str>,
+    predictions_col: &str,
+) -> Result<LanceDBVectorStore> {
+    let reference = source.reference().await?;
+    let snapshot = source
+        .checkout(DatabaseSelector {
+            branch: reference.branch,
+            version: Some(reference.version),
+            tag: None,
+            read_only: true,
+        })
+        .await?;
+    if let Some(key) = explicit_key {
+        if key == predictions_col {
+            return Err(anyhow!("Prediction Column must differ from Key Column"));
+        }
+        let schema = snapshot.schema().await?;
+        let field = schema
+            .field_with_name(key)
+            .map_err(|_| anyhow!("Database does not contain key column '{key}'"))?;
+        use flow_like_storage::arrow_schema::DataType;
+        if !matches!(
+            field.data_type(),
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+        ) {
+            return Err(anyhow!("Key Column must contain strings or integers"));
+        }
+        let quoted_key = format!("\"{}\"", key.replace('"', "\"\""));
+        let invalid = snapshot.sql("prediction_source", &format!(
+            "SELECT {quoted_key} FROM prediction_source GROUP BY {quoted_key} HAVING {quoted_key} IS NULL OR COUNT(*) > 1 LIMIT 1"
+        )).await?.collect().await?;
+        if invalid.iter().any(|batch| batch.num_rows() > 0) {
+            return Err(anyhow!(
+                "Key Column '{key}' must contain unique, non-null values"
+            ));
+        }
+    }
+    Ok(snapshot)
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -56,7 +111,7 @@ impl NodeLogic for MLPredictNode {
         );
         node.set_flowscript_name("ml", "predict");
         node.set_receiver("model");
-        node.set_version(1);
+        node.set_version(2);
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
@@ -129,8 +184,32 @@ impl NodeLogic for MLPredictNode {
             "Database" => {
                 // fetch additional inputs
                 let node_database: NodeDBConnection = context.evaluate_pin("database").await?;
+                let output_database: Option<NodeDBConnection> =
+                    if context.get_pin_by_name("output_database").await.is_ok() {
+                        context.evaluate_pin("output_database").await?
+                    } else {
+                        None
+                    };
+                let output_database = output_database.unwrap_or_else(|| node_database.clone());
                 let records_col: String = context.evaluate_pin("records").await?;
                 let predictions_col: String = context.evaluate_pin("predictions_col").await?;
+                let id_field: String = if context.get_pin_by_name("id_field").await.is_ok() {
+                    context.evaluate_pin("id_field").await?
+                } else {
+                    String::new()
+                };
+                let id_field = id_field.trim().to_string();
+                if output_database.cache_key != node_database.cache_key && id_field.is_empty() {
+                    return Err(anyhow!(
+                        "Set Key Column when writing predictions to another database"
+                    ));
+                }
+                let explicit_key = !id_field.is_empty();
+                let id_field = if explicit_key {
+                    id_field
+                } else {
+                    records_col.clone()
+                };
                 let batch_size: i64 = context.evaluate_pin("batch_size").await.unwrap_or(5000);
                 let batch_size = if batch_size <= 0 {
                     usize::MAX
@@ -139,12 +218,35 @@ impl NodeLogic for MLPredictNode {
                 };
 
                 // fetch database
-                let cached_db = node_database.load(context).await?;
-                let database = cached_db.db.clone();
+                let (cached_db, mut source_generation) =
+                    node_database.load_with_generation(context).await?;
+                cached_db.ensure_flushed().await?;
+                let output_db = output_database.load(context).await?;
+                output_db.ensure_flushed().await?;
+                output_db.db.read().await.inner().ensure_writable()?;
+                let mut database = {
+                    let input = cached_db.db.read().await;
+                    snapshot_prediction_source(
+                        input.inner(),
+                        explicit_key.then_some(id_field.as_str()),
+                        &predictions_col,
+                    )
+                    .await?
+                };
+                if explicit_key && output_database.cache_key != node_database.cache_key {
+                    let output = output_db.db.read().await;
+                    if output.inner().raw().await.is_ok() {
+                        snapshot_prediction_source(
+                            output.inner(),
+                            Some(id_field.as_str()),
+                            &predictions_col,
+                        )
+                        .await?;
+                    }
+                }
 
                 // get schema and validate columns exist
                 let existing_cols: HashSet<String> = {
-                    let database = database.read().await;
                     let schema = database.schema().await?;
                     schema.fields.iter().map(|f| f.name().clone()).collect()
                 };
@@ -154,21 +256,42 @@ impl NodeLogic for MLPredictNode {
                         records_col
                     )));
                 }
+                if !existing_cols.contains(&id_field) {
+                    return Err(anyhow!("Database does not contain key column '{id_field}'"));
+                }
 
                 // load model once for all batches
                 let model = node_model.get_model(context).await?;
 
                 // add prediction column if missing (before batch loop)
-                let mut column_added = existing_cols.contains(&predictions_col);
+                let mut column_added = {
+                    let output = output_db.db.read().await;
+                    match output.inner().raw().await {
+                        Ok(table) => table
+                            .schema()
+                            .await?
+                            .fields()
+                            .iter()
+                            .any(|field| field.name() == &predictions_col),
+                        // A new destination infers its full schema on the first write.
+                        Err(_) => true,
+                    }
+                };
 
                 let mut offset: usize = 0;
                 let mut total_processed: usize = 0;
                 loop {
                     // fetch batch
                     let t0 = std::time::Instant::now();
-                    cached_db.ensure_flushed().await?;
+                    let (refreshed_input, generation) =
+                        node_database.load_with_generation(context).await?;
+                    if generation != source_generation {
+                        let connection =
+                            refreshed_input.db.read().await.inner().connection().clone();
+                        database = database.reopen(connection).await?;
+                        source_generation = generation;
+                    }
                     let mut records = {
-                        let database = database.read().await;
                         database
                             // Full rows: the upsert below merges with `when_matched_update_all`,
                             // which replaces the matched row wholesale, so a partial row would
@@ -211,8 +334,9 @@ impl NodeLogic for MLPredictNode {
 
                     // upsert batch
                     let t0 = std::time::Instant::now();
+                    let output_db = output_database.load(context).await?;
                     {
-                        let mut database = database.write().await;
+                        let mut database = output_db.db.write().await;
                         if !column_added {
                             let probe =
                                 records.first().ok_or_else(|| anyhow!("Got No Records!"))?;
@@ -229,8 +353,8 @@ impl NodeLogic for MLPredictNode {
                             column_added = true;
                         }
                     }
-                    cached_db
-                        .upsert_from(context, records, records_col.clone())
+                    output_db
+                        .upsert_from(context, records, id_field.clone())
                         .await?;
                     context.log_message(
                         &format!("Upsert batch: {:?}", t0.elapsed()),
@@ -246,13 +370,19 @@ impl NodeLogic for MLPredictNode {
                     }
                 }
 
+                output_database
+                    .load(context)
+                    .await?
+                    .ensure_flushed()
+                    .await?;
+
                 context.log_message(
                     &format!("Processed {} total records", total_processed),
                     LogLevel::Info,
                 );
 
                 // set output
-                let database_value: Value = flow_like_types::json::to_value(&node_database)?;
+                let database_value: Value = flow_like_types::json::to_value(&output_database)?;
                 context
                     .set_pin_value("database_out", database_value)
                     .await?;
@@ -301,6 +431,19 @@ impl NodeLogic for MLPredictNode {
             .unwrap_or_default();
 
         if source_pin == *"Database" {
+            if node.get_pin_by_name("output_database").is_none() {
+                node.add_input_pin(
+                    "output_database", "Output Database",
+                    "Optional writable destination. Copies full source rows with predictions; leave empty to update the input database.",
+                    VariableType::Struct,
+                ).set_schema::<NodeDBConnection>()
+                    .set_options(PinOptions::new().set_optional(true).set_enforce_schema(true).build())
+                    .set_default_value(Some(json!(null)));
+            }
+            if node.get_pin_by_name("id_field").is_none() {
+                node.add_input_pin("id_field", "Key Column", "Stable application key for prediction upserts. Required for a separate destination. Empty retains the existing input-column matching behavior.", VariableType::String)
+                    .set_default_value(Some(json!("")));
+            }
             if node.get_pin_by_name("database").is_none() {
                 node.add_input_pin(
                     "database",
@@ -358,9 +501,140 @@ impl NodeLogic for MLPredictNode {
             remove_pin_by_name(node, "records");
             remove_pin_by_name(node, "predictions_col");
             remove_pin_by_name(node, "database_out");
+            remove_pin_by_name(node, "output_database");
+            remove_pin_by_name(node, "id_field");
         } else {
             node.error = Some("Datasource Not Implemented".to_string());
             return;
         }
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod reference_tests {
+    use super::*;
+    use crate::ml::{MLModel, ModelWithMeta};
+    use linfa::traits::Fit;
+    use ndarray::{Array1, Array2};
+    use std::path::PathBuf;
+
+    struct TestPath(PathBuf);
+    impl Drop for TestPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn database(rows: Vec<Value>) -> Result<(TestPath, LanceDBVectorStore)> {
+        let path =
+            std::env::temp_dir().join(format!("flow-prediction-{}", flow_like_types::create_id()));
+        std::fs::create_dir_all(&path)?;
+        let mut source = LanceDBVectorStore::new(path.clone(), "source".into()).await?;
+        source.insert(rows).await?;
+        Ok((TestPath(path), source))
+    }
+
+    #[tokio::test]
+    async fn prediction_source_rejects_ambiguous_keys_before_writes() -> Result<()> {
+        for rows in [
+            vec![
+                json!({"id": 1, "vector": [1.0]}),
+                json!({"id": 1, "vector": [2.0]}),
+            ],
+            vec![
+                json!({"id": 1, "vector": [1.0]}),
+                json!({"id": null, "vector": [2.0]}),
+            ],
+        ] {
+            let (_guard, source) = database(rows).await?;
+            assert!(
+                snapshot_prediction_source(&source, Some("id"), "prediction")
+                    .await
+                    .is_err()
+            );
+            assert!(
+                source
+                    .schema()
+                    .await?
+                    .field_with_name("prediction")
+                    .is_err()
+            );
+            assert_eq!(source.count(None).await?, 2);
+        }
+        let (_guard, source) = database(vec![json!({"id": 1, "vector": [1.0]})]).await?;
+        assert!(
+            snapshot_prediction_source(&source, Some("id"), "id")
+                .await
+                .is_err()
+        );
+        assert!(
+            snapshot_prediction_source(&source, Some("vector"), "prediction")
+                .await
+                .is_err()
+        );
+        assert!(
+            snapshot_prediction_source(&source, Some("missing"), "prediction")
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prediction_batches_read_one_snapshot_and_write_a_separate_branch() -> Result<()> {
+        let (_guard, mut source) = database(vec![
+            json!({"id": 1, "vector": [1.0], "label": "first"}),
+            json!({"id": 2, "vector": [2.0], "label": "second"}),
+        ])
+        .await?;
+        let mut output = source.create_branch("predictions").await?;
+        let snapshot = snapshot_prediction_source(&source, Some("id"), "prediction").await?;
+        let snapshot_version = snapshot.reference().await?.version;
+        source
+            .insert(vec![json!({"id": 3, "vector": [3.0], "label": "later"})])
+            .await?;
+        let training = linfa::Dataset::new(
+            Array2::from_shape_vec((3, 1), vec![1.0, 2.0, 3.0])?,
+            Array1::from(vec![2.0, 4.0, 6.0]),
+        );
+        let model = MLModel::LinearRegression(ModelWithMeta {
+            model: linfa_linear::LinearRegression::default().fit(&training)?,
+            classes: None,
+        });
+        let mut offset = 0;
+        loop {
+            let mut rows = snapshot.filter("true", None, 1, offset).await?;
+            if rows.is_empty() {
+                break;
+            }
+            model.predict_on_values(&mut rows, "vector", "prediction")?;
+            if offset == 0 {
+                output
+                    .add_columns(
+                        NewColumnTransform::AllNulls(
+                            Schema::new(vec![make_new_field(&rows[0], "prediction")?]).into(),
+                        ),
+                        None,
+                    )
+                    .await?;
+            }
+            output.upsert(rows, "id".into()).await?;
+            offset += 1;
+        }
+        assert_eq!(offset, 2);
+        assert_eq!(source.count(None).await?, 3);
+        assert_eq!(snapshot.reference().await?.version, snapshot_version);
+        assert!(
+            source
+                .schema()
+                .await?
+                .field_with_name("prediction")
+                .is_err()
+        );
+        assert_eq!(output.count(None).await?, 2);
+        let first = output.filter("id = 1", None, 1, 0).await?;
+        assert_eq!(first[0]["label"], "first");
+        assert!((first[0]["prediction"].as_f64().expect("numeric prediction") - 2.0).abs() < 1e-8);
+        Ok(())
     }
 }

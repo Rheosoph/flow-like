@@ -91,7 +91,6 @@ pub async fn create_widget_version(
         "widget.version",
         "Widget",
         widget_id,
-        "Published a widget version",
         serde_json::json!({ "version": version })
     );
 

@@ -141,14 +141,6 @@ pub async fn delete_page(
 
     page_id_guard.release().await;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "page.delete",
-        "Page",
-        page_id,
-        "Page deleted"
-    );
+    audit_branch!(state, user, app_id, "page.delete", "Page", page_id);
     Ok(Json(()))
 }

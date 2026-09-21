@@ -15,10 +15,9 @@ use flow_like_types::create_id;
 
 use crate::{
     audit::{
-        AuditService, actor_type_from_user,
+        AuditRecordInput, WriteMode, actor_type_from_user,
         level::{REQUEST_ATTEMPT_ACTION, REQUEST_FINISH_ACTION, records},
         request::{REQUEST_AUDIT, RequestAuditContext},
-        service::AuditEntryInput,
     },
     error::ApiError,
     middleware::jwt::{AppUser, ClientIp},
@@ -43,7 +42,7 @@ fn request_entry(
     route: &str,
     chain: RequestChain,
     actor_ip: Option<String>,
-) -> AuditEntryInput {
+) -> AuditRecordInput {
     let request_id = create_id();
     let mut details = serde_json::json!({
         "request_id": request_id,
@@ -53,25 +52,24 @@ fn request_entry(
     if let Some(requested) = chain.requested_app_id {
         details["requested_app_id"] = requested.into();
     }
-    AuditEntryInput {
+    AuditRecordInput {
         actor_id,
         actor_type: actor_type_from_user(user),
         actor_ip,
         action: REQUEST_ATTEMPT_ACTION.to_string(),
         resource_type: "ApiRequest".to_string(),
         resource_id: request_id,
-        chain_id: chain.chain_id,
-        summary: format!("{} {} requested", method, route),
+        scope: chain.scope,
         details: Some(details),
     }
 }
 
 /// Where a request record lands. An app chain belongs to its members: a caller
-/// without a role there is recorded on the root chain with the id it asked for,
+/// without a role there is recorded on the platform chain with the id it asked for,
 /// so nobody can write into, or create, a chain by naming it in a path.
 #[derive(Default)]
 struct RequestChain {
-    chain_id: Option<String>,
+    scope: Option<String>,
     requested_app_id: Option<String>,
 }
 
@@ -84,16 +82,16 @@ async fn request_chain(
         // Executors hold no membership; their token names the app they run for.
         Some(app_id) if user.execution_app_permission(&app_id, state).await.is_ok() => {
             RequestChain {
-                chain_id: Some(app_id),
+                scope: Some(app_id),
                 requested_app_id: None,
             }
         }
         Some(app_id) => RequestChain {
-            chain_id: None,
+            scope: None,
             requested_app_id: Some(app_id),
         },
         None => RequestChain {
-            chain_id: user.app_id().ok(),
+            scope: user.app_id().ok(),
             requested_app_id: None,
         },
     }
@@ -106,13 +104,13 @@ fn outcome_unknown(response: &Response) -> bool {
 }
 
 async fn record_request<R, RF, N, NF>(
-    entry: AuditEntryInput,
+    entry: AuditRecordInput,
     context: RequestAuditContext,
     mut record: R,
     next: N,
 ) -> Response
 where
-    R: FnMut(AuditEntryInput) -> RF,
+    R: FnMut(AuditRecordInput) -> RF,
     RF: Future<Output = flow_like_types::Result<()>>,
     N: FnOnce() -> NF,
     NF: Future<Output = Response>,
@@ -127,7 +125,6 @@ where
     let mut response = REQUEST_AUDIT.scope(context, async { next().await }).await;
     let mut outcome = entry;
     outcome.action = REQUEST_FINISH_ACTION.to_string();
-    outcome.summary = format!("Request returned HTTP {}", response.status().as_u16());
     let failure_count = failures.load(Ordering::Relaxed);
     if let Some(details) = outcome
         .details
@@ -265,9 +262,9 @@ pub async fn audit_middleware(
         |input| {
             let state = state.clone();
             async move {
-                AuditService::record(&state.db, state.db_dialect, input)
+                crate::audit::record::write(&state.db, input, WriteMode::Append)
                     .await
-                    .map(|_| ())
+                    .map_err(flow_like_types::Error::from)
             }
         },
         || next.run(Request::from_parts(parts, body)),
@@ -284,14 +281,14 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
-    fn entry() -> AuditEntryInput {
+    fn entry() -> AuditRecordInput {
         request_entry(
             &AppUser::Unauthorized,
             "test-actor".to_string(),
             &Method::DELETE,
             "/api/v1/apps/{app_id}/board/{board_id}",
             RequestChain {
-                chain_id: Some("app-1".to_string()),
+                scope: Some("app-1".to_string()),
                 requested_app_id: None,
             },
             None,
@@ -299,20 +296,23 @@ mod tests {
     }
 
     #[test]
-    fn a_request_for_a_foreign_app_is_recorded_on_the_root_chain() {
+    fn a_request_for_a_foreign_app_is_recorded_on_the_platform_chain() {
         let entry = request_entry(
             &AppUser::Unauthorized,
             "test-actor".to_string(),
             &Method::POST,
             "/api/v1/apps/{app_id}/board",
             RequestChain {
-                chain_id: None,
+                scope: None,
                 requested_app_id: Some("foreign-app".to_string()),
             },
             None,
         );
-        assert_eq!(entry.chain_id, None);
-        assert_eq!(entry.details.unwrap()["requested_app_id"], "foreign-app");
+        assert_eq!(entry.scope, None);
+        assert_eq!(entry.chain_id(), "platform#activity");
+        let details = entry.details.unwrap();
+        assert_eq!(details["requested_app_id"], "foreign-app");
+        assert_eq!(details["request_id"], entry.resource_id.as_str());
     }
 
     #[tokio::test]

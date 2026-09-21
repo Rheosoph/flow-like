@@ -244,6 +244,7 @@ const RULES: &[Rule] = &[
     rule(M::ANY, "/api/v1/sink/trigger/*", Dispatch),
     // Observed max 33.4 s; the deletion pass budget reaches 270 s.
     rule(M::POST, "/api/v1/maintenance/run", Job),
+    rule(M::POST, "/api/v1/maintenance/payments", Job),
     rule(
         M::POST,
         "/api/v1/maintenance/compute-attempts/reconcile",
@@ -292,8 +293,9 @@ const RULES: &[Rule] = &[
     rule(M::GET, "/api/v1/execution/poll", Data),
     // Upstream cancel call has a 60 s timeout.
     rule(M::DELETE, "/api/v1/execution/run/{run_id}", Data),
-    // Without a range, verifies the whole audit chain.
+    // A first or full verification reads a whole chain or the whole epoch timeline.
     rule(GET_HEAD, "/api/v1/audit/verify", Data),
+    rule(GET_HEAD, "/api/v1/audit/verify/epochs", Data),
     // Provider calls have their own 30 s timeout, which a write deadline would pre-empt.
     rule(M::POST, "/api/v1/oauth/*", Data),
     // The upstream fetch has its own 10 s timeout, which a read deadline would pre-empt.
@@ -793,7 +795,8 @@ mod tests {
             None,
         ),
         ("GET", "/api/v1/audit/verify", Data, None),
-        ("GET", "/api/v1/audit/entries", Read, None),
+        ("GET", "/api/v1/audit/verify/epochs", Data, None),
+        ("GET", "/api/v1/audit/records", Read, None),
         ("POST", "/api/v1/oauth/token/{provider_id}", Data, None),
         (
             "POST",

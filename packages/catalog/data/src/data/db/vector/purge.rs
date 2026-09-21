@@ -26,7 +26,7 @@ impl NodeLogic for PurgeLocalDatabaseNode {
         let mut node = Node::new(
             "purge_local_db",
             "Purge",
-            "Purge Database",
+            "Delete all rows from the selected writable branch. The schema and version history remain available.",
             "Data/Database/Delete",
         );
         node.set_flowscript_name("db", "purge");

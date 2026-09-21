@@ -79,7 +79,6 @@ pub async fn upsert_nodes(
         "graph.nodes.upsert",
         "GraphOverlay",
         overlay_id,
-        "Saved graph nodes",
         serde_json::json!({
             "row_count": upserted,
             "user_scoped": scope.is_user_scoped(),

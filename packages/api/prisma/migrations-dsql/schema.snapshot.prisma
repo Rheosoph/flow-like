@@ -1316,6 +1316,9 @@ model AppPackage {
 // Cryptographic Audit Trail — blake3 hash chains with ES256 server signatures
 // Branching chain architecture: platform root chain + per-app/per-package sub-chains
 
+/// Legacy hash chain from before the 2026-09 redesign. Nothing writes to it; the audit
+/// worker exports it once, raw, to the audit bucket and then deletes its rows. Drop the
+/// table in a later migration.
 model AuditEntry {
   id       String @id @default(cuid())
   sequence BigInt
@@ -1353,6 +1356,160 @@ model AuditEntry {
   @@index([action])
   @@index([entryHash])
   @@index([timestamp])
+}
+
+/// One audited change. Rows without a seal id are pending; the audit worker verifies their
+/// MAC and seals them. The row holds no chain fields: the chain lives in AuditSeal.
+model AuditRecord {
+  id                String   @id
+  /// "platform", an app or package id, or "<scope>#activity" for verbose-only actions
+  chainId           String
+  timestamp         DateTime @db.Timestamptz(3)
+  actorId           String
+  actorType         String
+  action            String
+  resourceType      String
+  resourceId        String
+  /// Salted BLAKE3 commitments to the personal fields; the record hash covers these
+  ipCommitment      Bytes?
+  detailsCommitment Bytes?
+  /// Raw personal values and their salts, set to NULL when they expire
+  actorIp           String?
+  ipSalt            Bytes?
+  details           Json?
+  detailsSalt       Bytes?
+  /// Keyed BLAKE3 MAC with the API entry key while pending, cleared once sealed
+  mac               Bytes?
+  /// Seal id, or "invalid" for a pending record whose MAC failed
+  sealId            String?
+
+  @@index([chainId, timestamp, id])
+  @@index([sealId, chainId, timestamp, id])
+}
+
+/// A sealed batch of one chain's records. Seals of a chain link by prevHash.
+model AuditSeal {
+  id             String   @id
+  chainId        String
+  seq            BigInt
+  /// "evidence" or "activity"
+  class          String
+  prevHash       Bytes
+  recordCount    Int
+  /// RFC 6962 Merkle root over the record hashes in (timestamp, id) order
+  recordsRoot    Bytes
+  firstAt        DateTime @db.Timestamptz(3)
+  lastAt         DateTime @db.Timestamptz(3)
+  sealedAt       DateTime @db.Timestamptz(3)
+  hash           Bytes
+  /// Set once an epoch commits to this seal
+  epochSeq       BigInt?
+  epochIndex     Int?
+  /// RFC 6962 inclusion proof of this seal in its epoch
+  epochProof     Bytes?
+  /// Keyed BLAKE3 of the seal hash with the entry key, protecting the seal until an
+  /// epoch anchors it; cleared on anchoring
+  mac            Bytes?
+  /// Some record still holds a raw value of that kind awaiting expiry
+  ipPending      Boolean  @default(false)
+  detailsPending Boolean  @default(false)
+
+  @@unique([chainId, seq])
+  @@index([epochSeq, epochIndex])
+  @@index([class, lastAt])
+  @@index([ipPending, lastAt])
+  @@index([detailsPending, lastAt])
+}
+
+/// Platform-wide timeline: each epoch commits to the seals it covers and is signed
+/// with the audit key.
+model AuditEpoch {
+  seq       BigInt   @id
+  prevHash  Bytes
+  sealCount Int
+  sealsRoot Bytes
+  createdAt DateTime @db.Timestamptz(3)
+  hash      Bytes
+  kid       String
+  /// Raw 64-byte P-256 ECDSA signature (r || s) over the epoch hash
+  signature Bytes
+
+  @@index([createdAt])
+}
+
+/// Last pruned seal of a chain ("~epochs" for the epoch chain), signed so verification
+/// can start there.
+model AuditWatermark {
+  chainId    String   @id
+  seq        BigInt
+  hash       Bytes
+  prunedAt   DateTime @db.Timestamptz(3)
+  /// One signature covers every watermark of a prune run: the Merkle root over their
+  /// hashes is signed, and each row carries its inclusion proof
+  batchRoot  Bytes
+  batchSize  Int
+  batchIndex Int
+  batchProof Bytes
+  kid        String
+  signature  Bytes
+  /// Seals at or below `seq` may still exist and wait for deletion
+  pendingDelete Boolean @default(false)
+
+  @@index([prunedAt])
+  @@index([pendingDelete])
+}
+
+/// Archive objects written to the audit bucket. Part 0 is the signed manifest that
+/// completes a period ("YYYY-MM" or "legacy").
+model AuditArchive {
+  period      String
+  part        Int
+  objectKey   String
+  sha256      Bytes
+  byteSize    BigInt
+  firstEpoch  BigInt?
+  lastEpoch   BigInt?
+  epochCount  BigInt
+  sealCount   BigInt
+  recordCount BigInt
+  createdAt   DateTime @db.Timestamptz(3)
+  kid         String?
+  signature   Bytes?
+  /// Part 0 only: the manifest without its signature, so the signed manifest can be
+  /// verified and re-uploaded without reading the bucket or signing again
+  manifest    Json?
+  /// When the object was confirmed written; a part 0 row without it still waits for
+  /// its upload
+  uploadedAt  DateTime? @db.Timestamptz(3)
+
+  @@id([period, part])
+}
+
+/// A chain with a seal that failed its hash or MAC before an epoch signed it. Its seals
+/// are never signed, archived or pruned until an operator resolves the incident.
+model AuditHeldChain {
+  chainId String   @id
+  seq     BigInt
+  sealId  String
+  heldAt  DateTime @db.Timestamptz(3)
+  reason  String
+}
+
+/// Per-app webhook that receives the app's sealed audit records.
+model AuditExportTarget {
+  appId           String    @id
+  url             String
+  /// Signing secret, encrypted with the platform encryption key
+  secret          String
+  active          Boolean   @default(true)
+  evidenceCursor  BigInt    @default(0)
+  activityCursor  BigInt    @default(0)
+  failures        Int       @default(0)
+  nextAttemptAt   DateTime? @db.Timestamptz(3)
+  lastDeliveredAt DateTime? @db.Timestamptz(3)
+  lastError       String?
+  createdAt       DateTime  @db.Timestamptz(3)
+  updatedAt       DateTime  @db.Timestamptz(3)
 }
 
 // ---- capacity.prisma
@@ -4189,4 +4346,12 @@ model PaymentLegacyArchive {
   @@unique([sourceType, sourceId], map: "PaymentLegacyArchive_sourceType_sourceId_key")
   @@index([status, createdAt], map: "PaymentLegacyArchive_status_createdAt_idx")
   @@index([canonicalId], map: "PaymentLegacyArchive_canonicalId_idx")
+}
+
+/// Worker coordination is separate from API mutation locks. Only the worker role can write it.
+model AuditWorkerLease {
+  id        BigInt    @id
+  owner     String?
+  expiresAt DateTime? @db.Timestamptz(3)
+  updatedAt DateTime  @default(now()) @db.Timestamptz(3)
 }

@@ -15,6 +15,7 @@ pub mod internal;
 pub mod ai_act;
 pub mod analytics;
 pub mod api;
+pub mod audit;
 pub mod board;
 pub mod cache;
 pub mod comments;
@@ -124,6 +125,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/api", api::routes())
         .nest("/{app_id}/routes", route::routes())
         .nest("/{app_id}/ai-act", ai_act::routes())
+        .nest("/{app_id}/audit", audit::routes())
 }
 
 #[macro_export]

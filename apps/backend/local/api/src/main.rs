@@ -3,6 +3,9 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use dotenv::dotenv;
+use flow_like_api::audit::worker::{
+    self as audit_worker, AuditWorkerContext, bucket as audit_bucket,
+};
 use flow_like_api::axum;
 use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper_for};
 use flow_like_api::channel::{ChannelSweeperConfig, spawn_channel_sweeper};
@@ -125,6 +128,16 @@ async fn main() {
         flow_like_api::audit::ExecutionAuditContext::from(&state),
         RunSweeperConfig::from_env(),
     );
+    let _audit_worker = if audit_bucket::in_process_worker_enabled() {
+        let context =
+            AuditWorkerContext::from_state(&state).expect("audit worker configuration is invalid");
+        Some(audit_worker::spawn(
+            Arc::new(context),
+            audit_worker::TICK_INTERVAL,
+        ))
+    } else {
+        None
+    };
     let _regression_suites_handle = spawn_regression_suites_worker(state.clone());
     let _payments_worker = flow_like_api::payments::worker::spawn(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(

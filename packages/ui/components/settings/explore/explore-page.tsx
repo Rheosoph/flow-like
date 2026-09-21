@@ -42,7 +42,10 @@ import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
-import type { ITableSummary } from "@flow-like/flow-like-ui/state/backend-state/db-state";
+import type {
+	IDatabaseSelector,
+	ITableSummary,
+} from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import type {
 	CreateOverlayPayload,
 	EdgeLabelMapping,
@@ -80,6 +83,10 @@ import {
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+	databaseSelectorFromParams,
+	setDatabaseSelectorParams,
+} from "../data-studio/database-reference";
 import {
 	type SourceEntry,
 	type SourceFacet,
@@ -210,6 +217,8 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 				const params = new URLSearchParams(searchParams?.toString() ?? "");
 				params.delete("table");
 				params.delete("scope");
+				for (const name of ["branch", "version", "tag", "page"])
+					params.delete(name);
 				router.push(`${pathname}?${params.toString()}`);
 			}}
 		/>
@@ -235,6 +244,24 @@ function TableView({
 	const router = useRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
+	const selection = useMemo(() => {
+		try {
+			return {
+				selector: databaseSelectorFromParams(searchParams),
+				error: undefined,
+			};
+		} catch (error) {
+			return { selector: {}, error: getErrorMessage(error) };
+		}
+	}, [searchParams]);
+	const selectReference = useCallback(
+		(next: IDatabaseSelector) => {
+			const params = new URLSearchParams(searchParams.toString());
+			setDatabaseSelectorParams(params, next);
+			router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+		},
+		[router, pathname, searchParams],
+	);
 
 	const pageParam = searchParams?.get("page");
 	const pageSizeParam = searchParams?.get("pageSize");
@@ -267,11 +294,24 @@ function TableView({
 		[router, pathname, searchParams],
 	);
 
+	if (selection.error)
+		return (
+			<div className="space-y-3 p-4">
+				<p role="alert" className="text-destructive">
+					{selection.error}
+				</p>
+				<Button onClick={() => selectReference({})}>Open latest main</Button>
+			</div>
+		);
+
 	return (
 		<TableInspector
 			appId={appId}
 			table={table}
 			userScoped={userScoped}
+			selector={selection.selector}
+			onSelectorChange={selectReference}
+			onTableDeleted={onBack}
 			page={page}
 			pageSize={pageSize}
 			onPageChange={updateUrlParams}
@@ -1427,7 +1467,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						<AlertDialogDescription>
 							{t(
 								"thisPermanentlyDeletesTheTableEveryRowInItItsSchemaAndItsIndexesItCannotBeUndone",
-								"This permanently deletes the table, every row in it, its schema and its indexes. It cannot be undone.",
+								"This permanently deletes the table, every branch, version, tag and row, its schema and its indexes. It cannot be undone.",
 							)}
 						</AlertDialogDescription>
 					</AlertDialogHeader>

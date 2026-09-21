@@ -373,6 +373,33 @@ pub async fn resolve_page_trigger(
             "Page execution requires Event runtime permission",
         ));
     }
+    let subject = permission.effective_user_id().map_err(|_| {
+        ApiError::forbidden("Page execution requires a caller linked to a user account")
+    })?;
+    resolve_authorized_page_trigger(
+        state,
+        app_id,
+        event,
+        trigger,
+        variant_pin,
+        &subject,
+        permission.technical_user_id(),
+    )
+    .await
+}
+
+/// Resolve the Page contract after a crate-owned route has authorized this
+/// exact Event. Public hosted frontends authorize exposure rather than app
+/// membership; their session subject still binds dynamic capabilities.
+pub(crate) async fn resolve_authorized_page_trigger(
+    state: &AppState,
+    app_id: &str,
+    event: &Event,
+    trigger: &PageTrigger,
+    variant_pin: Option<&str>,
+    subject: &str,
+    technical_user_id: Option<&str>,
+) -> Result<ResolvedPageTrigger, ApiError> {
     if !event.active {
         return Err(ApiError::forbidden("The Page Event is not active"));
     }
@@ -392,7 +419,8 @@ pub async fn resolve_page_trigger(
     {
         return resolve_dynamic_page_trigger(
             state,
-            permission,
+            subject,
+            technical_user_id,
             app_id,
             event,
             pinned_target,
@@ -572,7 +600,8 @@ fn sealed_page_target(
 
 async fn resolve_dynamic_page_trigger(
     state: &AppState,
-    permission: &AppPermissionResponse,
+    caller_sub: &str,
+    caller_technical_user: Option<&str>,
     app_id: &str,
     event: &Event,
     pinned_target: Option<ResolvedTarget>,
@@ -581,9 +610,6 @@ async fn resolve_dynamic_page_trigger(
 ) -> Result<ResolvedPageTrigger, ApiError> {
     let claims = verify_page_action_capability(capability_jwt)
         .map_err(|_| ApiError::forbidden("The Page action capability is invalid"))?;
-    let caller_sub = permission.effective_user_id().map_err(|_| {
-        ApiError::forbidden("Page execution requires a caller linked to a user account")
-    })?;
     let target = sealed_page_target(event, &claims)?;
     if pinned_target.is_some_and(|pinned| pinned.variant_name != target.variant_name) {
         return Err(ApiError::forbidden(
@@ -594,8 +620,8 @@ async fn resolve_dynamic_page_trigger(
         ApiError::bad_request("Page triggers can only invoke Events that own a Page")
     })?;
     let binding = DynamicCapabilityBinding {
-        caller_sub: &caller_sub,
-        caller_technical_user: permission.technical_user_id(),
+        caller_sub,
+        caller_technical_user,
         app_id,
         event_id: &event.id,
         page_id,

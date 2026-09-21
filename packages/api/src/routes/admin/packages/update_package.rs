@@ -59,8 +59,7 @@ pub async fn update_package(
         user,
         "admin.package.update",
         "WasmPackage",
-        package_id,
-        "Package status updated"
+        package_id
     );
     Ok(Json(()))
 }

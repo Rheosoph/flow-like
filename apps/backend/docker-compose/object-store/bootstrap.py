@@ -21,6 +21,10 @@ from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
 ADMIN_PREFIX = "/rustfs/admin/v3"
+BUCKET_NAME = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
+LOCK_MODES = ("GOVERNANCE", "COMPLIANCE")
+ABORT_INCOMPLETE_UPLOADS = {"ID": "abort-incomplete-uploads", "Status": "Enabled", "Filter": {"Prefix": ""},
+                            "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}
 
 
 def setting(name, default=None):
@@ -59,6 +63,21 @@ def base_policy(buckets, issuer):
          "Resource": [resource + "/*" for resource in resources]},
         {"Effect": "Allow" if issuer else "Deny", "Action": ["sts:AssumeRole"], "Resource": ["*"]},
         # Deny self-service admin operations as well as broad administrative access.
+        {"Effect": "Deny", "Action": ["admin:*"], "Resource": ["*"]},
+    ]}
+
+
+def audit_policy(bucket):
+    """Write and read only: no delete, no retention change and no governance bypass."""
+    resource = f"arn:aws:s3:::{bucket}"
+    return {"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"], "Resource": [resource]},
+        {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload",
+         "s3:ListMultipartUploadParts"], "Resource": [resource + "/*"]},
+        {"Effect": "Deny", "Action": ["s3:DeleteObject", "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention",
+         "s3:PutObjectRetention", "s3:PutObjectLegalHold", "s3:PutBucketObjectLockConfiguration"],
+         "Resource": [resource, resource + "/*"]},
+        {"Effect": "Deny", "Action": ["sts:AssumeRole"], "Resource": ["*"]},
         {"Effect": "Deny", "Action": ["admin:*"], "Resource": ["*"]},
     ]}
 
@@ -121,16 +140,24 @@ def ensure_user(admin, users, key, password, policy_name):
         admin.request("POST", "/idp/builtin/policy/attach", {"policies": [policy_name], "user": key})
 
 
-def ensure_bucket(client, bucket, region, origins, temporary=False):
+def create_missing_bucket(client, bucket, region, object_lock=False):
+    """Create the bucket unless it exists; report whether it was created."""
     try:
         client.head_bucket(Bucket=bucket)
+        return False
     except ClientError as error:
         if error.response["ResponseMetadata"]["HTTPStatusCode"] != 404:
             raise
-        kwargs = {"Bucket": bucket}
-        if region != "us-east-1":
-            kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
-        client.create_bucket(**kwargs)
+    kwargs = {"Bucket": bucket}
+    if object_lock:
+        kwargs["ObjectLockEnabledForBucket"] = True
+    if region != "us-east-1":
+        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
+    client.create_bucket(**kwargs)
+    return True
+
+
+def reject_bucket_policy(client, bucket):
     # Existing public policy is drift, not an instruction to silently unpublish data.
     try:
         client.get_bucket_policy(Bucket=bucket)
@@ -138,7 +165,12 @@ def ensure_bucket(client, bucket, region, origins, temporary=False):
         if error.response["Error"]["Code"] not in ("NoSuchBucketPolicy", "NoSuchPolicy", "404"):
             raise
     else:
-        raise ValueError(f"Bucket {bucket} has a policy; bundled application buckets must be private")
+        raise ValueError(f"Bucket {bucket} has a policy; bundled buckets must be private")
+
+
+def ensure_bucket(client, bucket, region, origins, temporary=False):
+    create_missing_bucket(client, bucket, region)
+    reject_bucket_policy(client, bucket)
     if origins:
         client.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": [{
             "AllowedOrigins": origins, "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
@@ -147,12 +179,60 @@ def ensure_bucket(client, bucket, region, origins, temporary=False):
         }]})
     else:
         client.delete_bucket_cors(Bucket=bucket)
-    rules = [{"ID": "abort-incomplete-uploads", "Status": "Enabled", "Filter": {"Prefix": ""},
-              "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}]
+    rules = [ABORT_INCOMPLETE_UPLOADS]
     if temporary:
         rules.append({"ID": "expire-temporary-content", "Status": "Enabled", "Filter": {"Prefix": "tmp/"},
                       "Expiration": {"Days": 2}})
     client.put_bucket_lifecycle_configuration(Bucket=bucket, LifecycleConfiguration={"Rules": rules})
+
+
+def ensure_audit_bucket(client, bucket, region, mode, years):
+    """Object Lock can only be switched on at creation, so an existing bucket without it stops here."""
+    if not create_missing_bucket(client, bucket, region, object_lock=True):
+        try:
+            configuration = client.get_object_lock_configuration(Bucket=bucket)["ObjectLockConfiguration"]
+            enabled = configuration.get("ObjectLockEnabled")
+        except ClientError as error:
+            if error.response["Error"]["Code"] != "ObjectLockConfigurationNotFoundError":
+                raise
+            enabled = None
+        if enabled != "Enabled":
+            raise ValueError(f"Audit bucket {bucket} exists without Object Lock; recreate it with Object Lock enabled")
+        retention = configuration.get("Rule", {}).get("DefaultRetention", {})
+        actual_mode = retention.get("Mode")
+        sufficient_mode = actual_mode == "COMPLIANCE" or (mode == "GOVERNANCE" and actual_mode == "GOVERNANCE")
+        sufficient_duration = retention.get("Years", 0) >= years or retention.get("Days", 0) >= years * 366
+        if not sufficient_mode or not sufficient_duration:
+            raise ValueError(f"Audit bucket {bucket} retention does not meet {mode} for {years} years; a storage administrator must review it")
+        # Existing retention belongs to the storage administrator. Changing deployment
+        # defaults must never alter an existing bucket's policy.
+        reject_bucket_policy(client, bucket)
+        return
+    reject_bucket_policy(client, bucket)
+    client.put_object_lock_configuration(Bucket=bucket, ObjectLockConfiguration={
+        "ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": mode, "Years": years}}})
+    client.put_bucket_lifecycle_configuration(Bucket=bucket, LifecycleConfiguration={"Rules": [ABORT_INCOMPLETE_UPLOADS]})
+
+
+def audit_configuration(buckets, identities):
+    """Optional audit bucket with its own write-only identity; None when AUDIT_BUCKET is unset."""
+    bucket = setting("AUDIT_BUCKET")
+    if not bucket:
+        return None
+    if not BUCKET_NAME.fullmatch(bucket) or bucket in buckets:
+        raise ValueError("AUDIT_BUCKET must be a valid S3 bucket name separate from the application buckets")
+    mode = setting("AUDIT_BUCKET_LOCK_MODE", "COMPLIANCE").upper()
+    if mode not in LOCK_MODES:
+        raise ValueError("AUDIT_BUCKET_LOCK_MODE must be GOVERNANCE or COMPLIANCE")
+    years = setting("AUDIT_BUCKET_RETENTION_YEARS", "4")
+    if not years.isdigit() or not 1 <= int(years) <= 100:
+        raise ValueError("AUDIT_BUCKET_RETENTION_YEARS must be a whole number from 1 to 100")
+    identity = (secret("AUDIT_BUCKET_ACCESS_KEY_ID"), secret("AUDIT_BUCKET_SECRET_ACCESS_KEY"))
+    if identity[0] in {key for key, _ in identities} or identity[1] in {password for _, password in identities}:
+        raise ValueError("The audit identity must have its own access key and secret")
+    if len(identity[1]) < 16:
+        raise ValueError("AUDIT_BUCKET_SECRET_ACCESS_KEY must have at least 16 characters")
+    return {"bucket": bucket, "mode": mode, "years": int(years), "identity": identity}
 
 
 def configuration():
@@ -161,7 +241,7 @@ def configuration():
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.path not in ("", "/") or parsed.query or parsed.fragment or parsed.username:
         raise ValueError("S3_INTERNAL_ENDPOINT must be an http(s) origin")
     buckets = [setting("META_BUCKET"), setting("CONTENT_BUCKET"), setting("LOG_BUCKET")]
-    if any(not bucket or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket) for bucket in buckets):
+    if any(not bucket or not BUCKET_NAME.fullmatch(bucket) for bucket in buckets):
         raise ValueError("META_BUCKET, CONTENT_BUCKET and LOG_BUCKET must be valid S3 bucket names")
     if len(set(buckets)) != 3:
         raise ValueError("Bundled storage requires separate metadata, content and log buckets")
@@ -177,11 +257,12 @@ def configuration():
         raise ValueError("Root, API and issuer must have distinct access keys and secrets")
     if any(len(password) < 16 for _, password in (root, api, issuer)):
         raise ValueError("Root, API and issuer secrets must each have at least 16 characters")
-    return endpoint, setting("AWS_REGION", "us-east-1"), buckets, origins, root, api, issuer
+    audit = audit_configuration(buckets, (root, api, issuer))
+    return endpoint, setting("AWS_REGION", "us-east-1"), buckets, origins, root, api, issuer, audit
 
 
 def main():
-    endpoint, region, buckets, origins, root, api, issuer = configuration()
+    endpoint, region, buckets, origins, root, api, issuer, audit = configuration()
     admin = Admin(endpoint, region, *root)
     # Readiness includes IAM. Bound startup so orchestration can report failure.
     for attempt in range(30):
@@ -201,7 +282,12 @@ def main():
         ensure_user(admin, users, *identity, name)
         # Existing user secrets are not overwritten. A mismatch requires explicit rotation.
         s3_client(endpoint, region, *identity).head_bucket(Bucket=buckets[1])
-    print("Private buckets and restricted API/STS users are ready.")
+    if audit:
+        ensure_audit_bucket(client, audit["bucket"], region, audit["mode"], audit["years"])
+        ensure_policy(admin, policies, "flow-like-audit-v1", audit_policy(audit["bucket"]))
+        ensure_user(admin, users, *audit["identity"], "flow-like-audit-v1")
+        s3_client(endpoint, region, *audit["identity"]).head_bucket(Bucket=audit["bucket"])
+    print("Private buckets and restricted API/STS/audit users are ready.")
 
 
 if __name__ == "__main__":

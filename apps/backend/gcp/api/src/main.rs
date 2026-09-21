@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Validate the environment before telemetry exporters open sockets.
     config::reject_forbidden_environment()?;
     metrics_endpoint::init_telemetry();
+    flow_like_api::audit::worker::bucket::ensure_api_only()?;
 
     let config = config::Config::from_env()?;
     let postgres_config = postgres::IamPostgresConfig::from_env()?;

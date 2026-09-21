@@ -475,6 +475,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         id_field: String,
         origin: Option<BufferedWriteOrigin>,
     ) -> Result<()> {
+        self.inner.ensure_writable()?;
         let count = items.len();
         let items = items
             .into_iter()
@@ -493,6 +494,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         items: Vec<Value>,
         origin: Option<BufferedWriteOrigin>,
     ) -> Result<()> {
+        self.inner.ensure_writable()?;
         let count = items.len();
         let items = items
             .into_iter()
@@ -526,6 +528,10 @@ impl<T: VectorStore> BufferedVectorStore<T> {
 
 #[async_trait]
 impl<T: VectorStore + 'static> VectorStore for BufferedVectorStore<T> {
+    fn ensure_writable(&self) -> Result<()> {
+        self.inner.ensure_writable()
+    }
+
     async fn vector_search(
         &self,
         vector: Vec<f64>,

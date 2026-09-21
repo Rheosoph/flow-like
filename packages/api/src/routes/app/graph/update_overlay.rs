@@ -349,7 +349,6 @@ pub async fn update_overlay(
         "graph.overlay.update",
         "GraphOverlay",
         overlay_id,
-        "Updated a graph overlay",
         serde_json::json!({
             "user_scoped": scope.is_user_scoped(),
             "exposed": def.exposed,

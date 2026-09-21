@@ -78,6 +78,7 @@ pub async fn update_user(
         .transpose()?;
     let permission = request.permission;
     let payer_id = user_id.clone();
+    let payment_change_id = flow_like_types::create_id();
     let updated = crate::db::retry_transaction(
         &state.db,
         state.db_dialect,
@@ -87,12 +88,18 @@ pub async fn update_user(
             let payer_id = payer_id.clone();
             let status = status.clone();
             let tier = tier.clone();
+            let payment_change_id = payment_change_id.clone();
             Box::pin(async move {
                 crate::db::coordination::coordinate(txn, "account-quota", &[&payer_id]).await?;
+                crate::db::coordination::coordinate(txn, "payments-owner", &[&payer_id]).await?;
                 let existing = user::Entity::find_by_id(&payer_id)
                     .one(txn)
                     .await?
                     .ok_or_else(|| ApiError::not_found("User not found"))?;
+                let recipient_changed = permission.is_some_and(|next| {
+                    (existing.permission & GlobalPermission::Admin.bits())
+                        != (next & GlobalPermission::Admin.bits())
+                });
                 let mut active: user::ActiveModel = existing.into();
                 if let Some(status) = status {
                     active.status = Set(status);
@@ -103,7 +110,19 @@ pub async fn update_user(
                 if let Some(permission) = permission {
                     active.permission = Set(permission);
                 }
-                Ok::<_, ApiError>(active.update(txn).await?)
+                let updated = active.update(txn).await?;
+                if recipient_changed {
+                    crate::payments::outbox::enqueue(
+                        txn,
+                        &format!("seller:{payer_id}:recipient:{payment_change_id}"),
+                        "CANCEL_SELLER_PAYMENTS",
+                        "USER",
+                        &payer_id,
+                        serde_json::json!({"reason":"PAYMENT_RECIPIENT_CHANGED"}),
+                    )
+                    .await?;
+                }
+                Ok::<_, ApiError>(updated)
             })
         },
     )
@@ -115,10 +134,11 @@ pub async fn update_user(
         "admin.user.update",
         "user",
         user_id,
-        format!(
-            "User updated: status={:?}, tier={:?}, permission={:?}",
-            request.status, request.tier, request.permission
-        )
+        serde_json::json!({
+            "status": request.status.as_deref().map(str::to_uppercase),
+            "tier": request.tier.as_deref().map(str::to_uppercase),
+            "permission": request.permission,
+        })
     );
 
     Ok(Json(UpdateUserResponse {

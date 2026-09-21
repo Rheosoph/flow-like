@@ -1,24 +1,16 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQuery } from "@tanstack/react-query";
-import {
-	Box,
-	CheckCircle2,
-	Cpu,
-	Fingerprint,
-	GitBranch,
-	KeyRound,
-	Link2,
-	RefreshCw,
-	Shield,
-	ShieldAlert,
-	ShieldCheck,
-	ShieldEllipsis,
-} from "lucide-react";
+import { Link2, ScrollText } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
-import { useBackend } from "../../../../state/backend-state";
+import {
+	ACTIVITY_SUFFIX,
+	AuditHeadCard,
+	AuditRecordList,
+	AuditVerifyPanel,
+	PLATFORM_CHAIN,
+} from "../../../audit";
 import {
 	Badge,
 	Button,
@@ -27,563 +19,145 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
-	RelativeTime,
-	Separator,
-	Skeleton,
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
+	Input,
 } from "../../../ui";
-import type { IChainStatusResponse } from "./types";
-import { UserPill } from "./user-pill";
+import { useChainStatus } from "./use-chain-status";
 
 interface AuditChainExplorerProps {
 	profile: IProfile | undefined;
+	chainId: string;
+	onChainChange: (chainId: string) => void;
 }
 
-interface IAuditEntry {
-	id: string;
-	sequence: number;
-	timestamp: string;
-	actor_id: string;
-	actor_type: string;
-	action: string;
-	resource_type: string;
-	resource_id: string;
-	chain_id?: string | null;
-	summary: string;
-	details?: unknown;
-	entry_hash: string;
-	prev_hash: string;
-	signature?: string | null;
-	kid?: string | null;
-}
+function ChainPicker({
+	profile,
+	value,
+	onOpen,
+}: Readonly<{
+	profile: IProfile | undefined;
+	value: string;
+	onOpen: (chainId: string) => void;
+}>) {
+	const { t } = useTranslation("audit");
+	const [draft, setDraft] = useState(value);
+	const status = useChainStatus(profile);
 
-interface IChainVerification {
-	valid: boolean;
-	fully_authenticated: boolean;
-	entries_checked: number;
-	first_broken_at: number | null;
-	unsigned_entries: number;
-	legacy_entries: number;
-	unverifiable_signatures: number;
-	empty?: boolean;
-	anchor_sequence?: number | null;
-}
-
-function HashChip({ hash }: { hash?: string | null }) {
-	if (!hash) return null;
-	return (
-		<TooltipProvider>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">
-						{hash.slice(0, 8)}…{hash.slice(-6)}
-					</code>
-				</TooltipTrigger>
-				<TooltipContent>
-					<code className="font-mono text-[11px] break-all">{hash}</code>
-				</TooltipContent>
-			</Tooltip>
-		</TooltipProvider>
-	);
-}
-
-function ChainHealthBadge({
-	signed,
-	valid,
-	fullyAuthenticated,
-	firstBrokenAt,
-	unverifiableSignatures,
-	empty,
-}: {
-	signed: boolean;
-	valid?: boolean | null;
-	fullyAuthenticated?: boolean | null;
-	firstBrokenAt?: number | null;
-	unverifiableSignatures?: number | null;
-	empty?: boolean;
-}) {
-	const { t } = useTranslation("admin");
-	if (empty && valid !== false) {
-		return (
-			<Badge variant="outline" className="gap-1">
-				<ShieldEllipsis className="h-3 w-3" />{" "}
-				{t("auditNoEntries", "No entries")}
-			</Badge>
-		);
-	}
-	if (valid === false) {
-		if (firstBrokenAt == null && (unverifiableSignatures ?? 0) > 0) {
-			return (
-				<Badge variant="outline" className="gap-1">
-					<ShieldEllipsis className="h-3 w-3" />{" "}
-					{t("unverifiable", "Unverifiable")}
-				</Badge>
-			);
+	const suggestions = useMemo(() => {
+		const pending = new Map<string, number>([[PLATFORM_CHAIN, 0]]);
+		for (const chain of status.data?.recent_chains ?? []) {
+			pending.set(chain.chain_id, chain.pending);
 		}
-		return (
-			<Badge variant="destructive" className="gap-1">
-				<ShieldAlert className="h-3 w-3" />{" "}
-				{firstBrokenAt != null
-					? t("broken", "Broken")
-					: t("verificationFailed", "Verification failed")}
-			</Badge>
-		);
-	}
-	if (valid === true && fullyAuthenticated === true) {
-		return (
-			<Badge className="gap-1 bg-emerald-500 text-white hover:bg-emerald-500/90">
-				<ShieldCheck className="h-3 w-3" /> {t("verified", "Verified")}
-			</Badge>
-		);
-	}
-	const unchecked = valid == null;
-	if (signed) {
-		return (
-			<Badge variant="secondary" className="gap-1">
-				<Shield className="h-3 w-3" />{" "}
-				{unchecked
-					? t("auditSignedNotChecked", "Signed, not checked")
-					: t("signed", "Signed")}
-			</Badge>
-		);
-	}
+		return [...pending.entries()];
+	}, [status.data?.recent_chains]);
+
 	return (
-		<Badge variant="outline" className="gap-1">
-			<ShieldEllipsis className="h-3 w-3" />{" "}
-			{unchecked
-				? t("auditUnsignedNotChecked", "Unsigned, not checked")
-				: t("unsigned", "Unsigned")}
-		</Badge>
+		<Card>
+			<CardContent className="space-y-3 pt-6">
+				<form
+					className="flex flex-wrap gap-2"
+					onSubmit={(event) => {
+						event.preventDefault();
+						const next = draft.trim();
+						if (next) onOpen(next);
+					}}
+				>
+					<div className="relative min-w-60 flex-1">
+						<Link2 className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							value={draft}
+							onChange={(event) => setDraft(event.target.value)}
+							placeholder={t(
+								"chainIdPlaceholder",
+								"platform, an app id, or <app id>#activity",
+							)}
+							aria-label={t("chainId", "Chain id")}
+							className="pl-8 font-mono text-sm"
+						/>
+					</div>
+					<Button type="submit" disabled={!draft.trim()}>
+						{t("openChain", "Open chain")}
+					</Button>
+				</form>
+				<div className="flex flex-wrap items-center gap-1.5">
+					<span className="text-xs text-muted-foreground">
+						{t("recentChains", "Recently sealed")}
+					</span>
+					{suggestions.map(([chainId, pending]) => (
+						<Button
+							key={chainId}
+							type="button"
+							size="sm"
+							variant={chainId === value ? "secondary" : "outline"}
+							className="h-7 gap-1.5 font-mono text-xs"
+							onClick={() => onOpen(chainId)}
+						>
+							<span className="max-w-56 truncate">{chainId}</span>
+							{pending > 0 && (
+								<Badge
+									variant="outline"
+									className="px-1 text-[10px]"
+									title={t("pendingInChain", "Pending records")}
+								>
+									{pending}
+								</Badge>
+							)}
+						</Button>
+					))}
+				</div>
+			</CardContent>
+		</Card>
 	);
 }
 
 export function AuditChainExplorer({
 	profile,
+	chainId,
+	onChainChange,
 }: Readonly<AuditChainExplorerProps>) {
-	const { t } = useTranslation("admin");
-	const backend = useBackend();
-	const [selected, setSelected] = useState<string | null>(null);
-
-	const status = useQuery<IChainStatusResponse>({
-		queryKey: ["admin", "logs", "chain-status", "explorer"],
-		queryFn: async () => {
-			if (!profile) throw new Error("Profile not loaded");
-			return backend.apiState.get<IChainStatusResponse>(
-				profile,
-				"admin/logs/chain-status",
-			);
-		},
-		enabled: !!profile,
-	});
-
-	const activeChainId = selected ?? null;
-	const entries = useQuery<IAuditEntry[]>({
-		queryKey: ["admin", "logs", "audit", "entries", activeChainId],
-		queryFn: async () => {
-			if (!profile) throw new Error("Profile not loaded");
-			const qs = new URLSearchParams();
-			if (activeChainId) qs.set("chain_id", activeChainId);
-			qs.set("limit", "50");
-			return backend.apiState.get<IAuditEntry[]>(
-				profile,
-				`audit/entries?${qs.toString()}`,
-			);
-		},
-		enabled: !!profile,
-	});
-
-	const verification = useQuery<IChainVerification>({
-		queryKey: [
-			"admin",
-			"logs",
-			"audit",
-			"verify",
-			activeChainId,
-			entries.dataUpdatedAt,
-		],
-		queryFn: async () => {
-			if (!profile) throw new Error("Profile not loaded");
-			const qs = new URLSearchParams();
-			if (activeChainId) qs.set("chain_id", activeChainId);
-			return backend.apiState.get<IChainVerification>(
-				profile,
-				`audit/verify?${qs.toString()}`,
-			);
-		},
-		enabled: false,
-		retry: false,
-	});
-
-	const chainOptions = useMemo(() => {
-		if (!status.data) return [];
-		const root = {
-			chain_id: null as string | null,
-			label: status.data.root_chain.label,
-			signed: status.data.root_chain.signed,
-			valid: status.data.root_chain.valid,
-			fullyAuthenticated: status.data.root_chain.fully_authenticated,
-			firstBrokenAt: status.data.root_chain.first_broken_at,
-			unverifiableSignatures: status.data.root_chain.unverifiable_signatures,
-			entries: status.data.root_chain.entries,
-		};
-		return [
-			root,
-			...status.data.recent_branches.map((b) => ({
-				chain_id: b.chain_id ?? null,
-				label: b.label,
-				signed: b.signed,
-				valid: b.valid,
-				fullyAuthenticated: b.fully_authenticated,
-				firstBrokenAt: b.first_broken_at,
-				unverifiableSignatures: b.unverifiable_signatures,
-				entries: b.entries,
-			})),
-		];
-	}, [status.data]);
-
-	const signedRatio =
-		status.data && status.data.total_entries > 0
-			? Math.round(
-					(status.data.signed_entries / status.data.total_entries) * 100,
-				)
-			: 0;
+	const { t } = useTranslation("audit");
+	const isActivity = chainId.endsWith(ACTIVITY_SUFFIX);
 
 	return (
 		<div className="space-y-4">
-			<div className="grid gap-4 md:grid-cols-4">
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">
-							{t("totalEntries", "Total entries")}
-						</CardTitle>
-						<Link2 className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						{status.isLoading ? (
-							<Skeleton className="h-8 w-20" />
-						) : (
-							<div className="text-2xl font-bold tabular-nums">
-								{status.data?.total_entries.toLocaleString() ?? "0"}
-							</div>
-						)}
-						<p className="mt-1 text-xs text-muted-foreground">
-							{status.data?.last_24h_entries.toLocaleString() ?? "0"}{" "}
-							{t("inLast24h", "in last 24h")}
-						</p>
-					</CardContent>
-				</Card>
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">
-							{t("signedCoverage", "Signed coverage")}
-						</CardTitle>
-						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-					</CardHeader>
-					<CardContent>
-						{status.isLoading ? (
-							<Skeleton className="h-8 w-20" />
-						) : (
-							<div className="text-2xl font-bold tabular-nums">{`${signedRatio}%`}</div>
-						)}
-						<div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-							<div
-								className="h-full bg-linear-to-r from-emerald-400 to-emerald-600"
-								style={{ width: `${signedRatio}%` }}
-							/>
-						</div>
-					</CardContent>
-				</Card>
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">
-							{t("branches", "Branches")}
-						</CardTitle>
-						<GitBranch className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						{status.isLoading ? (
-							<Skeleton className="h-8 w-20" />
-						) : (
-							<div className="text-2xl font-bold tabular-nums">
-								{status.data?.branch_chain_count.toLocaleString() ?? "0"}
-							</div>
-						)}
-						<p className="mt-1 text-xs text-muted-foreground">
-							{t("appPackageSubchains", "App + package sub-chains")}
-						</p>
-					</CardContent>
-				</Card>
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1">
-						<CardTitle className="text-sm">
-							{t("activeKey", "Active key")}
-						</CardTitle>
-						<KeyRound className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						{status.isLoading ? (
-							<Skeleton className="h-8 w-20" />
-						) : (
-							<div
-								className="truncate font-mono text-base font-semibold"
-								title={status.data?.current_kid}
-							>
-								{status.data?.current_kid ?? "—"}
-							</div>
-						)}
-						<p className="mt-1 text-xs text-muted-foreground">
-							{status.data?.signing_configured
-								? t("signingEnabled", "Signing enabled")
-								: t("signingNotConfigured", "Signing not configured")}
-						</p>
-					</CardContent>
-				</Card>
-			</div>
-
-			<div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-				<Card className="overflow-hidden">
+			<ChainPicker
+				key={chainId}
+				profile={profile}
+				value={chainId}
+				onOpen={onChainChange}
+			/>
+			<div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+				<Card className="min-w-0">
 					<CardHeader className="pb-3">
 						<CardTitle className="flex items-center gap-2 text-base">
-							<Fingerprint className="h-4 w-4 text-emerald-500" />
-							{t("chains", "Chains")}
+							<ScrollText className="h-4 w-4 text-primary" />
+							{t("records", "Records")}
+							<Badge variant="outline" className="text-[10px]">
+								{isActivity
+									? t("classActivity", "Activity")
+									: t("classEvidence", "Evidence")}
+							</Badge>
 						</CardTitle>
-						<CardDescription>
-							{t(
-								"pickAChainToInspectEntries",
-								"Pick a chain to inspect entries",
-							)}
+						<CardDescription className="break-all font-mono text-xs">
+							{chainId}
 						</CardDescription>
 					</CardHeader>
-					<CardContent className="space-y-1.5">
-						{status.isLoading ? (
-							<>
-								<Skeleton className="h-9 w-full" />
-								<Skeleton className="h-9 w-full" />
-								<Skeleton className="h-9 w-full" />
-							</>
-						) : (
-							chainOptions.map((c) => {
-								const isActive = (selected ?? null) === (c.chain_id ?? null);
-								return (
-									<button
-										key={c.chain_id ?? "__root__"}
-										type="button"
-										onClick={() => setSelected(c.chain_id ?? null)}
-										className={`w-full rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-											isActive
-												? "border-primary/40 bg-primary/5"
-												: "hover:bg-muted/60"
-										}`}
-									>
-										<div className="flex items-center justify-between gap-1">
-											<span className="truncate font-medium">{c.label}</span>
-											<Badge
-												variant="outline"
-												className="ml-2 shrink-0 text-[10px]"
-											>
-												{c.entries}
-											</Badge>
-										</div>
-										<div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-											<ChainHealthBadge
-												signed={c.signed}
-												valid={c.valid ?? null}
-												fullyAuthenticated={c.fullyAuthenticated}
-												firstBrokenAt={c.firstBrokenAt}
-												unverifiableSignatures={c.unverifiableSignatures}
-											/>
-										</div>
-									</button>
-								);
-							})
-						)}
-					</CardContent>
-				</Card>
-
-				<Card className="overflow-hidden">
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-						<div className="space-y-1">
-							<CardTitle className="text-base">
-								{t("chainEntries", "Chain entries")}
-							</CardTitle>
-							<CardDescription>
-								{activeChainId
-									? t(
-											"branchChainActivechainid",
-											"Branch chain {{activeChainId}}",
-											{ activeChainId },
-										)
-									: t("platformRootChain", "Platform root chain")}
-							</CardDescription>
-						</div>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() => entries.refetch()}
-							disabled={entries.isFetching}
-						>
-							<RefreshCw
-								className={`h-3.5 w-3.5 ${entries.isFetching ? "animate-spin" : ""}`}
-							/>
-						</Button>
-					</CardHeader>
 					<CardContent>
-						<div className="mb-4 space-y-2">
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={
-									!profile ||
-									entries.isFetching ||
-									entries.isError ||
-									verification.isFetching
-								}
-								onClick={() => verification.refetch()}
-							>
-								<ShieldCheck className="mr-2 h-3.5 w-3.5" />
-								{verification.isFetching
-									? t("verifyingChain", "Verifying chain…")
-									: t("verifySelectedChain", "Verify selected chain")}
-							</Button>
-							{!entries.isFetching && verification.isError ? (
-								<p role="alert" className="text-sm text-destructive">
-									{t(
-										"chainVerificationFailed",
-										"Could not verify this chain. Try again.",
-									)}
-								</p>
-							) : !entries.isFetching && verification.data ? (
-								<div aria-live="polite" className="space-y-1 text-sm">
-									<ChainHealthBadge
-										signed={
-											verification.data.unsigned_entries === 0 &&
-											verification.data.entries_checked > 0
-										}
-										valid={verification.data.valid}
-										fullyAuthenticated={verification.data.fully_authenticated}
-										firstBrokenAt={verification.data.first_broken_at}
-										unverifiableSignatures={
-											verification.data.unverifiable_signatures
-										}
-										empty={verification.data.empty}
-									/>
-									<p className="text-muted-foreground">
-										{t("verificationSnapshot", "Verification snapshot")}:{" "}
-										<RelativeTime value={verification.dataUpdatedAt} />
-									</p>
-									<p className="text-muted-foreground">
-										{t(
-											"auditVerificationCounts",
-											"{{checked}} entries checked; {{unsigned}} unsigned; {{legacy}} legacy; {{unverifiable}} signatures could not be verified.",
-											{
-												checked: verification.data.entries_checked,
-												unsigned: verification.data.unsigned_entries,
-												legacy: verification.data.legacy_entries,
-												unverifiable: verification.data.unverifiable_signatures,
-											},
-										)}
-									</p>
-									{verification.data.first_broken_at !== null && (
-										<p className="text-destructive">
-											{t(
-												"auditBrokenSequence",
-												"First failing sequence: {{sequence}}",
-												{ sequence: verification.data.first_broken_at },
-											)}
-										</p>
-									)}
-								</div>
-							) : null}
-						</div>
-						{entries.isLoading ? (
-							<div className="space-y-2">
-								<Skeleton className="h-12 w-full" />
-								<Skeleton className="h-12 w-full" />
-								<Skeleton className="h-12 w-full" />
-							</div>
-						) : entries.data && entries.data.length > 0 ? (
-							<ol className="relative space-y-1.5 border-l border-border/60 pl-4">
-								{entries.data.map((e) => (
-									<li
-										key={e.id}
-										className="relative rounded-lg border bg-background/50 p-3"
-									>
-										<span className="absolute -left-1.75 top-4 h-3 w-3 rounded-full border-2 border-background bg-emerald-500 shadow" />
-										<div className="flex flex-wrap items-center gap-2">
-											<Badge
-												variant="outline"
-												className="font-mono text-[10px]"
-											>{`#${e.sequence}`}</Badge>
-											<Badge
-												variant="secondary"
-												className="font-mono text-[10px]"
-											>
-												{e.action}
-											</Badge>
-											{e.signature ? (
-												<Badge variant="secondary" className="gap-1">
-													<Shield className="h-3 w-3" /> {t("signed", "Signed")}
-												</Badge>
-											) : (
-												<Badge variant="outline" className="gap-1">
-													<ShieldEllipsis className="h-3 w-3" />{" "}
-													{t("unsigned", "Unsigned")}
-												</Badge>
-											)}
-											<RelativeTime
-												value={e.timestamp}
-												className="ml-auto text-[11px] text-muted-foreground"
-											/>
-										</div>
-										<div className="mt-2 text-sm">{e.summary}</div>
-										<div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-											<span className="inline-flex items-center gap-1">
-												<Cpu className="h-3 w-3" />
-												{e.actor_type}
-											</span>
-											{e.actor_type.toUpperCase() === "USER" ? (
-												<UserPill
-													userId={e.actor_id.split(":")[1] || e.actor_id}
-													compact
-													muted
-												/>
-											) : (
-												<code className="rounded bg-muted px-1.5 py-0.5 font-mono">
-													{e.actor_id}
-												</code>
-											)}
-											<span className="inline-flex items-center gap-1">
-												<Box className="h-3 w-3" />
-												{`${e.resource_type}:${e.resource_id}`}
-											</span>
-										</div>
-										<Separator className="my-2" />
-										<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-											<span className="inline-flex items-center gap-1">
-												prev <HashChip hash={e.prev_hash} />
-											</span>
-											<span className="inline-flex items-center gap-1">
-												hash <HashChip hash={e.entry_hash} />
-											</span>
-											{e.kid && (
-												<span className="inline-flex items-center gap-1">
-													<KeyRound className="h-3 w-3" /> {e.kid}
-												</span>
-											)}
-										</div>
-									</li>
-								))}
-							</ol>
-						) : (
-							<div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
-								{t("noEntriesInThisChain", "No entries in this chain.")}
-							</div>
-						)}
+						<AuditRecordList
+							key={chainId}
+							profile={profile}
+							chainId={chainId}
+						/>
 					</CardContent>
 				</Card>
+				<div className="min-w-0 space-y-4">
+					<AuditVerifyPanel
+						key={chainId}
+						profile={profile}
+						chainId={chainId}
+						allowFull
+					/>
+					<AuditHeadCard profile={profile} chainId={chainId} />
+				</div>
 			</div>
 		</div>
 	);

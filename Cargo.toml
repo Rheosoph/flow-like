@@ -11,6 +11,7 @@ members = [
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
     "apps/backend/local/runtime",
+    "apps/backend/audit-worker",
     "apps/schema-gen",
     "apps/backend/aws/api",
     "apps/backend/aws/api-ecs",

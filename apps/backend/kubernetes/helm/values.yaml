@@ -52,7 +52,10 @@ api:
     - http://localhost:3001
     - tauri://localhost
   publicUrl: ""
-  # Keys: SINK_TOKEN_ENCRYPTION_KEY, SINK_SECRET, MAINTENANCE_TOKEN.
+  # Existing Flow-Like web origin. setup-config.py uses PUBLIC_WEB_URL.
+  frontendBaseUrl: "http://localhost:3001"
+  # Keys: SINK_TOKEN_ENCRYPTION_KEY, SINK_SECRET, MAINTENANCE_TOKEN, and optionally
+  # AUDIT_ENTRY_KEY and AUDIT_ENTRY_KEY_PREVIOUS (see audit below).
   existingSecret: ""
   # Choose at most one source. Empty values retain the public embedded fallback.
   # setup-config.py generates an existingSecret reference for the hub JSON.
@@ -366,6 +369,81 @@ storage:
     existingSecret: ""
 
 # =============================================================================
+# Audit Trail
+# =============================================================================
+# A separate worker seals, signs, archives and prunes. API pods only ingest and
+# verify records. Disabling this Deployment stops sealing and signing.
+audit:
+  worker: true
+  image:
+    repository: ghcr.io/rheosoph/flow-like-audit-worker
+    tag: dev
+    digest: ""
+    pullPolicy: Always
+  replicaCount: 1
+  entrySecret: ""
+  bucketSecret: ""
+  exportSecret: ""
+  database:
+    existingSecret: ""
+  runtimeConfig:
+    existingSecret: ""
+    existingConfigMap: ""
+    key: audit.config.json
+  serviceAccount:
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  env: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  extraContainers: []
+  # Explicit destinations for external SQL, transit and private object storage.
+  extraEgress: []
+  nodeSelector: {}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  # Audit bucket. Empty keeps every record in the database: nothing is archived
+  # and no evidence is pruned. With bundled RustFS the object-store init job
+  # creates it with Object Lock, which cannot be enabled on an existing bucket.
+  bucket: ""
+  lockMode: COMPLIANCE
+  retentionYears: 4
+  # External storage only; bundled RustFS is reached directly, not through the
+  # bucket-only gateway.
+  endpoint: ""
+  # SSE-KMS key sent with every audit upload (AWS S3).
+  kmsKeyArn: ""
+  # Signing credentials only. Bucket credentials belong in bucketSecret, so the
+  # object-store init job never sees a signing key or transit token.
+  # AUDIT_SIGNING_KEY unless kmsKeyId is set, and AUDIT_KMS_AWS_ACCESS_KEY_ID and
+  # AUDIT_KMS_AWS_SECRET_ACCESS_KEY for AWS KMS, which bundled RustFS needs so its
+  # object-store credentials never reach AWS KMS. Required with bundled RustFS;
+  # scripts/setup-config.py generates it.
+  existingSecret: ""
+  # Audit key in AWS KMS, Cloud KMS, Azure Key Vault, or a HashiCorp Vault /
+  # OpenBao transit mount. Set this or AUDIT_SIGNING_KEY, never both: the worker
+  # refuses to start.
+  kmsKeyId: ""
+  kmsProvider: ""
+  # AWS KMS region. Default: the region of a key ARN, else the pod's AWS region.
+  kmsRegion: ""
+  # Self-hosted key service, in or outside the cluster: setting the address makes
+  # kmsKeyId a transit key name, `audit` or `<mount>/audit`. Create it with
+  # `bao write -f transit/keys/audit type=ecdsa-p256`. The token comes from
+  # AUDIT_VAULT_TOKEN in the audit secret; with a Vault Agent sidecar, point
+  # vaultTokenFile at its sink instead and leave the secret entry out. The worker
+  # re-reads that file for every request, so renewal needs no restart.
+  vaultAddress: ""
+  vaultTokenFile: ""
+  kid: ""
+  # Public keys of audit keys the API does not hold, as {"<kid>": "<PEM>"}.
+  verifyingKeys: ""
+  # entrySecret carries AUDIT_ENTRY_KEY and optionally AUDIT_ENTRY_KEY_PREVIOUS.
+  # The API and worker share only these ingestion keys, never BACKEND_KEY.
+
+# =============================================================================
 # LLM Provider Configuration
 # =============================================================================
 # Configure upstream credentials for the API's authenticated hosted-model
@@ -435,6 +513,9 @@ llm:
 #   - external: Use an external PostgreSQL/CockroachDB database
 database:
   type: internal
+  # Separate runtime and schema-owner identities. Setup provisions these secrets.
+  apiExistingSecret: ""
+  caSecret: ""
   pool:
     maxConnections: 10
     minConnections: 1
@@ -442,6 +523,7 @@ database:
   # Database migration job (runs on install/upgrade)
   migration:
     enabled: true
+    existingSecret: ""
     image:
       repository: ghcr.io/rheosoph/flow-like-kubernetes-migration
       tag: dev
@@ -484,8 +566,8 @@ database:
     cache: "25%"
     maxSqlMemory: "25%"
     tls:
-      enabled: false
-      existingSecret: ""
+      nodeSecret: ""
+      initSecret: ""
 
   # External database configuration (when type=external)
   external:
@@ -545,6 +627,24 @@ ingress:
   #       - path: /api
   #         pathType: Prefix
   #         service: api
+  #       - path: /frontend
+  #         pathType: Prefix
+  #         service: api
+  #       - path: /c
+  #         pathType: Prefix
+  #         service: web
+  #       - path: /f
+  #         pathType: Prefix
+  #         service: web
+  #       - path: /u
+  #         pathType: Prefix
+  #         service: web
+  #       - path: /r
+  #         pathType: Prefix
+  #         service: api
+  #       - path: /m
+  #         pathType: Prefix
+  #         service: api
   #       - path: /
   #         pathType: Prefix
   #         service: web
@@ -569,6 +669,13 @@ networkPolicy:
       kubernetes.io/metadata.name: kube-system
   # Extra rules for external databases, Redis, custom DNS or storage endpoints.
   # Rules apply only to trusted control-plane components, never sandbox pods.
+  # The built-in rules allow public egress on 443 only, so a key service on
+  # another port needs an entry here, for example a Vault for audit.vaultAddress:
+  #   - to:
+  #       - namespaceSelector:
+  #           matchLabels:
+  #             kubernetes.io/metadata.name: vault
+  #     ports: [{protocol: TCP, port: 8200}]
   controlPlaneExtraEgress: []
   executionGatewayExtraEgress: []
   trustedExecutorExtraEgress: []

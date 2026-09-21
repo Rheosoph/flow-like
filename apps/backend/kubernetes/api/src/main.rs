@@ -35,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     metrics::init_telemetry();
+    flow_like_api::audit::worker::bucket::ensure_api_only()?;
 
     tracing::info!("Starting Flow-Like Kubernetes API Service");
 

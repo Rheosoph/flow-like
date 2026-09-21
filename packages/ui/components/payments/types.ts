@@ -4,6 +4,7 @@ export interface PaymentTerms {
 	locale: string;
 	text: string;
 	hash: string;
+	url?: string | null;
 }
 
 export interface ConnectAccount {

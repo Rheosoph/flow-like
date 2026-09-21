@@ -10,7 +10,7 @@ use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
-    pin::{Pin, PinOptions, ValueType},
+    pin::{Pin, PinOptions, ValueType, resolve_schema},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -242,44 +242,70 @@ struct QueryRuntimeInfo {
     live_only: bool,
 }
 
-fn query_runtime_info(node: &Node, query: &str) -> QueryRuntimeInfo {
+fn query_runtime_info(
+    node: &Node,
+    query: &str,
+    refs: &std::collections::HashMap<String, String>,
+) -> QueryRuntimeInfo {
     let Some(query_pin) = node.get_pin_by_name("query") else {
         return QueryRuntimeInfo::default();
     };
-    let operations = query_pin
-        .schema
-        .as_deref()
-        .and_then(|schema| flow_like_types::json::from_str::<Value>(schema).ok())
-        .and_then(|schema| schema.get(QUERY_OPERATIONS_SCHEMA_KEY).cloned())
-        .and_then(|operations| operations.as_object().cloned());
-    if let Some(operations) = operations {
-        let Some(operation) = operations.get(query) else {
-            // A wired query name outside the discovered contract must never
-            // inherit read fallback semantics from the dropdown default.
-            return QueryRuntimeInfo {
-                live_only: true,
-                ..Default::default()
-            };
-        };
-        let mutation = operation
-            .get("mutation")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        return QueryRuntimeInfo {
-            mutation,
-            object_args: operation
-                .get("objectArgs")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            live_only: mutation,
-        };
-    }
-
     // Contracts predating mutation metadata remain read-compatible when the
     // query is a literal. Dynamic names are conservatively live-only.
-    QueryRuntimeInfo {
+    let legacy = QueryRuntimeInfo {
         live_only: !query_pin.depends_on.is_empty(),
         ..Default::default()
+    };
+    let Some(schema) = query_pin.schema.as_deref() else {
+        return legacy;
+    };
+
+    // Board cleanup compacts every pin schema into a board ref key, and such a
+    // key parses as a JSON number, so skipping the resolve loses the operation
+    // map silently instead of loudly.
+    let schema = resolve_schema(schema, refs)
+        .ok()
+        .and_then(|schema| flow_like_types::json::from_str::<Value>(schema).ok());
+    let Some(Value::Object(schema)) = schema else {
+        // Unreadable metadata (a dangling or cyclic ref) must never downgrade a
+        // mutation to a cached read.
+        return QueryRuntimeInfo {
+            live_only: true,
+            ..Default::default()
+        };
+    };
+
+    let Some(metadata) = schema.get(QUERY_OPERATIONS_SCHEMA_KEY) else {
+        return legacy;
+    };
+    let Some(operations) = metadata.as_object() else {
+        // Present but unreadable is corruption, not a contract predating the
+        // metadata, so it fails safe like an unresolvable ref above.
+        return QueryRuntimeInfo {
+            live_only: true,
+            ..Default::default()
+        };
+    };
+
+    let Some(operation) = operations.get(query) else {
+        // A wired query name outside the discovered contract must never
+        // inherit read fallback semantics from the dropdown default.
+        return QueryRuntimeInfo {
+            live_only: true,
+            ..Default::default()
+        };
+    };
+    let mutation = operation
+        .get("mutation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    QueryRuntimeInfo {
+        mutation,
+        object_args: operation
+            .get("objectArgs")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        live_only: mutation,
     }
 }
 
@@ -521,6 +547,13 @@ impl NodeLogic for WidgetQuery {
             ));
         }
 
+        // An unreachable board must not fail a run that used to work: an inline
+        // schema still resolves against an empty map, a compacted one falls back
+        // to live-only.
+        let board = context.get_board().await.ok();
+        let no_refs = std::collections::HashMap::new();
+        let refs = board.as_ref().map_or(&no_refs, |board| &board.refs);
+
         // Object schemas become one pin per property. Scalar/array schemas use
         // the single friendly "Args" pin and must be sent as the raw value,
         // not wrapped as { "args": value }.
@@ -528,7 +561,7 @@ impl NodeLogic for WidgetQuery {
             let node = context.node.node.lock().await;
             (
                 raw_query_arg_pin_name(&node),
-                query_runtime_info(&node, &query),
+                query_runtime_info(&node, &query, refs),
             )
         };
         let args = if let Some(pin_name) = raw_arg_pin {
@@ -667,6 +700,7 @@ mod tests {
     use super::*;
     use crate::a2ui::micro_widget_utils::set_widget_ref_metadata;
     use flow_like_storage::object_store::path::Path;
+    use std::collections::HashMap;
 
     fn sales_contract() -> WidgetContract {
         flow_like_types::json::from_value(json!({
@@ -1016,9 +1050,8 @@ mod tests {
         assert_eq!(node.get_pin_by_name("dyn_arg_top").unwrap().id, argument_id);
     }
 
-    #[test]
-    fn selected_mutation_persists_live_only_execution_metadata() {
-        let contract: WidgetContract = flow_like_types::json::from_value(json!({
+    fn map_contract() -> WidgetContract {
+        flow_like_types::json::from_value(json!({
             "contractVersion": 1,
             "id": "map",
             "queries": {
@@ -1037,14 +1070,19 @@ mod tests {
                 }
             }
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn selected_mutation_persists_live_only_execution_metadata() {
+        let contract = map_contract();
         let mut node = WidgetQuery::new().get_node();
         node.get_pin_mut_by_name("query")
             .unwrap()
             .set_default_value(Some(json!("upsertEntities")));
 
         configure_query_contract(&mut node, "Map", &contract);
-        let info = query_runtime_info(&node, "upsertEntities");
+        let info = query_runtime_info(&node, "upsertEntities", &HashMap::new());
         assert_eq!(
             info,
             QueryRuntimeInfo {
@@ -1071,10 +1109,39 @@ mod tests {
             .set_default_value(Some(json!("getView")));
         configure_query_contract(&mut node, "Map", &contract);
         assert_eq!(
-            query_runtime_info(&node, "getView"),
+            query_runtime_info(&node, "getView", &HashMap::new()),
             QueryRuntimeInfo::default()
         );
-        assert!(query_runtime_info(&node, "runtimeOnly").live_only);
+        assert!(query_runtime_info(&node, "runtimeOnly", &HashMap::new()).live_only);
+    }
+
+    #[test]
+    fn mutation_metadata_survives_board_cleanup_and_fails_safe_without_it() {
+        let mut node = WidgetQuery::new().get_node();
+        node.get_pin_mut_by_name("query")
+            .unwrap()
+            .set_default_value(Some(json!("upsertEntities")));
+        configure_query_contract(&mut node, "Map", &map_contract());
+
+        // Every save runs cleanup, which compacts the Query pin's schema into a
+        // board ref key. Runs only ever see that key.
+        let mut board = Board::new_detached(Some("query-refs-test".into()), Path::default());
+        board.nodes.insert(node.id.clone(), node);
+        board.cleanup();
+        let node = board.nodes.values().next().unwrap();
+        let schema = node.get_pin_by_name("query").unwrap().schema.clone();
+        assert!(board.refs.contains_key(schema.as_deref().unwrap()));
+
+        assert_eq!(
+            query_runtime_info(node, "upsertEntities", &board.refs),
+            QueryRuntimeInfo {
+                mutation: true,
+                object_args: true,
+                live_only: true
+            }
+        );
+        // A key without its text is lost metadata, not a legacy contract.
+        assert!(query_runtime_info(node, "upsertEntities", &HashMap::new()).live_only);
     }
 
     #[test]

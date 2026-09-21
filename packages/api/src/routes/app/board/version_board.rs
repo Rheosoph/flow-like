@@ -125,10 +125,9 @@ pub async fn version_board(
         "board.version",
         "board",
         board_id,
-        format!(
-            "Board versioned to {}.{}.{}",
-            version.0, version.1, version.2
-        )
+        serde_json::json!({
+            "version": crate::routes::app::events::dotted_version_key(version),
+        })
     );
     Ok(Json(version))
 }

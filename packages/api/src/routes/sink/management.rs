@@ -344,15 +344,7 @@ pub async fn update_sink(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to update sink: {}", e)))?;
 
-    audit_branch!(
-        state,
-        user,
-        sink_app_id,
-        "sink.update",
-        "sink",
-        event_id,
-        "Sink settings updated"
-    );
+    audit_branch!(state, user, sink_app_id, "sink.update", "sink", event_id);
     Ok(Json(SinkResponse::from(updated)))
 }
 
@@ -404,10 +396,7 @@ pub async fn toggle_sink(
         "sink.toggle",
         "sink",
         event_id,
-        format!(
-            "Sink toggled to {}",
-            if updated.active { "active" } else { "inactive" }
-        )
+        serde_json::json!({ "active": updated.active })
     );
     Ok(Json(SinkResponse::from(updated)))
 }

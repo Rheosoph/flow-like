@@ -479,7 +479,6 @@ pub async fn onboarding(
             text.kind == "PAYMENTS_OWNER_TERMS"
                 && text.version == body.terms_version
                 && text.locale == locale
-                && !text.text.is_empty()
         })
         .ok_or_else(|| {
             error(
@@ -487,6 +486,9 @@ pub async fn onboarding(
                 "The current owner agreement is unavailable",
             )
         })?;
+    let content = text
+        .content()
+        .map_err(|message| error("PAYMENT_TERMS_REQUIRED", &message))?;
     if config.owner_terms_version.as_deref() != Some(&body.terms_version) {
         return Err(error(
             "PAYMENT_TERMS_REQUIRED",
@@ -508,7 +510,7 @@ pub async fn onboarding(
     let candidate = flow_like_types::create_id();
     let consent = flow_like_types::create_id();
     let now = Utc::now().timestamp_millis();
-    let text_hash = blake3::hash(text.text.as_bytes()).to_hex().to_string();
+    let text_hash = blake3::hash(content.as_bytes()).to_hex().to_string();
     let account_id=state.transaction(|txn| {
         let binding_id=binding_id.clone();let user_id=user_id.clone();let candidate=candidate.clone();let consent=consent.clone();let country=country.clone();let scope=scope.clone();let version=body.terms_version.clone();let locale=locale.to_owned();let text_hash=text_hash.clone();
         Box::pin(async move {
@@ -882,8 +884,11 @@ pub async fn terms(
     let locale = query.locale.as_deref().unwrap_or("en");
     let text =
         select_legal_text(config, &query.kind, version, locale).ok_or(ApiError::NOT_FOUND)?;
+    let content = text
+        .content()
+        .map_err(|message| error("PAYMENT_TERMS_REQUIRED", &message))?;
     Ok(Json(
-        json!({"kind":text.kind,"version":text.version,"locale":text.locale,"text":text.text,"hash":blake3::hash(text.text.as_bytes()).to_hex().to_string()}),
+        json!({"kind":text.kind,"version":text.version,"locale":text.locale,"text":content,"hash":blake3::hash(content.as_bytes()).to_hex().to_string(),"url":text.url}),
     ))
 }
 
@@ -896,12 +901,10 @@ fn select_legal_text<'a>(
     let language = locale.split(['-', '_']).next().unwrap_or(locale);
     // Return the actual locale so acceptance always records the text shown.
     [locale, language, "en"].into_iter().find_map(|locale| {
-        config.legal_texts.iter().find(|text| {
-            text.kind == kind
-                && text.version == version
-                && text.locale == locale
-                && !text.text.trim().is_empty()
-        })
+        config
+            .legal_texts
+            .iter()
+            .find(|text| text.kind == kind && text.version == version && text.locale == locale)
     })
 }
 
@@ -921,12 +924,14 @@ mod tests {
                     version: "v1".into(),
                     locale: "en".into(),
                     text: "English".into(),
+                    ..Default::default()
                 },
                 PaymentLegalText {
                     kind: "PURCHASE_TERMS".into(),
                     version: "v1".into(),
                     locale: "de".into(),
                     text: "Deutsch".into(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -946,6 +951,35 @@ mod tests {
         assert!(select_legal_text(&config, "PURCHASE_TERMS", "v2", "fr").is_none());
         assert!(select_legal_text(&config, "SELLER_TERMS", "v1", "en").is_none());
     }
+
+    #[test]
+    fn website_terms_resolve_locale_fallback_without_hiding_invalid_references() {
+        let source: Value =
+            serde_json::from_str(include_str!("../../../../flow-like.config.json")).unwrap();
+        let mut config: flow_like::hub::PaymentsConfig =
+            serde_json::from_value(source["payments"].clone()).unwrap();
+        let version = config.purchase_terms_version.clone().unwrap();
+        for (requested, expected) in [("de-DE", "de"), ("fr", "en")] {
+            let text = select_legal_text(&config, "PURCHASE_TERMS", &version, requested).unwrap();
+            assert_eq!(text.locale, expected);
+            assert!(text.text.is_empty());
+            let content = text.content().unwrap();
+            assert_eq!(
+                text.hash.as_deref(),
+                Some(blake3::hash(content.as_bytes()).to_hex().as_str())
+            );
+        }
+        config
+            .legal_texts
+            .iter_mut()
+            .find(|text| text.kind == "PURCHASE_TERMS" && text.locale == "de")
+            .unwrap()
+            .hash = Some("0".repeat(64));
+        let selected = select_legal_text(&config, "PURCHASE_TERMS", &version, "de-DE").unwrap();
+        assert_eq!(selected.locale, "de");
+        assert!(selected.content().unwrap_err().contains("hash mismatch"));
+    }
+
     #[test]
     fn readiness_does_not_confuse_payment_and_payout_availability() {
         let mut account = account();

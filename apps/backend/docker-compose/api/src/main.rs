@@ -60,6 +60,7 @@ async fn metrics_middleware(request: Request<Body>, next: Next) -> impl IntoResp
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     secrets::load()?;
+    flow_like_api::audit::worker::bucket::ensure_api_only()?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
 #[utoipa::path(
@@ -40,6 +41,7 @@ pub async fn list_items(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(params): Query<ScopedPaginationParams>,
+    Query(selector): Query<DatabaseSelector>,
 ) -> Result<Json<Vec<flow_like_types::Value>>, ApiError> {
     ensure_any_permission!(
         user,
@@ -49,12 +51,15 @@ pub async fn list_items(
         RolePermissions::ReadDatabase
     );
     validate_table_name(&table)?;
+    selector
+        .validate()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     let offset = params.offset.unwrap_or(0).min(100_000) as usize;
     let limit = params.limit.unwrap_or(25).min(250) as usize;
 
     let connection = resolve_connection(&state, &user, &app_id, &params.scope_params()).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector).await?;
 
     let items = db.list(None, limit, offset).await?;
 

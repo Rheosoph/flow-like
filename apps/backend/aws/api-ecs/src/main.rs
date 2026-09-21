@@ -10,9 +10,13 @@ mod health;
 mod server;
 mod telemetry;
 
+use flow_like_api::audit::worker::{
+    self as audit_worker, AuditWorkerContext, bucket as audit_bucket,
+};
 use flow_like_api::{construct_router, construct_router_with_cors};
 use flow_like_aws_data::dsql::{DsqlConfig, MAX_CONNECTIONS_ENV};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
 
@@ -96,6 +100,16 @@ async fn serve(config: &config::Config) -> Result<(), bootstrap::BootstrapError>
         .dsql
         .as_ref()
         .map(|database| database.spawn_background_refresh());
+    // Set AUDIT_WORKER=off when the audit worker Lambda holds the audit key and bucket.
+    let _audit_worker = if audit_bucket::in_process_worker_enabled() {
+        let context = AuditWorkerContext::from_state(&api.state)?;
+        Some(audit_worker::spawn(
+            Arc::new(context),
+            audit_worker::TICK_INTERVAL,
+        ))
+    } else {
+        None
+    };
     let _payments_worker = flow_like_api::payments::worker::spawn(api.state.clone());
     let router = match cors {
         Some(cors) => construct_router_with_cors(api.state, cors),

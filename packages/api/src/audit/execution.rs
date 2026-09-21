@@ -11,7 +11,7 @@ use crate::{
     state::AppState,
 };
 
-use super::{AuditService, service::AuditEntryInput};
+use super::record::{self, AuditRecordInput, WriteMode};
 
 /// Retain the audit policy when a response stream outlives its request handler.
 #[derive(Clone, Debug)]
@@ -36,7 +36,7 @@ fn execution_entry(
     actor_id: &str,
     actor_type: AuditActorType,
     terminal: bool,
-) -> Option<AuditEntryInput> {
+) -> Option<AuditRecordInput> {
     let outcome = if terminal {
         match run.status {
             RunStatus::Completed => "complete",
@@ -53,27 +53,19 @@ fn execution_entry(
     } else {
         "board"
     };
-    Some(AuditEntryInput {
+    Some(AuditRecordInput {
         actor_id: actor_id.to_owned(),
         actor_type,
         actor_ip: super::request::actor_ip(),
         action: format!("execution.{kind}.{outcome}"),
         resource_type: "ExecutionRun".to_owned(),
         resource_id: run.id.clone(),
-        chain_id: Some(run.app_id.clone()),
-        summary: if terminal {
-            format!("Execution ended with status {:?}", run.status)
-        } else {
-            "Execution requested".to_owned()
-        },
+        scope: Some(run.app_id.clone()),
         details: Some(serde_json::json!({
-            "run_id": run.id,
-            "app_id": run.app_id,
             "board_id": run.board_id,
             "event_id": run.event_id,
             "node_id": run.node_id,
             "version": run.version,
-            "execution_type": kind,
             "mode": format!("{:?}", run.mode),
             "status": format!("{:?}", run.status),
             "input_payload_len": run.input_payload_len,
@@ -99,7 +91,7 @@ pub async fn record_execution_result(
     if context.enabled
         && let Some(input) = execution_entry(run, actor_id, actor_type, true)
     {
-        AuditService::record_once(&context.db, context.dialect, input)
+        record::write(context.db.as_ref(), input, WriteMode::Once)
             .await
             .map_err(|error| {
                 super::request::record_failure();
@@ -138,7 +130,7 @@ pub async fn record_execution_dispatch_for(
         return Ok(());
     }
     if let Some(input) = execution_entry(run, source, AuditActorType::System, false) {
-        AuditService::record_once(&state.db, context.dialect, input)
+        record::write(&state.db, input, WriteMode::Once)
             .await
             .map_err(|error| {
                 super::request::record_failure();
@@ -251,7 +243,7 @@ mod tests {
             let entry =
                 execution_entry(&run(status), "executor", AuditActorType::Executor, true).unwrap();
             assert_eq!(entry.action, format!("execution.board.{action}"));
-            assert_eq!(entry.chain_id.as_deref(), Some("app-1"));
+            assert_eq!(entry.chain_id(), "app-1#activity");
         }
         for status in [RunStatus::Pending, RunStatus::Running] {
             assert!(
@@ -293,8 +285,13 @@ mod tests {
 
     #[flow_like_types::tokio::test]
     async fn an_outcome_write_failure_is_returned_and_marks_the_request_incomplete() {
+        // A closed lazy pool fails the insert without connecting to a database.
+        let mut options = sea_orm::ConnectOptions::new("postgres://localhost/audit_outcome_test");
+        options.connect_lazy(true).min_connections(0);
+        let db = sea_orm::Database::connect(options).await.unwrap();
+        db.close_by_ref().await.unwrap();
         let context = ExecutionAuditContext {
-            db: Arc::new(DatabaseConnection::default()),
+            db: Arc::new(db),
             dialect: DbDialect::default(),
             enabled: true,
         };

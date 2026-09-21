@@ -1,0 +1,186 @@
+{{- if .Values.audit.worker }}
+{{- $runtime := .Values.audit.runtimeConfig }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "flow-like.fullname" . }}-audit-worker
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-worker
+  {{- with .Values.audit.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow-like.fullname" . }}-audit-worker
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-worker
+spec:
+  replicas: {{ .Values.audit.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: audit-worker
+  template:
+    metadata:
+      labels:
+        {{- include "flow-like.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: audit-worker
+        {{- with .Values.audit.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.audit.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "flow-like.fullname" . }}-audit-worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.audit.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: audit-worker
+          image: {{ include "flow-like.image" (dict "image" .Values.audit.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.audit.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.database.existingSecret | quote }}
+                  key: DATABASE_URL
+            - name: AUDIT_ENTRY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.entrySecret | quote }}
+                  key: AUDIT_ENTRY_KEY
+            - name: AUDIT_ENTRY_KEY_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.entrySecret | quote }}
+                  key: AUDIT_ENTRY_KEY_PREVIOUS
+                  optional: true
+            - name: FLOW_LIKE_CONFIG_PATH
+              value: /etc/audit/audit.config.json
+            - name: AUDIT_HEALTH_FILE
+              value: /tmp/audit-worker-health
+            - name: AUDIT_BUCKET
+              value: {{ .Values.audit.bucket | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.storage.s3.region | quote }}
+            - name: AWS_USE_PATH_STYLE
+              value: {{ .Values.storage.s3.usePathStyle | quote }}
+            {{- if .Values.rustfs.enabled }}
+            - name: AUDIT_BUCKET_ENDPOINT
+              value: {{ include "flow-like.objectStoreStsEndpoint" . | quote }}
+            {{- else if .Values.audit.endpoint }}
+            - name: AUDIT_BUCKET_ENDPOINT
+              value: {{ .Values.audit.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.audit.bucketSecret }}
+            - name: AUDIT_BUCKET_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.bucketSecret | quote }}
+                  key: AUDIT_BUCKET_ACCESS_KEY_ID
+            - name: AUDIT_BUCKET_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.bucketSecret | quote }}
+                  key: AUDIT_BUCKET_SECRET_ACCESS_KEY
+            {{- end }}
+            {{- range $setting, $name := dict "kmsKeyArn" "AUDIT_BUCKET_KMS_KEY_ARN" "kmsKeyId" "AUDIT_KMS_KEY_ID" "kmsProvider" "AUDIT_KMS_PROVIDER" "kmsRegion" "AUDIT_KMS_REGION" "vaultAddress" "AUDIT_VAULT_ADDR" "vaultTokenFile" "AUDIT_VAULT_TOKEN_FILE" "kid" "AUDIT_KID" "verifyingKeys" "AUDIT_VERIFYING_KEYS" }}
+            {{- with index $.Values.audit $setting }}
+            - name: {{ $name }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.audit.exportSecret }}
+            - name: SINK_TOKEN_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.exportSecret | quote }}
+                  key: SINK_TOKEN_ENCRYPTION_KEY
+            {{- end }}
+            {{- with .Values.audit.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.audit.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.audit.existingSecret | quote }}
+          {{- end }}
+          securityContext:
+            {{- include "flow-like.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: audit-config
+              mountPath: /etc/audit
+              readOnly: true
+            {{- if .Values.database.caSecret }}
+            - name: database-ca
+              mountPath: /etc/database
+              readOnly: true
+            {{- end }}
+            {{- with .Values.audit.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            exec:
+              command: [/app/flow-like-audit-worker, --health-check]
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            exec:
+              command: [/app/flow-like-audit-worker, --health-check]
+            periodSeconds: 30
+          livenessProbe:
+            exec:
+              command: [/app/flow-like-audit-worker, --health-check]
+            periodSeconds: 30
+            failureThreshold: 10
+          resources:
+            {{- toYaml .Values.audit.resources | nindent 12 }}
+        {{- with .Values.audit.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}
+        - name: audit-config
+          {{- if $runtime.existingSecret }}
+          secret:
+            secretName: {{ $runtime.existingSecret | quote }}
+          {{- else }}
+          configMap:
+            name: {{ $runtime.existingConfigMap | quote }}
+          {{- end }}
+            items:
+              - key: {{ $runtime.key | quote }}
+                path: audit.config.json
+        {{- if .Values.database.caSecret }}
+        - name: database-ca
+          secret:
+            secretName: {{ .Values.database.caSecret | quote }}
+            items:
+              - {key: ca.crt, path: ca.crt}
+        {{- end }}
+        {{- with .Values.audit.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

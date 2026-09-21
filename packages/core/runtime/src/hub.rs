@@ -455,7 +455,7 @@ pub struct AuditRetention {
     /// Largest seal the worker writes in one transaction.
     #[serde(default = "default_max_records_per_seal")]
     pub max_records_per_seal: u32,
-    /// Sign an epoch once the oldest unanchored seal is this old, or earlier when 2,000
+    /// Sign an epoch once the oldest unanchored seal is this old, or earlier when 20,000
     /// seals wait. Each epoch is one request to the key service, so this sets its cost:
     /// 300 s means at most 12 routine signatures an hour.
     #[serde(default = "default_epoch_interval_seconds")]

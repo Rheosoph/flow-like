@@ -31,18 +31,69 @@ fn variant_mode_label(mode: &EventVariantMode) -> &'static str {
     }
 }
 
-fn variant_audit_entry(variant: &EventVariant) -> serde_json::Value {
-    let share_field = match variant.mode {
-        EventVariantMode::Live { .. } => "weight",
-        EventVariantMode::Shadow { .. } => "sample_rate",
-    };
+const MAX_AUDITED_VARIANTS: usize = 8;
+
+fn share_basis_points(variant: &EventVariant) -> u32 {
+    (variant.mode.share() * 10000.0).round() as u32
+}
+
+fn variant_content_changed(old: &EventVariant, new: &EventVariant) -> bool {
+    old.mode != new.mode
+        || old.board_id != new.board_id
+        || old.board_version != new.board_version
+        || old.node_id != new.node_id
+        || old.default_page_id != new.default_page_id
+        || old.variables != new.variables
+}
+
+fn capped<T>(items: impl IntoIterator<Item = T>) -> (Vec<T>, bool) {
+    let mut items = items.into_iter();
+    let head = items.by_ref().take(MAX_AUDITED_VARIANTS).collect();
+    (head, items.next().is_some())
+}
+
+/// A list replace may carry any number of variants, so the record holds the diff with
+/// every list capped.
+fn variants_audit_details(before: &[EventVariant], after: &[EventVariant]) -> serde_json::Value {
+    let previous: std::collections::HashMap<&str, &EventVariant> = before
+        .iter()
+        .map(|variant| (variant.name.as_str(), variant))
+        .collect();
+    let current: std::collections::HashSet<&str> =
+        after.iter().map(|variant| variant.name.as_str()).collect();
+
+    let (added, added_truncated) = capped(
+        after
+            .iter()
+            .filter(|variant| !previous.contains_key(variant.name.as_str()))
+            .map(|variant| variant.name.as_str()),
+    );
+    let (removed, removed_truncated) = capped(
+        before
+            .iter()
+            .filter(|variant| !current.contains(variant.name.as_str()))
+            .map(|variant| variant.name.as_str()),
+    );
+    let (changed, changed_truncated) = capped(after.iter().filter_map(|variant| {
+        let old = previous.get(variant.name.as_str())?;
+        variant_content_changed(old, variant).then(|| {
+            serde_json::json!({
+                "name": variant.name,
+                "from_bp": share_basis_points(old),
+                "to_bp": share_basis_points(variant),
+            })
+        })
+    }));
+
     serde_json::json!({
-        "name": variant.name,
-        "mode": variant_mode_label(&variant.mode),
-        "board_id": variant.board_id,
-        "board_version": variant.board_version.map(super::dotted_version_key),
-        "default_page_id": variant.default_page_id,
-        share_field: variant.mode.share(),
+        "variant_count_before": before.len(),
+        "variant_count_after": after.len(),
+        "added": added,
+        "added_truncated": added_truncated,
+        "removed": removed,
+        "removed_truncated": removed_truncated,
+        "changed": changed,
+        "changed_truncated": changed_truncated,
     })
 }
 
@@ -496,7 +547,6 @@ pub async fn patch_canary(
         "event.canary.share",
         "Event",
         event_id,
-        "Canary share changed",
         serde_json::json!({
             "variant": patch.name,
             "from": share_before,
@@ -621,11 +671,7 @@ pub async fn put_event_variants(
         "event.canary.variants",
         "Event",
         event_id,
-        "Canary variants replaced",
-        serde_json::json!({
-            "variants": after.iter().map(variant_audit_entry).collect::<Vec<_>>(),
-            "previous": before.iter().map(variant_audit_entry).collect::<Vec<_>>(),
-        })
+        variants_audit_details(&before, &after)
     );
 
     Ok(Json(filter_event_secrets(event)))
@@ -1002,7 +1048,6 @@ pub async fn promote_canary(
         "event.canary.promote",
         "Event",
         event_id,
-        "Canary variant promoted to primary",
         serde_json::json!({
             "variant": body.variant,
             "from": {
@@ -1137,7 +1182,6 @@ pub async fn abort_canary(
         "event.canary.abort",
         "Event",
         event_id,
-        "Canary variant removed",
         serde_json::json!({
             "variant": body.variant,
             "mode": aborted_mode,
@@ -1222,4 +1266,75 @@ pub async fn list_event_setups(
             })
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variant(name: &str, weight: f32) -> EventVariant {
+        EventVariant {
+            name: name.to_string(),
+            board_id: "board".to_string(),
+            board_version: None,
+            node_id: "node".to_string(),
+            variables: std::collections::HashMap::new(),
+            default_page_id: None,
+            mode: EventVariantMode::Live { weight },
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn variant_diff_records_changes_in_basis_points() {
+        let before = vec![
+            variant("kept", 0.1),
+            variant("moved", 0.1),
+            variant("gone", 0.2),
+        ];
+        let mut retargeted = variant("kept", 0.1);
+        retargeted.node_id = "other-node".to_string();
+        let after = vec![retargeted, variant("moved", 0.25), variant("new", 0.05)];
+
+        let details = variants_audit_details(&before, &after);
+
+        assert_eq!(details["variant_count_before"], 3);
+        assert_eq!(details["variant_count_after"], 3);
+        assert_eq!(details["added"], serde_json::json!(["new"]));
+        assert_eq!(details["removed"], serde_json::json!(["gone"]));
+        assert_eq!(
+            details["changed"],
+            serde_json::json!([
+                { "name": "kept", "from_bp": 1000, "to_bp": 1000 },
+                { "name": "moved", "from_bp": 1000, "to_bp": 2500 },
+            ])
+        );
+        assert_eq!(details["added_truncated"], false);
+        assert_eq!(details["removed_truncated"], false);
+        assert_eq!(details["changed_truncated"], false);
+    }
+
+    #[test]
+    fn variant_diff_caps_every_list() {
+        let before: Vec<_> = (0..20)
+            .map(|i| variant(&format!("old-{i}"), 0.01))
+            .chain((0..20).map(|i| variant(&format!("both-{i}"), 0.01)))
+            .collect();
+        let after: Vec<_> = (0..20)
+            .map(|i| variant(&format!("new-{i}"), 0.01))
+            .chain((0..20).map(|i| variant(&format!("both-{i}"), 0.02)))
+            .collect();
+
+        let details = variants_audit_details(&before, &after);
+
+        for list in ["added", "removed", "changed"] {
+            assert_eq!(
+                details[list].as_array().unwrap().len(),
+                MAX_AUDITED_VARIANTS
+            );
+            assert_eq!(details[format!("{list}_truncated")], true);
+        }
+        assert!(details.to_string().len() <= crate::audit::record::MAX_DETAILS_BYTES);
+    }
 }

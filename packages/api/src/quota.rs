@@ -556,19 +556,22 @@ pub async fn reconcile_runtime_receipts(state: &AppState) -> Result<u64, ApiErro
         if !schedule_runtime_receipt_retry(&state.db, &id, now).await? {
             continue;
         }
-        let read = flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            let result = match state.meta_bucket.as_generic().get(&receipt_path(&id)).await {
-                Ok(value) => value,
-                Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(None),
-                Err(error) => return Err(ApiError::from(error)),
-            };
-            if result.meta.size > 16_384 {
-                return Err(ApiError::internal("Runtime receipt exceeds its size limit"));
-            }
-            let value: Value = serde_json::from_slice(&result.bytes().await?)?;
-            Ok::<_, ApiError>(Some(value))
-        })
-        .await;
+        let read =
+            flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let result = match state.meta_bucket.as_generic().get(&receipt_path(&id)).await {
+                    Ok(value) => value,
+                    Err(flow_like_storage::object_store::Error::NotFound { .. }) => {
+                        return Ok(None);
+                    }
+                    Err(error) => return Err(ApiError::from(error)),
+                };
+                if result.meta.size > 16_384 {
+                    return Err(ApiError::internal("Runtime receipt exceeds its size limit"));
+                }
+                let value: Value = serde_json::from_slice(&result.bytes().await?)?;
+                Ok::<_, ApiError>(Some(value))
+            })
+            .await;
         let value = match read {
             Ok(Ok(Some(value))) => value,
             Ok(Ok(None)) => continue,

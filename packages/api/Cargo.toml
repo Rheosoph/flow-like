@@ -71,11 +71,13 @@ aws-sdk-sqs = {workspace = true, optional=true}
 aws-sdk-sns = { version = "1.83.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws_lambda_events = { workspace = true, features = ["apigw"], optional = true }
 aws-sdk-iotdataplane = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
 # -----
 
 # ----- Azure dependencies ----
 hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
+zstd.workspace = true
 rand = { version = "0.9" }
 urlencoding = { workspace = true }
 flow-like-azure-data = { workspace = true, optional = true }
@@ -160,6 +162,10 @@ dynamodb = ["aws-config", "aws-sdk-dynamodb", "dep:tokio"]  # Uses FlowLikeStore
 cosmos = ["dep:flow-like-azure-data", "dep:tokio"]
 firestore = ["dep:flow-like-gcp-data", "dep:tokio"]
 s3 = ["aws-config", "aws-sdk-s3"]
+# Audit key in a key management service (`AUDIT_KMS_KEY_ID`), one backend per cloud.
+audit-kms-aws = ["aws-config", "dep:aws-sdk-kms"]
+audit-kms-gcp = ["gcp"]
+audit-kms-azure = ["dep:azure_core", "dep:azure_identity"]
 # Channel transports (`CHANNEL_TRANSPORT`): credential minting + push forwarding per cloud.
 channel-aws = ["aws", "flow-like-channels/aws", "dep:aws-sdk-iotdataplane"]
 channel-azure = ["flow-like-channels/azure"]
@@ -190,7 +196,7 @@ urlencoding = []
 db-chaos = []
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "net", "io-util"] }
 dotenv = { workspace = true }
 flow-like-wasm.workspace = true
 flow-like-aws-data.workspace = true

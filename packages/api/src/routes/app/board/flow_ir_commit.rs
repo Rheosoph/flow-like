@@ -1178,7 +1178,6 @@ pub async fn apply_flow_ir_commit(
         "board.flow_ir.commit",
         "Board",
         board_id,
-        "Applied a compiled workflow commit",
         serde_json::json!({
             "command_count": result.commands.len(),
             "approved_destructive": params.approve_destructive,

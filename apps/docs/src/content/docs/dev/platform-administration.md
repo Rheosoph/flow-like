@@ -128,7 +128,7 @@ trail does not capture offline desktop edits or every direct storage operation.
    seal's hash. The record's MAC is cleared because the seal covers the record, and
    the seal carries its own MAC with the entry key until an epoch signs it.
 3. **Epoch.** Once the oldest unsigned seal has waited `epoch_interval_seconds`, or
-   2,000 seals wait, the worker writes one epoch: a Merkle root over all waiting
+   20,000 seals wait, the worker writes one epoch: a Merkle root over all waiting
    seals, linked to the previous epoch and signed with the audit key. It first
    re-hashes every seal and checks its MAC; a seal that fails is never signed, is
    logged at error level, and holds back the rest of its chain. Each seal stores its
@@ -155,9 +155,9 @@ trail does not capture offline desktop edits or every direct storage operation.
    archive record or back-dating a seal cannot make the worker sign away evidence; it
    only stops that chain from being pruned, which is logged.
 
-How many requests the audit key costs in a key service, and why that number does not
-grow with traffic, is described in
-[Signing cost](/self-hosting/audit-trail/#signing-cost).
+How many requests the audit key costs in a key service, why that number does not grow
+with traffic, and how a self-hosted Vault or OpenBao replaces a cloud key service are
+described in [Signing cost](/self-hosting/audit-trail/#signing-cost).
 
 A pending record whose MAC fails is never sealed. The worker marks it `invalid`
 (quarantined) and logs its id. Seals, epochs and records are hashed with BLAKE3 over
@@ -238,7 +238,7 @@ is optional; the example shows the defaults.
 | `seal_after_records` | 500 | Seal a chain once this many records are pending |
 | `seal_after_seconds` | 300 | Seal a chain once its oldest pending record is this old |
 | `max_records_per_seal` | 1000 | Largest seal the worker writes, at most 2,000 |
-| `epoch_interval_seconds` | 300 | How long a seal may wait for its signed epoch; earlier when 2,000 seals wait. Each epoch is one key-service request, so this sets the signing cost: at most 12 routine signatures an hour |
+| `epoch_interval_seconds` | 300 | How long a seal may wait for its signed epoch; earlier when 20,000 seals wait. Each epoch is one key-service request, so this sets the signing cost: at most 12 routine signatures an hour |
 | `pending_alert_seconds` | 900 | Age of the oldest pending record that triggers the alert log |
 | `archive_grace_days` | 3 | Days after a month closes before it is archived |
 
@@ -284,6 +284,11 @@ a pseudonymous id that no longer resolves once the account is deleted. Document 
 legal basis (GDPR art. 32 and art. 17(3)(e)) and the periods in the record of
 processing activities.
 
+Setting `details_days` also expires details in existing database records. The worker
+repairs older seals' expiry flags in batches of at most 1,000 per tick, so a large
+backlog takes several ticks to clear. Details already written to immutable archives
+remain there until those objects expire.
+
 ### Keys
 
 | Key | Variable | Held by | Used for |
@@ -328,10 +333,13 @@ proofs and epoch signatures, the MAC of every seal no epoch covers yet, and the 
 of the newest 1,000 pending records. It
 reads one batch of seals at a time in short, independent queries, so it never holds
 a long snapshot. Each process remembers the last fully anchored seal it verified
-per chain and later checks start after it; `full=true`, open to everyone who may read
-the chain, re-checks from the watermark. `GET /api/v1/audit/verify/epochs` checks continuity,
-hashes and signatures of the epoch timeline and is limited to administrators; it
-also continues after the last verified epoch unless `full=true`.
+per chain. Later checks recheck that seal and its records before reading newer seals;
+`full=true`, open to everyone who may read the chain, rechecks from the watermark.
+`GET /api/v1/audit/verify/epochs` checks continuity, hashes and signatures of the
+epoch timeline and is limited to administrators. It also rechecks the last verified
+epoch before reading newer epochs unless `full=true`. A failed check invalidates
+cached progress, so later incremental checks reread retained history. Previously
+verified boundaries remain in memory to detect a deleted tail on repeated checks.
 
 | Field | Meaning |
 | --- | --- |
@@ -347,7 +355,7 @@ also continues after the last verified epoch unless `full=true`.
 | `latest_seal_seq`, `latest_epoch_seq` | The chain's newest seal and the newest epoch covering it |
 | `checked_from_seq` | First sequence this run checked. Higher than the watermark means earlier seals were verified by an earlier run in the same server process; `full=true` starts again at the watermark |
 | `held` | A seal of this chain failed its hash or MAC before it was signed. The worker signs, archives and prunes nothing of this chain until an operator resolves it |
-| `empty` | No seal, pending record or watermark. A deleted chain looks the same; only a retained head tells them apart |
+| `empty` | No seal, pending record or watermark. A deleted chain looks the same unless the process remembers a verified boundary or the caller checks a retained head; also check `valid` |
 
 `problem` names the failure, for example `seal 7 is missing`, `seal does not link to
 its predecessor`, `seal holds 12 records but 11 remain`, `record <id> IP does not
@@ -406,12 +414,15 @@ worker is not running or cannot sign.
 ### Legacy entries
 
 Entries of the previous hash chain (`AuditEntry`) are not converted. With an audit
-bucket, the worker exports all of them once, raw, to `legacy/audit-entry.jsonl.zst`
-(one JSON object per row) and records the export as archive period `legacy`. It then
-deletes the rows, up to 20,000 per run; `legacy_entries` in the chain status counts
-what is left. The export is a raw copy kept for the retention period; the current
-verifier does not check the old hashes. Without an audit bucket the rows stay in the
-database.
+bucket, the worker exports up to 5,000 rows per run, raw, with one JSON object per
+row. The first batch is `legacy/audit-entry.jsonl.zst`; later batches have distinct
+names under `legacy/`. Each batch is recorded under archive period `legacy` before
+the worker deletes only the ids included in that upload. Entries written by old API
+replicas during a rolling upgrade join a later batch. A crash before deletion can
+produce duplicate exports, which preserve the original entry ids. `legacy_entries`
+in the chain status counts what is left. The export is a raw copy kept for the
+retention period; the current verifier does not check the old hashes. Without an
+audit bucket the rows stay in the database.
 
 ### Audit regression checks
 
@@ -588,8 +599,30 @@ The `payments` object in the hub configuration separates creation and servicing:
 | `countries`, `currencies` | Restrict seller countries and payment currencies to configured markets. The initial currency is EUR. |
 | `node_tax_mode`, `marketplace_tax_mode`, `live_approved` | Record the approved seller, tax and commercial configuration. There is no live tax default. |
 | `frontend_url` | Build payment and onboarding returns on a configured HTTPS origin. Test mode also permits localhost HTTP. |
-| `legal_texts` and the terms version fields | Supply the exact localized owner, seller and buyer terms accepted by users. Draft terms are blocked in live mode. |
+| `legal_texts` and the terms version fields | Select the exact localized owner, seller and buyer terms by kind, version, locale, website URL and BLAKE3 content hash. Draft terms are blocked in live mode. |
 | `legacy_checkout_until` | Stop new legacy checkout at an epoch-millisecond deadline while continuing historical settlement. Enabling the marketplace also stops legacy creation. |
+
+The official agreements live in `apps/website/src/content/legal/payments/`.
+The website publishes each agreement at
+`https://flow-like.com/legal/payments/{kind}/{version}/{locale}/`, where `kind`
+is `owner-terms`, `seller-terms` or `purchase-terms`. Append `text.txt` to retrieve
+the canonical UTF-8 text. The backend bundles the same source content and verifies
+each configured `hash` against its exact bytes. It serves the selected agreement
+through `/payments/terms`, so onboarding and checkout do not fetch the website.
+
+Each `legal_texts` entry retains `kind`, `version` and `locale`, with `url` and
+`hash` replacing the inline `text`. The hash is the lowercase hexadecimal BLAKE3
+digest of the text, including whitespace. Add each new version file to the backend's
+bundled legal texts in `packages/core/runtime/src/hub/payments.rs` and retain old
+content at its original URL. Deploy the website content before activating
+references in the backend configuration. The public hub response
+excludes these entries; clients load terms only when needed.
+
+Self-hosted operators can still supply inline `text` for their own agreements,
+with an optional HTTPS `url` and matching `hash`. A URL alone does not make the
+backend download arbitrary terms: references must resolve to bundled content,
+or the entry must supply inline text. Missing content or a mismatched hash blocks
+use of that agreement.
 
 Before live activation, exercise the exact account controller and charge model in
 Stripe test mode, verify the approved terms and tax handling, and confirm payment

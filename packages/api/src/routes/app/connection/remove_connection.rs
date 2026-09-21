@@ -72,8 +72,7 @@ pub async fn remove_connection(
         app_id,
         "app_connection.remove",
         "AppConnection",
-        connection_id,
-        "App connection removed"
+        connection_id
     );
 
     Ok(Json(()))

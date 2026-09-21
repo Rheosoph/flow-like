@@ -290,24 +290,21 @@ fn legal_text(
     version: &str,
     locale: &str,
 ) -> Result<String, ApiError> {
-    state
+    let text = state
         .platform_config
         .payments
         .legal_texts
         .iter()
-        .find(|text| {
-            text.kind == kind
-                && text.version == version
-                && text.locale == locale
-                && !text.text.is_empty()
-        })
-        .map(|text| text.text.clone())
+        .find(|text| text.kind == kind && text.version == version && text.locale == locale)
         .ok_or_else(|| {
             error(
                 "PAYMENT_TERMS_REQUIRED",
                 "The current payment terms are unavailable",
             )
-        })
+        })?;
+    text.content()
+        .map(str::to_owned)
+        .map_err(|message| error("PAYMENT_TERMS_REQUIRED", &message))
 }
 
 #[utoipa::path(post, path="/apps/{app_id}/marketplace/checkout", tag="payments", request_body=CheckoutInput, responses((status=200,description="Persisted marketplace order")))]

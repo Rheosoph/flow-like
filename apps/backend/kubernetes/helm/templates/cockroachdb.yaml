@@ -1,25 +1,7 @@
 {{- if eq (include "flow-like.databaseMode" .) "internal" }}
 {{- $fullname := include "flow-like.fullname" . -}}
-{{- $secretName := printf "%s-cockroachdb" $fullname -}}
-{{- $user := (default "flowlike" .Values.database.internal.auth.username) -}}
-{{- $dbName := (default "flowlike" .Values.database.internal.auth.database) -}}
-{{- $host := printf "%s-cockroachdb-public" $fullname -}}
-{{- /* In insecure mode, CockroachDB doesn't support passwords */}}
-{{- $urlInsecure := printf "postgresql://%s@%s:26257/%s?sslmode=disable" $user $host $dbName -}}
-
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $secretName }}
-  labels:
-    {{- include "flow-like.labels" . | nindent 4 }}
-    app.kubernetes.io/component: cockroachdb
-type: Opaque
-stringData:
-  username: {{ $user | quote }}
-  database: {{ $dbName | quote }}
-  DATABASE_URL: {{ $urlInsecure | quote }}
----
+{{- $user := .Values.database.internal.auth.username -}}
+{{- $dbName := .Values.database.internal.auth.database -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -105,7 +87,7 @@ spec:
           command:
             - /cockroach/cockroach
             - start-single-node
-            - --insecure
+            - --certs-dir=/cockroach/certs
             - --advertise-addr=$(POD_NAME).{{ $fullname }}-cockroachdb.{{ .Release.Namespace }}.svc.cluster.local
             - --logtostderr=WARNING
             - --cache={{ .Values.database.internal.cache | default "25%" }}
@@ -118,13 +100,16 @@ spec:
             - name: COCKROACH_CHANNEL
               value: kubernetes-helm
           volumeMounts:
+            - name: node-certs
+              mountPath: /cockroach/certs
+              readOnly: true
             - name: datadir
               mountPath: /cockroach/cockroach-data
           readinessProbe:
             httpGet:
               path: /health?ready=1
               port: http
-              scheme: HTTP
+              scheme: HTTPS
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 2
@@ -132,13 +117,18 @@ spec:
             httpGet:
               path: /health
               port: http
-              scheme: HTTP
+              scheme: HTTPS
             initialDelaySeconds: 30
             periodSeconds: 10
           {{- with .Values.database.internal.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      volumes:
+        - name: node-certs
+          secret:
+            secretName: {{ required "database.internal.tls.nodeSecret is required" .Values.database.internal.tls.nodeSecret }}
+            defaultMode: 0400
       terminationGracePeriodSeconds: 60
   volumeClaimTemplates:
     - metadata:
@@ -183,6 +173,16 @@ spec:
         - name: init
           image: "{{ .Values.database.internal.image.repository }}:{{ .Values.database.internal.image.tag }}"
           imagePullPolicy: {{ .Values.database.internal.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: MIGRATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.internal.tls.initSecret }}
+                  key: MIGRATION_PASSWORD
+          volumeMounts:
+            - name: init-certs
+              mountPath: /cockroach/certs
+              readOnly: true
           command:
             - /bin/sh
             - -c
@@ -191,7 +191,7 @@ spec:
 
               echo "Waiting for CockroachDB to be ready..."
               until /cockroach/cockroach sql \
-                --insecure \
+                --certs-dir=/cockroach/certs \
                 --host={{ $fullname }}-cockroachdb-public \
                 -e "SELECT 1" 2>/dev/null; do
                 echo "CockroachDB not ready yet, waiting..."
@@ -200,14 +200,24 @@ spec:
 
               echo "Creating user and database..."
               /cockroach/cockroach sql \
-                --insecure \
+                --certs-dir=/cockroach/certs \
                 --host={{ $fullname }}-cockroachdb-public \
                 -e "
-                  CREATE USER IF NOT EXISTS {{ $user }};
+                  CREATE USER IF NOT EXISTS {{ $user }} WITH PASSWORD '$MIGRATION_PASSWORD';
+                  ALTER USER {{ $user }} WITH PASSWORD '$MIGRATION_PASSWORD';
                   CREATE DATABASE IF NOT EXISTS {{ $dbName }};
-                  GRANT ALL ON DATABASE {{ $dbName }} TO {{ $user }};
-                  ALTER USER {{ $user }} WITH CREATEDB;
+                  GRANT admin TO {{ $user }};
+
                 "
 
               echo "CockroachDB initialization complete!"
+      volumes:
+        - name: init-certs
+          secret:
+            secretName: {{ required "database.internal.tls.initSecret is required" .Values.database.internal.tls.initSecret }}
+            defaultMode: 0400
+            items:
+              - {key: ca.crt, path: ca.crt}
+              - {key: client.root.crt, path: client.root.crt}
+              - {key: client.root.key, path: client.root.key}
 {{- end }}

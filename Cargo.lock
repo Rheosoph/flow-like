@@ -8187,6 +8187,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-audit-worker"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "flow-like",
+ "flow-like-api",
+ "flow-like-types",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flow-like-aws-data"
 version = "0.1.0"
 dependencies = [

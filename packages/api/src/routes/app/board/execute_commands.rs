@@ -449,7 +449,6 @@ pub async fn execute_commands(
             "board.commands.execute",
             "Board",
             board_id,
-            "Applied board commands",
             serde_json::json!({ "command_count": batch })
         );
     }

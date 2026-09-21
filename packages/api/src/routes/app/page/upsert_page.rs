@@ -6,7 +6,10 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::a2ui::{page_targets::retarget_page_workflow_actions, widget::Page};
+use flow_like::a2ui::{
+    page_targets::{RetargetedAction, retarget_page_workflow_actions},
+    widget::Page,
+};
 use flow_like_types::anyhow;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
@@ -188,21 +191,8 @@ pub async fn upsert_page(
     page_id_guard.release().await;
 
     if retargeted.is_empty() {
-        audit_branch!(
-            state,
-            user,
-            app_id,
-            "page.upsert",
-            "Page",
-            page_id,
-            "Page created or updated"
-        );
+        audit_branch!(state, user, app_id, "page.upsert", "Page", page_id);
     } else {
-        let details = serde_json::json!({
-            "app_id": &app_id,
-            "board_id": &board_id,
-            "retargeted": &retargeted,
-        });
         audit_branch!(
             state,
             user,
@@ -210,9 +200,91 @@ pub async fn upsert_page(
             "page.upsert",
             "Page",
             page_id,
-            "Page created or updated; foreign workflow targets rewritten to the owning app",
-            details
+            retarget_audit_details(&board_id, &retargeted)
         );
     }
     Ok(Json(page))
+}
+
+const MAX_AUDITED_FOREIGN_APPS: usize = 8;
+
+/// Page content decides how many actions get retargeted, so the record carries counts and a
+/// capped sample of the foreign apps instead of the change list.
+fn retarget_audit_details(board_id: &str, retargeted: &[RetargetedAction]) -> serde_json::Value {
+    let mut foreign_app_ids: Vec<&str> = Vec::new();
+    let mut foreign_app_ids_truncated = false;
+    let mut dropped_board_count = 0usize;
+    for change in retargeted {
+        match change.field {
+            "appId" if !foreign_app_ids.contains(&change.from.as_str()) => {
+                if foreign_app_ids.len() < MAX_AUDITED_FOREIGN_APPS {
+                    foreign_app_ids.push(&change.from);
+                } else {
+                    foreign_app_ids_truncated = true;
+                }
+            }
+            "boardId" => dropped_board_count += 1,
+            _ => {}
+        }
+    }
+    serde_json::json!({
+        "board_id": board_id,
+        "retargeted_count": retargeted.len(),
+        "foreign_app_ids": foreign_app_ids,
+        "foreign_app_ids_truncated": foreign_app_ids_truncated,
+        "dropped_board_count": dropped_board_count,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn change(field: &'static str, from: &str) -> RetargetedAction {
+        RetargetedAction {
+            component_id: "c".to_string(),
+            field,
+            from: from.to_string(),
+            to: None,
+        }
+    }
+
+    #[test]
+    fn retarget_details_stay_bounded() {
+        let mut retargeted: Vec<RetargetedAction> = (0..40)
+            .flat_map(|i| {
+                [
+                    change("appId", &format!("app-{}", i % 10)),
+                    change("boardId", "b"),
+                ]
+            })
+            .collect();
+        retargeted.push(change("appId", "app-0"));
+
+        let details = retarget_audit_details("board", &retargeted);
+
+        assert_eq!(details["board_id"], "board");
+        assert_eq!(details["retargeted_count"], 81);
+        assert_eq!(details["dropped_board_count"], 40);
+        assert_eq!(details["foreign_app_ids_truncated"], true);
+        let ids = details["foreign_app_ids"].as_array().unwrap();
+        assert_eq!(ids.len(), MAX_AUDITED_FOREIGN_APPS);
+        assert_eq!(ids[0], "app-0");
+        assert!(details.get("app_id").is_none());
+    }
+
+    #[test]
+    fn retarget_details_dedupe_without_truncating() {
+        let retargeted = vec![
+            change("appId", "other"),
+            change("appId", "other"),
+            change("boardId", "b"),
+        ];
+
+        let details = retarget_audit_details("board", &retargeted);
+
+        assert_eq!(details["foreign_app_ids"], serde_json::json!(["other"]));
+        assert_eq!(details["foreign_app_ids_truncated"], false);
+        assert_eq!(details["dropped_board_count"], 1);
+    }
 }

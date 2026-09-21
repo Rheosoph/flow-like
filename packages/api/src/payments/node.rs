@@ -383,12 +383,19 @@ pub(crate) async fn require_owner_terms<C: ConnectionTrait>(
     let consent=db.query_one_raw(sql(r#"SELECT l."textHash",l.locale FROM "ConnectedAccount" c JOIN "LegalConsent" l ON l.id=c."consentId" WHERE c.id=$1 AND l."userId"=$2 AND l.kind='PAYMENTS_OWNER_TERMS' AND l."subjectType"='CONNECTED_ACCOUNT' AND l."subjectId"=$1 AND l."textVersion"=$3 AND l.accepted=true"#,vec![account_row.into(),payee.into(),config.owner_terms_version.clone().into()])).await?.ok_or_else(||error("PAYMENT_TERMS_REQUIRED","The owner must accept the current payment agreement"))?;
     let consent_hash: String = consent.try_get("", "textHash")?;
     let consent_locale: String = consent.try_get("", "locale")?;
-    if !config.legal_texts.iter().any(|text| {
-        text.kind == "PAYMENTS_OWNER_TERMS"
-            && Some(text.version.as_str()) == config.owner_terms_version.as_deref()
-            && text.locale == consent_locale
-            && blake3::hash(text.text.as_bytes()).to_hex().as_str() == consent_hash
-    }) {
+    let text = config
+        .legal_texts
+        .iter()
+        .find(|text| {
+            text.kind == "PAYMENTS_OWNER_TERMS"
+                && Some(text.version.as_str()) == config.owner_terms_version.as_deref()
+                && text.locale == consent_locale
+        })
+        .ok_or_else(|| error("PAYMENT_TERMS_REQUIRED", "The owner agreement changed"))?;
+    let content = text
+        .content()
+        .map_err(|message| error("PAYMENT_TERMS_REQUIRED", &message))?;
+    if blake3::hash(content.as_bytes()).to_hex().as_str() != consent_hash {
         return Err(error(
             "PAYMENT_TERMS_REQUIRED",
             "The owner agreement changed",

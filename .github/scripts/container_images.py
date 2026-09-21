@@ -14,7 +14,7 @@ SCHEMA_VERSION = 1
 CLOUDS = ("all", "aws", "gcp", "azure", "docker-compose", "kubernetes", "self-hosted")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SELF_HOSTED_CLOUDS = ("docker-compose", "kubernetes")
-KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init"}
+KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init", "audit-worker"}
 API_WORKLOADS = {"api", "api-ecs"}
 CHANNEL_BRANCHES = ("dev", "main", "alpha")
 SEMVER = re.compile(
@@ -47,7 +47,8 @@ def layer_cache_enabled(dockerfile):
     return whole_copy is None or whole_copy > expensive
 
 
-def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", architecture_id=False):
+def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", architecture_id=False,
+           image_suffix=None, audit_features=None):
     target_id = f"{cloud}-{workload}"
     if architecture_id:
         target_id += f"-{platform.split('/')[1]}"
@@ -60,7 +61,8 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
         "context": context,
         "platform": platform,
         "runner": "ubuntu-24.04-arm" if platform == "linux/arm64" else "ubuntu-24.04",
-        "image_suffix": f"flow-like-{cloud}-{workload}",
+        "image_suffix": image_suffix or f"flow-like-{cloud}-{workload}",
+        "audit_features": audit_features or "",
         "layer_cache": layer_cache_enabled(dockerfile),
     }
 
@@ -79,6 +81,12 @@ TARGETS = tuple(sorted([
     target("aws", "media-transformer", "linux/arm64"),
     target("aws", "event-bridge", "linux/arm64"),
     target("aws", "maintenance", "linux/arm64"),
+    target("aws", "audit-worker", "linux/arm64"),
+    *[target(cloud, "audit-worker", recipe="apps/backend/audit-worker/Dockerfile", audit_features=cloud)
+      for cloud in ("azure", "gcp")],
+    *[target("docker-compose", "audit-worker", f"linux/{architecture}", architecture_id=True,
+             recipe="apps/backend/audit-worker/Dockerfile", image_suffix="flow-like-audit-worker", audit_features="aws,azure,gcp")
+      for architecture in ("amd64", "arm64")],
     target("aws", "signaling", "linux/arm64", recipe="apps/backend/docker-compose/signaling/Dockerfile"),
     target("aws", "migration", "linux/arm64"),
     *[target("gcp", workload) for workload in (
@@ -138,7 +146,10 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
     build_inputs = {
         "dockerfile_sha256": hashlib.sha256((REPOSITORY_ROOT / entry["dockerfile"]).read_bytes()).hexdigest(),
     }
-    api = entry["workload"] in API_WORKLOADS
+    api = entry["workload"] in API_WORKLOADS or (entry["cloud"] == "aws" and entry["workload"] == "audit-worker")
+    if entry["audit_features"]:
+        build_inputs["audit_features"] = entry["audit_features"]
+        build_inputs["runtime_config"] = "audit-worker-env-v1"
     if api:
         build_inputs["runtime_config"] = "full-document-v1"
     if api and entry["cloud"] not in SELF_HOSTED_CLOUDS:

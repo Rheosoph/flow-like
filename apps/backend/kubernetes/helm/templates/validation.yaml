@@ -42,7 +42,89 @@
 {{- end }}
 {{- end }}
 
-{{- $reservedEnv := list "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" }}
+{{- if .Values.audit.bucket }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$" .Values.audit.bucket) }}
+{{- fail "audit.bucket must be a valid lowercase DNS bucket name" }}
+{{- end }}
+{{- if has .Values.audit.bucket (list .Values.storage.s3.metaBucket .Values.storage.s3.contentBucket .Values.storage.s3.logBucket) }}
+{{- fail "audit.bucket must be separate from the metadata, content and logs buckets" }}
+{{- end }}
+{{- if not (has .Values.audit.lockMode (list "GOVERNANCE" "COMPLIANCE")) }}
+{{- fail "audit.lockMode must be GOVERNANCE or COMPLIANCE" }}
+{{- end }}
+{{- if and .Values.rustfs.enabled (not .Values.audit.bucketSecret) }}
+{{- fail "audit.bucketSecret with only the audit bucket identity is required for bundled RustFS; run scripts/setup-config.py" }}
+{{- end }}
+{{- if lt (int .Values.audit.retentionYears) 4 }}
+{{- fail "audit.retentionYears must be at least 4 to cover archives retained through calendar year end" }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.audit.vaultAddress }}
+{{- if not (regexMatch "^https?://" .Values.audit.vaultAddress) }}
+{{- fail "audit.vaultAddress must be an HTTP(S) URL, for example https://vault:8200" }}
+{{- end }}
+{{- if not .Values.audit.kmsKeyId }}
+{{- fail "audit.vaultAddress needs audit.kmsKeyId, the transit key name: audit or <mount>/audit" }}
+{{- end }}
+{{- if not (or .Values.audit.vaultTokenFile .Values.audit.existingSecret) }}
+{{- fail "a Vault audit key needs AUDIT_VAULT_TOKEN in audit.existingSecret, or audit.vaultTokenFile pointing at a Vault Agent sink" }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.audit.worker }}
+{{- if .Values.sinkServices.enabled }}
+{{- fail "audit.worker cannot share a namespace with the API-managed sinkServices CronJobs; isolate the scheduler before enabling it" }}
+{{- end }}
+{{- $_ := required "audit.entrySecret is required for the API and dedicated worker" .Values.audit.entrySecret }}
+{{- $_ := required "audit.database.existingSecret is required for the dedicated worker" .Values.audit.database.existingSecret }}
+{{- $_ := required "audit.bucket is required for the dedicated worker" .Values.audit.bucket }}
+{{- if not (or .Values.audit.kmsKeyId .Values.audit.existingSecret) }}
+{{- fail "audit.existingSecret with AUDIT_SIGNING_KEY or audit.kmsKeyId is required" }}
+{{- end }}
+{{- if eq (empty .Values.audit.runtimeConfig.existingSecret) (empty .Values.audit.runtimeConfig.existingConfigMap) }}
+{{- fail "audit.runtimeConfig requires exactly one existingSecret or existingConfigMap" }}
+{{- end }}
+{{- if not .Values.networkPolicy.enabled }}
+{{- fail "audit.worker requires networkPolicy.enabled" }}
+{{- end }}
+{{- if or (eq .Values.audit.database.existingSecret (include "flow-like.databaseSecretName" .)) (eq .Values.audit.database.existingSecret .Values.database.migration.existingSecret) }}
+{{- fail "audit.database.existingSecret must differ from API and migration database secrets" }}
+{{- end }}
+{{- end }}
+{{- if and .Values.database.migration.enabled (eq .Values.database.migration.existingSecret (include "flow-like.databaseSecretName" .)) }}
+{{- fail "database.migration.existingSecret must differ from the API database secret" }}
+{{- end }}
+{{- if eq (include "flow-like.databaseMode" .) "internal" }}
+{{- if not (and .Values.database.caSecret .Values.database.internal.tls.nodeSecret .Values.database.internal.tls.initSecret) }}
+{{- fail "bundled CockroachDB requires separate CA, node and init TLS secrets; run scripts/setup-config.py" }}
+{{- end }}
+{{- range list .Values.database.internal.auth.username .Values.database.internal.auth.database }}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" .) }}
+{{- fail "internal database and migration role names must use lowercase SQL identifiers" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $name, $value := .Values.audit.serviceAccount.annotations }}
+{{- if and (has $name (list "eks.amazonaws.com/role-arn" "iam.gke.io/gcp-service-account" "azure.workload.identity/client-id")) (eq $value (index $.Values.serviceAccount.annotations $name)) }}
+{{- fail "API and audit worker must not share a cloud workload identity" }}
+{{- end }}
+{{- end }}
+{{- range .Values.api.env }}
+{{- if or (hasPrefix "AUDIT_SIGNING_KEY" .name) (hasPrefix "AUDIT_KMS_" .name) (hasPrefix "AUDIT_VAULT_" .name) (hasPrefix "AUDIT_BUCKET" .name) }}
+{{- fail "signing and audit bucket credentials belong to the dedicated audit worker" }}
+{{- end }}
+{{- if has .name (list "AUDIT_ENTRY_KEY" "AUDIT_ENTRY_KEY_PREVIOUS" "AUDIT_KID" "AUDIT_VERIFYING_KEYS") }}
+{{- fail "use audit values and audit.entrySecret for API audit settings" }}
+{{- end }}
+{{- end }}
+{{- range .Values.audit.env }}
+{{- if has .name (list "DATABASE_URL" "AUDIT_ENTRY_KEY" "AUDIT_ENTRY_KEY_PREVIOUS" "FLOW_LIKE_CONFIG_PATH" "FLOW_LIKE_CONFIG_JSON" "AUDIT_HEALTH_FILE" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "AUDIT_BUCKET_ACCESS_KEY_ID" "AUDIT_BUCKET_SECRET_ACCESS_KEY" "AWS_REGION" "AWS_USE_PATH_STYLE" "AUDIT_KMS_KEY_ID" "AUDIT_KMS_PROVIDER" "AUDIT_KMS_REGION" "AUDIT_VAULT_ADDR" "AUDIT_VAULT_TOKEN_FILE" "AUDIT_KID" "AUDIT_VERIFYING_KEYS") }}
+{{- fail "audit.env cannot override chart-managed worker configuration" }}
+{{- end }}
+{{- end }}
+
+{{- $reservedEnv := list "AUDIT_WORKER" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "FRONTEND_BASE_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" }}
 {{- range .Values.api.env }}
 {{- if has .name $reservedEnv }}
 {{- fail (printf "api.env cannot override chart-managed %s; configure its values.yaml setting" .name) }}

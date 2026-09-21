@@ -123,17 +123,17 @@ pub async fn change_forking(
         return Ok(Json(()));
     }
 
-    let mut detail = Vec::new();
+    let mut details = serde_json::Map::new();
     let mut active = app_row.into_active_model();
     if let Some(allow) = body.allow_forking.filter(|_| allow_changed) {
         active.allow_forking = Set(allow);
-        detail.push(format!("allow_forking = {allow}"));
+        details.insert("allow_forking".to_string(), allow.into());
     }
     if let Some(policy) = body.fork_policy.filter(|_| policy_changed) {
         let encoded = serde_json::to_value(&policy).map_err(|e| {
             ApiError::internal_error(flow_like_types::anyhow!("encode policy: {e}"))
         })?;
-        detail.push(format!("fork_policy = {encoded}"));
+        details.insert("fork_policy".to_string(), encoded.clone());
         active.fork_policy = Set(Some(encoded));
     }
     active.updated_at = Set(chrono::Utc::now().fixed_offset());
@@ -146,7 +146,7 @@ pub async fn change_forking(
         "app.settings.forking",
         "App",
         app_id,
-        detail.join(", ")
+        serde_json::Value::Object(details)
     );
 
     Ok(Json(()))

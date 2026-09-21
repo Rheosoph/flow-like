@@ -1336,9 +1336,15 @@
 				},
 				"text": {
 					"type": "string"
+				},
+				"url": {
+					"type": ["string", "null"]
+				},
+				"hash": {
+					"type": ["string", "null"]
 				}
 			},
-			"required": ["kind", "version", "locale", "text"]
+			"required": ["kind", "version", "locale"]
 		}
 	}
 }

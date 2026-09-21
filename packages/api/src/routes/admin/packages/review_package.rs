@@ -106,7 +106,7 @@ pub async fn review_package(
         "admin.package.review",
         "package",
         package_id,
-        format!("Package reviewed: {}", review_action)
+        serde_json::json!({ "review_action": review_action })
     );
     Ok(Json(result))
 }

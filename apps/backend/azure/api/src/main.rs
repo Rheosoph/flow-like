@@ -33,6 +33,7 @@ const REQUIRED_SECRETS: &[(&str, usize)] = &[
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metrics_endpoint::init_telemetry();
+    flow_like_api::audit::worker::bucket::ensure_api_only()?;
 
     let config = config::Config::from_env()?;
     let postgres_config = postgres::ManagedIdentityPostgresConfig::from_env(
