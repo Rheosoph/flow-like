@@ -35,9 +35,12 @@ pub struct PaymentLegalText {
 // Website pages and payment consent use the same immutable source bytes.
 static BUNDLED_LEGAL_TEXTS: LazyLock<Vec<PaymentLegalText>> = LazyLock::new(|| {
     // Append new versions and retain existing bundles for historical consent.
-    let sources = [include_str!(
-        "../../../../../apps/website/src/content/legal/payments/2026-09-20-draft-1.json"
-    )];
+    let sources = [
+        include_str!(
+            "../../../../../apps/website/src/content/legal/payments/2026-09-20-draft-1.json"
+        ),
+        include_str!("../../../../../apps/website/src/content/legal/payments/2026-09-21-1.json"),
+    ];
     sources
         .into_iter()
         .flat_map(|source| {
@@ -695,6 +698,17 @@ mod tests {
             "txcd_10000000/else",
         ] {
             assert!(!valid_product_tax_code(code));
+        }
+    }
+
+    // Mirrors the API startup gate so an invalid embedded config fails here, not on deploy.
+    #[test]
+    fn embedded_config_passes_startup_validation() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../../flow-like.config.json")).unwrap();
+        let payments: PaymentsConfig = serde_json::from_value(config["payments"].clone()).unwrap();
+        if payments.creation_enabled() {
+            payments.validate().unwrap();
         }
     }
 }
