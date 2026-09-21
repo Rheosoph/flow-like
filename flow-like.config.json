@@ -31,7 +31,7 @@
 		"node_payments_enabled": true,
 		"servicing_enabled": true,
 		"livemode": true,
-		"live_approved": false,
+		"live_approved": true,
 		"platform_account_id": "acct_1MH2NGEApaAD9lV4",
 		"frontend_url": "https://app.flow-like.com",
 		"node_tax_mode": "seller_supplier",
