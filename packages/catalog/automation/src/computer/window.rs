@@ -924,6 +924,7 @@ impl NodeLogic for ComputerWindowOperationNode {
         );
         node.set_version(1);
         node.set_flowscript_name("computer", "manageWindow");
+        node.add_icon("/flow/icons/computer.svg");
         node.set_only_offline(true);
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
         node.add_input_pin("session", "Session", "Active session", VariableType::Struct)
@@ -1034,6 +1035,7 @@ impl NodeLogic for ComputerWaitForWindowNode {
         );
         node.set_version(1);
         node.set_flowscript_name("computer", "waitForWindow");
+        node.add_icon("/flow/icons/computer.svg");
         node.set_only_offline(true);
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
         node.add_input_pin("session", "Session", "Active session", VariableType::Struct)

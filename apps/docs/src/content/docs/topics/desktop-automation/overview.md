@@ -240,6 +240,10 @@ the recording keeps the action coordinates. Inserting with template or fingerpri
 replay enabled requires the corresponding sample; choose coordinate replay when
 that evidence is unavailable.
 
+Native recording cannot reliably identify secure fields, so typed or pasted
+secrets can be saved. Pause before entering secrets and configure credentials
+explicitly in the Flow.
+
 For web pages, select browser recording and supply the debugger address of a
 Chrome or Edge instance started with remote debugging, plus its compatible
 WebDriver endpoint. Browser recording creates selector-based actions, waits for

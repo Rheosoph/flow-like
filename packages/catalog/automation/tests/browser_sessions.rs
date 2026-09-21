@@ -60,6 +60,7 @@ impl MockWebDriver {
                     std::thread::sleep(std::time::Duration::from_millis(2));
                     continue;
                 };
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();

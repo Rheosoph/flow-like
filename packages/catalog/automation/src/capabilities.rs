@@ -414,6 +414,7 @@ fn capability_node(name: &str, title: &str, request: bool) -> flow_like::flow::n
         },
         "Automation",
     );
+    node.add_icon("/flow/icons/automation.svg");
     node.set_only_offline(true);
     node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
     node.add_input_pin(

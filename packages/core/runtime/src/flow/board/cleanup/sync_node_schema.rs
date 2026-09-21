@@ -334,6 +334,7 @@ pub async fn sync_board_node_schemas(
     // invoking `on_update`; the cleanup pass afterwards compacts them back to one-hop refs.
     expand_board_schema_refs(board, &refs);
     let blocked = super::migrate_geo_geometry::migrate_geo_geometry(board, registry);
+    super::migrate_automation_collections::migrate_automation_collections(board, registry);
     let sync_node = |node: &mut Node, registry: &crate::state::FlowNodeRegistryInner| {
         if blocked.contains(&node.id) {
             return;

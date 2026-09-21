@@ -635,6 +635,13 @@ export function RecordingDock({
 				{/* Main Controls */}
 				<div className="px-4 py-5">
 					<div className="flex flex-col items-center gap-4">
+						{!settings.browser_debugger_address?.trim() && (
+							<p className="text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
+								Native recording cannot reliably identify secure fields. Typed
+								or pasted secrets can be saved. Pause before entering secrets,
+								then configure credentials explicitly in the Flow.
+							</p>
+						)}
 						{status === "Idle" && (
 							<>
 								<div className="flex items-center gap-3">

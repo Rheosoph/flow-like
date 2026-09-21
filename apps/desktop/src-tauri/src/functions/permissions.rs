@@ -4,9 +4,7 @@ use tauri::AppHandle;
 #[cfg(desktop)]
 use flow_like_catalog::automation_capabilities::capability_status;
 #[cfg(desktop)]
-pub use flow_like_catalog::automation_capabilities::{
-    AutomationCapability, CapabilityState, CapabilityStatus,
-};
+pub use flow_like_catalog::automation_capabilities::{AutomationCapability, CapabilityStatus};
 #[cfg(mobile)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

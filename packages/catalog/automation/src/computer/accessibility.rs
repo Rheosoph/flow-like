@@ -422,6 +422,7 @@ impl NodeLogic for ComputerAccessibilityActionNode {
         );
         node.set_version(1);
         node.set_flowscript_name("computer", "accessibilityAction");
+        node.add_icon("/flow/icons/computer.svg");
         node.set_only_offline(true);
         node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
         node.add_input_pin(
