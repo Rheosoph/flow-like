@@ -1,12 +1,14 @@
 """Keep cloud audit identities, immutable storage and API workloads separate."""
 
 import importlib.util
+import base64
 import contextlib
 import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import tempfile
 from unittest.mock import patch
 
 
@@ -25,9 +27,11 @@ IMAGE = "ghcr.io/example/audit-worker@sha256:" + "a" * 64
 GCP_ARGS = {
     "project": "audit-project", "region": "europe-west1", "bucket": "isolated-audit-bucket", "image": IMAGE,
     "key_version": "projects/audit-project/locations/europe-west1/keyRings/audit/cryptoKeys/timeline/cryptoKeyVersions/1",
-    "api_service_account": "api@app-project.iam.gserviceaccount.com", "database_secret": "audit-database",
+    "api_service_account": "api@app-project.iam.gserviceaccount.com",
+    "database_instance": "audit-db", "database_host": "10.0.0.2", "database_name": "flow_like", "database_user": None,
     "entry_key_secret": "audit-entry-key", "config_secret": "audit-config", "network": "private", "subnet": "database",
-    "name": "flow-like-audit-worker", "encryption_secret": None, "database_ca_secret": None, "retention_days": 1461,
+    "name": "flow-like-audit-worker", "encryption_secret": "audit-sink-key", "database_ca_secret": "cloud-sql-ca", "retention_days": 1461,
+    "previous_entry_key_secret": None, "audit_kid": None, "verifying_keys_secret": None,
 }
 SCOPE = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/audit"
 AZURE_ARGS = {
@@ -40,11 +44,26 @@ AZURE_ARGS = {
     "database_secret_uri": "https://secrets.vault.azure.net/secrets/database/version1",
     "entry_key_secret_uri": "https://secrets.vault.azure.net/secrets/entry-key/version1",
     "config_secret_uri": "https://secrets.vault.azure.net/secrets/config/version1",
-    "name": "flow-like-audit-worker", "container": "audit", "encryption_secret_uri": None, "retention_days": 1461,
+    "name": "flow-like-audit-worker", "container": "audit", "retention_days": 1461,
+    "encryption_secret_uri": "https://secrets.vault.azure.net/secrets/encryption/version1",
+    "database_user": "audit-worker", "kid": "audit-v1", "verifying_keys_file": None,
 }
 
 
 class DeploymentTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        directory = tempfile.TemporaryDirectory(prefix="audit-public-keys-")
+        cls.addClassCleanup(directory.cleanup)
+        # Public P-256 generator point, encoded as SPKI. No signing secret.
+        point = bytes.fromhex("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+                              "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
+        prefix = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")
+        pem = "-----BEGIN PUBLIC KEY-----\n" + base64.b64encode(prefix + point).decode() + "\n-----END PUBLIC KEY-----\n"
+        path = Path(directory.name) / "keys.json"
+        path.write_text(json.dumps({"audit-v1": pem}))
+        AZURE_ARGS["verifying_keys_file"] = str(path)
+
     def test_default_invocation_only_prints_the_plan(self):
         for module, values in ((GCP, GCP_ARGS), (AZURE, AZURE_ARGS)):
             args = [item for key, value in values.items() if value is not None
@@ -85,12 +104,17 @@ class DeploymentTests(unittest.TestCase):
         serialized = json.dumps(steps)
         for forbidden in ("roles/storage.admin", "roles/storage.objectAdmin", "roles/cloudkms.admin"):
             self.assertNotIn(forbidden, serialized)
-        self.assertFalse(any(f"--member=serviceAccount:{GCP_ARGS['api_service_account']}" in command for command in bindings))
+        api_bindings = [command for command in bindings if f"--member=serviceAccount:{GCP_ARGS['api_service_account']}" in command]
+        self.assertEqual({command[3] for command in api_bindings}, {"audit-entry-key", "audit-sink-key"})
+        self.assertTrue(all(command[1:3] == ["secrets", "add-iam-policy-binding"] and
+                            "--role=roles/secretmanager.secretAccessor" in command for command in api_bindings))
         deployment = next(step["run"] for step in steps if step.get("run", [])[1:4] == ["run", "jobs", "deploy"])
         self.assertIn("--args=--once", deployment)
-        self.assertTrue(any(value.startswith("--set-secrets=DATABASE_URL=audit-database:latest,") for value in deployment))
+        self.assertFalse(any("DATABASE_URL=" in value for value in deployment))
+        self.assertIn("GCP_POSTGRES_USER=flow-like-audit-worker@audit-project.iam", json.dumps(deployment))
+        self.assertIn("GCP_POSTGRES_SERVER_CA=cloud-sql-ca:latest", json.dumps(deployment))
         ca_steps = GCP.plan(SimpleNamespace(**{**GCP_ARGS, "database_ca_secret": "cloud-sql-ca"}))
-        self.assertIn("/etc/audit-db/server-ca.pem=cloud-sql-ca:latest", json.dumps(ca_steps))
+        self.assertIn("GCP_POSTGRES_SERVER_CA=cloud-sql-ca:latest", json.dumps(ca_steps))
 
     def test_azure_grants_only_blob_read_write_and_key_read_sign(self):
         steps = AZURE.plan(SimpleNamespace(**AZURE_ARGS))

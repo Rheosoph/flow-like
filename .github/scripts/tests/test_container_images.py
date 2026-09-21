@@ -112,11 +112,21 @@ class MatrixTests(unittest.TestCase):
             with self.subTest(target=target_id):
                 self.assertEqual(entries[target_id]["image_suffix"], image)
                 self.assertEqual(entries[target_id]["audit_features"], feature)
-                self.assertEqual(entries[target_id]["dockerfile"], "apps/backend/audit-worker/Dockerfile")
+                cloud = entries[target_id]["cloud"]
+                recipe = f"apps/backend/{cloud}/audit-worker/Dockerfile" if cloud in ("azure", "gcp") else "apps/backend/audit-worker/Dockerfile"
+                self.assertEqual(entries[target_id]["dockerfile"], recipe)
+                self.assertEqual(entries[target_id]["context"], ".")
                 inputs = containers.record(target_id, OWNER, SOURCE_SHA, DIGEST, RUN_ID, RUN_ATTEMPT)["build_inputs"]
                 self.assertEqual(inputs["audit_features"], feature)
                 self.assertEqual(inputs["runtime_config"], "audit-worker-env-v1")
                 self.assertNotIn("flow_like_config_sha256", inputs)
+                if cloud in ("azure", "gcp"):
+                    launcher = containers.REPOSITORY_ROOT / f"apps/backend/{cloud}/audit-worker/entrypoint.py"
+                    self.assertEqual(inputs["entrypoint_sha256"], hashlib.sha256(launcher.read_bytes()).hexdigest())
+                    self.assertEqual(inputs["database_auth"], "entra-managed-identity" if cloud == "azure" else "cloud-sql-iam")
+                    self.assertFalse((containers.REPOSITORY_ROOT / (recipe + ".dockerignore")).exists())
+                else:
+                    self.assertNotIn("database_auth", inputs)
 
     def test_self_hosted_selectors_cover_both_native_architectures(self):
         self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("self-hosted", "docker-compose", "kubernetes")], [32, 20, 22])

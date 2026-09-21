@@ -60,34 +60,64 @@ Prepare these resources first:
 - A versioned Cloud KMS `EC_SIGN_P256_SHA256` signing key. Keep key administration
   outside the API identity. Enable Cloud Run, Cloud Scheduler, Secret Manager,
   Cloud KMS, and Policy Troubleshooter APIs in the relevant projects.
-- Secret Manager secrets for the worker's dedicated PostgreSQL `DATABASE_URL`, the
-  shared base64 `AUDIT_ENTRY_KEY`, and the audit configuration JSON. A minimal
-  configuration is `{"audit":{"enabled":true,"require_signing":true}}`. The API
-  must resolve the same entry key through its secret store. Its database identity
-  must differ from the worker login. Use TLS certificate verification in the
-  database URL and the [database grants below](#database-bootstrap-and-token-rotation).
+- A Cloud SQL PostgreSQL instance with a private endpoint,
+  `cloudsql.iam_authentication=on`, and TLS mode `ENCRYPTED_ONLY`. Register the
+  worker service account as a `CLOUD_IAM_SERVICE_ACCOUNT` database user and apply
+  the [database grants below](#database-bootstrap-and-token-rotation). The default
+  worker login is `flow-like-audit-worker@<project>.iam`; `--name` changes its
+  service account and login together. It must differ from the API login. The helper
+  verifies the instance settings, private endpoint, and existing IAM user mapping,
+  then grants `roles/cloudsql.instanceUser` in the database project. This project
+  grant covers every Cloud SQL instance there; database user mappings and SQL
+  grants must keep the worker limited to its audit database.
+- Secret Manager secrets containing the instance server CA PEM, the shared base64
+  `AUDIT_ENTRY_KEY`, the shared `SINK_TOKEN_ENCRYPTION_KEY`, and the worker's audit
+  configuration JSON. A minimal configuration is
+  `{"audit":{"enabled":true,"require_signing":true}}`. Supply the exact entry and
+  sink secret IDs that the API already resolves through its Secret Manager project
+  and `SECRET_PREFIX`. The helper grants both identities access to these same
+  secrets; it does not change the API's secret lookup settings.
 - A private network/subnet that reaches PostgreSQL and an immutable digest of
   `ghcr.io/rheosoph/flow-like-gcp-audit-worker`. Mirror the image to an Artifact
   Registry repository accessible to Cloud Run before deployment and set
-  `AUDIT_WORKER_IMAGE` to its complete `@sha256:` reference.
+  `AUDIT_WORKER_IMAGE` to its complete `@sha256:` reference. Build custom images
+  with `docker build -f apps/backend/gcp/audit-worker/Dockerfile .` from the
+  `flow-like` repository root. This recipe includes the IAM launcher used by the
+  deployment helper and uses the repository's `.dockerignore`.
 
 ```sh
 python3 apps/backend/gcp/audit-worker/deploy.py \
   --project audit-project --region europe-west1 \
   --bucket organization-audit-evidence \
-  --api-service-account api@app-project.iam.gserviceaccount.com \
+  --api-service-account api@audit-project.iam.gserviceaccount.com \
   --image "$AUDIT_WORKER_IMAGE" \
   --key-version projects/audit-project/locations/europe-west1/keyRings/audit/cryptoKeys/timeline/cryptoKeyVersions/1 \
-  --database-secret audit-database-url \
-  --entry-key-secret audit-entry-key --config-secret audit-config \
+  --database-instance audit-postgres --database-host 10.2.3.4 \
+  --database-name flow_like --database-ca-secret cloud-sql-server-ca \
+  --entry-key-secret "$AUDIT_ENTRY_KEY_SECRET" \
+  --encryption-secret "$SINK_TOKEN_ENCRYPTION_KEY_SECRET" \
+  --config-secret audit-config \
   --network audit-network --subnet audit-database
 ```
 
-For a Cloud SQL instance CA, add `--database-ca-secret cloud-sql-server-ca` and
-include `sslmode=verify-full&sslrootcert=/etc/audit-db/server-ca.pem` in the worker
-database URL. The secret contains the PEM certificate and is mounted as a file.
-Use the instance hostname covered by its certificate and resolve it through the
-private network.
+Set `AUDIT_ENTRY_KEY_SECRET` and `SINK_TOKEN_ENCRYPTION_KEY_SECRET` to those existing
+secret IDs before running the example. The CA secret is required and becomes
+`GCP_POSTGRES_SERVER_CA`. At each `--once` invocation, the launcher checks that
+`GCP_POSTGRES_USER` matches the attached service account and requests a metadata
+token with the `sqlservice.login` scope. It builds the child's temporary
+`DATABASE_URL`, verifies the server CA for private IPs or the CA and hostname for
+DNS endpoints, and removes the temporary CA file on exit. It stops the child
+before the token expires. Static database passwords and credential overrides are
+rejected; the old `--database-secret` argument is no longer supported.
+
+To avoid fetching the KMS public key at every startup, also supply
+`--audit-kid <current-key-id> --verifying-keys-secret <public-keys-secret-id>`.
+The secret contains the shared `AUDIT_VERIFYING_KEYS` JSON map of key IDs to public
+PEM keys, including the selected KMS version. Both arguments are required together;
+retain older verifying keys while their evidence must remain verifiable. During
+entry-key rotation, use `--previous-entry-key-secret` for the API's same
+`AUDIT_ENTRY_KEY_PREVIOUS` secret and coordinate API revision replacement with the
+worker's latest secret versions.
 
 Review the output, then repeat with `--apply`. That operation locks retention;
 the bucket's retention period cannot subsequently be shortened. The default of
@@ -97,12 +127,12 @@ least the requested retention, uniform bucket-level access, and public access
 prevention. The script checks the effective lock before deploying the job.
 
 The script requires Policy Troubleshooter to establish that the API cannot sign,
-access the audit bucket or worker database/configuration secrets, impersonate the
+access the audit bucket or worker configuration secret, impersonate the
 worker, or change its job/IAM policies. Inherited access or an inconclusive check
 stops deployment. The deployment identity needs visibility into ancestor policies;
-remove broad API grants rather than bypassing the checks. The entry key and the
-optional `--encryption-secret` are intentionally shared with the API. Supply the
-latter for webhook exports as the same `SINK_TOKEN_ENCRYPTION_KEY` used by the API.
+remove broad API grants rather than bypassing the checks. The entry and sink
+encryption secrets are required and shared with the API. The API receives no
+worker database token, signing grant, or audit bucket access.
 The script also rejects inherited worker permissions to delete evidence, change
 retention, administer signing keys/secrets, or modify its own job.
 
@@ -268,18 +298,18 @@ administration, and database ownership off the API identity. The file-tracking
 worker needs its own IAM user with update rights on `App` and `User`.
 
 Those broad runtime grants need a final audit-specific restriction after every
-schema migration. Create a separate password login for the audit worker and store
-its TLS-enabled URL only in the worker's Secret Manager secret. Create this role
-with SQL `CREATE ROLE ... LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`, without role
-memberships. Cloud SQL's default built-in user creation grants `cloudsqlsuperuser`,
-which is unsuitable for this worker. See [Cloud SQL's system roles](https://docs.cloud.google.com/sql/docs/postgres/users).
+schema migration. Register the separate worker service account as a
+`CLOUD_IAM_SERVICE_ACCOUNT` Cloud SQL user. Its PostgreSQL username is the service
+account email without `.gserviceaccount.com`. Do not create a built-in password
+user: Cloud SQL's default built-in user creation grants `cloudsqlsuperuser`, which
+is unsuitable for this worker. See [Cloud SQL's system roles](https://docs.cloud.google.com/sql/docs/postgres/users).
 With the schema owner's `DATABASE_URL`
 available to Bun, run:
 
 ```sh
 AUDIT_DB_GRANTS_ONLY=true \
 API_DATABASE_ROLE='<api-account>@<project>.iam' \
-AUDIT_DATABASE_ROLE=flow_like_audit \
+AUDIT_DATABASE_ROLE='flow-like-audit-worker@<project>.iam' \
 bun apps/backend/shared/audit_database_roles.ts
 ```
 

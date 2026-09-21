@@ -2,6 +2,7 @@
 """Preview or provision an isolated, scheduled audit worker with a locked GCS bucket."""
 
 import argparse
+import ipaddress
 import json
 import re
 import subprocess
@@ -10,12 +11,15 @@ import sys
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    for name in ("project", "region", "bucket", "image", "key-version", "api-service-account", "database-secret",
-                 "entry-key-secret", "config-secret", "network", "subnet"):
+    for name in ("project", "region", "bucket", "image", "key-version", "api-service-account",
+                 "database-instance", "database-host", "database-name", "database-ca-secret",
+                 "entry-key-secret", "encryption-secret", "config-secret", "network", "subnet"):
         result.add_argument(f"--{name}", required=True)
     result.add_argument("--name", default="flow-like-audit-worker")
-    result.add_argument("--encryption-secret")
-    result.add_argument("--database-ca-secret", help="Mount a database CA PEM at /etc/audit-db/server-ca.pem")
+    result.add_argument("--database-user", help="Existing Cloud SQL IAM username; defaults to the worker email without .gserviceaccount.com")
+    result.add_argument("--previous-entry-key-secret", help="Previous shared entry key during coordinated rotation")
+    result.add_argument("--audit-kid", help="Key ID present in --verifying-keys-secret; supply both to avoid startup public-key reads")
+    result.add_argument("--verifying-keys-secret", help="Shared public AUDIT_VERIFYING_KEYS JSON map in Secret Manager")
     result.add_argument("--retention-days", type=int, default=1461)
     result.add_argument("--apply", action="store_true",
                         help="Create resources and irreversibly lock the bucket retention policy")
@@ -36,9 +40,18 @@ def plan(args):
     if not re.fullmatch(r"[a-z][a-z0-9-]{4,20}[a-z0-9]", args.name):
         raise ValueError("--name must be a 6-22 character service account ID, leaving room for '-trigger'")
     for value in (args.project, args.region, args.bucket, args.name, args.network, args.subnet,
-                  args.database_secret, args.entry_key_secret, args.config_secret, args.encryption_secret, args.database_ca_secret):
+                  args.database_instance, args.database_host, args.database_name, args.database_user,
+                  args.entry_key_secret, args.config_secret, args.encryption_secret, args.database_ca_secret,
+                  args.previous_entry_key_secret, args.audit_kid, args.verifying_keys_secret):
         if value is not None and (not value or re.search(r"[\s,=]", value) or value.startswith("-")):
             raise ValueError("resource names must not contain whitespace, commas, equals signs or start with '-' ")
+    if bool(args.audit_kid) != bool(args.verifying_keys_secret):
+        raise ValueError("--audit-kid and --verifying-keys-secret must be supplied together")
+    try:
+        ipaddress.ip_address(args.database_host)
+    except ValueError:
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", args.database_host):
+            raise ValueError("--database-host must be a Cloud SQL private IP or certificate hostname")
 
     def command(*parts, project=None):
         return ["gcloud", *parts, f"--project={project or args.project}", "--quiet", "--format=json"]
@@ -61,6 +74,22 @@ def plan(args):
                                              f"--principal-email={worker}", f"--permission={permission}")})
 
     worker = f"{args.name}@{args.project}.iam.gserviceaccount.com"
+    database_user = worker.removesuffix(".gserviceaccount.com")
+    if args.database_user and args.database_user != database_user:
+        raise ValueError("--database-user must match the worker service account without .gserviceaccount.com")
+    secrets = {"GCP_POSTGRES_SERVER_CA": args.database_ca_secret,
+               "AUDIT_ENTRY_KEY": args.entry_key_secret,
+               "SINK_TOKEN_ENCRYPTION_KEY": args.encryption_secret,
+               "FLOW_LIKE_CONFIG_JSON": args.config_secret}
+    shared_secrets = {args.entry_key_secret, args.encryption_secret}
+    if args.previous_entry_key_secret:
+        secrets["AUDIT_ENTRY_KEY_PREVIOUS"] = args.previous_entry_key_secret
+        shared_secrets.add(args.previous_entry_key_secret)
+    if args.verifying_keys_secret:
+        secrets["AUDIT_VERIFYING_KEYS"] = args.verifying_keys_secret
+        shared_secrets.add(args.verifying_keys_secret)
+    if len(set(secrets.values())) != len(secrets):
+        raise ValueError("CA, configuration, entry, encryption and verifying-key secrets must be distinct")
     trigger_name = f"{args.name}-trigger"
     trigger = f"{trigger_name}@{args.project}.iam.gserviceaccount.com"
     if args.api_service_account in (worker, trigger):
@@ -75,9 +104,19 @@ def plan(args):
     deny_api(f"//cloudresourcemanager.googleapis.com/projects/{args.project}", "resourcemanager.projects.setIamPolicy")
     deny_api("//cloudkms.googleapis.com/" + args.key_version.rsplit("/cryptoKeyVersions/", 1)[0],
              "cloudkms.cryptoKeyVersions.useToSign", "cloudkms.cryptoKeys.setIamPolicy")
-    for secret in (args.database_secret, args.config_secret):
+    for secret in (args.config_secret,):
         deny_api(f"//secretmanager.googleapis.com/projects/{args.project}/secrets/{secret}",
                  "secretmanager.versions.access", "secretmanager.versions.add", "secretmanager.secrets.setIamPolicy")
+    # SQL identity and grants are provisioned by the database owner before this job.
+    steps.append({"validate_database": {"host": args.database_host},
+                  "inspect": command("sql", "instances", "describe", args.database_instance)})
+    steps.append({"validate_database_user": database_user,
+                  "inspect": command("sql", "users", "list", f"--instance={args.database_instance}")})
+    steps.append({"run": command("sql", "databases", "describe", args.database_name,
+                                 f"--instance={args.database_instance}")})
+    steps.append({"run": command("projects", "add-iam-policy-binding", args.project,
+                                 f"--member=serviceAccount:{worker}", "--role=roles/cloudsql.instanceUser",
+                                 "--condition=None")})
     bucket = f"gs://{args.bucket}"
     ensure(command("storage", "buckets", "describe", bucket, "--raw"),
            command("storage", "buckets", "create", bucket, f"--location={args.region}",
@@ -96,28 +135,32 @@ def plan(args):
                                  f"--location={location}", f"--keyring={ring}",
                                  f"--member=serviceAccount:{worker}", "--role=roles/cloudkms.signerVerifier",
                                  project=key_project)})
-    secrets = {"DATABASE_URL": args.database_secret, "AUDIT_ENTRY_KEY": args.entry_key_secret,
-               "FLOW_LIKE_CONFIG_JSON": args.config_secret}
-    if args.encryption_secret:
-        secrets["SINK_TOKEN_ENCRYPTION_KEY"] = args.encryption_secret
-    if args.database_ca_secret:
-        secrets["/etc/audit-db/server-ca.pem"] = args.database_ca_secret
     for secret in sorted(set(secrets.values())):
         steps.append({"run": command("secrets", "add-iam-policy-binding", secret,
                                      f"--member=serviceAccount:{worker}", "--role=roles/secretmanager.secretAccessor")})
         deny_worker(f"//secretmanager.googleapis.com/projects/{args.project}/secrets/{secret}",
                     "secretmanager.versions.add", "secretmanager.secrets.setIamPolicy")
+        if secret in shared_secrets:
+            steps.append({"run": command("secrets", "add-iam-policy-binding", secret,
+                                         f"--member=serviceAccount:{args.api_service_account}",
+                                         "--role=roles/secretmanager.secretAccessor")})
+            deny_api(f"//secretmanager.googleapis.com/projects/{args.project}/secrets/{secret}",
+                     "secretmanager.versions.add", "secretmanager.secrets.setIamPolicy")
     deny_worker(f"//storage.googleapis.com/projects/_/buckets/{args.bucket}",
                 "storage.objects.delete", "storage.buckets.update", "storage.buckets.setIamPolicy")
     deny_worker("//cloudkms.googleapis.com/" + args.key_version.rsplit("/cryptoKeyVersions/", 1)[0],
                 "cloudkms.cryptoKeys.setIamPolicy", "cloudkms.cryptoKeyVersions.destroy", "cloudkms.cryptoKeyVersions.update")
     environment = {"GCP_PROJECT_ID": args.project, "GCP_AUDIT_BUCKET": args.bucket,
+                   "GCP_POSTGRES_HOST": args.database_host, "GCP_POSTGRES_DATABASE": args.database_name,
+                   "GCP_POSTGRES_USER": database_user,
                    "AUDIT_KMS_PROVIDER": "gcp", "AUDIT_KMS_KEY_ID": args.key_version,
                    "AUDIT_WORKER": "on"}
+    if args.audit_kid:
+        environment["AUDIT_KID"] = args.audit_kid
     steps.append({"run": command(
         "run", "jobs", "deploy", args.name, f"--region={args.region}", f"--image={args.image}",
         f"--service-account={worker}", "--args=--once", "--tasks=1", "--parallelism=1", "--max-retries=1",
-        "--task-timeout=3600s", "--cpu=1", "--memory=1Gi", f"--network={args.network}",
+        "--task-timeout=3600s", "--cpu=1", "--memory=2Gi", f"--network={args.network}",
         f"--subnet={args.subnet}", "--vpc-egress=private-ranges-only",
         "--set-env-vars=" + ",".join(f"{key}={value}" for key, value in environment.items()),
         "--set-secrets=" + ",".join(f"{key}={value}:latest" for key, value in secrets.items()),
@@ -158,9 +201,35 @@ def validate_lock(metadata, minimum_days):
     return policy.get("isLocked") is True
 
 
+def validate_database(metadata, host):
+    if not metadata.get("databaseVersion", "").startswith("POSTGRES_"):
+        raise ValueError("the audit database must be a Cloud SQL PostgreSQL instance")
+    settings = metadata.get("settings", {})
+    flags = {item.get("name"): item.get("value") for item in settings.get("databaseFlags", [])}
+    if flags.get("cloudsql.iam_authentication") != "on":
+        raise ValueError("enable cloudsql.iam_authentication on the database before deployment")
+    if settings.get("ipConfiguration", {}).get("sslMode") != "ENCRYPTED_ONLY":
+        raise ValueError("the IAM launcher requires ENCRYPTED_ONLY TLS; client-certificate-only mode is unsupported")
+    private_addresses = {item.get("ipAddress") for item in metadata.get("ipAddresses", [])
+                         if item.get("type") == "PRIVATE" and item.get("ipAddress")}
+    if not private_addresses or host not in private_addresses | {metadata.get("dnsName")}:
+        raise ValueError("--database-host must match this instance's private IP or certificate DNS name")
+
+
+def validate_database_user(users, expected_user):
+    matches = [user for user in users
+               if user.get("name", "").removesuffix(".gserviceaccount.com") == expected_user]
+    if not matches or any(user.get("type") != "CLOUD_IAM_SERVICE_ACCOUNT" for user in matches):
+        raise ValueError("create the worker's CLOUD_IAM_SERVICE_ACCOUNT database user and audit grants before deployment")
+
+
 def apply(steps):
     for step in steps:
-        if "deny_api_permission" in step or "deny_worker_permission" in step:
+        if "validate_database" in step:
+            validate_database(json.loads(run(step["inspect"]).stdout), step["validate_database"]["host"])
+        elif "validate_database_user" in step:
+            validate_database_user(json.loads(run(step["inspect"]).stdout), step["validate_database_user"])
+        elif "deny_api_permission" in step or "deny_worker_permission" in step:
             result = json.loads(run(step["inspect"]).stdout)
             # An unknown result is not evidence of isolation, including conditions
             # and ancestor policies the deployment identity cannot read.

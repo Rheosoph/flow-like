@@ -60,8 +60,15 @@ test.skipIf(!adminUrl)("API can append pending records but cannot alter sealed e
     await admin.query('CREATE ROLE cloudsqliamserviceaccount');
     try {
       await admin.query(`GRANT cloudsqliamserviceaccount TO "${apiUrl.username}"`);
+      await admin.query(`GRANT cloudsqliamserviceaccount TO "${workerUrl.username}"`);
       await provisionAuditDatabaseRoles(admin, grantOnly);
+      await worker.query('SET ROLE cloudsqliamserviceaccount');
+      await expect(worker.query('INSERT INTO public."AuditEpoch" (id) VALUES ($1)', ["iam-marker-forgery"])).rejects.toMatchObject({ code: "42501" });
+      await worker.query('RESET ROLE');
       await expect(provisionAuditDatabaseRoles(admin, env)).rejects.toThrow("inherit other roles");
+      // A marker held only by the worker must receive the same privilege checks.
+      await admin.query(`REVOKE cloudsqliamserviceaccount FROM "${apiUrl.username}"`);
+      await provisionAuditDatabaseRoles(admin, grantOnly);
       // NOINHERIT does not prevent SET ROLE. Inspect the marker itself too.
       await admin.query('GRANT UPDATE ON "AuditEpoch" TO cloudsqliamserviceaccount');
       await expect(provisionAuditDatabaseRoles(admin, grantOnly)).rejects.toThrow("Inherited audit write privileges");
@@ -70,6 +77,7 @@ test.skipIf(!adminUrl)("API can append pending records but cannot alter sealed e
       await expect(provisionAuditDatabaseRoles(admin, grantOnly)).rejects.toThrow("Inherited database ownership or DDL privileges");
     } finally {
       await admin.query(`REVOKE cloudsqliamserviceaccount FROM "${apiUrl.username}"`);
+      await admin.query(`REVOKE cloudsqliamserviceaccount FROM "${workerUrl.username}"`);
       await admin.query('DROP OWNED BY cloudsqliamserviceaccount');
       await admin.query('DROP ROLE cloudsqliamserviceaccount');
     }

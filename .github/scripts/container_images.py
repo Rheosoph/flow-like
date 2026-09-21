@@ -82,7 +82,7 @@ TARGETS = tuple(sorted([
     target("aws", "event-bridge", "linux/arm64"),
     target("aws", "maintenance", "linux/arm64"),
     target("aws", "audit-worker", "linux/arm64"),
-    *[target(cloud, "audit-worker", recipe="apps/backend/audit-worker/Dockerfile", audit_features=cloud)
+    *[target(cloud, "audit-worker", audit_features=cloud)
       for cloud in ("azure", "gcp")],
     *[target("docker-compose", "audit-worker", f"linux/{architecture}", architecture_id=True,
              recipe="apps/backend/audit-worker/Dockerfile", image_suffix="flow-like-audit-worker", audit_features="aws,azure,gcp")
@@ -150,6 +150,10 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
     if entry["audit_features"]:
         build_inputs["audit_features"] = entry["audit_features"]
         build_inputs["runtime_config"] = "audit-worker-env-v1"
+    if entry["workload"] == "audit-worker" and entry["cloud"] in ("azure", "gcp"):
+        launcher = REPOSITORY_ROOT / f"apps/backend/{entry['cloud']}/audit-worker/entrypoint.py"
+        build_inputs["entrypoint_sha256"] = hashlib.sha256(launcher.read_bytes()).hexdigest()
+        build_inputs["database_auth"] = "entra-managed-identity" if entry["cloud"] == "azure" else "cloud-sql-iam"
     if api:
         build_inputs["runtime_config"] = "full-document-v1"
     if api and entry["cloud"] not in SELF_HOSTED_CLOUDS:

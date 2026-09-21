@@ -65,7 +65,7 @@ export async function provisionAuditDatabaseRoles(client: Client, env = process.
       ) SELECT r.* FROM inherited i JOIN pg_catalog.pg_roles r ON r.oid = i.oid`, [role.user]);
       // Cloud SQL uses these non-group system roles to recognize IAM logins.
       // Inspect their effective rights below; their names alone do not establish isolation.
-      const allowedMemberships = grantsOnly && !cockroach && role.user === api.user
+      const allowedMemberships = grantsOnly && !cockroach
         && memberships.rows.every(parent => ["cloudsqliamserviceaccount", "cloudsqliamuser"].includes(parent.rolname)
           && !["rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication", "rolbypassrls"].some(key => parent[key] === true));
       if (allowedMemberships) for (const parent of memberships.rows) authenticationRoles.add(parent.rolname);
