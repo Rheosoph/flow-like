@@ -42,8 +42,9 @@ Flow-Like host services for data a node legitimately needs.
 ## Per-node permissions
 
 Each node exports its own permission labels. The loader converts those labels
-to runtime capabilities, then layers the package's memory and timeout limits on
-top.
+to runtime capabilities. The desktop loader for installed packages then layers
+the package's memory and timeout limits and its `allowed_hosts` list on top.
+The manifest cannot add or remove capabilities.
 
 | Permission | Protected capability |
 | --- | --- |
@@ -54,6 +55,8 @@ top.
 | `network:dns` | DNS lookups |
 | `storage:read` | Read through Flow-Like storage host functions |
 | `storage:write` | Write and delete through storage host functions |
+| `database:read` | Read from wired database and SQL session pins |
+| `database:write` | Modify rows through wired database pins |
 | `variables` | Read and write flow variables |
 | `cache` | Read and write execution cache |
 | `streaming` | Emit streaming output |
@@ -64,7 +67,9 @@ top.
 
 There are no current `storage:node` or `storage:user` node-permission labels.
 Storage scope is represented by the `FlowPath` values provided to the node and
-the credentials behind the host service.
+the credentials behind the host service. The sandbox gates the node, user,
+upload, and cache directories on one storage capability, so the store lists all
+four for a package whose nodes declare `storage:read` or `storage:write`.
 
 A node with no declared permissions receives none of the protected Flow-Like
 capabilities in this table. It can still read its input pins, write outputs,
@@ -77,10 +82,15 @@ operation. Component Model nodes also receive WASI interfaces. In the current
 linker, any network capability enables the WASI networking context, while
 specific Flow-Like network host functions still check their capability.
 
-Package-level `allowed_hosts` is not merged into the per-node execution
-configuration by the current installed-package loader. Do not describe it as an
-effective execution-time allowlist. Apply network egress restrictions at the
-executor or cluster boundary when destinations must be constrained.
+The desktop loader for installed packages copies the manifest's
+`allowed_hosts` into each node's execution configuration. The list is checked
+for WebSocket connects and for WASI sockets, where the destination IP address
+is compared with it. A non-empty list also keeps the standard `wasi:http`
+interface from being linked. The Flow-Like HTTP host function does not consult
+the list today, and the server executor applies neither `allowed_hosts` nor the
+manifest's resource tiers. Do not describe `allowed_hosts` as a complete
+execution-time allowlist. Apply network egress restrictions at the executor or
+cluster boundary when destinations must be constrained.
 
 ## Declare only required permissions
 
@@ -114,9 +124,11 @@ node.addPermission("network:http");
 Do not request capabilities “just in case.” The UI displays the union of
 permissions used by each package's nodes in the board.
 
-Package-level resource declarations remain in `flow-like.toml`. See the
+Resource tiers, the host allowlist, and OAuth scopes remain in
+`flow-like.toml`. Capability flags are not authored there; the registry derives
+the store's capability listing from the node definitions. See the
 [manifest reference](/dev/wasm-nodes/manifest/) for the exact division between
-manifest limits and node permissions.
+manifest settings and node permissions.
 
 ## Consent before execution
 

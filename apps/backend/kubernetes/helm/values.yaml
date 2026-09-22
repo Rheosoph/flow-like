@@ -372,9 +372,18 @@ storage:
 # Audit Trail
 # =============================================================================
 # A separate worker seals, signs, archives and prunes. API pods only ingest and
-# verify records. Disabling this Deployment stops sealing and signing.
+# verify records. Disabling this Deployment stops sealing and signing. The worker
+# takes its audit policy from the API's hub config (api.runtimeConfig) and, like
+# the API, waits for the database migration Job before starting.
 audit:
   worker: true
+  # Keeps the Deployment: the worker logs, exits before taking its lease and is
+  # restarted by the kubelet. Nothing is sealed or archived while paused; grants
+  # and credentials are untouched.
+  paused: false
+  # Database login of the API. The worker verifies at startup that this role can
+  # no longer alter evidence. scripts/setup-config.py fills it from API_DATABASE_URL.
+  apiDatabaseRole: flowlike_api
   image:
     repository: ghcr.io/rheosoph/flow-like-audit-worker
     tag: dev
@@ -386,10 +395,6 @@ audit:
   exportSecret: ""
   database:
     existingSecret: ""
-  runtimeConfig:
-    existingSecret: ""
-    existingConfigMap: ""
-    key: audit.config.json
   serviceAccount:
     annotations: {}
   podAnnotations: {}
@@ -630,13 +635,7 @@ ingress:
   #       - path: /frontend
   #         pathType: Prefix
   #         service: api
-  #       - path: /c
-  #         pathType: Prefix
-  #         service: web
-  #       - path: /f
-  #         pathType: Prefix
-  #         service: web
-  #       - path: /u
+  #       - path: /a
   #         pathType: Prefix
   #         service: web
   #       - path: /r

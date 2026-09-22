@@ -1393,6 +1393,8 @@
 	"modules": "モジュール",
 	"modulesGroupLessonsReorderViaThePositionField": "モジュールはレッスンをグループ化します。位置フィールドで並べ替えできます。",
 	"modulesLessons": "モジュールとレッスン",
+	"monetization": "",
+	"monetizationNavDescription": "",
 	"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml": "モノレポ構成: node/ + widgets/をルートの mise.toml で統合。",
 	"more": "もっと見る",
 	"moreActions": "その他のアクション",

@@ -9,7 +9,7 @@ Flow-Like Desktop separates packages into three related scopes:
 
 | Scope | Where to manage it | Purpose |
 | --- | --- | --- |
-| Registry | **Explore → Packages** | Discover package versions and inspect their declared capabilities |
+| Registry | **Explore → Packages** | Discover package versions and inspect their listed capabilities |
 | Device | **Library → Packages** | Manage packages installed on this computer |
 | App | Open an App → **Packages** | Declare the package versions that belong to that App |
 
@@ -72,7 +72,7 @@ Installed Packages list:
 1. Open the project's **Publish to Registry** action.
 2. Confirm the package ID and version.
 3. Review the manifest metadata.
-4. Review resource tiers and permissions.
+4. Review the resource tiers and allowed hosts.
 5. Build and publish the release artifact.
 
 The publisher checks package-ID and version availability, locates the release
@@ -80,16 +80,25 @@ WASM artifact, uploads it, and creates the registry version. A new package is
 published privately first. Manage its metadata and request publication review
 from its registry detail page when it is ready.
 
-Declared permissions currently cover:
+The manifest (`flow-like.toml`) authors only what a node cannot state in code:
 
 - memory and execution-time tiers;
-- HTTP, WebSocket, TCP, UDP, and DNS access, including allowed HTTP hosts;
-- node-scoped and user-scoped storage;
-- OAuth scopes;
-- variables, cache, streaming, A2UI, and model capabilities.
+- `allowed_hosts`, a package-wide outbound host allowlist;
+- OAuth scopes, each with provider, scopes, reason, and whether it is required.
 
-Request only the capabilities the nodes actually use. Package consumers see
-this declaration before installation.
+Capabilities are not authored in the manifest. Each node declares its own
+permissions in code: HTTP, WebSocket, TCP, UDP, and DNS access, storage read
+and write, database read and write, variables, cache, streaming, models, A2UI,
+OAuth, and functions. The sandbox grants each node exactly what it declares.
+The registry derives the capability listing shown in the store from the
+compiled node definitions and replaces capability flags authored in a
+manifest. When a developer project is loaded, Desktop derives the same listing
+and logs a warning for every authored flag that no node backs.
+
+Declare only the permissions each node actually uses. Package consumers see
+the tiers, allowed hosts, OAuth scopes, and derived capabilities before
+installation. See [Package Manifest](/dev/wasm-nodes/manifest/) for where
+`allowed_hosts` is enforced.
 
 ## Publication states
 

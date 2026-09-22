@@ -76,9 +76,9 @@ roll out the same web image. Supply public HTTP(S) URLs without credentials,
 queries or fragments. See [Runtime web configuration](/self-hosting/containers/#runtime-web-configuration)
 for the separate static-metadata and third-party OAuth relay limits.
 
-`api.frontendBaseUrl` points hosted Event shortlinks to the same web deployment.
-Setup derives it from `PUBLIC_WEB_URL`, defaulting to `http://localhost:3001`.
-When API and web share an origin, route `/c`, `/f` and `/u` to web and
+`api.frontendBaseUrl` points hosted App links (`/a/<app-id>/<route>`) to the
+same web deployment. Setup derives it from `PUBLIC_WEB_URL`, defaulting to
+`http://localhost:3001`. When API and web share an origin, route `/a` to web and
 `/frontend` to API. See [Hosted frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
 for the static rewrites and existing login callback.
 

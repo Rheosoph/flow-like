@@ -433,7 +433,9 @@ host compromise with storage and retained copies administered elsewhere.
    migration directory. Use the migration owner connection.
 3. Provision distinct API and worker database roles. The deployment migration applies
    `apps/backend/shared/audit_database_roles.ts` after creating the schema. Existing
-   owner or administrative roles are rejected for either runtime identity.
+   owner or administrative roles are rejected for either runtime identity. On Aurora
+   DSQL, run the migration job once with `DSQL_AUDIT_ROLE_ARN` set to the worker's IAM
+   role; see [the DSQL audit worker role](/self-hosting/aws/database/#audit-worker-role).
 4. Preserve the entry key during the switch. Give the worker its signing authority,
    audit bucket identity and audit-only configuration. Give the API the public keys
    in `AUDIT_VERIFYING_KEYS`; remove its access to worker secrets and cloud roles.

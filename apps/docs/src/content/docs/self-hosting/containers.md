@@ -164,10 +164,11 @@ relay or its provider registrations.
 
 ## Host chat, form and page frontends
 
-The existing `apps/web` application includes the hosted chat, form and custom
-page routes. Deploy the normal Compose or Kubernetes `web` image, or publish
-the normal web static export. The browser resolves Event IDs and aliases through
-the API at runtime, so publishing an Event does not require another web build.
+The existing `apps/web` application includes the hosted App route
+`/a/<app-id>/<route>`, which serves the chat, form or custom page published on
+that route. Deploy the normal Compose or Kubernetes `web` image, or publish the
+normal web static export. The browser resolves routes through the API at
+runtime, so publishing an Event does not require another web build.
 
 Container images use the [runtime web settings](#runtime-web-configuration)
 above. For a static host, build the web application from a checkout with the
@@ -198,10 +199,10 @@ Keep the web origin in the API's `CORS_ALLOWED_ORIGINS`, preserving desktop and
 other application origins. Helm uses `api.corsAllowedOrigins`. Hosted frontends
 use the web application's existing OpenID client and `/callback` route. Keep
 the deployed callback registered with that identity provider. No separate
-OpenID application or callback is needed for `/c`, `/f` or `/u`.
+OpenID application or callback is needed for `/a`.
 
 Hosting starts disabled. Enabling it requires sign-in by default: the web
-application uses its normal login and returns to the original Event link.
+application uses its normal login and returns to the original App route.
 **Allow anonymous access** is a separate opt-in with a confirmation warning
 that anyone with the link can execute workflows and the App owner pays for
 usage. Disabling hosting clears that choice in the editor. Save the Event to
@@ -228,15 +229,16 @@ preserving the requested browser URL and query string:
 
 | Web host request | Export file |
 | --- | --- |
-| `/c/<alias-or-event-id>` | `/c.html` |
-| `/f/<alias-or-event-id>` | `/f.html` |
-| `/u/<alias-or-event-id>` | `/u.html` |
+| `/a/<app-id>/<route>` | `/a.html` |
 | `/use/<app-route>?id=<app-id>` | `/use.html` |
 | `/callback` | `/callback.html` |
 
-The query form, such as `/c?event=support`, also works when the host resolves
-`/c` to `/c.html`. Configure clean URLs for the exported pages. An `index.html`
-fallback alone does not load the requested interface entry point.
+The query form, such as `/a?app=<app-id>&route=/orders`, also works when the
+host resolves `/a` to `/a.html`. Configure clean URLs for the exported pages.
+An `index.html` fallback alone does not load the requested interface entry
+point. On Cloudflare Pages, rewrite `/a/*` to `/a`, never to `/a.html`: Pages
+answers a `.html` target with a redirect to the clean path, which drops the
+route.
 
 App routes also need the `/use/*` rewrite for direct links
 such as `/use/orders/123?id=my-app`. Serve existing exported files first, including
@@ -247,17 +249,16 @@ event-only links remain `/use?id=my-app&eventId=event`. Legacy
 web application through browser history replacement. Desktop uses the same
 path format and resolves deep links through its bundled assets.
 
-With **separate API and web origins**, the API's `/c/*`, `/f/*` and `/u/*`
-shortlinks redirect to the same paths on the web origin. Forward those API
-shortlinks to the API along with `/frontend/*`, `/api/v1/*`, `/r/*` and `/m/*`.
-The bundled Compose API proxy and default Helm API ingress already forward
-every API path.
+With **separate API and web origins**, the API's `/a/*` shortlinks redirect to
+the same path on the web origin. Forward those API shortlinks to the API along
+with `/frontend/*`, `/api/v1/*`, `/r/*` and `/m/*`. The bundled Compose API
+proxy and default Helm API ingress already forward every API path.
 
-With **one shared origin**, route `/c`, `/f`, `/u` and `/use`, including their
-subpaths, directly to the **web** service. Route `/frontend/*`, `/api/v1/*`, `/r/*` and
+With **one shared origin**, route `/a` and `/use`, including their subpaths,
+directly to the **web** service. Route `/frontend/*`, `/api/v1/*`, `/r/*` and
 `/m/*` to the **API** service. The Helm values include this path-based example.
-Sending the shared origin's `/c/*`, `/f/*` or `/u/*` paths to the API would
-redirect them back to themselves.
+Sending the shared origin's `/a/*` paths to the API would redirect them back to
+themselves.
 
 For API requests, preserve `Authorization`, `X-Flow-Like-Session`, query strings
 and request bodies, allow CORS preflight requests, disable response caching,
@@ -265,12 +266,13 @@ and stream execution responses without proxy buffering. An edge that replaces
 `Authorization` with its origin signature must preserve the viewer token using
 the existing `X-Flow-Like-Authorization` contract.
 
-After deployment, open a saved Event's direct link in a fresh browser session
-and submit a form or send a chat message. Test a sign-in-protected Event and
+After deployment, open a published route's link in a fresh browser session
+and submit a form or send a chat message. Test a sign-in-protected route and
 confirm the normal callback returns to it. A `503` mentioning
 `FRONTEND_BASE_URL` means the API shortlink destination is missing or invalid.
-A disabled, inactive, Local or Internal Event returns `404` from the hosted API;
-the web host may still serve the static entry page that displays that error.
+A route with no Event, or whose Event is not published, inactive, Local or
+Internal, returns `404` from the hosted API; the web host may still serve the
+static entry page that displays that error.
 
 ## Tags and visibility
 

@@ -19,7 +19,8 @@ Two components talk to the database at runtime: the API
 [ECS](/self-hosting/aws/ecs-api/)) and the file tracker Lambda
 (`apps/backend/aws/file-tracker`). A third component, the migration job
 (`apps/backend/aws/migration`), is a one-off ECS Fargate task that applies the
-committed migrations and grants the runtime role.
+committed migrations, maps and grants the runtime role and applies the audit
+privilege boundary.
 
 ## Environment contract
 
@@ -35,8 +36,10 @@ before. All three components share the same validation
 | `DSQL_USER` | database role, default `admin`; production uses `flow_like_api` | always `admin` |
 | `DSQL_TOKEN_DURATION_SECS` | token lifetime, default `3600` (1800–604800) | fixed `900`, minted per connection |
 | `DSQL_MAX_CONNECTIONS` | pool size, default `4` (`32` for the ECS API) | n/a |
-| `DSQL_RUNTIME_ROLE_ARN` | n/a | optional, the Lambdas' IAM role ARN; unset skips the grant step with a warning |
+| `DSQL_RUNTIME_ROLE_ARNS` | n/a | optional, comma-separated IAM role ARNs of the API and file-tracker Lambdas, all mapped to `DSQL_RUNTIME_DB_ROLE` in one run; unset skips the mapping with a warning |
 | `DSQL_RUNTIME_DB_ROLE` | n/a | optional, default `flow_like_api` |
+| `DSQL_AUDIT_ROLE_ARN` | n/a | optional, the audit worker Lambda's IAM role ARN; must not appear in `DSQL_RUNTIME_ROLE_ARNS` |
+| `DSQL_AUDIT_DB_ROLE` | n/a | optional, default `flow_like_audit_worker`; must differ from `DSQL_RUNTIME_DB_ROLE` |
 | `DSQL_MIGRATIONS_DIR` | n/a | optional, default `prisma/migrations-dsql` (what the image ships) |
 | `DSQL_SCHEMA_DIR` | n/a | optional, default `prisma/schema`; a checkout requires the generated PostgreSQL mirror |
 | `DSQL_JOB_WAIT_TIMEOUT_SECS` | n/a | optional, default `7200` (60–86400), budget per wait on `sys.jobs` |
@@ -118,19 +121,31 @@ owns `public`; the Lambdas need only the grants below.
 ## One-time grant
 
 The migration job performs this step itself, idempotently, on every run that
-has `DSQL_RUNTIME_ROLE_ARN` set (the runtime role; `DSQL_RUNTIME_DB_ROLE` is
-the database role). Without it - a development cluster that has no runtime
-role yet - the job applies the schema and logs a warning instead. For
-reference, or to run it by hand as `admin`:
+has `DSQL_RUNTIME_ROLE_ARNS` set: a comma-separated list of every IAM role that
+logs in as the runtime database role (`DSQL_RUNTIME_DB_ROLE`), which is the
+API Lambda's role and the file tracker's when the two differ. One run creates
+the database role, maps each listed ARN with `AWS IAM GRANT`, then reconciles
+the grants once. Without the list - a development cluster that has no runtime
+role yet - the job applies the schema and logs a warning instead; when the
+role already exists it still reconciles the grants. For reference, or to run
+it by hand as `admin`:
 
 ```sql
 CREATE ROLE flow_like_api WITH LOGIN;
-AWS IAM GRANT flow_like_api TO 'arn:aws:iam::<account>:role/<runtime-role>';
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO flow_like_api;
+AWS IAM GRANT flow_like_api TO 'arn:aws:iam::<account>:role/<api-role>';
+AWS IAM GRANT flow_like_api TO 'arn:aws:iam::<account>:role/<file-tracker-role>';
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO flow_like_api;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO flow_like_api;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO flow_like_api;
+-- plus, for every table except the audit evidence tables:
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public."<table>" TO flow_like_api;
 ```
+
+The job grants table by table, never `ON ALL TABLES`, so the audit evidence
+tables stay out of the runtime role's grant. It probes `has_table_privilege`
+first and emits only what is missing: a rerun on an up-to-date cluster changes
+nothing. Every `GRANT` and `REVOKE` on DSQL is a catalog change, and a warm
+API session sees one `OC001` on its next statement after each one.
 
 The role inherits `USAGE` on `public` through `PUBLIC`. DSQL rejects
 `GRANT USAGE ON SCHEMA public` because `public` is a system schema. The
@@ -140,6 +155,51 @@ if it is missing.
 
 Check the mapping with `SELECT * FROM sys.iam_pg_role_mappings;`. The Lambdas
 then run with `DSQL_USER=flow_like_api`.
+
+### Audit worker role
+
+The audit worker Lambda connects as its own database role with its own IAM
+role. Run the migration job once with `DSQL_AUDIT_ROLE_ARN` set to that IAM
+role: it creates `flow_like_audit_worker` and maps it. The job refuses an IAM
+role that is already mapped to `flow_like_api`, and an ARN that also appears
+in `DSQL_RUNTIME_ROLE_ARNS`, because that identity could log in as either
+role. The worker then runs with `DSQL_USER=flow_like_audit_worker`.
+
+Once that role exists, every migration run applies the audit privilege
+boundary, with or without a role ARN. Admin's default privileges give
+`flow_like_api` full access to every table a migration creates, so the job
+removes it again at the end of each run. Like the runtime grant this is
+drift-only: the worker's grants are reconciled first, then the API's, and a
+run that finds the catalog already correct emits no statement.
+
+| Role | Audit tables |
+| --- | --- |
+| `flow_like_audit_worker` | `SELECT, INSERT, UPDATE, DELETE` on the evidence tables (`AuditEntry`, `AuditRecord`, `AuditSeal`, `AuditEpoch`, `AuditWatermark`, `AuditArchive`, `AuditHeldChain`, `AuditWorkerLease`), `SELECT, UPDATE` on `AuditExportTarget`, `SELECT` on `AiActAssessment` |
+| `flow_like_api` | `SELECT` on the evidence tables except `AuditWorkerLease` (none), plus `INSERT` on `AuditRecord` |
+
+The job checks the result with `has_table_privilege` and fails if
+`flow_like_api` can still write evidence or if `flow_like_audit_worker` holds
+any privilege on a table outside the audit tables. Only the privileges DSQL
+knows are ever named (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `REFERENCES`);
+DSQL rejects a `REVOKE` that names `TRUNCATE` or `TRIGGER`. PostgreSQL
+deployments also withhold
+the `sealId` column from the API's `INSERT`. On DSQL every `GRANT` and `REVOKE`
+is its own DDL transaction, and swapping the table grant for a column grant
+would reject record inserts in between, so the API keeps table-level `INSERT`.
+A record inserted with an invented `sealId` fails verification.
+
+When the check passes, the job prints one stable line after its descriptive
+summary:
+
+```
+[aws-migration] AUDIT_BOUNDARY_VERIFIED api=flow_like_api worker=flow_like_audit_worker
+```
+
+The two values are the configured `DSQL_RUNTIME_DB_ROLE` and
+`DSQL_AUDIT_DB_ROLE`. A pipeline greps the task log for
+`AUDIT_BOUNDARY_VERIFIED` as the machine-readable proof that the boundary is
+in effect. The line is never printed while the worker role does not exist, and
+a failed check exits `1` without it.
 
 ## Applying migrations
 
@@ -159,7 +219,7 @@ aws ecs run-task \
   --launch-type FARGATE \
   --task-definition flow-like-aws-migration \
   --network-configuration 'awsvpcConfiguration={subnets=[<subnet-id>],securityGroups=[<security-group-id>],assignPublicIp=ENABLED}' \
-  --overrides '{"containerOverrides":[{"name":"migration","environment":[{"name":"DSQL_CLUSTER_ENDPOINT","value":"<id>.dsql.<region>.on.aws"},{"name":"DSQL_RUNTIME_ROLE_ARN","value":"arn:aws:iam::<account>:role/<runtime-role>"}]}]}'
+  --overrides '{"containerOverrides":[{"name":"migration","environment":[{"name":"DSQL_CLUSTER_ENDPOINT","value":"<id>.dsql.<region>.on.aws"},{"name":"DSQL_RUNTIME_ROLE_ARNS","value":"arn:aws:iam::<account>:role/<api-role>,arn:aws:iam::<account>:role/<file-tracker-role>"}]}]}'
 ```
 
 The same image runs from a workstation whose AWS credentials hold
@@ -171,7 +231,7 @@ docker run --rm \
   -e AWS_REGION=<region> \
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
   -e DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
-  -e DSQL_RUNTIME_ROLE_ARN=arn:aws:iam::<account>:role/<runtime-role> \
+  -e DSQL_RUNTIME_ROLE_ARNS=arn:aws:iam::<account>:role/<api-role>,arn:aws:iam::<account>:role/<file-tracker-role> \
   flow-like-aws-migration
 ```
 
@@ -184,13 +244,14 @@ while it is present):
 
 ```sh
 DSQL_CLUSTER_ENDPOINT=<id>.dsql.<region>.on.aws \
-DSQL_RUNTIME_ROLE_ARN=arn:aws:iam::<account>:role/<runtime-role> \
+DSQL_RUNTIME_ROLE_ARNS=arn:aws:iam::<account>:role/<api-role>,arn:aws:iam::<account>:role/<file-tracker-role> \
 mise run db:dsql:migrate
 ```
 
-Leave `DSQL_RUNTIME_ROLE_ARN` out on a development cluster that has no
-runtime role yet; the job applies the schema and skips the grant with a
-warning.
+Leave `DSQL_RUNTIME_ROLE_ARNS` out on a development cluster that has no
+runtime role yet; the job applies the schema and skips the mapping with a
+warning. When the API and file tracker share one IAM role, the list has one
+entry.
 
 The job takes a 30-minute lease in `_flow_migration_lock` (a second concurrent
 run exits `3`), first waits for any `sys.jobs` entry still running from an
@@ -203,12 +264,13 @@ that is still building. A statement that hits an OCC conflict is retried, and
 an "already exists" on the retry counts as applied. Once every statement is
 committed the row gets `applied_steps_count = 1`; `finished_at` is set only
 after the migration's async jobs have completed. Before verifying `pg_index`
-and `pg_constraint` the job drains `sys.jobs` once more, then grants the
-runtime role and finishes with `prisma migrate status` against
-`_prisma_migrations`. A run that dies while waiting (SIGKILL, the
-`DSQL_JOB_WAIT_TIMEOUT_SECS` budget) leaves a row with `applied_steps_count =
-1` and no `finished_at`; the next run waits for the jobs and finishes it. Only
-a row with `logs` set - a failed statement or a failed job - needs a human.
+and `pg_constraint` the job drains `sys.jobs` once more, then maps and grants
+the runtime role, applies the audit privilege boundary and finishes with
+`prisma migrate status` against `_prisma_migrations`. A run that dies while
+waiting (SIGKILL, the `DSQL_JOB_WAIT_TIMEOUT_SECS` budget) leaves a row with
+`applied_steps_count = 1` and no `finished_at`; the next run waits for the
+jobs and finishes it. Only a row with `logs` set - a failed statement or a
+failed job - needs a human.
 The job does not use `prisma migrate deploy`: Prisma sends a migration file as
 one batch, which PostgreSQL runs in one implicit transaction and DSQL rejects.
 See [migration recovery](#migration-recovery) if the run fails.
@@ -217,15 +279,11 @@ Run the job before deploying a Lambda revision that needs the new schema;
 sessions opened before a schema change see one `OC001` conflict on their next
 statement, which the API's transaction retry absorbs.
 
-When the API and file tracker use separate IAM roles, run the migration job
-once with each `DSQL_RUNTIME_ROLE_ARN` and the same `DSQL_RUNTIME_DB_ROLE`.
-Later runs retain the applied migration history and grant the additional role.
-
 ### Migration recovery
 
 | Exit code | Meaning and next step |
 | --- | --- |
-| `0` | Migrations, async jobs, grants, and the final status check succeeded, or the schema was already up to date |
+| `0` | Migrations, async jobs, grants, the audit boundary (once the worker role exists) and the final status check succeeded, or the schema was already up to date |
 | `1` | Inspect the log for a token, statement, async job, catalog, grant, status-check, or wait-timeout failure |
 | `2` | Correct the rejected environment setting before retrying |
 | `3` | Another migration holds the lease; wait for that run to finish or for its lease to expire |

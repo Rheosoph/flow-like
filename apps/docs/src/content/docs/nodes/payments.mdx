@@ -67,7 +67,7 @@ requires a collected or saved shipping address.
 **Timeout** is a requested number of seconds. The server shortens it when the remaining run quota
 requires an earlier deadline. Wire all four execution outputs:
 
-- **paid**: the server accepted this captured payment for the active run.
+- **paid**: the server accepted this captured payment, including a saved result reused by its idempotency key.
 - **canceled**: the payer declined, the run ended, or payment admission was revoked.
 - **expired**: the payment request deadline passed.
 - **failed**: the node could not request or verify a result. Inspect **Reason**.
@@ -79,6 +79,28 @@ remain pending while the payment provider processes them.
 
 The node appears in FlowScript as `payments::request`. Keep it outside cached functions so a saved
 function result cannot skip the payer interaction.
+
+## Retry a workflow without charging again
+
+Set **Idempotency Key** to a stable identifier for one purchase, such as `order-4821`.
+Pass the same value when restarting the workflow. Once the request has finished, the node
+immediately follows its saved **paid**, **canceled**, **expired**, or **failed** branch, with the
+same **Payment ID** and **Reason**. It does not open another payment prompt or charge again.
+
+Keys are scoped to the signed-in payer, app, board, Event, and payment node, within the deployment's
+payment account and test or live mode. Keep those identifiers and the key unchanged across retries.
+Each new purchase needs a new key. Leaving the input empty preserves the behavior of creating a
+new request each time the node runs. Keys may contain at most 200 bytes and no control characters;
+leading and trailing spaces are removed.
+
+Keep the amount, currency, product, tax code, shipping countries, description, and reference the
+same for that key. Changing those fields returns **failed** with `PAYMENT_REPLAY_MISMATCH`.
+The timeout may change, but a retry keeps the original request's deadline.
+
+If the original request is still pending, the node checks that request without opening another
+prompt. Settlement remains tied to the original run. An ended run can therefore resolve to
+**canceled** or **expired**, and a late capture still follows refund recovery. To request another
+payment after a canceled, expired, or failed result, use a new key.
 
 ## Test without charging
 

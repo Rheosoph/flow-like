@@ -137,10 +137,16 @@ services:
         condition: service_completed_successfully
       object-store-init:
         condition: service_completed_successfully
+    configs:
+      - source: flowlike_runtime_config
+        target: /app/flow-like.config.json
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      FLOW_LIKE_CONFIG_JSON: ${AUDIT_WORKER_CONFIG_JSON:?Generate the audit worker policy from the API config}
+      # The worker takes its audit policy from the same API config source.
+      FLOW_LIKE_CONFIG_PATH: ${FLOW_LIKE_CONFIG_FILE-/app/flow-like.config.json}
+      FLOW_LIKE_CONFIG_JSON: ${FLOW_LIKE_CONFIG_JSON:-}
       DATABASE_URL: ${AUDIT_DATABASE_URL:?Configure the audit worker database URL}
+      AUDIT_API_DATABASE_ROLE: ${AUDIT_API_DATABASE_ROLE:-flowlike_api}
       SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_USE_PATH_STYLE: ${AWS_USE_PATH_STYLE:-true}

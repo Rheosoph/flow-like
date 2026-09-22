@@ -1447,6 +1447,8 @@
 	"modules": "Modules",
 	"modulesGroupLessonsReorderViaThePositionField": "Modules group lessons. Reorder via the position field.",
 	"modulesLessons": "Modules & lessons",
+	"monetization": "Monetization",
+	"monetizationNavDescription": "Store sales, flow payments, pricing and payment settings",
 	"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml": "Monorepo layout: node/ + widgets/, orchestrated by a root mise.toml.",
 	"more": "More",
 	"moreActions": "More actions",

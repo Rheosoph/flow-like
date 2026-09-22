@@ -1,4 +1,5 @@
 {
+	"sellerTermsBeforePrice": "",
 	"withdrawPurchase": "계약 철회",
 	"withdrawConfirmation": "철회가 기록되면 이 구매로 얻은 이용 권한이 종료됩니다. 이유를 밝힐 필요는 없습니다.",
 	"withdrawDeclaration": "위에 표시된 구매 계약을 철회합니다.",

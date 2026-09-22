@@ -1398,6 +1398,8 @@
 	"modules": "Module",
 	"modulesGroupLessonsReorderViaThePositionField": "Module Gruppenlektionen. Reorder über das Positionsfeld.",
 	"modulesLessons": "Module & Lektionen",
+	"monetization": "",
+	"monetizationNavDescription": "",
 	"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml": "Monorepo-Layout: node/ + widgets/, orchestriert von einem root mise.toml.",
 	"more": "Mehr",
 	"moreActions": "Weitere Maßnahmen",

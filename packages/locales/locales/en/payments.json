@@ -137,6 +137,7 @@
 	"saveSettings": "Save payment settings",
 	"sellerRefundConfirmation": "Confirm a refund of {{amount}}? This cannot be undone.",
 	"sellerTermsAccepted": "Seller terms accepted.",
+	"sellerTermsBeforePrice": "Accept the current seller terms before you set a price for this app.",
 	"sellerTermsDescription": "Accept the current seller terms before offering this app for sale. Listing price and visibility remain in the app settings.",
 	"sendReport": "Send report and cancel",
 	"setUpStripe": "Set up payments with Stripe",

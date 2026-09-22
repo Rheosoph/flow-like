@@ -1,4 +1,5 @@
 {
+	"sellerTermsBeforePrice": "",
 	"withdrawPurchase": "Desistir del contrato",
 	"withdrawConfirmation": "El acceso de esta compra finalizará cuando se registre el desistimiento. No tiene que indicar un motivo.",
 	"withdrawDeclaration": "Desisto de la compra indicada arriba.",

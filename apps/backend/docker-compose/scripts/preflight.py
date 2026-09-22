@@ -10,7 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_WORKLOADS = {"API_IMAGE": "api", "DB_INIT_IMAGE": "db-init", "WEB_IMAGE": "web", "RUNTIME_IMAGE": "runtime",
@@ -111,9 +111,11 @@ def validate(values, config):
         errors.append("Migration, API and audit worker need distinct database login URLs")
     if worker.get("DATABASE_URL") != values.get("AUDIT_DATABASE_URL"):
         errors.append("audit-worker must use AUDIT_DATABASE_URL")
+    if worker.get("AUDIT_API_DATABASE_ROLE") != unquote(identities[1] or ""):
+        errors.append("AUDIT_API_DATABASE_ROLE must name the DATABASE_URL login; the audit worker verifies that role's privilege boundary at startup")
     if worker.get("BACKEND_KEY"):
         errors.append("audit-worker must not receive BACKEND_KEY")
-    errors.extend(audit_config_errors(values, config, api, worker))
+    errors.extend(audit_config_errors(config, api, worker))
     runtime_sources = ("FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF")
     for key in runtime_sources:
         value = str(api.get(key, ""))
@@ -209,7 +211,7 @@ def validate(values, config):
                 errors.append("Grafana must bind to loopback")
     datastore_mode = values.get("DATASTORE_MODE", "bundled")
     if datastore_mode == "external":
-        if "postgres" in services or "redis" in services or "db-init" in services:
+        if "postgres" in services or "redis" in services:
             errors.append("External datastores require docker-compose.external-datastores.yml")
         for key in ["DATABASE_URL", "MIGRATION_DATABASE_URL", "AUDIT_DATABASE_URL", "REDIS_URL", "RUNTIME_REDIS_URL", "SIGNALING_REDIS_URL", "SINK_REDIS_URL"]:
             endpoint = urlsplit(values.get(key, ""))
@@ -270,29 +272,25 @@ def validate(values, config):
     return errors
 
 
-def audit_config_errors(values, config, api, worker):
+def audit_config_errors(config, api, worker):
+    """The worker reads the API's runtime config document and takes its audit policy."""
+    if api.get("FLOW_LIKE_CONFIG_SECRET_REF"):
+        return ["The dedicated audit worker cannot resolve FLOW_LIKE_CONFIG_SECRET_REF; provide the API config through FLOW_LIKE_RUNTIME_CONFIG_FILE or FLOW_LIKE_CONFIG_JSON"]
+    if worker.get("FLOW_LIKE_CONFIG_JSON", "") != api.get("FLOW_LIKE_CONFIG_JSON", "") or worker.get("FLOW_LIKE_CONFIG_PATH", "") != api.get("FLOW_LIKE_CONFIG_FILE", ""):
+        return ["audit-worker must read the same API runtime config source as the API"]
     try:
-        policy = json.loads(worker.get("FLOW_LIKE_CONFIG_JSON", ""))
-        if not isinstance(policy, dict) or set(policy) != {"audit"} or not isinstance(policy["audit"], dict):
-            return ["AUDIT_WORKER_CONFIG_JSON must contain only an audit object"]
-        if policy["audit"].get("enabled") is False:
-            return ["The dedicated audit worker requires audit to be enabled"]
-        reference = api.get("FLOW_LIKE_CONFIG_SECRET_REF", "")
-        if reference:
-            bound = values.get("AUDIT_WORKER_CONFIG_SECRET_REF", "").strip("'")
-            if bound != reference:
-                return ["A remote API config needs explicit AUDIT_WORKER_CONFIG_JSON and a matching AUDIT_WORKER_CONFIG_SECRET_REF"]
-            return []
         if api.get("FLOW_LIKE_CONFIG_JSON"):
             source = json.loads(api["FLOW_LIKE_CONFIG_JSON"])
         elif api.get("FLOW_LIKE_CONFIG_FILE") == "/app/flow-like.config.json":
             source = json.loads(Path(config["configs"]["flowlike_runtime_config"]["file"]).read_text())
         else:
-            return ["Cannot compare the API and worker audit policies; use the mounted API config, JSON or a bound remote config"]
-        if not isinstance(source, dict) or policy["audit"] != source.get("audit", {}):
-            return ["AUDIT_WORKER_CONFIG_JSON differs from the API audit policy; regenerate the worker policy before deployment"]
+            return ["The dedicated audit worker needs the mounted API config or FLOW_LIKE_CONFIG_JSON; the embedded fallback carries no audit policy"]
     except (ValueError, TypeError, KeyError, OSError):
-        return ["Cannot read the API/worker audit JSON policy"]
+        return ["Cannot read the API runtime config JSON"]
+    if not isinstance(source, dict) or not isinstance(source.get("audit", {}), dict):
+        return ["The API runtime config must be a JSON object whose audit entry is an object"]
+    if source.get("audit", {}).get("enabled") is False:
+        return ["The dedicated audit worker requires audit to be enabled"]
     return []
 
 

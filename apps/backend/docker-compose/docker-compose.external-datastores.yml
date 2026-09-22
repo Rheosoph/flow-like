@@ -1,22 +1,18 @@
 # Configure DATABASE_URL, MIGRATION_DATABASE_URL, AUDIT_DATABASE_URL and Redis URLs.
-# Apply schema updates explicitly: docker compose run --rm db-init.
+# db-init runs on every `up`: it re-applies the schema and the audit privilege
+# boundary before the API and the audit worker start.
 services:
   postgres:
     profiles: [disabled-bundled-datastores]
   redis:
     profiles: [disabled-bundled-datastores]
   db-init:
-    profiles: [migration]
     depends_on: !reset {}
     networks: !override [app]
   api:
     depends_on:
       postgres: !reset null
       redis: !reset null
-      db-init: !reset null
-  audit-worker:
-    depends_on:
-      db-init: !reset null
   signaling:
     depends_on:
       redis: !reset null

@@ -39,15 +39,19 @@ Open a package to review:
 - **Overview** — description, README, author, links, usage, and publication
   information supplied by the maintainer.
 - **Nodes** — the nodes exported by the package.
-- **Permissions** — declared resource limits and host capabilities.
+- **Permissions** — resource tiers, allowed hosts, and OAuth scopes from the
+  manifest, and the capabilities derived from the package's nodes.
 - **Versions** — available, installed, yanked, disabled, or review versions.
 - **Reviews** — user reviews and ratings.
 
-Permissions can include network access, scoped storage, OAuth scopes, runtime
-variables, cache, streaming, A2UI, or model access. Network declarations can
-also constrain allowed hosts and protocol families. Requesting a permission
-does not mean the package should receive it blindly—compare the declaration
-with what the nodes are supposed to do.
+Capabilities can include network access, storage, database access, runtime
+variables, cache, streaming, A2UI, or model access. Authors do not enter them
+in the manifest: each node declares its permissions in code, the sandbox
+enforces them per node, and the registry derives this listing from the compiled
+node definitions. The manifest adds the memory and timeout tiers, a
+package-wide allowed-host list, and OAuth scopes with their reasons. A listed
+capability does not mean the package should receive it blindly—compare the
+listing with what the nodes are supposed to do.
 
 :::caution[Verification is not a security warranty]
 A verified badge records registry review state. It does not make third-party

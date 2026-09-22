@@ -1435,6 +1435,8 @@
 	"modules": "Módulos",
 	"modulesGroupLessonsReorderViaThePositionField": "Los módulos agrupan lecciones. Reordénalos con el campo de posición.",
 	"modulesLessons": "Módulos y lecciones",
+	"monetization": "",
+	"monetizationNavDescription": "",
 	"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml": "Estructura de monorepo: node/ + widgets/, orquestada por un mise.toml raíz.",
 	"more": "Más",
 	"moreActions": "Más acciones",

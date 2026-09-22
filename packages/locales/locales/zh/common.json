@@ -1393,6 +1393,8 @@
 	"modules": "模块",
 	"modulesGroupLessonsReorderViaThePositionField": "模块用于对课程分组。可通过位置字段重新排序。",
 	"modulesLessons": "模块和课程",
+	"monetization": "",
+	"monetizationNavDescription": "",
 	"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml": "Monorepo 布局：node/ + widgets/，由根目录的 mise.toml 统一编排。",
 	"more": "更多",
 	"moreActions": "更多操作",

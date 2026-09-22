@@ -13,7 +13,7 @@ Use the desktop app's **Store → Packages** view to search the registry and ope
 
 - package metadata and current status;
 - exported nodes;
-- requested permissions;
+- resource tiers, allowed hosts, OAuth scopes, and the capabilities derived from its nodes;
 - available versions;
 - access or purchase requirements;
 - installation state.
@@ -30,17 +30,17 @@ Open **Library → Packages → Publish**. The current wizard has four steps:
 
 1. **Upload WASM** — select a file with a valid WebAssembly header.
 2. **Manifest** — enter the package ID, name, version, description, license, links, and keywords.
-3. **Permissions** — choose resource tiers and capabilities.
+3. **Permissions** — choose the memory and timeout tiers and the allowed hosts. Capabilities come from the node definitions in the binary.
 4. **Review** — verify the binary and metadata, then submit.
 
-The client uploads the binary and submits a versioned manifest to the registry. The backend hashes the binary, rejects duplicate package versions, extracts node definitions, and prepares a platform artifact when compilation is configured.
+The client uploads the binary and submits a versioned manifest to the registry. The backend hashes the binary, rejects duplicate package versions, extracts node definitions, and prepares a platform artifact when compilation is configured. When compilation succeeds, the registry derives the package's capability listing from the permissions those node definitions declare.
 
 ### Package identity
 
 - Use a stable reverse-domain ID such as `com.example.image-tools`.
 - Increment the semantic version for every published artifact.
 - A package ID and version pair is immutable.
-- Keep the manifest's permissions aligned with the node definitions exported by the binary.
+- Declare capabilities on the nodes, not in the manifest. The manifest authors only the memory and timeout tiers, `allowed_hosts`, and OAuth scopes.
 
 ## Private packages and publication
 
@@ -74,7 +74,7 @@ Status and visibility are different. An active package can still be private.
 | Area | Evidence to check |
 |---|---|
 | Binary | Valid WASM, node extraction, and compilation result |
-| Permissions | Declared capabilities match the implementation and description |
+| Permissions | Node-declared capabilities match the implementation and description |
 | Node contract | Pins, schemas, defaults, and permissions are internally consistent |
 | Metadata | ID, version, description, categories, links, and release notes are accurate |
 | Safety | External hosts, storage access, OAuth scopes, and model access are justified |
@@ -84,23 +84,28 @@ A `verified` flag is registry metadata set by administrators. Treat it as an add
 
 ## Version review behavior
 
-Publishing an update creates a new version record without immediately replacing the package's current active artifact. On approval, the registry promotes the reviewed version and its extracted node definitions. Rejecting the pending version leaves an already-active package version available.
+Publishing an update creates a new version record without immediately replacing the package's current active artifact. On approval, the registry promotes the reviewed version and its extracted node definitions, and derives the capability listing from them again. Rejecting the pending version leaves an already-active package version available.
 
 This separation prevents an unreviewed update from silently changing a public package.
 
 ## Permissions shown to users
 
-The registry can display package-level resource and capability declarations, including:
+The registry displays two kinds of information. The manifest authors the settings a node cannot state in code. The capabilities are derived from the permissions declared by the compiled node definitions, which are the permissions the sandbox enforces per node. Capability flags authored in a manifest are replaced by the derived ones.
 
-| Area | Examples |
-|---|---|
-| Resources | Memory and timeout tier |
-| Network | HTTP, allowed hosts, WebSocket, TCP, UDP, DNS |
-| Storage | Node- or user-scoped storage |
-| Runtime context | Variables, cache, streaming, A2UI |
-| Services | OAuth and model access |
+| Area | Examples | Source |
+|---|---|---|
+| Resources | Memory and timeout tier | Manifest |
+| Allowed hosts | Package-wide outbound host allowlist | Manifest |
+| OAuth scopes | Provider, scopes, reason, required | Manifest |
+| Network | HTTP, WebSocket, TCP, UDP, DNS | Nodes |
+| Storage | Node, user, upload, and cache storage | Nodes |
+| Database | Read and write | Nodes |
+| Runtime context | Variables, cache, streaming, A2UI | Nodes |
+| Services | Model access | Nodes |
 
-Request the smallest useful set. An empty allowed-host list with HTTP enabled means unrestricted hosts, not no hosts.
+A package whose nodes declare `storage:read` or `storage:write` lists all four storage areas, because the sandbox gates them on a single storage capability.
+
+Declare the smallest useful set on each node. An empty allowed-host list means unrestricted hosts, not no hosts. The desktop loader for installed packages applies a non-empty list to WebSocket connects and WASI sockets; the Flow-Like HTTP host function does not consult it, and the server executor does not apply it. See [Package Manifest](/dev/wasm-nodes/manifest/) for details.
 
 ## Package-author checklist
 

@@ -14647,7 +14647,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 6,
         "options": {
           "range": [
-            1e-7,
+            1e-07,
             1.0
           ]
         }
@@ -14947,7 +14947,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
-        "defaultValue": 0.00001,
+        "defaultValue": 1e-05,
         "index": 7
       },
       {
@@ -15831,7 +15831,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 7,
         "options": {
           "range": [
-            1e-7,
+            1e-07,
             1.0
           ]
         }
@@ -15843,7 +15843,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
-        "defaultValue": 1e-6,
+        "defaultValue": 1e-06,
         "index": 8,
         "options": {
           "range": [
@@ -21018,7 +21018,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
-        "defaultValue": 1e-7,
+        "defaultValue": 1e-07,
         "index": 6,
         "options": {
           "range": [
@@ -21038,7 +21038,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 7,
         "options": {
           "range": [
-            1e-6,
+            1e-06,
             10.0
           ]
         }
@@ -21217,7 +21217,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
-        "defaultValue": 1e-7,
+        "defaultValue": 1e-07,
         "index": 7,
         "options": {
           "range": [
@@ -21237,7 +21237,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 8,
         "options": {
           "range": [
-            1e-6,
+            1e-06,
             10.0
           ]
         }
@@ -21554,7 +21554,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
-        "defaultValue": 1e-7,
+        "defaultValue": 1e-07,
         "index": 9,
         "options": {
           "range": [
@@ -21574,7 +21574,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 10,
         "options": {
           "range": [
-            1e-6,
+            1e-06,
             10.0
           ]
         }
@@ -21813,7 +21813,7 @@ export const catalogNodes: CatalogNode[] = [
         "pinType": "Input",
         "dataType": "Float",
         "valueType": "Normal",
-        "defaultValue": 1e-7,
+        "defaultValue": 1e-07,
         "index": 10,
         "options": {
           "range": [
@@ -21833,7 +21833,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 11,
         "options": {
           "range": [
-            1e-6,
+            1e-06,
             10.0
           ]
         }
@@ -23348,7 +23348,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 9,
         "options": {
           "range": [
-            1e-7,
+            1e-07,
             1.0
           ]
         }
@@ -66740,7 +66740,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "include_git",
         "friendlyName": "Include .git",
-        "description": "Include the .git directory (only useful for local stores)",
+        "description": "Copy .git metadata into non-local stores. Local clones always retain their Git metadata.",
         "pinType": "Input",
         "dataType": "Boolean",
         "valueType": "Normal",
@@ -72979,6 +72979,3720 @@ export const catalogNodes: CatalogNode[] = [
         "repo"
       ]
     },
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-abort-local-merge",
+    "packageName": "data",
+    "name": "data_github_abort_local_merge",
+    "friendlyName": "Abort Merge",
+    "description": "Cancel an unfinished merge and restore the pre-merge state. Returns an error when no merge is in progress.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 2,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-add-repo-remote",
+    "packageName": "data",
+    "name": "data_github_add_repo_remote",
+    "friendlyName": "Add Repository Remote",
+    "description": "Add a named HTTPS remote to a local repository without storing credentials.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "remote",
+        "friendlyName": "Remote",
+        "description": "Configured remote name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "origin",
+        "index": 3
+      },
+      {
+        "name": "url",
+        "friendlyName": "URL",
+        "description": "HTTPS repository URL without embedded credentials",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-checkout-local-revision",
+    "packageName": "data",
+    "name": "data_github_checkout_local_revision",
+    "friendlyName": "Checkout Revision",
+    "description": "Check out a commit or tag with detached HEAD. Use Switch Branch to resume work on a local branch.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "revision",
+        "friendlyName": "Revision",
+        "description": "Commit, tag, or revision to check out",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "HEAD",
+        "index": 3
+      },
+      {
+        "name": "require_clean",
+        "friendlyName": "Require Clean",
+        "description": "Reject tracked changes and untracked files before checking out",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-commit-local-repository",
+    "packageName": "data",
+    "name": "data_github_commit_local_repository",
+    "friendlyName": "Commit Changes",
+    "description": "Commit the staged changes. Uses the repository identity unless an author name and email are provided. Commit signing is disabled for unattended execution.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "message",
+        "friendlyName": "Message",
+        "description": "Required commit message",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "author_name",
+        "friendlyName": "Author Name",
+        "description": "Optional author and committer name; requires Author Email",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "author_email",
+        "friendlyName": "Author Email",
+        "description": "Optional author and committer email; requires Author Name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "allow_empty",
+        "friendlyName": "Allow Empty",
+        "description": "Allow creating a commit with no staged changes",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 6
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "commit",
+        "friendlyName": "Commit",
+        "description": "Created commit SHA",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 6
+      }
+    ],
+    "inputCount": 6,
+    "outputCount": 6,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-create-local-branch",
+    "packageName": "data",
+    "name": "data_github_create_local_branch",
+    "friendlyName": "Create Local Branch",
+    "description": "Create a local branch at a commit, tag, or branch without changing a GitHub API branch directly.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Branch",
+        "description": "New local branch name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "start_point",
+        "friendlyName": "Start Point",
+        "description": "Commit, tag, or existing branch for the new branch",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "HEAD",
+        "index": 4
+      },
+      {
+        "name": "switch",
+        "friendlyName": "Switch",
+        "description": "Switch to the new branch; requires a clean working tree",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-create-local-tag",
+    "packageName": "data",
+    "name": "data_github_create_local_tag",
+    "friendlyName": "Create Local Tag",
+    "description": "Create a tag at a commit. A nonempty message creates an unsigned annotated tag; an empty message creates a lightweight tag. Existing tags are never overwritten.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "name",
+        "friendlyName": "Name",
+        "description": "New local tag name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "revision",
+        "friendlyName": "Revision",
+        "description": "Commit, branch, or tag to tag",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "HEAD",
+        "index": 4
+      },
+      {
+        "name": "message",
+        "friendlyName": "Message",
+        "description": "Annotation message; leave empty for a lightweight tag",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-delete-local-branch",
+    "packageName": "data",
+    "name": "data_github_delete_local_branch",
+    "friendlyName": "Delete Local Branch",
+    "description": "Delete a local branch. Git rejects unmerged branches unless Force is enabled and always protects branches checked out in a worktree.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Branch",
+        "description": "Local branch to delete",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "force",
+        "friendlyName": "Force",
+        "description": "Allow deleting an unmerged branch; its commits may become unreachable",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-delete-local-tag",
+    "packageName": "data",
+    "name": "data_github_delete_local_tag",
+    "friendlyName": "Delete Local Tag",
+    "description": "Delete a named local tag. Remote tags are unchanged.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "name",
+        "friendlyName": "Name",
+        "description": "Existing local tag name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-fetch-repo",
+    "packageName": "data",
+    "name": "data_github_fetch_repo",
+    "friendlyName": "Fetch Repository",
+    "description": "Download remote branches and tags into a local repository without changing checked-out files.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "provider",
+        "friendlyName": "Provider",
+        "description": "GitHub authentication for this operation",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+        "index": 3,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "remote",
+        "friendlyName": "Remote",
+        "description": "Configured remote name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "origin",
+        "index": 4
+      },
+      {
+        "name": "prune",
+        "friendlyName": "Prune",
+        "description": "Remove stale remote-tracking references",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 5
+      },
+      {
+        "name": "tags",
+        "friendlyName": "All Tags",
+        "description": "Fetch all tags in addition to configured branches",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 6
+      },
+      {
+        "name": "unshallow",
+        "friendlyName": "Unshallow",
+        "description": "Fetch complete history from a complete remote; fails if this clone is already complete",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 7
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 7,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {
+      "github": [
+        "repo"
+      ]
+    },
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-init-repo",
+    "packageName": "data",
+    "name": "data_github_init_repo",
+    "friendlyName": "Init Repository",
+    "description": "Initialize a new local Git working tree at the supplied directory. Refuses an existing repository.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Initial Branch",
+        "description": "Initial branch name for the new repository",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "main",
+        "index": 3
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-list-local-branches",
+    "packageName": "data",
+    "name": "data_github_list_local_branches",
+    "friendlyName": "List Local Branches",
+    "description": "List local branches and optionally cached remote branches. Fetch first to refresh remote branches.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "include_remote",
+        "friendlyName": "Include Remote",
+        "description": "Include branches under refs/remotes",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 3
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "branches",
+        "friendlyName": "Branches",
+        "description": "Branches, their commits, and upstream configuration",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitBranch\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"current\":{\"type\":\"boolean\"},\"remote\":{\"type\":\"boolean\"},\"upstream\":{\"type\":\"string\"}},\"required\":[\"name\",\"commit\",\"current\",\"remote\",\"upstream\"]}",
+        "index": 6
+      },
+      {
+        "name": "count",
+        "friendlyName": "Count",
+        "description": "Number of entries returned",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 7
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 7,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-list-local-tags",
+    "packageName": "data",
+    "name": "data_github_list_local_tags",
+    "friendlyName": "List Local Tags",
+    "description": "List tags stored in the local repository. Fetch with tags enabled to refresh tags from a remote.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "tags",
+        "friendlyName": "Tags",
+        "description": "Tag names in lexicographic order",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Array",
+        "index": 6
+      },
+      {
+        "name": "count",
+        "friendlyName": "Count",
+        "description": "Number of entries returned",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 7
+      }
+    ],
+    "inputCount": 2,
+    "outputCount": 7,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-list-local-remotes",
+    "packageName": "data",
+    "name": "data_github_list_local_remotes",
+    "friendlyName": "List Remotes",
+    "description": "List configured fetch and push URLs with embedded credentials removed.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "remotes",
+        "friendlyName": "Remotes",
+        "description": "Configured remote names and URLs",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitRemote\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"fetch_urls\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"push_urls\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"fetch_urls\",\"push_urls\"]}",
+        "index": 6
+      },
+      {
+        "name": "count",
+        "friendlyName": "Count",
+        "description": "Number of entries returned",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 7
+      }
+    ],
+    "inputCount": 2,
+    "outputCount": 7,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-list-local-stashes",
+    "packageName": "data",
+    "name": "data_github_list_local_stashes",
+    "friendlyName": "List Stashes",
+    "description": "List saved local stashes in newest-first order.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "stashes",
+        "friendlyName": "Stashes",
+        "description": "Stash references, commits, and messages",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitStash\",\"type\":\"object\",\"properties\":{\"reference\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"reference\",\"commit\",\"message\"]}",
+        "index": 6
+      },
+      {
+        "name": "count",
+        "friendlyName": "Count",
+        "description": "Number of entries returned",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 7
+      }
+    ],
+    "inputCount": 2,
+    "outputCount": 7,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-merge-local-repository",
+    "packageName": "data",
+    "name": "data_github_merge_local_repository",
+    "friendlyName": "Merge Branch",
+    "description": "Merge a branch or revision into the current branch. Requires a clean working tree. Conflicts route to Error; Abort Merge cancels an unfinished merge.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "revision",
+        "friendlyName": "Revision",
+        "description": "Branch, tag, or revision to merge",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "fast_forward_only",
+        "friendlyName": "Fast Forward Only",
+        "description": "Reject divergent history instead of creating a merge commit",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-pop-local-stash",
+    "packageName": "data",
+    "name": "data_github_pop_local_stash",
+    "friendlyName": "Pop Stash",
+    "description": "Apply a stash and remove it after success. Conflicts route to Error and preserve the stash for recovery.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "index",
+        "friendlyName": "Stash Index",
+        "description": "Zero-based stash index; 0 is the newest stash",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 0,
+        "index": 3
+      },
+      {
+        "name": "restore_index",
+        "friendlyName": "Restore Index",
+        "description": "Attempt to restore which changes were staged",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-pull-repo",
+    "packageName": "data",
+    "name": "data_github_pull_repo",
+    "friendlyName": "Pull Repository",
+    "description": "Fetch and fast-forward the current branch of a clean local repository. Divergent history produces an error.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "provider",
+        "friendlyName": "Provider",
+        "description": "GitHub authentication for this operation",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+        "index": 3,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "remote",
+        "friendlyName": "Remote",
+        "description": "Configured remote name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "origin",
+        "index": 4
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Remote Branch",
+        "description": "Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {
+      "github": [
+        "repo"
+      ]
+    },
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-push-repo",
+    "packageName": "data",
+    "name": "data_github_push_repo",
+    "friendlyName": "Push Repository",
+    "description": "Push the current local branch to GitHub. Does not force-push or delete remote branches.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "provider",
+        "friendlyName": "Provider",
+        "description": "GitHub authentication for this operation",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+        "index": 3,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "remote",
+        "friendlyName": "Remote",
+        "description": "Configured remote name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "origin",
+        "index": 4
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Remote Branch",
+        "description": "Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "set_upstream",
+        "friendlyName": "Set Upstream",
+        "description": "Record tracking information for the pushed branch",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 6
+      },
+      {
+        "name": "follow_tags",
+        "friendlyName": "Follow Tags",
+        "description": "Also push reachable annotated tags missing from the remote",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 7
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 7,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {
+      "github": [
+        "repo"
+      ]
+    },
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-remove-repo-remote",
+    "packageName": "data",
+    "name": "data_github_remove_repo_remote",
+    "friendlyName": "Remove Repository Remote",
+    "description": "Remove a remote and its tracking references from the local repository. Does not delete the remote repository.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "remote",
+        "friendlyName": "Remote",
+        "description": "Configured remote name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "origin",
+        "index": 3
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-local-diff",
+    "packageName": "data",
+    "name": "data_github_local_diff",
+    "friendlyName": "Repository Diff",
+    "description": "Read the tracked-file diff for a working tree or its staged changes. Untracked files are available from Repository Status.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "staged",
+        "friendlyName": "Staged",
+        "description": "Compare staged changes against the revision instead of working tree changes",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 3
+      },
+      {
+        "name": "revision",
+        "friendlyName": "Revision",
+        "description": "Optional commit or revision to compare against; empty uses the index or HEAD",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "paths",
+        "friendlyName": "Paths",
+        "description": "Literal paths relative to the repository root. Wildcards are not expanded.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Array",
+        "defaultValue": [],
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-local-log",
+    "packageName": "data",
+    "name": "data_github_local_log",
+    "friendlyName": "Repository Log",
+    "description": "Read recent commits from a local branch, tag, or revision.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "revision",
+        "friendlyName": "Revision",
+        "description": "Branch, tag, or revision to read",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "HEAD",
+        "index": 3
+      },
+      {
+        "name": "max_count",
+        "friendlyName": "Max Count",
+        "description": "Maximum commits to return, from 1 to 10000",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 20,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "commits",
+        "friendlyName": "Commits",
+        "description": "Commits in newest-first order",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Array",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitCommit\",\"type\":\"object\",\"properties\":{\"sha\":{\"type\":\"string\"},\"parents\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"author_name\":{\"type\":\"string\"},\"author_email\":{\"type\":\"string\"},\"authored_at\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"}},\"required\":[\"sha\",\"parents\",\"author_name\",\"author_email\",\"authored_at\",\"subject\"]}",
+        "index": 6
+      },
+      {
+        "name": "count",
+        "friendlyName": "Count",
+        "description": "Number of entries returned",
+        "pinType": "Output",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "index": 7
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 7,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-local-status",
+    "packageName": "data",
+    "name": "data_github_local_status",
+    "friendlyName": "Repository Status",
+    "description": "Inspect local changes, the current branch, and the checked out commit. Handles repositories before their first commit.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      },
+      {
+        "name": "status",
+        "friendlyName": "Status",
+        "description": "Structured repository state and file changes",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitStatus\",\"type\":\"object\",\"properties\":{\"branch\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"clean\":{\"type\":\"boolean\"},\"detached\":{\"type\":\"boolean\"},\"files\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LocalGitFileStatus\"}}},\"required\":[\"branch\",\"commit\",\"clean\",\"detached\",\"files\"],\"$defs\":{\"LocalGitFileStatus\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"original_path\":{\"type\":[\"string\",\"null\"]},\"index_status\":{\"type\":\"string\"},\"worktree_status\":{\"type\":\"string\"},\"untracked\":{\"type\":\"boolean\"},\"conflicted\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"index_status\",\"worktree_status\",\"untracked\",\"conflicted\"]}}}",
+        "index": 6
+      },
+      {
+        "name": "clean",
+        "friendlyName": "Clean",
+        "description": "No tracked changes or untracked files",
+        "pinType": "Output",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "index": 7
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Branch",
+        "description": "Current branch; empty for detached HEAD",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 8
+      },
+      {
+        "name": "commit",
+        "friendlyName": "Commit",
+        "description": "Current commit SHA; empty before the first commit",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 9
+      }
+    ],
+    "inputCount": 2,
+    "outputCount": 9,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-reset-local-repository",
+    "packageName": "data",
+    "name": "data_github_reset_local_repository",
+    "friendlyName": "Reset Repository",
+    "description": "Move the current branch to a revision. Soft preserves staged changes; mixed unstages changes; hard discards tracked changes and may remove obstructing untracked files.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "revision",
+        "friendlyName": "Revision",
+        "description": "Commit, branch, or tag to reset to",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "HEAD",
+        "index": 3
+      },
+      {
+        "name": "mode",
+        "friendlyName": "Mode",
+        "description": "soft, mixed, or hard",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "mixed",
+        "index": 4,
+        "options": {
+          "validValues": [
+            "soft",
+            "mixed",
+            "hard"
+          ]
+        }
+      },
+      {
+        "name": "allow_destructive",
+        "friendlyName": "Allow Destructive",
+        "description": "Required for hard reset, which can discard local file contents",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 5
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 5,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-set-repo-remote-url",
+    "packageName": "data",
+    "name": "data_github_set_repo_remote_url",
+    "friendlyName": "Set Repository Remote URL",
+    "description": "Change a named remote's fetch URL. A separately configured push URL is left unchanged.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "remote",
+        "friendlyName": "Remote",
+        "description": "Configured remote name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "origin",
+        "index": 3
+      },
+      {
+        "name": "url",
+        "friendlyName": "URL",
+        "description": "HTTPS repository URL without embedded credentials",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-stage-local-files",
+    "packageName": "data",
+    "name": "data_github_stage_local_files",
+    "friendlyName": "Stage Files",
+    "description": "Stage additions, modifications, and deletions for a commit. Provide literal paths or explicitly enable All.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "paths",
+        "friendlyName": "Paths",
+        "description": "Literal paths relative to the repository root. Wildcards are not expanded.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Array",
+        "defaultValue": [],
+        "index": 3
+      },
+      {
+        "name": "all",
+        "friendlyName": "All",
+        "description": "Stage every non-ignored change; leave Paths empty",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-save-local-stash",
+    "packageName": "data",
+    "name": "data_github_save_local_stash",
+    "friendlyName": "Stash Changes",
+    "description": "Save tracked worktree and staged changes in a stash. Untracked files are included only when requested; ignored files are preserved.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "message",
+        "friendlyName": "Message",
+        "description": "Optional stash description",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "include_untracked",
+        "friendlyName": "Include Untracked",
+        "description": "Also stash and remove untracked files from the working tree",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-switch-local-branch",
+    "packageName": "data",
+    "name": "data_github_switch_local_branch",
+    "friendlyName": "Switch Branch",
+    "description": "Switch an existing local branch. Local changes are rejected by default; disabling Require Clean retains normal Git overwrite checks.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Branch",
+        "description": "Existing local branch name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "require_clean",
+        "friendlyName": "Require Clean",
+        "description": "Reject tracked changes and untracked files before switching",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": true,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-sync-repo",
+    "packageName": "data",
+    "name": "data_github_sync_repo",
+    "friendlyName": "Sync Repository",
+    "description": "Clone a missing local working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Local changes and divergent history produce an error.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "provider",
+        "friendlyName": "Provider",
+        "description": "GitHub authentication for this operation",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+        "index": 3,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "owner",
+        "friendlyName": "Owner",
+        "description": "GitHub repository owner",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 4
+      },
+      {
+        "name": "repo",
+        "friendlyName": "Repository Name",
+        "description": "GitHub repository name",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 5
+      },
+      {
+        "name": "branch",
+        "friendlyName": "Branch",
+        "description": "Branch to clone or switch to; empty keeps the current branch or clones the default branch",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 6
+      },
+      {
+        "name": "depth",
+        "friendlyName": "Depth",
+        "description": "Clone depth when creating the repository; 0 clones full history",
+        "pinType": "Input",
+        "dataType": "Integer",
+        "valueType": "Normal",
+        "defaultValue": 1,
+        "index": 7
+      },
+      {
+        "name": "prune",
+        "friendlyName": "Prune",
+        "description": "Remove stale origin tracking references when updating",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 8
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 8,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {
+      "github": [
+        "repo"
+      ]
+    },
+    "permissions": []
+  },
+  {
+    "slug": "nodes/data/github/repository/data-github-unstage-local-files",
+    "packageName": "data",
+    "name": "data_github_unstage_local_files",
+    "friendlyName": "Unstage Files",
+    "description": "Remove selected changes from the staging area while preserving working files, including before the first commit.",
+    "category": "Data/GitHub/Repository",
+    "categoryPath": [
+      "Data",
+      "GitHub",
+      "Repository"
+    ],
+    "categorySlug": "nodes/data/github/repository",
+    "icon": "/flow/icons/github.svg",
+    "scores": {
+      "privacy": 5,
+      "security": 5,
+      "performance": 7,
+      "governance": 5,
+      "reliability": 7,
+      "cost": 10
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "Input",
+        "description": "Run the operation",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "repository",
+        "friendlyName": "Repository",
+        "description": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+        "pinType": "Input",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 2,
+        "options": {
+          "enforceSchema": true
+        }
+      },
+      {
+        "name": "paths",
+        "friendlyName": "Paths",
+        "description": "Literal paths relative to the repository root. Wildcards are not expanded.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Array",
+        "defaultValue": [],
+        "index": 3
+      },
+      {
+        "name": "all",
+        "friendlyName": "All",
+        "description": "Unstage every staged change; leave Paths empty",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 4
+      },
+      {
+        "name": "exec_out",
+        "friendlyName": "Success",
+        "description": "Operation completed",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error",
+        "friendlyName": "Error",
+        "description": "Operation failed; inspect Error Message",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "repo_path",
+        "friendlyName": "Repository Path",
+        "description": "Local working tree for the next repository node",
+        "pinType": "Output",
+        "dataType": "Struct",
+        "valueType": "Normal",
+        "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+        "index": 3
+      },
+      {
+        "name": "output",
+        "friendlyName": "Output",
+        "description": "Git output with credentials removed",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Failure details, empty on success",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 5
+      }
+    ],
+    "inputCount": 4,
+    "outputCount": 5,
+    "flags": [
+      "Long running"
+    ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
     "permissions": []
   },
   {
@@ -116352,6 +120066,16 @@ export const catalogNodes: CatalogNode[] = [
         "index": 10
       },
       {
+        "name": "idempotency_key",
+        "friendlyName": "Idempotency Key",
+        "description": "Reuse a stable key for the same payment across workflow retries. Completed payments immediately select their previous result. Leave empty for a new payment.",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 11
+      },
+      {
         "name": "paid",
         "friendlyName": "paid",
         "description": "Authoritative payment result",
@@ -116406,7 +120130,7 @@ export const catalogNodes: CatalogNode[] = [
         "index": 6
       }
     ],
-    "inputCount": 10,
+    "inputCount": 11,
     "outputCount": 6,
     "flags": [
       "Long running"
@@ -162432,14 +166156,6 @@ export const catalogCategories: CatalogCategory[] = [
     "description": "Browse 2 generated Flow-Like node references in AI/Preprocessing with pin details and available schema, package, and risk-rating metadata."
   },
   {
-    "label": "Payments",
-    "path": "Payments",
-    "slug": "nodes/payments",
-    "depth": 1,
-    "count": 1,
-    "description": "Browse 1 generated Flow-Like node reference in Payments with pin details and available schema, package, and risk-rating metadata."
-  },
-  {
     "label": "Processing",
     "path": "AI/Processing",
     "slug": "nodes/ai/processing",
@@ -162748,8 +166464,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Data",
     "slug": "nodes/data",
     "depth": 1,
-    "count": 458,
-    "description": "Browse 458 generated Flow-Like node references in Data with pin details and available schema, package, and risk-rating metadata."
+    "count": 487,
+    "description": "Browse 487 generated Flow-Like node references in Data with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Data Studio",
@@ -163060,8 +166776,16 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Data/GitHub",
     "slug": "nodes/data/github",
     "depth": 2,
-    "count": 49,
-    "description": "Browse 49 generated Flow-Like node references in Data/GitHub with pin details and available schema, package, and risk-rating metadata."
+    "count": 78,
+    "description": "Browse 78 generated Flow-Like node references in Data/GitHub with pin details and available schema, package, and risk-rating metadata."
+  },
+  {
+    "label": "Repository",
+    "path": "Data/GitHub/Repository",
+    "slug": "nodes/data/github/repository",
+    "depth": 3,
+    "count": 29,
+    "description": "Browse 29 generated Flow-Like node references in Data/GitHub/Repository with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Workflows",
@@ -163582,6 +167306,14 @@ export const catalogCategories: CatalogCategory[] = [
     "depth": 1,
     "count": 2,
     "description": "Browse 2 generated Flow-Like node references in Notifications with pin details and available schema, package, and risk-rating metadata."
+  },
+  {
+    "label": "Payments",
+    "path": "Payments",
+    "slug": "nodes/payments",
+    "depth": 1,
+    "count": 1,
+    "description": "Browse 1 generated Flow-Like node reference in Payments with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Processing",

@@ -3803,6 +3803,132 @@ export const generatedNodeSidebar = [
             "slug": "nodes/data/github"
           },
           {
+            "label": "Repository",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/github/repository"
+              },
+              {
+                "label": "Abort Merge",
+                "slug": "nodes/data/github/repository/data-github-abort-local-merge"
+              },
+              {
+                "label": "Add Repository Remote",
+                "slug": "nodes/data/github/repository/data-github-add-repo-remote"
+              },
+              {
+                "label": "Checkout Revision",
+                "slug": "nodes/data/github/repository/data-github-checkout-local-revision"
+              },
+              {
+                "label": "Commit Changes",
+                "slug": "nodes/data/github/repository/data-github-commit-local-repository"
+              },
+              {
+                "label": "Create Local Branch",
+                "slug": "nodes/data/github/repository/data-github-create-local-branch"
+              },
+              {
+                "label": "Create Local Tag",
+                "slug": "nodes/data/github/repository/data-github-create-local-tag"
+              },
+              {
+                "label": "Delete Local Branch",
+                "slug": "nodes/data/github/repository/data-github-delete-local-branch"
+              },
+              {
+                "label": "Delete Local Tag",
+                "slug": "nodes/data/github/repository/data-github-delete-local-tag"
+              },
+              {
+                "label": "Fetch Repository",
+                "slug": "nodes/data/github/repository/data-github-fetch-repo"
+              },
+              {
+                "label": "Init Repository",
+                "slug": "nodes/data/github/repository/data-github-init-repo"
+              },
+              {
+                "label": "List Local Branches",
+                "slug": "nodes/data/github/repository/data-github-list-local-branches"
+              },
+              {
+                "label": "List Local Tags",
+                "slug": "nodes/data/github/repository/data-github-list-local-tags"
+              },
+              {
+                "label": "List Remotes",
+                "slug": "nodes/data/github/repository/data-github-list-local-remotes"
+              },
+              {
+                "label": "List Stashes",
+                "slug": "nodes/data/github/repository/data-github-list-local-stashes"
+              },
+              {
+                "label": "Merge Branch",
+                "slug": "nodes/data/github/repository/data-github-merge-local-repository"
+              },
+              {
+                "label": "Pop Stash",
+                "slug": "nodes/data/github/repository/data-github-pop-local-stash"
+              },
+              {
+                "label": "Pull Repository",
+                "slug": "nodes/data/github/repository/data-github-pull-repo"
+              },
+              {
+                "label": "Push Repository",
+                "slug": "nodes/data/github/repository/data-github-push-repo"
+              },
+              {
+                "label": "Remove Repository Remote",
+                "slug": "nodes/data/github/repository/data-github-remove-repo-remote"
+              },
+              {
+                "label": "Repository Diff",
+                "slug": "nodes/data/github/repository/data-github-local-diff"
+              },
+              {
+                "label": "Repository Log",
+                "slug": "nodes/data/github/repository/data-github-local-log"
+              },
+              {
+                "label": "Repository Status",
+                "slug": "nodes/data/github/repository/data-github-local-status"
+              },
+              {
+                "label": "Reset Repository",
+                "slug": "nodes/data/github/repository/data-github-reset-local-repository"
+              },
+              {
+                "label": "Set Repository Remote URL",
+                "slug": "nodes/data/github/repository/data-github-set-repo-remote-url"
+              },
+              {
+                "label": "Stage Files",
+                "slug": "nodes/data/github/repository/data-github-stage-local-files"
+              },
+              {
+                "label": "Stash Changes",
+                "slug": "nodes/data/github/repository/data-github-save-local-stash"
+              },
+              {
+                "label": "Switch Branch",
+                "slug": "nodes/data/github/repository/data-github-switch-local-branch"
+              },
+              {
+                "label": "Sync Repository",
+                "slug": "nodes/data/github/repository/data-github-sync-repo"
+              },
+              {
+                "label": "Unstage Files",
+                "slug": "nodes/data/github/repository/data-github-unstage-local-files"
+              }
+            ]
+          },
+          {
             "label": "Workflows",
             "collapsed": true,
             "items": [

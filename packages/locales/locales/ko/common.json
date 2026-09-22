@@ -1393,6 +1393,8 @@
 	"modules": "모듈",
 	"modulesGroupLessonsReorderViaThePositionField": "모듈은 레슨을 그룹화합니다. position 필드로 순서를 변경하세요.",
 	"modulesLessons": "모듈 및 레슨",
+	"monetization": "",
+	"monetizationNavDescription": "",
 	"monorepoLayoutNodeWidgetsOrchestratedByARootMisetoml": "모노레포 구조: node/ + widgets/, 루트 mise.toml로 관리됩니다.",
 	"more": "더 보기",
 	"moreActions": "추가 작업",
