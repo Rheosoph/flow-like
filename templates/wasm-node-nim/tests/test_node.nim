@@ -50,7 +50,7 @@ suite "Node Definition":
     def.friendlyName = "Perm"
     def.description = "d"
     def.category = "c"
-    def.addPermission("http")
+    def.addPermission("network:http")
     def.addPermission("streaming")
 
     let json = def.toJson()

@@ -37,7 +37,7 @@ fun httpRequest(method: Int, url: String, headers: String, body: String): Boolea
 }
 
 // ============================================================================
-// Node definition — note `def.addPermission("http")`
+// Node definition — note `def.addPermission("network:http")`
 // ============================================================================
 
 fun buildHttpGetDefinition(): NodeDefinition {
@@ -47,7 +47,7 @@ fun buildHttpGetDefinition(): NodeDefinition {
         description = "Sends a GET request to a URL and reports the result",
         category = "Network/HTTP",
     )
-    def.addPermission("http")
+    def.addPermission("network:http")
 
     def.addPin(PinDefinition.input("exec", "Execute", "Trigger execution", DataType.EXEC))
     def.addPin(PinDefinition.input("url", "URL", "Target URL", DataType.STRING))

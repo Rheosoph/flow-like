@@ -1,6 +1,6 @@
 /// HTTP Request Node — Demonstrates declaring HTTP permissions (Zig, Component Model)
 ///
-/// This example shows how to declare the "http" permission and use the
+/// This example shows how to declare the "network:http" permission and use the
 /// WIT-generated host imports to make outbound HTTP requests from a Zig WASM node.
 /// Copy this pattern into your main.zig when you need network access.
 
@@ -52,7 +52,7 @@ fn buildPinJson(name: []const u8, friendly_name: []const u8, description: []cons
 }
 
 // ============================================================================
-// Node definition — note "http" permission
+// Node definition — note "network:http" permission
 // ============================================================================
 
 fn buildHttpGetDefinition() []const u8 {
@@ -73,7 +73,7 @@ fn buildHttpGetDefinition() []const u8 {
     pins_json.appendSlice("]") catch {};
 
     return std.fmt.allocPrint(allocator,
-        "{{\"name\":\"http_get_request_zig\",\"friendly_name\":\"HTTP GET Request (Zig)\",\"description\":\"Sends a GET request to a URL and reports the result\",\"category\":\"Network/HTTP\",\"pins\":{s},\"long_running\":false,\"abi_version\":1,\"permissions\":[\"http\"]}}",
+        "{{\"name\":\"http_get_request_zig\",\"friendly_name\":\"HTTP GET Request (Zig)\",\"description\":\"Sends a GET request to a URL and reports the result\",\"category\":\"Network/HTTP\",\"pins\":{s},\"long_running\":false,\"abi_version\":1,\"permissions\":[\"network:http\"]}}",
         .{pins_json.items},
     ) catch "{}";
 }

@@ -17,7 +17,7 @@ import {
 } from "@flow-like/wasm-sdk-assemblyscript/assembly/index";
 
 // ============================================================================
-// Node class — note `def.addPermission("http")`
+// Node class — note `def.addPermission("network:http")`
 // ============================================================================
 
 export class HttpGetRequestNode extends FlowNode {
@@ -27,7 +27,7 @@ export class HttpGetRequestNode extends FlowNode {
 		def.friendly_name = "HTTP GET Request (AS)";
 		def.description = "Sends a GET request to a URL and reports the result";
 		def.category = "Network/HTTP";
-		def.addPermission("http");
+		def.addPermission("network:http");
 
 		def.addPin(
 			PinDefinition.input(
