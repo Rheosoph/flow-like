@@ -1,3 +1,4 @@
+pub mod authorization;
 pub mod embedding;
 pub mod history;
 pub mod image_embedding;

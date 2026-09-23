@@ -689,11 +689,11 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         Some(c) => c,
                         None => return Ok((None,)),
                     };
-                    let obj_store = match ctx.resolve_store(&flow_path.store_ref) {
+                    let path = flow_path.object_path();
+                    let obj_store = match ctx.resolve_store(&flow_path.store_ref, &path) {
                         Some(s) => s,
                         None => return Ok((None,)),
                     };
-                    let path = flow_path.object_path();
                     match obj_store.as_generic().get(&path).await {
                         Ok(result) => match result.bytes().await {
                             Ok(bytes) => Ok((Some(bytes.to_vec()),)),
@@ -879,12 +879,13 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         Some(c) => c,
                         None => return Ok((None,)),
                     };
-                    let obj_store = match ctx.resolve_store(&flow_path.store_ref) {
+                    let path = flow_path.object_path();
+                    let obj_store = match ctx.resolve_store(&flow_path.store_ref, &path) {
                         Some(s) => s,
                         None => return Ok((None,)),
                     };
                     use futures::StreamExt;
-                    let prefix = flow_path.object_path();
+                    let prefix = path;
                     let entries: Vec<_> = obj_store
                         .as_generic()
                         .list(Some(&prefix))

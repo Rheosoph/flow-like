@@ -29236,6 +29236,58 @@
       "alias": "gcpProvider"
     },
     {
+      "node_type": "data_github_abort_local_merge",
+      "display": "dataGithubAbortLocalMerge",
+      "friendly": "Abort Merge",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Cancel an unfinished merge and restore the pre-merge state. Returns an error when no merge is in progress.",
+      "namespace": "github",
+      "alias": "abortMerge"
+    },
+    {
       "node_type": "data_github_add_issue_comment",
       "display": "dataGithubAddIssueComment",
       "friendly": "Add Issue Comment",
@@ -29315,6 +29367,146 @@
       "alias": "addIssueComment"
     },
     {
+      "node_type": "data_github_add_repo_remote",
+      "display": "dataGithubAddRepoRemote",
+      "friendly": "Add Repository Remote",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "remote",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Configured remote name"
+        },
+        {
+          "name": "url",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "HTTPS repository URL without embedded credentials"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Add a named HTTPS remote to a local repository without storing credentials.",
+      "namespace": "github",
+      "alias": "addRepoRemote"
+    },
+    {
+      "node_type": "data_github_checkout_local_revision",
+      "display": "dataGithubCheckoutLocalRevision",
+      "friendly": "Checkout Revision",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "revision",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Commit, tag, or revision to check out"
+        },
+        {
+          "name": "require_clean",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Reject tracked changes and untracked files before checking out"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Check out a commit or tag with detached HEAD. Use Switch Branch to resume work on a local branch.",
+      "namespace": "github",
+      "alias": "checkoutRevision"
+    },
+    {
       "node_type": "data_github_clone_repo",
       "display": "dataGithubCloneRepo",
       "friendly": "Clone Repository",
@@ -29383,7 +29575,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Include the .git directory (only useful for local stores)"
+          "doc": "Copy .git metadata into non-local stores. Local clones always retain their Git metadata."
         }
       ],
       "outputs": [
@@ -29402,6 +29594,103 @@
       "doc": "Clone a GitHub repository. Works with any FlowPath store type (local, S3, memory, etc.). For non-local stores, clones to a temp directory first, then copies files into the target store.",
       "namespace": "github",
       "alias": "cloneRepo"
+    },
+    {
+      "node_type": "data_github_commit_local_repository",
+      "display": "dataGithubCommitLocalRepository",
+      "friendly": "Commit Changes",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Required commit message"
+        },
+        {
+          "name": "author_name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional author and committer name; requires Author Email"
+        },
+        {
+          "name": "author_email",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional author and committer email; requires Author Name"
+        },
+        {
+          "name": "allow_empty",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Allow creating a commit with no staged changes"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "commit",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Created commit SHA"
+        }
+      ],
+      "impure": true,
+      "doc": "Commit the staged changes. Uses the repository identity unless an author name and email are provided. Commit signing is disabled for unattended execution.",
+      "namespace": "github",
+      "alias": "commitChanges"
     },
     {
       "node_type": "data_github_compare_commits",
@@ -29693,6 +29982,164 @@
       "doc": "Create a new issue in a repository",
       "namespace": "github",
       "alias": "createIssue"
+    },
+    {
+      "node_type": "data_github_create_local_branch",
+      "display": "dataGithubCreateLocalBranch",
+      "friendly": "Create Local Branch",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "New local branch name"
+        },
+        {
+          "name": "start_point",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Commit, tag, or existing branch for the new branch"
+        },
+        {
+          "name": "switch",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Switch to the new branch; requires a clean working tree"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Create a local branch at a commit, tag, or branch without changing a GitHub API branch directly.",
+      "namespace": "github",
+      "alias": "createLocalBranch"
+    },
+    {
+      "node_type": "data_github_create_local_tag",
+      "display": "dataGithubCreateLocalTag",
+      "friendly": "Create Local Tag",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "New local tag name"
+        },
+        {
+          "name": "revision",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Commit, branch, or tag to tag"
+        },
+        {
+          "name": "message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Annotation message; leave empty for a lightweight tag"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Create a tag at a commit. A nonempty message creates an unsigned annotated tag; an empty message creates a lightweight tag. Existing tags are never overwritten.",
+      "namespace": "github",
+      "alias": "createLocalTag"
     },
     {
       "node_type": "data_github_create_or_update_file",
@@ -30419,6 +30866,137 @@
       "alias": "deleteFile"
     },
     {
+      "node_type": "data_github_delete_local_branch",
+      "display": "dataGithubDeleteLocalBranch",
+      "friendly": "Delete Local Branch",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Local branch to delete"
+        },
+        {
+          "name": "force",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Allow deleting an unmerged branch; its commits may become unreachable"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Delete a local branch. Git rejects unmerged branches unless Force is enabled and always protects branches checked out in a worktree.",
+      "namespace": "github",
+      "alias": "deleteLocalBranch"
+    },
+    {
+      "node_type": "data_github_delete_local_tag",
+      "display": "dataGithubDeleteLocalTag",
+      "friendly": "Delete Local Tag",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "name",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Existing local tag name"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Delete a named local tag. Remote tags are unchanged.",
+      "namespace": "github",
+      "alias": "deleteLocalTag"
+    },
+    {
       "node_type": "data_github_download_file",
       "display": "dataGithubDownloadFile",
       "friendly": "Download File",
@@ -30586,6 +31164,104 @@
       "doc": "Download a release asset into a FlowPath",
       "namespace": "github",
       "alias": "downloadReleaseAsset"
+    },
+    {
+      "node_type": "data_github_fetch_repo",
+      "display": "dataGithubFetchRepo",
+      "friendly": "Fetch Repository",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "provider",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "GitHub authentication for this operation",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
+        },
+        {
+          "name": "remote",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Configured remote name"
+        },
+        {
+          "name": "prune",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Remove stale remote-tracking references"
+        },
+        {
+          "name": "tags",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Fetch all tags in addition to configured branches"
+        },
+        {
+          "name": "unshallow",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Fetch complete history from a complete remote; fails if this clone is already complete"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Download remote branches and tags into a local repository without changing checked-out files.",
+      "namespace": "github",
+      "alias": "fetchRepo"
     },
     {
       "node_type": "data_github_get_branch",
@@ -31263,6 +31939,67 @@
       "alias": "getUser"
     },
     {
+      "node_type": "data_github_init_repo",
+      "display": "dataGithubInitRepo",
+      "friendly": "Init Repository",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Initial branch name for the new repository"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Initialize a new local Git working tree at the supplied directory. Refuses an existing repository.",
+      "namespace": "github",
+      "alias": "initRepo"
+    },
+    {
       "node_type": "data_github_list_branches",
       "display": "dataGithubListBranches",
       "friendly": "List Branches",
@@ -31739,6 +32476,298 @@
       "doc": "List issues for a repository",
       "namespace": "github",
       "alias": "listIssues"
+    },
+    {
+      "node_type": "data_github_list_local_branches",
+      "display": "dataGithubListLocalBranches",
+      "friendly": "List Local Branches",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "include_remote",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Include branches under refs/remotes"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "branches",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Branches, their commits, and upstream configuration",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitBranch\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"current\":{\"type\":\"boolean\"},\"remote\":{\"type\":\"boolean\"},\"upstream\":{\"type\":\"string\"}},\"required\":[\"name\",\"commit\",\"current\",\"remote\",\"upstream\"]}"
+        },
+        {
+          "name": "count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entries returned"
+        }
+      ],
+      "impure": true,
+      "doc": "List local branches and optionally cached remote branches. Fetch first to refresh remote branches.",
+      "namespace": "github",
+      "alias": "listLocalBranches"
+    },
+    {
+      "node_type": "data_github_list_local_remotes",
+      "display": "dataGithubListLocalRemotes",
+      "friendly": "List Remotes",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "remotes",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Configured remote names and URLs",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitRemote\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"fetch_urls\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"push_urls\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"fetch_urls\",\"push_urls\"]}"
+        },
+        {
+          "name": "count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entries returned"
+        }
+      ],
+      "impure": true,
+      "doc": "List configured fetch and push URLs with embedded credentials removed.",
+      "namespace": "github",
+      "alias": "listRemotes"
+    },
+    {
+      "node_type": "data_github_list_local_stashes",
+      "display": "dataGithubListLocalStashes",
+      "friendly": "List Stashes",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "stashes",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Stash references, commits, and messages",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitStash\",\"type\":\"object\",\"properties\":{\"reference\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"reference\",\"commit\",\"message\"]}"
+        },
+        {
+          "name": "count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entries returned"
+        }
+      ],
+      "impure": true,
+      "doc": "List saved local stashes in newest-first order.",
+      "namespace": "github",
+      "alias": "listStashes"
+    },
+    {
+      "node_type": "data_github_list_local_tags",
+      "display": "dataGithubListLocalTags",
+      "friendly": "List Local Tags",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "tags",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Tag names in lexicographic order"
+        },
+        {
+          "name": "count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entries returned"
+        }
+      ],
+      "impure": true,
+      "doc": "List tags stored in the local repository. Fetch with tags enabled to refresh tags from a remote.",
+      "namespace": "github",
+      "alias": "listLocalTags"
     },
     {
       "node_type": "data_github_list_pr_files",
@@ -32323,6 +33352,333 @@
       "alias": "listRepos"
     },
     {
+      "node_type": "data_github_local_diff",
+      "display": "dataGithubLocalDiff",
+      "friendly": "Repository Diff",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "staged",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Compare staged changes against the revision instead of working tree changes"
+        },
+        {
+          "name": "revision",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional commit or revision to compare against; empty uses the index or HEAD"
+        },
+        {
+          "name": "paths",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Literal paths relative to the repository root. Wildcards are not expanded."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Read the tracked-file diff for a working tree or its staged changes. Untracked files are available from Repository Status.",
+      "namespace": "github",
+      "alias": "diffRepository"
+    },
+    {
+      "node_type": "data_github_local_log",
+      "display": "dataGithubLocalLog",
+      "friendly": "Repository Log",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "revision",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Branch, tag, or revision to read"
+        },
+        {
+          "name": "max_count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Maximum commits to return, from 1 to 10000"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "commits",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Commits in newest-first order",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitCommit\",\"type\":\"object\",\"properties\":{\"sha\":{\"type\":\"string\"},\"parents\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"author_name\":{\"type\":\"string\"},\"author_email\":{\"type\":\"string\"},\"authored_at\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"}},\"required\":[\"sha\",\"parents\",\"author_name\",\"author_email\",\"authored_at\",\"subject\"]}"
+        },
+        {
+          "name": "count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entries returned"
+        }
+      ],
+      "impure": true,
+      "doc": "Read recent commits from a local branch, tag, or revision.",
+      "namespace": "github",
+      "alias": "repositoryLog"
+    },
+    {
+      "node_type": "data_github_local_status",
+      "display": "dataGithubLocalStatus",
+      "friendly": "Repository Status",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        },
+        {
+          "name": "status",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Structured repository state and file changes",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitStatus\",\"type\":\"object\",\"properties\":{\"branch\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"clean\":{\"type\":\"boolean\"},\"detached\":{\"type\":\"boolean\"},\"files\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LocalGitFileStatus\"}}},\"required\":[\"branch\",\"commit\",\"clean\",\"detached\",\"files\"],\"$defs\":{\"LocalGitFileStatus\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"original_path\":{\"type\":[\"string\",\"null\"]},\"index_status\":{\"type\":\"string\"},\"worktree_status\":{\"type\":\"string\"},\"untracked\":{\"type\":\"boolean\"},\"conflicted\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"index_status\",\"worktree_status\",\"untracked\",\"conflicted\"]}}}"
+        },
+        {
+          "name": "clean",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "No tracked changes or untracked files"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Current branch; empty for detached HEAD"
+        },
+        {
+          "name": "commit",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Current commit SHA; empty before the first commit"
+        }
+      ],
+      "impure": true,
+      "doc": "Inspect local changes, the current branch, and the checked out commit. Handles repositories before their first commit.",
+      "namespace": "github",
+      "alias": "repositoryStatus"
+    },
+    {
+      "node_type": "data_github_merge_local_repository",
+      "display": "dataGithubMergeLocalRepository",
+      "friendly": "Merge Branch",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "revision",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Branch, tag, or revision to merge"
+        },
+        {
+          "name": "fast_forward_only",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Reject divergent history instead of creating a merge commit"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Merge a branch or revision into the current branch. Requires a clean working tree. Conflicts route to Error; Abort Merge cancels an unfinished merge.",
+      "namespace": "github",
+      "alias": "mergeBranch"
+    },
+    {
       "node_type": "data_github_merge_pull_request",
       "display": "dataGithubMergePullRequest",
       "friendly": "Merge Pull Request",
@@ -32426,6 +33782,76 @@
       "doc": "Merge a pull request",
       "namespace": "github",
       "alias": "mergePullRequest"
+    },
+    {
+      "node_type": "data_github_pop_local_stash",
+      "display": "dataGithubPopLocalStash",
+      "friendly": "Pop Stash",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "index",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Zero-based stash index; 0 is the newest stash"
+        },
+        {
+          "name": "restore_index",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Attempt to restore which changes were staged"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Apply a stash and remove it after success. Conflicts route to Error and preserve the stash for recovery.",
+      "namespace": "github",
+      "alias": "popStash"
     },
     {
       "node_type": "data_github_provider_app",
@@ -32543,6 +33969,394 @@
       "doc": "Connect to GitHub using a Personal Access Token. Generate one at github.com/settings/tokens",
       "namespace": "github",
       "alias": "providerPat"
+    },
+    {
+      "node_type": "data_github_pull_repo",
+      "display": "dataGithubPullRepo",
+      "friendly": "Pull Repository",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "provider",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "GitHub authentication for this operation",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
+        },
+        {
+          "name": "remote",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Configured remote name"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Fetch and fast-forward the current branch of a clean local repository. Divergent history produces an error.",
+      "namespace": "github",
+      "alias": "pullRepo"
+    },
+    {
+      "node_type": "data_github_push_repo",
+      "display": "dataGithubPushRepo",
+      "friendly": "Push Repository",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "provider",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "GitHub authentication for this operation",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
+        },
+        {
+          "name": "remote",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Configured remote name"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured"
+        },
+        {
+          "name": "set_upstream",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Record tracking information for the pushed branch"
+        },
+        {
+          "name": "follow_tags",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Also push reachable annotated tags missing from the remote"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Push the current local branch to GitHub. Does not force-push or delete remote branches.",
+      "namespace": "github",
+      "alias": "pushRepo"
+    },
+    {
+      "node_type": "data_github_remove_repo_remote",
+      "display": "dataGithubRemoveRepoRemote",
+      "friendly": "Remove Repository Remote",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "remote",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Configured remote name"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Remove a remote and its tracking references from the local repository. Does not delete the remote repository.",
+      "namespace": "github",
+      "alias": "removeRepoRemote"
+    },
+    {
+      "node_type": "data_github_reset_local_repository",
+      "display": "dataGithubResetLocalRepository",
+      "friendly": "Reset Repository",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "revision",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Commit, branch, or tag to reset to"
+        },
+        {
+          "name": "mode",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "soft, mixed, or hard"
+        },
+        {
+          "name": "allow_destructive",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Required for hard reset, which can discard local file contents"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Move the current branch to a revision. Soft preserves staged changes; mixed unstages changes; hard discards tracked changes and may remove obstructing untracked files.",
+      "namespace": "github",
+      "alias": "resetRepository"
+    },
+    {
+      "node_type": "data_github_save_local_stash",
+      "display": "dataGithubSaveLocalStash",
+      "friendly": "Stash Changes",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional stash description"
+        },
+        {
+          "name": "include_untracked",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Also stash and remove untracked files from the working tree"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Save tracked worktree and staged changes in a stash. Untracked files are included only when requested; ignored files are preserved.",
+      "namespace": "github",
+      "alias": "stashChanges"
     },
     {
       "node_type": "data_github_search_code",
@@ -32933,6 +34747,393 @@
       "doc": "Search for repositories on GitHub",
       "namespace": "github",
       "alias": "searchRepos"
+    },
+    {
+      "node_type": "data_github_set_repo_remote_url",
+      "display": "dataGithubSetRepoRemoteUrl",
+      "friendly": "Set Repository Remote URL",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "remote",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Configured remote name"
+        },
+        {
+          "name": "url",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "HTTPS repository URL without embedded credentials"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Change a named remote's fetch URL. A separately configured push URL is left unchanged.",
+      "namespace": "github",
+      "alias": "setRepoRemoteUrl"
+    },
+    {
+      "node_type": "data_github_stage_local_files",
+      "display": "dataGithubStageLocalFiles",
+      "friendly": "Stage Files",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "paths",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Literal paths relative to the repository root. Wildcards are not expanded."
+        },
+        {
+          "name": "all",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Stage every non-ignored change; leave Paths empty"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Stage additions, modifications, and deletions for a commit. Provide literal paths or explicitly enable All.",
+      "namespace": "github",
+      "alias": "stageFiles"
+    },
+    {
+      "node_type": "data_github_switch_local_branch",
+      "display": "dataGithubSwitchLocalBranch",
+      "friendly": "Switch Branch",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Existing local branch name"
+        },
+        {
+          "name": "require_clean",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Reject tracked changes and untracked files before switching"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Switch an existing local branch. Local changes are rejected by default; disabling Require Clean retains normal Git overwrite checks.",
+      "namespace": "github",
+      "alias": "switchBranch"
+    },
+    {
+      "node_type": "data_github_sync_repo",
+      "display": "dataGithubSyncRepo",
+      "friendly": "Sync Repository",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "provider",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "GitHub authentication for this operation",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
+        },
+        {
+          "name": "owner",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "GitHub repository owner"
+        },
+        {
+          "name": "repo",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "GitHub repository name"
+        },
+        {
+          "name": "branch",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Branch to clone or switch to; empty keeps the current branch or clones the default branch"
+        },
+        {
+          "name": "depth",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Clone depth when creating the repository; 0 clones full history"
+        },
+        {
+          "name": "prune",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Remove stale origin tracking references when updating"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Clone a missing local working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Local changes and divergent history produce an error.",
+      "namespace": "github",
+      "alias": "syncRepo"
+    },
+    {
+      "node_type": "data_github_unstage_local_files",
+      "display": "dataGithubUnstageLocalFiles",
+      "friendly": "Unstage Files",
+      "category": "Data/GitHub/Repository",
+      "inputs": [
+        {
+          "name": "repository",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "FlowPath to the root of a local Git working tree. Requires Git on the runtime host.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "paths",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Literal paths relative to the repository root. Wildcards are not expanded."
+        },
+        {
+          "name": "all",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Unstage every staged change; leave Paths empty"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repo_path",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Local working tree for the next repository node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "output",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Git output with credentials removed"
+        },
+        {
+          "name": "error_message",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Failure details, empty on success"
+        }
+      ],
+      "impure": true,
+      "doc": "Remove selected changes from the staging area while preserving working files, including before the first commit.",
+      "namespace": "github",
+      "alias": "unstageFiles"
     },
     {
       "node_type": "data_github_update_issue",
@@ -79693,6 +81894,142 @@
       "alias": "gliner"
     },
     {
+      "node_type": "onnx_laya",
+      "display": "onnxLaya",
+      "friendly": "Typed Decision (Laya)",
+      "category": "AI/ML/ONNX/NLP",
+      "inputs": [
+        {
+          "name": "weights",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional model.onnx FlowPath. If omitted, download the pinned multilingual weights into Cache Directory",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "tokenizer",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional matching tokenizer/tokenizer.json FlowPath. If omitted, use the pinned multilingual tokenizer",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "config",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional matching rl_agent_config.json FlowPath with prompt limits and temperatures. If omitted, use the pinned multilingual config",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "cache_dir",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "FlowPath directory for verified downloads. Required when any model file is omitted. The complete bundle uses about 681 MB of cache space",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "text",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Text or serialized JSON state to evaluate"
+        },
+        {
+          "name": "instructions",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Question to answer about Text"
+        },
+        {
+          "name": "question_type",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "choice selects a label; score returns an expected rubric level; noul returns P(true)"
+        },
+        {
+          "name": "criteria",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": true,
+          "doc": "Unique choice labels or ordered score descriptions (level 0 first). For noul, leave empty or supply false then true descriptions"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Typed answer, calibrated probabilities, confidence, action probability and token count",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LayaResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/LayaQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LayaProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"act_probability\":{\"description\":\"Probability of action index zero from the model's separate action head.\",\"type\":\"number\",\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"act_probability\",\"input_tokens\"],\"$defs\":{\"LayaQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"LayaProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}"
+        },
+        {
+          "name": "choice",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Selected label for choice questions; empty for other types"
+        },
+        {
+          "name": "score",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Expected zero-based rubric level for score questions; zero for other types"
+        },
+        {
+          "name": "noul",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Probability the statement holds for noul questions; zero for other types"
+        },
+        {
+          "name": "confidence",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Normalized entropy confidence, or max(P(false), P(true)) for noul"
+        }
+      ],
+      "impure": true,
+      "doc": "Answer a choice, rubric score, or true-probability question about text using Laya multilingual. Supply model files as FlowPaths, or connect a cache directory to download missing files from mizchi/laya-multilingual-onnx (about 681 MB). Loaded models are reused within the execution cache.",
+      "namespace": "onnx",
+      "alias": "laya"
+    },
+    {
       "node_type": "onnx_model_info",
       "display": "onnxModelInfo",
       "friendly": "Model Info",
@@ -85492,6 +87829,15 @@
           },
           "optional": true,
           "doc": "Requested timeout in seconds, limited by the remaining run quota"
+        },
+        {
+          "name": "idempotency_key",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Reuse a stable key for the same payment across workflow retries. Completed payments immediately select their previous result. Leave empty for a new payment."
         }
       ],
       "outputs": [

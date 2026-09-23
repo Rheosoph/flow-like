@@ -365,6 +365,26 @@ declare namespace onnx {
     function gliner({ model: Struct, tokenizer: Struct, text: string, labels: string[], threshold?: float, maxWidth?: int, multiLabel?: bool, mergeAdjacent?: bool }): { result: Struct, entities: Struct[], entityCount: int };
 
     /**
+     * Answer a choice, rubric score, or true-probability question about text using Laya multilingual. Supply model files as FlowPaths, or connect a cache directory to download missing files from mizchi/laya-multilingual-onnx (about 681 MB). Loaded models are reused within the execution cache.
+     * @node onnx_laya @alias onnxLaya
+     * @param weights (optional) — Optional model.onnx FlowPath. If omitted, download the pinned multilingual weights into Cache Directory
+     * @param tokenizer (optional) — Optional matching tokenizer/tokenizer.json FlowPath. If omitted, use the pinned multilingual tokenizer
+     * @param config (optional) — Optional matching rl_agent_config.json FlowPath with prompt limits and temperatures. If omitted, use the pinned multilingual config
+     * @param cacheDir (optional) — FlowPath directory for verified downloads. Required when any model file is omitted. The complete bundle uses about 681 MB of cache space
+     * @param text — Text or serialized JSON state to evaluate
+     * @param instructions — Question to answer about Text
+     * @param questionType (optional) — choice selects a label; score returns an expected rubric level; noul returns P(true)
+     * @param criteria (optional) — Unique choice labels or ordered score descriptions (level 0 first). For noul, leave empty or supply false then true descriptions
+     * @returns result — Typed answer, calibrated probabilities, confidence, action probability and token count
+     * @returns choice — Selected label for choice questions; empty for other types
+     * @returns score — Expected zero-based rubric level for score questions; zero for other types
+     * @returns noul — Probability the statement holds for noul questions; zero for other types
+     * @returns confidence — Normalized entropy confidence, or max(P(false), P(true)) for noul
+     * @impure has side effects / drives control flow
+     */
+    function laya({ weights?: Struct, tokenizer?: Struct, config?: Struct, cacheDir?: Struct, text: string, instructions: string, questionType?: string, criteria?: string[] }): { result: Struct, choice: string, score: float, noul: float, confidence: float };
+
+    /**
      * Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Text longer than the model's window is split into overlapping chunks rather than truncated, so entities are found throughout a long document. Download tokenizer.json and config.json from the same model repository — config.json carries the id2label mapping that names the entity types and the sequence length the model accepts.
      * @node onnx_ner @alias onnxNer
      * @param model — ONNX NER Model Session

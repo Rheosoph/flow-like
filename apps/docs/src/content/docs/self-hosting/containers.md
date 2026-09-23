@@ -86,6 +86,13 @@ document. A secret mount avoids a loose copy in a build layer; it does not hide
 the embedded content from someone who can pull the image. Prefer runtime config
 for installation-specific settings.
 
+The dedicated audit worker recipes take the same build input as their API:
+`FLOW_LIKE_CONFIG` for `flow-like-audit-worker` (default: the Compose example,
+whose `audit` section matches the Kubernetes example) and the `flow_like_config`
+secret for the Azure and GCP workers. The worker compiles that document's `audit`
+section as its only policy and accepts no runtime config; see
+[Audit policy](/self-hosting/audit-trail/#audit-policy).
+
 ## Runtime API configuration
 
 Set one nonempty source on the API container:

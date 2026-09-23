@@ -97,12 +97,11 @@ impl WasmSecurityConfig {
         }
     }
 
-    /// Cap a node's declared capabilities by what its package manifest declares.
-    /// The manifest is what the store shows and the registry reviews, so a node
-    /// may narrow it but never widen it; resource limits and the HTTP host
-    /// allowlist are the manifest's alone.
-    pub fn bounded_by_manifest(mut self, manifest: &Self) -> Self {
-        self.capabilities &= manifest.capabilities;
+    /// Take the package-wide settings from the manifest: resource limits and
+    /// the host allowlist. Capabilities stay exactly what the node declares;
+    /// the registry derives the manifest's capability listing from the nodes,
+    /// so it can never be the wider of the two.
+    pub fn with_package_settings(mut self, manifest: &Self) -> Self {
         self.limits = manifest.limits.clone();
         self.allowed_hosts = manifest.allowed_hosts.clone();
         self
@@ -186,27 +185,20 @@ mod tests {
     }
 
     #[test]
-    fn node_permissions_never_exceed_the_manifest() {
+    fn package_settings_leave_node_capabilities_alone() {
         use flow_like::flow::node::NodePermission;
 
-        let manifest = WasmSecurityConfig::from_node_permissions(&[
+        // A manifest without capability flags, as the templates ship it.
+        let manifest = WasmSecurityConfig::from_node_permissions(&[])
+            .with_allowed_hosts(vec!["api.example.com".to_string()]);
+        let declared = WasmSecurityConfig::from_node_permissions(&[
             NodePermission::DatabaseRead,
-            NodePermission::NetworkHttp,
-        ])
-        .with_allowed_hosts(vec!["api.example.com".to_string()]);
-        let node = WasmSecurityConfig::from_node_permissions(&[
-            NodePermission::DatabaseRead,
-            NodePermission::DatabaseWrite,
             NodePermission::StorageWrite,
-        ])
-        .bounded_by_manifest(&manifest);
+        ]);
+        let node = declared.clone().with_package_settings(&manifest);
 
-        assert_eq!(node.capabilities, WasmCapabilities::DATABASE_READ);
-        assert!(!node.capabilities.intersects(
-            WasmCapabilities::DATABASE_WRITE
-                | WasmCapabilities::STORAGE_WRITE
-                | WasmCapabilities::HTTP_ALL
-        ));
+        assert_eq!(node.capabilities, declared.capabilities);
+        assert!(!node.capabilities.intersects(WasmCapabilities::HTTP_ALL));
         assert_eq!(
             node.allowed_hosts.as_deref(),
             Some(&["api.example.com".to_string()][..])

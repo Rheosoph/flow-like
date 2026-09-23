@@ -1,3 +1,4 @@
+pub use flow_like_types_contracts::authorization;
 pub use flow_like_types_contracts::{Cacheable, OAuthTokenInput, PROXY_EVENT_AUTHORIZATION_HEADER};
 pub use flow_like_types_proto::{FromProto, Message, Timestamp, ToProto, proto};
 

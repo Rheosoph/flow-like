@@ -71,9 +71,7 @@ Prepare these resources first:
   grant covers every Cloud SQL instance there; database user mappings and SQL
   grants must keep the worker limited to its audit database.
 - Secret Manager secrets containing the instance server CA PEM, the shared base64
-  `AUDIT_ENTRY_KEY`, the shared `SINK_TOKEN_ENCRYPTION_KEY`, and the worker's audit
-  configuration JSON. A minimal configuration is
-  `{"audit":{"enabled":true,"require_signing":true}}`. Supply the exact entry and
+  `AUDIT_ENTRY_KEY` and the shared `SINK_TOKEN_ENCRYPTION_KEY`. Supply the exact entry and
   sink secret IDs that the API already resolves through its Secret Manager project
   and `SECRET_PREFIX`. The helper grants both identities access to these same
   secrets; it does not change the API's secret lookup settings.
@@ -84,6 +82,12 @@ Prepare these resources first:
   with `docker build -f apps/backend/gcp/audit-worker/Dockerfile .` from the
   `flow-like` repository root. This recipe includes the IAM launcher used by the
   deployment helper and uses the repository's `.dockerignore`.
+- The worker's audit policy, which is compiled in: the `audit` section of the same
+  document as the GCP API image, either the tracked public default or the API
+  build's `flow_like_config` BuildKit secret with its `FLOW_LIKE_CONFIG_SHA256`
+  build argument. The worker reads no configuration at runtime, so the API's
+  `FLOW_LIKE_CONFIG_*` sources do not reach it; see
+  [Audit policy](/self-hosting/audit-trail/#audit-policy).
 
 ```sh
 python3 apps/backend/gcp/audit-worker/deploy.py \
@@ -96,7 +100,6 @@ python3 apps/backend/gcp/audit-worker/deploy.py \
   --database-name flow_like --database-ca-secret cloud-sql-server-ca \
   --entry-key-secret "$AUDIT_ENTRY_KEY_SECRET" \
   --encryption-secret "$SINK_TOKEN_ENCRYPTION_KEY_SECRET" \
-  --config-secret audit-config \
   --network audit-network --subnet audit-database
 ```
 
@@ -140,8 +143,7 @@ least the requested retention, uniform bucket-level access, and public access
 prevention. The script checks the effective lock before deploying the job.
 
 The script requires Policy Troubleshooter to establish that the API cannot sign,
-access the audit bucket or worker configuration secret, impersonate the
-worker, or change its job/IAM policies. Inherited access or an inconclusive check
+access the audit bucket, impersonate the worker, or change its job/IAM policies. Inherited access or an inconclusive check
 stops deployment. The deployment identity needs visibility into ancestor policies;
 remove broad API grants rather than bypassing the checks. The entry and sink
 encryption secrets are required and shared with the API. The API receives no

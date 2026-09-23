@@ -1,6 +1,7 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use super::{ModelLogic, UsageReportingMode, extract_headers, merge_additional_params};
+use crate::authorization::AuthorizedHttpClient;
 use crate::provider::random_provider;
 use crate::{
     history::History,
@@ -10,10 +11,11 @@ use crate::{
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
+use flow_like_types_contracts::authorization::{RequestAuthorizer, ResourceAudience};
 use serde_json::json;
 
 pub struct OpenRouterModel {
-    client: rig::providers::openrouter::Client,
+    client: rig::providers::openrouter::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -27,7 +29,9 @@ impl OpenRouterModel {
         let api_key = openrouter_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::openrouter::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::openrouter::Client::builder()
+            .api_key(&api_key)
+            .http_client(AuthorizedHttpClient::default());
 
         if let Some(endpoint) = openrouter_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -43,6 +47,13 @@ impl OpenRouterModel {
     }
 
     pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+        Self::from_provider_with_authorizer(provider, None).await
+    }
+
+    pub async fn from_provider_with_authorizer(
+        provider: &ModelProvider,
+        authorizer: Option<Arc<dyn RequestAuthorizer>>,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -54,7 +65,19 @@ impl OpenRouterModel {
         let endpoint = params.get("endpoint").and_then(|v| v.as_str());
         let custom_headers = extract_headers(&params);
 
-        let mut builder = rig::providers::openrouter::Client::builder().api_key(api_key);
+        let http_client = match authorizer {
+            Some(authorizer) => AuthorizedHttpClient::new(
+                authorizer,
+                ResourceAudience::HostedModels,
+                endpoint.ok_or_else(|| {
+                    anyhow::anyhow!("Hosted authorization requires an explicit endpoint")
+                })?,
+            )?,
+            None => AuthorizedHttpClient::default(),
+        };
+        let mut builder = rig::providers::openrouter::Client::builder()
+            .api_key(api_key)
+            .http_client(http_client);
         if let Some(endpoint) = endpoint {
             builder = builder.base_url(endpoint);
         }

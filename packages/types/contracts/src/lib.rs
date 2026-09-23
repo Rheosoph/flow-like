@@ -2,6 +2,8 @@
 
 use std::any::Any;
 
+pub mod authorization;
+
 #[cfg(feature = "geometry")]
 pub mod geometry;
 

@@ -1182,7 +1182,7 @@ impl RegistryClient {
             .map(|def| {
                 let node_security =
                     crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
-                        .bounded_by_manifest(&manifest_security);
+                        .with_package_settings(&manifest_security);
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
@@ -1241,7 +1241,7 @@ impl RegistryClient {
             .map(|def| {
                 let node_security =
                     crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
-                        .bounded_by_manifest(&manifest_security);
+                        .with_package_settings(&manifest_security);
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),

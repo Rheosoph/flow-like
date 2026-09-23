@@ -1,6 +1,7 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use super::{ModelLogic, UsageReportingMode, extract_headers, merge_additional_params};
+use crate::authorization::AuthorizedHttpClient;
 use crate::llm::CompletionClientDyn;
 use crate::provider::random_provider;
 use crate::{
@@ -11,12 +12,13 @@ use crate::{
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
+use flow_like_types_contracts::authorization::{RequestAuthorizer, ResourceAudience};
 use serde_json::json;
 
 #[derive(Clone)]
 enum OpenAIClientType {
-    OpenAI(rig::providers::openai::Client),
-    OpenAIChatCompletions(rig::providers::openai::CompletionsClient),
+    OpenAI(rig::providers::openai::Client<AuthorizedHttpClient>),
+    OpenAIChatCompletions(rig::providers::openai::CompletionsClient<AuthorizedHttpClient>),
     Azure(rig::providers::azure::Client),
 }
 
@@ -63,7 +65,9 @@ impl OpenAIModel {
 
             OpenAIClientType::Azure(builder.build()?)
         } else {
-            let mut builder = rig::providers::openai::Client::builder().api_key(&api_key);
+            let mut builder = rig::providers::openai::Client::builder()
+                .api_key(&api_key)
+                .http_client(AuthorizedHttpClient::default());
             if let Some(endpoint) = openai_config.endpoint.as_deref() {
                 builder = builder.base_url(endpoint);
             }
@@ -79,6 +83,14 @@ impl OpenAIModel {
 
     #[allow(clippy::cognitive_complexity)]
     pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+        Self::from_provider_with_authorizer(provider, None).await
+    }
+
+    #[allow(clippy::cognitive_complexity)]
+    pub async fn from_provider_with_authorizer(
+        provider: &ModelProvider,
+        authorizer: Option<Arc<dyn RequestAuthorizer>>,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -95,6 +107,10 @@ impl OpenAIModel {
             Some(val) => val.as_bool().unwrap_or(false),
             None => false,
         };
+
+        if is_azure && authorizer.is_some() {
+            anyhow::bail!("Renewable hosted authorization requires the Flow-Like proxy endpoint");
+        }
 
         if is_azure && endpoint.is_none() {
             return Err(anyhow::anyhow!("Azure OpenAI requires an endpoint"));
@@ -127,7 +143,22 @@ impl OpenAIModel {
             }
             OpenAIClientType::Azure(builder.build()?)
         } else {
-            let mut builder = rig::providers::openai::Client::builder().api_key(api_key);
+            let http_client = match authorizer {
+                Some(authorizer) => AuthorizedHttpClient::new(
+                    authorizer,
+                    ResourceAudience::HostedModels,
+                    endpoint
+                        .as_ref()
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("Hosted authorization requires an explicit endpoint")
+                        })?,
+                )?,
+                None => AuthorizedHttpClient::default(),
+            };
+            let mut builder = rig::providers::openai::Client::builder()
+                .api_key(api_key)
+                .http_client(http_client);
             if let Some(endpoint) = endpoint.as_ref().and_then(|v| v.as_str()) {
                 builder = builder.base_url(endpoint);
             }
@@ -167,6 +198,16 @@ impl OpenAIModel {
         surface: ModelApiSurface,
     ) -> anyhow::Result<Self> {
         Ok(Self::from_provider(provider)
+            .await?
+            .with_api_surface(surface))
+    }
+
+    pub async fn from_provider_with_surface_and_authorizer(
+        provider: &ModelProvider,
+        surface: ModelApiSurface,
+        authorizer: Option<Arc<dyn RequestAuthorizer>>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self::from_provider_with_authorizer(provider, authorizer)
             .await?
             .with_api_surface(surface))
     }

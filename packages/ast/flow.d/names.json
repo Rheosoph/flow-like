@@ -4895,6 +4895,15 @@
     "class": null,
     "category": "Data/Providers"
   },
+  "data_github_abort_local_merge": {
+    "qualified": "github::abortMerge",
+    "namespace": "github",
+    "alias": "abortMerge",
+    "flat": "dataGithubAbortLocalMerge",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_add_issue_comment": {
     "qualified": "github::addIssueComment",
     "namespace": "github",
@@ -4904,6 +4913,24 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_add_repo_remote": {
+    "qualified": "github::addRepoRemote",
+    "namespace": "github",
+    "alias": "addRepoRemote",
+    "flat": "dataGithubAddRepoRemote",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_checkout_local_revision": {
+    "qualified": "github::checkoutRevision",
+    "namespace": "github",
+    "alias": "checkoutRevision",
+    "flat": "dataGithubCheckoutLocalRevision",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_clone_repo": {
     "qualified": "github::cloneRepo",
     "namespace": "github",
@@ -4912,6 +4939,15 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_commit_local_repository": {
+    "qualified": "github::commitChanges",
+    "namespace": "github",
+    "alias": "commitChanges",
+    "flat": "dataGithubCommitLocalRepository",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_compare_commits": {
     "qualified": "github::compareCommits",
@@ -4939,6 +4975,24 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_create_local_branch": {
+    "qualified": "github::createLocalBranch",
+    "namespace": "github",
+    "alias": "createLocalBranch",
+    "flat": "dataGithubCreateLocalBranch",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_create_local_tag": {
+    "qualified": "github::createLocalTag",
+    "namespace": "github",
+    "alias": "createLocalTag",
+    "flat": "dataGithubCreateLocalTag",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_create_or_update_file": {
     "qualified": "github::createOrUpdateFile",
@@ -4994,6 +5048,24 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_delete_local_branch": {
+    "qualified": "github::deleteLocalBranch",
+    "namespace": "github",
+    "alias": "deleteLocalBranch",
+    "flat": "dataGithubDeleteLocalBranch",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_delete_local_tag": {
+    "qualified": "github::deleteLocalTag",
+    "namespace": "github",
+    "alias": "deleteLocalTag",
+    "flat": "dataGithubDeleteLocalTag",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_download_file": {
     "qualified": "github::downloadFile",
     "namespace": "github",
@@ -5011,6 +5083,15 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_fetch_repo": {
+    "qualified": "github::fetchRepo",
+    "namespace": "github",
+    "alias": "fetchRepo",
+    "flat": "dataGithubFetchRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_get_branch": {
     "qualified": "github::getBranch",
@@ -5093,6 +5174,15 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_init_repo": {
+    "qualified": "github::initRepo",
+    "namespace": "github",
+    "alias": "initRepo",
+    "flat": "dataGithubInitRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_list_branches": {
     "qualified": "github::listBranches",
     "namespace": "github",
@@ -5128,6 +5218,42 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_list_local_branches": {
+    "qualified": "github::listLocalBranches",
+    "namespace": "github",
+    "alias": "listLocalBranches",
+    "flat": "dataGithubListLocalBranches",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_list_local_remotes": {
+    "qualified": "github::listRemotes",
+    "namespace": "github",
+    "alias": "listRemotes",
+    "flat": "dataGithubListLocalRemotes",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_list_local_stashes": {
+    "qualified": "github::listStashes",
+    "namespace": "github",
+    "alias": "listStashes",
+    "flat": "dataGithubListLocalStashes",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_list_local_tags": {
+    "qualified": "github::listLocalTags",
+    "namespace": "github",
+    "alias": "listLocalTags",
+    "flat": "dataGithubListLocalTags",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_list_pr_files": {
     "qualified": "github::listPrFiles",
@@ -5183,6 +5309,42 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_local_diff": {
+    "qualified": "github::diffRepository",
+    "namespace": "github",
+    "alias": "diffRepository",
+    "flat": "dataGithubLocalDiff",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_local_log": {
+    "qualified": "github::repositoryLog",
+    "namespace": "github",
+    "alias": "repositoryLog",
+    "flat": "dataGithubLocalLog",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_local_status": {
+    "qualified": "github::repositoryStatus",
+    "namespace": "github",
+    "alias": "repositoryStatus",
+    "flat": "dataGithubLocalStatus",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_merge_local_repository": {
+    "qualified": "github::mergeBranch",
+    "namespace": "github",
+    "alias": "mergeBranch",
+    "flat": "dataGithubMergeLocalRepository",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_merge_pull_request": {
     "qualified": "github::mergePullRequest",
     "namespace": "github",
@@ -5191,6 +5353,15 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_pop_local_stash": {
+    "qualified": "github::popStash",
+    "namespace": "github",
+    "alias": "popStash",
+    "flat": "dataGithubPopLocalStash",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_provider_app": {
     "qualified": "github::providerApp",
@@ -5219,6 +5390,51 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_pull_repo": {
+    "qualified": "github::pullRepo",
+    "namespace": "github",
+    "alias": "pullRepo",
+    "flat": "dataGithubPullRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_push_repo": {
+    "qualified": "github::pushRepo",
+    "namespace": "github",
+    "alias": "pushRepo",
+    "flat": "dataGithubPushRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_remove_repo_remote": {
+    "qualified": "github::removeRepoRemote",
+    "namespace": "github",
+    "alias": "removeRepoRemote",
+    "flat": "dataGithubRemoveRepoRemote",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_reset_local_repository": {
+    "qualified": "github::resetRepository",
+    "namespace": "github",
+    "alias": "resetRepository",
+    "flat": "dataGithubResetLocalRepository",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_save_local_stash": {
+    "qualified": "github::stashChanges",
+    "namespace": "github",
+    "alias": "stashChanges",
+    "flat": "dataGithubSaveLocalStash",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_search_code": {
     "qualified": "github::searchCode",
     "namespace": "github",
@@ -5245,6 +5461,51 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_set_repo_remote_url": {
+    "qualified": "github::setRepoRemoteUrl",
+    "namespace": "github",
+    "alias": "setRepoRemoteUrl",
+    "flat": "dataGithubSetRepoRemoteUrl",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_stage_local_files": {
+    "qualified": "github::stageFiles",
+    "namespace": "github",
+    "alias": "stageFiles",
+    "flat": "dataGithubStageLocalFiles",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_switch_local_branch": {
+    "qualified": "github::switchBranch",
+    "namespace": "github",
+    "alias": "switchBranch",
+    "flat": "dataGithubSwitchLocalBranch",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_sync_repo": {
+    "qualified": "github::syncRepo",
+    "namespace": "github",
+    "alias": "syncRepo",
+    "flat": "dataGithubSyncRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_unstage_local_files": {
+    "qualified": "github::unstageFiles",
+    "namespace": "github",
+    "alias": "unstageFiles",
+    "flat": "dataGithubUnstageLocalFiles",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_update_issue": {
     "qualified": "github::updateIssue",
@@ -12748,6 +13009,15 @@
     "namespace": "onnx",
     "alias": "gliner",
     "flat": "onnxGliner",
+    "receiver": null,
+    "class": null,
+    "category": "AI/ML/ONNX/NLP"
+  },
+  "onnx_laya": {
+    "qualified": "onnx::laya",
+    "namespace": "onnx",
+    "alias": "laya",
+    "flat": "onnxLaya",
     "receiver": null,
     "class": null,
     "category": "AI/ML/ONNX/NLP"

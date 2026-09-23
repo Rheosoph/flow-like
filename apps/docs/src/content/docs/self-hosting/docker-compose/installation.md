@@ -54,7 +54,10 @@ FLOW_LIKE_RUNTIME_CONFIG_FILE=./flow-like.config.json
 ```
 
 Compose mounts that file into the API and sink services at startup. Recreate the
-API and sink services after editing it. The web container also reads its public
+API and sink services after editing it. The audit worker does not read it; its
+audit policy is compiled into its image, see
+[Audit worker policy](/self-hosting/docker-compose/configuration/#audit-worker-policy).
+The web container also reads its public
 URLs at startup, so recreate `web` after changing `NEXT_PUBLIC_*`. These changes
 do not require rebuilding images. See
 [Configuration](/self-hosting/docker-compose/configuration/#hub-configuration-and-identity)

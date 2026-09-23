@@ -80,9 +80,11 @@ Lambda API.
 
 Pausing is a platform action, not a worker setting. Disable the schedule on AWS
 (EventBridge Scheduler) or GCP (Cloud Scheduler), switch the Azure Container Apps Job
-to a manual trigger, scale the Kubernetes Deployment to zero replicas, or stop the
+to a manual trigger, set `audit.replicaCount: 0` in the Helm chart, or stop the
 Compose service. Records stay pending while the worker is paused and are sealed once
 it runs again.
+
+### Entry key
 
 Every API and worker needs the same explicit `AUDIT_ENTRY_KEY`. Setup scripts
 generate this separately from `BACKEND_KEY`, so the worker never needs the backend

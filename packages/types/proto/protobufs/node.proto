@@ -50,6 +50,7 @@ message Node {
     optional string alias = 27;
     optional string receiver = 28;
     optional bool pins_collapsed = 29;
+    optional bool auto_reroute = 30;
 }
 
 message NodeWasm {

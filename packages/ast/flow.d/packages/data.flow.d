@@ -2540,7 +2540,7 @@ declare namespace github {
      * @param targetDir — FlowPath directory to clone into (supports any store type)
      * @param branch (optional) — Branch to clone (leave empty for default branch)
      * @param depth (optional) — Shallow clone depth (0 for full clone)
-     * @param includeGit (optional) — Include the .git directory (only useful for local stores)
+     * @param includeGit (optional) — Copy .git metadata into non-local stores. Local clones always retain their Git metadata.
      * @returns repoPath — FlowPath to the cloned repository
      * @impure has side effects / drives control flow
      */
@@ -3184,6 +3184,403 @@ declare namespace github {
      * @impure has side effects / drives control flow
      */
     function uploadReleaseAsset({ provider: Struct, owner: string, repo: string, releaseId: int, file: Struct, name?: string, label?: string, contentType?: string }): { asset: Struct, assetId: int, downloadUrl: string };
+
+    // === Data/GitHub/Repository ===
+
+    /**
+     * Cancel an unfinished merge and restore the pre-merge state. Returns an error when no merge is in progress.
+     * @node data_github_abort_local_merge @alias dataGithubAbortLocalMerge
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function abortMerge({ repository: Struct }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Add a named HTTPS remote to a local repository without storing credentials.
+     * @node data_github_add_repo_remote @alias dataGithubAddRepoRemote
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param remote (optional) — Configured remote name
+     * @param url (optional) — HTTPS repository URL without embedded credentials
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function addRepoRemote({ repository: Struct, remote?: string, url?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Check out a commit or tag with detached HEAD. Use Switch Branch to resume work on a local branch.
+     * @node data_github_checkout_local_revision @alias dataGithubCheckoutLocalRevision
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param revision (optional) — Commit, tag, or revision to check out
+     * @param requireClean (optional) — Reject tracked changes and untracked files before checking out
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function checkoutRevision({ repository: Struct, revision?: string, requireClean?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Commit the staged changes. Uses the repository identity unless an author name and email are provided. Commit signing is disabled for unattended execution.
+     * @node data_github_commit_local_repository @alias dataGithubCommitLocalRepository
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param message (optional) — Required commit message
+     * @param authorName (optional) — Optional author and committer name; requires Author Email
+     * @param authorEmail (optional) — Optional author and committer email; requires Author Name
+     * @param allowEmpty (optional) — Allow creating a commit with no staged changes
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns commit — Created commit SHA
+     * @impure has side effects / drives control flow
+     */
+    function commitChanges({ repository: Struct, message?: string, authorName?: string, authorEmail?: string, allowEmpty?: bool }): { repoPath: Struct, output: string, errorMessage: string, commit: string };
+
+    /**
+     * Create a local branch at a commit, tag, or branch without changing a GitHub API branch directly.
+     * @node data_github_create_local_branch @alias dataGithubCreateLocalBranch
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param branch (optional) — New local branch name
+     * @param startPoint (optional) — Commit, tag, or existing branch for the new branch
+     * @param switch (optional) — Switch to the new branch; requires a clean working tree
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function createLocalBranch({ repository: Struct, branch?: string, startPoint?: string, switch?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Create a tag at a commit. A nonempty message creates an unsigned annotated tag; an empty message creates a lightweight tag. Existing tags are never overwritten.
+     * @node data_github_create_local_tag @alias dataGithubCreateLocalTag
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param name (optional) — New local tag name
+     * @param revision (optional) — Commit, branch, or tag to tag
+     * @param message (optional) — Annotation message; leave empty for a lightweight tag
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function createLocalTag({ repository: Struct, name?: string, revision?: string, message?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Delete a local branch. Git rejects unmerged branches unless Force is enabled and always protects branches checked out in a worktree.
+     * @node data_github_delete_local_branch @alias dataGithubDeleteLocalBranch
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param branch (optional) — Local branch to delete
+     * @param force (optional) — Allow deleting an unmerged branch; its commits may become unreachable
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function deleteLocalBranch({ repository: Struct, branch?: string, force?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Delete a named local tag. Remote tags are unchanged.
+     * @node data_github_delete_local_tag @alias dataGithubDeleteLocalTag
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param name (optional) — Existing local tag name
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function deleteLocalTag({ repository: Struct, name?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Read the tracked-file diff for a working tree or its staged changes. Untracked files are available from Repository Status.
+     * @node data_github_local_diff @alias dataGithubLocalDiff
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param staged (optional) — Compare staged changes against the revision instead of working tree changes
+     * @param revision (optional) — Optional commit or revision to compare against; empty uses the index or HEAD
+     * @param paths (optional) — Literal paths relative to the repository root. Wildcards are not expanded.
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function diffRepository({ repository: Struct, staged?: bool, revision?: string, paths?: string[] }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Download remote branches and tags into a local repository without changing checked-out files.
+     * @node data_github_fetch_repo @alias dataGithubFetchRepo
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param provider — GitHub authentication for this operation
+     * @param remote (optional) — Configured remote name
+     * @param prune (optional) — Remove stale remote-tracking references
+     * @param tags (optional) — Fetch all tags in addition to configured branches
+     * @param unshallow (optional) — Fetch complete history from a complete remote; fails if this clone is already complete
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function fetchRepo({ repository: Struct, provider: Struct, remote?: string, prune?: bool, tags?: bool, unshallow?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Initialize a new local Git working tree at the supplied directory. Refuses an existing repository.
+     * @node data_github_init_repo @alias dataGithubInitRepo
+     * @param repository — Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.
+     * @param branch (optional) — Initial branch name for the new repository
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function initRepo({ repository: Struct, branch?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * List local branches and optionally cached remote branches. Fetch first to refresh remote branches.
+     * @node data_github_list_local_branches @alias dataGithubListLocalBranches
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param includeRemote (optional) — Include branches under refs/remotes
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns branches — Branches, their commits, and upstream configuration
+     * @returns count — Number of entries returned
+     * @impure has side effects / drives control flow
+     */
+    function listLocalBranches({ repository: Struct, includeRemote?: bool }): { repoPath: Struct, output: string, errorMessage: string, branches: Struct[], count: int };
+
+    /**
+     * List tags stored in the local repository. Fetch with tags enabled to refresh tags from a remote.
+     * @node data_github_list_local_tags @alias dataGithubListLocalTags
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns tags — Tag names in lexicographic order
+     * @returns count — Number of entries returned
+     * @impure has side effects / drives control flow
+     */
+    function listLocalTags({ repository: Struct }): { repoPath: Struct, output: string, errorMessage: string, tags: string[], count: int };
+
+    /**
+     * List configured fetch and push URLs with embedded credentials removed.
+     * @node data_github_list_local_remotes @alias dataGithubListLocalRemotes
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns remotes — Configured remote names and URLs
+     * @returns count — Number of entries returned
+     * @impure has side effects / drives control flow
+     */
+    function listRemotes({ repository: Struct }): { repoPath: Struct, output: string, errorMessage: string, remotes: Struct[], count: int };
+
+    /**
+     * List saved local stashes in newest-first order.
+     * @node data_github_list_local_stashes @alias dataGithubListLocalStashes
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns stashes — Stash references, commits, and messages
+     * @returns count — Number of entries returned
+     * @impure has side effects / drives control flow
+     */
+    function listStashes({ repository: Struct }): { repoPath: Struct, output: string, errorMessage: string, stashes: Struct[], count: int };
+
+    /**
+     * Merge a branch or revision into the current branch. Requires a clean working tree. Conflicts route to Error; Abort Merge cancels an unfinished merge.
+     * @node data_github_merge_local_repository @alias dataGithubMergeLocalRepository
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param revision (optional) — Branch, tag, or revision to merge
+     * @param fastForwardOnly (optional) — Reject divergent history instead of creating a merge commit
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function mergeBranch({ repository: Struct, revision?: string, fastForwardOnly?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Apply a stash and remove it after success. Conflicts route to Error and preserve the stash for recovery.
+     * @node data_github_pop_local_stash @alias dataGithubPopLocalStash
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param index (optional) — Zero-based stash index; 0 is the newest stash
+     * @param restoreIndex (optional) — Attempt to restore which changes were staged
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function popStash({ repository: Struct, index?: int, restoreIndex?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Fetch and fast-forward the current branch of a clean local repository. Divergent history produces an error.
+     * @node data_github_pull_repo @alias dataGithubPullRepo
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param provider — GitHub authentication for this operation
+     * @param remote (optional) — Configured remote name
+     * @param branch (optional) — Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function pullRepo({ repository: Struct, provider: Struct, remote?: string, branch?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Push the current local branch to GitHub. Does not force-push or delete remote branches.
+     * @node data_github_push_repo @alias dataGithubPushRepo
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param provider — GitHub authentication for this operation
+     * @param remote (optional) — Configured remote name
+     * @param branch (optional) — Remote branch name; empty uses the current branch's upstream, or current branch name if no upstream is configured
+     * @param setUpstream (optional) — Record tracking information for the pushed branch
+     * @param followTags (optional) — Also push reachable annotated tags missing from the remote
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function pushRepo({ repository: Struct, provider: Struct, remote?: string, branch?: string, setUpstream?: bool, followTags?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Remove a remote and its tracking references from the local repository. Does not delete the remote repository.
+     * @node data_github_remove_repo_remote @alias dataGithubRemoveRepoRemote
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param remote (optional) — Configured remote name
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function removeRepoRemote({ repository: Struct, remote?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Read recent commits from a local branch, tag, or revision.
+     * @node data_github_local_log @alias dataGithubLocalLog
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param revision (optional) — Branch, tag, or revision to read
+     * @param maxCount (optional) — Maximum commits to return, from 1 to 10000
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns commits — Commits in newest-first order
+     * @returns count — Number of entries returned
+     * @impure has side effects / drives control flow
+     */
+    function repositoryLog({ repository: Struct, revision?: string, maxCount?: int }): { repoPath: Struct, output: string, errorMessage: string, commits: Struct[], count: int };
+
+    /**
+     * Inspect local changes, the current branch, and the checked out commit. Handles repositories before their first commit.
+     * @node data_github_local_status @alias dataGithubLocalStatus
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @returns status — Structured repository state and file changes
+     * @returns clean — No tracked changes or untracked files
+     * @returns branch — Current branch; empty for detached HEAD
+     * @returns commit — Current commit SHA; empty before the first commit
+     * @impure has side effects / drives control flow
+     */
+    function repositoryStatus({ repository: Struct }): { repoPath: Struct, output: string, errorMessage: string, status: Struct, clean: bool, branch: string, commit: string };
+
+    /**
+     * Move the current branch to a revision. Soft preserves staged changes; mixed unstages changes; hard discards tracked changes and may remove obstructing untracked files.
+     * @node data_github_reset_local_repository @alias dataGithubResetLocalRepository
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param revision (optional) — Commit, branch, or tag to reset to
+     * @param mode (optional) — soft, mixed, or hard
+     * @param allowDestructive (optional) — Required for hard reset, which can discard local file contents
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function resetRepository({ repository: Struct, revision?: string, mode?: string, allowDestructive?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Change a named remote's fetch URL. A separately configured push URL is left unchanged.
+     * @node data_github_set_repo_remote_url @alias dataGithubSetRepoRemoteUrl
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param remote (optional) — Configured remote name
+     * @param url (optional) — HTTPS repository URL without embedded credentials
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function setRepoRemoteUrl({ repository: Struct, remote?: string, url?: string }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Stage additions, modifications, and deletions for a commit. Provide literal paths or explicitly enable All.
+     * @node data_github_stage_local_files @alias dataGithubStageLocalFiles
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param paths (optional) — Literal paths relative to the repository root. Wildcards are not expanded.
+     * @param all (optional) — Stage every non-ignored change; leave Paths empty
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function stageFiles({ repository: Struct, paths?: string[], all?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Save tracked worktree and staged changes in a stash. Untracked files are included only when requested; ignored files are preserved.
+     * @node data_github_save_local_stash @alias dataGithubSaveLocalStash
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param message (optional) — Optional stash description
+     * @param includeUntracked (optional) — Also stash and remove untracked files from the working tree
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function stashChanges({ repository: Struct, message?: string, includeUntracked?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Switch an existing local branch. Local changes are rejected by default; disabling Require Clean retains normal Git overwrite checks.
+     * @node data_github_switch_local_branch @alias dataGithubSwitchLocalBranch
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param branch (optional) — Existing local branch name
+     * @param requireClean (optional) — Reject tracked changes and untracked files before switching
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function switchBranch({ repository: Struct, branch?: string, requireClean?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Clone a missing local working tree, or fetch and fast-forward an existing clone of the same GitHub repository. Local changes and divergent history produce an error.
+     * @node data_github_sync_repo @alias dataGithubSyncRepo
+     * @param repository — Local FlowPath for the exact repository directory, not its parent. The directory may be missing. Requires Git on the runtime host.
+     * @param provider — GitHub authentication for this operation
+     * @param owner (optional) — GitHub repository owner
+     * @param repo (optional) — GitHub repository name
+     * @param branch (optional) — Branch to clone or switch to; empty keeps the current branch or clones the default branch
+     * @param depth (optional) — Clone depth when creating the repository; 0 clones full history
+     * @param prune (optional) — Remove stale origin tracking references when updating
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function syncRepo({ repository: Struct, provider: Struct, owner?: string, repo?: string, branch?: string, depth?: int, prune?: bool }): { repoPath: Struct, output: string, errorMessage: string };
+
+    /**
+     * Remove selected changes from the staging area while preserving working files, including before the first commit.
+     * @node data_github_unstage_local_files @alias dataGithubUnstageLocalFiles
+     * @param repository — FlowPath to the root of a local Git working tree. Requires Git on the runtime host.
+     * @param paths (optional) — Literal paths relative to the repository root. Wildcards are not expanded.
+     * @param all (optional) — Unstage every staged change; leave Paths empty
+     * @returns repoPath — Local working tree for the next repository node
+     * @returns output — Git output with credentials removed
+     * @returns errorMessage — Failure details, empty on success
+     * @impure has side effects / drives control flow
+     */
+    function unstageFiles({ repository: Struct, paths?: string[], all?: bool }): { repoPath: Struct, output: string, errorMessage: string };
 
     // === Data/GitHub/Workflows ===
 

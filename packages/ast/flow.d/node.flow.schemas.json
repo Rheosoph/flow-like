@@ -2988,6 +2988,14 @@
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GcpProvider\",\"description\":\"Typed credential struct emitted by `GcpProviderNode`.\\n\\n`auth_mode` decides which of the optional fields are consulted at run-time.\\nThe struct is the single contract between GCP-aware consumers (BigQuery,\\nGCS, etc.) and the provider node \\u2014 consumer nodes should never define their\\nown GCP credential pins.\",\"type\":\"object\",\"properties\":{\"auth_mode\":{\"type\":\"string\"},\"default_project_id\":{\"type\":[\"string\",\"null\"]},\"readonly\":{\"type\":\"boolean\"},\"service_account_json\":{\"type\":[\"string\",\"null\"]},\"service_account_file\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]},\"access_token\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"auth_mode\",\"readonly\"],\"$defs\":{\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
     }
   },
+  "data_github_abort_local_merge": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
   "data_github_add_issue_comment": {
     "inputs": {
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
@@ -2996,10 +3004,34 @@
       "comment": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubIssueComment\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"body\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"},\"user\":{\"$ref\":\"#/$defs/GitHubIssueUser\"},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"}},\"required\":[\"id\",\"body\",\"html_url\",\"user\",\"created_at\",\"updated_at\"],\"$defs\":{\"GitHubIssueUser\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"login\":{\"type\":\"string\"},\"avatar_url\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"}},\"required\":[\"id\",\"login\",\"avatar_url\",\"html_url\"]}}}"
     }
   },
+  "data_github_add_repo_remote": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_checkout_local_revision": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
   "data_github_clone_repo": {
     "inputs": {
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
       "targetDir": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_commit_local_repository": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     },
     "outputs": {
       "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
@@ -3025,6 +3057,22 @@
     },
     "outputs": {
       "issue": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubIssue\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"number\":{\"type\":\"integer\",\"format\":\"int64\"},\"title\":{\"type\":\"string\"},\"body\":{\"type\":[\"string\",\"null\"]},\"state\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"},\"user\":{\"$ref\":\"#/$defs/GitHubIssueUser\"},\"labels\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GitHubLabel\"}},\"assignees\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GitHubIssueUser\"}},\"milestone\":{\"anyOf\":[{\"$ref\":\"#/$defs/GitHubMilestone\"},{\"type\":\"null\"}]},\"comments\":{\"type\":\"integer\",\"format\":\"int64\"},\"is_pull_request\":{\"type\":\"boolean\"},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"},\"closed_at\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"number\",\"title\",\"state\",\"html_url\",\"user\",\"labels\",\"assignees\",\"comments\",\"is_pull_request\",\"created_at\",\"updated_at\"],\"$defs\":{\"GitHubIssueUser\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"login\":{\"type\":\"string\"},\"avatar_url\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"}},\"required\":[\"id\",\"login\",\"avatar_url\",\"html_url\"]},\"GitHubLabel\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"name\":{\"type\":\"string\"},\"color\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"name\",\"color\"]},\"GitHubMilestone\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"number\":{\"type\":\"integer\",\"format\":\"int64\"},\"title\":{\"type\":\"string\"},\"state\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"number\",\"title\",\"state\"]}}}"
+    }
+  },
+  "data_github_create_local_branch": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_create_local_tag": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     }
   },
   "data_github_create_or_update_file": {
@@ -3068,6 +3116,22 @@
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
     }
   },
+  "data_github_delete_local_branch": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_delete_local_tag": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
   "data_github_download_file": {
     "inputs": {
       "outputPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
@@ -3084,6 +3148,15 @@
     },
     "outputs": {
       "path": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_fetch_repo": {
+    "inputs": {
+      "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     }
   },
   "data_github_get_branch": {
@@ -3158,6 +3231,14 @@
       "user": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubUser\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"login\":{\"type\":\"string\"},\"name\":{\"type\":[\"string\",\"null\"]},\"email\":{\"type\":[\"string\",\"null\"]},\"avatar_url\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"},\"user_type\":{\"type\":\"string\"},\"bio\":{\"type\":[\"string\",\"null\"]},\"company\":{\"type\":[\"string\",\"null\"]},\"location\":{\"type\":[\"string\",\"null\"]},\"blog\":{\"type\":[\"string\",\"null\"]},\"twitter_username\":{\"type\":[\"string\",\"null\"]},\"public_repos\":{\"type\":\"integer\",\"format\":\"int64\"},\"public_gists\":{\"type\":\"integer\",\"format\":\"int64\"},\"followers\":{\"type\":\"integer\",\"format\":\"int64\"},\"following\":{\"type\":\"integer\",\"format\":\"int64\"},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"}},\"required\":[\"id\",\"login\",\"avatar_url\",\"html_url\",\"user_type\",\"public_repos\",\"public_gists\",\"followers\",\"following\",\"created_at\",\"updated_at\"]}"
     }
   },
+  "data_github_init_repo": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
   "data_github_list_branches": {
     "inputs": {
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
@@ -3188,6 +3269,41 @@
     },
     "outputs": {
       "issues": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubIssue\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"number\":{\"type\":\"integer\",\"format\":\"int64\"},\"title\":{\"type\":\"string\"},\"body\":{\"type\":[\"string\",\"null\"]},\"state\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"},\"user\":{\"$ref\":\"#/$defs/GitHubIssueUser\"},\"labels\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GitHubLabel\"}},\"assignees\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GitHubIssueUser\"}},\"milestone\":{\"anyOf\":[{\"$ref\":\"#/$defs/GitHubMilestone\"},{\"type\":\"null\"}]},\"comments\":{\"type\":\"integer\",\"format\":\"int64\"},\"is_pull_request\":{\"type\":\"boolean\"},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"},\"closed_at\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"number\",\"title\",\"state\",\"html_url\",\"user\",\"labels\",\"assignees\",\"comments\",\"is_pull_request\",\"created_at\",\"updated_at\"],\"$defs\":{\"GitHubIssueUser\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"login\":{\"type\":\"string\"},\"avatar_url\":{\"type\":\"string\"},\"html_url\":{\"type\":\"string\"}},\"required\":[\"id\",\"login\",\"avatar_url\",\"html_url\"]},\"GitHubLabel\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"name\":{\"type\":\"string\"},\"color\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"name\",\"color\"]},\"GitHubMilestone\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"number\":{\"type\":\"integer\",\"format\":\"int64\"},\"title\":{\"type\":\"string\"},\"state\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"number\",\"title\",\"state\"]}}}"
+    }
+  },
+  "data_github_list_local_branches": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "branches": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitBranch\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"current\":{\"type\":\"boolean\"},\"remote\":{\"type\":\"boolean\"},\"upstream\":{\"type\":\"string\"}},\"required\":[\"name\",\"commit\",\"current\",\"remote\",\"upstream\"]}",
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_list_local_remotes": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "remotes": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitRemote\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"fetch_urls\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"push_urls\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\",\"fetch_urls\",\"push_urls\"]}",
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_list_local_stashes": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+      "stashes": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitStash\",\"type\":\"object\",\"properties\":{\"reference\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"reference\",\"commit\",\"message\"]}"
+    }
+  },
+  "data_github_list_local_tags": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     }
   },
   "data_github_list_pr_files": {
@@ -3238,9 +3354,51 @@
       "repos": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubRepository\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"name\":{\"type\":\"string\"},\"full_name\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]},\"html_url\":{\"type\":\"string\"},\"clone_url\":{\"type\":\"string\"},\"ssh_url\":{\"type\":\"string\"},\"private\":{\"type\":\"boolean\"},\"fork\":{\"type\":\"boolean\"},\"archived\":{\"type\":\"boolean\"},\"default_branch\":{\"type\":\"string\"},\"language\":{\"type\":[\"string\",\"null\"]},\"stargazers_count\":{\"type\":\"integer\",\"format\":\"int64\"},\"forks_count\":{\"type\":\"integer\",\"format\":\"int64\"},\"open_issues_count\":{\"type\":\"integer\",\"format\":\"int64\"},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"},\"pushed_at\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"name\",\"full_name\",\"html_url\",\"clone_url\",\"ssh_url\",\"private\",\"fork\",\"archived\",\"default_branch\",\"stargazers_count\",\"forks_count\",\"open_issues_count\",\"created_at\",\"updated_at\"]}"
     }
   },
+  "data_github_local_diff": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_local_log": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "commits": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitCommit\",\"type\":\"object\",\"properties\":{\"sha\":{\"type\":\"string\"},\"parents\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"author_name\":{\"type\":\"string\"},\"author_email\":{\"type\":\"string\"},\"authored_at\":{\"type\":\"string\"},\"subject\":{\"type\":\"string\"}},\"required\":[\"sha\",\"parents\",\"author_name\",\"author_email\",\"authored_at\",\"subject\"]}",
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_local_status": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+      "status": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LocalGitStatus\",\"type\":\"object\",\"properties\":{\"branch\":{\"type\":\"string\"},\"commit\":{\"type\":\"string\"},\"clean\":{\"type\":\"boolean\"},\"detached\":{\"type\":\"boolean\"},\"files\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LocalGitFileStatus\"}}},\"required\":[\"branch\",\"commit\",\"clean\",\"detached\",\"files\"],\"$defs\":{\"LocalGitFileStatus\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"original_path\":{\"type\":[\"string\",\"null\"]},\"index_status\":{\"type\":\"string\"},\"worktree_status\":{\"type\":\"string\"},\"untracked\":{\"type\":\"boolean\"},\"conflicted\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"index_status\",\"worktree_status\",\"untracked\",\"conflicted\"]}}}"
+    }
+  },
+  "data_github_merge_local_repository": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
   "data_github_merge_pull_request": {
     "inputs": {
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
+    }
+  },
+  "data_github_pop_local_stash": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     }
   },
   "data_github_provider_app": {
@@ -3256,6 +3414,48 @@
   "data_github_provider_pat": {
     "outputs": {
       "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}"
+    }
+  },
+  "data_github_pull_repo": {
+    "inputs": {
+      "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_push_repo": {
+    "inputs": {
+      "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_remove_repo_remote": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_reset_local_repository": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_save_local_stash": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     }
   },
   "data_github_search_code": {
@@ -3280,6 +3480,47 @@
     },
     "outputs": {
       "repos": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubRepository\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"format\":\"int64\"},\"name\":{\"type\":\"string\"},\"full_name\":{\"type\":\"string\"},\"description\":{\"type\":[\"string\",\"null\"]},\"html_url\":{\"type\":\"string\"},\"clone_url\":{\"type\":\"string\"},\"ssh_url\":{\"type\":\"string\"},\"private\":{\"type\":\"boolean\"},\"fork\":{\"type\":\"boolean\"},\"archived\":{\"type\":\"boolean\"},\"default_branch\":{\"type\":\"string\"},\"language\":{\"type\":[\"string\",\"null\"]},\"stargazers_count\":{\"type\":\"integer\",\"format\":\"int64\"},\"forks_count\":{\"type\":\"integer\",\"format\":\"int64\"},\"open_issues_count\":{\"type\":\"integer\",\"format\":\"int64\"},\"created_at\":{\"type\":\"string\"},\"updated_at\":{\"type\":\"string\"},\"pushed_at\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"id\",\"name\",\"full_name\",\"html_url\",\"clone_url\",\"ssh_url\",\"private\",\"fork\",\"archived\",\"default_branch\",\"stargazers_count\",\"forks_count\",\"open_issues_count\",\"created_at\",\"updated_at\"]}"
+    }
+  },
+  "data_github_set_repo_remote_url": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_stage_local_files": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_switch_local_branch": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_sync_repo": {
+    "inputs": {
+      "provider": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GitHubProvider\",\"description\":\"GitHub provider - works with OAuth, PAT, or GitHub App tokens\",\"type\":\"object\",\"properties\":{\"provider_id\":{\"type\":\"string\"},\"access_token\":{\"type\":\"string\"},\"base_url\":{\"type\":\"string\"}},\"required\":[\"provider_id\",\"access_token\",\"base_url\"]}",
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    }
+  },
+  "data_github_unstage_local_files": {
+    "inputs": {
+      "repository": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "repoPath": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
     }
   },
   "data_github_update_issue": {
@@ -7173,6 +7414,17 @@
     "outputs": {
       "entities": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GlinerEntity\",\"description\":\"A span GLiNER assigned one of the runtime labels\",\"type\":\"object\",\"properties\":{\"text\":{\"description\":\"The entity text, sliced from the input\",\"type\":\"string\"},\"label\":{\"description\":\"The runtime label this span matched\",\"type\":\"string\"},\"start_char\":{\"description\":\"Character start position in the original text\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_char\":{\"description\":\"Character end position in the original text (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"start_word\":{\"description\":\"Index of the first word in the span\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_word\":{\"description\":\"Index of the last word in the span (inclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"score\":{\"description\":\"Sigmoid score for this span/label pair\",\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"text\",\"label\",\"start_char\",\"end_char\",\"start_word\",\"end_word\",\"score\"]}",
       "result": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GlinerResult\",\"description\":\"Result of a zero-shot extraction pass\",\"type\":\"object\",\"properties\":{\"entities\":{\"description\":\"Accepted entities, ordered by position\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GlinerEntity\"}},\"text\":{\"description\":\"Original input text\",\"type\":\"string\"},\"labels\":{\"description\":\"Labels the model was asked about\",\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"word_count\":{\"description\":\"Words the text was split into\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"entities\",\"text\",\"labels\",\"word_count\"],\"$defs\":{\"GlinerEntity\":{\"description\":\"A span GLiNER assigned one of the runtime labels\",\"type\":\"object\",\"properties\":{\"text\":{\"description\":\"The entity text, sliced from the input\",\"type\":\"string\"},\"label\":{\"description\":\"The runtime label this span matched\",\"type\":\"string\"},\"start_char\":{\"description\":\"Character start position in the original text\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_char\":{\"description\":\"Character end position in the original text (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"start_word\":{\"description\":\"Index of the first word in the span\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_word\":{\"description\":\"Index of the last word in the span (inclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"score\":{\"description\":\"Sigmoid score for this span/label pair\",\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"text\",\"label\",\"start_char\",\"end_char\",\"start_word\",\"end_word\",\"score\"]}}}"
+    }
+  },
+  "onnx_laya": {
+    "inputs": {
+      "cacheDir": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+      "config": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+      "tokenizer": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}",
+      "weights": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+    },
+    "outputs": {
+      "result": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"LayaResult\",\"type\":\"object\",\"properties\":{\"question_type\":{\"$ref\":\"#/$defs/LayaQuestionType\"},\"choice\":{\"description\":\"Selected label for a choice question.\",\"type\":[\"string\",\"null\"]},\"score\":{\"description\":\"Expected zero-based rubric level for a score question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"noul\":{\"description\":\"Probability that the statement holds for a noul question.\",\"type\":[\"number\",\"null\"],\"format\":\"double\"},\"probabilities\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/LayaProbability\"}},\"confidence\":{\"description\":\"One minus normalized entropy; for noul, the larger of P(false) and P(true).\",\"type\":\"number\",\"format\":\"double\"},\"act_probability\":{\"description\":\"Probability of action index zero from the model's separate action head.\",\"type\":\"number\",\"format\":\"double\"},\"input_tokens\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"question_type\",\"probabilities\",\"confidence\",\"act_probability\",\"input_tokens\"],\"$defs\":{\"LayaQuestionType\":{\"type\":\"string\",\"enum\":[\"choice\",\"score\",\"noul\"]},\"LayaProbability\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"probability\":{\"type\":\"number\",\"format\":\"double\"}},\"required\":[\"label\",\"probability\"]}}}"
     }
   },
   "onnx_model_info": {

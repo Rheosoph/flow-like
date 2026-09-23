@@ -25,6 +25,16 @@ export interface IHub {
 	region?: null | string;
 	terms_of_service: string;
 	signaling?: null | string[];
+	/** Standalone device enrollment and inventory availability. */
+	standalone?: {
+		enabled: boolean;
+		telemetry_tiers?: Record<string, { max_bytes: number; retention_seconds: number }>;
+		release_trust?: {
+			manifest_url: string;
+			public_keys: string[];
+			minimum_sequence: number;
+		} | null;
+	} | null;
 	/** Supported server-side event sinks */
 	supported_sinks?: ISupportedSinks | null;
 	thumbnail?: null | string;

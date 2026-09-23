@@ -383,13 +383,13 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
     } else {
         reportCreated = true   //@n:c3z9pjjhjpy4njl7v5pl1exk
         const date3 = now()   //@n:ijrzyi85455n11q11zjlins6
-        let record = struct::set({ structIn: {}, field: "created", value: date3 }).structOut   //@n:oyz8sbq88icbqp31xyu68kke
-        record.title = title   //@n:xw6ifsysoanbo9ka83d72cpt
-        record.report = report   //@n:udwegq14u2johkogeuk3etlm
-        record.description = shortSummary   //@n:g4msinux2ooq26k7tk6hdvss
-        record.report_id = reportID   //@n:l3uwlikddjsnscukz2cfu8ll
+        let row = struct::set({ structIn: {}, field: "created", value: date3 }).structOut   //@n:oyz8sbq88icbqp31xyu68kke
+        row.title = title   //@n:xw6ifsysoanbo9ka83d72cpt
+        row.report = report   //@n:udwegq14u2johkogeuk3etlm
+        row.description = shortSummary   //@n:g4msinux2ooq26k7tk6hdvss
+        row.report_id = reportID   //@n:l3uwlikddjsnscukz2cfu8ll
         const database6 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
-        database6.insertOne(record)   //@n:fqn428vwps1mlqa5qqa5ttbm
+        database6.insertOne(row)   //@n:fqn428vwps1mlqa5qqa5ttbm
         user({ title: title, description: "", link: "/briefing?report_id={id}".format({ id: reportID }), showDesktop: true })   //@n:jcqwuf19ps7p9n7a7zpv796q
         return `Successfully created Report. You are done now!`   //@n:u44suc8lkffroaz9f30waxaf
     }
