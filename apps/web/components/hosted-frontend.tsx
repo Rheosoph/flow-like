@@ -42,6 +42,7 @@ import {
 import {
 	type HostedTarget,
 	hostedNavigationPath,
+	isHostedQueryPath,
 	parseHostedTarget,
 } from "../lib/hosted-route";
 
@@ -288,10 +289,11 @@ function HostedRuntime({
 					await request("/routes")
 				).json()) as HostedRoute[];
 				const path = hostedNavigationPath(
+					target.app,
 					route,
 					routes,
 					params,
-					new URLSearchParams(window.location.search).has("event"),
+					isHostedQueryPath(window.location.pathname),
 				);
 				if (replace) window.location.replace(path);
 				else window.location.assign(path);
@@ -303,7 +305,7 @@ function HostedRuntime({
 				);
 			}
 		},
-		[request],
+		[request, target.app],
 	);
 	useEffect(() => {
 		const previousBackend = useBackendStore.getState().backend;
@@ -339,7 +341,7 @@ function HostedRuntime({
 										css={bootstrap.appCustomCss}
 										scopeSelector="#hosted-interface"
 									/>
-									{target.kind !== "u" && (
+									{data.kind !== "u" && (
 										<header className="flex min-h-14 shrink-0 items-center gap-2 border-b px-4">
 											<span className="truncate font-medium">{event.name}</span>
 											<nav className="flex flex-1 items-center gap-2">
@@ -349,11 +351,11 @@ function HostedRuntime({
 										</header>
 									)}
 									<Container ref={sidebarRef}>
-										{target.kind === "c" ? (
+										{data.kind === "c" ? (
 											<ChatFeedbackEnabledContext.Provider value={false}>
 												<ChatInterface {...props} />
 											</ChatFeedbackEnabledContext.Provider>
-										) : target.kind === "f" ? (
+										) : data.kind === "f" ? (
 											<GenericEventFormInterface {...props} />
 										) : bootstrap.page ? (
 											<PageInterface

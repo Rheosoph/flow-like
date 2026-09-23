@@ -16,6 +16,7 @@ import {
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useNetworkStatus } from "../../hooks/use-network-status";
+import { isTransportFailure } from "../../lib/api-error";
 import { getApiOrigin } from "../../lib/api-url";
 import {
 	boardReadinessKey,
@@ -481,9 +482,17 @@ export function UsePageContent({
 				localProfileCheckPending,
 				remoteAppCheckPending: authenticatedRemoteCheckPending,
 				remoteAppLoaded: Boolean(remoteApp.data || validatedBootstrap),
-				remoteAppFailed: !validatedBootstrap && remoteApp.isError,
+				// A timeout or a socket that never answered proves nothing about access;
+				// ejecting on it trades the retry card for a store the user cannot reach.
+				remoteAppFailed:
+					!validatedBootstrap &&
+					remoteApp.isError &&
+					!isTransportFailure(remoteApp.error),
 				eventsLoaded: Boolean(confirmedEventCatalog || validatedBootstrap),
-				eventsFailed: !validatedBootstrap && events.isError,
+				eventsFailed:
+					!validatedBootstrap &&
+					events.isError &&
+					!isTransportFailure(events.error),
 				eventsFetching: bootstrapPending || events.isFetching,
 				offline: !isOnline,
 			}),
@@ -497,10 +506,12 @@ export function UsePageContent({
 			authenticatedRemoteCheckPending,
 			remoteApp.data,
 			remoteApp.isError,
+			remoteApp.error,
 			validatedBootstrap,
 			bootstrapPending,
 			confirmedEventCatalog,
 			events.isError,
+			events.error,
 			events.isFetching,
 			isOnline,
 		],

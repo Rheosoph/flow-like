@@ -2,7 +2,8 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { pathUseUrl, readUseRoutePath } from "../../lib/use-route-url";
+import { useClientHref, useClientRouter } from "../../lib/client-navigation";
+import { readUseRoutePath } from "../../lib/use-route-url";
 import { UsePageContent, type UsePageContentProps } from "./use-page-content";
 
 export function UseRoutePage({
@@ -11,12 +12,16 @@ export function UseRoutePage({
 }: Pick<UsePageContentProps, "eventConfig" | "notFound">) {
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
+	const clientHref = useClientHref();
+	const router = useClientRouter();
 	const query = searchParams.toString();
 	const [ready, setReady] = useState(false);
 	useEffect(() => {
 		try {
 			const current = new URL(window.location.href);
-			const canonical = pathUseUrl(current);
+			const canonical = clientHref(
+				current.pathname + current.search + current.hash,
+			);
 			if (
 				canonical !== current.pathname + current.search + current.hash ||
 				pathname !== current.pathname ||
@@ -24,14 +29,16 @@ export function UseRoutePage({
 			) {
 				// Development rewrites can inject their path parameter into Next's
 				// search params. The browser URL owns the app's actual query data.
-				window.history.replaceState(null, "", canonical);
+				router.replace(canonical, {
+					scroll: window.history.state?.flowLikeUseScroll !== false,
+				});
 				return;
 			}
 		} catch {
 			// Invalid path encodings render the existing not-found screen below.
 		}
 		setReady(true);
-	}, [pathname, query]);
+	}, [pathname, query, clientHref, router]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a different app or query can replace the fragment target without changing the path.
 	useEffect(() => {
 		if (

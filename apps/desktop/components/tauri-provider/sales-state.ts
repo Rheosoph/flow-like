@@ -1,11 +1,13 @@
-import type {
-	ICreateDiscountRequest,
-	IDiscount,
-	IPurchasesResponse,
-	ISalesOverview,
-	ISalesState,
-	ISalesStats,
-	IUpdateDiscountRequest,
+import {
+	type ICreateDiscountRequest,
+	type IDiscount,
+	type IFlowPaymentsReport,
+	type IPurchasesResponse,
+	type ISalesOverview,
+	type ISalesState,
+	type ISalesStats,
+	type IUpdateDiscountRequest,
+	flowPaymentsPath,
 } from "@flow-like/flow-like-ui";
 import { fetcher, post } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -46,6 +48,23 @@ export class SalesState implements ISalesState {
 		return await fetcher<ISalesStats>(
 			this.backend.profile,
 			url,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async getFlowPayments(
+		appId: string,
+		startDate?: string,
+		endDate?: string,
+		limit?: number,
+	): Promise<IFlowPaymentsReport> {
+		if (!this.backend.profile) {
+			throw new Error("Profile not available");
+		}
+		return await fetcher<IFlowPaymentsReport>(
+			this.backend.profile,
+			flowPaymentsPath(appId, startDate, endDate, limit),
 			undefined,
 			this.backend.auth,
 		);

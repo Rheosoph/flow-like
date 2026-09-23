@@ -16,28 +16,32 @@ export class AiState implements IAIState {
 		appId?: string,
 	): Promise<ReadableStream<IResponseChunk[]>> {
 		const channel = new Channel<IIntercomEvent[]>();
+		// Chunks keep arriving after a stop and after a cancel; the controller throws on them.
+		let closed = false;
 
 		// Create a ReadableStream that will be used to stream the response
 		const stream = new ReadableStream<IResponseChunk[]>({
 			start(controller) {
 				channel.onmessage = (chunks: IIntercomEvent[]) => {
+					if (closed) return;
 					const responseChunks = chunks
 						.filter((chunk) => chunk.event_type === "chunk")
 						.map((chunk) => chunk.payload as IResponseChunk);
 					controller.enqueue(responseChunks);
-					for (const chunk of chunks) {
-						if (chunk.event_type === "chunk") {
-							const responseChunk = chunk.payload as IResponseChunk;
-							if (responseChunk?.choices?.[0]?.finish_reason === "stop") {
-								controller.close();
-							}
-						}
+					if (
+						responseChunks.some(
+							(chunk) => chunk?.choices?.[0]?.finish_reason === "stop",
+						)
+					) {
+						closed = true;
+						controller.close();
 					}
 				};
 			},
 
 			cancel() {
-				// Background task will finish naturally
+				// The background task finishes on its own; later chunks are dropped.
+				closed = true;
 			},
 		});
 

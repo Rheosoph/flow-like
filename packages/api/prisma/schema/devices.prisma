@@ -1,0 +1,136 @@
+/// Account registry. Private identity keys and management plaintext stay on endpoints.
+model ManagedDevice {
+  id           String @id
+  ownerId      String
+  name         String
+  status       String
+  authEpoch    BigInt @default(1)
+  identity     String
+  receipt      String
+  registeredAt BigInt
+  lastSeenAt   BigInt?
+
+  @@index([ownerId, status])
+}
+
+/// The exact unsigned manifest template is immutable after the JWT is issued.
+model DeviceEnrollment {
+  id         String @id
+  deviceId   String @unique
+  ownerId    String
+  jwtId      String @unique
+  manifest   String
+  status     String
+  expiresAt  BigInt
+  createdAt  BigInt
+  consumedAt BigInt?
+
+  @@index([ownerId, status, expiresAt])
+}
+
+/// A new challenge replaces the preceding challenge for this pending enrollment.
+model DeviceChallenge {
+  enrollmentId String @id
+  id           String @unique
+  nonceHash    String
+  expiresAt    BigInt
+}
+
+/// Shared proof replay protection across API replicas. Expired entries may be removed.
+model DeviceProofReplay {
+  deviceId  String
+  authEpoch BigInt
+  proofId   String
+  expiresAt BigInt
+
+  @@id([deviceId, authEpoch, proofId])
+  @@index([expiresAt])
+}
+
+/// Cloud capabilities for one placement. Historical revoked grants keep distinct IDs.
+model PlacementResourceGrant {
+  id                String @id
+  deviceId          String
+  placementId       String
+  deploymentId      String
+  projectId         String
+  appId             String?
+  delegatingUserId  String
+  approvedByUserId  String
+  status            String
+  authzVersion      BigInt @default(1)
+  modelIds          String
+  onlineAccess      String?
+  maxInstances      BigInt
+  expiresAt         BigInt
+  createdAt         BigInt
+
+  @@index([deviceId, placementId, status])
+  @@index([appId, status])
+}
+
+/// Explicit personal sponsorship, bounded across every replica until expiry.
+model PlacementBillingGrant {
+  id               String @id
+  grantId          String
+  payerId          String
+  approvedByUserId String
+  status           String
+  authzVersion     BigInt @default(1)
+  limitMicros      BigInt
+  usedMicros       BigInt @default(0)
+  reservedMicros   BigInt @default(0)
+  expiresAt        BigInt
+  createdAt        BigInt
+
+  @@index([grantId, status])
+  @@index([payerId, status])
+}
+
+model WorkloadInstance {
+  id              String @id
+  deviceId        String
+  grantId         String
+  billingGrantId  String?
+  workloadKey     String
+  workloadKeyThumbprint String @unique
+  deviceAuthEpoch BigInt
+  grantAuthzVersion BigInt
+  billingAuthzVersion BigInt?
+  keyEpoch        BigInt @default(1)
+  status          String
+  registeredAt    BigInt
+  leaseExpiresAt  BigInt
+  registrationJws String
+
+  @@index([grantId, status, leaseExpiresAt])
+  @@index([deviceId, status, leaseExpiresAt])
+}
+
+model InstanceProofReplay {
+  instanceId String
+  keyEpoch   BigInt
+  proofId    String
+  expiresAt  BigInt
+
+  @@id([instanceId, keyEpoch, proofId])
+  @@index([expiresAt])
+}
+
+/// Immutable operation attribution and cumulative placement-budget settlement.
+model InstanceUsageAdmission {
+  operationId       String @id
+  billingGrantId    String
+  instanceId        String
+  payerId           String
+  authority         String
+  requiredModelTier String
+  ceilingMicros     BigInt
+  usedMicros        BigInt @default(0)
+  reservedMicros    BigInt
+  status            String
+  createdAt         BigInt
+
+  @@index([billingGrantId, status])
+  @@index([instanceId, createdAt])
+}

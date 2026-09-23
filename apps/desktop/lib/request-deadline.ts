@@ -20,6 +20,91 @@ export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** Streams are unbounded once open; only reaching the first byte is bounded. */
 export const STREAM_HEADER_TIMEOUT_MS = 30_000;
 
+/**
+ * JSON routes mirror the API's deadline classes (packages/api/src/middleware/
+ * deadline.rs) with headroom, so the server's own 504 always arrives before the
+ * client gives up: reads (10 s) and writes (30 s) share one bound, data routes
+ * have 120 s, maintenance jobs 300 s, and dispatch routes — executor setup or a
+ * tool result collected synchronously — the 870 s Lambda cap.
+ */
+export const WRITE_REQUEST_TIMEOUT_MS = 45_000;
+export const DATA_REQUEST_TIMEOUT_MS = 135_000;
+export const JOB_REQUEST_TIMEOUT_MS = 315_000;
+export const DISPATCH_REQUEST_TIMEOUT_MS = 900_000;
+/** The body is sent inside the deadline; a slow uplink earns a second per full unit. */
+export const UPLOAD_FLOOR_BYTES_PER_SECOND = 64 * 1024;
+
+const DATA_APP_SECTIONS = new Set([
+	"board",
+	"db",
+	"graph",
+	"analytics",
+	"sales",
+	"fork",
+]);
+const DISPATCH_EVENT_ACTIONS = new Set([
+	"setup",
+	"restore",
+	"invoke",
+	"mcp-operation",
+	"mcp",
+	"rest",
+]);
+
+function routeTimeoutMs(parts: readonly string[], method: string): number {
+	const [root, second, section, , action, sub] = parts;
+	if (root === "admin" || root === "maintenance") return JOB_REQUEST_TIMEOUT_MS;
+	if (root === "r" || root === "m") return DISPATCH_REQUEST_TIMEOUT_MS;
+	if (root === "sink" && second === "trigger")
+		return DISPATCH_REQUEST_TIMEOUT_MS;
+	if (root === "apps") {
+		if (second === "fork") return DATA_REQUEST_TIMEOUT_MS;
+		if (section === "events" && parts.length >= 4) {
+			if (parts.length === 4) {
+				return method === "PUT"
+					? DISPATCH_REQUEST_TIMEOUT_MS
+					: WRITE_REQUEST_TIMEOUT_MS;
+			}
+			if (action !== undefined && DISPATCH_EVENT_ACTIONS.has(action)) {
+				return DISPATCH_REQUEST_TIMEOUT_MS;
+			}
+			if (action === "canary" && sub === "promote") {
+				return DISPATCH_REQUEST_TIMEOUT_MS;
+			}
+			return WRITE_REQUEST_TIMEOUT_MS;
+		}
+		if (section === "board" && action === "invoke") {
+			return DISPATCH_REQUEST_TIMEOUT_MS;
+		}
+		if (section === "graph" && action === "actions" && parts[6] === "invoke") {
+			return DISPATCH_REQUEST_TIMEOUT_MS;
+		}
+		if (section !== undefined && DATA_APP_SECTIONS.has(section)) {
+			return DATA_REQUEST_TIMEOUT_MS;
+		}
+		return WRITE_REQUEST_TIMEOUT_MS;
+	}
+	if (root === "registry" && second === "publish")
+		return DATA_REQUEST_TIMEOUT_MS;
+	if (root === "courses" && parts[2] === "assets" && parts[4] === "optimize") {
+		return DATA_REQUEST_TIMEOUT_MS;
+	}
+	if (root === "execution" || root === "oauth") return DATA_REQUEST_TIMEOUT_MS;
+	if (root === "audit" && second === "verify") return DATA_REQUEST_TIMEOUT_MS;
+	return WRITE_REQUEST_TIMEOUT_MS;
+}
+
+/** `path` is the API path without host, `api/v1/` prefix or query string. */
+export function requestTimeoutMs(
+	path: string,
+	method = "GET",
+	bodyBytes = 0,
+): number {
+	const parts = path.split("/").filter(Boolean);
+	const upload = Math.floor(bodyBytes / UPLOAD_FLOOR_BYTES_PER_SECOND) * 1000;
+	return routeTimeoutMs(parts, method.toUpperCase()) + upload;
+}
+
 export class RequestTimeoutError extends Error {
 	readonly timeoutMs: number;
 	readonly target: string;

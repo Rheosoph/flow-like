@@ -1,8 +1,9 @@
 "use client";
 
-import type { SlateElementProps, TAudioElement } from "platejs";
+import type { TAudioElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
-import { SlateElement } from "platejs";
+import { SlateElement } from "platejs/static";
 
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 

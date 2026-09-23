@@ -35,6 +35,9 @@ export default (phase) => {
 		// Keep /use/ distinct from an Event-only /use link during development.
 		skipTrailingSlashRedirect: true,
 		// Production serves these paths through the static host or Tauri assets.
-		rewrites: async () => [{ source: "/use/:path*", destination: "/use" }],
+		rewrites: async () => [
+			{ source: "/use/:path*", destination: "/use" },
+			{ source: "/a/:path*", destination: "/a" },
+		],
 	};
 };

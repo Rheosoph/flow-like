@@ -98,23 +98,33 @@ if (process.env.FLOW_EVENT_HOSTING_TEST_CHILD !== "1") {
 	});
 	afterAll(async () => window.happyDOM.abort());
 
+	const eventChanges: Record<string, unknown>[] = [];
 	async function mount(
 		initialConfig: Record<string, unknown> = {},
 		canWrite = true,
+		eventOverrides: Record<string, unknown> = {},
+		route: string | null = "/contact",
 	) {
 		const updates: IFrontendHosting[] = [];
+		eventChanges.length = 0;
 		function Harness() {
 			const [config, setConfig] = useState(initialConfig);
+			const [current, setCurrent] = useState({ ...event, ...eventOverrides });
 			return (
 				<EventHosting
 					appId="app"
-					event={event}
+					event={current}
+					route={route}
 					config={config}
 					canWrite={canWrite}
 					hasUnsavedChanges={false}
 					onUpdate={(hosting) => {
 						updates.push(hosting);
 						setConfig({ ...config, frontend_hosting: hosting });
+					}}
+					onEventChange={(change) => {
+						eventChanges.push(change);
+						setCurrent((previous) => ({ ...previous, ...change }));
 					}}
 				/>
 			);
@@ -203,5 +213,59 @@ if (process.env.FLOW_EVENT_HOSTING_TEST_CHILD !== "1") {
 		await click(toggle("anonymous"));
 		expect(updates).toEqual([]);
 		expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+	});
+
+	test("names the failing requirement and fixes it in place", async () => {
+		await mount({ frontend_hosting: authenticated }, true, {
+			execution_mode: IEventExecutionMode.Local,
+		});
+		expect(document.body.textContent).toContain("returns 404");
+		expect(document.body.textContent).toContain("Execution is Local");
+		expect(document.body.textContent).not.toContain("The event is inactive");
+		expect(document.body.textContent).toContain("Not live");
+		await click(button("Switch to Remote"));
+		expect(eventChanges).toEqual([
+			{ execution_mode: IEventExecutionMode.Remote },
+		]);
+		expect(document.body.textContent).not.toContain("returns 404");
+		expect(document.body.textContent).toContain("Live");
+		expect(document.body.textContent).not.toContain("Not live");
+	});
+
+	test("links the app route, not the event", async () => {
+		await mount({ frontend_hosting: authenticated });
+		const link = document.querySelector<HTMLInputElement>(
+			"#frontend-hosting-url",
+		);
+		expect(link?.value).toMatch(/\/a\/app\/contact$/);
+		expect(link?.value).not.toContain("published-event");
+		expect(document.body.textContent).not.toContain("Public alias");
+	});
+
+	test("an unrouted event has no link and says why", async () => {
+		await mount({ frontend_hosting: authenticated }, true, {}, null);
+		expect(document.querySelector("#frontend-hosting-url")).toBeNull();
+		expect(document.body.textContent).toContain("The event has no route");
+		expect(
+			Array.from(document.querySelectorAll("button")).some(
+				(candidate) => candidate.textContent?.trim() === "Switch to Remote",
+			),
+		).toBe(false);
+	});
+
+	test("read-only viewers see the blockers without fix buttons", async () => {
+		await mount({ frontend_hosting: authenticated }, false, {
+			active: false,
+			exposure: IEventExposure.Internal,
+		});
+		expect(document.body.textContent).toContain("The event is inactive");
+		expect(document.body.textContent).toContain("Exposure is Internal");
+		expect(
+			Array.from(document.querySelectorAll("button")).some((candidate) =>
+				["Activate", "Make public"].includes(
+					candidate.textContent?.trim() ?? "",
+				),
+			),
+		).toBe(false);
 	});
 }

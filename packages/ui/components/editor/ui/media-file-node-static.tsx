@@ -1,9 +1,10 @@
 "use client";
 
-import type { SlateElementProps, TFileElement } from "platejs";
+import type { TFileElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
 import { FileUp } from "lucide-react";
-import { SlateElement } from "platejs";
+import { SlateElement } from "platejs/static";
 
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 

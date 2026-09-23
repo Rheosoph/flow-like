@@ -1,0 +1,26 @@
+model DeviceArchive {
+  deviceId String
+  archiveId String
+  ownerId String
+  scope String
+  kind String
+  sequence BigInt
+  digest String
+  bundle String
+  sizeBytes BigInt
+  createdAt BigInt
+  expiresAt BigInt
+  @@id([deviceId, archiveId])
+  @@unique([deviceId, scope, kind, sequence])
+  @@index([ownerId, expiresAt])
+  @@index([expiresAt])
+}
+
+model DeviceArchiveHead {
+  deviceId String
+  scope String
+  kind String
+  sequence BigInt
+  digest String
+  @@id([deviceId, scope, kind])
+}

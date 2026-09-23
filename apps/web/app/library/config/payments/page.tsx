@@ -1,7 +1,7 @@
 "use client";
 
-import { AppPaymentsPage } from "@flow-like/flow-like-ui/components/payments/app-payments-page";
+import { PaymentsRouteRedirect } from "@flow-like/flow-like-ui";
 
 export default function Page() {
-	return <AppPaymentsPage />;
+	return <PaymentsRouteRedirect />;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { formatDateValue } from "@platejs/date";
 import type { TDateElement } from "platejs";
 import type { PlateElementProps } from "platejs/react";
 
@@ -9,12 +10,14 @@ import { PlateElement, useReadOnly } from "platejs/react";
 import { Calendar } from "../../..";
 import { Popover, PopoverContent, PopoverTrigger } from "../../..";
 import { cn } from "../../../lib/utils";
+import { getDateElementDate, getDateElementLabel } from "./date-label";
 
 export function DateElement(props: PlateElementProps<TDateElement>) {
 	const { t } = useTranslation("common");
 	const { editor, element } = props;
 
 	const readOnly = useReadOnly();
+	const label = getDateElementLabel(element);
 
 	const trigger = (
 		<span
@@ -24,35 +27,7 @@ export function DateElement(props: PlateElementProps<TDateElement>) {
 			contentEditable={false}
 			draggable
 		>
-			{element.date ? (
-				(() => {
-					const today = new Date();
-					const elementDate = new Date(element.date);
-					const isToday =
-						elementDate.getDate() === today.getDate() &&
-						elementDate.getMonth() === today.getMonth() &&
-						elementDate.getFullYear() === today.getFullYear();
-
-					const isYesterday =
-						new Date(today.setDate(today.getDate() - 1)).toDateString() ===
-						elementDate.toDateString();
-					const isTomorrow =
-						new Date(today.setDate(today.getDate() + 2)).toDateString() ===
-						elementDate.toDateString();
-
-					if (isToday) return "Today";
-					if (isYesterday) return "Yesterday";
-					if (isTomorrow) return "Tomorrow";
-
-					return elementDate.toLocaleDateString(undefined, {
-						day: "numeric",
-						month: "long",
-						year: "numeric",
-					});
-				})()
-			) : (
-				<span>{t("pickADate", "Pick a date")}</span>
-			)}
+			{label ?? <span>{t("pickADate", "Pick a date")}</span>}
 		</span>
 	);
 
@@ -73,12 +48,12 @@ export function DateElement(props: PlateElementProps<TDateElement>) {
 				<PopoverTrigger asChild>{trigger}</PopoverTrigger>
 				<PopoverContent className="w-auto p-0">
 					<Calendar
-						selected={new Date(element.date as string)}
+						selected={getDateElementDate(element)}
 						onSelect={(date) => {
 							if (!date) return;
 
 							editor.tf.setNodes(
-								{ date: date.toDateString() },
+								{ date: formatDateValue(date), rawDate: undefined },
 								{ at: element },
 							);
 						}}

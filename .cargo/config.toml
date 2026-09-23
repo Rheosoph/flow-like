@@ -27,6 +27,9 @@ check-wasm = "check --package flow-like-wasm"
 check-executor = "check --package flow-like-executor --no-default-features --features executor-local-ml"
 check-executor-server = "check --package flow-like-executor --no-default-features --features server"
 check-desktop = "check --package flow-like-desktop"
+check-standalone = "check --package flow-like-standalone --all-targets"
+test-standalone = "test --package flow-like-standalone"
+test-standalone-e2e = "test --package flow-like-standalone --test workflow_rollout -- --include-ignored"
 check-api = "check --package flow-like-api"
 check-catalog = "check --package flow-like-catalog --no-default-features --features all-metadata"
 check-catalog-desktop = "check --package flow-like-catalog --no-default-features --features desktop"
@@ -37,6 +40,7 @@ clippy-all = "clippy --workspace"
 # Cargo aliases expand to Cargo subcommands, not arbitrary shell commands. Run
 # `tools/check-feature-boundaries.sh` and `tools/compile-times.sh` directly.
 run-desktop = "run --package flow-like-desktop --profile dev-run"
+run-standalone = "run --package flow-like-standalone --profile dev-run --"
 bits = "run --package bit-cli --"
 
 # Do not set build.jobs here. Cargo detects the host/runner CPU quota and a

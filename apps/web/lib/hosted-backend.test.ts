@@ -3,6 +3,7 @@ import {
 	type HostedBootstrap,
 	createHostedBackend,
 	createHostedRequest,
+	hostedErrorMessage,
 } from "./hosted-backend";
 
 const originalFetch = globalThis.fetch;
@@ -34,8 +35,10 @@ describe("hosted API contract", () => {
 				requestedUrl = String(input);
 				return new Response("{}");
 			}) as typeof fetch;
-			await createHostedRequest({ kind: "f", slug: "contact" })();
-			expect(requestedUrl).toBe("https://api.example.test/frontend/f/contact");
+			await createHostedRequest({ app: "published-app", route: "/contact" })();
+			expect(requestedUrl).toBe(
+				"https://api.example.test/frontend/a/published-app?route=%2Fcontact",
+			);
 		} finally {
 			if (previousFlag === undefined)
 				Reflect.deleteProperty(
@@ -74,7 +77,7 @@ describe("hosted API contract", () => {
 		).rejects.toThrow("unavailable in a hosted interface");
 		expect(requests).toBe(0);
 	});
-	it("uses root frontend routes and preserves the session and variant on every request", async () => {
+	it("addresses the app, and preserves the route, session and variant on every request", async () => {
 		const requests: { url: URL; init?: RequestInit }[] = [];
 		globalThis.fetch = (async (
 			input: string | URL | Request,
@@ -84,21 +87,26 @@ describe("hosted API contract", () => {
 			return new Response("{}", { status: 200 });
 		}) as typeof fetch;
 		const request = createHostedRequest(
-			{ kind: "u", slug: "contact", variant: "preview one" },
+			{ app: "app-1", route: "/support/demo", variant: "preview one" },
 			"visitor-token",
 		);
 		await request();
 		await request("/prerun", { method: "POST", body: "{}" });
 		await request("/invoke", { method: "POST", body: "{}" });
+		await request("/routes");
+		await request("/assets", { method: "POST", body: "{}" });
 		await request("/widgets/widget-one?version=1_2_3");
 		expect(requests.map(({ url }) => url.pathname)).toEqual([
-			"/frontend/u/contact",
-			"/frontend/u/contact/prerun",
-			"/frontend/u/contact/invoke",
-			"/frontend/u/contact/widgets/widget-one",
+			"/frontend/a/app-1",
+			"/frontend/a/app-1/prerun",
+			"/frontend/a/app-1/invoke",
+			"/frontend/a/app-1/routes",
+			"/frontend/a/app-1/assets",
+			"/frontend/a/app-1/widgets/widget-one",
 		]);
 		const sessionIds = new Set<string>();
 		for (const { url, init } of requests) {
+			expect(url.searchParams.getAll("route")).toEqual(["/support/demo"]);
 			expect(url.searchParams.get("__variant")).toBe("preview one");
 			const headers = new Headers(init?.headers);
 			expect(headers.get("Authorization")).toBe("Bearer visitor-token");
@@ -109,6 +117,70 @@ describe("hosted API contract", () => {
 			expect(init?.credentials).toBe("omit");
 		}
 		expect(sessionIds.size).toBe(1);
-		expect(requests[3].url.searchParams.get("version")).toBe("1_2_3");
+		expect(requests[5].url.searchParams.get("version")).toBe("1_2_3");
+	});
+	it("sends the root route explicitly and encodes the app id", async () => {
+		let requestedUrl: URL | undefined;
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			requestedUrl = new URL(String(input));
+			return new Response("{}");
+		}) as typeof fetch;
+		await createHostedRequest({ app: "app_1", route: "/" })();
+		expect(requestedUrl?.pathname).toBe("/frontend/a/app_1");
+		expect(requestedUrl?.searchParams.get("route")).toBe("/");
+		expect(requestedUrl?.searchParams.has("__variant")).toBe(false);
+	});
+	it("signs storage assets through the hosted route in server-sized batches", async () => {
+		const data = {
+			app_id: "published-app",
+			auth_proxy: false,
+			bootstrap: { event: { id: "published-event" } },
+		} as HostedBootstrap;
+		const bodies: string[][] = [];
+		const backend = createHostedBackend(data, async (suffix, init) => {
+			expect(suffix).toBe("/assets");
+			expect(init?.method).toBe("POST");
+			const { prefixes } = JSON.parse(String(init?.body)) as {
+				prefixes: string[];
+			};
+			bodies.push(prefixes);
+			return new Response(
+				JSON.stringify(
+					prefixes.map((prefix) => ({ prefix, url: `https://s/${prefix}` })),
+				),
+			);
+		});
+		const paths = Array.from({ length: 150 }, (_, index) => `a/${index}.png`);
+		const results = await backend.storageState.downloadStorageItems(
+			"published-app",
+			paths,
+		);
+		expect(bodies.map((batch) => batch.length)).toEqual([100, 50]);
+		expect(results).toHaveLength(150);
+		expect(results[0]).toEqual({ prefix: "a/0.png", url: "https://s/a/0.png" });
+		await expect(
+			backend.storageState.downloadStorageItems("other-app", ["a/0.png"]),
+		).rejects.toThrow("another app");
+	});
+	it("reads the API error envelope instead of printing a bare status", () => {
+		expect(
+			hostedErrorMessage(
+				401,
+				'{"error":{"code":"UNAUTHORIZED","message":"Sign in to open this frontend"}}',
+			),
+		).toBe("Sign in to open this frontend");
+		expect(hostedErrorMessage(400, '{"message":"Bad input"}')).toBe(
+			"Bad input",
+		);
+		expect(hostedErrorMessage(500, '{"error":{"code":"X"}}')).toBe(
+			"Request failed (500)",
+		);
+		expect(hostedErrorMessage(502, "")).toBe("Request failed (502)");
+		expect(
+			hostedErrorMessage(
+				404,
+				'{"error":{"code":"NOT_FOUND","message":"Not Found"}}',
+			),
+		).toContain("not published");
 	});
 });

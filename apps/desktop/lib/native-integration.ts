@@ -636,11 +636,7 @@ export async function dispatchNativeAction(
 			)
 				throw new Error("This app path no longer opens an active interface.");
 		}
-		context.navigate(
-			pathUseUrl(
-				new URL(appRouteUrl(action.appId, target), "https://native.invalid"),
-			),
-		);
+		context.navigate(appRouteUrl(action.appId, target));
 		return;
 	}
 	if (action.kind === "open_run") {

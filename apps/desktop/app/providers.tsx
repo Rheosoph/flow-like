@@ -139,7 +139,7 @@ export function Providers({
 	children: React.ReactNode;
 }>) {
 	return (
-		<UseNavigationProvider>
+		<UseNavigationProvider routeMode="query">
 			<IdbMigrationGate>
 				<ReactFlowProvider>
 					<QueryClientProvider client={queryClient}>

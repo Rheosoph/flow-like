@@ -509,6 +509,35 @@ function renderPlateChildren(children: PlateNode[] | undefined): string {
 	return (children ?? []).map(renderPlateInline).join("");
 }
 
+const INLINE_PLATE_TYPES = new Set([
+	"a",
+	"date",
+	"emoji_input",
+	"focus_node",
+	"footnoteReference",
+	"inline_equation",
+	"inline_spoiler",
+	"mention",
+	"mention_input",
+	"slash_input",
+	"user_mention",
+]);
+
+/**
+ * Quotes and callouts hold paragraphs since Plate 53, and columns always held
+ * blocks; earlier quotes hold their text directly. `null` for inline content.
+ */
+function renderNestedBlocks(node: PlateElementNode): string | null {
+	const children = node.children ?? [];
+	const holdsBlocks =
+		children.every((child) => !isTextNode(child)) &&
+		children.some(
+			(child) =>
+				!INLINE_PLATE_TYPES.has((child as PlateElementNode).type ?? ""),
+		);
+	return holdsBlocks ? children.map(renderPlateBlock).join("") : null;
+}
+
 function renderPlateBlock(node: PlateNode): string {
 	if (isTextNode(node)) return renderPlateInline(node);
 
@@ -517,7 +546,8 @@ function renderPlateBlock(node: PlateNode): string {
 	if (!children.trim() && type !== "img") return "";
 
 	if (/^h[1-6]$/.test(type)) return `<${type}>${children}</${type}>`;
-	if (type === "blockquote") return `<blockquote>${children}</blockquote>`;
+	if (type === "blockquote")
+		return `<blockquote>${renderNestedBlocks(node) ?? children}</blockquote>`;
 	if (type === "code_block") return `<pre><code>${children}</code></pre>`;
 	if (type === "li") return `<li>${children}</li>`;
 	if (type === "ul" || type === "ol") {
@@ -540,7 +570,7 @@ function renderPlateBlock(node: PlateNode): string {
 		const listType = node.listStyleType === "decimal" ? "ol" : "ul";
 		return `<${listType}><li>${children}</li></${listType}>`;
 	}
-	return `<p>${children}</p>`;
+	return renderNestedBlocks(node) ?? `<p>${children}</p>`;
 }
 
 function renderPlateContent(content: string): string {

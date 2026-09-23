@@ -14,7 +14,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Separator,
-	Switch,
 	Textarea,
 } from "@flow-like/flow-like-ui";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
@@ -72,28 +71,14 @@ interface ManifestData {
 	repository?: string;
 	homepage?: string;
 	keywords: string[];
+	// Capability flags are not authored: nodes declare them in code and the
+	// registry derives the store listing from the compiled nodes.
 	permissions: {
 		memory: string;
 		timeout: string;
 		network: {
-			http_enabled: boolean;
 			allowed_hosts: string[];
-			websocket_enabled: boolean;
-			tcp_enabled: boolean;
-			udp_enabled: boolean;
-			dns_enabled: boolean;
 		};
-		filesystem: {
-			node_storage: boolean;
-			user_storage: boolean;
-			upload_dir: boolean;
-			cache_dir: boolean;
-		};
-		variables: boolean;
-		cache: boolean;
-		streaming: boolean;
-		a2ui: boolean;
-		models: boolean;
 		oauth_scopes: {
 			provider: string;
 			scopes: string[];
@@ -119,25 +104,49 @@ function createDefaultManifest(): ManifestData {
 			memory: "standard",
 			timeout: "standard",
 			network: {
-				http_enabled: false,
 				allowed_hosts: [],
-				websocket_enabled: false,
-				tcp_enabled: false,
-				udp_enabled: false,
-				dns_enabled: false,
 			},
-			filesystem: {
-				node_storage: false,
-				user_storage: false,
-				upload_dir: false,
-				cache_dir: false,
-			},
-			variables: false,
-			cache: false,
-			streaming: false,
-			a2ui: false,
-			models: false,
 			oauth_scopes: [],
+		},
+	};
+}
+
+const CAPABILITY_KEYS = [
+	"filesystem",
+	"database",
+	"variables",
+	"cache",
+	"streaming",
+	"a2ui",
+	"models",
+];
+
+const NETWORK_CAPABILITY_KEYS = [
+	"http_enabled",
+	"websocket_enabled",
+	"tcp_enabled",
+	"udp_enabled",
+	"dns_enabled",
+];
+
+function omitKeys<T extends object>(value: T, keys: string[]): T {
+	return Object.fromEntries(
+		Object.entries(value).filter(([key]) => !keys.includes(key)),
+	) as T;
+}
+
+/** Drops the capability flags an older manifest still authors. */
+function stripCapabilityFlags(manifest: ManifestData): ManifestData {
+	const permissions = manifest.permissions;
+	if (!permissions) return manifest;
+	return {
+		...manifest,
+		permissions: {
+			...omitKeys(permissions, CAPABILITY_KEYS),
+			network: {
+				...omitKeys(permissions.network ?? {}, NETWORK_CAPABILITY_KEYS),
+				allowed_hosts: permissions.network?.allowed_hosts ?? [],
+			},
 		},
 	};
 }
@@ -370,24 +379,11 @@ function PermissionsSection({
 }) {
 	const { t } = useTranslation("common");
 	const p = data.permissions ?? {};
-	const net = p.network ?? {
-		http_enabled: false,
-		allowed_hosts: [],
-		websocket_enabled: false,
-		tcp_enabled: false,
-		udp_enabled: false,
-		dns_enabled: false,
-	};
-	const fs = p.filesystem ?? {
-		node_storage: false,
-		user_storage: false,
-		upload_dir: false,
-		cache_dir: false,
-	};
+	const net = p.network ?? { allowed_hosts: [] };
 	const updatePerm = (patch: Partial<ManifestData["permissions"]>) =>
 		onChange({
 			...data,
-			permissions: { ...p, network: net, filesystem: fs, ...patch },
+			permissions: { ...p, network: net, ...patch },
 		});
 
 	return (
@@ -397,8 +393,8 @@ function PermissionsSection({
 					icon={Lock}
 					title="Permissions"
 					description={t(
-						"declareWhatYourPackageNeedsAccessTo",
-						"Declare what your package needs access to",
+						"setTheResourceLimitsAndOutboundHostsForYourPackage",
+						"Set the resource limits and outbound hosts for your package",
 					)}
 				/>
 			</CardHeader>
@@ -455,147 +451,31 @@ function PermissionsSection({
 					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 						<Globe className="h-3 w-3" /> {t("network", "Network")}
 					</div>
-					<div className="space-y-3">
-						<PermToggle
-							label={t("httpAccess", "HTTP Access")}
-							checked={net.http_enabled}
-							onChange={(v) =>
-								updatePerm({
-									network: { ...net, http_enabled: v },
-								})
-							}
-						/>
-						{net.http_enabled && (
-							<motion.div
-								initial={{ opacity: 0, height: 0 }}
-								animate={{ opacity: 1, height: "auto" }}
-								exit={{ opacity: 0, height: 0 }}
-								className="space-y-1.5 pl-6"
-							>
-								<Label className="text-xs">
-									{t(
-										"allowedHostsCommaseparatedEmptyAll",
-										"Allowed Hosts (comma-separated, empty = all)",
-									)}
-								</Label>
-								<Input
-									value={(net.allowed_hosts ?? []).join(", ")}
-									onChange={(e) =>
-										updatePerm({
-											network: {
-												...net,
-												allowed_hosts: e.target.value
-													.split(",")
-													.map((h) => h.trim())
-													.filter(Boolean),
-											},
-										})
-									}
-									placeholder={t(
-										"apiexamplecomCdnexamplecom",
-										"api.example.com, cdn.example.com",
-									)}
-									className="h-8 text-xs"
-								/>
-							</motion.div>
-						)}
-						<PermToggle
-							label={t("websocket", "WebSocket")}
-							checked={net.websocket_enabled}
-							onChange={(v) =>
+					<div className="space-y-1.5">
+						<Label className="text-xs">
+							{t(
+								"allowedHostsCommaseparatedEmptyAll",
+								"Allowed Hosts (comma-separated, empty = all)",
+							)}
+						</Label>
+						<Input
+							value={(net.allowed_hosts ?? []).join(", ")}
+							onChange={(e) =>
 								updatePerm({
 									network: {
 										...net,
-										websocket_enabled: v,
+										allowed_hosts: e.target.value
+											.split(",")
+											.map((h) => h.trim())
+											.filter(Boolean),
 									},
 								})
 							}
-						/>
-						<PermToggle
-							label={t("tcpSockets", "TCP Sockets")}
-							checked={net.tcp_enabled ?? false}
-							onChange={(v) =>
-								updatePerm({
-									network: { ...net, tcp_enabled: v },
-								})
-							}
-						/>
-						<PermToggle
-							label={t("udpSockets", "UDP Sockets")}
-							checked={net.udp_enabled ?? false}
-							onChange={(v) =>
-								updatePerm({
-									network: { ...net, udp_enabled: v },
-								})
-							}
-						/>
-						<PermToggle
-							label={t("dnsLookups", "DNS Lookups")}
-							checked={net.dns_enabled ?? false}
-							onChange={(v) =>
-								updatePerm({
-									network: { ...net, dns_enabled: v },
-								})
-							}
-						/>
-					</div>
-				</div>
-
-				<Separator />
-
-				{/* Filesystem */}
-				<div className="space-y-3">
-					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-						<HardDrive className="h-3 w-3" /> {t("filesystem", "Filesystem")}
-					</div>
-					<div className="space-y-2">
-						<PermToggle
-							label={t("nodeStorage", "Node Storage")}
-							checked={fs.node_storage}
-							onChange={(v) =>
-								updatePerm({
-									filesystem: {
-										...fs,
-										node_storage: v,
-									},
-								})
-							}
-						/>
-						<PermToggle
-							label={t("userStorage", "User Storage")}
-							checked={fs.user_storage}
-							onChange={(v) =>
-								updatePerm({
-									filesystem: {
-										...fs,
-										user_storage: v,
-									},
-								})
-							}
-						/>
-						<PermToggle
-							label={t("uploadDirectory", "Upload Directory")}
-							checked={fs.upload_dir}
-							onChange={(v) =>
-								updatePerm({
-									filesystem: {
-										...fs,
-										upload_dir: v,
-									},
-								})
-							}
-						/>
-						<PermToggle
-							label={t("cacheDirectory", "Cache Directory")}
-							checked={fs.cache_dir}
-							onChange={(v) =>
-								updatePerm({
-									filesystem: {
-										...fs,
-										cache_dir: v,
-									},
-								})
-							}
+							placeholder={t(
+								"apiexamplecomCdnexamplecom",
+								"api.example.com, cdn.example.com",
+							)}
+							className="h-8 text-xs"
 						/>
 					</div>
 				</div>
@@ -607,53 +487,15 @@ function PermissionsSection({
 					<div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
 						<Zap className="h-3 w-3" /> {t("capabilities", "Capabilities")}
 					</div>
-					<div className="space-y-2">
-						<PermToggle
-							label="Variables"
-							checked={p.variables}
-							onChange={(v) => updatePerm({ variables: v })}
-						/>
-						<PermToggle
-							label="Cache"
-							checked={p.cache}
-							onChange={(v) => updatePerm({ cache: v })}
-						/>
-						<PermToggle
-							label="Streaming"
-							checked={p.streaming}
-							onChange={(v) => updatePerm({ streaming: v })}
-						/>
-						<PermToggle
-							label={`A2UI`}
-							checked={p.a2ui}
-							onChange={(v) => updatePerm({ a2ui: v })}
-						/>
-						<PermToggle
-							label={t("modelsLlm", "Models / LLM")}
-							checked={p.models}
-							onChange={(v) => updatePerm({ models: v })}
-						/>
-					</div>
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"capabilitiesComeFromNodes",
+							"Capabilities (network, storage, database, models, ...) are declared by each node in code. The sandbox enforces them and the store lists them, so they are not set in flow-like.toml.",
+						)}
+					</p>
 				</div>
 			</CardContent>
 		</Card>
-	);
-}
-
-function PermToggle({
-	label,
-	checked,
-	onChange,
-}: {
-	label: string;
-	checked: boolean;
-	onChange: (v: boolean) => void;
-}) {
-	return (
-		<div className="flex items-center justify-between">
-			<Label className="text-xs">{label}</Label>
-			<Switch checked={checked} onCheckedChange={onChange} />
-		</div>
 	);
 }
 
@@ -707,6 +549,7 @@ function ManifestEditorContent() {
 	}, []);
 
 	const saveManifest = useCallback(async () => {
+		const manifest = data ? stripCapabilityFlags(data) : data;
 		if (!data || !projectPath) {
 			if (!projectPath) {
 				const selected = await open({ directory: true, multiple: false });
@@ -716,7 +559,7 @@ function ManifestEditorContent() {
 				try {
 					await invoke("developer_save_manifest", {
 						projectPath: selected,
-						manifest: data,
+						manifest,
 					});
 					toast.success("Manifest saved");
 					setHasChanges(false);
@@ -734,7 +577,7 @@ function ManifestEditorContent() {
 		try {
 			await invoke("developer_save_manifest", {
 				projectPath,
-				manifest: data,
+				manifest,
 			});
 			toast.success("Manifest saved");
 			setHasChanges(false);

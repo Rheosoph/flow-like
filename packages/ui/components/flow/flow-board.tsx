@@ -42,6 +42,7 @@ import {
 	FilesIcon,
 	FlaskConicalIcon,
 	GitBranchIcon,
+	GroupIcon,
 	HistoryIcon,
 	HouseIcon,
 	LayoutTemplateIcon,
@@ -174,6 +175,7 @@ import { VariablesMenu } from "../../components/flow/variables/variables-menu";
 import { useBoardQualityAnalysis } from "../../hooks/use-board-quality";
 import { useCommandExecution } from "../../hooks/use-command-execution";
 import { useCopilotCommands } from "../../hooks/use-copilot-commands";
+import { useGroupSuggestions } from "../../hooks/use-group-suggestions";
 import { useExecutionPresence } from "../../hooks/use-execution-presence";
 import {
 	type FollowedEditorAnchor,
@@ -241,6 +243,12 @@ import {
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
 import {
+	type CommentDragSession,
+	followAnchor,
+	startCommentDrag,
+} from "../../lib/flow-comment-drag";
+import { buildAutoRerouteCommands } from "../../lib/flow-layout/reroute-commands";
+import {
 	FLOWSCRIPT_KEYWORDS,
 	MAIN_FILE_ID,
 	MAIN_FILE_LABEL,
@@ -299,6 +307,7 @@ import {
 	useRuntimeVariables,
 } from "../../state/runtime-variables-context";
 import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
+import { GroupSuggestionsOverlay } from "./group-suggestions";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
 import { FlowCopilot } from "./flow-copilot";
@@ -399,6 +408,7 @@ const sameIds = (previous: string[], next: string[]): boolean => {
 type ReactFlowProps = ComponentProps<typeof ReactFlow>;
 
 interface FlowCanvasProps {
+	overlay?: ReactFlowProps["children"];
 	flowRef: ReactFlowProps["ref"];
 	nodes: ReactFlowProps["nodes"];
 	edges: ReactFlowProps["edges"];
@@ -435,6 +445,7 @@ interface FlowCanvasProps {
 // menus) skip reconciling the entire React Flow canvas. All props passed in are
 // referentially stable (state arrays + useCallback handlers), so the memo holds.
 const FlowCanvas = memo(function FlowCanvas({
+	overlay,
 	flowRef,
 	nodes,
 	edges,
@@ -502,6 +513,7 @@ const FlowCanvas = memo(function FlowCanvas({
 			fitView
 			proOptions={{ hideAttribution: true }}
 		>
+			{overlay}
 			<Controls>
 				<ControlButton onClick={onScreenshot}>
 					<ShareIcon className="size-4" />
@@ -859,8 +871,14 @@ export function FlowBoard({
 	selectorDataRef.current.loadBits = loadBitOptions;
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
 	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
-	const { screenToFlowPosition, getViewport, setViewport, fitView, getNodes } =
-		useReactFlow();
+	const {
+		screenToFlowPosition,
+		getViewport,
+		setViewport,
+		fitView,
+		getNodes,
+		getInternalNode,
+	} = useReactFlow();
 
 	const [nodes, setNodes] = useNodesState<any>([]);
 	const [edges, setEdges] = useEdgesState<any>([]);
@@ -4038,14 +4056,23 @@ export function FlowBoard({
 		setClickPosition({ x: event.clientX, y: event.clientY });
 	}, []);
 
+	// A dragged comment carries the nodes it covers; ⌥ moves the comment alone.
 	// Advisory only (collab rule 3): dragging a node a teammate has selected or
 	// is editing in code proceeds, but names the overlap first. One toast per
 	// drag, rate-limited per node so a jittery drag does not stack them.
+	const commentDragRef = useRef<CommentDragSession | undefined>(undefined);
 	const collisionToastAtRef = useRef<Map<string, number>>(new Map());
 	const onNodeDragStart = useCallback(
-		(_event: unknown, node: Node, nodes: Node[]) => {
+		(event: React.MouseEvent, node: Node, nodes: Node[]) => {
+			const draggedNodes = nodes.length > 0 ? nodes : [node];
+			commentDragRef.current = event.altKey
+				? undefined
+				: startCommentDrag(node, draggedNodes, getNodes());
 			if (!awareness) return;
-			const dragged = (nodes.length > 0 ? nodes : [node]).map((n) => n.id);
+			const dragged = [
+				...draggedNodes.map((n) => n.id),
+				...(commentDragRef.current?.passengers.keys() ?? []),
+			];
 			const claims = readPeerFlowScriptClaims(awareness, sub);
 			const peers = peerStatesRef.current.filter((peer) => peer.sub !== sub);
 			const nameOf = (peerSub?: string) =>
@@ -4085,7 +4112,7 @@ export function FlowBoard({
 				break;
 			}
 		},
-		[awareness, sub, peerUsers, t],
+		[awareness, sub, peerUsers, t, getNodes],
 	);
 
 	// ⌥-click on the empty canvas drops a "look here" ping for teammates. React
@@ -4117,19 +4144,28 @@ export function FlowBoard({
 	const onNodeDragStop = useCallback(
 		async (event: any, node: any, nodes: any) => {
 			endDrag();
+			const commentDrag = commentDragRef.current;
+			commentDragRef.current = undefined;
 			// Don't execute commands when viewing an old version
 			if (typeof version !== "undefined") {
 				return;
 			}
 			const commands: IGenericCommand[] = [];
-			for await (const node of nodes) {
-				const command = moveNodeCommand({
-					node_id: node.id,
-					to_coordinates: [node.position.x, node.position.y, 0],
-					current_layer: currentLayer,
-				});
-
-				commands.push(command);
+			const moved = [
+				...nodes.map((dragged: Node) => ({
+					id: dragged.id,
+					...dragged.position,
+				})),
+				...(commentDrag ? followAnchor(commentDrag, nodes) : []),
+			];
+			for (const { id, x, y } of moved) {
+				commands.push(
+					moveNodeCommand({
+						node_id: id,
+						to_coordinates: [x, y, 0],
+						current_layer: currentLayer,
+					}),
+				);
 			}
 			await executeCommands(commands);
 		},
@@ -4295,15 +4331,30 @@ export function FlowBoard({
 					}
 				});
 			}
-			broadcastDrag(
-				nodes.map((dragged) => ({
+			const passengers = commentDragRef.current
+				? followAnchor(commentDragRef.current, nodes)
+				: [];
+			if (passengers.length > 0) {
+				const next = new Map(passengers.map((p) => [p.id, p]));
+				setNodes((nds) =>
+					nds.map((current) => {
+						const target = next.get(current.id);
+						return target
+							? { ...current, position: { x: target.x, y: target.y } }
+							: current;
+					}),
+				);
+			}
+			broadcastDrag([
+				...nodes.map((dragged) => ({
 					id: dragged.id,
 					x: dragged.position.x,
 					y: dragged.position.y,
 				})),
-			);
+				...passengers,
+			]);
 		},
-		[shiftPressed, broadcastDrag],
+		[shiftPressed, broadcastDrag, setNodes],
 	);
 
 	const onAcceptSuggestion = useCallback(
@@ -4324,6 +4375,61 @@ export function FlowBoard({
 	);
 
 	const [autoLayoutDialogOpen, setAutoLayoutDialogOpen] = useState(false);
+	const grouping = useGroupSuggestions({
+		board: board.data,
+		currentLayer,
+		readOnly: typeof version !== "undefined",
+		selectedNodeIds,
+		getNodes,
+		getInternalNode,
+		executeCommands,
+		onStale: () =>
+			toastWarning(
+				t(
+					"groupSuggestionChanged",
+					"This region changed. Review the refreshed grouping suggestions.",
+				),
+				<TriangleAlertIcon className="size-4" />,
+			),
+	});
+	const { close: closeGrouping, offerAfterLayout } = grouping;
+	const previewNodes = useMemo(
+		() =>
+			grouping.previewMemberIds.size
+				? nodes.map((node) =>
+						grouping.previewMemberIds.has(node.id)
+							? { ...node, style: { ...node.style, opacity: 0.15 } }
+							: node,
+					)
+				: nodes,
+		[nodes, grouping.previewMemberIds],
+	);
+	const previewEdges = useMemo(
+		() =>
+			grouping.previewMemberIds.size
+				? edges.map((edge) =>
+						grouping.previewMemberIds.has(edge.source) ||
+						grouping.previewMemberIds.has(edge.target)
+							? { ...edge, className: cn(edge.className, "opacity-10") }
+							: edge,
+					)
+				: edges,
+		[edges, grouping.previewMemberIds],
+	);
+	const groupOverlay = grouping.open ? (
+		<GroupSuggestionsOverlay
+			suggestions={grouping.suggestions}
+			selectedId={grouping.selectedId}
+			preview={grouping.preview}
+			busy={grouping.busy}
+			onSelect={grouping.select}
+			onPreview={grouping.togglePreview}
+			onCollapse={() => void grouping.collapse()}
+			onDismiss={grouping.dismiss}
+			onClose={grouping.close}
+			getPinPosition={grouping.getPinPosition}
+		/>
+	) : null;
 
 	const autoLayout = useCallback(
 		async (style: LayoutStyle = "compact") => {
@@ -4336,6 +4442,21 @@ export function FlowBoard({
 			}
 			const boardData = board.data;
 			if (!boardData) return;
+			closeGrouping();
+			const reroute =
+				style === "routed"
+					? catalog.data?.find((node) => node.name === "reroute")
+					: undefined;
+			if (style === "routed" && !reroute) {
+				toastError(
+					t(
+						"rerouteNodeUnavailable",
+						"The reroute node is not available. Wait for the node catalog to load and try again.",
+					),
+					<XIcon />,
+				);
+				return;
+			}
 
 			const layerNodes: INode[] = [];
 			for (const node of Object.values(boardData.nodes)) {
@@ -4425,7 +4546,21 @@ export function FlowBoard({
 			// widest node they contain and rows by real heights, so a mis-measured
 			// node is the difference between a clean board and overlapping nodes.
 			const nodeSizes = new Map<string, [number, number]>();
+			const pinOffsets = new Map<string, { x: number; y: number }>();
 			for (const rendered of getNodes()) {
+				if (style === "routed") {
+					const handles = getInternalNode(rendered.id)?.internals.handleBounds;
+					for (const handle of [
+						...(handles?.source ?? []),
+						...(handles?.target ?? []),
+					]) {
+						if (handle.id)
+							pinOffsets.set(handle.id, {
+								x: handle.x + handle.width / 2,
+								y: handle.y + handle.height / 2,
+							});
+					}
+				}
 				const width = rendered.measured?.width ?? rendered.width;
 				const height = rendered.measured?.height ?? rendered.height;
 				if (
@@ -4469,6 +4604,7 @@ export function FlowBoard({
 					const size = nodeSizes.get(rendered.id);
 					if (!size) continue;
 					obstacles.push({
+						id: rendered.id,
 						x: rendered.position.x,
 						y: rendered.position.y,
 						width: size[0],
@@ -4477,19 +4613,23 @@ export function FlowBoard({
 				}
 			}
 
-			const { positions, commentPositions } = computeFlowLayoutDetailed(
-				{
-					layerNodes,
-					layerEntities,
-					boardLayers: boardData.layers,
-					currentLayer,
-					nodeSizes,
-					comments: scoped ? [] : comments,
-					only,
-					obstacles,
-				},
-				style,
-			);
+			const { positions, commentPositions, routing } =
+				computeFlowLayoutDetailed(
+					{
+						layerNodes,
+						layerEntities,
+						boardLayers: boardData.layers,
+						currentLayer,
+						nodeSizes,
+						pinOffsets: style === "routed" ? pinOffsets : undefined,
+						edgePathType:
+							connectionMode === "simplebezier" ? "default" : connectionMode,
+						comments: scoped ? [] : comments,
+						only,
+						obstacles,
+					},
+					style,
+				);
 
 			const commands: IGenericCommand[] = [];
 			for (const node of layerNodes) {
@@ -4530,8 +4670,21 @@ export function FlowBoard({
 				);
 			}
 
+			if (routing && reroute) {
+				commands.push(
+					...buildAutoRerouteCommands({
+						...routing,
+						reroute,
+						currentLayer,
+						pinCache,
+					}),
+				);
+			}
+
 			if (commands.length === 0) return;
-			await executeCommands(commands);
+			const applied = await executeCommands(commands);
+			if (applied === undefined) return;
+			offerAfterLayout();
 
 			setTimeout(
 				() =>
@@ -4545,12 +4698,19 @@ export function FlowBoard({
 		},
 		[
 			board.data,
+			catalog.data,
+			closeGrouping,
+			connectionMode,
 			currentLayer,
 			executeCommands,
 			fitView,
 			getNodes,
+			getInternalNode,
+			pinCache,
+			offerAfterLayout,
 			selectedNodeIds,
 			version,
+			t,
 		],
 	);
 
@@ -4753,6 +4913,15 @@ export function FlowBoard({
 				run: () => setAutoLayoutDialogOpen(true),
 			},
 			{
+				id: "find-groups",
+				surface: "editor",
+				title: t("findGroups", "Find groups"),
+				icon: GroupIcon,
+				keywords: ["collapse", "group", "simplify", "regions"],
+				when: typeof version === "undefined",
+				run: () => (grouping.open ? grouping.close() : grouping.start()),
+			},
+			{
 				id: "layer-up",
 				surface: "rail-bottom",
 				title: t("layerUp", "Layer Up"),
@@ -4788,6 +4957,10 @@ export function FlowBoard({
 			popLayer,
 			openAssistant,
 			externalAssistant,
+			grouping.open,
+			grouping.close,
+			grouping.start,
+			version,
 		],
 	);
 	useBoardCommands(boardCommands);
@@ -4798,6 +4971,8 @@ export function FlowBoard({
 	const isCommandActive = useCallback(
 		(id: string) => {
 			switch (id) {
+				case "find-groups":
+					return grouping.open;
 				case "flowscript":
 					return shell.script;
 				case "runs":
@@ -4812,7 +4987,7 @@ export function FlowBoard({
 					return shell.sidebar === id;
 			}
 		},
-		[shell],
+		[shell, grouping.open],
 	);
 
 	const railItems = useMemo<IBoardRailItem[]>(
@@ -5543,6 +5718,33 @@ export function FlowBoard({
 										{layerBreadcrumb}
 									</BoardStatusItem>
 								)}
+								{grouping.offerCount > 0 && (
+									<>
+										<BoardStatusItem
+											icon={<GroupIcon />}
+											tone="accent"
+											title={t(
+												"reviewGroupSuggestions",
+												"Review grouping suggestions",
+											)}
+											onClick={() => grouping.start(false)}
+										>
+											{t(
+												"groupSuggestionsCount",
+												"{{count}} grouping suggestions",
+												{ count: grouping.offerCount },
+											)}
+										</BoardStatusItem>
+										<BoardStatusItem
+											icon={<XIcon />}
+											title={t(
+												"dismissGroupSuggestions",
+												"Dismiss grouping suggestions",
+											)}
+											onClick={grouping.dismissOffer}
+										/>
+									</>
+								)}
 								{board.data && (
 									<BoardStatusItem
 										icon={executionModeIcon(
@@ -5736,9 +5938,10 @@ export function FlowBoard({
 										</h3>
 									)}
 									<FlowCanvas
+										overlay={groupOverlay}
 										flowRef={flowRef}
-										nodes={nodes}
-										edges={edges}
+										nodes={previewNodes}
+										edges={previewEdges}
 										nodeTypes={nodeTypes}
 										edgeTypes={edgeTypes}
 										colorMode={colorMode}

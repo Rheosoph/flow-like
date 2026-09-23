@@ -67,7 +67,11 @@ for validation, limits and secret handling.
 
 For an explicit custom fallback build, `build-images.sh` accepts the
 repository-relative `FLOW_LIKE_BUILD_CONFIG`. Use only public settings because
-the document is embedded in the executable.
+the document is embedded in the executable. The audit worker is built from the
+same document and takes its `audit` section as its
+[audit policy](/self-hosting/audit-trail/#audit-policy). The runtime config
+above does not reach the worker, so audit policy changes need this build input
+and a rebuilt worker image.
 
 The web image reads `web.runtimeConfig.apiUrl`, falling back to `api.publicUrl`,
 and optional `redirectUrl`/`logoutUrl` at container startup. Omitted redirect and

@@ -19,13 +19,11 @@ name = "Flow-Like"
 
 [permissions]
 memory = "intensive"
-streaming = true
 timeout = "extended"
-variables = true
 
-[permissions.filesystem]
-node_storage = true
-user_storage = true
-
+# Capabilities (network, storage, database, models, ...) are declared on each
+# node in code. The sandbox enforces those, and the registry derives the store's
+# capability listing from them, so they are not repeated here. This file only
+# sets resource tiers, the outbound host allowlist and OAuth scopes.
 [permissions.network]
-http_enabled = true
+allowed_hosts = []

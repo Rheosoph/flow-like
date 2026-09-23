@@ -114,6 +114,15 @@ function withFeedbackPageContext(localState?: Record<string, any>) {
 	};
 }
 
+/**
+ * The execution service preruns a governed Page trigger for consent and runtime
+ * variables, then hands the same trigger to `executeEvent`, which needs the same
+ * answer for routing and revision re-stamping. Inside this window the decision
+ * is reused for that one dispatch under the same principal; anything older or
+ * from another profile or account is asked for again.
+ */
+const PAGE_TRIGGER_PRERUN_REUSE_MS = 15_000;
+
 async function getHubConfig(profile?: { hub?: string }): Promise<
 	IHub | undefined
 > {
@@ -276,6 +285,11 @@ export class EventState implements IEventState {
 	>();
 
 	constructor(private readonly backend: TauriBackend) {}
+
+	private readonly recentPageTriggerPreruns = new Map<
+		string,
+		{ readonly result: IPrerunEventResponse; readonly at: number }
+	>();
 
 	private requireAuthoritativeHostedRead(): void {
 		if (
@@ -1154,7 +1168,10 @@ export class EventState implements IEventState {
 
 			let prerun: IPrerunEventResponse;
 			try {
-				prerun = await this.prerunEvent(appId, eventId, undefined, pageTrigger);
+				prerun =
+					this.takeRecentPageTriggerPrerun(
+						this.pageTriggerPrerunKey(appId, eventId, undefined, pageTrigger),
+					) ?? (await this.resolvePrerun(appId, eventId, undefined, pageTrigger));
 			} catch (error) {
 				// The server prerun resolves the trigger, so a removed action is
 				// refused HERE and the run is never built. Publishing before the
@@ -1872,6 +1889,63 @@ export class EventState implements IEventState {
 	}
 
 	async prerunEvent(
+		appId: string,
+		eventId: string,
+		version?: [number, number, number],
+		pageTrigger?: PageTrigger,
+	): Promise<IPrerunEventResponse> {
+		const result = await this.resolvePrerun(appId, eventId, version, pageTrigger);
+		if (pageTrigger) {
+			this.rememberPageTriggerPrerun(
+				this.pageTriggerPrerunKey(appId, eventId, version, pageTrigger),
+				result,
+			);
+		}
+		return result;
+	}
+
+	private pageTriggerPrerunKey(
+		appId: string,
+		eventId: string,
+		version: [number, number, number] | undefined,
+		trigger: PageTrigger,
+	): string {
+		return JSON.stringify([
+			this.backend.profile?.id ?? null,
+			this.backend.auth?.user?.profile?.sub ?? null,
+			appId,
+			eventId,
+			version ?? null,
+			serializePageTrigger(trigger),
+		]);
+	}
+
+	private rememberPageTriggerPrerun(
+		key: string,
+		result: IPrerunEventResponse,
+	): void {
+		const now = Date.now();
+		for (const [entryKey, entry] of this.recentPageTriggerPreruns) {
+			if (now - entry.at > PAGE_TRIGGER_PRERUN_REUSE_MS) {
+				this.recentPageTriggerPreruns.delete(entryKey);
+			}
+		}
+		this.recentPageTriggerPreruns.set(key, { result, at: now });
+	}
+
+	/** Single use: the dispatch that consumes a decision is the one it was fetched for. */
+	private takeRecentPageTriggerPrerun(
+		key: string,
+	): IPrerunEventResponse | undefined {
+		const entry = this.recentPageTriggerPreruns.get(key);
+		if (!entry) return undefined;
+		this.recentPageTriggerPreruns.delete(key);
+		return Date.now() - entry.at <= PAGE_TRIGGER_PRERUN_REUSE_MS
+			? entry.result
+			: undefined;
+	}
+
+	private async resolvePrerun(
 		appId: string,
 		eventId: string,
 		version?: [number, number, number],

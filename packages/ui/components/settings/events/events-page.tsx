@@ -3,6 +3,14 @@
 import { NativeEventSettingsCard } from "./native-event-settings";
 
 import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
 	Badge,
 	Button,
 	Card,
@@ -46,7 +54,6 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-	useIsMobile,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
 import type { EventSectionId } from "@flow-like/flow-like-ui/lib/event-sections";
@@ -54,7 +61,10 @@ import {
 	getEventSections,
 	isTriggerSection,
 } from "@flow-like/flow-like-ui/lib/event-sections";
-import { getHostedFrontendKind } from "@flow-like/flow-like-ui/lib/frontend-hosting";
+import {
+	getHostedFrontendKind,
+	getHostedRoute,
+} from "@flow-like/flow-like-ui/lib/frontend-hosting";
 import {
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
@@ -106,15 +116,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EventAttentionStrip } from "./event-attention-strip";
 import { EventCanary } from "./event-canary";
+import { EventEditorHeader } from "./event-editor-header";
 import { EventHistory } from "./event-history";
 import { EventHosting } from "./event-hosting";
 import { EventQuality } from "./event-quality";
-import { EventSaveBar } from "./event-save-bar";
 import { EventSectionRail } from "./event-section-rail";
 import { EventsOverview } from "./events-overview";
 import { SectionGuidance } from "./section-guidance";
 import { SetupChecklist } from "./setup-checklist";
 import { isHeadlessEventType, useEventIssues } from "./use-event-issues";
+
+function caseKeyRowsOf(
+	mappings: IEvent["correlation_mappings"],
+): Array<{ key: string; path: string }> {
+	return Object.entries(mappings ?? {}).map(([key, path]) => ({ key, path }));
+}
 
 function errorMessage(error: unknown): string {
 	if (error instanceof Error) return error.message;
@@ -745,7 +761,6 @@ function EventConfiguration({
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
-	const isMobile = useIsMobile();
 	const permissions = useAppPermissions(appId);
 	const canWriteEvents = permissions.can(RolePermissions.WriteEvents);
 	const canListEvents = permissions.can(RolePermissions.ListEvents);
@@ -754,8 +769,8 @@ function EventConfiguration({
 		"yourRoleCannotChangeThisProjectsEvents",
 		"Your role cannot create, change or delete this project's events.",
 	);
-	const [isEditing, setIsEditing] = useState(false);
 	const [formData, setFormData] = useState<IEvent>(event);
+	const [confirmLeave, setConfirmLeave] = useState(false);
 	const [showPatDialog, setShowPatDialog] = useState(false);
 	const [isSaving, setIsSaving] = useState(false);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
@@ -774,12 +789,7 @@ function EventConfiguration({
 	>([]);
 
 	useEffect(() => {
-		setCaseKeyRows(
-			Object.entries(event.correlation_mappings ?? {}).map(([key, path]) => ({
-				key,
-				path,
-			})),
-		);
+		setCaseKeyRows(caseKeyRowsOf(event.correlation_mappings));
 	}, [event.id, event.correlation_mappings]);
 
 	const commitCaseKeyRows = useCallback(
@@ -813,12 +823,18 @@ function EventConfiguration({
 
 	// Until the route list has actually loaded, `routeForEvent` is null for an
 	// event that does have a route. Seeding the draft with "/" then would let a
-	// save overwrite the real path with the placeholder.
+	// save overwrite the real path with the placeholder. A draft the user has
+	// already changed is kept, so a refetch never overwrites typing in progress.
+	const syncedRoutePath = useRef<string | null>(null);
+	const storedRoutePath = routeForEvent?.path ?? "/";
 	useEffect(() => {
-		if (isEditing || !routes.isSuccess) return;
-		setRoutePathDraft(routeForEvent?.path ?? "/");
-		setRoutePathError(null);
-	}, [routeForEvent?.path, isEditing, routes.isSuccess]);
+		if (!routes.isSuccess) return;
+		const previous = syncedRoutePath.current;
+		syncedRoutePath.current = storedRoutePath;
+		setRoutePathDraft((draft) =>
+			previous === null || draft === previous ? storedRoutePath : draft,
+		);
+	}, [storedRoutePath, routes.isSuccess]);
 
 	// OAuth consent state
 	const [showOAuthConsent, setShowOAuthConsent] = useState(false);
@@ -838,29 +854,11 @@ function EventConfiguration({
 	const shouldShowRoutePath =
 		uiEventTypeSet.has(formData.event_type) || isPageTargetEvent;
 
-	const boards = useInvoke(
-		backend.boardState.getBoardSummaries,
-		backend.boardState,
-		[appId],
-		!!appId && isEditing && !isPageTargetEvent && canReadBoards,
-	);
-	const pages = useInvoke(
-		backend.pageState.getPages,
-		backend.pageState,
-		[appId],
-		!!appId && isEditing && canReadBoards,
-	);
 	const board = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
 		[appId, formData.board_id, normalizeBoardVersion(formData.board_version)],
 		!!formData.board_id && !isPageTargetEvent && canReadBoards,
-	);
-	const versions = useInvoke(
-		backend.boardState.getBoardVersions,
-		backend.boardState,
-		[appId, formData.board_id],
-		(formData.board_id ?? "") !== "" && isEditing && canReadBoards,
 	);
 
 	// Check if app is offline
@@ -1094,7 +1092,6 @@ function EventConfiguration({
 			}
 		}
 		onReload?.();
-		setIsEditing(false);
 		setShowPatDialog(false);
 		toast.success(`"${saved.name}" saved`);
 	};
@@ -1173,7 +1170,9 @@ function EventConfiguration({
 
 	const handleCancel = () => {
 		setFormData(event);
-		setIsEditing(false);
+		setCaseKeyRows(caseKeyRowsOf(event.correlation_mappings));
+		setRoutePathDraft(storedRoutePath);
+		setRoutePathError(null);
 	};
 
 	// Refresh inputs from the current node definition
@@ -1352,9 +1351,21 @@ function EventConfiguration({
 		) {
 			return true;
 		}
-		if (routeForEvent && routePathDraft !== routeForEvent.path) return true;
+		if (
+			shouldShowRoutePath &&
+			routes.isSuccess &&
+			routePathDraft !== storedRoutePath
+		)
+			return true;
 		return false;
-	}, [formData, event, routePathDraft, routeForEvent]);
+	}, [
+		formData,
+		event,
+		routePathDraft,
+		storedRoutePath,
+		shouldShowRoutePath,
+		routes.isSuccess,
+	]);
 
 	// The section rail is generated from the event type, so a mailbox shows a
 	// different shape from an MCP server without the layout knowing either exists.
@@ -1372,6 +1383,28 @@ function EventConfiguration({
 	}, [sections, activeSection]);
 	const activeSectionDef =
 		sections.find((section) => section.id === activeSection) ?? sections[0];
+
+	// The pickers only exist in the Flow section, so their lists load there.
+	const loadBindingOptions =
+		!!appId && activeSection === "flow" && canWriteEvents && canReadBoards;
+	const boards = useInvoke(
+		backend.boardState.getBoardSummaries,
+		backend.boardState,
+		[appId],
+		loadBindingOptions && !isPageTargetEvent,
+	);
+	const pages = useInvoke(
+		backend.pageState.getPages,
+		backend.pageState,
+		[appId],
+		loadBindingOptions && isPageTargetEvent,
+	);
+	const versions = useInvoke(
+		backend.boardState.getBoardVersions,
+		backend.boardState,
+		[appId, formData.board_id],
+		loadBindingOptions && (formData.board_id ?? "") !== "",
+	);
 
 	const parsedConfig = useMemo(
 		() => parseUint8ArrayToJson(formData.config ?? []) ?? {},
@@ -1416,49 +1449,75 @@ function EventConfiguration({
 		boardVariables: board.data?.variables,
 	});
 
-	// Every inline "click to edit" affordance funnels through here, so a role
-	// that cannot save never enters an edit state it would be stuck in.
-	const enterEdit = useCallback(() => {
-		if (!canWriteEvents) {
-			toast.error(writeDeniedMessage);
-			return;
-		}
-		setIsEditing(true);
-	}, [canWriteEvents, writeDeniedMessage]);
+	const canSave = isDirty && canWriteEvents;
+	const saveRef = useRef(handleSave);
+	saveRef.current = handleSave;
+	useEffect(() => {
+		if (!canSave) return;
+		const onKeyDown = (keyEvent: KeyboardEvent) => {
+			if ((keyEvent.metaKey || keyEvent.ctrlKey) && keyEvent.key === "s") {
+				keyEvent.preventDefault();
+				void saveRef.current();
+			}
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [canSave]);
 
-	const showSaveBar = (isDirty || isEditing) && canWriteEvents;
-	const saveBar = (
-		<EventSaveBar
-			placement={isMobile ? "top" : "bottom"}
-			isDirty={isDirty}
-			isSaving={isSaving}
-			error={routePathError}
-			onSave={() => handleSave()}
-			onDiscard={handleCancel}
-		/>
-	);
+	const leave = () => {
+		if (canSave) setConfirmLeave(true);
+		else onDone?.();
+	};
+
+	const openFlowLink = (label: string) =>
+		onNavigateToFlow ? (
+			<button
+				type="button"
+				title={t("openFlowAndNode", "Open Flow and Node")}
+				className="flex flex-row items-center"
+				onClick={() =>
+					onNavigateToFlow({
+						boardId: event.board_id,
+						appId,
+						nodeId: event.node_id,
+						version: event.board_version as
+							| [number, number, number]
+							| undefined,
+					})
+				}
+			>
+				{label}
+				<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
+					<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+				</span>
+			</button>
+		) : (
+			<Link
+				title={t("openFlowAndNode", "Open Flow and Node")}
+				className="flex flex-row items-center"
+				href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
+			>
+				{label}
+				<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
+					<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+				</span>
+			</Link>
+		);
 
 	return (
 		// The desktop shell drops all padding below md, so the editor supplies its
 		// own gutter instead of running its cards into the screen edges.
 		<div className="container mx-auto flex min-h-0 flex-col px-3 md:px-0">
-			{/* Breadcrumbs */}
-			<div className="flex min-w-0 items-center gap-2 py-3 text-sm text-muted-foreground sm:py-4">
-				<Button
-					variant="ghost"
-					size="sm"
-					onClick={onDone}
-					className="h-auto shrink-0 p-0 font-normal hover:text-foreground"
-				>
-					{t("events", "Events")}
-				</Button>
-				<span className="shrink-0">/</span>
-				<span className="truncate font-medium text-foreground">
-					{event.name}
-				</span>
-			</div>
-
-			{isMobile && showSaveBar && saveBar}
+			<EventEditorHeader
+				eventName={event.name}
+				canWrite={canWriteEvents}
+				isDirty={isDirty}
+				isSaving={isSaving}
+				error={routePathError}
+				onBack={leave}
+				onSave={() => handleSave()}
+				onDiscard={handleCancel}
+			/>
 
 			{/* Content */}
 			<div className="space-y-6 pb-6">
@@ -1510,13 +1569,12 @@ function EventConfiguration({
 								<Select
 									value={currentMode}
 									onValueChange={(value) => {
-										if (!isEditing) enterEdit();
 										handleInputChange(
 											"execution_mode",
 											value as IEventExecutionMode,
 										);
 									}}
-									disabled={!isEditing || locked}
+									disabled={!canWriteEvents || locked}
 								>
 									<SelectTrigger size="sm" className="w-32 text-xs">
 										<SelectValue />
@@ -1553,11 +1611,10 @@ function EventConfiguration({
 									</Label>
 									<Select
 										value={currentExposure}
-										onValueChange={(value) => {
-											if (!isEditing) enterEdit();
-											handleInputChange("exposure", value as IEventExposure);
-										}}
-										disabled={!isEditing}
+										onValueChange={(value) =>
+											handleInputChange("exposure", value as IEventExposure)
+										}
+										disabled={!canWriteEvents}
 									>
 										<SelectTrigger
 											size="sm"
@@ -1597,13 +1654,10 @@ function EventConfiguration({
 						{board.data?.nodes?.[formData.node_id] && formData.node_id && (
 							<EventTypeConfiguration
 								eventConfig={eventMapping}
-								disabled={!isEditing}
+								disabled={!canWriteEvents}
 								node={board.data?.nodes?.[formData.node_id]}
 								event={formData}
-								onUpdate={(type) => {
-									if (!isEditing) enterEdit();
-									handleInputChange("event_type", type);
-								}}
+								onUpdate={(type) => handleInputChange("event_type", type)}
 								hub={hub}
 								canExecuteLocally={canExecuteLocally}
 								eventExecutionMode={
@@ -1617,10 +1671,7 @@ function EventConfiguration({
 							size="sm"
 							disabled={!canWriteEvents}
 							title={canWriteEvents ? undefined : writeDeniedMessage}
-							onClick={() => {
-								if (!isEditing) enterEdit();
-								handleInputChange("active", !formData.active);
-							}}
+							onClick={() => handleInputChange("active", !formData.active)}
 							className="shrink-0 gap-2"
 						>
 							{formData.active ? (
@@ -1685,7 +1736,6 @@ function EventConfiguration({
 								event={formData}
 								disabled={!canWriteEvents}
 								onChange={(settings) => {
-									if (!isEditing) setIsEditing(true);
 									handleInputChange(
 										"config",
 										convertJsonToUint8Array({
@@ -1707,82 +1757,60 @@ function EventConfiguration({
 								</CardHeader>
 								<CardContent className="space-y-4">
 									<div>
-										<Label>{t("eventName", "Event Name")}</Label>
-										{isEditing ? (
-											<Input
-												type="text"
-												value={formData.name}
-												onChange={(e) =>
-													handleInputChange("name", e.target.value)
-												}
-											/>
-										) : (
-											<button
-												type="button"
-												className="mt-1 text-sm text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-												onClick={enterEdit}
-											>
-												{event.name}
-											</button>
-										)}
+										<Label htmlFor="event-name">
+											{t("eventName", "Event Name")}
+										</Label>
+										<Input
+											id="event-name"
+											type="text"
+											value={formData.name}
+											disabled={!canWriteEvents}
+											onChange={(e) =>
+												handleInputChange("name", e.target.value)
+											}
+										/>
 									</div>
 									<div>
-										<Label>{t("description", "Description")}</Label>
-										{isEditing ? (
-											<Textarea
-												value={formData.description}
-												onChange={(e) =>
-													handleInputChange("description", e.target.value)
-												}
-												rows={3}
-											/>
-										) : (
-											<button
-												type="button"
-												className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-												onClick={enterEdit}
-											>
-												{event.description ||
-													t(
-														"clickToAddADescription",
-														"Click to add a description",
-													)}
-											</button>
-										)}
-									</div>
-									{uiEventTypeSet.has(formData.event_type) ||
-									isPageTargetEvent ? (
-										<div>
-											<Label>{t("routePath", "Route Path")}</Label>
-											{isEditing ? (
-												<div className="space-y-1">
-													<Input
-														value={routePathDraft}
-														onChange={(e) => setRoutePathDraft(e.target.value)}
-														placeholder="/"
-													/>
-													{routePathError && (
-														<p className="text-xs text-destructive">
-															{routePathError}
-														</p>
-													)}
-													<p className="text-xs text-muted-foreground">
-														{t(
-															"usedForPathbasedNavigationMustBeUnique",
-															"Used for path-based navigation. Must be unique.",
-														)}
-													</p>
-												</div>
-											) : (
-												<button
-													type="button"
-													className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-													onClick={enterEdit}
-												>
-													{routeForEvent?.path ??
-														t("noRouteConfigured", "No route configured")}
-												</button>
+										<Label htmlFor="event-description">
+											{t("description", "Description")}
+										</Label>
+										<Textarea
+											id="event-description"
+											value={formData.description}
+											disabled={!canWriteEvents}
+											placeholder={t(
+												"describeWhatThisEventIsFor",
+												"Describe what this event is for",
 											)}
+											onChange={(e) =>
+												handleInputChange("description", e.target.value)
+											}
+											rows={3}
+										/>
+									</div>
+									{shouldShowRoutePath ? (
+										<div className="space-y-1">
+											<Label htmlFor="event-route-path">
+												{t("routePath", "Route Path")}
+											</Label>
+											<Input
+												id="event-route-path"
+												value={routePathDraft}
+												disabled={!canWriteEvents}
+												onChange={(e) => setRoutePathDraft(e.target.value)}
+												placeholder="/"
+											/>
+											{routePathError && (
+												<p className="text-xs text-destructive">
+													{routePathError}
+												</p>
+											)}
+											<p className="text-xs text-muted-foreground">
+												{t(
+													"usedForPathbasedNavigationMustBeUnique",
+													"Used for path-based navigation. Must be unique.",
+												)}
+											</p>
 										</div>
 									) : null}
 									<div>
@@ -1800,7 +1828,7 @@ function EventConfiguration({
 												runs into cases across apps.
 											</Trans>
 										</p>
-										{isEditing ? (
+										{canWriteEvents ? (
 											<div className="mt-2 space-y-2">
 												{caseKeyRows.map((row, index) => (
 													<div
@@ -1863,11 +1891,7 @@ function EventConfiguration({
 												</Button>
 											</div>
 										) : (
-											<button
-												type="button"
-												className="mt-1 w-full rounded px-2 py-1 -mx-2 text-left transition-colors hover:bg-muted/60"
-												onClick={enterEdit}
-											>
+											<div className="mt-1">
 												{Object.keys(event.correlation_mappings ?? {}).length >
 												0 ? (
 													<span className="flex flex-wrap gap-1">
@@ -1887,12 +1911,12 @@ function EventConfiguration({
 												) : (
 													<span className="text-sm text-muted-foreground">
 														{t(
-															"noCaseKeysClickToConfigureProcessMining",
-															"No case keys — click to configure process mining",
+															"noCaseKeysConfigured",
+															"No case keys configured",
 														)}
 													</span>
 												)}
-											</button>
+											</div>
 										)}
 									</div>
 								</CardContent>
@@ -1909,7 +1933,7 @@ function EventConfiguration({
 											: "Flow Configuration"}
 									</CardTitle>
 								</CardHeader>
-								{!isEditing && event.default_page_id && (
+								{!canWriteEvents && event.default_page_id && (
 									<CardContent className="space-y-4">
 										<div>
 											<Label className="group flex items-center hover:underline">
@@ -1934,27 +1958,19 @@ function EventConfiguration({
 										</div>
 										<div>
 											<Label>{t("flowVersion", "Flow Version")}</Label>
-											<button
-												type="button"
-												className="mt-1 block w-full rounded px-2 py-1 -mx-2 text-left text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
-												onClick={enterEdit}
-											>
+											<p className="mt-1 text-sm text-muted-foreground">
 												{event.board_version
 													? `v${event.board_version.join(".")}`
 													: "Latest"}
-											</button>
+											</p>
 										</div>
 									</CardContent>
 								)}
-								{!isEditing && !event.default_page_id && (
+								{!canWriteEvents && !event.default_page_id && (
 									<CardContent className="space-y-4">
 										<div>
 											<Label>{t("flow", "Flow")}</Label>
-											<button
-												type="button"
-												className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
-												onClick={enterEdit}
-											>
+											<p className="mt-1 text-sm text-muted-foreground font-mono">
 												{board.data?.name ??
 													(canReadBoards
 														? t("boardNotFound", "BOARD NOT FOUND!")
@@ -1962,59 +1978,19 @@ function EventConfiguration({
 																"flowNameHiddenByYourRole",
 																"Name hidden — your role cannot read this flow",
 															))}
-											</button>
+											</p>
 										</div>
 										<div>
 											<Label>{t("flowVersion", "Flow Version")}</Label>
-											<button
-												type="button"
-												className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
-												onClick={enterEdit}
-											>
+											<p className="mt-1 text-sm text-muted-foreground">
 												{event.board_version
 													? event.board_version.join(".")
 													: "Latest"}
-											</button>
+											</p>
 										</div>
 										<div>
 											<Label className="group flex items-center hover:underline">
-												{onNavigateToFlow ? (
-													<button
-														type="button"
-														title={t("openFlowAndNode", "Open Flow and Node")}
-														className="flex flex-row items-center"
-														onClick={() =>
-															onNavigateToFlow({
-																boardId: event.board_id,
-																appId,
-																nodeId: event.node_id,
-																version: event.board_version as
-																	| [number, number, number]
-																	| undefined,
-															})
-														}
-													>
-														{t("nodeId", "Node ID")}
-														<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
-															<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
-														</span>
-													</button>
-												) : (
-													<Link
-														title={t("openFlowAndNode", "Open Flow and Node")}
-														className="flex flex-row items-center"
-														href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
-													>
-														{t("nodeId", "Node ID")}
-														<Button
-															size={"icon"}
-															variant={"ghost"}
-															className="p-0! w-4 h-4 ml-1 mb-[0.1rem]"
-														>
-															<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
-														</Button>
-													</Link>
-												)}
+												{openFlowLink(t("nodeId", "Node ID"))}
 											</Label>
 											<p className="mt-1 text-sm text-muted-foreground font-mono">
 												{board.data?.nodes?.[event.node_id]?.friendly_name ??
@@ -2024,11 +2000,22 @@ function EventConfiguration({
 										</div>
 									</CardContent>
 								)}
-								{isEditing && isPageTargetEvent && (
+								{canWriteEvents && isPageTargetEvent && (
 									<CardContent className="space-y-4">
 										{/* Page Selection */}
 										<div className="space-y-2">
-											<Label htmlFor="page">{t("page", "Page")}</Label>
+											<Label className="group flex items-center hover:underline">
+												<Link
+													title={t("openPageEditor", "Open Page Editor")}
+													className="flex flex-row items-center"
+													href={`/library/config/page-editor?id=${appId}&pageId=${formData.default_page_id}`}
+												>
+													{t("page", "Page")}
+													<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
+														<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+													</span>
+												</Link>
+											</Label>
 											<Select
 												value={formData.default_page_id ?? ""}
 												onValueChange={(value) => {
@@ -2091,7 +2078,7 @@ function EventConfiguration({
 										</div>
 									</CardContent>
 								)}
-								{isEditing && !isPageTargetEvent && (
+								{canWriteEvents && !isPageTargetEvent && (
 									<CardContent className="space-y-4">
 										{/* Board Selection */}
 										<div className="space-y-4">
@@ -2186,6 +2173,13 @@ function EventConfiguration({
 																))}
 														</SelectContent>
 													</Select>
+													{event.node_id && (
+														<div className="group text-sm text-muted-foreground hover:text-foreground hover:underline">
+															{openFlowLink(
+																t("openFlowAndNode", "Open Flow and Node"),
+															)}
+														</div>
+													)}
 												</div>
 											</div>
 										)}
@@ -2382,7 +2376,7 @@ function EventConfiguration({
 											<CodeIcon className="h-5 w-5" />
 											<p>{t("variables", "Variables")}</p>
 										</CardTitle>
-										{isEditing && (
+										{canWriteEvents && (
 											<Dialog>
 												<DialogTrigger asChild>
 													<Button variant="outline" className="gap-2 ml-2">
@@ -2536,11 +2530,10 @@ function EventConfiguration({
 											{Object.entries(formData.variables).map(
 												([key, value]) => (
 													<VariableConfigCard
-														disabled={!isEditing}
+														disabled={!canWriteEvents}
 														key={key}
 														variable={value}
 														onUpdate={async (variable) => {
-															if (!isEditing) setIsEditing(true);
 															const newVars = {
 																...formData.variables,
 																[key]: {
@@ -2556,7 +2549,7 @@ function EventConfiguration({
 										</div>
 									) : (
 										<p className="text-sm text-muted-foreground">
-											{isEditing
+											{canWriteEvents
 												? t(
 														"noVariablesConfiguredClickAddFlowVariablesToGetStarted",
 														"No variables configured. Click 'Add Flow Variables' to get started.",
@@ -2573,19 +2566,25 @@ function EventConfiguration({
 								key={event.id}
 								appId={appId}
 								event={formData}
+								route={getHostedRoute({
+									route: routes.isSuccess ? routeForEvent?.path : event.route,
+									is_default: event.is_default,
+								})}
 								config={parsedConfig}
 								canWrite={canWriteEvents}
 								hasUnsavedChanges={isDirty}
-								onUpdate={(frontend_hosting) => {
-									if (!isEditing) setIsEditing(true);
+								onUpdate={(frontend_hosting) =>
 									handleInputChange(
 										"config",
 										convertJsonToUint8Array({
 											...parsedConfig,
 											frontend_hosting,
 										}),
-									);
-								}}
+									)
+								}
+								onEventChange={(change) =>
+									setFormData((prev) => ({ ...prev, ...change }))
+								}
 							/>
 						)}
 
@@ -2622,7 +2621,6 @@ function EventConfiguration({
 											formData.execution_mode ?? IEventExecutionMode.Local
 										}
 										onUpdate={(config) => {
-											if (!isEditing) setIsEditing(true);
 											handleInputChange(
 												"config",
 												convertJsonToUint8Array({
@@ -2689,28 +2687,18 @@ function EventConfiguration({
 									</CardTitle>
 								</CardHeader>
 								<CardContent>
-									{isEditing ? (
-										<Textarea
-											value={formData.notes?.NOTES ?? ""}
-											onChange={(e) =>
-												handleInputChange("notes", { NOTES: e.target.value })
-											}
-											placeholder={t(
-												"addNotesAboutThisEvent",
-												"Add notes about this event...",
-											)}
-											rows={4}
-										/>
-									) : (
-										<button
-											type="button"
-											className="text-sm text-muted-foreground whitespace-pre-wrap text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-											onClick={enterEdit}
-										>
-											{event.notes?.NOTES ??
-												t("clickToAddNotes", "Click to add notes...")}
-										</button>
-									)}
+									<Textarea
+										value={formData.notes?.NOTES ?? ""}
+										disabled={!canWriteEvents}
+										onChange={(e) =>
+											handleInputChange("notes", { NOTES: e.target.value })
+										}
+										placeholder={t(
+											"addNotesAboutThisEvent",
+											"Add notes about this event...",
+										)}
+										rows={4}
+									/>
 								</CardContent>
 							</Card>
 						)}
@@ -2726,10 +2714,34 @@ function EventConfiguration({
 				</div>
 			</div>
 
-			{/* Save bar — driven by actual changes, since the config surface is
-			    always interactive and "edit mode" no longer means the user has
-			    changed anything. */}
-			{!isMobile && showSaveBar && saveBar}
+			<AlertDialog open={confirmLeave} onOpenChange={setConfirmLeave}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							{t("discardUnsavedChanges", "Discard unsaved changes?")}
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							{t(
+								"leavingDiscardsEventEdits",
+								"You changed this event but did not save. Leaving now throws those edits away.",
+							)}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>
+							{t("keepEditing", "Keep editing")}
+						</AlertDialogCancel>
+						<AlertDialogAction
+							onClick={() => {
+								handleCancel();
+								onDone?.();
+							}}
+						>
+							{t("discardAndLeave", "Discard and leave")}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 
 			{/* PAT Selector Dialog */}
 			<PatSelectorDialog

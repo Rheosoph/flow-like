@@ -38,7 +38,7 @@ export default function CallbackPage() {
 			const returnUrl = sanitizeReturnUrl(auth.user?.url_state) ?? stored;
 			const hostedPath = hostedReturnPath(returnUrl);
 			if (hostedPath) {
-				// The static host resolves runtime aliases to the exported entry page.
+				// The static host serves every hosted app route from the exported /a page.
 				window.location.replace(hostedPath);
 				return;
 			}

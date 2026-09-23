@@ -8,11 +8,12 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
-	Checkbox,
 	Input,
 	Label,
 	MemoryTier,
+	type NetworkPermissions,
 	type PackageManifest,
+	type PackagePermissions,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -59,17 +60,19 @@ interface PublishFormData {
 	// Permissions
 	memoryTier: MemoryTier;
 	timeoutTier: TimeoutTier;
-	httpEnabled: boolean;
 	allowedHosts: string;
-	websocketEnabled: boolean;
-	nodeStorage: boolean;
-	userStorage: boolean;
-	variables: boolean;
-	cache: boolean;
-	streaming: boolean;
-	a2ui: boolean;
-	models: boolean;
 }
+
+/**
+ * The published manifest carries only what nodes cannot state: the resource
+ * tiers and the outbound host allowlist. The registry derives the capability
+ * flags from the compiled node definitions.
+ */
+type PublishManifest = Omit<PackageManifest, "permissions"> & {
+	permissions: Pick<PackagePermissions, "memory" | "timeout"> & {
+		network: Pick<NetworkPermissions, "allowedHosts">;
+	};
+};
 
 type PublishStep = "upload" | "manifest" | "permissions" | "review";
 
@@ -133,16 +136,7 @@ export default function PublishPackagePage() {
 		keywords: "",
 		memoryTier: MemoryTier.Standard,
 		timeoutTier: TimeoutTier.Standard,
-		httpEnabled: false,
 		allowedHosts: "",
-		websocketEnabled: false,
-		nodeStorage: false,
-		userStorage: false,
-		variables: false,
-		cache: false,
-		streaming: false,
-		a2ui: false,
-		models: false,
 	});
 
 	const selectWasmFile = useCallback(async () => {
@@ -191,7 +185,7 @@ export default function PublishPackagePage() {
 			}
 
 			// Build manifest
-			const manifest: PackageManifest = {
+			const manifest: PublishManifest = {
 				manifestVersion: 1,
 				id: formData.id,
 				name: formData.name,
@@ -207,27 +201,13 @@ export default function PublishPackagePage() {
 					memory: formData.memoryTier,
 					timeout: formData.timeoutTier,
 					network: {
-						httpEnabled: formData.httpEnabled,
 						allowedHosts: formData.allowedHosts
-							? formData.allowedHosts.split(",").map((h) => h.trim())
+							? formData.allowedHosts
+									.split(",")
+									.map((h) => h.trim())
+									.filter(Boolean)
 							: [],
-						websocketEnabled: formData.websocketEnabled,
-						tcpEnabled: false,
-						udpEnabled: false,
-						dnsEnabled: false,
 					},
-					filesystem: {
-						nodeStorage: formData.nodeStorage,
-						userStorage: formData.userStorage,
-						uploadDir: false,
-						cacheDir: false,
-					},
-					oauthScopes: [],
-					variables: formData.variables,
-					cache: formData.cache,
-					streaming: formData.streaming,
-					a2ui: formData.a2ui,
-					models: formData.models,
 				},
 				keywords: formData.keywords
 					? formData.keywords.split(",").map((k) => k.trim())
@@ -575,8 +555,8 @@ export default function PublishPackagePage() {
 								</CardTitle>
 								<CardDescription>
 									{t(
-										"declareTheCapabilitiesYourPackageNeeds",
-										"Declare the capabilities your package needs",
+										"setTheResourceLimitsAndOutboundHostsForYourPackage",
+										"Set the resource limits and outbound hosts for your package",
 									)}
 								</CardDescription>
 							</CardHeader>
@@ -671,151 +651,41 @@ export default function PublishPackagePage() {
 									<h4 className="font-medium">
 										{t("networkAccess", "Network Access")}
 									</h4>
-									<div className="flex items-center space-x-2">
-										<Checkbox
-											id="httpEnabled"
-											checked={formData.httpEnabled}
-											onCheckedChange={(c) =>
-												updateField("httpEnabled", c === true)
-											}
-										/>
-										<Label htmlFor="httpEnabled">
-											{t("enableHttpRequests", "Enable HTTP requests")}
-										</Label>
-									</div>
-									{formData.httpEnabled && (
-										<div className="space-y-2 ml-6">
-											<Label htmlFor="allowedHosts">
-												{t(
-													"allowedHostsCommaseparatedEmptyAll",
-													"Allowed Hosts (comma-separated, empty = all)",
-												)}
-											</Label>
-											<Input
-												id="allowedHosts"
-												placeholder={t(
-													"apiexamplecomCdnexamplecom",
-													"api.example.com, cdn.example.com",
-												)}
-												value={formData.allowedHosts}
-												onChange={(e) =>
-													updateField("allowedHosts", e.target.value)
-												}
-											/>
-										</div>
-									)}
-									<div className="flex items-center space-x-2">
-										<Checkbox
-											id="websocketEnabled"
-											checked={formData.websocketEnabled}
-											onCheckedChange={(c) =>
-												updateField(`websocketEnabled`, c === true)
-											}
-										/>
-										<Label htmlFor="websocketEnabled">
+									<div className="space-y-2">
+										<Label htmlFor="allowedHosts">
 											{t(
-												"enableWebsocketConnections",
-												"Enable WebSocket connections",
+												"allowedHostsCommaseparatedEmptyAll",
+												"Allowed Hosts (comma-separated, empty = all)",
 											)}
 										</Label>
+										<Input
+											id="allowedHosts"
+											placeholder={t(
+												"apiexamplecomCdnexamplecom",
+												"api.example.com, cdn.example.com",
+											)}
+											value={formData.allowedHosts}
+											onChange={(e) =>
+												updateField("allowedHosts", e.target.value)
+											}
+										/>
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"packagewideOutboundHostAllowlistSharedByAllNodes",
+												"Package-wide outbound host allowlist, shared by all nodes.",
+											)}
+										</p>
 									</div>
 								</div>
 
 								<Separator />
 
-								<div className="space-y-4">
-									<h4 className="font-medium">
-										{t("storageAccess", "Storage Access")}
-									</h4>
-									<div className="flex items-center space-x-2">
-										<Checkbox
-											id="nodeStorage"
-											checked={formData.nodeStorage}
-											onCheckedChange={(c) =>
-												updateField("nodeStorage", c === true)
-											}
-										/>
-										<Label htmlFor="nodeStorage">
-											{t("nodescopedStorage", "Node-scoped storage")}
-										</Label>
-									</div>
-									<div className="flex items-center space-x-2">
-										<Checkbox
-											id="userStorage"
-											checked={formData.userStorage}
-											onCheckedChange={(c) =>
-												updateField("userStorage", c === true)
-											}
-										/>
-										<Label htmlFor="userStorage">
-											{t("userscopedStorage", "User-scoped storage")}
-										</Label>
-									</div>
-								</div>
-
-								<Separator />
-
-								<div className="space-y-4">
-									<h4 className="font-medium">
-										{t("additionalCapabilities", "Additional Capabilities")}
-									</h4>
-									<div className="grid grid-cols-2 gap-2">
-										<div className="flex items-center space-x-2">
-											<Checkbox
-												id="variables"
-												checked={formData.variables}
-												onCheckedChange={(c) =>
-													updateField("variables", c === true)
-												}
-											/>
-											<Label htmlFor="variables">
-												{t("variables", "Variables")}
-											</Label>
-										</div>
-										<div className="flex items-center space-x-2">
-											<Checkbox
-												id="cache"
-												checked={formData.cache}
-												onCheckedChange={(c) =>
-													updateField("cache", c === true)
-												}
-											/>
-											<Label htmlFor="cache">{t("cache", "Cache")}</Label>
-										</div>
-										<div className="flex items-center space-x-2">
-											<Checkbox
-												id="streaming"
-												checked={formData.streaming}
-												onCheckedChange={(c) =>
-													updateField("streaming", c === true)
-												}
-											/>
-											<Label htmlFor="streaming">
-												{t("streaming", "Streaming")}
-											</Label>
-										</div>
-										<div className="flex items-center space-x-2">
-											<Checkbox
-												id="a2ui"
-												checked={formData.a2ui}
-												onCheckedChange={(c) => updateField("a2ui", c === true)}
-											/>
-											<Label htmlFor="a2ui">{`A2UI`}</Label>
-										</div>
-										<div className="flex items-center space-x-2">
-											<Checkbox
-												id="models"
-												checked={formData.models}
-												onCheckedChange={(c) =>
-													updateField("models", c === true)
-												}
-											/>
-											<Label htmlFor="models">
-												{t("modelsLlm", "Models / LLM")}
-											</Label>
-										</div>
-									</div>
-								</div>
+								<p className="text-sm text-muted-foreground">
+									{t(
+										"capabilitiesSuchAsNetworkStorageDatabaseOrModelsAreDeclaredOnEachNodeInCodeTheRegistryDerivesThePackagesCapabilityListingFromTheCompiledNodes",
+										"Capabilities such as network, storage, database or models are declared on each node in code. The registry derives the package's capability listing from the compiled nodes.",
+									)}
+								</p>
 							</CardContent>
 						</>
 					)}
@@ -871,42 +741,13 @@ export default function PublishPackagePage() {
 												timeoutTier: formData.timeoutTier,
 											})}
 										</Badge>
-										{formData.httpEnabled && (
-											<Badge variant="outline">{`HTTP`}</Badge>
-										)}
-										{formData.websocketEnabled && (
-											<Badge variant="outline">
-												{t("websocket", "WebSocket")}
-											</Badge>
-										)}
-										{formData.nodeStorage && (
-											<Badge variant="outline">
-												{t("nodeStorage", "Node Storage")}
-											</Badge>
-										)}
-										{formData.userStorage && (
-											<Badge variant="outline">
-												{t("userStorage", "User Storage")}
-											</Badge>
-										)}
-										{formData.variables && (
-											<Badge variant="outline">
-												{t("variables", "Variables")}
-											</Badge>
-										)}
-										{formData.cache && (
-											<Badge variant="outline">{t("cache", "Cache")}</Badge>
-										)}
-										{formData.streaming && (
-											<Badge variant="outline">
-												{t("streaming", "Streaming")}
-											</Badge>
-										)}
-										{formData.a2ui && <Badge variant="outline">{`A2UI`}</Badge>}
-										{formData.models && (
-											<Badge variant="outline">{t("models", "Models")}</Badge>
-										)}
 									</div>
+									<p className="text-xs text-muted-foreground">
+										{t(
+											"capabilitiesAreDerivedFromThePackagesNodesAfterCompilation",
+											"Capabilities are derived from the package's nodes after compilation.",
+										)}
+									</p>
 								</div>
 
 								<div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-4">

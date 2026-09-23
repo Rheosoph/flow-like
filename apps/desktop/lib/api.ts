@@ -16,8 +16,14 @@ import {
 import {
 	DEFAULT_CONNECT_TIMEOUT_MS,
 	STREAM_HEADER_TIMEOUT_MS,
+	requestTimeoutMs,
 	withRequestDeadline,
 } from "./request-deadline";
+
+export interface FetcherOptions extends RequestInit {
+	/** Overrides the route-class deadline for one call. */
+	timeoutMs?: number;
+}
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"payments",
@@ -493,7 +499,7 @@ export interface IConditionalResponse<T> {
 export async function fetcherConditional<T>(
 	profile: IProfile,
 	path: string,
-	options: RequestInit | undefined,
+	options: FetcherOptions | undefined,
 	auth: AuthContextProps | undefined,
 	etag?: string,
 ): Promise<IConditionalResponse<T>> {
@@ -503,7 +509,7 @@ export async function fetcherConditional<T>(
 export async function fetcher<T>(
 	profile: IProfile,
 	path: string,
-	options?: RequestInit,
+	options?: FetcherOptions,
 	auth?: AuthContextProps,
 ): Promise<T> {
 	const { data } = await requestJson<T>(profile, path, options, auth);
@@ -513,7 +519,7 @@ export async function fetcher<T>(
 async function requestJson<T>(
 	profile: IProfile,
 	path: string,
-	options?: RequestInit,
+	options?: FetcherOptions,
 	auth?: AuthContextProps,
 	ifNoneMatch?: string,
 ): Promise<IConditionalResponse<T>> {
@@ -542,50 +548,70 @@ async function requestJson<T>(
 	const url = constructUrl(profile, path);
 	const route = normalizeApiPath(methodOf(options), path);
 	if (API_STATS_ENABLED) console.log("[API DEBUG] Fetching route:", route);
+	const { timeoutMs, signal, ...init } = options ?? {};
+	const bodyBytes = typeof init.body === "string" ? init.body.length : 0;
 	try {
-		const response = await tauriFetch(url, {
-			...options,
-			headers: {
-				"Content-Type": "application/json",
-				...options?.headers,
-				...headers,
+		// The deadline spans the body read as well: `fetch_read_body` stalls on a
+		// half-open socket exactly like `fetch_send` does.
+		return await withRequestDeadline<IConditionalResponse<T>>(
+			route,
+			async (deadline) => {
+				const response = await tauriFetch(url, {
+					...init,
+					headers: {
+						"Content-Type": "application/json",
+						...init.headers,
+						...headers,
+					},
+					keepalive: true,
+					priority: "high",
+					connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+					signal: deadline.signal,
+				});
+
+				if (API_STATS_ENABLED) {
+					console.log("[API DEBUG] Response received:", {
+						status: response.status,
+						statusText: response.statusText,
+					});
+				}
+
+				const responseEtag = response.headers.get("etag") ?? undefined;
+
+				// Only a caller that offered a tag can interpret a 304; without one it would be an
+				// unexpected empty success, so it keeps falling through to the error path below.
+				if (response.status === 304 && ifNoneMatch) {
+					return { notModified: true, etag: responseEtag ?? ifNoneMatch };
+				}
+
+				if (!response.ok) {
+					if (response.status === 401 && auth) {
+						requestSilentRenew(auth, "after 401");
+					}
+					const errorText = await response.text();
+					const apiError = apiResponseError(response, errorText, path);
+					console.error(
+						`Error fetching ${route}:`,
+						apiErrorDiagnostic(apiError),
+					);
+					throw apiError;
+				}
+
+				const text = await response.text();
+				if (!text) return { notModified: false, etag: responseEtag };
+				const json = tryParseJSON<T>(text);
+				if (json === null) {
+					return { notModified: false, data: text as T, etag: responseEtag };
+				}
+				return { notModified: false, data: json, etag: responseEtag };
 			},
-			keepalive: true,
-			priority: "high",
-		});
-
-		if (API_STATS_ENABLED) {
-			console.log("[API DEBUG] Response received:", {
-				status: response.status,
-				statusText: response.statusText,
-			});
-		}
-
-		const responseEtag = response.headers.get("etag") ?? undefined;
-
-		// Only a caller that offered a tag can interpret a 304; without one it would be an
-		// unexpected empty success, so it keeps falling through to the error path below.
-		if (response.status === 304 && ifNoneMatch) {
-			return { notModified: true, etag: responseEtag ?? ifNoneMatch };
-		}
-
-		if (!response.ok) {
-			if (response.status === 401 && auth) {
-				requestSilentRenew(auth, "after 401");
-			}
-			const errorText = await response.text();
-			const apiError = apiResponseError(response, errorText, path);
-			console.error(`Error fetching ${route}:`, apiErrorDiagnostic(apiError));
-			throw apiError;
-		}
-
-		const text = await response.text();
-		if (!text) return { notModified: false, etag: responseEtag };
-		const json = tryParseJSON<T>(text);
-		if (json === null) {
-			return { notModified: false, data: text as T, etag: responseEtag };
-		}
-		return { notModified: false, data: json, etag: responseEtag };
+			{
+				timeoutMs:
+					timeoutMs ??
+					requestTimeoutMs(cleanApiPath(path), methodOf(options), bodyBytes),
+				signal,
+			},
+		);
 	} catch (error) {
 		if (error instanceof ApiResponseError) throw error;
 		console.groupCollapsed(`API Request: ${route}`);

@@ -1,46 +1,21 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { SlateElementProps, TDateElement } from "platejs";
+import type { TDateElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
-import { SlateElement } from "platejs";
+import { SlateElement } from "platejs/static";
+
+import { getDateElementLabel } from "./date-label";
 
 export function DateElementStatic(props: SlateElementProps<TDateElement>) {
 	const { t } = useTranslation("common");
-	const { element } = props;
+	const label = getDateElementLabel(props.element);
 
 	return (
 		<SlateElement className="inline-block" {...props}>
 			<span className="w-fit rounded-sm bg-muted px-1 text-muted-foreground">
-				{element.date ? (
-					(() => {
-						const today = new Date();
-						const elementDate = new Date(element.date);
-						const isToday =
-							elementDate.getDate() === today.getDate() &&
-							elementDate.getMonth() === today.getMonth() &&
-							elementDate.getFullYear() === today.getFullYear();
-
-						const isYesterday =
-							new Date(today.setDate(today.getDate() - 1)).toDateString() ===
-							elementDate.toDateString();
-						const isTomorrow =
-							new Date(today.setDate(today.getDate() + 2)).toDateString() ===
-							elementDate.toDateString();
-
-						if (isToday) return "Today";
-						if (isYesterday) return "Yesterday";
-						if (isTomorrow) return "Tomorrow";
-
-						return elementDate.toLocaleDateString(undefined, {
-							day: "numeric",
-							month: "long",
-							year: "numeric",
-						});
-					})()
-				) : (
-					<span>{t("pickADate", "Pick a date")}</span>
-				)}
+				{label ?? <span>{t("pickADate", "Pick a date")}</span>}
 			</span>
 			{props.children}
 		</SlateElement>

@@ -7,6 +7,7 @@ import {
 	CardTitle,
 	DeveloperModeCard,
 	useDeveloperMode,
+	useHub,
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import {
@@ -20,6 +21,7 @@ import {
 	type LucideIcon,
 	Package,
 	Scroll,
+	Server,
 	ShieldCheck,
 	Smartphone,
 	User,
@@ -35,6 +37,7 @@ interface SettingsCard {
 	icon: LucideIcon;
 	external?: boolean;
 	devOnly?: boolean;
+	requiresDevices?: boolean;
 }
 
 interface SettingsSection {
@@ -96,6 +99,16 @@ function buildSettingsSections(
 		{
 			label: t("extensionsAmpIntegrations", "Extensions & Integrations"),
 			cards: [
+				{
+					title: t("devices", "Devices"),
+					description: t(
+						"devicesSettingsDescription",
+						"View registered standalone devices and revoke account access",
+					),
+					href: "/settings/devices",
+					icon: Server,
+					requiresDevices: true,
+				},
 				{
 					title: t("registry", "Registry"),
 					description: t(
@@ -211,16 +224,22 @@ function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 export default function SettingsPage() {
 	const { t } = useTranslation("common");
 	const { developerMode } = useDeveloperMode();
+	const { hub } = useHub();
+	const devicesEnabled = hub?.standalone?.enabled === true;
 
 	const sections = useMemo(
 		() =>
 			buildSettingsSections(t)
 				.map((section) => ({
 					...section,
-					cards: section.cards.filter((card) => developerMode || !card.devOnly),
+					cards: section.cards.filter(
+						(card) =>
+							(developerMode || !card.devOnly) &&
+							(!card.requiresDevices || devicesEnabled),
+					),
 				}))
 				.filter((section) => section.cards.length > 0),
-		[developerMode, t],
+		[developerMode, devicesEnabled, t],
 	);
 
 	return (

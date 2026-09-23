@@ -275,9 +275,13 @@ The job does not use `prisma migrate deploy`: Prisma sends a migration file as
 one batch, which PostgreSQL runs in one implicit transaction and DSQL rejects.
 See [migration recovery](#migration-recovery) if the run fails.
 
-Run the job before deploying a Lambda revision that needs the new schema;
-sessions opened before a schema change see one `OC001` conflict on their next
-statement, which the API's transaction retry absorbs.
+Run the job before deploying a Lambda revision that needs the new schema.
+Sessions opened before a schema change see one `OC001` conflict on their next
+statement. Only two paths absorb it: work that runs through `retry_transaction`,
+and the audit record insert, which retries a stale catalog up to three times.
+Every other statement returns the conflict to its caller once, so a real schema
+migration against a live cluster costs a handful of failed requests from warm
+sessions; the drift-only grants of a routine run change no schema and cause none.
 
 ### Migration recovery
 

@@ -43,7 +43,9 @@ mock.module("../../hooks/use-app-permissions", () => ({
 }));
 
 const { PayoutsPage } = await import("./payouts-page");
-const { AppPaymentsPage } = await import("./app-payments-page");
+const { AppPaymentSettingsPanel, SellerTermsCard } = await import(
+	"./app-payment-settings"
+);
 const { EarningsPage } = await import("./earnings-page");
 const { NodePaymentCard } = await import("./node-payment");
 const { WithdrawalConfirmation, PurchaseLookupResult, PurchasesPage } =
@@ -88,10 +90,29 @@ test("platform-owned app settings omit seller self-agreements and personal accou
 		canAcceptPayments: true,
 		canSell: true,
 	};
-	const markup = renderToStaticMarkup(<AppPaymentsPage />);
+	const markup = renderToStaticMarkup(
+		<>
+			<AppPaymentSettingsPanel appId="app" />
+			<SellerTermsCard appId="app" />
+		</>,
+	);
 	expect(markup).toContain("Flow-Like can collect payments for this app");
 	expect(markup).not.toContain("Accept seller terms");
 	expect(markup).not.toContain("Manage your payment account");
+});
+
+test("independent owners get the seller terms and their payout account link", () => {
+	responses["apps/app/payments/readiness"] = {
+		platformOwned: false,
+		canAcceptPayments: false,
+		canSell: false,
+	};
+	const panel = renderToStaticMarkup(<AppPaymentSettingsPanel appId="app" />);
+	expect(panel).toContain("Manage your payment account");
+	expect(panel).toContain("The owner must complete payment setup");
+	expect(renderToStaticMarkup(<SellerTermsCard appId="app" />)).toContain(
+		"Accept seller terms",
+	);
 });
 
 test("platform balance and historical recipients remain visibly distinct", () => {

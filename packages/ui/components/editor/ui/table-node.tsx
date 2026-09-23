@@ -151,11 +151,8 @@ export const TableElement = withHOC(
 			"isSelectionAreaVisible",
 		);
 		const hasControls = !readOnly && !isSelectionAreaVisible;
-		const {
-			isSelectingCell,
-			marginLeft,
-			props: tableProps,
-		} = useTableElement();
+		const isSelectingCell = usePluginOption(TablePlugin, "isSelectingCell");
+		const { marginLeft, props: tableProps } = useTableElement();
 
 		const isSelectingTable = useBlockSelected(props.element.id as string);
 
@@ -495,6 +492,7 @@ export function TableRowElement(props: PlateElementProps<TTableRowElement>) {
 		element,
 		type: element.type,
 		canDropNode: ({ dragEntry, dropEntry }) =>
+			!!dragEntry &&
 			PathApi.equals(
 				PathApi.parent(dragEntry[1]),
 				PathApi.parent(dropEntry[1]),
@@ -639,7 +637,7 @@ export function TableCellElement({
 					"relative z-20 box-border h-full",
 					readOnly ? "px-2 py-1.5 text-sm" : "px-3 py-2",
 				)}
-				style={{ minHeight: readOnly ? undefined : minHeight }}
+				style={{ minHeight: readOnly || !minHeight ? undefined : minHeight }}
 			>
 				{props.children}
 			</div>
