@@ -44,6 +44,8 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod perplexity;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod together;
 pub mod vertex;
 pub mod voyageai;
@@ -91,6 +93,15 @@ pub fn merge_additional_params(base: Option<Value>, extra: Option<Value>) -> Opt
             }
         }
     }
+}
+
+/// What an agent needs from a History: body parameters plus the fields Rig's agent builder
+/// sets natively.
+#[derive(Clone, Debug, Default)]
+pub struct AgentSettings {
+    pub params: Option<Value>,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -174,6 +185,40 @@ pub trait ModelLogic: Send + Sync {
     }
 
     fn transform_history(&self, _history: &mut History) {}
+
+    /// Body parameters for a request built from `history`: the provider's own mapping, or the
+    /// OpenAI-style History fields for providers that take them as they are.
+    fn request_params(&self, history: &History, is_streaming: bool) -> Result<Option<Value>> {
+        let params = match self.additional_params(&Some(history.clone())) {
+            Some(params) => Some(params),
+            None => history.build_additional_params()?,
+        };
+        Ok(apply_usage_reporting(
+            params,
+            self.usage_reporting(),
+            is_streaming,
+        ))
+    }
+
+    /// Settings for a Rig agent built from `history`, prepared the way `invoke` prepares its
+    /// request. The agent picks the transport per call, so the History's `stream` flag must not
+    /// turn a completion into SSE.
+    fn agent_settings(&self, history: &Option<History>) -> Result<AgentSettings> {
+        let Some(history) = history else {
+            return Ok(AgentSettings {
+                params: apply_usage_reporting(None, self.usage_reporting(), false),
+                ..AgentSettings::default()
+            });
+        };
+        let mut history = history.clone();
+        self.transform_history(&mut history);
+        history.stream = None;
+        Ok(AgentSettings {
+            params: self.request_params(&history, false)?,
+            temperature: history.temperature.map(f64::from),
+            max_tokens: history.max_completion_tokens.map(u64::from),
+        })
+    }
 
     /// Get a DynamicCompletionModel for use with external libraries that need `CompletionModel`.
     /// This is the preferred method over `completion_model_handle` as it properly implements the trait.
@@ -264,19 +309,7 @@ pub trait ModelLogic: Send + Sync {
             builder = builder.tool_choice(choice);
         }
 
-        // Note: We call self.additional_params() later which may need to merge with history params
-        // Some providers (like Gemini) need to filter certain fields from history params
-        // So we let the model implementation handle the merging in additional_params()
-        // Only add history params here if the model doesn't provide custom params
-        let mut model_additional_params = self.additional_params(&Some(history.clone()));
-        if model_additional_params.is_none() {
-            model_additional_params = history.build_additional_params()?;
-        }
-        model_additional_params = apply_usage_reporting(
-            model_additional_params,
-            self.usage_reporting(),
-            should_stream,
-        );
+        let model_additional_params = self.request_params(&history, should_stream)?;
 
         if should_stream {
             invoke_with_stream(
@@ -301,7 +334,10 @@ pub trait CompletionModelDyn: WasmCompatSend + WasmCompatSync {
     fn completion(
         &self,
         request: CompletionRequest,
-    ) -> WasmBoxedFuture<'_, std::result::Result<CompletionResponse<()>, CompletionError>>;
+    ) -> WasmBoxedFuture<
+        '_,
+        std::result::Result<CompletionResponse<DynamicResponse>, CompletionError>,
+    >;
 
     fn stream(
         &self,
@@ -332,16 +368,31 @@ where
     fn completion(
         &self,
         request: CompletionRequest,
-    ) -> WasmBoxedFuture<'_, std::result::Result<CompletionResponse<()>, CompletionError>> {
+    ) -> WasmBoxedFuture<
+        '_,
+        std::result::Result<CompletionResponse<DynamicResponse>, CompletionError>,
+    > {
+        let max_tokens = requested_output_budget(&request);
         Box::pin(async move {
-            CompletionModel::completion(self, request)
-                .await
-                .map(|resp| CompletionResponse {
-                    choice: resp.choice,
-                    usage: resp.usage,
-                    raw_response: (),
-                    message_id: resp.message_id,
-                })
+            let resp = CompletionModel::completion(self, request).await?;
+            let has_tool_call = resp
+                .choice
+                .iter()
+                .any(|content| matches!(content, rig::message::AssistantContent::ToolCall(_)));
+            let finish_reason = resolve_finish_reason(
+                reported_finish_reason(&resp.raw_response),
+                max_tokens,
+                resp.usage.output_tokens,
+                has_tool_call,
+            );
+            Ok(CompletionResponse {
+                choice: resp.choice,
+                usage: resp.usage,
+                raw_response: DynamicResponse {
+                    finish_reason: Some(finish_reason),
+                },
+                message_id: resp.message_id,
+            })
         })
     }
 
@@ -352,15 +403,21 @@ where
         '_,
         std::result::Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
     > {
+        let max_tokens = requested_output_budget(&request);
         Box::pin(async move {
+            let mut has_tool_call = false;
             let stream = CompletionModel::stream(self, request)
                 .await?
-                .flat_map(|item| {
+                .flat_map(move |item| {
                     futures::stream::iter(match item {
-                        Ok(item) => dynamic_raw_stream_items(item)
-                            .into_iter()
-                            .map(Ok)
-                            .collect::<Vec<_>>(),
+                        Ok(item) => {
+                            has_tool_call |=
+                                matches!(item, StreamedAssistantContent::ToolCall { .. });
+                            dynamic_raw_stream_items(item, max_tokens, has_tool_call)
+                                .into_iter()
+                                .map(Ok)
+                                .collect::<Vec<_>>()
+                        }
                         Err(err) => vec![Err(err)],
                     })
                 });
@@ -416,7 +473,7 @@ impl<'a> CompletionModelHandle<'a> {
 }
 
 impl CompletionModel for CompletionModelHandle<'_> {
-    type Response = ();
+    type Response = DynamicResponse;
     type StreamingResponse = DynamicStreamingResponse;
     type Client = ();
 
@@ -449,6 +506,9 @@ impl CompletionModel for CompletionModelHandle<'_> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DynamicStreamingResponse {
     pub usage: Option<RigUsage>,
+    /// OpenAI vocabulary (`stop`, `length`, `tool_calls`, `content_filter`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
 }
 
 impl GetTokenUsage for DynamicStreamingResponse {
@@ -457,11 +517,73 @@ impl GetTokenUsage for DynamicStreamingResponse {
     }
 }
 
+/// Maps a provider's stop reason onto the OpenAI vocabulary the `Response` protocol uses.
+fn normalize_finish_reason(reason: &str) -> Option<String> {
+    let reason = reason.trim().to_ascii_lowercase();
+    let normalized = match reason.as_str() {
+        "" | "null" | "finish_reason_unspecified" => return None,
+        "length"
+        | "max_tokens"
+        | "max_output_tokens"
+        | "model_length"
+        | "model_context_window_exceeded" => "length",
+        "tool_calls" | "tool_call" | "tool_use" | "function_call" => "tool_calls",
+        "content_filter" | "safety" | "recitation" | "blocklist" | "prohibited_content"
+        | "spii" | "refusal" => "content_filter",
+        "stop" | "end_turn" | "stop_sequence" | "complete" => "stop",
+        _ => return Some(reason),
+    };
+    Some(normalized.to_string())
+}
+
+/// Reads the stop reason from a serialized Rig raw response. Rig 0.38.2 keeps it only in
+/// provider-specific shapes: OpenAI-compatible `choices`, Anthropic `stop_reason`, Gemini
+/// `candidates`/`finish_reason`, Ollama `done_reason`, Cohere and our own dynamic responses.
+fn reported_finish_reason(raw: &impl Serialize) -> Option<String> {
+    let raw = serde_json::to_value(raw).ok()?;
+    if raw.get("status").and_then(Value::as_str) == Some("incomplete") {
+        let reason = raw
+            .pointer("/incomplete_details/reason")
+            .and_then(Value::as_str)
+            .unwrap_or("length");
+        return normalize_finish_reason(reason);
+    }
+    [
+        "/choices/0/finish_reason",
+        "/candidates/0/finishReason",
+        "/finish_reason",
+        "/stop_reason",
+        "/done_reason",
+    ]
+    .iter()
+    .find_map(|pointer| raw.pointer(pointer).and_then(Value::as_str))
+    .and_then(normalize_finish_reason)
+}
+
+/// An output that consumed the whole requested budget was truncated, whatever the provider
+/// (or a Rig client that discards the reason) says.
+fn resolve_finish_reason(
+    reported: Option<String>,
+    max_tokens: Option<u64>,
+    output_tokens: u64,
+    has_tool_call: bool,
+) -> String {
+    let budget_exhausted = max_tokens.is_some_and(|budget| budget > 0 && output_tokens >= budget);
+    match reported {
+        Some(reason) if !(budget_exhausted && reason == "stop") => reason,
+        _ if budget_exhausted => "length".to_string(),
+        _ if has_tool_call => "tool_calls".to_string(),
+        _ => "stop".to_string(),
+    }
+}
+
 fn dynamic_raw_stream_items<R>(
     item: StreamedAssistantContent<R>,
+    max_tokens: Option<u64>,
+    has_tool_call: bool,
 ) -> Vec<RawStreamingChoice<DynamicStreamingResponse>>
 where
-    R: Clone + Unpin + GetTokenUsage,
+    R: Clone + Unpin + GetTokenUsage + Serialize,
 {
     match item {
         StreamedAssistantContent::Text(text) => {
@@ -507,9 +629,17 @@ where
             vec![RawStreamingChoice::ReasoningDelta { id, reasoning }]
         }
         StreamedAssistantContent::Final(response) => {
+            let usage = response.token_usage();
+            let finish_reason = resolve_finish_reason(
+                reported_finish_reason(&response),
+                max_tokens,
+                usage.map_or(0, |usage| usage.output_tokens),
+                has_tool_call,
+            );
             vec![RawStreamingChoice::FinalResponse(
                 DynamicStreamingResponse {
-                    usage: response.token_usage(),
+                    usage,
+                    finish_reason: Some(finish_reason),
                 },
             )]
         }
@@ -535,6 +665,229 @@ impl ModelConstructor {
     /// This properly returns a type that implements `CompletionModel + Send + Sync + 'static`.
     pub fn dynamic_model(self, model_name: &str) -> DynamicCompletionModel {
         DynamicCompletionModel::new(self.inner, model_name.to_string())
+    }
+
+    /// For Rig clients whose request body omits `CompletionRequest::max_tokens` (Rig 0.38.2:
+    /// OpenRouter, Azure and most OpenAI-compatible providers). Without it, the provider or the
+    /// hosted relay applies its own default budget.
+    pub fn with_max_tokens_body_param(
+        client: impl CompletionClientDyn + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_request_fixup(client, |_, request| {
+            output_budget_as_body_param(request, "max_tokens")
+        })
+    }
+
+    /// Enforces a provider's constraints on the final Rig request. It runs for `invoke` and for
+    /// agents alike, and sees fields (`tool_choice`, `temperature`) that agents set on the
+    /// builder rather than on the History.
+    pub fn with_request_fixup(
+        client: impl CompletionClientDyn + Send + Sync + 'static,
+        fixup: RequestFixup,
+    ) -> Self {
+        Self {
+            inner: Box::new(FixupClient {
+                client: Box::new(client),
+                fixup,
+            }),
+        }
+    }
+}
+
+/// Rewrites a request for the named model right before it reaches the provider client.
+pub type RequestFixup = fn(&str, CompletionRequest) -> CompletionRequest;
+
+/// How a provider names, or lacks, the OpenAI-style fields `History::build_additional_params`
+/// emits. Strict providers reject unknown fields, which fails the whole request.
+pub struct ParamDialect {
+    pub provider: &'static str,
+    pub renames: &'static [(&'static str, &'static str)],
+    pub unsupported: &'static [&'static str],
+    /// Fields the Rig client sets itself from the transport.
+    pub rig_owned: &'static [&'static str],
+}
+
+/// OpenRouter-only History fields.
+pub const OPENROUTER_ONLY: [&str; 2] = ["usage", "preset"];
+
+impl ParamDialect {
+    pub fn params(&self, history: &History) -> Value {
+        let mut params = history
+            .build_additional_params()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Value::Object(Default::default()));
+        if let Some(object) = params.as_object_mut() {
+            for key in self.rig_owned {
+                object.remove(*key);
+            }
+            for key in self.unsupported {
+                if object.remove(*key).is_some() {
+                    tracing::warn!(
+                        provider = self.provider,
+                        parameter = key,
+                        "Provider has no such request parameter; dropping it"
+                    );
+                }
+            }
+            for (from, to) in self.renames {
+                if let Some(value) = object.remove(*from) {
+                    object.insert((*to).to_string(), value);
+                }
+            }
+        }
+        params
+    }
+}
+
+/// The request's body parameters as an object, created when absent.
+pub fn body_params(request: &mut CompletionRequest) -> &mut serde_json::Map<String, Value> {
+    let params = request
+        .additional_params
+        .get_or_insert_with(|| Value::Object(Default::default()));
+    if !params.is_object() {
+        *params = Value::Object(Default::default());
+    }
+    params.as_object_mut().expect("ensured object")
+}
+
+/// Removes a body parameter the model rejects, saying why.
+pub fn drop_body_param(request: &mut CompletionRequest, key: &str, model: &str, reason: &str) {
+    if let Some(params) = request
+        .additional_params
+        .as_mut()
+        .and_then(Value::as_object_mut)
+        && params.remove(key).is_some()
+    {
+        tracing::warn!(model, parameter = key, reason, "Dropping request parameter");
+    }
+}
+
+/// For models that reject forced `tool_choice`: lets the model choose and names the required
+/// tool in the system prompt instead, the providers' documented workaround.
+pub fn unforce_tool_choice(request: &mut CompletionRequest, model: &str) {
+    let instruction = match request.tool_choice.as_ref() {
+        Some(rig::message::ToolChoice::Required) => {
+            "Respond by calling one of the provided tools.".to_string()
+        }
+        Some(rig::message::ToolChoice::Specific { function_names }) => format!(
+            "Respond by calling the {} tool.",
+            function_names
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
+        _ => return,
+    };
+    request.tool_choice = Some(rig::message::ToolChoice::Auto);
+    request.preamble = Some(match request.preamble.take() {
+        Some(preamble) if !preamble.is_empty() => format!("{preamble}\n\n{instruction}"),
+        _ => instruction,
+    });
+    tracing::debug!(
+        model,
+        "Model rejects forced tool_choice; sending auto with an instruction naming the tool"
+    );
+}
+
+/// Removes `temperature` when the model rejects it, saying why.
+pub fn drop_temperature(request: &mut CompletionRequest, model: &str, reason: &str) {
+    if request.temperature.take().is_some() {
+        tracing::warn!(
+            model,
+            parameter = "temperature",
+            reason,
+            "Dropping request parameter"
+        );
+    }
+}
+
+fn requested_output_budget(request: &CompletionRequest) -> Option<u64> {
+    request.max_tokens.or_else(|| {
+        let params = request.additional_params.as_ref()?;
+        ["max_completion_tokens", "max_tokens", "num_predict"]
+            .iter()
+            .find_map(|key| params.get(*key).and_then(Value::as_u64))
+    })
+}
+
+/// Copies `CompletionRequest::max_tokens` into the body under the provider's own name.
+pub fn output_budget_as_body_param(mut request: CompletionRequest, key: &str) -> CompletionRequest {
+    if let Some(max_tokens) = request.max_tokens {
+        request.additional_params = merge_additional_params(
+            request.additional_params.take(),
+            Some(serde_json::json!({ key: max_tokens })),
+        );
+    }
+    request
+}
+
+struct FixupClient {
+    client: Box<dyn CompletionClientDyn + Send + Sync>,
+    fixup: RequestFixup,
+}
+
+impl FixupClient {
+    fn model<'a>(&self, model: &str) -> FixupModel<'a> {
+        FixupModel {
+            inner: Arc::from(self.client.completion_model(model)),
+            model: model.to_string(),
+            fixup: self.fixup,
+        }
+    }
+}
+
+impl CompletionClientDyn for FixupClient {
+    fn completion_model<'a>(&self, model: &str) -> Box<dyn CompletionModelDyn + 'a> {
+        Box::new(self.model(model))
+    }
+
+    fn agent<'a>(&self, model: &str) -> AgentBuilder<CompletionModelHandle<'a>> {
+        AgentBuilder::new(CompletionModelHandle::new(Arc::new(self.model(model))))
+    }
+}
+
+#[derive(Clone)]
+struct FixupModel<'a> {
+    inner: Arc<dyn CompletionModelDyn + 'a>,
+    model: String,
+    fixup: RequestFixup,
+}
+
+impl FixupModel<'_> {
+    fn fix(&self, request: CompletionRequest) -> CompletionRequest {
+        let model = request.model.clone().unwrap_or_else(|| self.model.clone());
+        (self.fixup)(&model, request)
+    }
+}
+
+impl CompletionModelDyn for FixupModel<'_> {
+    fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<
+        '_,
+        std::result::Result<CompletionResponse<DynamicResponse>, CompletionError>,
+    > {
+        self.inner.completion(self.fix(request))
+    }
+
+    fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<
+        '_,
+        std::result::Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
+    > {
+        self.inner.stream(self.fix(request))
+    }
+
+    fn completion_request(
+        &self,
+        prompt: Message,
+    ) -> CompletionRequestBuilder<CompletionModelHandle<'_>> {
+        CompletionRequestBuilder::new(CompletionModelHandle::new(Arc::new(self.clone())), prompt)
     }
 }
 
@@ -565,9 +918,13 @@ impl DynamicCompletionModel {
     }
 }
 
-/// Response type for dynamic completion models - always returns unit type
+/// Provider-independent remainder of a Rig raw response.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DynamicResponse;
+pub struct DynamicResponse {
+    /// OpenAI vocabulary (`stop`, `length`, `tool_calls`, `content_filter`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
 
 #[allow(deprecated)]
 impl CompletionModel for DynamicCompletionModel {
@@ -588,15 +945,7 @@ impl CompletionModel for DynamicCompletionModel {
         Output = Result<CompletionResponse<Self::Response>, CompletionError>,
     > + Send {
         let model = self.client.completion_model(&self.model_name);
-        async move {
-            let response = model.completion(request).await?;
-            Ok(CompletionResponse {
-                choice: response.choice,
-                message_id: response.message_id,
-                usage: response.usage,
-                raw_response: DynamicResponse,
-            })
-        }
+        async move { model.completion(request).await }
     }
 
     fn stream(
@@ -635,6 +984,11 @@ async fn invoke_without_stream<'a>(
     let mut response = Response::from_rig_message(message)?;
     response.model = Some(model_name.to_string());
     response.usage = ResponseUsage::from_rig(completion.usage);
+    if let Some(finish_reason) = completion.raw_response.finish_reason
+        && let Some(choice) = response.choices.first_mut()
+    {
+        choice.finish_reason = finish_reason;
+    }
     Ok(response)
 }
 
@@ -667,7 +1021,12 @@ pub(crate) async fn emit_response_to_callback(
         }
     }
 
-    let mut finish = ResponseChunk::finish(model_name, None);
+    let finish_reason = response
+        .choices
+        .first()
+        .map(|choice| choice.finish_reason.as_str())
+        .filter(|reason| !reason.is_empty());
+    let mut finish = ResponseChunk::finish(model_name, None, finish_reason);
     finish.usage = Some(response.usage.clone());
     callback(finish).await
 }
@@ -695,6 +1054,7 @@ async fn invoke_with_stream<'a>(
     response.model = Some(model_name.to_string());
 
     let mut final_usage: Option<RigUsage> = None;
+    let mut finish_reason: Option<String> = None;
     let mut streamed_reasoning = String::new();
 
     while let Some(item) = stream.next().await {
@@ -771,11 +1131,13 @@ async fn invoke_with_stream<'a>(
             }
             StreamedAssistantContent::Final(final_resp) => {
                 final_usage = final_resp.usage;
+                finish_reason = final_resp.finish_reason;
             }
         }
     }
 
-    let finish_chunk = ResponseChunk::finish(model_name, final_usage.as_ref());
+    let finish_chunk =
+        ResponseChunk::finish(model_name, final_usage.as_ref(), finish_reason.as_deref());
     response.push_chunk(finish_chunk.clone());
     callback(finish_chunk).await?;
 
@@ -822,6 +1184,90 @@ mod tests {
     fn openai_stream_usage_skips_non_streaming_requests() {
         let params = apply_usage_reporting(None, UsageReportingMode::OpenAIStreamOptions, false);
         assert!(params.is_none());
+    }
+
+    #[test]
+    fn reported_finish_reasons_are_read_from_each_provider_shape() {
+        for (raw, expected) in [
+            (json!({"choices": [{"finish_reason": "length"}]}), "length"),
+            (json!({"stop_reason": "max_tokens"}), "length"),
+            (
+                json!({"candidates": [{"finishReason": "MAX_TOKENS"}]}),
+                "length",
+            ),
+            (json!({"finish_reason": "MAX_TOKENS"}), "length"),
+            (json!({"done_reason": "length"}), "length"),
+            (
+                json!({"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}),
+                "length",
+            ),
+            (json!({"stop_reason": "tool_use"}), "tool_calls"),
+            (json!({"stop_reason": "end_turn"}), "stop"),
+            (
+                json!({"candidates": [{"finishReason": "SAFETY"}]}),
+                "content_filter",
+            ),
+            (json!({"stop_reason": "pause_turn"}), "pause_turn"),
+        ] {
+            assert_eq!(
+                reported_finish_reason(&raw).as_deref(),
+                Some(expected),
+                "{raw}"
+            );
+        }
+        assert_eq!(
+            reported_finish_reason(&json!({"status": "completed"})),
+            None
+        );
+        assert_eq!(reported_finish_reason(&()), None);
+    }
+
+    #[test]
+    fn exhausted_budget_is_length_even_when_reported_as_stop() {
+        let reported = || Some("stop".to_string());
+        assert_eq!(
+            resolve_finish_reason(reported(), Some(100_000), 100_000, false),
+            "length"
+        );
+        assert_eq!(
+            resolve_finish_reason(None, Some(4096), 4096, true),
+            "length"
+        );
+        assert_eq!(
+            resolve_finish_reason(reported(), Some(100_000), 4096, false),
+            "stop"
+        );
+        assert_eq!(
+            resolve_finish_reason(Some("length".into()), Some(100_000), 4096, false),
+            "length"
+        );
+        assert_eq!(resolve_finish_reason(None, None, 4096, true), "tool_calls");
+        assert_eq!(resolve_finish_reason(None, None, 0, false), "stop");
+    }
+
+    #[test]
+    fn max_tokens_body_param_keeps_existing_params() {
+        let request = CompletionRequest {
+            model: None,
+            preamble: None,
+            chat_history: rig::OneOrMany::one(Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: Some(100_000),
+            tool_choice: None,
+            additional_params: Some(json!({"stream": true, "usage": {"include": true}})),
+            output_schema: None,
+        };
+
+        let params = output_budget_as_body_param(request, "max_tokens")
+            .additional_params
+            .unwrap();
+
+        assert_eq!(
+            params,
+            json!({"stream": true, "usage": {"include": true}, "max_tokens": 100_000})
+        );
     }
 
     #[test]

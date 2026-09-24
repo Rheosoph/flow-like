@@ -51,6 +51,7 @@ import {
 	pendingMigrations,
 	redactDatabaseUrl,
 	redactSecret,
+	restrictMigrationAccess,
 	splitStatements,
 	startedRecord,
 	waitForJobs,
@@ -735,15 +736,15 @@ describe("_prisma_migrations bookkeeping", () => {
 });
 
 describe("grants and retries", () => {
-	test("grant script covers sequences and future tables, never all current tables", () => {
+	test("grant script covers sequences without default table access", () => {
 		const statements = grantStatements(parseConfig(validSettings()));
-		expect(statements).toHaveLength(3);
-		expect(statements.some((s) => s.includes("ON ALL TABLES"))).toBe(false);
+		expect(statements).toHaveLength(2);
+		expect(statements.some((s) => s.includes("TABLES"))).toBe(false);
 		expect(
 			statements.filter((s) =>
 				s.startsWith("ALTER DEFAULT PRIVILEGES IN SCHEMA public"),
 			),
-		).toHaveLength(2);
+		).toHaveLength(1);
 	});
 
 	test("runtime bootstrap uses inherited public schema access without changing the system schema", async () => {
@@ -869,7 +870,7 @@ describe("grants and retries", () => {
 		).toEqual(grantStatements(config));
 		expect(
 			session.calls.filter((sql) =>
-				sql.startsWith("SELECT 1 FROM pg_default_acl"),
+				sql.startsWith("SELECT n.nspname AS schema"),
 			),
 		).toHaveLength(1);
 	});
@@ -940,8 +941,11 @@ describe("grants and retries", () => {
 		"AuditExportTarget",
 		"App",
 		"_prisma_migrations",
+		"_prisma_custom_metadata",
+		"_flow_migration_lock",
 	];
 	type Acl = Map<string, Set<string>>;
+	type DefaultAcl = { schema: string | null; object_type: string; acl: string };
 	const aclKey = (role: unknown, table: unknown) => `${role}|${table}`;
 
 	// admin's default privileges: the runtime role holds everything, the worker nothing.
@@ -960,9 +964,12 @@ describe("grants and retries", () => {
 		roles: string[];
 		acl: Acl;
 		ignoreRevokes?: boolean;
-		defaultPrivileges?: boolean;
+		defaultAcls?: DefaultAcl[];
 	}): Executor & { calls: string[] } {
 		const calls: string[] = [];
+		const defaults = options.defaultAcls ?? [
+			{ schema: "public", object_type: "S", acl: "{flow_like_api=rU/admin}" },
+		];
 		return {
 			calls,
 			async run<R extends pg.QueryResultRow>(
@@ -980,8 +987,30 @@ describe("grants and retries", () => {
 				if (sql.startsWith("SELECT c.relname FROM pg_class")) {
 					return queryResult<R>(APP_TABLES.map((relname) => ({ relname })));
 				}
-				if (sql.startsWith("SELECT 1 FROM pg_default_acl")) {
-					return queryResult<R>(options.defaultPrivileges ? [{ one: 1 }] : []);
+				if (sql.startsWith("SELECT n.nspname AS schema")) {
+					return queryResult<R>(defaults);
+				}
+				const revokeDefaults = sql.match(
+					/^ALTER DEFAULT PRIVILEGES( IN SCHEMA public)? REVOKE ALL ON TABLES FROM flow_like_api$/,
+				);
+				if (revokeDefaults && !options.ignoreRevokes) {
+					for (const entry of defaults) {
+						if (
+							entry.object_type === "r" &&
+							entry.schema === (revokeDefaults[1] ? "public" : null)
+						)
+							entry.acl = "{admin=arwd/admin}";
+					}
+				}
+				if (
+					sql ===
+					"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO flow_like_api"
+				) {
+					defaults.push({
+						schema: "public",
+						object_type: "S",
+						acl: "{flow_like_api=rU/admin}",
+					});
 				}
 				if (sql.includes("has_table_privilege")) {
 					const held = options.acl.get(aclKey(values[0], values[1]));
@@ -1009,34 +1038,119 @@ describe("grants and retries", () => {
 		};
 	}
 
-	test("runtime grants skip the evidence tables and emit nothing once held", async () => {
+	test("runtime grants repair metadata access, preserve evidence and become a no-op", async () => {
 		const config = parseConfig(validSettings());
 		const acl = defaultAcl();
 		acl.delete(aclKey("flow_like_api", 'public."App"'));
 		const session = aclSession({
 			roles: ["flow_like_api"],
 			acl,
-			defaultPrivileges: true,
 		});
 		await applyRuntimeGrants(session, config);
 		expect(session.calls.filter((sql) => DCL.test(sql))).toEqual([
+			'REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE public."_prisma_migrations" FROM flow_like_api',
+			'REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE public."_prisma_custom_metadata" FROM flow_like_api',
+			'REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE public."_flow_migration_lock" FROM flow_like_api',
 			'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public."App" TO flow_like_api',
 		]);
+		for (const name of APP_TABLES.filter((table) => table.startsWith("_"))) {
+			expect(acl.get(aclKey("flow_like_api", `public."${name}"`))?.size).toBe(
+				0,
+			);
+		}
+		expect(acl.get(aclKey("flow_like_api", 'public."AuditRecord"'))).toEqual(
+			new Set(["SELECT", "INSERT", "UPDATE", "DELETE"]),
+		);
 		const again = aclSession({
 			roles: ["flow_like_api"],
 			acl,
-			defaultPrivileges: true,
 		});
 		await applyRuntimeGrants(again, config);
 		expect(again.calls.some((sql) => DCL.test(sql))).toBe(false);
 	});
 
-	test("runtime grants restore default privileges only when they are missing", async () => {
+	test("runtime grants revoke both global and schema table defaults once and retain sequence access", async () => {
 		const config = parseConfig(validSettings());
-		const session = aclSession({ roles: ["flow_like_api"], acl: defaultAcl() });
+		const acl = new Map<string, Set<string>>();
+		const defaultAcls: DefaultAcl[] = [
+			{
+				schema: null,
+				object_type: "r",
+				acl: "{admin=arwd/admin,flow_like_api=arwd/admin}",
+			},
+			{ schema: "public", object_type: "r", acl: "{flow_like_api=a/admin}" },
+			{ schema: "public", object_type: "S", acl: "{flow_like_api=rU/admin}" },
+		];
+		const session = aclSession({ roles: ["flow_like_api"], acl, defaultAcls });
+		await applyRuntimeGrants(session, config);
+		const statements = session.calls.filter((sql) => DCL.test(sql));
+		expect(statements.slice(0, 2)).toEqual([
+			"ALTER DEFAULT PRIVILEGES REVOKE ALL ON TABLES FROM flow_like_api",
+			"ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM flow_like_api",
+		]);
+		expect(
+			statements.some((sql) =>
+				/SEQUENCES|_prisma|_flow_migration_lock/.test(sql),
+			),
+		).toBe(false);
+		expect(acl.get(aclKey("flow_like_api", 'public."App"'))).toEqual(
+			new Set(["SELECT", "INSERT", "UPDATE", "DELETE"]),
+		);
+		const again = aclSession({ roles: ["flow_like_api"], acl, defaultAcls });
+		await applyRuntimeGrants(again, config);
+		expect(again.calls.some((sql) => DCL.test(sql))).toBe(false);
+	});
+
+	test("sequence defaults are restored independently of table defaults and remain a no-op afterwards", async () => {
+		const config = parseConfig(validSettings());
+		const acl = defaultAcl();
+		for (const name of APP_TABLES.filter((table) => table.startsWith("_"))) {
+			acl.delete(aclKey("flow_like_api", `public."${name}"`));
+		}
+		const defaultAcls: DefaultAcl[] = [
+			{
+				schema: "public",
+				object_type: "r",
+				acl: "{other_flow_like_api=arwd/admin,flow_like_apix=arwd/admin}",
+			},
+			{ schema: "public", object_type: "S", acl: "{flow_like_api=U/admin}" },
+		];
+		const session = aclSession({ roles: ["flow_like_api"], acl, defaultAcls });
 		await applyRuntimeGrants(session, config);
 		expect(session.calls.filter((sql) => DCL.test(sql))).toEqual(
 			grantStatements(config),
+		);
+		const again = aclSession({ roles: ["flow_like_api"], acl, defaultAcls });
+		await applyRuntimeGrants(again, config);
+		expect(again.calls.some((sql) => DCL.test(sql))).toBe(false);
+	});
+
+	test("metadata restriction fails if inherited or PUBLIC table access survives the revoke", async () => {
+		const session = aclSession({
+			roles: ["flow_like_api"],
+			acl: defaultAcl(),
+			ignoreRevokes: true,
+		});
+		await expect(
+			restrictMigrationAccess(session, parseConfig(validSettings())),
+		).rejects.toThrow(
+			/migration privilege boundary not in effect: flow_like_api still holds SELECT, INSERT, UPDATE, DELETE on public\."_prisma_migrations"/,
+		);
+	});
+
+	test("metadata restriction fails if a default privilege revoke does not take effect", async () => {
+		const session = aclSession({
+			roles: ["flow_like_api"],
+			acl: defaultAcl(),
+			ignoreRevokes: true,
+			defaultAcls: [
+				{ schema: null, object_type: "r", acl: "{flow_like_api=arwd/admin}" },
+			],
+		});
+		await expect(
+			restrictMigrationAccess(session, parseConfig(validSettings())),
+		).rejects.toThrow(
+			/still holds default table privileges for the migration owner/,
 		);
 	});
 

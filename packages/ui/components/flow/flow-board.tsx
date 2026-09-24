@@ -663,7 +663,9 @@ export function FlowBoard({
 	const catalog: UseQueryResult<INode[]> =
 		catalogQuery.data === undefined || Array.isArray(catalogQuery.data)
 			? catalogQuery
-			: ({ ...catalogQuery, data: undefined } as UseQueryResult<INode[]>);
+			: ({ ...catalogQuery, data: undefined } as unknown as UseQueryResult<
+					INode[]
+				>);
 	const boardQuery = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
@@ -674,7 +676,7 @@ export function FlowBoard({
 		boardQuery.data === undefined ||
 		(isRecord(boardQuery.data) && isRecord(boardQuery.data.nodes))
 			? boardQuery
-			: ({ ...boardQuery, data: undefined } as typeof boardQuery);
+			: ({ ...boardQuery, data: undefined } as unknown as typeof boardQuery);
 	const boardRef = useRef<IBoard | undefined>(undefined);
 	const currentProfile = useInvoke(
 		backend.userState.getProfile,
@@ -716,9 +718,9 @@ export function FlowBoard({
 			const promise = (async () => {
 				try {
 					const [routes, events, pages] = await Promise.all([
-						backend.routeState.getRoutes(appId),
-						backend.eventState.getEvents(appId),
-						backend.pageState.getPages(appId),
+						backend.routeState.getRoutes(appId).then(asArray),
+						backend.eventState.getEvents(appId).then(asArray),
+						backend.pageState.getPages(appId).then(asArray),
 					]);
 					const eventsMap = new Map(events.map((event) => [event.id, event]));
 					const pagesById = new Map(pages.map((page) => [page.pageId, page]));
@@ -1010,6 +1012,8 @@ export function FlowBoard({
 		flowScriptFilesClear();
 	}, [boardId, version, flowScriptFilesClear]);
 	const [templateSelectorOpen, setTemplateSelectorOpen] = useState(false);
+	const [templateSelectorDismissedBoard, setTemplateSelectorDismissedBoard] =
+		useState<string>();
 	const [runtimeVarsPromptOpen, setRuntimeVarsPromptOpen] = useState(false);
 	const [pendingExecution, setPendingExecution] = useState<{
 		node: INode;
@@ -1687,6 +1691,12 @@ export function FlowBoard({
 		const layerCount = Object.keys(board.data.layers).length;
 		return nodeCount === 0 && commentCount === 0 && layerCount === 0;
 	}, [board.data]);
+	// An empty board opens the selector on its own, so closing it must be remembered per board.
+	const showTemplateSelector =
+		templateSelectorOpen ||
+		(isBoardEmpty &&
+			!currentLayer &&
+			templateSelectorDismissedBoard !== boardId);
 
 	// Handler for applying a template to the board
 	const handleApplyTemplate = useCallback(
@@ -6083,10 +6093,13 @@ export function FlowBoard({
 				}
 				overlays={
 					<>
-						{(templateSelectorOpen || (isBoardEmpty && !currentLayer)) && (
+						{showTemplateSelector && (
 							<FlowTemplateSelector
 								onSelectTemplate={handleApplyTemplate}
-								onDismiss={() => setTemplateSelectorOpen(false)}
+								onDismiss={() => {
+									setTemplateSelectorOpen(false);
+									setTemplateSelectorDismissedBoard(boardId);
+								}}
 							/>
 						)}
 						{chatOpen && awareness && (

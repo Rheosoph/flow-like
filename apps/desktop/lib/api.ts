@@ -665,7 +665,12 @@ async function requestJson<T>(
 
 				const text = await response.text();
 				if (!text) return { notModified: false, etag: responseEtag };
-				const data = tryParseJSON<T>(text) ?? (text as T);
+				let data: T;
+				try {
+					data = JSON.parse(text) as T;
+				} catch {
+					data = text as T;
+				}
 				const upstreamError = upstreamFailureInSuccess(response, data, path);
 				if (upstreamError) {
 					console.error(

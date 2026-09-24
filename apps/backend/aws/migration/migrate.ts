@@ -908,14 +908,12 @@ async function assertSchemaValid(session: Executor): Promise<void> {
 
 // Design §3: the runtime Lambdas connect as a dedicated role bound to their IAM
 // role with dsql:DbConnect; admin (dsql:DbConnectAdmin) stays with this job.
-// Tables are granted one by one (reconcileRuntimeGrants) so the audit evidence
-// tables never enter the runtime role's grant; the default privileges still
-// cover a table created by a run that ends before the grant step.
+// Tables are granted one by one after migration. Default table privileges would
+// also expose migration metadata and newly created audit evidence to the API.
 export function grantStatements(config: MigrationConfig): string[] {
 	const role = config.runtimeDbRole;
 	return [
 		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`,
-		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${role}`,
 		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${role}`,
 	];
 }
@@ -999,19 +997,29 @@ export async function applyRuntimeGrants(
 	await reconcileRuntimeGrants(session, config);
 }
 
-async function defaultPrivilegesPresent(
+interface RuntimeDefaultAcl {
+	readonly schema: string | null;
+	readonly object_type: string;
+	readonly acl: string;
+}
+
+async function runtimeDefaultAcls(
 	session: Executor,
 	role: string,
-): Promise<boolean> {
-	const found = await session.run(
-		`SELECT 1 FROM pg_default_acl d
+): Promise<(RuntimeDefaultAcl & { privileges: string })[]> {
+	const found = await session.run<RuntimeDefaultAcl>(
+		`SELECT n.nspname AS schema, d.defaclobjtype AS object_type, d.defaclacl::text AS acl FROM pg_default_acl d
 		 JOIN pg_roles r ON r.oid = d.defaclrole
-		 JOIN pg_namespace n ON n.oid = d.defaclnamespace
-		 WHERE r.rolname = current_user AND n.nspname = 'public' AND d.defaclobjtype = 'r'
-		   AND d.defaclacl::text LIKE $1`,
-		[`%${role}=arwd/%`],
+		 LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+		 WHERE r.rolname = current_user AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+		   AND d.defaclobjtype IN ('r', 'S')`,
 	);
-	return (found.rowCount ?? 0) > 0;
+	// Role names are restricted to unquoted lowercase identifiers by parseConfig.
+	const grantee = new RegExp(`(?:^|[,{])${role}=([^/]*)/`);
+	return found.rows.flatMap((row) => {
+		const privileges = row.acl.match(grantee)?.[1];
+		return privileges ? [{ ...row, privileges }] : [];
+	});
 }
 
 const RUNTIME_PRIVILEGES: readonly TablePrivilege[] = [
@@ -1021,19 +1029,67 @@ const RUNTIME_PRIVILEGES: readonly TablePrivilege[] = [
 	"DELETE",
 ];
 
+const isMigrationTable = (name: string) =>
+	name.startsWith("_prisma") || name === LEASE_TABLE;
+
+// Repair old broad grants before reading migration history or applying schema
+// changes. Global defaults must also be cleared: a schema REVOKE cannot undo them.
+export async function restrictMigrationAccess(
+	session: Executor,
+	config: MigrationConfig,
+): Promise<void> {
+	const role = config.runtimeDbRole;
+	if (!(await existingRoles(session, [role])).has(role)) return;
+	const defaults = await runtimeDefaultAcls(session, role);
+	const tableDefaults = defaults.filter((entry) => entry.object_type === "r");
+	for (const entry of tableDefaults) {
+		const scope = entry.schema === null ? "" : " IN SCHEMA public";
+		await session.run(
+			`ALTER DEFAULT PRIVILEGES${scope} REVOKE ALL ON TABLES FROM ${role}`,
+		);
+	}
+	if (
+		tableDefaults.length &&
+		(await runtimeDefaultAcls(session, role)).some(
+			(entry) => entry.object_type === "r",
+		)
+	) {
+		throw new MigrationError(
+			`runtime role ${role} still holds default table privileges for the migration owner`,
+		);
+	}
+	for (const name of await publicTables(session)) {
+		if (!isMigrationTable(name)) continue;
+		const grant: TableGrant = {
+			role,
+			table: quotedTable(name),
+			wanted: [],
+			exact: true,
+		};
+		await reconcileTable(session, grant);
+		await verifyTable(session, grant, "migration privilege boundary");
+	}
+}
+
 async function reconcileRuntimeGrants(
 	session: Executor,
 	config: MigrationConfig,
 ): Promise<void> {
 	const role = config.runtimeDbRole;
-	if (!(await defaultPrivilegesPresent(session, role))) {
+	await restrictMigrationAccess(session, config);
+	const defaults = await runtimeDefaultAcls(session, role);
+	const sequencePrivileges = defaults
+		.filter((entry) => entry.object_type === "S")
+		.map((entry) => entry.privileges)
+		.join("");
+	if (!sequencePrivileges.includes("U") || !sequencePrivileges.includes("r")) {
 		for (const statement of grantStatements(config))
 			await session.run(statement);
 	}
 	const evidence = new Set<string>(AUDIT_EVIDENCE_TABLES);
 	let emitted = 0;
 	for (const name of await publicTables(session)) {
-		if (evidence.has(name)) continue;
+		if (evidence.has(name) || isMigrationTable(name)) continue;
 		const statements = await reconcileTable(session, {
 			role,
 			table: quotedTable(name),
@@ -1043,7 +1099,7 @@ async function reconcileRuntimeGrants(
 		emitted += statements.length;
 	}
 	log(
-		`privileges on schema public reconciled for ${role}: ${emitted} statement(s), audit evidence tables excluded`,
+		`privileges on schema public reconciled for ${role}: ${emitted} statement(s), audit evidence and migration tables excluded`,
 	);
 }
 
@@ -1222,6 +1278,7 @@ async function reconcileTable(
 async function verifyTable(
 	session: Executor,
 	grant: TableGrant,
+	boundary = "audit privilege boundary",
 ): Promise<void> {
 	const { missing, extra } = privilegeDrift(
 		grant,
@@ -1232,13 +1289,13 @@ async function verifyTable(
 			? `lacks ${missing.join(", ")}`
 			: `still holds ${extra.join(", ")}`;
 		throw new MigrationError(
-			`audit privilege boundary not in effect: ${grant.role} ${problem} on ${grant.table}`,
+			`${boundary} not in effect: ${grant.role} ${problem} on ${grant.table}`,
 		);
 	}
 }
 
-// Runs after every migration once the worker role exists: admin's default
-// privileges hand the runtime role every table a migration creates.
+// Runs after every migration once the worker role exists, including revocation
+// of evidence writes left by the previous default table privileges.
 export async function applyAuditBoundary(
 	session: Executor,
 	config: MigrationConfig,
@@ -1379,6 +1436,7 @@ async function main(): Promise<number> {
 		held = await lease.acquire();
 		if (!held) return 3;
 
+		await restrictMigrationAccess(session, config);
 		await session.run(PRISMA_MIGRATIONS_TABLE_SQL);
 		const applied = await session.run<AppliedRow>(LIST_APPLIED_SQL);
 		const pending = pendingMigrations(local, applied.rows);

@@ -114,6 +114,7 @@ export default defineConfig({
 						{ label: "AI Models", slug: "start/models" },
 						{ label: "Profiles", slug: "start/profiles" },
 						{ label: "Customize your Home", slug: "start/home" },
+						{ label: "Explore", slug: "start/explore" },
 						{ label: "Get Support", slug: "start/support" },
 					],
 				},

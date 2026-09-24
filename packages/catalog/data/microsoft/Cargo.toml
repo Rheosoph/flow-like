@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-execute = ["flow-like-catalog-core/execute"]
+execute = ["flow-like-catalog-core/execute", "dep:rmcp"]
 local-ml = ["flow-like-catalog-core/local-ml"]
 
 [dependencies]
@@ -19,12 +19,14 @@ flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 ahash.workspace = true
 futures.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time"] }
 base64.workspace = true
 urlencoding.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 iana-time-zone.workspace = true
+eventsource-stream = "0.2"
+rmcp = { workspace = true, optional = true }
 
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

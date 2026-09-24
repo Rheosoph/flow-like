@@ -16,6 +16,8 @@ pub struct PlacementConfig {
     pub deployment_id: String,
     pub revision: String,
     pub source: ProjectSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_metadata_sha256: Option<String>,
     pub project_path: PathBuf,
     pub events: Vec<EventBinding>,
     #[serde(default)]
@@ -224,6 +226,10 @@ impl PlacementConfig {
                 self.resource_grant.is_some(),
                 "Online placements require a project resource grant"
             );
+            let digest = self.online_metadata_sha256.as_deref().context(
+                "Online deployment requires controller-approved executable metadata. Prepare and deploy this project again",
+            )?;
+            flow_like_device_protocol::validate_artifact_digest(digest)?;
         }
         if let Some(buffering) = &self.offline_writes {
             ensure!(

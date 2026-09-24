@@ -1426,7 +1426,6 @@ async fn signed_instances_enforce_consent_scope_leases_and_revocation() {
 
     distinct_host_project_and_payer_consent(&state, &db).await;
 
-    drop(state);
     db.close().await.unwrap();
     admin
         .execute_unprepared(&format!("DROP SCHEMA {schema} CASCADE"))

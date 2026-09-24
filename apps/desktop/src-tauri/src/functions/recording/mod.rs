@@ -92,18 +92,21 @@ async fn get_recording_store(
         let hub_url = &profile.hub_profile.hub;
         if !hub_url.is_empty() {
             let http_client = TauriFlowLikeState::http_client(handler).await?;
-            let hub = Hub::new(hub_url, http_client)
-                .await
-                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
-            let credentials = hub
-                .shared_credentials(token, app_id)
-                .await
-                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
-            let store = credentials
-                .to_store_type(flow_like::credentials::StoreType::Content)
-                .await
-                .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
-            return Ok(Some(store));
+            let remote_store = async {
+                Hub::new(hub_url, http_client)
+                    .await?
+                    .shared_credentials(token, app_id)
+                    .await?
+                    .to_store_type(flow_like::credentials::StoreType::Content)
+                    .await
+            };
+            match remote_store.await {
+                Ok(store) => return Ok(Some(store)),
+                Err(error) => tracing::warn!(
+                    %error,
+                    "[Recording] Hub unavailable, using local storage for screenshots"
+                ),
+            }
         }
     }
 

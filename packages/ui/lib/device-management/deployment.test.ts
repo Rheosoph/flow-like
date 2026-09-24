@@ -33,6 +33,7 @@ const installed: InstalledProject = {
 	project_path: "/private/projects/project/revisions/abc",
 	revision: "a".repeat(64),
 	source: "offline",
+	online_metadata_sha256: "a".repeat(64),
 };
 const event: DeploymentEvent = {
 	id: "api",

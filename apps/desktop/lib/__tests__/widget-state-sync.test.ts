@@ -128,6 +128,7 @@ describe("native widget synchronization", () => {
 		mocks.invoke.mockResolvedValue(widget());
 		const error = new ApiResponseError({
 			status: 404,
+			code: "NOT_FOUND",
 			message: "Widget not found",
 		});
 		mocks.fetcher.mockRejectedValue(error);

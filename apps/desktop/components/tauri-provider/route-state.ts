@@ -38,14 +38,14 @@ function toRemoteRouteMappings(
 }
 
 /**
- * The hub answers "no route" with JSON `null`, which the fetcher hands back as the text
- * "null". Any other body that is not a mapping is a broken response, never "no route".
+ * The hub answers "no route" with JSON `null`. Any other body that is not a mapping is a
+ * broken response, never "no route".
  */
 function toOptionalRouteMapping(
 	appId: string,
 	remote: unknown,
 ): IRouteMapping | null {
-	if (remote === null || remote === "null") return null;
+	if (remote === null) return null;
 	if (!isRemoteRoute(remote)) {
 		throw new Error(`Route response for app ${appId} is not a route mapping`);
 	}

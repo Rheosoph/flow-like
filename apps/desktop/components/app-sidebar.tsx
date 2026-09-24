@@ -10,12 +10,12 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	AnimatedBrainIcon,
-	AnimatedCodeIcon,
 	AnimatedDashboardIcon,
 	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
 	AnimatedLibraryIcon,
+	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
@@ -141,7 +141,7 @@ function useNavData() {
 				},
 				{
 					title: t("explore", "Explore"),
-					url: "/store/explore/apps",
+					url: "/store/explore",
 					icon: AnimatedExploreAppsIcon,
 					isActive: false,
 					permission: false,
@@ -192,10 +192,11 @@ function useNavData() {
 			],
 			navDev: [
 				{
-					title: t("developerTools", "Developer Tools"),
-					url: "/developer",
-					icon: AnimatedCodeIcon,
+					title: t("packages", "Packages"),
+					url: "/store/packages?tab=mine",
+					icon: AnimatedPackageIcon,
 					isActive: false,
+					activePaths: ["/developer", "/store/package-workspace"],
 				},
 			],
 		}),
@@ -772,6 +773,7 @@ interface INavItem {
 	isActive?: boolean;
 	permission?: boolean;
 	devOnly?: boolean;
+	activePaths?: string[];
 	items?: {
 		title: string;
 		url: string;
@@ -824,15 +826,16 @@ const iconVariants = {
 	},
 };
 
+function isWithinPath(pathname: string, path: string): boolean {
+	return pathname === path || pathname.startsWith(`${path}/`);
+}
+
 function isItemActive(item: INavItem, pathname: string): boolean {
-	if (pathname === item.url) return true;
-	if (
-		item.items?.some(
-			(sub) => pathname === sub.url || pathname.startsWith(`${sub.url}/`),
-		)
-	)
+	const itemPath = item.url.split(/[?#]/, 1)[0];
+	if (isWithinPath(pathname, itemPath)) return true;
+	if (item.activePaths?.some((path) => isWithinPath(pathname, path)))
 		return true;
-	return pathname.startsWith(`${item.url}/`);
+	return item.items?.some((sub) => isWithinPath(pathname, sub.url)) ?? false;
 }
 
 function NavFlatItem({

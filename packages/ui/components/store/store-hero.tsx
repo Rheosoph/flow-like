@@ -12,6 +12,7 @@ import {
 import { useIsMobile } from "../../hooks/use-mobile";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { useAppCategoryLabel } from "../../lib/app-category";
+import { asArray } from "../../lib/response-shape";
 import type { IAppVisibility } from "../../lib/schema/app/app";
 import { IAppVisibility as AppVis } from "../../lib/schema/app/app";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
@@ -68,6 +69,7 @@ export function StoreHero({
 	const categoryLabel = useAppCategoryLabel();
 	const { primaryHue, isDark } = useThemeInfo();
 	const isMobile = useIsMobile();
+	const authorList = asArray(authors);
 	const primarySize = isMobile ? "default" : "sm";
 
 	return (
@@ -131,11 +133,11 @@ export function StoreHero({
 							<span>{categoryLabel(category)}</span>
 							<span className="select-none">·</span>
 							<span className="capitalize">{visibilityLabel(visibility)}</span>
-							{authors?.length > 0 && (
+							{authorList.length > 0 && (
 								<>
 									<span className="select-none">·</span>
 									<span className="truncate max-w-50">
-										{authors.join(", ")}
+										{authorList.join(", ")}
 									</span>
 								</>
 							)}

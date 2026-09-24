@@ -29,6 +29,7 @@ import {
 	databaseSelectorKey,
 	isDatabaseSnapshot,
 } from "../data-studio/database-reference";
+import { OfflineManagedBadge } from "../offline-access/offline-managed-badge";
 import { SectionLockedPanel } from "../permission/permission-gate";
 import { PermissionNotice } from "../permission/permission-notice";
 
@@ -101,17 +102,28 @@ function TableInspectorView(props: Readonly<TableInspectorProps>) {
 	const leading = props.onBack ? (
 		<TableInspectorBackButton onClick={props.onBack} />
 	) : null;
+	const offlineWrites = backend.offlineWritesState;
 	const meta =
 		props.appId && props.table && canRead ? (
-			<DatabaseHistoryControls
-				key={databaseSelectorKey(selector)}
-				appId={props.appId}
-				table={props.table}
-				userScoped={props.userScoped}
-				selector={selector}
-				canWrite={permissions.can(...WRITE_DATA)}
-				onSelect={select}
-			/>
+			<>
+				<DatabaseHistoryControls
+					key={databaseSelectorKey(selector)}
+					appId={props.appId}
+					table={props.table}
+					userScoped={props.userScoped}
+					selector={selector}
+					canWrite={permissions.can(...WRITE_DATA)}
+					onSelect={select}
+				/>
+				{offlineWrites && (
+					<OfflineManagedBadge
+						appId={props.appId}
+						table={props.table}
+						userScoped={props.userScoped}
+						state={offlineWrites}
+					/>
+				)}
+			</>
 		) : null;
 	const unresolved =
 		canRead &&

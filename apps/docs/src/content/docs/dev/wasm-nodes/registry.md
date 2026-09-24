@@ -56,6 +56,17 @@ Making a package public is a separate governance step:
 
 There is no guaranteed review time. Use the package detail and publication-review history as the source of truth.
 
+## Sell a package
+
+The package owner sets the price on the package's **Overview** tab under **Package price**. Prices are in euros. A price of 0 makes the package free. A paid price must fall within the range the platform shows next to the price field.
+
+- You can set a price on a private package ahead of publication. People can only buy it once it is public.
+- Packages whose maintainers approve access requests cannot be sold. Approving a request already grants access.
+- On the marketplace, payments go to your payout account minus the platform fee. You need a ready payout account (**Account → Payouts**) and must accept the seller terms before you can set a paid price.
+- Changing the price never takes the package away from people who already have it.
+
+Buyers who get a refund lose their access to the package. Projects they licensed the package for then hand the licence to another admin or the owner who holds it, or start a 30-day grace period. See [project licences](/start/packages-store/#paid-packages-and-project-licences).
+
 ## Statuses
 
 | Status | Meaning |

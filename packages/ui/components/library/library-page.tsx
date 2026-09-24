@@ -49,6 +49,7 @@ import { SuiteShelf } from "./library-suite-shelf";
 import type { LibraryItem, SortMode } from "./library-types";
 import {
 	CATEGORY_COLORS,
+	appPairs,
 	sortItems,
 	sortItemsByRank,
 	toLibraryItem,
@@ -157,7 +158,7 @@ export function LibraryPage({
 
 	const allAvailableItems = useMemo(() => {
 		const map = new Map<string, LibraryItem>();
-		for (const [app, meta] of asArray(apps.data)) {
+		for (const [app, meta] of appPairs(apps.data)) {
 			if (meta) map.set(app.id, toLibraryItem(app, meta));
 		}
 		return Array.from(map.values());

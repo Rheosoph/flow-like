@@ -1159,7 +1159,7 @@ mod tests {
         let mut store = StateStore::open(&directory.path().join("management.sqlite"))?;
         let mut config: PlacementConfig = serde_json::from_value(serde_json::json!({
             "id":"service","project_id":"project","deployment_id":"deployment","revision":"one",
-            "source":"online","project_path":directory.path(),
+            "source":"online","online_metadata_sha256":"a".repeat(64),"project_path":directory.path(),
             "resource_grant":{"grant_id":"grant","authz_version":1},
             "hosting":{"host":"127.0.0.1","port":8080,"max_in_flight":4,"request_timeout_secs":30,"auth_secret":"auth"},
             "events":[{"event_id":"http","event_version":[1,0,0],"board_version":[1,0,0]}]

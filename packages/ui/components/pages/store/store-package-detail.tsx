@@ -8,15 +8,16 @@ import type { IProfile } from "../../../lib/schema/profile/profile";
 import type { RegistryEntry } from "../../../lib/schema/wasm";
 import { PackageStatus } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
+import { MarketplaceCheckoutDialog } from "../../payments/checkout-dialog";
 import { PackageDetailView } from "../../store/package-detail-view";
 import { usePackageStoreData } from "../../store/use-package-store-data";
 import type { CompileStatus } from "../../ui/package-status-badge";
 
-// biome-ignore lint/suspicious/noExplicitAny: Required for generic fetcher signature compatibility
 export type GenericFetcher = <T>(
 	profile: IProfile,
 	path: string,
 	options?: RequestInit,
+	// biome-ignore lint/suspicious/noExplicitAny: Required for generic fetcher signature compatibility
 	auth?: any,
 ) => Promise<T>;
 
@@ -169,9 +170,13 @@ export function StorePackageDetail({
 	const {
 		isPurchasing,
 		isRequesting,
+		awaitingCheckout,
+		checkoutOpen,
+		setCheckoutOpen,
 		priceLabel,
 		hasAccess,
 		onBuy,
+		onRequestAccess,
 		onGetOrBuy,
 	} = usePackageStoreData(
 		packageId || undefined,
@@ -192,30 +197,46 @@ export function StorePackageDetail({
 	);
 
 	return (
-		<PackageDetailView
-			pkg={resolvedPkg}
-			isLoading={resolvedLoading}
-			loadError={loadError}
-			onRetry={handleRetry}
-			installedVersion={installedVersion.data}
-			onBack={onBack}
-			onInstall={handleInstall}
-			onUninstall={handleUninstall}
-			isInstalling={installMutation.isPending}
-			isUninstalling={uninstallMutation.isPending}
-			compileStatus={compileStatus}
-			price={resolvedPkg?.price}
-			visibility={resolvedPkg?.visibility}
-			priceLabel={priceLabel}
-			hasAccess={hasAccess}
-			isPurchasing={isPurchasing}
-			isRequesting={isRequesting}
-			onBuy={onBuy}
-			onGetOrBuy={onGetOrBuy}
-			onDeleteSuccess={onDeleteSuccess}
-			currentUserPermission={resolvedPkg?.currentUserPermission}
-			fetcher={fetcher}
-			auth={auth}
-		/>
+		<>
+			{remotePkg && (
+				<MarketplaceCheckoutDialog
+					key={`checkout:${packageId}`}
+					itemKind="PACKAGE"
+					itemId={packageId}
+					itemName={remotePkg.manifest.name || packageId}
+					amount={remotePkg.price ?? 0}
+					open={checkoutOpen}
+					onOpenChange={setCheckoutOpen}
+					onPurchased={handleAccessChanged}
+				/>
+			)}
+			<PackageDetailView
+				pkg={resolvedPkg}
+				isLoading={resolvedLoading}
+				loadError={loadError}
+				onRetry={handleRetry}
+				installedVersion={installedVersion.data}
+				onBack={onBack}
+				onInstall={handleInstall}
+				onUninstall={handleUninstall}
+				isInstalling={installMutation.isPending}
+				isUninstalling={uninstallMutation.isPending}
+				compileStatus={compileStatus}
+				price={resolvedPkg?.price}
+				visibility={resolvedPkg?.visibility}
+				priceLabel={priceLabel}
+				hasAccess={hasAccess}
+				isPurchasing={isPurchasing}
+				isRequesting={isRequesting}
+				awaitingCheckout={awaitingCheckout}
+				onBuy={onBuy}
+				onRequestAccess={onRequestAccess}
+				onGetOrBuy={onGetOrBuy}
+				onDeleteSuccess={onDeleteSuccess}
+				currentUserPermission={resolvedPkg?.currentUserPermission}
+				fetcher={fetcher}
+				auth={auth}
+			/>
+		</>
 	);
 }

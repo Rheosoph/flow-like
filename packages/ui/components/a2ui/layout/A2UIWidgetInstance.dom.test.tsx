@@ -139,7 +139,11 @@ describe("A2UIWidgetInstance cached definitions after a failed refetch", () => {
 		test(`removes the cached widget when the server returns ${status}`, async () => {
 			const host = await renderInstance(
 				() => createElement("div", { "data-external": "cached" }),
-				new ApiResponseError({ status, message: "Widget no longer exists" }),
+				new ApiResponseError({
+					status,
+					code: "NOT_FOUND",
+					message: "Widget no longer exists",
+				}),
 			);
 			expect(host.innerHTML).not.toContain('data-external="cached"');
 			expect(host.textContent).toContain("could not be resolved");

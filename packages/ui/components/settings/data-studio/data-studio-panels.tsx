@@ -106,8 +106,11 @@ import {
 } from "../../ui/sheet";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
+import { OntologySchemaGraph, useRevealTarget } from "./ontology-schema-graph";
+import { externalTargetKey } from "./ontology-schema-model";
 import {
 	AddRelationshipForm,
+	type RelationshipPrefill,
 	type WizardEdge,
 	isValidGraphIdentifier,
 	nodeToEndpoint,
@@ -532,7 +535,7 @@ export function ObjectExplorerPanel({
 		} finally {
 			if (generation === loadGeneration.current) setLoading(false);
 		}
-	}, [activeSelectionKey, objectType, onSample, onSampleRemote, source]);
+	}, [activeSelectionKey, objectType, onSample, onSampleRemote, source, t]);
 
 	useEffect(() => {
 		loadObjects();
@@ -929,8 +932,14 @@ function ObjectViewSheet({
 							</div>
 						</div>
 						<SheetDescription className="sr-only">
-							{objectType?.label || "Object"} {`details from ontology`}{" "}
-							{ontology?.name ?? ""}
+							{t(
+								"typeDetailsFromOntologyName",
+								"{{type}} details from ontology {{name}}",
+								{
+									type: objectType?.label || t("object", "Object"),
+									name: ontology?.name ?? "",
+								},
+							)}
 						</SheetDescription>
 					</SheetHeader>
 
@@ -1488,6 +1497,7 @@ function OntologyActionDialog({
 		onInvokeAction,
 		ontology,
 		parameters,
+		t,
 	]);
 
 	return (
@@ -1664,7 +1674,7 @@ function OntologyLifecycleMenu({
 		} finally {
 			setBusy(false);
 		}
-	}, [appId, backend.graphState, nameDraft, ontology, refreshOverlays]);
+	}, [appId, backend.graphState, nameDraft, ontology, refreshOverlays, t]);
 
 	const remove = useCallback(async () => {
 		setBusy(true);
@@ -1682,7 +1692,7 @@ function OntologyLifecycleMenu({
 		} finally {
 			setBusy(false);
 		}
-	}, [appId, backend.graphState, ontology.id, refreshOverlays]);
+	}, [appId, backend.graphState, ontology.id, refreshOverlays, t]);
 
 	return (
 		<>
@@ -1827,9 +1837,7 @@ function OntologyLifecycleMenu({
 }
 
 function encodeEdgeTarget(edge: EdgeLabelMapping): string {
-	if (edge.dst_ontology) return `local:${edge.dst_ontology}`;
-	if (edge.dst_binding_id) return `remote:${edge.dst_binding_id}`;
-	return "self";
+	return externalTargetKey(edge) ?? "self";
 }
 
 function decodeEdgeTarget(value: string): Partial<EdgeLabelMapping> {
@@ -1845,6 +1853,8 @@ function decodeEdgeTarget(value: string): Partial<EdgeLabelMapping> {
 function RelationshipRow({
 	edge,
 	index,
+	domId,
+	highlighted,
 	otherOntologies,
 	installedOntologies,
 	takenLabels,
@@ -1854,6 +1864,8 @@ function RelationshipRow({
 }: Readonly<{
 	edge: EdgeLabelMapping;
 	index: number;
+	domId?: string;
+	highlighted?: boolean;
 	otherOntologies: GraphOverlay[];
 	installedOntologies: RemoteOntologyImport[];
 	takenLabels: Set<string>;
@@ -1885,12 +1897,20 @@ function RelationshipRow({
 		</div>
 	);
 
+	const frame = `rounded-lg border transition-shadow duration-300${
+		highlighted ? " ring-2 ring-primary/60" : ""
+	}`;
+
 	if (!onChange) {
-		return <div className="rounded-lg border px-3 py-2">{summary}</div>;
+		return (
+			<div id={domId} className={`${frame} px-3 py-2`}>
+				{summary}
+			</div>
+		);
 	}
 
 	return (
-		<div className="space-y-2.5 rounded-lg border px-3 py-2.5">
+		<div id={domId} className={`${frame} space-y-2.5 px-3 py-2.5`}>
 			<div className="flex items-start justify-between gap-2">
 				<div className="min-w-0 flex-1">{summary}</div>
 				<div className="flex items-center">
@@ -2046,13 +2066,20 @@ export function OntologyModelPanel({
 	const { t } = useTranslation("settings");
 	const [selectedId, setSelectedId] = useState(ontologies[0]?.id ?? "");
 	const [addingEdge, setAddingEdge] = useState(false);
+	const [edgePrefill, setEdgePrefill] = useState<RelationshipPrefill | null>(
+		null,
+	);
 	const selected =
 		ontologies.find((ontology) => ontology.id === selectedId) ?? ontologies[0];
 	useEffect(() => {
 		if (selected) setSelectedId(selected.id);
 	}, [selected]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: closes the add form when the user switches ontology
-	useEffect(() => setAddingEdge(false), [selectedId]);
+	useEffect(() => {
+		setAddingEdge(false);
+		setEdgePrefill(null);
+	}, [selectedId]);
+	const { reveal, domId, revealedKey } = useRevealTarget();
 	const [edgesDraft, setEdgesDraft] = useState<EdgeLabelMapping[]>(
 		() => ontologies[0]?.edges ?? [],
 	);
@@ -2198,8 +2225,57 @@ export function OntologyModelPanel({
 		(edge: WizardEdge) => {
 			commitEdges([...edgesDraftRef.current, toEdgeMapping(edge)]);
 			setAddingEdge(false);
+			setEdgePrefill(null);
 		},
 		[commitEdges],
+	);
+
+	const openAddRelationship = useCallback(
+		(prefill: RelationshipPrefill | null) => {
+			setEdgePrefill(prefill);
+			setAddingEdge(true);
+			reveal("add-relationship");
+		},
+		[reveal],
+	);
+
+	const externalTargets = useMemo(
+		() =>
+			new Map<string, string>([
+				...otherOntologies.map((ontology): [string, string] => [
+					`local:${ontology.id}`,
+					ontology.name,
+				]),
+				...(installedOntologies ?? []).map((imported): [string, string] => [
+					`remote:${imported.id}`,
+					t("remoteName", "Remote: {{name}}", {
+						name: imported.contract.name,
+					}),
+				]),
+			]),
+		[installedOntologies, otherOntologies, t],
+	);
+
+	const revealObject = useCallback(
+		(object: NodeLabelMapping) => {
+			const index = selected?.nodes.indexOf(object) ?? -1;
+			if (index >= 0) reveal(`object-${index}`);
+		},
+		[reveal, selected?.nodes],
+	);
+
+	const revealRelationship = useCallback(
+		(index: number) => reveal(`relationship-${index}`),
+		[reveal],
+	);
+
+	const linkFromDiagram = useCallback(
+		(source: NodeLabelMapping, target: NodeLabelMapping) =>
+			openAddRelationship({
+				sourceId: nodeToEndpoint(source).id,
+				targetId: nodeToEndpoint(target).id,
+			}),
+		[openAddRelationship],
 	);
 
 	// Saved nodes carry every column in `property_columns`, so a relationship can
@@ -2322,20 +2398,63 @@ export function OntologyModelPanel({
 					</div>
 					<Separator />
 					<div>
+						<div className="mb-3">
+							<h3 className="text-sm font-medium">
+								{t("schemaDiagram", "Schema diagram")}
+							</h3>
+							<p className="text-xs text-muted-foreground">
+								{onSaveEdges
+									? t(
+											"howObjectTypesConnectClickToJumpToDetailsDragBetweenObjectsToLinkThem",
+											"How object types connect. Click to jump to details, drag from one object to another to link them.",
+										)
+									: t(
+											"howObjectTypesConnectClickToJumpToDetails",
+											"How object types connect. Click to jump to details.",
+										)}
+							</p>
+						</div>
+						<OntologySchemaGraph
+							key={selected.id}
+							title={selected.name}
+							nodes={selected.nodes}
+							edges={edgesDraft}
+							externalTargets={externalTargets}
+							onSelectObject={revealObject}
+							onSelectRelationship={revealRelationship}
+							onConnect={
+								onSaveEdges && endpoints.length > 0
+									? linkFromDiagram
+									: undefined
+							}
+						/>
+					</div>
+					<div>
 						<div className="mb-3 flex items-center justify-between">
 							<div>
 								<h3 className="text-sm font-medium">
 									{t("objectTypes", "Object types")}
 								</h3>
 								<p className="text-xs text-muted-foreground">
-									{`Business objects compiled from native tables`}
+									{t(
+										"businessObjectsCompiledFromNativeTables",
+										"Business objects compiled from native tables",
+									)}
 								</p>
 							</div>
 							<Badge variant="secondary">{selected.nodes.length}</Badge>
 						</div>
 						<div className="grid gap-3 md:grid-cols-2">
-							{selected.nodes.map((object) => (
-								<div key={objectKey(object)} className="rounded-xl border p-4">
+							{selected.nodes.map((object, objectIndex) => (
+								<div
+									key={objectKey(object)}
+									id={domId(`object-${objectIndex}`)}
+									className={`rounded-xl border p-4 transition-shadow duration-300${
+										revealedKey === `object-${objectIndex}`
+											? " ring-2 ring-primary/60"
+											: ""
+									}`}
+								>
 									<div className="flex items-start gap-3">
 										<span
 											className="mt-1 h-3 w-3 rounded-full"
@@ -2390,7 +2509,7 @@ export function OntologyModelPanel({
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={() => setAddingEdge(true)}
+										onClick={() => openAddRelationship(null)}
 										disabled={endpoints.length === 0}
 									>
 										<Plus className="h-4 w-4" />
@@ -2401,12 +2520,23 @@ export function OntologyModelPanel({
 						</div>
 						<div className="space-y-2">
 							{addingEdge && (
-								<AddRelationshipForm
-									endpoints={endpoints}
-									takenLabels={takenLabels}
-									onAdd={handleEdgeAdd}
-									onCancel={() => setAddingEdge(false)}
-								/>
+								<div id={domId("add-relationship")}>
+									<AddRelationshipForm
+										key={
+											edgePrefill
+												? `${edgePrefill.sourceId}>${edgePrefill.targetId ?? ""}`
+												: "blank"
+										}
+										endpoints={endpoints}
+										takenLabels={takenLabels}
+										prefill={edgePrefill}
+										onAdd={handleEdgeAdd}
+										onCancel={() => {
+											setAddingEdge(false);
+											setEdgePrefill(null);
+										}}
+									/>
+								</div>
 							)}
 							{edgesDraft.length === 0 && !addingEdge && (
 								<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
@@ -2425,6 +2555,8 @@ export function OntologyModelPanel({
 									}
 									edge={edge}
 									index={index}
+									domId={domId(`relationship-${index}`)}
+									highlighted={revealedKey === `relationship-${index}`}
 									otherOntologies={otherOntologies}
 									installedOntologies={installedOntologies ?? []}
 									takenLabels={takenLabels}
@@ -2635,7 +2767,7 @@ export function OntologyActionsPanel({
 		} finally {
 			setPublishingVersion(false);
 		}
-	}, [appId, boardId, backend.boardState]);
+	}, [appId, boardId, backend.boardState, t]);
 
 	const boardsRequestedRef = useRef(false);
 	useEffect(() => {
@@ -2730,6 +2862,7 @@ export function OntologyActionsPanel({
 		ontology,
 		resetActionEditor,
 		startNodeId,
+		t,
 	]);
 
 	const repairActionBindings = useCallback(
@@ -2751,7 +2884,7 @@ export function OntologyActionsPanel({
 				setRepairingOntologyId(null);
 			}
 		},
-		[onSaveActions],
+		[onSaveActions, t],
 	);
 	const removeAction = useCallback(
 		async (owner: GraphOverlay, actionId: string) => {
@@ -2775,7 +2908,7 @@ export function OntologyActionsPanel({
 				setRepairingOntologyId(null);
 			}
 		},
-		[onSaveActions],
+		[onSaveActions, t],
 	);
 
 	if (ontologies.length === 0)
@@ -3086,7 +3219,10 @@ export function OntologyActionsPanel({
 												{t("publishing", "Publishing…")}
 											</span>
 										) : (
-											`Publish current as new version`
+											t(
+												"publishCurrentAsNewVersion",
+												"Publish current as new version",
+											)
 										)}
 									</button>
 								)}
@@ -3155,7 +3291,10 @@ export function OntologyActionsPanel({
 							{inferredParameterSchema && (
 								<p className="mt-2 flex items-center gap-1.5 font-medium text-foreground">
 									<CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-									{`Typed parameters detected from this entry node.`}
+									{t(
+										"typedParametersDetectedFromThisEntryNode",
+										"Typed parameters detected from this entry node.",
+									)}
 								</p>
 							)}
 						</div>
@@ -3208,7 +3347,10 @@ export function OntologyActionsPanel({
 									)}
 								</Label>
 								<p className="text-xs text-muted-foreground">
-									{`Off hides this action from connected projects; it still runs locally`}
+									{t(
+										"offHidesThisActionFromConnectedProjectsItStillRunsLocally",
+										"Off hides this action from connected projects; it still runs locally",
+									)}
 								</p>
 							</div>
 							<Switch
@@ -3383,7 +3525,7 @@ export function OntologySharingPanel({
 				setSavingOntologyIds(new Set(savingOntologyIdsRef.current));
 			}
 		},
-		[onUpdateOntology],
+		[onUpdateOntology, t],
 	);
 	const installedStateUnavailable =
 		installedOntologiesLoading || Boolean(installedOntologiesError);
@@ -3430,7 +3572,7 @@ export function OntologySharingPanel({
 				}
 			}
 		},
-		[onLoadRemoteOntologies],
+		[onLoadRemoteOntologies, t],
 	);
 	const mutateImport = useCallback(
 		async (
@@ -3460,7 +3602,7 @@ export function OntologySharingPanel({
 				setMutatingImportId(null);
 			}
 		},
-		[onInstallRemoteOntology, onUninstallRemoteOntology],
+		[onInstallRemoteOntology, onUninstallRemoteOntology, t],
 	);
 	return (
 		<div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
@@ -3479,7 +3621,10 @@ export function OntologySharingPanel({
 				{ontologies.length === 0 && (
 					<EmptyStudioState
 						title={t("nothingToExposeYet", "Nothing to expose yet")}
-						description={`Set up a local ontology, or install a contract from a connected project.`}
+						description={t(
+							"setUpALocalOntologyOrInstallAContractFromAConnectedProject",
+							"Set up a local ontology, or install a contract from a connected project.",
+						)}
 						onCreate={onCreateOntology}
 					/>
 				)}
@@ -3577,7 +3722,10 @@ export function OntologySharingPanel({
 						{connections.filter((connection) => connection.status === "ACTIVE")
 							.length === 0 ? (
 							<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
-								{`No active app connections. Create one from Team → Connections.`}
+								{t(
+									"noActiveAppConnectionsCreateOneFromTeamConnections",
+									"No active app connections. Create one from Team → Connections.",
+								)}
 							</div>
 						) : (
 							connections

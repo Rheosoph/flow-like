@@ -854,7 +854,7 @@ fn execute(
                         Some(placement_id),
                     )?;
                     let config: PlacementConfig = serde_json::from_value(record.config)?;
-                    let mut available = crate::outbox::Outbox::for_placement(state_dir, &config)?;
+                    let mut available = crate::outbox::for_placement(state_dir, &config)?;
                     available.sort_by(|a, b| a.scope().cmp(b.scope()));
                     let mut page = available
                         .iter()
@@ -1268,6 +1268,12 @@ fn validate_remote_project_path(state_dir: &Path, config: &PlacementConfig) -> R
         allowed,
         "Remote placements must use their imported project store"
     );
+    if config.source == crate::config::ProjectSource::Online {
+        #[cfg(feature = "runtime")]
+        crate::online::validate_approved_metadata(config)?;
+        #[cfg(not(feature = "runtime"))]
+        anyhow::bail!("This device binary does not include the online project runtime");
+    }
     Ok(())
 }
 
@@ -1325,7 +1331,7 @@ fn execute_transaction(
                 Some(placement_id),
             )?;
             let config: PlacementConfig = serde_json::from_value(record.config)?;
-            let queues = crate::outbox::Outbox::for_placement(state_dir, &config)?;
+            let queues = crate::outbox::for_placement(state_dir, &config)?;
             let queue = queues
                 .iter()
                 .find(|queue| queue.scope() == scope)

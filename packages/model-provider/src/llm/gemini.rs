@@ -40,6 +40,18 @@ fn is_gemini_3_model(model_name: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// Gemini 2.5 Pro cannot turn thinking off; its smallest budget is 128.
+const GEMINI_2_5_PRO_MIN_BUDGET: u32 = 128;
+
+/// `MINIMAL` exists only on Gemini 3 Flash, 3.5/3.6 Flash and the Flash-Lite models; the
+/// others reject it (3 Pro and 3.1 Pro cannot turn thinking off at all).
+fn gemini_3_accepts_minimal(model: &str) -> bool {
+    model.contains("flash-lite")
+        || ["gemini-3-flash", "gemini-3.5-flash", "gemini-3.6-flash"]
+            .iter()
+            .any(|family| model.contains(family))
+}
+
 fn parse_base64_data_url(url: &str) -> Option<(&str, &str)> {
     let body = url.strip_prefix("data:")?;
     let comma_pos = body.find(',')?;
@@ -211,6 +223,8 @@ async fn fetch_url_bytes(url: &str) -> Option<Vec<u8>> {
     reqwest::get(url)
         .await
         .ok()?
+        .error_for_status()
+        .ok()?
         .bytes()
         .await
         .ok()
@@ -335,10 +349,12 @@ fn thinking_config_for_history(
 
     let include_thoughts = Some(thinking != HistoryThinking::Off);
 
+    let model = model_name.unwrap_or_default().to_ascii_lowercase();
     if is_gemini_3_model(model_name) {
         let thinking_level = match thinking {
-            HistoryThinking::Off => ThinkingLevel::Minimal,
-            HistoryThinking::Low => ThinkingLevel::Low,
+            _ if model.contains("pro-image") => ThinkingLevel::High,
+            HistoryThinking::Off if gemini_3_accepts_minimal(&model) => ThinkingLevel::Minimal,
+            HistoryThinking::Off | HistoryThinking::Low => ThinkingLevel::Low,
             HistoryThinking::Mid => ThinkingLevel::Medium,
             HistoryThinking::High => ThinkingLevel::High,
         };
@@ -350,6 +366,7 @@ fn thinking_config_for_history(
         }
     } else {
         let thinking_budget = match thinking {
+            HistoryThinking::Off if model.contains("2.5-pro") => GEMINI_2_5_PRO_MIN_BUDGET,
             HistoryThinking::Off => 0,
             HistoryThinking::Low => 1024,
             HistoryThinking::Mid => 2048,
@@ -616,24 +633,69 @@ mod tests {
         );
     }
 
-    #[test]
-    fn overrides_history_default_for_signed_image_urls() {
+    #[tokio::test]
+    async fn overrides_history_default_for_signed_image_urls() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/path/photo.jpg?X-Amz-Signature=abc",
+            listener.local_addr().unwrap()
+        );
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(stream.read(&mut bytes).await.unwrap() > 0);
+            // A failed local fetch retains the URL without contacting S3.
+        });
         let content = RigUserContent::Image(RigImage {
-            data: DocumentSourceKind::Url(
-                "https://example-bucket.s3.amazonaws.com/path/photo.jpg?X-Amz-Signature=abc"
-                    .to_string(),
-            ),
+            data: DocumentSourceKind::Url(url.clone()),
             media_type: Some(ImageMediaType::PNG),
             detail: None,
             additional_params: None,
         });
 
-        let transformed = futures::executor::block_on(transform_gemini_user_content(&content));
+        let transformed = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            transform_gemini_user_content(&content),
+        )
+        .await
+        .unwrap();
+        peer.await.unwrap();
 
         let RigUserContent::Image(image) = transformed else {
             panic!("expected image content");
         };
         assert_eq!(image.media_type, Some(ImageMediaType::JPEG));
-        assert!(matches!(image.data, DocumentSourceKind::Url(_)));
+        assert!(matches!(image.data, DocumentSourceKind::Url(original) if original == url));
+    }
+
+    #[test]
+    fn thinking_off_uses_the_lowest_setting_each_model_accepts() {
+        let mut history = History::new("gemini".to_string(), Vec::new());
+        history.thinking = Some(HistoryThinking::Off);
+        let config = |model| thinking_config_for_history(Some(&history), Some(model));
+
+        assert!(matches!(
+            config("gemini-3-flash-preview").thinking_level,
+            Some(ThinkingLevel::Minimal)
+        ));
+        assert!(matches!(
+            config("gemini-3.1-pro-preview").thinking_level,
+            Some(ThinkingLevel::Low)
+        ));
+        assert!(matches!(
+            config("gemini-3.8-flash").thinking_level,
+            Some(ThinkingLevel::Low)
+        ));
+        assert!(matches!(
+            config("gemini-3-pro-image-preview").thinking_level,
+            Some(ThinkingLevel::High)
+        ));
+        assert_eq!(
+            config("gemini-2.5-pro").thinking_budget,
+            Some(GEMINI_2_5_PRO_MIN_BUDGET)
+        );
+        assert_eq!(config("gemini-2.5-flash").thinking_budget, Some(0));
     }
 }

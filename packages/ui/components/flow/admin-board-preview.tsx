@@ -35,6 +35,7 @@ import {
 	cn,
 	parseBoard,
 } from "../../lib";
+import { isRecord } from "../../lib/response-shape";
 import type { ILayer, ILayerType } from "../../lib/schema/flow/board";
 import {
 	Badge,
@@ -1097,9 +1098,11 @@ export interface AdminBoardPreviewProps {
 
 export function AdminBoardPreview({ board }: AdminBoardPreviewProps) {
 	const { t } = useTranslation("flow");
-	const hasNodes = Object.keys(board.nodes).length > 0;
+	// The caller hands over the raw admin response body; anything but a board reads as empty.
+	const wellFormed = isRecord(board.nodes) && isRecord(board.layers);
+	const hasNodes = wellFormed && Object.keys(board.nodes).length > 0;
 
-	if (!hasNodes && Object.keys(board.layers).length === 0) {
+	if (!wellFormed || (!hasNodes && Object.keys(board.layers).length === 0)) {
 		return (
 			<div className="flex items-center justify-center h-full">
 				<p className="text-sm text-muted-foreground">

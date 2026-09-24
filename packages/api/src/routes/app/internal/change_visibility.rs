@@ -243,6 +243,7 @@ pub async fn change_visibility(
     // must not remove members from the existing public project.
     if purge_members {
         purge_memberships(&state, &other_members).await?;
+        crate::package_license::refresh_app(&state, &app_id).await;
     }
 
     let action = match transition {

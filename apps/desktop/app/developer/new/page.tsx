@@ -22,11 +22,20 @@ import {
 	Loader2,
 	Rocket,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useState } from "react";
 import { toast } from "sonner";
 
 type WizardStep = "capabilities" | "details" | "creating";
+
+const PACKAGES_HOME = "/store/packages?tab=mine";
+
+function templateLanguage(value: string | null): TemplateLanguage | null {
+	return (
+		TEMPLATE_LANGUAGES.find((language) => language.value === value)?.value ??
+		null
+	);
+}
 
 const STEPS: WizardStep[] = ["capabilities", "details", "creating"];
 
@@ -146,12 +155,13 @@ function SectionHeading({
 	);
 }
 
-export default function NewProjectWizard() {
+function NewProjectWizard() {
 	const { t } = useTranslation("common");
 	const router = useRouter();
+	const searchParams = useSearchParams();
 	const [step, setStep] = useState<WizardStep>("capabilities");
 	const [nodeLanguage, setNodeLanguage] = useState<TemplateLanguage | null>(
-		null,
+		() => templateLanguage(searchParams.get("language")),
 	);
 	const [widgetFrameworks, setWidgetFrameworks] = useState<WidgetFramework[]>(
 		[],
@@ -192,7 +202,7 @@ export default function NewProjectWizard() {
 				},
 			);
 			toast.success(`Project "${project.name}" created!`);
-			router.push("/developer");
+			router.push(PACKAGES_HOME);
 		} catch (err) {
 			toast.error(`Failed to create project: ${err}`);
 			setStep("details");
@@ -224,7 +234,7 @@ export default function NewProjectWizard() {
 						onClick={() =>
 							step === "details"
 								? setStep("capabilities")
-								: router.push("/developer")
+								: router.push(PACKAGES_HOME)
 						}
 						className="h-8 w-8 rounded-full flex items-center justify-center text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 transition-colors"
 					>
@@ -503,5 +513,13 @@ export default function NewProjectWizard() {
 				</div>
 			</div>
 		</div>
+	);
+}
+
+export default function NewProjectPage() {
+	return (
+		<Suspense>
+			<NewProjectWizard />
+		</Suspense>
 	);
 }

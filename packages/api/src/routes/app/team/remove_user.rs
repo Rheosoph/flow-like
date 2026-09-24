@@ -95,6 +95,10 @@ pub async fn remove_user(
         })
         .await?;
 
+    // Pins the member licensed pass to another admin or the owner who holds
+    // the package, or lapse and notify.
+    crate::package_license::refresh_app(&state, &app_id).await;
+
     audit_branch!(state, user, app_id, "membership.remove", "Membership", sub);
     Ok(Json(()))
 }

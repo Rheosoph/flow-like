@@ -14,6 +14,7 @@ import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
+import { appPairs } from "../library/library-types";
 
 interface StoreRouter {
 	push(href: string): void;
@@ -48,7 +49,7 @@ export function useStoreData(
 	const metaData = meta.data ?? null;
 
 	const isMember = useMemo(
-		() => !!(id && apps.data?.some(([a]) => a.id === id)),
+		() => !!(id && appPairs(apps.data).some(([a]) => a.id === id)),
 		[apps.data, id],
 	);
 	const routes = useInvoke(

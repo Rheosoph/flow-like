@@ -9,6 +9,7 @@ import { PaymentError, PaymentPage } from "./payment-parts";
 import {
 	type PurchaseOrder,
 	amountInput,
+	orderItemName,
 	parseEuroAmount,
 	paymentMoney,
 } from "./types";
@@ -56,7 +57,7 @@ function SaleRefund({ order }: { order: PurchaseOrder }) {
 		<div className="space-y-3 border-t pt-3">
 			<div className="flex flex-wrap justify-between gap-3">
 				<div>
-					<p className="text-sm font-medium">{order.itemName ?? order.appId}</p>
+					<p className="text-sm font-medium">{orderItemName(order)}</p>
 					<p className="text-xs text-muted-foreground">{order.orderId}</p>
 				</div>
 				<p className="text-sm">{paymentMoney(order.amount, order.currency)}</p>

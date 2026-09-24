@@ -3,7 +3,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
-	invoke: vi.fn().mockResolvedValue(undefined),
+	invoke: vi
+		.fn()
+		.mockImplementation(async (command: string) =>
+			command === "execution_open_auth_session" ? "native-session" : undefined,
+		),
 }));
 
 vi.mock("sonner", () => ({

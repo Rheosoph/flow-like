@@ -2,6 +2,7 @@ export {
 	ApiResponseError,
 	apiErrorDiagnostic,
 	apiResponseError,
+	isHubUnavailable,
 	isMissingResourceError,
 	redactApiPathSecrets,
 	upstreamFailureInSuccess,

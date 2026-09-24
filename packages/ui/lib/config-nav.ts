@@ -1,6 +1,7 @@
 import {
 	BadgeEuroIcon,
 	ChartAreaIcon,
+	CloudOffIcon,
 	CogIcon,
 	CopyIcon,
 	CrownIcon,
@@ -55,6 +56,8 @@ export interface INavigationItem {
 	 * where every member may read the section.
 	 */
 	permissions?: RolePermissions[];
+	/** Host feature the section needs; hosts without it never list the section. */
+	hostCapability?: string;
 }
 
 /**
@@ -218,6 +221,24 @@ export function buildNavigationItems(
 			permissions: [RolePermissions.ReadFiles, RolePermissions.ReadDatabase],
 		},
 		{
+			href: "/library/config/offline",
+			label: t("offlineAccess", "Offline access"),
+			icon: CloudOffIcon,
+			description: t(
+				"offlineAccessNavDescription",
+				"Keep tables available on this device and sync changes made while offline",
+			),
+			group: groups.data,
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+				IAppVisibility.Private,
+			],
+			permissions: [RolePermissions.ExecuteEvents],
+			hostCapability: "offlineWrites",
+		},
+		{
 			href: "/library/config/packages",
 			label: t("packages", "Packages"),
 			icon: PackageIcon,
@@ -378,6 +399,8 @@ export interface ResolveNavOptions {
 	/** Falls back to "allowed" while the caller's role is still unknown. */
 	can: (...permissions: RolePermissions[]) => boolean;
 	permissionLockReason: (item: INavigationItem) => string;
+	/** Capabilities of the host app; sections needing a missing one are left out. */
+	hostCapabilities?: ReadonlySet<string>;
 }
 
 /**
@@ -394,12 +417,20 @@ export function resolveNavigationItems(
 	items: INavigationItem[],
 	options: ResolveNavOptions,
 ): INavigationItemState[] {
-	const { visibility, developerMode, isPaid, can, permissionLockReason } =
-		options;
+	const {
+		visibility,
+		developerMode,
+		isPaid,
+		can,
+		permissionLockReason,
+		hostCapabilities,
+	} = options;
 
 	return items
 		.filter(
 			(item) =>
+				(!item.hostCapability ||
+					hostCapabilities?.has(item.hostCapability) === true) &&
 				(!item.devOnly || developerMode) &&
 				(!item.visibilities ||
 					item.visibilities.includes(visibility) ||

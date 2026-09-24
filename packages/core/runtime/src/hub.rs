@@ -7,7 +7,7 @@ use crate::{
     profile::Profile,
     utils::{http::HTTPClient, recursion::RecursionGuard},
 };
-use flow_like_types::{Result, sync::Mutex};
+use flow_like_types::{Result, authorization::AuthorizationError, sync::Mutex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -999,23 +999,37 @@ impl Hub {
             .build()
             .map_err(flow_like_types::Error::from)?;
 
+        // Each failure carries an `AuthorizationError`, so a caller can tell a hub it could
+        // not reach (or that answered garbage) from one that refused the caller.
+        let unavailable = |message: String| {
+            flow_like_types::Error::new(AuthorizationError::Unavailable).context(message)
+        };
         let resp = client
             .execute(request)
             .await
-            .map_err(flow_like_types::Error::from)?;
+            .map_err(|e| unavailable(format!("execution context request failed: {}", e)))?;
 
         let status = resp.status();
-        let body_text = resp.text().await.map_err(flow_like_types::Error::from)?;
+        let body_text = resp
+            .text()
+            .await
+            .map_err(|e| unavailable(format!("execution context body failed: {}", e)))?;
 
         if !status.is_success() {
-            return Err(flow_like_types::Error::msg(format!(
+            let kind = match status.as_u16() {
+                401 => AuthorizationError::Expired,
+                403 | 404 | 410 => AuthorizationError::Denied,
+                408 | 429 | 500..=599 => AuthorizationError::Unavailable,
+                _ => AuthorizationError::InvalidResponse,
+            };
+            return Err(flow_like_types::Error::new(kind).context(format!(
                 "execution context failed: status={} body={}",
                 status, body_text
             )));
         }
 
         flow_like_types::json::from_str(&body_text)
-            .map_err(|e| flow_like_types::Error::msg(format!("JSON parse error: {}", e)))
+            .map_err(|e| unavailable(format!("JSON parse error: {}", e)))
     }
 
     /// Personal access tokens are sent verbatim; everything else is a bearer

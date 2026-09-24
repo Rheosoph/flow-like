@@ -223,7 +223,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	}, [searchResults]);
 
 	const userAppIds = useMemo(
-		() => new Set(userApps.data?.map(([app]) => app.id) ?? []),
+		() => new Set(appPairs(userApps.data).map(([app]) => app.id)),
 		[userApps.data],
 	);
 

@@ -30,6 +30,7 @@ import { toast } from "sonner";
 import { type IBoard, type ILog, useBackend, useInfiniteInvoke } from "../..";
 import { parseTimespan } from "../../lib/date";
 import { logLevelToNumber } from "../../lib/log-level";
+import { asArray } from "../../lib/response-shape";
 import { ILogLevel, type ILogMessage } from "../../lib/schema/flow/run";
 import { cn } from "../../lib/utils";
 import { useLogAggregation } from "../../state/log-aggregation-state";
@@ -88,7 +89,7 @@ export function Traces({
 		);
 
 	const messages = useMemo(() => {
-		return data?.pages.flat() ?? [];
+		return asArray(data?.pages).flatMap((page) => asArray(page));
 	}, [data]);
 	const [search, setSearch] = useState<string>("");
 	const debouncedSearch = useDebounce(search, 300);

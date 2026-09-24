@@ -1,4 +1,10 @@
 import type {
+	ExploreQuery,
+	ExploreSearchQuery,
+	ExploreSearchResponse,
+	ResolvedExplore,
+} from "../../components/store/explore/explore-types";
+import type {
 	IApp,
 	IAppCategory,
 	IAppVisibility,
@@ -81,6 +87,16 @@ export interface IAppState {
 		offset?: number,
 		limit?: number,
 	): Promise<[IApp, IMetadata | undefined][]>;
+	/**
+	 * The curated Explore storefront resolved for this viewer (GET /store/explore). The implementation adds
+	 * its own `platform`. Throws `ExploreUnsupportedError` when the hub has no Explore endpoints.
+	 */
+	getExplore(query: ExploreQuery): Promise<ResolvedExplore>;
+	/**
+	 * Mixed app/package search with facets (GET /store/explore/search). `categories` and `permissions`
+	 * go out as one comma-joined param each. Throws `ExploreUnsupportedError` like {@link getExplore}.
+	 */
+	searchExplore(query: ExploreSearchQuery): Promise<ExploreSearchResponse>;
 	getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]>;
 	getStoreGroup(groupId: string): Promise<IGroup>;
 	/** Suites across all apps the caller is a member of (for the library). */

@@ -131,6 +131,19 @@ pub(crate) fn open_log_file() -> Option<crate::logging::log_file::RotatingLogFil
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
+pub(crate) fn execution_authority_dir() -> PathBuf {
+    mobile_storage_root().join("execution-authority")
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub(crate) fn execution_authority_dir() -> PathBuf {
+    dirs_next::data_dir()
+        .unwrap_or_default()
+        .join("flow-like")
+        .join("execution-authority")
+}
+
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn default_temporary_dir() -> PathBuf {
     mobile_storage_root().join("tmp")
 }

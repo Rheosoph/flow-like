@@ -13,14 +13,14 @@ use flow_like_device_protocol::{
     sign_dpop, sign_instance_possession, sign_workload_assertion,
 };
 use flow_like_types_contracts::authorization::{
-    AuthorizationError, AuthorizationFuture, AuthorizationRequest, RequestAuthorization,
-    RequestAuthorizer, ResourceAudience,
+    AuthorizationAttribution, AuthorizationError, AuthorizationFuture, AuthorizationRequest,
+    RequestAuthorization, RequestAuthorizer, ResourceAudience,
 };
 use rand_core::{OsRng, RngCore};
 use std::{
     path::PathBuf,
     sync::Arc,
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -33,18 +33,83 @@ struct ResourceLease {
     refresh_at: i64,
 }
 
+struct RefreshRetry {
+    failures: u8,
+    retry_at: Instant,
+    error: AuthorizationError,
+}
+
+impl RefreshRetry {
+    fn after_failure(previous: Option<&Self>, error: AuthorizationError) -> Self {
+        let failures = previous.map_or(1, |retry| retry.failures.saturating_add(1));
+        let seconds = (1_u64 << failures.saturating_sub(1).min(5)).min(30);
+        let millis = (seconds * 1_000 + u64::from(OsRng.next_u32() % 251)).min(30_000);
+        Self {
+            failures,
+            retry_at: Instant::now() + Duration::from_millis(millis),
+            error,
+        }
+    }
+}
+
+fn resource_authorization_error(error: &anyhow::Error) -> AuthorizationError {
+    if let Some(error) = error.downcast_ref::<AuthorizationError>() {
+        return *error;
+    }
+    match api_status(error) {
+        Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN) => {
+            AuthorizationError::Denied
+        }
+        Some(status)
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+        {
+            AuthorizationError::Unavailable
+        }
+        None if error.chain().any(|cause| {
+            cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+                error.status().is_none()
+                    && (error.is_connect()
+                        || error.is_timeout()
+                        || error.is_body()
+                        || error.is_request())
+            })
+        }) =>
+        {
+            AuthorizationError::Unavailable
+        }
+        _ => AuthorizationError::InvalidResponse,
+    }
+}
+
 #[derive(Default)]
 struct BrokerState {
     receipt: Option<InstanceReceipt>,
     registrations: Vec<String>,
     lease: Option<ResourceLease>,
+    lease_retry: Option<RefreshRetry>,
     denied: bool,
     project_lease: Option<ResourceLease>,
+    project_lease_retry: Option<RefreshRetry>,
     project_denied: bool,
     #[cfg(feature = "runtime")]
     outage_restored_until: Option<i64>,
     #[cfg(feature = "runtime")]
     ready: bool,
+}
+
+impl BrokerState {
+    fn deny_project(&mut self) {
+        self.project_denied = true;
+        self.denied = true;
+        self.project_lease = None;
+        self.lease = None;
+        self.project_lease_retry = None;
+        self.lease_retry = None;
+        #[cfg(feature = "runtime")]
+        {
+            self.outage_restored_until = None;
+        }
+    }
 }
 
 /// One ephemeral workload key and lease per supervised process. Only public
@@ -214,10 +279,7 @@ impl WorkloadBroker {
         ensure!(self.validation.is_some(), "Expected a validation instance");
         {
             let mut state = self.state.lock().await;
-            state.project_denied = true;
-            state.denied = true;
-            state.project_lease = None;
-            state.lease = None;
+            state.deny_project();
         }
         let store = StateStore::open(&self.state_dir.join("management.sqlite"))?;
         store.retire_instance(&self.instance_id)?;
@@ -240,6 +302,9 @@ impl WorkloadBroker {
     pub(crate) async fn prepare(&self) -> Result<()> {
         self.require_current_validation()?;
         let mut state = self.state.lock().await;
+        if state.project_denied {
+            return Err(AuthorizationError::Denied.into());
+        }
         let result = self.ensure_registered(&mut state).await;
         if result.as_ref().err().is_some_and(|error| {
             matches!(
@@ -247,7 +312,7 @@ impl WorkloadBroker {
                 Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
             )
         }) {
-            state.project_denied = true;
+            state.deny_project();
             #[cfg(feature = "runtime")]
             self.fence_outage()?;
         }
@@ -466,7 +531,7 @@ impl WorkloadBroker {
                 api_status(&error),
                 Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
             ) {
-                state.project_denied = true;
+                state.deny_project();
                 #[cfg(feature = "runtime")]
                 self.fence_outage()?;
             }
@@ -481,76 +546,72 @@ impl WorkloadBroker {
         .as_ref()
         .is_none_or(|lease| now >= lease.refresh_at)
         {
-            if project {
-                state.project_lease = None;
+            let retry = if project {
+                &state.project_lease_retry
             } else {
-                state.lease = None;
-            }
-            let endpoint = endpoint_url(
-                self.base(),
-                &format!(
-                    "/instances/{}/{}",
-                    self.instance_id,
-                    if project { "project-token" } else { "token" }
-                ),
-            )?;
-            self.reserve_possible_lease()?;
-            let response = response_json::<InstanceTokenResponse>(
-                self.client
-                    .post(&endpoint)
-                    .json(&InstanceTokenRequest {
-                        client_assertion: self.workload_assertion(&endpoint)?,
-                    })
-                    .send()
-                    .await?,
-            )
-            .await;
-            let mut response = match response {
-                Ok(response) => response,
-                Err(error) => {
-                    if matches!(
-                        api_status(&error),
-                        Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
-                    ) {
+                &state.lease_retry
+            };
+            if let Some(retry) = retry
+                .as_ref()
+                .filter(|retry| Instant::now() < retry.retry_at)
+            {
+                if retry.error != AuthorizationError::Unavailable {
+                    return Err(retry.error.into());
+                }
+                // A retry delay never extends the credential's actual lifetime.
+                let lease = if project {
+                    &state.project_lease
+                } else {
+                    &state.lease
+                };
+                if lease.is_none() {
+                    return Err(retry.error.into());
+                }
+            } else {
+                // Holding the broker mutex makes simultaneous retained clients
+                // share one renewal, including its failure and retry deadline.
+                match self.renew_resource_lease(project).await {
+                    Ok(lease) => {
                         if project {
-                            state.project_denied = true;
-                            #[cfg(feature = "runtime")]
-                            self.fence_outage()?;
+                            state.project_lease = Some(lease);
+                            state.project_lease_retry = None;
                         } else {
-                            state.denied = true;
+                            state.lease = Some(lease);
+                            state.lease_retry = None;
                         }
                     }
-                    return Err(error);
+                    Err(error) => {
+                        let failure = resource_authorization_error(&error);
+                        if failure == AuthorizationError::Denied {
+                            if project {
+                                state.deny_project();
+                                #[cfg(feature = "runtime")]
+                                self.fence_outage()?;
+                            } else {
+                                state.denied = true;
+                                state.lease = None;
+                            }
+                            return Err(failure.into());
+                        }
+                        let retry = if project {
+                            &mut state.project_lease_retry
+                        } else {
+                            &mut state.lease_retry
+                        };
+                        *retry = Some(RefreshRetry::after_failure(retry.as_ref(), failure));
+                        let lease = if project {
+                            &state.project_lease
+                        } else {
+                            &state.lease
+                        };
+                        // A transient issuer outage does not revoke a token the
+                        // resource server can still validate. Never retry the
+                        // paid request itself; only credential issuance is retried.
+                        if failure != AuthorizationError::Unavailable || lease.is_none() {
+                            return Err(failure.into());
+                        }
+                    }
                 }
-            };
-            let now = unix_time()?;
-            ensure!(
-                response.token_type == "DPoP"
-                    && response.expires_in > 60
-                    && response.expires_in <= 300
-                    && response.expires_at > now + 60
-                    && response.expires_at <= now + 305
-                    && response.lease_expires_at >= response.expires_at
-                    && response.lease_expires_at <= now + 605
-                    && (16..=256).contains(&response.dpop_nonce.len())
-                    && response
-                        .dpop_nonce
-                        .bytes()
-                        .all(|byte| byte.is_ascii_graphic()),
-                "Invalid instance resource lease"
-            );
-            StateStore::open(&self.state_dir.join("management.sqlite"))?
-                .update_instance_lease(&self.instance_id, response.lease_expires_at)?;
-            let lease = Some(ResourceLease {
-                token: Zeroizing::new(std::mem::take(&mut response.access_token)),
-                nonce: response.dpop_nonce,
-                expires_at: response.expires_at,
-                refresh_at: response.expires_at - 60 - i64::from(OsRng.next_u32() % 16),
-            });
-            if project {
-                state.project_lease = lease;
-            } else {
-                state.lease = lease;
             }
         }
         let lease = (if project {
@@ -560,6 +621,9 @@ impl WorkloadBroker {
         })
         .as_ref()
         .context("Missing resource lease")?;
+        if unix_time()? >= lease.expires_at {
+            return Err(AuthorizationError::Expired.into());
+        }
         let proof = sign_dpop(
             &DpopProof {
                 jti: Uuid::new_v4().to_string(),
@@ -577,6 +641,59 @@ impl WorkloadBroker {
             Some(proof),
             UNIX_EPOCH + Duration::from_secs(lease.expires_at.try_into()?),
         )?)
+    }
+
+    async fn renew_resource_lease(&self, project: bool) -> Result<ResourceLease> {
+        let endpoint = endpoint_url(
+            self.base(),
+            &format!(
+                "/instances/{}/{}",
+                self.instance_id,
+                if project { "project-token" } else { "token" }
+            ),
+        )?;
+        self.reserve_possible_lease()?;
+        let mut response = response_json::<InstanceTokenResponse>(
+            self.client
+                .post(&endpoint)
+                .json(&InstanceTokenRequest {
+                    client_assertion: self.workload_assertion(&endpoint)?,
+                })
+                .send()
+                .await?,
+        )
+        .await?;
+        let now = unix_time()?;
+        ensure!(
+            response.token_type == "DPoP"
+                && response.expires_in > 60
+                && response.expires_in <= 300
+                && response.expires_at > now + 60
+                && response.expires_at <= now + 305
+                && response.lease_expires_at >= response.expires_at
+                && response.lease_expires_at <= now + 605
+                && (16..=256).contains(&response.dpop_nonce.len())
+                && response
+                    .dpop_nonce
+                    .bytes()
+                    .all(|byte| byte.is_ascii_graphic())
+                && !response.access_token.is_empty()
+                && response.access_token.len() <= 16 * 1024
+                && response
+                    .access_token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_graphic()),
+            "Invalid instance resource lease"
+        );
+        self.require_current_validation()?;
+        StateStore::open(&self.state_dir.join("management.sqlite"))?
+            .update_instance_lease(&self.instance_id, response.lease_expires_at)?;
+        Ok(ResourceLease {
+            token: Zeroizing::new(std::mem::take(&mut response.access_token)),
+            nonce: response.dpop_nonce,
+            expires_at: response.expires_at,
+            refresh_at: response.expires_at - 60 - i64::from(OsRng.next_u32() % 16),
+        })
     }
 
     fn reserve_possible_lease(&self) -> Result<()> {
@@ -759,8 +876,8 @@ impl WorkloadBroker {
                     api_status(&error),
                     Some(reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN)
                 ) {
+                    self.state.lock().await.deny_project();
                     self.fence_outage()?;
-                    self.state.lock().await.project_denied = true;
                     return Err(AuthorizationError::Denied.into());
                 }
                 return Err(error);
@@ -860,11 +977,8 @@ impl crate::online::outage::OutageAuthority for WorkloadBroker {
             binding == self.outage_binding()?,
             "Cannot revoke another outage snapshot"
         );
+        self.state.lock().await.deny_project();
         self.fence_outage()?;
-        let mut state = self.state.lock().await;
-        state.project_denied = true;
-        state.project_lease = None;
-        state.outage_restored_until = None;
         Ok(())
     }
 }
@@ -917,6 +1031,10 @@ pub(crate) fn allowed_project_request(base: &str, method: &str, url: &str) -> bo
 }
 
 impl RequestAuthorizer for WorkloadBroker {
+    fn attribution(&self) -> AuthorizationAttribution {
+        AuthorizationAttribution::InstanceGrant
+    }
+
     fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
         Some(match audience {
             ResourceAudience::HostedModels => format!("{}/instances", self.base()),
@@ -947,28 +1065,7 @@ impl RequestAuthorizer for WorkloadBroker {
             }
             self.authorize_inner(request.audience, request.method, request.url)
                 .await
-                .map_err(|error| {
-                    if error.downcast_ref::<AuthorizationError>()
-                        == Some(&AuthorizationError::Denied)
-                        || matches!(
-                            api_status(&error),
-                            Some(
-                                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-                            )
-                        )
-                    {
-                        AuthorizationError::Denied
-                    } else {
-                        #[cfg(feature = "runtime")]
-                        {
-                            crate::online::authorization_error(&error)
-                        }
-                        #[cfg(not(feature = "runtime"))]
-                        {
-                            AuthorizationError::Unavailable
-                        }
-                    }
-                })
+                .map_err(|error| resource_authorization_error(&error))
         })
     }
 }
@@ -1020,7 +1117,7 @@ mod tests {
         DpopContext, Ed25519PublicKey, verify_dpop, verify_instance_possession,
         verify_instance_registration, verify_workload_assertion,
     };
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 
     #[derive(Clone)]
     struct ApiFixture {
@@ -1030,6 +1127,9 @@ mod tests {
         receipt: Arc<Mutex<Option<InstanceReceipt>>>,
         registrations: Arc<AtomicUsize>,
         tokens: Arc<AtomicUsize>,
+        token_status: Arc<AtomicU16>,
+        project_tokens: Arc<AtomicUsize>,
+        project_token_status: Arc<AtomicU16>,
         deny: Arc<AtomicBool>,
         lose_registration: Arc<AtomicBool>,
         retirements: Arc<AtomicUsize>,
@@ -1095,6 +1195,11 @@ mod tests {
         if api.deny.load(Ordering::SeqCst) {
             return Err(axum::http::StatusCode::FORBIDDEN);
         }
+        let status =
+            axum::http::StatusCode::from_u16(api.token_status.load(Ordering::SeqCst)).unwrap();
+        if !status.is_success() {
+            return Err(status);
+        }
         let now = unix_time().unwrap();
         Ok(axum::Json(InstanceTokenResponse {
             access_token: format!("token-{generation}"),
@@ -1125,7 +1230,7 @@ mod tests {
     async fn project_token(
         axum::extract::State(api): axum::extract::State<ApiFixture>,
         axum::Json(request): axum::Json<InstanceTokenRequest>,
-    ) -> axum::Json<InstanceTokenResponse> {
+    ) -> Result<axum::Json<InstanceTokenResponse>, axum::http::StatusCode> {
         let receipt = api.receipt.lock().await.clone().unwrap();
         verify_workload_assertion(
             &request.client_assertion,
@@ -1138,15 +1243,22 @@ mod tests {
             unix_time().unwrap(),
         )
         .unwrap();
+        api.project_tokens.fetch_add(1, Ordering::SeqCst);
+        let status =
+            axum::http::StatusCode::from_u16(api.project_token_status.load(Ordering::SeqCst))
+                .unwrap();
+        if !status.is_success() {
+            return Err(status);
+        }
         let now = unix_time().unwrap();
-        axum::Json(InstanceTokenResponse {
+        Ok(axum::Json(InstanceTokenResponse {
             access_token: "project-token".into(),
             token_type: "DPoP".into(),
             expires_in: 300,
             expires_at: now + 300,
             dpop_nonce: "project-server-issued-nonce".into(),
             lease_expires_at: now + 600,
-        })
+        }))
     }
 
     async fn retire(
@@ -1172,6 +1284,403 @@ mod tests {
         }
     }
 
+    struct BrokerFixture {
+        _directory: tempfile::TempDir,
+        api: ApiFixture,
+        broker: Arc<WorkloadBroker>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for BrokerFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    async fn broker_fixture() -> Result<BrokerFixture> {
+        let directory = tempfile::tempdir()?;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let base = format!("http://{}/api/v1", listener.local_addr()?);
+        let key = SigningKey::generate();
+        let api = ApiFixture {
+            base: base.clone(),
+            device_id: Uuid::new_v4().to_string(),
+            device_key: key.public_key(),
+            receipt: Arc::new(Mutex::new(None)),
+            registrations: Arc::new(AtomicUsize::new(0)),
+            tokens: Arc::new(AtomicUsize::new(0)),
+            token_status: Arc::new(AtomicU16::new(200)),
+            project_tokens: Arc::new(AtomicUsize::new(0)),
+            project_token_status: Arc::new(AtomicU16::new(200)),
+            deny: Arc::new(AtomicBool::new(false)),
+            lose_registration: Arc::new(AtomicBool::new(false)),
+            retirements: Arc::new(AtomicUsize::new(0)),
+        };
+        let router = axum::Router::new()
+            .route(
+                "/api/v1/devices/{device}/instances",
+                axum::routing::post(register),
+            )
+            .route(
+                "/api/v1/instances/{instance}/token",
+                axum::routing::post(token),
+            )
+            .route(
+                "/api/v1/instances/{instance}/project-token",
+                axum::routing::post(project_token),
+            )
+            .with_state(api.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({
+            "id":"placement","project_id":"project","deployment_id":"deployment","revision":"one",
+            "source":"online","online_metadata_sha256":"a".repeat(64),"project_path":directory.path(),
+            "events":[{"event_id":"daemon","event_version":[1,0,0],"board_version":[1,0,0]}],
+            "resource_grant":{"grant_id":"grant","authz_version":1,"billing_grant_id":"billing","billing_authz_version":1}
+        }))?;
+        let broker = Arc::new(WorkloadBroker::new(
+            Arc::new(DeviceSession::test_session(
+                base,
+                api.device_id.clone(),
+                key,
+            )),
+            config,
+            directory.path().into(),
+            1,
+            1,
+        )?);
+        Ok(BrokerFixture {
+            _directory: directory,
+            api,
+            broker,
+            server,
+        })
+    }
+
+    async fn fixture_authorize(
+        broker: &WorkloadBroker,
+        audience: ResourceAudience,
+        embedding: bool,
+    ) -> std::result::Result<RequestAuthorization, AuthorizationError> {
+        let (method, path) = match audience {
+            ResourceAudience::ProjectApi => ("GET", "/instances/project/app"),
+            ResourceAudience::HostedModels if embedding => ("POST", "/instances/embeddings/embed"),
+            ResourceAudience::HostedModels => ("POST", "/instances/responses"),
+        };
+        broker
+            .authorize(AuthorizationRequest {
+                audience,
+                method,
+                url: &format!("{}{path}", broker.base()),
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn issuer_disconnect_after_accepting_a_request_is_a_transient_outage() -> Result<()> {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/token", listener.local_addr()?);
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(stream.read(&mut bytes).await.unwrap() > 0);
+            // Closing after receipt differs from a failed TCP connect: reqwest
+            // reports a request error while the issuer's outcome is unknown.
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            http_client()?.post(endpoint).body("request").send(),
+        )
+        .await?
+        .unwrap_err();
+        peer.await?;
+        assert!(error.is_request());
+        let error = error.into();
+        assert_eq!(
+            resource_authorization_error(&error),
+            AuthorizationError::Unavailable
+        );
+        #[cfg(feature = "runtime")]
+        assert_eq!(
+            crate::online::authorization_error(&error),
+            AuthorizationError::Unavailable
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retained_broker_clients_keep_valid_tokens_during_outages_but_stop_at_expiry()
+    -> Result<()> {
+        for audience in [ResourceAudience::HostedModels, ResourceAudience::ProjectApi] {
+            let fixture = broker_fixture().await?;
+            let broker = &fixture.broker;
+            let project = audience == ResourceAudience::ProjectApi;
+            let status = if project {
+                &fixture.api.project_token_status
+            } else {
+                &fixture.api.token_status
+            };
+            let attempts = if project {
+                &fixture.api.project_tokens
+            } else {
+                &fixture.api.tokens
+            };
+            let first = fixture_authorize(broker, audience, false).await?;
+            let first_token = first.authorization().to_owned();
+            if project {
+                fixture_authorize(broker, ResourceAudience::HostedModels, false).await?;
+            }
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+            {
+                let mut state = broker.state.lock().await;
+                let lease = if project {
+                    &mut state.project_lease
+                } else {
+                    &mut state.lease
+                };
+                lease.as_mut().unwrap().refresh_at = 0;
+            }
+            status.store(503, Ordering::SeqCst);
+            let mut requests = tokio::task::JoinSet::new();
+            for index in 0..12 {
+                let broker = broker.clone();
+                requests.spawn(async move {
+                    fixture_authorize(&broker, audience, index % 2 == 0).await
+                });
+            }
+            let mut proofs = std::collections::HashSet::new();
+            while let Some(result) = requests.join_next().await {
+                let authorized = result??;
+                assert_eq!(authorized.authorization(), first_token);
+                assert!(proofs.insert(authorized.dpop().unwrap().to_owned()));
+            }
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                2,
+                "One renewal serves concurrent clients"
+            );
+            {
+                let state = broker.state.lock().await;
+                let retry = if project {
+                    &state.project_lease_retry
+                } else {
+                    &state.lease_retry
+                };
+                let retry = retry.as_ref().unwrap();
+                assert_eq!(retry.failures, 1);
+                assert!(retry.retry_at > Instant::now());
+                assert!(retry.retry_at <= Instant::now() + Duration::from_secs(30));
+            }
+            // Rate limits have the same retry boundary without discarding a live token.
+            status.store(429, Ordering::SeqCst);
+            {
+                let mut state = broker.state.lock().await;
+                let retry = if project {
+                    &mut state.project_lease_retry
+                } else {
+                    &mut state.lease_retry
+                };
+                retry.as_mut().unwrap().retry_at = Instant::now();
+            }
+            assert_eq!(
+                fixture_authorize(broker, audience, true)
+                    .await?
+                    .authorization(),
+                first_token
+            );
+            assert_eq!(attempts.load(Ordering::SeqCst), 3);
+            {
+                let mut state = broker.state.lock().await;
+                let lease = if project {
+                    &mut state.project_lease
+                } else {
+                    &mut state.lease
+                };
+                lease.as_mut().unwrap().expires_at = unix_time()? - 1;
+            }
+            assert_eq!(
+                fixture_authorize(broker, audience, false)
+                    .await
+                    .unwrap_err(),
+                AuthorizationError::Expired
+            );
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                3,
+                "Expiry does not bypass the retry delay"
+            );
+            status.store(200, Ordering::SeqCst);
+            {
+                let mut state = broker.state.lock().await;
+                let retry = if project {
+                    &mut state.project_lease_retry
+                } else {
+                    &mut state.lease_retry
+                };
+                retry.as_mut().unwrap().retry_at = Instant::now();
+            }
+            let renewed = fixture_authorize(broker, audience, true).await?;
+            assert!(renewed.expires_at() > std::time::SystemTime::now());
+            assert_eq!(attempts.load(Ordering::SeqCst), 4);
+            if !project {
+                assert_eq!(renewed.authorization(), "DPoP token-3");
+            }
+            {
+                let mut state = broker.state.lock().await;
+                let retry = if project {
+                    &state.project_lease_retry
+                } else {
+                    &state.lease_retry
+                };
+                assert!(retry.is_none());
+                let lease = if project {
+                    &mut state.project_lease
+                } else {
+                    &mut state.lease
+                };
+                lease.as_mut().unwrap().refresh_at = 0;
+            }
+            status.store(403, Ordering::SeqCst);
+            assert_eq!(
+                fixture_authorize(broker, audience, false)
+                    .await
+                    .unwrap_err(),
+                AuthorizationError::Denied
+            );
+            status.store(200, Ordering::SeqCst);
+            assert_eq!(
+                fixture_authorize(broker, audience, true).await.unwrap_err(),
+                AuthorizationError::Denied
+            );
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                5,
+                "A revoked broker never reacquires authority"
+            );
+            assert_eq!(fixture.api.registrations.load(Ordering::SeqCst), 1);
+            if project {
+                assert_eq!(
+                    fixture_authorize(broker, ResourceAudience::HostedModels, true)
+                        .await
+                        .unwrap_err(),
+                    AuthorizationError::Denied,
+                    "Revoking the project grant also fences its cached billing token"
+                );
+                assert!(broker.state.lock().await.lease.is_none());
+                assert_eq!(fixture.api.tokens.load(Ordering::SeqCst), 1);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn broker_leases_and_proofs_remain_bound_to_the_original_device_and_grant() -> Result<()>
+    {
+        let first = broker_fixture().await?;
+        let second = broker_fixture().await?;
+        let first_auth =
+            fixture_authorize(&first.broker, ResourceAudience::HostedModels, false).await?;
+        let second_auth =
+            fixture_authorize(&second.broker, ResourceAudience::HostedModels, true).await?;
+        assert_eq!(first.api.tokens.load(Ordering::SeqCst), 1);
+        assert_eq!(second.api.tokens.load(Ordering::SeqCst), 1);
+        assert_ne!(first_auth.dpop(), second_auth.dpop());
+        let receipt = first.api.receipt.lock().await.clone().unwrap();
+        let mut state = BrokerState {
+            registrations: vec![receipt.registration_jws.clone()],
+            ..Default::default()
+        };
+        for field in [
+            "device",
+            "instance",
+            "grant",
+            "billing",
+            "workload_key",
+            "registration",
+        ] {
+            let mut substituted = receipt.clone();
+            match field {
+                "device" => substituted.device_id = second.api.device_id.clone(),
+                "instance" => substituted.instance_id = second.broker.instance_id().to_owned(),
+                "grant" => substituted.grant_id = "another-project-grant".into(),
+                "billing" => {
+                    substituted.billing_grant_id = Some("another-user-billing-grant".into())
+                }
+                "workload_key" => substituted.workload_key = second.broker.key.public_key(),
+                "registration" => {
+                    substituted.registration_jws = second
+                        .api
+                        .receipt
+                        .lock()
+                        .await
+                        .as_ref()
+                        .unwrap()
+                        .registration_jws
+                        .clone()
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                first
+                    .broker
+                    .accept_receipt(&mut state, substituted)
+                    .is_err(),
+                "Substituted {field}"
+            );
+            assert!(state.receipt.is_none());
+        }
+        first.broker.accept_receipt(&mut state, receipt)?;
+        let other_endpoint = format!("{}/instances/responses", second.api.base);
+        assert_eq!(
+            first
+                .broker
+                .authorize(AuthorizationRequest {
+                    audience: ResourceAudience::HostedModels,
+                    method: "POST",
+                    url: &other_endpoint,
+                })
+                .await
+                .unwrap_err(),
+            AuthorizationError::InvalidRequest
+        );
+        assert_eq!(first.api.tokens.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "runtime")]
+    #[tokio::test]
+    async fn confirmed_revocation_fences_both_leases_when_outage_persistence_fails() -> Result<()> {
+        use crate::online::outage::OutageAuthority;
+
+        let mut fixture = broker_fixture().await?;
+        fixture_authorize(&fixture.broker, ResourceAudience::HostedModels, false).await?;
+        fixture_authorize(&fixture.broker, ResourceAudience::ProjectApi, false).await?;
+        let binding = fixture.broker.outage_binding()?;
+        let blocked = fixture._directory.path().join("not-a-state-directory");
+        std::fs::write(&blocked, b"fixture")?;
+        Arc::get_mut(&mut fixture.broker)
+            .context("Unexpected broker owner")?
+            .state_dir = blocked;
+
+        assert!(fixture.broker.deny(&binding).await.is_err());
+        for audience in [ResourceAudience::HostedModels, ResourceAudience::ProjectApi] {
+            assert_eq!(
+                fixture_authorize(&fixture.broker, audience, false)
+                    .await
+                    .unwrap_err(),
+                AuthorizationError::Denied
+            );
+        }
+        let state = fixture.broker.state.lock().await;
+        assert!(state.lease.is_none());
+        assert!(state.project_lease.is_none());
+        assert!(state.denied && state.project_denied);
+        assert_eq!(fixture.api.tokens.load(Ordering::SeqCst), 1);
+        assert_eq!(fixture.api.project_tokens.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn broker_is_lazy_recovers_lost_registration_and_refreshes_retained_requests()
     -> Result<()> {
@@ -1186,6 +1695,9 @@ mod tests {
             receipt: Arc::new(Mutex::new(None)),
             registrations: Arc::new(AtomicUsize::new(0)),
             tokens: Arc::new(AtomicUsize::new(0)),
+            token_status: Arc::new(AtomicU16::new(200)),
+            project_tokens: Arc::new(AtomicUsize::new(0)),
+            project_token_status: Arc::new(AtomicU16::new(200)),
             deny: Arc::new(AtomicBool::new(false)),
             lose_registration: Arc::new(AtomicBool::new(true)),
             retirements: Arc::new(AtomicUsize::new(0)),
@@ -1220,7 +1732,7 @@ mod tests {
         ));
         let config: PlacementConfig = serde_json::from_value(
             serde_json::json!({"id":"placement","project_id":"offline-project",
-            "deployment_id":"deployment","revision":"one","source":"online","project_path":directory.path(),
+            "deployment_id":"deployment","revision":"one","source":"online","online_metadata_sha256":"a".repeat(64),"project_path":directory.path(),
             "events":[{"event_id":"daemon","event_version":[1,0,0],"board_version":[1,0,0]}],
             "resource_grant":{"grant_id":"grant","authz_version":1,"billing_grant_id":"billing","billing_authz_version":1}}),
         )?;
@@ -1433,7 +1945,7 @@ mod tests {
             SigningKey::generate(),
         ));
         let config: PlacementConfig = serde_json::from_value(
-            serde_json::json!({"id":"placement","project_id":"project","deployment_id":"deployment","revision":"one","source":"online","project_path":directory.path(),"events":[{"event_id":"daemon","event_version":[1,0,0],"board_version":[1,0,0]}],"resource_grant":{"grant_id":"grant","authz_version":1}}),
+            serde_json::json!({"id":"placement","project_id":"project","deployment_id":"deployment","revision":"one","source":"online","online_metadata_sha256":"a".repeat(64),"project_path":directory.path(),"events":[{"event_id":"daemon","event_version":[1,0,0],"board_version":[1,0,0]}],"resource_grant":{"grant_id":"grant","authz_version":1}}),
         )?;
         let broker = WorkloadBroker::new(
             session.clone(),
@@ -1720,6 +2232,9 @@ mod tests {
             receipt: Arc::new(Mutex::new(None)),
             registrations: Arc::new(AtomicUsize::new(0)),
             tokens: Arc::new(AtomicUsize::new(0)),
+            token_status: Arc::new(AtomicU16::new(200)),
+            project_tokens: Arc::new(AtomicUsize::new(0)),
+            project_token_status: Arc::new(AtomicU16::new(200)),
             deny: Arc::new(AtomicBool::new(false)),
             lose_registration: Arc::new(AtomicBool::new(false)),
             retirements: Arc::new(AtomicUsize::new(0)),
@@ -1763,7 +2278,7 @@ mod tests {
         ));
         let config: PlacementConfig = serde_json::from_value(serde_json::json!({
             "id":"service","project_id":"project","deployment_id":"deployment","revision":"one",
-            "source":"online","project_path":directory.path(),
+            "source":"online","online_metadata_sha256":"a".repeat(64),"project_path":directory.path(),
             "hosting":{"host":"127.0.0.1","port":8080,"max_in_flight":4,"request_timeout_secs":30,"auth_secret":"auth"},
             "events":[{"event_id":"http","event_version":[1,0,0],"board_version":[1,0,0]}],
             "resource_grant":{"grant_id":"grant","authz_version":1,"billing_grant_id":"billing","billing_authz_version":1}

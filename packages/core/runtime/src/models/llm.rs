@@ -442,10 +442,14 @@ impl ModelFactory {
                     "endpoint".into(),
                     flow_like_types::Value::String(resource_base),
                 );
-                // Instance billing attribution comes from its signed grant.
-                params.remove("headers");
             } else {
                 ensure_hosted_proxy_endpoint(&mut params, &api_base_url);
+            }
+            if authorizer.as_ref().is_some_and(|provider| {
+                provider.attribution()
+                    == flow_like_types::authorization::AuthorizationAttribution::InstanceGrant
+            }) {
+                params.remove("headers");
             }
             params.remove("is_azure");
 
@@ -949,14 +953,31 @@ mod tests {
 
     #[tokio::test]
     async fn instance_factory_preserves_exact_broker_endpoint_and_ignores_app_headers() {
+        check_factory_live_billing(true).await;
+    }
+
+    #[tokio::test]
+    async fn desktop_factory_preserves_trusted_endpoint_and_user_billing_headers() {
+        check_factory_live_billing(false).await;
+    }
+
+    async fn check_factory_live_billing(instance: bool) {
         use flow_like_types::authorization::{
             AuthorizationFuture, AuthorizationRequest, RequestAuthorization, RequestAuthorizer,
             ResourceAudience,
         };
-        struct InstanceAuthorizer {
+        struct ScopedAuthorizer {
             base: String,
+            instance: bool,
         }
-        impl RequestAuthorizer for InstanceAuthorizer {
+        impl RequestAuthorizer for ScopedAuthorizer {
+            fn attribution(&self) -> flow_like_types::authorization::AuthorizationAttribution {
+                if self.instance {
+                    flow_like_types::authorization::AuthorizationAttribution::InstanceGrant
+                } else {
+                    flow_like_types::authorization::AuthorizationAttribution::User
+                }
+            }
             fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
                 (audience == ResourceAudience::HostedModels).then(|| self.base.clone())
             }
@@ -968,15 +989,25 @@ mod tests {
                     assert_eq!(request.method, "POST");
                     assert_eq!(request.url, format!("{}/chat/completions", self.base));
                     RequestAuthorization::new(
-                        "DPoP workload-lease".into(),
-                        Some("fresh-workload-proof".into()),
+                        if self.instance {
+                            "DPoP workload-lease"
+                        } else {
+                            "Bearer current-user-token"
+                        }
+                        .into(),
+                        self.instance.then(|| "fresh-workload-proof".into()),
                         SystemTime::now() + Duration::from_secs(60),
                     )
                 })
             }
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let base = format!("http://{}/api/v1/instances", listener.local_addr().unwrap());
+        let path = if instance {
+            "/api/v1/instances"
+        } else {
+            "/api/v1"
+        };
+        let base = format!("http://{}{path}", listener.local_addr().unwrap());
         let capture = tokio::spawn(capture_one_http_request(listener));
         let store = FlowLikeStore::Memory(Arc::new(
             flow_like_storage::object_store::memory::InMemory::new(),
@@ -985,7 +1016,7 @@ mod tests {
             FlowLikeConfig::with_default_store(store),
             crate::utils::http::HTTPClient::new_without_refetch(),
         );
-        state.request_authorizer = Some(Arc::new(InstanceAuthorizer { base }));
+        state.request_authorizer = Some(Arc::new(ScopedAuthorizer { base, instance }));
         let mut factory = ModelFactory::new();
         let model = factory
             .build(
@@ -1013,12 +1044,22 @@ mod tests {
             .unwrap();
         assert_eq!(
             request.request_line,
-            "POST /api/v1/instances/chat/completions HTTP/1.1"
+            format!("POST {path}/chat/completions HTTP/1.1")
         );
         let headers = request.headers.to_ascii_lowercase();
-        assert!(headers.contains("authorization: dpop workload-lease\r\n"));
-        assert!(headers.contains("dpop: fresh-workload-proof\r\n"));
-        assert!(!headers.contains("x-flow-like-app-id"));
+        if instance {
+            assert!(headers.contains("authorization: dpop workload-lease\r\n"));
+            assert!(headers.contains("dpop: fresh-workload-proof\r\n"));
+            assert!(!headers.contains("x-flow-like-app-id"));
+            assert!(!headers.contains("x-flow-like-run-id"));
+        } else {
+            assert!(headers.contains("authorization: bearer current-user-token\r\n"));
+            assert!(!headers.contains("dpop:"));
+            assert!(
+                headers.contains("x-flow-like-app-id: offline-project-is-not-a-hosted-app\r\n")
+            );
+            assert!(headers.contains("x-flow-like-run-id: local-run\r\n"));
+        }
         assert!(!headers.contains("obsolete-human-token"));
     }
 

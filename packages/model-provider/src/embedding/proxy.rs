@@ -4,7 +4,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
-use flow_like_types_contracts::authorization::{RequestAuthorizer, ResourceAudience};
+use flow_like_types_contracts::authorization::{
+    AuthorizationAttribution, RequestAuthorizer, ResourceAudience,
+};
 use serde::Deserialize;
 use serde::Serialize;
 use text_splitter::{Characters, ChunkConfig, MarkdownSplitter, TextSplitter};
@@ -93,7 +95,7 @@ impl ProxyEmbeddingModel {
             .exact_resource_base
             .clone()
             .unwrap_or_else(|| format!("{}/api/v1", self.api_base_url));
-        if self.exact_resource_base.is_some() {
+        if provider.attribution() == AuthorizationAttribution::InstanceGrant {
             self.usage_headers.clear();
         }
         self.authorizer = Some(ScopedRequestAuthorizer::new(
@@ -188,6 +190,13 @@ mod tests {
     struct RotatingAuthorizer(AtomicUsize, Option<String>);
 
     impl RequestAuthorizer for RotatingAuthorizer {
+        fn attribution(&self) -> AuthorizationAttribution {
+            if self.1.is_some() {
+                AuthorizationAttribution::InstanceGrant
+            } else {
+                AuthorizationAttribution::User
+            }
+        }
         fn resource_base_url(&self, _audience: ResourceAudience) -> Option<String> {
             self.1.clone()
         }

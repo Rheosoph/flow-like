@@ -138,6 +138,120 @@ describe("local execution widget preparation", () => {
 	});
 });
 
+describe("project package licences before a local run", () => {
+	const pin = (
+		packageId: string,
+		version: string,
+		status: "active" | "lapsed" | "expired",
+	) => ({
+		packageId,
+		version,
+		packageName: `Package ${packageId}`,
+		stale: status !== "active",
+		license: { required: true, status, graceDays: 30 },
+	});
+
+	function licensedBackend(localPackages: Record<string, string> = {}) {
+		mocks.fetcher.mockResolvedValueOnce([
+			pin("pkg-active", "1.0.0", "active"),
+			pin("pkg-lapsed", "2.0.0", "lapsed"),
+			pin("pkg-expired", "3.0.0", "expired"),
+		]);
+		const appState = {
+			listPackages: vi.fn().mockResolvedValue(localPackages),
+			addPackage: vi.fn().mockResolvedValue(undefined),
+			removePackage: vi.fn().mockResolvedValue(undefined),
+		};
+		const registryState = {
+			getInstalledPackages: vi.fn().mockResolvedValue([]),
+			installPackage: vi.fn().mockResolvedValue({}),
+		};
+		const backend = {
+			...hostedBackend(),
+			widgetState: {},
+			isOffline: vi.fn().mockResolvedValue(false),
+			appState,
+			registryState,
+		};
+		return { state: new BoardState(backend as never), appState, registryState };
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.fetcher.mockReset();
+	});
+
+	test("installs usable pins through the project licence and skips expired ones", async () => {
+		const { state, appState, registryState } = licensedBackend({
+			"pkg-expired": "3.0.0",
+		});
+
+		await state.ensureAppPackagesInstalledForExecution("app-1", {
+			nodes: {},
+			layers: {},
+		} as never);
+
+		expect(registryState.installPackage).toHaveBeenCalledTimes(2);
+		expect(registryState.installPackage).toHaveBeenCalledWith(
+			"pkg-active",
+			"1.0.0",
+			undefined,
+			"app-1",
+		);
+		expect(registryState.installPackage).toHaveBeenCalledWith(
+			"pkg-lapsed",
+			"2.0.0",
+			undefined,
+			"app-1",
+		);
+		expect(appState.addPackage).toHaveBeenCalledTimes(2);
+		expect(appState.addPackage).not.toHaveBeenCalledWith(
+			"app-1",
+			"pkg-expired",
+			expect.anything(),
+		);
+		expect(appState.removePackage).toHaveBeenCalledWith("app-1", "pkg-expired");
+	});
+
+	test("refuses a local run of a board that uses an expired package", async () => {
+		const { state, registryState } = licensedBackend();
+
+		await expect(
+			state.ensureAppPackagesInstalledForExecution("app-1", {
+				nodes: {},
+				layers: {
+					function: {
+						nodes: {
+							wasm: {
+								name: "expired_node",
+								wasm: { package_id: "pkg-expired", permissions: [] },
+							},
+						},
+					},
+				},
+			} as never),
+		).rejects.toThrow(
+			"Package pkg-expired is disabled in this project: its licence expired",
+		);
+		expect(registryState.installPackage).not.toHaveBeenCalled();
+	});
+
+	test("lets boards run that only use lapsed packages", async () => {
+		const { state, registryState } = licensedBackend();
+
+		await state.ensureAppPackagesInstalledForExecution("app-1", {
+			nodes: {
+				wasm: {
+					name: "lapsed_node",
+					wasm: { package_id: "pkg-lapsed", permissions: [] },
+				},
+			},
+			layers: {},
+		} as never);
+		expect(registryState.installPackage).toHaveBeenCalledTimes(2);
+	});
+});
+
 describe("authoritative Board and Event reads", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();

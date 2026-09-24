@@ -1100,7 +1100,7 @@ function VisibilityTab({
 				group.id,
 			]);
 			await onChange();
-			return { reviewRequested: result.reviewRequested };
+			return { reviewRequested: result?.reviewRequested ?? false };
 		},
 		[appId, backend.teamState, group.id, invalidate, onChange],
 	);

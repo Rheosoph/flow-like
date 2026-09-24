@@ -194,8 +194,11 @@ pub(super) fn is_offline(error: &object_store::Error) -> bool {
             }
         }
         if let Some(error) = error.downcast_ref::<reqwest::Error>() {
-            return error.is_connect()
-                || error.is_timeout()
+            return (error.status().is_none()
+                && (error.is_connect()
+                    || error.is_timeout()
+                    || error.is_body()
+                    || error.is_request()))
                 || error
                     .status()
                     .is_some_and(|status| status.is_server_error());
@@ -1571,6 +1574,33 @@ mod tests {
     use super::*;
     use futures_util::TryStreamExt;
     use std::sync::atomic::{AtomicU8, AtomicUsize};
+
+    #[tokio::test]
+    async fn cloud_disconnect_after_accepting_a_request_allows_offline_reads() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/object", listener.local_addr().unwrap());
+        let peer = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(stream.read(&mut bytes).await.unwrap() > 0);
+        });
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::enrollment::http_client()
+                .unwrap()
+                .get(endpoint)
+                .send(),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        peer.await.unwrap();
+        assert!(error.is_request());
+        assert!(error.status().is_none());
+        assert!(is_offline(&cache_error(error)));
+    }
 
     #[derive(Debug, Default)]
     struct Cloud {

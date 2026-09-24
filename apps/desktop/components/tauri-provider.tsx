@@ -54,6 +54,7 @@ import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
+import type { IOfflineWritesState } from "@flow-like/flow-like-ui/state/backend-state/offline-writes-state";
 import { createId } from "@paralleldrive/cuid2";
 import Dexie, { type EntityTable } from "dexie";
 import { useCallback, useEffect, useRef, useTransition } from "react";
@@ -86,6 +87,7 @@ import { DatabaseState } from "./tauri-provider/db-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
+import { OfflineWritesState } from "./tauri-provider/offline-writes-state";
 import { PageState } from "./tauri-provider/page-state";
 import { QueryState } from "./tauri-provider/query-state";
 import { RegistryState } from "./tauri-provider/registry-state";
@@ -158,11 +160,12 @@ export class TauriBackend implements IBackendState {
 	salesState: ISalesState;
 	usageState: IUsageState;
 	analyticsState: IAnalyticsState;
+	offlineWritesState: IOfflineWritesState;
 
 	private _apiState: TauriApiState;
 	private executionAuthHub?: string;
 	private readonly executionAuth = new ExecutionAuthBridge(
-		createId(),
+		() => invoke<string>("execution_open_auth_session"),
 		(update) => invoke<void>("execution_set_auth", { ...update }),
 	);
 
@@ -198,6 +201,7 @@ export class TauriBackend implements IBackendState {
 		this.salesState = new SalesState(this);
 		this.usageState = new UsageState(this);
 		this.analyticsState = new AnalyticsState(this);
+		this.offlineWritesState = new OfflineWritesState(this);
 	}
 
 	capabilities(): ICapabilities {
@@ -239,14 +243,23 @@ export class TauriBackend implements IBackendState {
 		this.refreshRemoteCatalogQueries();
 	}
 
+	/**
+	 * The user signed in to this hub, kept while its token is expired: offline
+	 * the native side falls back to the role the hub last confirmed for them,
+	 * and a reachable hub rejects the expired token itself.
+	 */
+	private executionUser() {
+		return this.executionAuthHub === getApiOrigin(this.profile)
+			? this.auth?.user
+			: undefined;
+	}
+
 	private syncExecutionAuth(): Promise<void> {
-		const hub = getApiOrigin(this.profile);
-		const authenticated =
-			this.executionAuthHub === hub && this.auth?.isAuthenticated;
-		const token = authenticated ? this.auth?.user?.access_token : null;
-		const subject = authenticated ? this.auth?.user?.profile.sub : null;
+		const user = this.executionUser();
+		const token = user?.access_token;
+		const subject = user?.profile.sub;
 		return this.executionAuth.update({
-			hub,
+			hub: getApiOrigin(this.profile),
 			token: token && subject ? token : null,
 			subject: token && subject ? subject : null,
 		});
@@ -255,11 +268,7 @@ export class TauriBackend implements IBackendState {
 	async prepareExecutionAuth(): Promise<string> {
 		await this.syncExecutionAuth();
 		await this.executionAuth.ready();
-		if (
-			this.executionAuthHub !== getApiOrigin(this.profile) ||
-			!this.auth?.isAuthenticated ||
-			!this.auth.user?.access_token
-		) {
+		if (!this.executionUser()?.access_token) {
 			throw new Error(
 				"Sign in to this hub before running an online project locally.",
 			);

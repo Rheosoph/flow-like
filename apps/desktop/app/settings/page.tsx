@@ -19,7 +19,6 @@ import {
 	ExternalLink,
 	HardDrive,
 	type LucideIcon,
-	Package,
 	Scroll,
 	Server,
 	ShieldCheck,
@@ -108,16 +107,6 @@ function buildSettingsSections(
 					href: "/settings/devices",
 					icon: Server,
 					requiresDevices: true,
-				},
-				{
-					title: t("registry", "Registry"),
-					description: t(
-						"installedPackagesAndExploreTheMarketplace",
-						"Installed packages and explore the marketplace",
-					),
-					href: "/settings/registry",
-					icon: Package,
-					devOnly: true,
 				},
 				{
 					title: t("sinksAmpTriggers", "Sinks & Triggers"),

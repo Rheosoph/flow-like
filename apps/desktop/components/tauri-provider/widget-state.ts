@@ -10,11 +10,12 @@ import {
 import {
 	ApiResponseError,
 	UPSTREAM_UNAVAILABLE_CODE,
-	isTransportFailure,
+	isHubUnavailable,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { HUB_REFRESH_TIMEOUT_MS } from "../../lib/request-deadline";
 import { isMissingResourceError } from "../../lib/api-error";
 import { withWidgetName } from "../../lib/widget-metadata";
 import type { TauriBackend } from "../tauri-provider";
@@ -34,13 +35,6 @@ function isWidgetPayload(value: unknown): value is IWidget {
 		isRecord(value) &&
 		typeof value.id === "string" &&
 		Array.isArray(value.components)
-	);
-}
-
-function isHubUnreachable(error: unknown): boolean {
-	return (
-		isTransportFailure(error) ||
-		(error instanceof ApiResponseError && error.status >= 500)
 	);
 }
 
@@ -86,7 +80,7 @@ export class WidgetState implements IWidgetState {
 			);
 			await invoke("cache_widgets", { appId, widgets });
 		} catch (error) {
-			if (!isHubUnreachable(error)) throw error;
+			if (!isHubUnavailable(error)) throw error;
 			console.warn(
 				"[WidgetState] Hub unreachable, running with cached widgets:",
 				error,
@@ -115,6 +109,7 @@ export class WidgetState implements IWidgetState {
 		appId: string,
 		widgetId: string,
 		version?: Version,
+		timeoutMs?: number,
 	): Promise<IWidget> {
 		if (!this.backend.profile) {
 			throw new Error("Profile not set. Cannot fetch remote widget.");
@@ -124,7 +119,7 @@ export class WidgetState implements IWidgetState {
 		const widget = await fetcher<unknown>(
 			this.backend.profile,
 			path,
-			{ method: "GET" },
+			{ method: "GET", timeoutMs },
 			this.getRemoteAuth(),
 		);
 		// Callers cache and render this payload, so a body that is no widget must not stand in.
@@ -251,7 +246,13 @@ export class WidgetState implements IWidgetState {
 		}
 
 		try {
-			const remote = await this.fetchRemoteWidget(appId, widgetId, version);
+			// With a local copy to fall back on, a hung hub must not hold the render.
+			const remote = await this.fetchRemoteWidget(
+				appId,
+				widgetId,
+				version,
+				local ? HUB_REFRESH_TIMEOUT_MS : undefined,
+			);
 			if (version && remote.version?.join("_") !== version.join("_")) {
 				throw new Error(`Widget version mismatch: ${widgetId}`);
 			}

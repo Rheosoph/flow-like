@@ -8663,6 +8663,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "eventsource-stream",
  "flow-like-catalog-build-helper",
  "flow-like-catalog-core",
  "flow-like-catalog-data-support",
@@ -8672,6 +8673,7 @@ dependencies = [
  "flow-like-types",
  "futures 0.3.32",
  "iana-time-zone",
+ "rmcp",
  "schemars 1.2.1",
  "serde",
  "tokio",
@@ -9617,6 +9619,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-offline-writes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "blake3",
+ "bytes",
+ "flow-like-device-protocol",
+ "flow-like-storage",
+ "flow-like-types",
+ "fs2",
+ "futures-util",
+ "libc",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid 1.23.1",
+]
+
+[[package]]
 name = "flow-like-ordinal"
 version = "0.1.0"
 dependencies = [
@@ -9757,6 +9786,7 @@ dependencies = [
  "flow-like-catalog",
  "flow-like-device-crypto",
  "flow-like-device-protocol",
+ "flow-like-offline-writes",
  "flow-like-runtime",
  "flow-like-storage",
  "flow-like-types",

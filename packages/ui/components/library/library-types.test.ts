@@ -168,7 +168,13 @@ describe("appPairs", () => {
 	const pair = [{ id: "a" }, undefined] as unknown as Pair;
 
 	test("drops entries that are not [app, metadata] pairs", () => {
-		const rows = [pair, null, { id: "b" }, [null, {}]] as unknown as Pair[];
+		const rows = [
+			pair,
+			null,
+			{ id: "b" },
+			[null, {}],
+			[{ name: "no id" }, undefined],
+		] as unknown as Pair[];
 		expect(appPairs(rows)).toEqual([pair]);
 	});
 

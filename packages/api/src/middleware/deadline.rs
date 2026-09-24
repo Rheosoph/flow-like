@@ -272,6 +272,12 @@ const RULES: &[Rule] = &[
         "/api/v1/apps/{app_id}/board/{board_id}/logs",
         Data,
     ),
+    // Writes up to 10,000 uploaded log rows of a local run as a new Lance table.
+    rule(
+        M::POST,
+        "/api/v1/apps/{app_id}/board/{board_id}/runs/{run_id}/logs",
+        Data,
+    ),
     // Observed max 4.5 s on a small app; inline forks copy up to 64 MiB.
     rule(M::POST, "/api/v1/apps/{app_id}/fork", Data),
     rule(M::POST, "/api/v1/apps/fork/online/begin", Data),
@@ -298,6 +304,9 @@ const RULES: &[Rule] = &[
     rule(GET_HEAD, "/api/v1/audit/verify/epochs", Data),
     // Provider calls have their own 30 s timeout, which a write deadline would pre-empt.
     rule(M::POST, "/api/v1/oauth/*", Data),
+    // A replay commits one Lance version; a cut handler leaves an unknown outcome to reconcile.
+    rule(M::POST, "/api/v1/apps/{app_id}/invoke/offline/replay", Data),
+    rule(M::POST, "/api/v1/instances/project/offline/replay", Data),
     // The upstream fetch has its own 10 s timeout, which a read deadline would pre-empt.
     rule(M::GET, "/api/v1/og", Write),
     // All other observed routes finish within 3 s.
@@ -645,7 +654,26 @@ mod tests {
         ("GET", "/api/v1/execution/poll", Data, None),
         ("DELETE", "/api/v1/execution/run/{run_id}", Data, None),
         ("GET", "/api/v1/execution/run/{run_id}", Read, None),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/invoke/offline/replay",
+            Data,
+            None,
+        ),
+        (
+            "GET",
+            "/api/v1/apps/{app_id}/invoke/offline/capabilities",
+            Read,
+            None,
+        ),
+        (
+            "POST",
+            "/api/v1/instances/project/offline/replay",
+            Data,
+            None,
+        ),
         ("POST", "/api/v1/maintenance/run", Job, Some(33.359)),
+        ("POST", "/api/v1/maintenance/payments", Job, None),
         (
             "POST",
             "/api/v1/maintenance/compute-attempts/reconcile",
@@ -725,6 +753,12 @@ mod tests {
             "/api/v1/apps/{app_id}/board/{board_id}/logs",
             Data,
             Some(5.224),
+        ),
+        (
+            "POST",
+            "/api/v1/apps/{app_id}/board/{board_id}/runs/{run_id}/logs",
+            Data,
+            None,
         ),
         (
             "POST",
@@ -852,6 +886,23 @@ mod tests {
         assert!(
             unreached.is_empty(),
             "rules without a case or shadowed: {unreached:?}"
+        );
+    }
+
+    #[test]
+    fn deadline_classifies_desktop_and_instance_replay_as_data() {
+        for template in [
+            "/api/v1/apps/{app_id}/invoke/offline/replay",
+            "/api/v1/instances/project/offline/replay",
+        ] {
+            assert_eq!(classify(&Method::POST, Some(template)), Data, "{template}");
+        }
+        assert_eq!(
+            classify(
+                &Method::GET,
+                Some("/api/v1/apps/{app_id}/invoke/offline/capabilities")
+            ),
+            Read
         );
     }
 

@@ -1672,6 +1672,8 @@
 	"off": "Off",
 	"offByDefaultFlipTheSwitchToStartCompeting": "Off by default — flip the switch to start competing.",
 	"offline": "Offline",
+	"offlineAccess": "Offline access",
+	"offlineAccessNavDescription": "Keep tables available on this device and sync changes made while offline",
 	"offlineAiCloudSync": "Offline AI & Cloud Sync",
 	"offlineProjectsAreNeverListedSoNoConformityAssessmentOrPublicationReviewIsRequiredBringTheProjectOnlineToStart": "Offline projects are never listed, so no conformity assessment or publication review is required. Bring the project online to start.",
 	"offlineUsingCachedData": "Offline - Using Cached Data",

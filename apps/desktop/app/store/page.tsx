@@ -9,10 +9,12 @@ import {
 	StoreHero,
 	StoreRecommendations,
 	TextEditor,
+	exploreHref,
+	legacyAppsExploreTarget,
 	useStoreData,
 } from "@flow-like/flow-like-ui";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { MarketplaceCheckoutDialog } from "@flow-like/flow-like-ui/components/payments/checkout-dialog";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -55,8 +57,11 @@ export default function Page() {
 
 	useEffect(() => {
 		if (id) return;
-		const sort = searchParams.get("sort");
-		router.replace(`/store/explore/apps${sort ? `?sort=${sort}` : ""}`);
+		router.replace(
+			searchParams.get("sort")
+				? legacyAppsExploreTarget(searchParams)
+				: exploreHref(),
+		);
 	}, [id, searchParams, router]);
 
 	useEffect(() => {

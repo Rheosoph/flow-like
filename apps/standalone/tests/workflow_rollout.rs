@@ -1,6 +1,7 @@
 #![cfg(all(unix, feature = "runtime"))]
 
 use anyhow::{Context, Result, ensure};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flow_like_device_protocol::*;
 use flow_like_runtime::{
     app::App,
@@ -45,6 +46,15 @@ const SERVICE_TOKEN: &str = "rollout-service-access-token-32-characters";
 const VARIABLE_SECRET: &str = "private-device-variable-survives-rollout";
 const ROLLOUT_DEADLINE_SECONDS: u64 = 90;
 
+// A parallel fork briefly inherits another test's artifact lock until exec.
+// Keep fixture imports outside that window without serializing service tests.
+static PROCESS_START_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn artifact_io<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _guard = PROCESS_START_GATE.lock().unwrap();
+    operation()
+}
+
 struct Agent {
     child: Child,
     process_group: i32,
@@ -53,6 +63,7 @@ struct Agent {
 
 impl Agent {
     fn start(root: &Path) -> Result<Self> {
+        let _guard = PROCESS_START_GATE.lock().unwrap();
         let log = File::options()
             .create(true)
             .append(true)
@@ -558,8 +569,9 @@ impl Fixture {
         };
         event.save(&app, Some((version, 0, 0))).await?;
         app.save().await?;
-        let receipt =
-            project_artifacts::import_local(&self.store()?, &self.root, "project", &source)?;
+        let receipt = artifact_io(|| {
+            project_artifacts::import_local(&self.store()?, &self.root, "project", &source)
+        })?;
         let revision = receipt.descriptor.manifest_sha256;
         Ok(PlacementConfig {
             id: "api".into(),
@@ -568,6 +580,7 @@ impl Fixture {
             project_path: project_artifacts::managed_revision(&self.root, "project", &revision)?,
             revision,
             source: ProjectSource::Offline,
+            online_metadata_sha256: None,
             events: vec![EventBinding {
                 event_id: "http".into(),
                 event_version: [version, 0, 0],
@@ -672,8 +685,9 @@ impl Fixture {
         event.board_id = board.id;
         event.config.clear();
         event.save(&app, Some((version, 0, 0))).await?;
-        let receipt =
-            project_artifacts::import_local(&self.store()?, &self.root, "project", &source)?;
+        let receipt = artifact_io(|| {
+            project_artifacts::import_local(&self.store()?, &self.root, "project", &source)
+        })?;
         placement.revision = receipt.descriptor.manifest_sha256;
         placement.project_path =
             project_artifacts::managed_revision(&self.root, "project", &placement.revision)?;
@@ -911,6 +925,52 @@ async fn assert_catalog_listener(port: u16) -> Result<()> {
     Ok(())
 }
 
+async fn open_mcp_session(port: u16) -> Result<String> {
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()?
+        .post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("accept", "application/json")
+        .json(&json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize",
+            "params":{"protocolVersion":"2025-06-18", "capabilities":{},
+                "clientInfo":{"name":"standalone-lifecycle-test","version":"1"}},
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .context("MCP session header")?
+        .to_str()?
+        .to_owned();
+    let initialized: Value = response.json().await?;
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+    Ok(session)
+}
+
+async fn assert_mcp_session(port: u16, session: &str) -> Result<()> {
+    let response: Value = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()?
+        .post(format!("http://127.0.0.1:{port}/mcp"))
+        .header("accept", "application/json")
+        .header("mcp-session-id", session)
+        .header("mcp-protocol-version", "2025-06-18")
+        .json(&json!({"jsonrpc":"2.0", "id":2, "method":"tools/list"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(response["id"], 2);
+    assert_eq!(response["result"]["tools"], json!([]));
+    Ok(())
+}
+
 async fn wait_for(label: &str, mut predicate: impl FnMut() -> Result<bool>) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
@@ -976,12 +1036,14 @@ async fn two_devices_keep_project_variables_data_and_management_independent() ->
         .await?;
     // Import the exact same source snapshot on the second device. Only placement
     // settings and device-local mutable data may differ between these instances.
-    let imported = project_artifacts::import_local(
-        &second.store()?,
-        &second.root,
-        "project",
-        &first.directory.path().join("source-1"),
-    )?;
+    let imported = artifact_io(|| {
+        project_artifacts::import_local(
+            &second.store()?,
+            &second.root,
+            "project",
+            &first.directory.path().join("source-1"),
+        )
+    })?;
     assert_eq!(imported.descriptor.manifest_sha256, a.revision);
     let mut b = a.clone();
     b.project_path = project_artifacts::managed_revision(&second.root, "project", &b.revision)?;
@@ -1393,6 +1455,7 @@ struct CloudInstance {
     retired: bool,
     resources: Vec<(String, String)>,
     project_tokens: usize,
+    issued_tokens: HashMap<String, i64>,
     active_workloads_at_registration: usize,
     retired_workloads_at_registration: usize,
 }
@@ -1409,6 +1472,7 @@ struct MockCloud {
     status: std::sync::atomic::AtomicU16,
     grant_expires_at: i64,
     storage_lease_seconds: i64,
+    project_token_seconds: i64,
     base: String,
     device_id: String,
     device_key: Ed25519PublicKey,
@@ -1435,7 +1499,10 @@ impl MockCloud {
             .context("resource authorization")?
             .to_str()?;
         let token = authorization.strip_prefix("DPoP ").context("DPoP token")?;
-        let id = token.strip_prefix("project-").context("project token")?;
+        let (id, _) = token
+            .strip_prefix("project-")
+            .and_then(|token| token.split_once('.'))
+            .context("project token generation")?;
         let mut instances = self.instances.lock().unwrap();
         let instance = instances
             .get_mut(id)
@@ -1443,6 +1510,14 @@ impl MockCloud {
         ensure!(
             !instance.retired,
             "retired identity used a project resource"
+        );
+        let now = unix_time()?;
+        ensure!(
+            instance
+                .issued_tokens
+                .get(token)
+                .is_some_and(|expiry| *expiry > now),
+            "unknown or expired resource token"
         );
         let url = format!("{}{}", self.base.trim_end_matches("/api/v1"), path);
         verify_dpop(
@@ -1556,6 +1631,7 @@ impl MockCloud {
                     retired: false,
                     resources: vec![],
                     project_tokens: 0,
+                    issued_tokens: HashMap::new(),
                     active_workloads_at_registration: active_workloads,
                     retired_workloads_at_registration: retired_workloads,
                 },
@@ -1602,11 +1678,15 @@ impl MockCloud {
                 ensure!(action == "project-token", "unexpected model token request");
                 instance.project_tokens += 1;
                 let now = unix_time()?;
+                let token = format!("project-{id}.{}", instance.project_tokens);
+                instance
+                    .issued_tokens
+                    .insert(token.clone(), now + self.project_token_seconds);
                 return Ok(serde_json::to_value(InstanceTokenResponse {
-                    access_token: format!("project-{id}"),
+                    access_token: token,
                     token_type: "DPoP".into(),
-                    expires_in: 300,
-                    expires_at: now + 300,
+                    expires_in: self.project_token_seconds as u64,
+                    expires_at: now + self.project_token_seconds,
                     dpop_nonce: "online-rollout-test-nonce".into(),
                     lease_expires_at: now + 600,
                 })?);
@@ -1718,7 +1798,15 @@ async fn online_project(
     route: &str,
     documents: &mut HashMap<String, Value>,
 ) -> Result<PlacementConfig> {
-    let mut placement = fixture.project(version, route).await?;
+    let placement = fixture.project(version, route).await?;
+    approve_online_project(fixture, placement, documents).await
+}
+
+async fn approve_online_project(
+    fixture: &Fixture,
+    mut placement: PlacementConfig,
+    documents: &mut HashMap<String, Value>,
+) -> Result<PlacementConfig> {
     let state = Arc::new(FlowLikeState::new(
         FlowLikeConfig::with_default_store(FlowLikeStore::Local(Arc::new(LocalObjectStore::new(
             placement.project_path.clone(),
@@ -1727,32 +1815,99 @@ async fn online_project(
     ));
     let mut app = App::load("project".into(), state.clone()).await?;
     app.visibility = flow_like_runtime::app::AppVisibility::Private;
-    app.boards = vec!["board".into()];
-    app.events = vec!["http".into()];
-    let event = Event::load_pinned("http", &app, (version, 0, 0)).await?;
-    let board = Board::load(
-        StorePath::from("apps/project"),
-        "board",
-        state,
-        Some((version, 0, 0)),
-    )
-    .await?;
-    for (suffix, document) in [
-        ("app".into(), serde_json::to_value(app)?),
-        (
-            format!("events/http/versions/{version}/0/0"),
+    app.boards.clear();
+    app.events.clear();
+    let mut approved = BTreeMap::new();
+    for binding in &placement.events {
+        let [major, minor, patch] = binding.event_version;
+        let event = Event::load_pinned(&binding.event_id, &app, (major, minor, patch)).await?;
+        let board = Board::load(
+            StorePath::from("apps/project"),
+            &event.board_id,
+            state.clone(),
+            event.board_version,
+        )
+        .await?;
+        app.events.push(event.id.clone());
+        app.boards.push(board.id.clone());
+        approved.insert(
+            format!("events/{}/versions/{major}/{minor}/{patch}", event.id),
             serde_json::to_value(event)?,
-        ),
-        (
-            format!("boards/board/versions/{version}/0/0"),
+        );
+        let [major, minor, patch] = binding.board_version;
+        approved.insert(
+            format!("boards/{}/versions/{major}/{minor}/{patch}", board.id),
             serde_json::to_value(board)?,
-        ),
-    ] {
-        documents.insert(format!("/api/v1/instances/project/{suffix}"), document);
+        );
     }
+    approved.insert("app".to_owned(), serde_json::to_value(app)?);
+    for (suffix, document) in &approved {
+        documents.insert(
+            format!("/api/v1/instances/project/{suffix}"),
+            document.clone(),
+        );
+    }
+    let bundle =
+        serde_json::to_vec(&json!({"version":1,"project_id":"project","documents":approved}))?;
+    placement.online_metadata_sha256 = Some(artifact_sha256(&bundle));
+    let marker =
+        serde_json::to_vec(&json!({"version":1,"project_id":"project","source":"online"}))?;
+    let files = [
+        ("apps/project/online-metadata.json", bundle),
+        ("apps/project/online-source.json", marker),
+    ];
+    let manifest = ProjectArtifactManifest {
+        version: 1,
+        project_id: "project".into(),
+        source: ProjectArtifactSource::Online,
+        files: files
+            .iter()
+            .map(|(path, data)| ProjectArtifactFile {
+                path: (*path).into(),
+                size: data.len() as u64,
+                sha256: artifact_sha256(data),
+            })
+            .collect(),
+        bit_pins: vec![],
+        package_pins: vec![],
+    };
+    let store = fixture.store()?;
+    let transfer = Uuid::new_v4().to_string();
+    let receipt = artifact_io(|| {
+        project_artifacts::begin(
+            &store,
+            &fixture.root,
+            &transfer,
+            "controller",
+            &manifest.descriptor()?,
+        )?;
+        for (index, bytes) in std::iter::once((None, manifest.canonical_bytes()?)).chain(
+            files
+                .into_iter()
+                .enumerate()
+                .map(|(i, (_, bytes))| (Some(i as u32), bytes)),
+        ) {
+            for (chunk, bytes) in bytes.chunks(PROJECT_ARTIFACT_CHUNK_BYTES).enumerate() {
+                project_artifacts::chunk(
+                    &store,
+                    &fixture.root,
+                    "project",
+                    &transfer,
+                    "controller",
+                    index,
+                    (chunk * PROJECT_ARTIFACT_CHUNK_BYTES) as u64,
+                    &URL_SAFE_NO_PAD.encode(bytes),
+                )?;
+            }
+        }
+        project_artifacts::commit(&store, &fixture.root, "project", &transfer, "controller")
+    })?;
     placement.source = ProjectSource::Online;
-    placement.project_path = project_artifacts::prepare_online_cache(&fixture.root, "project")?;
-    placement.revision = format!("online-{version}");
+    placement.project_path = receipt
+        .project_path
+        .context("approved artifact path")?
+        .into();
+    placement.revision = receipt.descriptor.manifest_sha256;
     placement.resource_grant = Some(flow_like_standalone::config::ResourceGrantRef {
         grant_id: "online-project-grant".into(),
         authz_version: 1,
@@ -1772,6 +1927,15 @@ async fn online_rollout_uses_metadata_only_credentials_and_stop_fences_preflight
     let initial = online_project(&fixture, 1, "/online-first", &mut documents).await?;
     let healthy = online_project(&fixture, 2, "/online-second", &mut documents).await?;
     let cancelled = online_project(&fixture, 3, "/online-cancelled", &mut documents).await?;
+    // Identical event IDs and versions do not authorize new executable bytes.
+    // The API may change its response after the controller approved the bundle.
+    for (path, document) in &mut documents {
+        if path.contains("/events/") {
+            document["config"] = serde_json::to_value(serde_json::to_vec(
+                &json!({"path":"/unapproved-server-route","method":"POST"}),
+            )?)?;
+        }
+    }
     let registration = fixture
         .store()?
         .registration()?
@@ -1780,6 +1944,7 @@ async fn online_rollout_uses_metadata_only_credentials_and_stop_fences_preflight
         status: std::sync::atomic::AtomicU16::new(200),
         grant_expires_at: unix_time()? + 86400,
         storage_lease_seconds: 3600,
+        project_token_seconds: 300,
         base,
         device_id: registration.manifest.device_id,
         device_key: registration
@@ -1857,21 +2022,22 @@ async fn online_rollout_uses_metadata_only_credentials_and_stop_fences_preflight
     let previous_pid = fixture.store()?.get_placement("api")?.unwrap().process_id;
     let mut invalid = healthy.clone();
     invalid.events[0].event_version = [99, 0, 0];
-    let failed = controller.stage(&invalid, 2, 2).await?;
-    controller.activate(&failed).await?;
-    controller.wait_rollout(&failed, "failed").await?;
+    let request = controller.request(serde_json::from_value(json!({
+        "type":"stage_rollout", "config":invalid, "expected_revision":2,
+        "stabilization_seconds":2, "deadline_seconds":ROLLOUT_DEADLINE_SECONDS,
+    }))?)?;
+    assert_eq!(controller.transmit(&request).await?.state, "rejected");
     fixture.assert_serving("/online-second", 2).await?;
     let unchanged = fixture.store()?.get_placement("api")?.unwrap();
     assert_eq!(unchanged.config_revision, 2);
     assert_eq!(unchanged.process_id, previous_pid);
 
-    *cloud.blocked_path.lock().unwrap() =
-        Some("/api/v1/instances/project/events/http/versions/3/0/0".into());
+    *cloud.blocked_path.lock().unwrap() = Some("/api/v1/instances/project/app".into());
     let stopped = controller.stage(&cancelled, 2, 2).await?;
     controller.activate(&stopped).await?;
     tokio::time::timeout(Duration::from_secs(15), cloud.blocked_entered.notified())
         .await
-        .context("candidate metadata preflight did not block")?;
+        .context("candidate grant preflight did not block")?;
     fixture.assert_serving("/online-second", 2).await?;
     controller
         .command(ManagementCommand::Stop {
@@ -1922,15 +2088,13 @@ async fn online_rollout_uses_metadata_only_credentials_and_stop_fences_preflight
         .iter()
         .filter(|instance| instance.registration.purpose == InstancePurpose::RolloutValidation)
         .count();
-    assert_eq!(validation_count, 6);
+    assert_eq!(validation_count, 3);
     for instance in snapshots {
         assert!(instance.project_tokens > 0);
         if instance.registration.purpose == InstancePurpose::RolloutValidation {
             assert!(instance.retired);
             assert!(instance.resources.iter().all(|(method, path)| {
-                (method == "GET"
-                    && path.starts_with("/api/v1/instances/project/")
-                    && !path.contains("/storage"))
+                (method == "GET" && path == "/api/v1/instances/project/app")
                     || (method == "POST" && path.ends_with("/project-token"))
             }));
         } else {
@@ -1948,15 +2112,25 @@ async fn online_rollout_uses_metadata_only_credentials_and_stop_fences_preflight
             );
         }
     }
-    let cache_root = initial.project_path.join(".standalone-cache/api");
-    assert!(std::fs::read_dir(cache_root)?.all(|entry| {
-        entry.is_ok_and(|entry| {
-            !entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("preflight-")
-        })
-    }));
+    for candidate in [&healthy, &cancelled] {
+        let cache_root = candidate.project_path.join(".standalone-cache/api");
+        match std::fs::read_dir(cache_root) {
+            Ok(entries) => {
+                for entry in entries {
+                    assert!(
+                        !entry?
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("preflight-")
+                    );
+                }
+            }
+            // Cancellation can stop the previous revision's preflight before
+            // validation ever creates a cache for the candidate.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     let activation = controller.request(serde_json::from_value(json!({
         "type":"activate_rollout", "rollout_id":stopped,
     }))?)?;
@@ -1988,6 +2162,7 @@ async fn online_service_restarts_through_api_outage_and_denial_fences_reboot() -
         status: std::sync::atomic::AtomicU16::new(200),
         grant_expires_at: unix_time()? + 86400,
         storage_lease_seconds: 4,
+        project_token_seconds: 300,
         base,
         device_id: registration.manifest.device_id,
         device_key: registration.receipt.context("receipt")?.identity.auth_key,
@@ -2188,5 +2363,172 @@ async fn online_service_restarts_through_api_outage_and_denial_fences_reboot() -
             .map_or(true, |response| !response.status().is_success())
     );
     agent.stop().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires loopback listeners and spawning the standalone runtime binary"]
+async fn online_catalog_services_keep_workers_through_renewal_and_outage_then_drain_on_revocation()
+-> Result<()> {
+    use std::sync::atomic::Ordering;
+    for kind in ["rest", "mcp", "daemon"] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}/api/v1", listener.local_addr()?);
+        let fixture = Fixture::with_api_base(&base)?;
+        let mut documents = HashMap::new();
+        let local = fixture
+            .catalog_service(1, kind, fixture.port, false)
+            .await?;
+        let placement = approve_online_project(&fixture, local, &mut documents).await?;
+        let registration = fixture.store()?.registration()?.context("device")?;
+        let cloud = Arc::new(MockCloud {
+            status: std::sync::atomic::AtomicU16::new(200),
+            grant_expires_at: unix_time()? + 86400,
+            storage_lease_seconds: 4,
+            // Resource tokens must last longer than the broker's 60-second safety
+            // margin. This brings proactive rotation into the process test window.
+            project_token_seconds: 65,
+            base,
+            device_id: registration.manifest.device_id,
+            device_key: registration.receipt.context("receipt")?.identity.auth_key,
+            documents,
+            instances: Default::default(),
+            blocked_path: Default::default(),
+            blocked_entered: Default::default(),
+            release_blocked: Default::default(),
+        });
+        let router = axum::Router::new()
+            .fallback(mock_cloud_request)
+            .with_state(cloud.clone());
+        let _server = MockCloudServer(tokio::spawn(
+            async move { axum::serve(listener, router).await },
+        ));
+        let mut controller = fixture.controller().await?;
+        controller
+            .command(ManagementCommand::Apply {
+                config: serde_json::to_value(&placement)?,
+                expected_revision: 0,
+                start: true,
+            })
+            .await?;
+        let mut agent = Agent::start(&fixture.root)?;
+        fixture
+            .wait_ready(1)
+            .await
+            .with_context(|| format!("online {kind} readiness"))?;
+        let initial = fixture
+            .store()?
+            .get_placement("api")?
+            .context("running service")?;
+        let process_id = initial.replicas[0].process_id.context("running worker")?;
+        let mcp_session = if kind == "mcp" {
+            Some(open_mcp_session(fixture.port).await?)
+        } else {
+            None
+        };
+        let live = || {
+            cloud.snapshots().into_iter().find(|instance| {
+                instance.registration.purpose == InstancePurpose::Workload && !instance.retired
+            })
+        };
+        wait_for("project token and storage credential rotation", || {
+            Ok(live().is_some_and(|instance| {
+                instance.project_tokens >= 3
+                    && instance
+                        .resources
+                        .iter()
+                        .filter(|(_, path)| path.ends_with("/project/storage"))
+                        .count()
+                        >= 3
+            }))
+        })
+        .await
+        .with_context(|| format!("{kind} refresh without restart"))?;
+        let before_outage = live().context("resource identity")?;
+        assert_eq!(
+            cloud
+                .snapshots()
+                .iter()
+                .filter(|i| i.registration.purpose == InstancePurpose::Workload)
+                .count(),
+            1
+        );
+        cloud.status.store(503, Ordering::SeqCst);
+        // Exceed the real provider credential TTL while local service stays live.
+        tokio::time::sleep(Duration::from_secs(7)).await;
+        let during = fixture
+            .store()?
+            .get_placement("api")?
+            .context("outage service")?;
+        assert_eq!(
+            during.replicas[0].process_id,
+            Some(process_id),
+            "{kind} restarted on transient outage"
+        );
+        assert_eq!(
+            during.ready_replicas, 1,
+            "{kind} lost local service readiness"
+        );
+        if kind != "daemon" {
+            assert_catalog_listener(fixture.port).await?;
+        }
+
+        if let Some(session) = &mcp_session {
+            assert_mcp_session(fixture.port, session).await?;
+        }
+        cloud.status.store(200, Ordering::SeqCst);
+        wait_for("resource access recovered on the original worker", || {
+            Ok(live().is_some_and(|instance| {
+                instance.project_tokens > before_outage.project_tokens
+                    && instance
+                        .resources
+                        .iter()
+                        .filter(|(_, path)| path.ends_with("/project/storage"))
+                        .count()
+                        > before_outage
+                            .resources
+                            .iter()
+                            .filter(|(_, path)| path.ends_with("/project/storage"))
+                            .count()
+            }))
+        })
+        .await
+        .with_context(|| format!("{kind} recovery"))?;
+        assert_eq!(
+            fixture.store()?.get_placement("api")?.unwrap().replicas[0].process_id,
+            Some(process_id)
+        );
+        assert_eq!(
+            live().unwrap().registration.instance_id,
+            before_outage.registration.instance_id
+        );
+        if let Some(session) = &mcp_session {
+            assert_mcp_session(fixture.port, session).await?;
+        }
+
+        cloud.status.store(403, Ordering::SeqCst);
+        wait_for(
+            "confirmed revocation drains long-running catalog service",
+            || {
+                Ok(fixture
+                    .store()?
+                    .get_placement("api")?
+                    .is_some_and(|record| record.ready_replicas == 0))
+            },
+        )
+        .await
+        .with_context(|| format!("{kind} revocation"))?;
+        if kind != "daemon" {
+            wait_for("revoked listener closed", || {
+                Ok(std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, fixture.port)),
+                    Duration::from_millis(100),
+                )
+                .is_err())
+            })
+            .await?;
+        }
+        agent.stop().await?;
+    }
     Ok(())
 }

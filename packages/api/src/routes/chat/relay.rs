@@ -140,16 +140,16 @@ fn bound_hosted_request(
         || String::from_utf8_lossy(&serialized).contains("image")
         || String::from_utf8_lossy(&serialized).contains("audio")
         || String::from_utf8_lossy(&serialized).contains("file");
+    // Serialized bytes over-count tokens, so they cap the reservation instead of rejecting
+    // an output budget that fits; the provider enforces the model's real context window.
+    let input_ceiling = rate.context_tokens.saturating_sub(output);
     let input = if hidden_input {
-        rate.context_tokens.saturating_sub(output)
+        input_ceiling
     } else {
-        (serialized.len() as i64).saturating_add(1024)
+        (serialized.len() as i64)
+            .saturating_add(1024)
+            .min(input_ceiling)
     };
-    if input.saturating_add(output) > rate.context_tokens {
-        return Err(ApiError::bad_request(
-            "Request exceeds this hosted model's reserved context capacity. Reduce the input or output token limit.",
-        ));
-    }
     Ok((
         input.saturating_add(output),
         rate.provider_cost(input, output),
@@ -1455,6 +1455,29 @@ mod tests {
         assert!(body.get("max_output_tokens").is_none());
         assert_eq!(body["max_completion_tokens"], 512);
         assert_eq!(body["provider"]["max_price"]["prompt"], 1.0);
+    }
+
+    #[test]
+    fn explicit_output_budget_is_forwarded_within_the_context_window() {
+        let rate = test_rate();
+        let prompt = "Describe the screen and plan the next step. ".repeat(600);
+        for (requested, forwarded) in [(20_000, 20_000), (100_000, rate.context_tokens - 1)] {
+            let mut body = serde_json::json!({
+                "model": "selected",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": requested,
+            });
+            let (tokens, cost) = bound_hosted_request(
+                &mut body,
+                ModelApiSurface::ChatCompletions,
+                &rate,
+                &HostedProvider::OpenRouter,
+            )
+            .unwrap();
+            assert_eq!(body["max_completion_tokens"], forwarded);
+            assert!(body.get("max_tokens").is_none());
+            assert!(tokens <= rate.context_tokens && cost > 0);
+        }
     }
 
     #[test]

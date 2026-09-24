@@ -45,9 +45,11 @@ import {
 	SelectValue,
 } from "../../ui/select";
 import { Switch } from "../../ui/switch";
+import { OntologySchemaGraph, useRevealTarget } from "./ontology-schema-graph";
 import {
 	AddRelationshipForm,
 	type RelationshipEndpoint,
+	type RelationshipPrefill,
 	type WizardEdge,
 	apiName,
 	buildEdge,
@@ -227,10 +229,10 @@ export function OntologySetupDialog({
 		new Set(),
 	);
 	const [addingEdge, setAddingEdge] = useState(false);
-	const [edgePrefill, setEdgePrefill] = useState<{
-		sourceId: string;
-		dstColumn: string;
-	} | null>(null);
+	const [edgePrefill, setEdgePrefill] = useState<RelationshipPrefill | null>(
+		null,
+	);
+	const { reveal, domId, revealedKey } = useRevealTarget();
 	const [loadingSchemas, setLoadingSchemas] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -438,6 +440,32 @@ export function OntologySetupDialog({
 		setAddingEdge(false);
 		setEdgePrefill(null);
 	}, []);
+
+	const openAddRelationship = useCallback(
+		(prefill: RelationshipPrefill | null) => {
+			setEdgePrefill(prefill);
+			setAddingEdge(true);
+			reveal("add-relationship");
+		},
+		[reveal],
+	);
+
+	const linkFromDiagram = useCallback(
+		(source: NodeLabelMapping, target: NodeLabelMapping) =>
+			openAddRelationship({
+				sourceId: source.id ?? "",
+				targetId: target.id ?? "",
+			}),
+		[openAddRelationship],
+	);
+
+	const revealEdge = useCallback(
+		(index: number) => {
+			const edge = edges[index];
+			if (edge) reveal(`edge-${edge.origin_key}`);
+		},
+		[edges, reveal],
+	);
 
 	const duplicateLabels = useMemo(() => {
 		const counts = new Map<string, number>();
@@ -946,10 +974,7 @@ export function OntologySetupDialog({
 										<Button
 											size="sm"
 											variant="outline"
-											onClick={() => {
-												setEdgePrefill(null);
-												setAddingEdge(true);
-											}}
+											onClick={() => openAddRelationship(null)}
 											disabled={objects.length === 0}
 										>
 											<Plus className="h-4 w-4" />
@@ -958,17 +983,35 @@ export function OntologySetupDialog({
 									)}
 								</div>
 
-								{addingEdge && (
-									<AddRelationshipForm
-										endpoints={endpoints}
-										takenLabels={takenLabels}
-										prefill={edgePrefill}
-										onAdd={addEdge}
-										onCancel={() => {
-											setAddingEdge(false);
-											setEdgePrefill(null);
-										}}
+								{objects.length > 0 && (
+									<OntologySchemaGraph
+										className="h-72"
+										title={name.trim() || undefined}
+										nodes={objects}
+										edges={edges}
+										onSelectRelationship={revealEdge}
+										onConnect={linkFromDiagram}
 									/>
+								)}
+
+								{addingEdge && (
+									<div id={domId("add-relationship")}>
+										<AddRelationshipForm
+											key={
+												edgePrefill
+													? `${edgePrefill.sourceId}>${edgePrefill.targetId ?? ""}>${edgePrefill.dstColumn ?? ""}`
+													: "blank"
+											}
+											endpoints={endpoints}
+											takenLabels={takenLabels}
+											prefill={edgePrefill}
+											onAdd={addEdge}
+											onCancel={() => {
+												setAddingEdge(false);
+												setEdgePrefill(null);
+											}}
+										/>
+									</div>
 								)}
 
 								{edges.length === 0 && !addingEdge && (
@@ -992,6 +1035,8 @@ export function OntologySetupDialog({
 									<EdgeReviewCard
 										key={edge.origin_key}
 										edge={edge}
+										domId={domId(`edge-${edge.origin_key}`)}
+										highlighted={revealedKey === `edge-${edge.origin_key}`}
 										issue={edgeLabelIssue(edge)}
 										onEdgeChange={updateEdge}
 										onReverse={reverseEdge}
@@ -1017,13 +1062,12 @@ export function OntologySetupDialog({
 													size="sm"
 													variant="outline"
 													className="h-7 font-mono text-[11px]"
-													onClick={() => {
-														setEdgePrefill({
+													onClick={() =>
+														openAddRelationship({
 															sourceId: object.id ?? "",
 															dstColumn: column,
-														});
-														setAddingEdge(true);
-													}}
+														})
+													}
 												>
 													<Plus className="h-3 w-3" />
 													{`${object.table}.${column}`}
@@ -1178,6 +1222,8 @@ export function OntologySetupDialog({
 
 interface EdgeReviewCardProps {
 	edge: WizardEdge;
+	domId?: string;
+	highlighted?: boolean;
 	issue?: "invalid" | "duplicate";
 	onEdgeChange: (originKey: string, patch: Partial<EdgeLabelMapping>) => void;
 	onReverse: (originKey: string) => void;
@@ -1186,6 +1232,8 @@ interface EdgeReviewCardProps {
 
 function EdgeReviewCard({
 	edge,
+	domId,
+	highlighted,
 	issue,
 	onEdgeChange,
 	onReverse,
@@ -1194,7 +1242,12 @@ function EdgeReviewCard({
 	const { t } = useTranslation("settings");
 	const containmentId = `edge-containment-${edge.origin_key}`;
 	return (
-		<div className="space-y-3 rounded-xl border p-4">
+		<div
+			id={domId}
+			className={`space-y-3 rounded-xl border p-4 transition-shadow duration-300${
+				highlighted ? " ring-2 ring-primary/60" : ""
+			}`}
+		>
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
 					<Badge variant="secondary">{edge.src_label}</Badge>

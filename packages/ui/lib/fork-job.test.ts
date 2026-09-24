@@ -88,7 +88,11 @@ describe("awaitForkJob", () => {
 			awaitForkJob(
 				job(),
 				async () => {
-					throw new ApiResponseError({ status: 404, message: "not found" });
+					throw new ApiResponseError({
+						status: 404,
+						code: "NOT_FOUND",
+						message: "not found",
+					});
 				},
 				{ sleep: noSleep },
 			),

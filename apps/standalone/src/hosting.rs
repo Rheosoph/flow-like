@@ -946,6 +946,7 @@ mod tests {
             deployment_id: "deployment".into(),
             revision: "one".into(),
             source: ProjectSource::Offline,
+            online_metadata_sha256: None,
             project_path: root.into(),
             events: vec![EventBinding {
                 event_id: "http".into(),

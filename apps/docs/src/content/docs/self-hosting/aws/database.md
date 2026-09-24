@@ -118,7 +118,7 @@ permission. See the [AWS DSQL KMS policy example](https://docs.aws.amazon.com/aw
 Keep `dsql:DbConnectAdmin` off the runtime role. The `admin` database role
 owns `public`; the Lambdas need only the grants below.
 
-## One-time grant
+## Runtime grants
 
 The migration job performs this step itself, idempotently, on every run that
 has `DSQL_RUNTIME_ROLE_ARNS` set: a comma-separated list of every IAM role that
@@ -127,25 +127,33 @@ API Lambda's role and the file tracker's when the two differ. One run creates
 the database role, maps each listed ARN with `AWS IAM GRANT`, then reconciles
 the grants once. Without the list - a development cluster that has no runtime
 role yet - the job applies the schema and logs a warning instead; when the
-role already exists it still reconciles the grants. For reference, or to run
-it by hand as `admin`:
+role already exists it still reconciles the grants. The role mapping uses:
 
 ```sql
 CREATE ROLE flow_like_api WITH LOGIN;
 AWS IAM GRANT flow_like_api TO 'arn:aws:iam::<account>:role/<api-role>';
 AWS IAM GRANT flow_like_api TO 'arn:aws:iam::<account>:role/<file-tracker-role>';
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO flow_like_api;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO flow_like_api;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO flow_like_api;
--- plus, for every table except the audit evidence tables:
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public."<table>" TO flow_like_api;
 ```
 
-The job grants table by table, never `ON ALL TABLES`, so the audit evidence
-tables stay out of the runtime role's grant. It probes `has_table_privilege`
-first and emits only what is missing: a rerun on an up-to-date cluster changes
-nothing. Every `GRANT` and `REVOKE` on DSQL is a catalog change, and a warm
-API session sees one `OC001` on its next statement after each one.
+Run the migration job to reconcile table and sequence access. It grants CRUD
+access to application tables individually and applies the separate audit
+boundary below. Tables whose names start with `_prisma`, and
+`_flow_migration_lock`, are withheld from the runtime role. The job
+revokes existing runtime grants on those metadata tables and verifies that
+the runtime role no longer has access.
+
+Before applying pending migrations, the job removes the runtime role's old
+default table grants, both globally and in `public`. A schema-specific revoke
+cannot remove a global default grant; see
+[PostgreSQL's default privilege rules](https://www.postgresql.org/docs/16/sql-alterdefaultprivileges.html).
+New application tables receive access during grant reconciliation after the
+migrations finish. If a run stops early, rerun it to complete those grants.
+Sequence grants remain available.
+
+The job probes privileges before changing them, so a rerun on an up-to-date
+cluster emits no grant or revoke. Every `GRANT` and `REVOKE` on DSQL is a
+catalog change, and a warm API session sees one `OC001` on its next statement
+after each one.
 
 The role inherits `USAGE` on `public` through `PUBLIC`. DSQL rejects
 `GRANT USAGE ON SCHEMA public` because `public` is a system schema. The
@@ -166,11 +174,9 @@ in `DSQL_RUNTIME_ROLE_ARNS`, because that identity could log in as either
 role. The worker then runs with `DSQL_USER=flow_like_audit_worker`.
 
 Once that role exists, every migration run applies the audit privilege
-boundary, with or without a role ARN. Admin's default privileges give
-`flow_like_api` full access to every table a migration creates, so the job
-removes it again at the end of each run. Like the runtime grant this is
-drift-only: the worker's grants are reconciled first, then the API's, and a
-run that finds the catalog already correct emits no statement.
+boundary, with or without a role ARN. The worker's grants are reconciled
+first, then the API's. The job also removes excess grants left by older
+deployments. A run that finds the catalog already correct emits no statement.
 
 | Role | Audit tables |
 | --- | --- |

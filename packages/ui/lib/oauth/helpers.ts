@@ -128,11 +128,11 @@ export function extractOAuthRequirementsFromBoard(board: IBoard): {
 		}
 	};
 
-	for (const node of Object.values(board.nodes)) {
+	for (const node of Object.values(board.nodes ?? {})) {
 		processNode(node);
 	}
-	for (const layer of Object.values(board.layers)) {
-		for (const node of Object.values(layer.nodes)) {
+	for (const layer of Object.values(board.layers ?? {})) {
+		for (const node of Object.values(layer?.nodes ?? {})) {
 			processNode(node);
 		}
 	}
@@ -232,11 +232,11 @@ export function extractOAuthProvidersFromBoard(
 		}
 	};
 
-	for (const node of Object.values(board.nodes)) {
+	for (const node of Object.values(board.nodes ?? {})) {
 		processNode(node);
 	}
-	for (const layer of Object.values(board.layers)) {
-		for (const node of Object.values(layer.nodes)) {
+	for (const layer of Object.values(board.layers ?? {})) {
+		for (const node of Object.values(layer?.nodes ?? {})) {
 			processNode(node);
 		}
 	}

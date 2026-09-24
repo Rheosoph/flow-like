@@ -14,11 +14,12 @@ CREATE TABLE "MutationLock" (id BIGINT PRIMARY KEY, "updatedAt" TIMESTAMPTZ NOT 
 CREATE TABLE "User" (id TEXT PRIMARY KEY, permission BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE "App" (id TEXT PRIMARY KEY, visibility TEXT NOT NULL, "ownerRoleId" TEXT NOT NULL);
 CREATE TABLE "Membership" (id TEXT PRIMARY KEY,"userId" TEXT NOT NULL,"appId" TEXT NOT NULL,"roleId" TEXT NOT NULL,"joinedVia" TEXT,"createdAt" TIMESTAMPTZ NOT NULL,"updatedAt" TIMESTAMPTZ NOT NULL,UNIQUE("userId","appId"));
-CREATE TABLE "WasmPackage" (id TEXT PRIMARY KEY);
+CREATE TABLE "WasmPackage" (id TEXT PRIMARY KEY, visibility TEXT NOT NULL DEFAULT 'PUBLIC', status TEXT NOT NULL DEFAULT 'ACTIVE', price BIGINT NOT NULL DEFAULT 0);
+CREATE TABLE "WasmPackageUser" (id TEXT PRIMARY KEY,"packageId" TEXT NOT NULL,"userId" TEXT NOT NULL,permission BIGINT NOT NULL,"grantedBy" TEXT,"grantedAt" TIMESTAMPTZ NOT NULL,UNIQUE("packageId","userId"));
 CREATE TABLE "AppDiscount" (id TEXT PRIMARY KEY);
 CREATE TABLE "JoinQueue" (id TEXT PRIMARY KEY);
 CREATE TABLE "AppPurchase" (id TEXT PRIMARY KEY,"userId" TEXT REFERENCES "User"(id) ON DELETE CASCADE,"appId" TEXT REFERENCES "App"(id) ON DELETE CASCADE,"discountId" TEXT REFERENCES "AppDiscount"(id) ON DELETE SET NULL,"stripeSessionId" TEXT NOT NULL,"stripePaymentIntentId" TEXT,"pricePaid" BIGINT,"originalPrice" BIGINT,"discountAmount" BIGINT,currency TEXT,status TEXT,"completedAt" TIMESTAMPTZ,"refundedAt" TIMESTAMPTZ,"refundReason" TEXT,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ);
-CREATE TABLE "WasmPackagePurchase" (id TEXT PRIMARY KEY,"userId" TEXT REFERENCES "User"(id) ON DELETE CASCADE,"packageId" TEXT REFERENCES "WasmPackage"(id) ON DELETE CASCADE,"stripeSessionId" TEXT NOT NULL);
+CREATE TABLE "WasmPackagePurchase" (id TEXT PRIMARY KEY,"userId" TEXT REFERENCES "User"(id) ON DELETE CASCADE,"packageId" TEXT REFERENCES "WasmPackage"(id) ON DELETE CASCADE,"stripeSessionId" TEXT NOT NULL,"stripePaymentIntentId" TEXT,"pricePaid" BIGINT,"originalPrice" BIGINT,"discountAmount" BIGINT,currency TEXT,status TEXT,"completedAt" TIMESTAMPTZ,"refundedAt" TIMESTAMPTZ,"refundReason" TEXT,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ);
 "#).await.expect("database must be empty");
     db.execute_unprepared(include_str!(
         "../../prisma/migrations/20260920120000_payments_foundations/migration.sql"
@@ -51,7 +52,8 @@ async fn seed(
     PaymentIntent,
 ) {
     let offer = Offer {
-        app_id: app.into(),
+        kind: ItemKind::App,
+        item_id: app.into(),
         buyer: buyer.into(),
         buyer_email: None,
         payee: "seller".into(),
@@ -102,6 +104,55 @@ async fn seed(
     (
         load_order(db, &order_id).await.unwrap(),
         payment_attempt::Entity::find_by_id(&attempt_id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap(),
+        charge,
+        intent,
+    )
+}
+
+/// An app sale fixture rewritten into a package sale by the package's owner.
+async fn seed_package(
+    db: &DatabaseConnection,
+    label: &str,
+    buyer: &str,
+    package: &str,
+) -> (
+    payment_order::Model,
+    payment_attempt::Model,
+    Charge,
+    PaymentIntent,
+) {
+    let (order, attempt, charge, intent) =
+        seed(db, label, buyer, &format!("app_for_{label}"), false).await;
+    let mut offer: Offer = serde_json::from_value(order.snapshot).unwrap();
+    offer.kind = ItemKind::Package;
+    offer.item_id = package.into();
+    offer.role_id = String::new();
+    let snapshot = serde_json::to_value(offer).unwrap();
+    db.execute_raw(sql(r#"INSERT INTO "WasmPackage" (id,visibility,status,price) VALUES ($1,'PUBLIC','ACTIVE',1000) ON CONFLICT DO NOTHING"#,vec![package.into()])).await.unwrap();
+    db.execute_raw(sql(r#"INSERT INTO "WasmPackageUser" (id,"packageId","userId",permission,"grantedAt") VALUES ($1,$2,'seller',1,now()) ON CONFLICT DO NOTHING"#,vec![format!("owner_{package}").into(),package.into()])).await.unwrap();
+    db.execute_raw(sql(
+        r#"UPDATE "PaymentOrder" SET kind='PACKAGE',"itemId"=$2,snapshot=$3 WHERE id=$1"#,
+        vec![
+            order.id.clone().into(),
+            package.into(),
+            snapshot.clone().into(),
+        ],
+    ))
+    .await
+    .unwrap();
+    db.execute_raw(sql(
+        r#"UPDATE "PaymentAttempt" SET "appId"=NULL,"packageId"=$2,snapshot=$3 WHERE id=$1"#,
+        vec![attempt.id.clone().into(), package.into(), snapshot.into()],
+    ))
+    .await
+    .unwrap();
+    (
+        load_order(db, &order.id).await.unwrap(),
+        payment_attempt::Entity::find_by_id(&attempt.id)
             .one(db)
             .await
             .unwrap()
@@ -751,4 +802,55 @@ async fn settlement_refund_and_access_invariants_hold_in_real_transactions() {
     assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "AccessGrant" WHERE "sourceId"='order_platform-disputed' AND status='REVOKED'"#).await, 1);
     assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "PaymentAdjustment" WHERE "attemptId"='attempt_platform-disputed' AND purpose IN ('SELLER_RECOVERY','SELLER_RESTORE','FEE_REFUND')"#).await, 0);
     assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "PaymentAttempt" WHERE id='attempt_platform-disputed' AND snapshot->'dispute'->>'status'='lost' AND snapshot->>'platform_owned'='true'"#).await, 1);
+
+    let package_sale = seed_package(&db, "package-sale", "package-buyer", "pkg").await;
+    let (one, two) = tokio::join!(deliver(&db, &package_sale), deliver(&db, &package_sale));
+    one.unwrap();
+    two.unwrap();
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "WasmPackageUser" WHERE "userId"='package-buyer' AND "packageId"='pkg' AND permission=8 AND "grantedBy"='payment:order_package-sale'"#).await, 1);
+    assert_eq!(
+        count(
+            &db,
+            r#"SELECT COUNT(*) FROM "Membership" WHERE "userId"='package-buyer'"#
+        )
+        .await,
+        0
+    );
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "AccessGrant" WHERE "sourceId"='order_package-sale' AND "itemKind"='PACKAGE' AND status='ACTIVE'"#).await, 1);
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "WasmPackagePurchase" WHERE id='order_package-sale' AND "paymentOrderId"='order_package-sale' AND status='COMPLETED' AND "pricePaid"=1000"#).await, 1);
+    assert_eq!(
+        count(
+            &db,
+            r#"SELECT COUNT(*) FROM "AppPurchase" WHERE id='order_package-sale'"#
+        )
+        .await,
+        0
+    );
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "PaymentEntitlement" WHERE "userId"='package-buyer' AND "itemKind"='PACKAGE' AND "itemId"='pkg'"#).await, 1);
+
+    observe(
+        &db,
+        &package_sale.1.id,
+        "re_package-sale",
+        1000,
+        "SUCCEEDED",
+    )
+    .await;
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "WasmPackageUser" WHERE "userId"='package-buyer' AND "packageId"='pkg'"#).await, 0);
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "WasmPackageUser" WHERE "userId"='seller' AND "packageId"='pkg' AND permission=1"#).await, 1);
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "WasmPackagePurchase" WHERE id='order_package-sale' AND status='REFUNDED'"#).await, 1);
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "PaymentOutbox" WHERE effect='package_access_changed' AND "sourceId"='pkg' AND payload->>'userId'='package-buyer'"#).await, 1);
+
+    let owned = seed_package(&db, "package-owned", "package-holder", "pkg-owned").await;
+    db.execute_unprepared(r#"INSERT INTO "WasmPackageUser" (id,"packageId","userId",permission,"grantedAt") VALUES ('holder','pkg-owned','package-holder',4,now())"#).await.unwrap();
+    deliver(&db, &owned).await.unwrap();
+    assert_eq!(count(&db, r#"SELECT COUNT(*) FROM "PaymentAttempt" WHERE id='attempt_package-owned' AND orphaned=true"#).await, 1);
+    assert_eq!(
+        count(
+            &db,
+            r#"SELECT COUNT(*) FROM "WasmPackagePurchase" WHERE id='order_package-owned'"#
+        )
+        .await,
+        0
+    );
 }

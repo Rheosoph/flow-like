@@ -22,6 +22,7 @@ mod local_page_actions;
 mod logging;
 mod profile;
 mod run_index;
+mod run_reports;
 mod settings;
 mod state;
 #[cfg(desktop)]
@@ -29,6 +30,30 @@ mod tray;
 pub mod utils;
 mod widget_grants;
 mod widget_protocol;
+
+#[tauri::command]
+fn execution_open_auth_session(webview: tauri::Webview) -> Result<String, String> {
+    execution_credentials::open_session(webview.window().label(), webview.label())
+}
+
+#[tauri::command]
+fn execution_set_auth(
+    webview: tauri::Webview,
+    hub: String,
+    subject: Option<String>,
+    token: Option<String>,
+    session_id: String,
+    sequence: u64,
+) -> Result<(), String> {
+    execution_credentials::update_session(
+        webview.label(),
+        hub,
+        subject,
+        token,
+        session_id,
+        sequence,
+    )
+}
 
 // Stub for tray_update_state on non-desktop platforms
 #[cfg(not(desktop))]
@@ -44,7 +69,7 @@ use flow_like::{
         lancedb,
     },
     state::{FlowLikeConfig, FlowLikeState},
-    utils::http::HTTPClient,
+    utils::http::{HTTPClient, Refetch},
 };
 use flow_like_catalog::{get_catalog, initialize as initialize_catalog};
 use flow_like_types::{sync::Mutex, tokio::time::interval};
@@ -487,6 +512,7 @@ pub fn run() {
     config.register_run_index(Arc::new(run_index::SqliteRunIndex::open(
         logs_dir.join("runs.db"),
     )));
+    let run_report_queue = run_reports::RunReportQueue::open(logs_dir.join("runs.db"));
 
     config.register_temporary_store(build_store(temporary_dir.clone()));
 
@@ -576,7 +602,17 @@ pub fn run() {
     let settings_state_for_sink = settings_state.clone();
     let shared_wasm_engine =
         state::TauriWasmEngineState::create_shared().expect("Failed to create shared WasmEngine");
-    let mut builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default()
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                execution_credentials::revoke_webview(webview.label());
+            }
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                execution_credentials::revoke_window(window.label());
+            }
+        });
 
     // Tauri requires this plugin to be registered first so a secondary process exits before any
     // other plugin or application setup hook runs.
@@ -594,6 +630,7 @@ pub fn run() {
         .manage(state::TauriRegistryState(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
+        .manage(run_report_queue)
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -663,6 +700,8 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 functions::telemetry::track(&telemetry_handle, "app_started", None).await;
             });
+
+            run_reports::spawn_drain(app.app_handle().clone());
 
             // Start the WasmEngine epoch ticker inside the async runtime
             if let Some(wasm_state) = app.try_state::<state::TauriWasmEngineState>() {
@@ -933,8 +972,7 @@ pub fn run() {
                 let client = http_client.client();
 
                 println!("Refetch Handler Started");
-                while let Some(event) = receiver.recv().await {
-                    let request = event;
+                while let Some(Refetch { request, accepts }) = receiver.recv().await {
                     let request_hash = http_client.quick_hash(&request);
                     let response = match client.execute(request).await {
                         Ok(response) => response,
@@ -962,6 +1000,13 @@ pub fn run() {
                             continue;
                         }
                     };
+
+                    if !accepts(&value) {
+                        tracing::warn!(
+                            "Skipping refetch cache update, response no longer matches the cached type"
+                        );
+                        continue;
+                    }
 
                     match http_client.put(&request_hash, &value) {
                         Ok(result) => result,
@@ -1341,7 +1386,8 @@ pub fn run() {
             functions::registry::registry_load_local,
             functions::registry::registry_init,
             functions::registry::registry_set_auth_token,
-            execution_credentials::execution_set_auth,
+            execution_open_auth_session,
+            execution_set_auth,
             functions::registry::registry_describe_widget_policy,
             functions::registry::registry_mint_widget_grant,
             functions::registry::registry_revoke_widget_grants,

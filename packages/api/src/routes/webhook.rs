@@ -345,9 +345,12 @@ async fn settle_legacy_purchase(
         let scope = scope.clone();
         Box::pin(async move {
             crate::db::coordination::coordinate(txn, "legacy-purchase", &[&kind, &user_id, &item_id]).await?;
-            if kind == "app_purchase" {
-                crate::payments::marketplace::coordinate_entitlement(txn, &user_id, &item_id).await?;
-            }
+            let entitlement_kind = if kind == "app_purchase" {
+                crate::payments::marketplace::ItemKind::App
+            } else {
+                crate::payments::marketplace::ItemKind::Package
+            };
+            crate::payments::marketplace::coordinate_entitlement(txn, &user_id, entitlement_kind, &item_id).await?;
             let item_kind = if kind == "app_purchase" { "APP" } else { "PACKAGE" };
             let blocked = payment_entitlement::Entity::find()
                 .filter(payment_entitlement::Column::UserId.eq(&user_id))
@@ -419,6 +422,9 @@ async fn settle_legacy_purchase(
     }).await?;
     state.invalidate_permission(&user_id, &item_id);
     state.invalidate_wasm_permission(&user_id, &item_id);
+    if kind == "wasm_purchase" {
+        crate::package_license::refresh_package_access(state, &user_id, &item_id).await;
+    }
     Ok(())
 }
 

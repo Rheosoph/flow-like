@@ -10,6 +10,11 @@ import {
 	prepareProjectArtifact,
 } from "./artifacts";
 
+import {
+	type ApprovedOnlineMetadata,
+	prepareOnlineMetadata,
+} from "./online-metadata";
+
 const MAX_FILE = 64 * 1024 * 1024;
 const MAX_TOTAL = 256 * 1024 * 1024;
 function check(value: unknown, message: string): asserts value {
@@ -151,8 +156,13 @@ export async function prepareOnlineDependencies(
 	backend: IBackendState,
 	profile: IProfile,
 	signal?: AbortSignal,
+	approved?: ApprovedOnlineMetadata,
 ) {
 	identifier(app.id);
+	const metadata =
+		approved ?? (await prepareOnlineMetadata(app.id, backend, profile, signal));
+	check(metadata.app.id === app.id, "Approved project identity differs.");
+	app = metadata.app;
 	check(
 		app.bits.length <= 256 && Object.keys(app.packages ?? {}).length <= 64,
 		"Too many project dependencies.",
@@ -350,8 +360,10 @@ export async function prepareOnlineDependencies(
 		path,
 		file,
 	}));
+	inputs.push(metadata.file);
 	return {
 		assets,
+		online_metadata_sha256: metadata.sha256,
 		artifact: await prepareProjectArtifact(
 			app.id,
 			inputs,

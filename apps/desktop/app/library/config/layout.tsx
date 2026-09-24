@@ -185,6 +185,11 @@ export default function Id({
 		[t],
 	);
 
+	const hostCapabilities = useMemo(
+		() => (backend.offlineWritesState ? new Set(["offlineWrites"]) : undefined),
+		[backend.offlineWritesState],
+	);
+
 	// Nav items visible for this app's visibility, paywall and role — shared by
 	// the desktop sidebar and the mobile bottom-sheet switcher (no double
 	// filtering). Items behind a gate stay in the list carrying a `lock`.
@@ -196,6 +201,7 @@ export default function Id({
 				isPaid: app.data?.price != null && app.data.price > 0,
 				can: permissions.can,
 				permissionLockReason,
+				hostCapabilities,
 			}),
 		[
 			visibility,
@@ -204,6 +210,7 @@ export default function Id({
 			t,
 			permissions.can,
 			permissionLockReason,
+			hostCapabilities,
 		],
 	);
 

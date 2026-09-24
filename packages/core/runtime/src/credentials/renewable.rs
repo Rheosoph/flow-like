@@ -27,6 +27,11 @@ pub trait SharedCredentialRefresh: Send + Sync {
     }
 }
 
+/// Host decoration of content stores (desktop offline file buffering).
+pub trait ContentStoreDecorator: Send + Sync {
+    fn decorate(&self, store: FlowLikeStore) -> Result<FlowLikeStore>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Purpose {
     Meta,
@@ -65,6 +70,7 @@ pub struct RenewableSharedCredentials {
     refreshing: tokio::sync::Mutex<()>,
     scope_id: String,
     this: Weak<Self>,
+    content_decorator: std::sync::OnceLock<Arc<dyn ContentStoreDecorator>>,
 }
 impl fmt::Debug for RenewableSharedCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -268,6 +274,7 @@ impl RenewableSharedCredentials {
             refreshing: tokio::sync::Mutex::new(()),
             scope_id: flow_like_types::create_id(),
             this: this.clone(),
+            content_decorator: std::sync::OnceLock::new(),
         });
         let weak = Arc::downgrade(&value);
         tokio::spawn(async move {
@@ -483,7 +490,21 @@ impl RenewableSharedCredentials {
         .await
     }
 
+    /// First installation wins; returns false when one is already installed.
+    pub fn install_content_decorator(&self, decorator: Arc<dyn ContentStoreDecorator>) -> bool {
+        self.content_decorator.set(decorator).is_ok()
+    }
+
     pub async fn to_store_type(&self, kind: StoreType) -> Result<FlowLikeStore> {
+        let store = self.to_store_type_undecorated(kind).await?;
+        match self.content_decorator.get() {
+            Some(decorator) if kind == StoreType::Content => decorator.decorate(store),
+            _ => Ok(store),
+        }
+    }
+
+    /// Bypasses the content decorator; mirror downloads must never be buffered.
+    pub async fn to_store_type_undecorated(&self, kind: StoreType) -> Result<FlowLikeStore> {
         let purpose = match kind {
             StoreType::Meta => Purpose::Meta,
             StoreType::Content => Purpose::Content,
@@ -917,6 +938,15 @@ impl object_store::signer::Signer for RoutedStore {
     ) -> object_store::Result<url::Url> {
         self.owner.ensure_lease().await.map_err(store_error)?;
         let store = self.selected(path)?;
+        let remaining = self
+            .owner
+            .state
+            .lock()
+            .unwrap()
+            .expires
+            .duration_since(SystemTime::now())
+            .map_err(|_| store_error(AuthorizationError::Expired))?;
+        let expires_in = expires_in.min(remaining);
         self.owner
             .while_lease_valid(async {
                 store
@@ -1461,6 +1491,86 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn expired_shared_lease_fences_retained_routes_until_refresh_recovers() -> Result<()> {
+        let source = source_fixture(aws(1));
+        let owner =
+            RenewableSharedCredentials::new(aws(0), "project".into(), source.clone()).await?;
+        let memory = Arc::new(object_store::memory::InMemory::new());
+        let root = Path::from("apps/project");
+        let existing = root.clone().join("existing");
+        let destination = root.clone().join("new");
+        memory.put(&existing, "present".into()).await?;
+        memory
+            .put(&root.clone().join("other"), "present".into())
+            .await?;
+        let store = owner
+            .router(vec![(root.clone(), FlowLikeStore::Other(memory.clone()))])
+            .as_generic();
+        let signer = owner.router(vec![(root.clone(), owner.native_store(Purpose::Content)?)]);
+        owner.state.lock().unwrap().expires = SystemTime::now() + Duration::from_secs(60);
+        let signed = signer
+            .sign("GET", &existing, Duration::from_secs(3600))
+            .await?;
+        let lifetime: u64 = signed
+            .query_pairs()
+            .find(|(key, _)| key.eq_ignore_ascii_case("x-amz-expires"))
+            .unwrap()
+            .1
+            .parse()?;
+        assert!(lifetime <= 60);
+
+        let mut listing = store.list(Some(&root));
+        assert!(listing.next().await.unwrap().is_ok());
+        let mut upload = store.put_multipart(&destination).await?;
+        let part = upload.put_part("pending".into());
+        *source.next.lock().unwrap() = Err(AuthorizationError::Unavailable);
+        {
+            let mut state = owner.state.lock().unwrap();
+            state.expires = SystemTime::UNIX_EPOCH;
+            state.refresh_at = SystemTime::UNIX_EPOCH;
+        }
+        assert_eq!(
+            owner.refresh_if_due().await,
+            Err(AuthorizationError::Unavailable)
+        );
+        assert!(store.put(&destination, "blocked".into()).await.is_err());
+        assert!(store.head(&existing).await.is_err());
+        assert!(store.get(&existing).await.is_err());
+        assert!(store.delete(&existing).await.is_err());
+        assert!(store.copy(&existing, &destination).await.is_err());
+        assert!(store.rename(&existing, &destination).await.is_err());
+        assert!(store.list_with_delimiter(Some(&root)).await.is_err());
+        assert!(store.list(Some(&root)).next().await.unwrap().is_err());
+        assert!(listing.next().await.unwrap().is_err());
+        assert!(listing.next().await.is_none());
+        assert!(store.put_multipart(&destination).await.is_err());
+        assert!(part.await.is_err());
+        assert!(upload.put_part("blocked".into()).await.is_err());
+        assert!(upload.complete().await.is_err());
+        assert!(
+            signer
+                .sign("GET", &existing, Duration::from_secs(30))
+                .await
+                .is_err()
+        );
+        assert!(memory.head(&destination).await.is_err());
+        assert!(memory.head(&existing).await.is_ok());
+
+        *source.next.lock().unwrap() = Ok(aws(1));
+        owner.state.lock().unwrap().refresh_at = SystemTime::UNIX_EPOCH;
+        store.put(&destination, "renewed".into()).await?;
+        assert_eq!(memory.get(&destination).await?.bytes().await?, "renewed");
+        assert!(
+            signer
+                .sign("GET", &existing, Duration::from_secs(30))
+                .await
+                .is_ok()
+        );
+        upload.abort().await?;
+        Ok(())
+    }
+
     #[cfg(feature = "flow-runtime")]
     #[tokio::test]
     async fn user_database_paths_match_existing_builders_for_encoded_subjects() -> Result<()> {
@@ -1538,6 +1648,56 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("denied"));
+        Ok(())
+    }
+
+    struct MemoryDecorator {
+        calls: AtomicUsize,
+        store: Arc<object_store::memory::InMemory>,
+    }
+    impl ContentStoreDecorator for MemoryDecorator {
+        fn decorate(&self, _store: FlowLikeStore) -> Result<FlowLikeStore> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(FlowLikeStore::Memory(self.store.clone()))
+        }
+    }
+    fn memory_decorator() -> Arc<MemoryDecorator> {
+        Arc::new(MemoryDecorator {
+            calls: AtomicUsize::new(0),
+            store: Arc::new(object_store::memory::InMemory::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn content_decorator_wraps_only_content_stores_and_installs_once() -> Result<()> {
+        let owner =
+            RenewableSharedCredentials::new(aws(0), "project".into(), source_fixture(aws(1)))
+                .await?;
+        let decorated = |store: FlowLikeStore| matches!(store, FlowLikeStore::Memory(_));
+        assert!(!decorated(owner.to_store(false).await?));
+        let first = memory_decorator();
+        let second = memory_decorator();
+        assert!(owner.install_content_decorator(first.clone()));
+        assert!(!owner.install_content_decorator(second.clone()));
+
+        let FlowLikeStore::Memory(content) = owner.to_store(false).await? else {
+            panic!("content store was not decorated");
+        };
+        assert!(Arc::ptr_eq(&content, &first.store));
+        assert!(decorated(
+            SharedCredentials::Renewable(owner.clone())
+                .to_store_type(StoreType::Content)
+                .await?
+        ));
+        assert_eq!(first.calls.load(Ordering::SeqCst), 2);
+
+        assert!(!decorated(owner.to_store(true).await?));
+        assert!(!decorated(owner.to_store_type(StoreType::Tmp).await?));
+        assert!(!decorated(
+            owner.to_store_type_undecorated(StoreType::Content).await?
+        ));
+        assert_eq!(first.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(second.calls.load(Ordering::SeqCst), 0);
         Ok(())
     }
 }

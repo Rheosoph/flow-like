@@ -75,9 +75,7 @@ impl NodeLogic for ListTablesNode {
             .callbacks
             .database_table_names
             .clone();
-        if context.credentials.is_none()
-            && let Some(list_local) = list_local
-        {
+        if let Some(list_local) = list_local {
             let path = if user_scoped {
                 context_cache.get_user_dir(false)?.join("db")
             } else {

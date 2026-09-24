@@ -21,6 +21,7 @@ import {
 	type XYPosition,
 	useConnection,
 	useInternalNode,
+	useNodes,
 	useNodesState,
 	useReactFlow,
 } from "@xyflow/react";
@@ -73,8 +74,8 @@ import {
 	type SchemaRelationship,
 	type SchemaRow,
 	buildSchemaModel,
-	curveGeometry,
 	loopGeometry,
+	routedCurveGeometry,
 } from "./ontology-schema-model";
 
 export interface OntologySchemaGraphProps {
@@ -91,10 +92,23 @@ export interface OntologySchemaGraphProps {
 }
 
 type SchemaObjectNode = Node<{ object: SchemaObject }, "schemaObject">;
+// An invisible, inert node marking the gap the layout reserved for a
+// relationship that skips columns; being a node keeps it inside fitView.
+type SchemaLaneNode = Node<Record<string, never>, "schemaLane">;
+type SchemaGraphNode = SchemaObjectNode | SchemaLaneNode;
 type SchemaRelationshipEdge = Edge<
-	{ relationship: SchemaRelationship },
+	{
+		relationship: SchemaRelationship;
+		laneId?: string;
+		/** Laid-out endpoint positions; the lane only applies while both hold. */
+		sourceAt?: XYPosition;
+		targetAt?: XYPosition;
+	},
 	"schemaRelationship"
 >;
+
+const LANE_WIDTH = 120;
+const LANE_HEIGHT = 24;
 
 type HoverTarget = { kind: "node" | "edge"; id: string };
 
@@ -152,6 +166,12 @@ const CANVAS_STYLE = {
 } as CSSProperties;
 const PANEL_STYLE: CSSProperties = { margin: 8 };
 
+function isAt(node: InternalNode, position: XYPosition | undefined): boolean {
+	if (!position) return false;
+	const { x, y } = node.internals.positionAbsolute;
+	return Math.abs(x - position.x) < 1 && Math.abs(y - position.y) < 1;
+}
+
 function nodeRect(node: InternalNode): SchemaRect {
 	return {
 		x: node.internals.positionAbsolute.x,
@@ -162,7 +182,8 @@ function nodeRect(node: InternalNode): SchemaRect {
 }
 
 function RowGlyph({ role }: Readonly<{ role: SchemaRow["role"] }>) {
-	if (role === "id") return <KeyRound className="h-3 w-3 shrink-0 text-primary" />;
+	if (role === "id")
+		return <KeyRound className="h-3 w-3 shrink-0 text-primary" />;
 	if (role === "link")
 		return <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />;
 	return (
@@ -184,7 +205,8 @@ const SchemaObjectCard = memo(function SchemaObjectCard({
 	const { object } = data;
 	const isObject = object.kind === "object";
 	const canLink = connectable && isObject;
-	const dropTarget = canLink && connectingFrom !== null && connectingFrom !== id;
+	const dropTarget =
+		canLink && connectingFrom !== null && connectingFrom !== id;
 	const dimmed = highlight !== null && !highlight.nodes.has(id);
 	const Icon = isObject
 		? getGraphIcon(object.icon ?? "")
@@ -301,16 +323,45 @@ const SchemaRelationshipLine = memo(function SchemaRelationshipLine({
 		useContext(SchemaGraphContext);
 	const sourceNode = useInternalNode(source);
 	const targetNode = useInternalNode(target);
+	const laneNode = useInternalNode(data?.laneId ?? "");
+	const nodes = useNodes<SchemaGraphNode>();
 	if (!data || !sourceNode || !targetNode) return null;
 
 	const { relationship } = data;
+	const obstacles = nodes.flatMap((node) =>
+		node.type === "schemaObject" &&
+		node.id !== source &&
+		node.id !== target &&
+		node.measured?.width &&
+		node.measured.height
+			? [
+					{
+						x: node.position.x,
+						y: node.position.y,
+						width: node.measured.width,
+						height: node.measured.height,
+					},
+				]
+			: [],
+	);
+	const lane =
+		laneNode &&
+		isAt(sourceNode, data.sourceAt) &&
+		isAt(targetNode, data.targetAt)
+			? {
+					x: laneNode.internals.positionAbsolute.x + LANE_WIDTH / 2,
+					y: laneNode.internals.positionAbsolute.y + LANE_HEIGHT / 2,
+				}
+			: undefined;
 	const geometry =
 		source === target
 			? loopGeometry(nodeRect(sourceNode), relationship.loop)
-			: curveGeometry(
+			: routedCurveGeometry(
 					nodeRect(sourceNode),
 					nodeRect(targetNode),
 					relationship.offset,
+					obstacles,
+					lane,
 				);
 	const active = highlight?.edges.has(id) ?? false;
 	const dimmed = highlight !== null && !active;
@@ -365,7 +416,11 @@ const SchemaRelationshipLine = memo(function SchemaRelationshipLine({
 	);
 });
 
-const NODE_TYPES = { schemaObject: SchemaObjectCard };
+function SchemaLane() {
+	return <div style={{ width: LANE_WIDTH, height: LANE_HEIGHT }} />;
+}
+
+const NODE_TYPES = { schemaObject: SchemaObjectCard, schemaLane: SchemaLane };
 const EDGE_TYPES = { schemaRelationship: SchemaRelationshipLine };
 
 function SchemaMarkers({ prefix }: Readonly<{ prefix: string }>) {
@@ -396,7 +451,10 @@ function SchemaMarkers({ prefix }: Readonly<{ prefix: string }>) {
 							markerUnits="userSpaceOnUse"
 							orient="auto"
 						>
-							<path d="M0,4 L7,0 L14,4 L7,8 z" style={{ fill: EDGE_TONES[tone] }} />
+							<path
+								d="M0,4 L7,0 L14,4 L7,8 z"
+								style={{ fill: EDGE_TONES[tone] }}
+							/>
 						</marker>
 					</Fragment>
 				))}
@@ -459,39 +517,61 @@ function SchemaGraphCanvas({
 		[edges, externalTargets, nodes],
 	);
 
-	const layoutNodes = useMemo<SchemaObjectNode[]>(() => {
-		const positions = layoutSchema(
+	const { layoutNodes, flowEdges } = useMemo(() => {
+		const { positions, lanes } = layoutSchema(
 			model.objects.map((object) => ({
 				id: object.id,
 				width: SCHEMA_NODE_WIDTH,
 				height: object.height,
 			})),
 			model.relationships,
+			{ laneHeight: LANE_HEIGHT },
 		);
-		return model.objects.map((object) => ({
+		const objectNodes: SchemaGraphNode[] = model.objects.map((object) => ({
 			id: object.id,
 			type: "schemaObject",
 			position: positions.get(object.id) ?? { x: 0, y: 0 },
 			data: { object },
 		}));
-	}, [model]);
-
-	const flowEdges = useMemo<SchemaRelationshipEdge[]>(
-		() =>
-			model.relationships.map((relationship) => ({
+		const laneNodes: SchemaGraphNode[] = [...lanes].map(([edgeId, center]) => ({
+			id: `lane:${edgeId}`,
+			type: "schemaLane",
+			position: {
+				x: center.x - LANE_WIDTH / 2,
+				y: center.y - LANE_HEIGHT / 2,
+			},
+			data: {},
+			draggable: false,
+			connectable: false,
+			focusable: false,
+			style: { pointerEvents: "none" },
+		}));
+		const relationshipEdges: SchemaRelationshipEdge[] = model.relationships.map(
+			(relationship) => ({
 				id: relationship.id,
 				type: "schemaRelationship",
 				source: relationship.source,
 				target: relationship.target,
-				data: { relationship },
-			})),
-		[model],
-	);
+				data: {
+					relationship,
+					laneId: lanes.has(relationship.id)
+						? `lane:${relationship.id}`
+						: undefined,
+					sourceAt: positions.get(relationship.source),
+					targetAt: positions.get(relationship.target),
+				},
+			}),
+		);
+		return {
+			layoutNodes: [...objectNodes, ...laneNodes],
+			flowEdges: relationshipEdges,
+		};
+	}, [model]);
 
 	// Objects the user dragged keep their spot across edits until "Tidy up".
 	const pinnedRef = useRef(new Map<string, XYPosition>());
 	const [flowNodes, setFlowNodes, onNodesChange] =
-		useNodesState<SchemaObjectNode>(layoutNodes);
+		useNodesState<SchemaGraphNode>(layoutNodes);
 	useEffect(() => {
 		setFlowNodes(
 			layoutNodes.map((node) => {
@@ -586,7 +666,7 @@ function SchemaGraphCanvas({
 	return (
 		<SchemaGraphContext.Provider value={context}>
 			<SchemaMarkers prefix={markerPrefix} />
-			<ReactFlow<SchemaObjectNode, SchemaRelationshipEdge>
+			<ReactFlow<SchemaGraphNode, SchemaRelationshipEdge>
 				nodes={flowNodes}
 				edges={flowEdges}
 				nodeTypes={NODE_TYPES}
@@ -596,15 +676,22 @@ function SchemaGraphCanvas({
 					pinnedRef.current.set(node.id, node.position)
 				}
 				onNodeClick={(_, node) => {
+					if (node.type !== "schemaObject") return;
 					const mapping = node.data.object.mapping;
 					if (mapping) onSelectObject?.(mapping);
 				}}
 				onEdgeClick={(_, edge) => {
 					if (edge.data) onSelectRelationship?.(edge.data.relationship.index);
 				}}
-				onNodeMouseEnter={(_, node) => setHovered({ kind: "node", id: node.id })}
+				onNodeMouseEnter={(_, node) => {
+					if (node.type === "schemaObject") {
+						setHovered({ kind: "node", id: node.id });
+					}
+				}}
 				onNodeMouseLeave={() => setHovered(null)}
-				onEdgeMouseEnter={(_, edge) => setHovered({ kind: "edge", id: edge.id })}
+				onEdgeMouseEnter={(_, edge) =>
+					setHovered({ kind: "edge", id: edge.id })
+				}
 				onEdgeMouseLeave={() => setHovered(null)}
 				onConnect={handleConnect}
 				nodesConnectable={Boolean(onConnect)}
@@ -682,6 +769,33 @@ function SchemaGraphCanvas({
 }
 
 /**
+ * Scrolls the editor a diagram click points at into view and flags it for a
+ * brief highlight. `domId(key)` goes on the element, `revealedKey` is the key
+ * currently flashing.
+ */
+export function useRevealTarget() {
+	const prefix = `reveal-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+	const [revealed, setRevealed] = useState<{
+		key: string;
+		nonce: number;
+	} | null>(null);
+	useEffect(() => {
+		if (!revealed) return;
+		document
+			.getElementById(`${prefix}-${revealed.key}`)
+			?.scrollIntoView({ behavior: "smooth", block: "center" });
+		const timer = setTimeout(() => setRevealed(null), 1600);
+		return () => clearTimeout(timer);
+	}, [prefix, revealed]);
+	const reveal = useCallback(
+		(key: string) => setRevealed({ key, nonce: Date.now() }),
+		[],
+	);
+	const domId = useCallback((key: string) => `${prefix}-${key}`, [prefix]);
+	return { reveal, domId, revealedKey: revealed?.key };
+}
+
+/**
  * The ontology as a schema diagram: one card per object type with its identity
  * and join columns, one labelled arrow per relationship. Hierarchy edges carry
  * a diamond at the parent, children in other ontologies show as dashed ghosts.
@@ -689,29 +803,54 @@ function SchemaGraphCanvas({
 export function OntologySchemaGraph(props: Readonly<OntologySchemaGraphProps>) {
 	const { t } = useTranslation("settings");
 	const [expanded, setExpanded] = useState(false);
-	const { className, title, ...graph } = props;
-	const connectAndCollapse = useMemo(
-		() =>
-			graph.onConnect
-				? (source: NodeLabelMapping, target: NodeLabelMapping) => {
+	const {
+		className,
+		title,
+		onSelectObject,
+		onSelectRelationship,
+		onConnect,
+		...graph
+	} = props;
+	// Every action jumps to an editor below the diagram, so the expanded view
+	// gets out of the way first.
+	const expandedHandlers = useMemo(
+		() => ({
+			onSelectObject: onSelectObject
+				? (object: NodeLabelMapping) => {
 						setExpanded(false);
-						graph.onConnect?.(source, target);
+						onSelectObject(object);
 					}
 				: undefined,
-		[graph.onConnect],
+			onSelectRelationship: onSelectRelationship
+				? (index: number) => {
+						setExpanded(false);
+						onSelectRelationship(index);
+					}
+				: undefined,
+			onConnect: onConnect
+				? (source: NodeLabelMapping, target: NodeLabelMapping) => {
+						setExpanded(false);
+						onConnect(source, target);
+					}
+				: undefined,
+		}),
+		[onConnect, onSelectObject, onSelectRelationship],
 	);
 
 	return (
 		<>
 			<div
 				className={cn(
-					"relative h-[380px] overflow-hidden rounded-xl border bg-muted/20",
+					"relative h-95 overflow-hidden rounded-xl border bg-muted/20",
 					className,
 				)}
 			>
 				<ReactFlowProvider>
 					<SchemaGraphCanvas
 						{...graph}
+						onSelectObject={onSelectObject}
+						onSelectRelationship={onSelectRelationship}
+						onConnect={onConnect}
 						expanded={false}
 						onExpand={() => setExpanded(true)}
 					/>
@@ -720,7 +859,9 @@ export function OntologySchemaGraph(props: Readonly<OntologySchemaGraphProps>) {
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent className="flex h-[88vh] max-w-[min(96vw,1600px)] flex-col gap-3">
 					<DialogHeader>
-						<DialogTitle>{title ?? t("schemaDiagram", "Schema diagram")}</DialogTitle>
+						<DialogTitle>
+							{title ?? t("schemaDiagram", "Schema diagram")}
+						</DialogTitle>
 						<DialogDescription>
 							{t(
 								"objectTypesAndHowTheyRelateScrollToZoomDragToRearrange",
@@ -731,11 +872,7 @@ export function OntologySchemaGraph(props: Readonly<OntologySchemaGraphProps>) {
 					<div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border bg-muted/20">
 						{expanded && (
 							<ReactFlowProvider>
-								<SchemaGraphCanvas
-									{...graph}
-									onConnect={connectAndCollapse}
-									expanded
-								/>
+								<SchemaGraphCanvas {...graph} {...expandedHandlers} expanded />
 							</ReactFlowProvider>
 						)}
 					</div>

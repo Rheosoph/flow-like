@@ -91,6 +91,7 @@ import {
 } from "../ui/package-status-badge";
 import { PackageAccessTab } from "./package-access-tab";
 import { PackageMetaTab } from "./package-meta-tab";
+import { PackagePricingCard } from "./package-pricing-card";
 import { PackageReviewsTab } from "./package-reviews-tab";
 import { PackageUsersContainer } from "./package-users-container";
 import { WidgetCardGrid } from "./widget-card";
@@ -451,7 +452,9 @@ export interface PackageDetailViewProps {
 	hasAccess?: boolean;
 	isPurchasing?: boolean;
 	isRequesting?: boolean;
+	awaitingCheckout?: boolean;
 	onBuy?: () => void;
+	onRequestAccess?: () => void;
 	onGetOrBuy?: () => void;
 	onDeleteSuccess?: () => void;
 	currentUserPermission?: number;
@@ -480,7 +483,9 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		hasAccess,
 		isPurchasing,
 		isRequesting,
+		awaitingCheckout,
 		onBuy,
+		onRequestAccess,
 		onGetOrBuy,
 		onDeleteSuccess,
 		currentUserPermission,
@@ -630,24 +635,25 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	}
 
 	const manifest = pkg.manifest;
+	const versions = asArray(pkg.versions);
 	const widgets = readManifestWidgets(manifest);
 	const canManagePublication =
 		currentUserPermission != null &&
 		isMaintainer(currentUserPermission) &&
 		!!fetcher;
-	const hasPendingVersion = pkg.versions.some(
+	const hasPendingVersion = versions.some(
 		(version) => version.status === PackageStatus.PendingReview,
 	);
 	const latestVersion =
-		pkg.versions.find(
+		versions.find(
 			(v) =>
 				!v.yanked &&
 				v.status !== PackageStatus.Rejected &&
 				v.status !== PackageStatus.Disabled,
-		)?.version ?? pkg.versions[0]?.version;
+		)?.version ?? versions[0]?.version;
 	const widgetBundleHash =
 		readManifestWidgetBundleHash(manifest) ??
-		pkg.versions.find((v) => v.version === latestVersion)?.widgetBundleHash ??
+		versions.find((v) => v.version === latestVersion)?.widgetBundleHash ??
 		undefined;
 	const canInstallForReview =
 		canManagePublication &&
@@ -842,6 +848,18 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										</Button>
 									</>
 								) : hasAccess === false &&
+									visibility === "public_request_access" ? (
+									<Button onClick={onRequestAccess} disabled={isRequesting}>
+										{isRequesting ? (
+											t("requesting", "Requesting...")
+										) : (
+											<>
+												<KeyRound className="mr-2 h-4 w-4" />
+												{t("requestAccess", "Request access")}
+											</>
+										)}
+									</Button>
+								) : hasAccess === false &&
 									price != null &&
 									price > 0 &&
 									!purchasingAllowed ? (
@@ -851,6 +869,22 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											"Purchasing is unavailable in this app distribution.",
 										)}
 									</p>
+								) : hasAccess === false &&
+									price != null &&
+									price > 0 &&
+									awaitingCheckout ? (
+									<div className="flex max-w-xs flex-col gap-1">
+										<Button disabled>
+											<Loader2 className="mr-2 h-4 w-4 animate-spin" />
+											{t("awaitingPayment", "Waiting for payment...")}
+										</Button>
+										<p className="text-xs text-muted-foreground">
+											{t(
+												"awaitingPaymentDescription",
+												"Finish checkout in your browser. Install unlocks here once the payment is confirmed.",
+											)}
+										</p>
+									</div>
 								) : hasAccess === false && price != null && price > 0 ? (
 									<Button onClick={onBuy} disabled={isPurchasing}>
 										{isPurchasing ? (
@@ -859,18 +893,6 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											<>
 												<ShoppingCart className="mr-2 h-4 w-4" />
 												{priceLabel || `€${(price / 100).toFixed(2)}`}
-											</>
-										)}
-									</Button>
-								) : hasAccess === false &&
-									visibility === "public_request_access" ? (
-									<Button onClick={onGetOrBuy} disabled={isRequesting}>
-										{isRequesting ? (
-											t("requesting", "Requesting...")
-										) : (
-											<>
-												<KeyRound className="mr-2 h-4 w-4" />
-												{t("requestAccess", "Request access")}
 											</>
 										)}
 									</Button>
@@ -935,7 +957,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						</TabsTrigger>
 						<TabsTrigger value="versions">
 							{t("versionsLength", "Versions ({{length}})", {
-								length: pkg.versions.length,
+								length: versions.length,
 							})}
 						</TabsTrigger>
 						<TabsTrigger value="reviews">{t("reviews", "Reviews")}</TabsTrigger>
@@ -1160,7 +1182,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										</p>
 									</div>
 									<div>
-										<p className="text-2xl font-bold">{pkg.versions.length}</p>
+										<p className="text-2xl font-bold">{versions.length}</p>
 										<p className="text-sm text-muted-foreground">
 											{t("versions", "Versions")}
 										</p>
@@ -1206,6 +1228,20 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								auth={auth}
 							/>
 						)}
+
+						{currentUserPermission != null &&
+							isOwner(currentUserPermission) &&
+							fetcher &&
+							visibility !== "local" &&
+							pkg.status !== PackageStatus.Disabled && (
+								<PackagePricingCard
+									packageId={pkg.id}
+									price={price ?? 0}
+									visibility={visibility}
+									fetcher={fetcher}
+									auth={auth}
+								/>
+							)}
 
 						{/* Package Management - visible to owners */}
 						{currentUserPermission != null &&
@@ -1502,13 +1538,13 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								</CardTitle>
 							</CardHeader>
 							<CardContent>
-								{pkg.versions.length === 0 ? (
+								{versions.length === 0 ? (
 									<p className="text-sm text-muted-foreground">
 										{t("noVersionsAvailable", "No versions available")}
 									</p>
 								) : (
 									<div className="divide-y">
-										{pkg.versions.map((v, idx) => (
+										{versions.map((v, idx) => (
 											<VersionRow
 												key={v.version}
 												version={v}

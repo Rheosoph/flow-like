@@ -337,8 +337,14 @@ impl RegistryClient {
             };
             params.append_pair("sort_by", sort_str);
             params.append_pair("sort_desc", &filters.sort_desc.to_string());
-            if include_own {
+            if let Some(access) = filters.access {
+                params.append_pair("owned_only", "true");
+                params.append_pair("access", access.as_str());
+            } else if include_own {
                 params.append_pair("include_own", "true");
+            }
+            if let Some(ids) = &filters.ids {
+                params.append_pair("ids", &ids.join(","));
             }
         }
 
@@ -427,6 +433,7 @@ impl RegistryClient {
             package_id: package_id.to_owned(),
             version: Some(version.to_owned()),
             target_platform: None,
+            app_id: None,
         };
         let mut request = client
             .post(format!("{}/download", self.config.default_registry))
@@ -520,6 +527,19 @@ impl RegistryClient {
         version: Option<&str>,
         auth_token: Option<&str>,
     ) -> Result<CachedPackage> {
+        self.download_package_for(package_id, version, auth_token, None)
+            .await
+    }
+
+    /// Download and cache a package; with `app_id` the registry authorizes the
+    /// download through that project's license instead of the caller's own access.
+    async fn download_package_for(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        auth_token: Option<&str>,
+        app_id: Option<&str>,
+    ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
             if (version.is_none() || version == Some(&installed.version))
@@ -568,6 +588,7 @@ impl RegistryClient {
             package_id: package_id.to_string(),
             version: version.map(String::from),
             target_platform: Self::target_platform_for_download(),
+            app_id: app_id.map(String::from),
         };
 
         let url = format!("{}/download", self.config.default_registry);
@@ -773,6 +794,19 @@ impl RegistryClient {
         auth_token: Option<&str>,
     ) -> Result<CachedPackage> {
         self.download_package(package_id, version, auth_token).await
+    }
+
+    /// Install the version a project pins, downloading through the project's
+    /// licence so members need not hold the package themselves.
+    pub async fn install_for_app(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        auth_token: Option<&str>,
+        app_id: &str,
+    ) -> Result<CachedPackage> {
+        self.download_package_for(package_id, version, auth_token, Some(app_id))
+            .await
     }
 
     pub async fn install_version(
@@ -1572,6 +1606,44 @@ mod tests {
             ..Default::default()
         };
         RegistryClient::new(config).unwrap()
+    }
+
+    fn search_pairs(
+        filters: &SearchFilters,
+        include_own: bool,
+    ) -> std::collections::HashMap<String, String> {
+        let temp = tempfile::tempdir().unwrap();
+        let url = test_client(temp.path()).build_search_url(filters, include_own);
+        reqwest::Url::parse(&url)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    #[test]
+    fn test_search_url_forwards_access_as_owned_only() {
+        let pairs = search_pairs(
+            &SearchFilters {
+                access: Some(crate::registry::PackageAccessFilter::Maintainer),
+                ids: Some(vec!["a".into(), "b".into()]),
+                ..Default::default()
+            },
+            true,
+        );
+        assert_eq!(pairs.get("access").map(String::as_str), Some("maintainer"));
+        assert_eq!(pairs.get("owned_only").map(String::as_str), Some("true"));
+        assert_eq!(pairs.get("ids").map(String::as_str), Some("a,b"));
+        assert!(!pairs.contains_key("include_own"));
+    }
+
+    #[test]
+    fn test_search_url_without_access_keeps_include_own() {
+        let pairs = search_pairs(&SearchFilters::default(), true);
+        assert_eq!(pairs.get("include_own").map(String::as_str), Some("true"));
+        assert!(!pairs.contains_key("access"));
+        assert!(!pairs.contains_key("owned_only"));
+        assert!(!pairs.contains_key("ids"));
     }
 
     #[test]

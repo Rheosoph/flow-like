@@ -225,6 +225,13 @@ impl EventBusEvent {
         };
 
         let mut credentials = None;
+        let request_authorizer = crate::execution_credentials::request_authorizer(
+            &profile.hub_profile.hub,
+            &self.app_id,
+            self.token.as_deref(),
+            None,
+            None,
+        );
         if !matches!(app.visibility, flow_like::app::AppVisibility::Offline) {
             let token = self.token.as_ref().ok_or_else(|| {
                 flow_like_types::anyhow!("No token registered, cannot run online event")
@@ -236,13 +243,32 @@ impl EventBusEvent {
                 ));
             }
 
-            let shared_credentials =
-                crate::execution_credentials::prepare(&hub_url, &self.app_id, Some(token), None)
-                    .await?;
-            credentials = Some(shared_credentials);
+            match crate::execution_credentials::prepare(
+                &hub_url,
+                &self.app_id,
+                Some(token),
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(shared_credentials) => credentials = Some(shared_credentials),
+                Err(error)
+                    if crate::execution_credentials::falls_back_to_device_storage(&error) =>
+                {
+                    tracing::warn!(
+                        app_id = %self.app_id,
+                        event_id = %self.event_id,
+                        %error,
+                        "Hub credentials unavailable; running the event against device storage"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         let mut renewable_state = (*execution_state).clone();
+        renewable_state.request_authorizer = Some(request_authorizer);
         if let Some(credentials) = &credentials {
             crate::execution_credentials::install_registry(&mut renewable_state, credentials)?;
         }
@@ -343,6 +369,21 @@ impl EventBusEvent {
 
         if let Err(err) = buffered_sender.flush().await {
             println!("Error flushing buffered sender: {}", err);
+        }
+
+        if let Some(meta) = &meta {
+            crate::run_reports::enqueue(
+                app_handle,
+                crate::run_reports::FinishedRun {
+                    meta,
+                    status: &internal_run.get_status().await,
+                    visibility: &app.visibility,
+                    hub: &profile.hub_profile.hub,
+                    secure: profile.hub_profile.secure,
+                    token: self.token.as_deref(),
+                },
+            )
+            .await;
         }
 
         // Release the finished run from the registry; otherwise it stays

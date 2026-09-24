@@ -253,6 +253,10 @@ const placementConfigSchema = z
 			.refine((value) => value.trim().length > 0),
 		source: z.enum(["offline", "online"]),
 		project_path: z.string().min(1).max(4096),
+		online_metadata_sha256: z
+			.string()
+			.regex(/^[a-f0-9]{64}$/)
+			.nullish(),
 		events: z
 			.array(
 				z.object({
@@ -420,6 +424,7 @@ export type InstalledProject = {
 	revision?: string;
 	source: "offline" | "online";
 	assets?: ProjectArtifactAssets;
+	online_metadata_sha256?: string;
 };
 export type DeploymentCatalog = {
 	events: DeploymentEvent[];
@@ -867,6 +872,18 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		: input.resourceGrant;
 	if (installed.source === "online" && !resourceGrant)
 		throw new Error("Select a resource approval for the online project.");
+	if (
+		installed.source === "online" &&
+		!/^[a-f0-9]{64}$/.test(
+			installed.online_metadata_sha256 ??
+				(typeof existing?.config.online_metadata_sha256 === "string"
+					? existing.config.online_metadata_sha256
+					: ""),
+		)
+	)
+		throw new Error(
+			"Prepare and install controller-approved executable metadata before deploying this online project.",
+		);
 	const hosted = events.some((event) => event.hosted);
 	if (
 		!Number.isInteger(input.replicas) ||
@@ -916,6 +933,13 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 			installed.revision ?? existing?.config.revision ?? crypto.randomUUID(),
 		source: installed.source,
 		project_path: installed.project_path,
+		...(installed.source === "online"
+			? {
+					online_metadata_sha256:
+						installed.online_metadata_sha256 ??
+						existing?.config.online_metadata_sha256,
+				}
+			: {}),
 		events: events.map((event) => ({
 			event_id: event.id,
 			event_version: event.event_version,

@@ -5,6 +5,8 @@ export interface SchemaLayoutNode {
 }
 
 export interface SchemaLayoutEdge {
+	/** Keys `lanes` in the result; defaults to the edge's index. */
+	id?: string;
 	source: string;
 	target: string;
 }
@@ -13,6 +15,7 @@ export interface SchemaLayoutOptions {
 	columnGap?: number;
 	rowGap?: number;
 	sectionGap?: number;
+	laneHeight?: number;
 }
 
 export interface SchemaPoint {
@@ -20,41 +23,61 @@ export interface SchemaPoint {
 	y: number;
 }
 
+export interface SchemaLayout {
+	/** Top-left corner of every object. */
+	positions: Map<string, SchemaPoint>;
+	/** For links that skip columns: the centre of the gap reserved for them. */
+	lanes: Map<string, SchemaPoint>;
+}
+
 const ORDER_SWEEPS = 4;
 
 /**
  * Layered left-to-right layout for small schema graphs. Linked objects are
  * ranked by longest path over the graph with cycles broken in input order,
- * ordered within a column by barycenter sweeps, and centred per column.
- * Objects without links go into a grid below. Output depends only on input
- * order, never on existing coordinates.
+ * ordered within a column by barycenter sweeps, and centred per column. A link
+ * that skips columns reserves a lane in each one it crosses, so it has a gap
+ * to run through instead of passing under a card. Objects without links go
+ * into a grid below. Output depends only on input order, never on existing
+ * coordinates.
  */
 export function layoutSchema(
 	nodes: readonly SchemaLayoutNode[],
 	edges: readonly SchemaLayoutEdge[],
 	options: SchemaLayoutOptions = {},
-): Map<string, SchemaPoint> {
+): SchemaLayout {
 	const columnGap = options.columnGap ?? 120;
 	const rowGap = options.rowGap ?? 40;
 	const sectionGap = options.sectionGap ?? 72;
+	const laneHeight = options.laneHeight ?? 24;
 
 	const indexOf = new Map(nodes.map((node, index) => [node.id, index]));
-	const links = edges.filter(
-		(edge) =>
-			edge.source !== edge.target &&
-			indexOf.has(edge.source) &&
-			indexOf.has(edge.target),
-	);
+	const links = edges
+		.map((edge, index) => ({ ...edge, id: edge.id ?? String(index) }))
+		.filter(
+			(edge) =>
+				edge.source !== edge.target &&
+				indexOf.has(edge.source) &&
+				indexOf.has(edge.target),
+		);
 	const linked = new Set(links.flatMap((edge) => [edge.source, edge.target]));
 	const connected = nodes.filter((node) => linked.has(node.id));
 	const isolated = nodes.filter((node) => !linked.has(node.id));
 
 	const positions = new Map<string, SchemaPoint>();
+	const lanes = new Map<string, SchemaPoint>();
 	let top = 0;
 
 	if (connected.length > 0) {
-		const layers = orderLayers(connected, rankNodes(connected, links), links);
-		const byId = new Map(connected.map((node) => [node.id, node]));
+		const rank = rankNodes(connected, links);
+		const { items, segments, laneOf } = reserveLanes(
+			connected,
+			links,
+			rank,
+			laneHeight,
+		);
+		const layers = orderLayers(items, rank, segments);
+		const byId = new Map(items.map((item) => [item.id, item]));
 		const columnHeights = layers.map((layer) =>
 			layer.reduce(
 				(sum, id, index) =>
@@ -63,25 +86,39 @@ export function layoutSchema(
 			),
 		);
 		const blockHeight = Math.max(...columnHeights);
+		const placed = new Map<string, SchemaPoint>();
 		let x = 0;
-		for (const [rank, layer] of layers.entries()) {
-			let y = (blockHeight - columnHeights[rank]) / 2;
-			let columnWidth = 0;
+		for (const [layerIndex, layer] of layers.entries()) {
+			const columnWidth = Math.max(
+				...layer.map((id) => byId.get(id)?.width ?? 0),
+			);
+			let y = (blockHeight - columnHeights[layerIndex]) / 2;
 			for (const id of layer) {
-				const node = byId.get(id);
-				if (!node) continue;
-				positions.set(id, { x: Math.round(x), y: Math.round(y) });
-				y += node.height + rowGap;
-				columnWidth = Math.max(columnWidth, node.width);
+				const item = byId.get(id);
+				if (!item) continue;
+				placed.set(id, {
+					x: Math.round(item.lane ? x + columnWidth / 2 : x),
+					y: Math.round(item.lane ? y + item.height / 2 : y),
+				});
+				y += item.height + rowGap;
 			}
 			x += columnWidth + columnGap;
+		}
+		for (const node of connected) {
+			const point = placed.get(node.id);
+			if (point) positions.set(node.id, point);
+		}
+		for (const [edgeId, laneId] of laneOf) {
+			const point = placed.get(laneId);
+			if (point) lanes.set(edgeId, point);
 		}
 		top = blockHeight + sectionGap;
 	}
 
 	if (isolated.length > 0) {
 		const columns = Math.max(1, Math.ceil(Math.sqrt(isolated.length * 1.6)));
-		const cellWidth = Math.max(...isolated.map((node) => node.width)) + columnGap;
+		const cellWidth =
+			Math.max(...isolated.map((node) => node.width)) + columnGap;
 		for (let start = 0; start < isolated.length; start += columns) {
 			const row = isolated.slice(start, start + columns);
 			for (const [column, node] of row.entries()) {
@@ -94,7 +131,53 @@ export function layoutSchema(
 		}
 	}
 
-	return positions;
+	return { positions, lanes };
+}
+
+interface LayoutItem extends SchemaLayoutNode {
+	lane?: boolean;
+}
+
+/**
+ * Splits every link that spans more than one column into a chain through one
+ * lane placeholder per skipped column. Placeholders are added to `rank` and
+ * then ordered and stacked like objects; the middle one is the link's waypoint.
+ */
+function reserveLanes(
+	nodes: readonly SchemaLayoutNode[],
+	links: readonly Required<SchemaLayoutEdge>[],
+	rank: Map<string, number>,
+	laneHeight: number,
+): {
+	items: LayoutItem[];
+	segments: SchemaLayoutEdge[];
+	laneOf: Map<string, string>;
+} {
+	const items: LayoutItem[] = [...nodes];
+	const segments: SchemaLayoutEdge[] = [];
+	const laneOf = new Map<string, string>();
+	for (const link of links) {
+		const from = rank.get(link.source) ?? 0;
+		const to = rank.get(link.target) ?? 0;
+		const step = to > from ? 1 : -1;
+		if (Math.abs(to - from) < 2) {
+			segments.push(link);
+			continue;
+		}
+		const chain: string[] = [];
+		for (let layer = from + step; layer !== to; layer += step) {
+			const id = `\u0000lane:${link.id}:${layer}`;
+			rank.set(id, layer);
+			items.push({ id, width: 0, height: laneHeight, lane: true });
+			chain.push(id);
+		}
+		laneOf.set(link.id, chain[Math.floor((chain.length - 1) / 2)]);
+		const path = [link.source, ...chain, link.target];
+		for (let index = 1; index < path.length; index += 1) {
+			segments.push({ source: path[index - 1], target: path[index] });
+		}
+	}
+	return { items, segments, laneOf };
 }
 
 function rankNodes(
@@ -102,7 +185,9 @@ function rankNodes(
 	links: readonly SchemaLayoutEdge[],
 ): Map<string, number> {
 	const order = new Map(nodes.map((node, index) => [node.id, index]));
-	const outgoing = new Map<string, string[]>(nodes.map((node) => [node.id, []]));
+	const outgoing = new Map<string, string[]>(
+		nodes.map((node) => [node.id, []]),
+	);
 	for (const link of links) outgoing.get(link.source)?.push(link.target);
 	for (const targets of outgoing.values()) {
 		targets.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
@@ -152,7 +237,10 @@ function rankNodes(
 	while (ready.length > 0) {
 		const id = ready.shift() as string;
 		for (const target of successors.get(id) ?? []) {
-			rank.set(target, Math.max(rank.get(target) ?? 0, (rank.get(id) ?? 0) + 1));
+			rank.set(
+				target,
+				Math.max(rank.get(target) ?? 0, (rank.get(id) ?? 0) + 1),
+			);
 			const remaining = (incoming.get(target) ?? 0) - 1;
 			incoming.set(target, remaining);
 			if (remaining === 0) ready.push(target);
@@ -208,7 +296,10 @@ function orderLayers(
 					towards(rank.get(other) ?? 0),
 				);
 				if (anchors.length === 0) return [id, slot.get(id) ?? 0];
-				const sum = anchors.reduce((total, other) => total + (slot.get(other) ?? 0), 0);
+				const sum = anchors.reduce(
+					(total, other) => total + (slot.get(other) ?? 0),
+					0,
+				);
 				return [id, sum / anchors.length];
 			}),
 		);

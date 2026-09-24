@@ -15,12 +15,14 @@ runtime = [
     "dep:flow-like-types",
     "dep:jsonschema",
     "dep:flow-like-wasm",
+    "flow-like-offline-writes/runtime",
 ]
 
 [dependencies]
 axum = { workspace = true, optional = true }
 anyhow = "1"
 flow-like-device-protocol.workspace = true
+flow-like-offline-writes.workspace = true
 flow-like-device-crypto = { workspace = true, features = ["sqlite"] }
 flow-like-types-contracts = { workspace = true, default-features = false }
 reqwest.workspace = true
@@ -70,5 +72,6 @@ libc = "0.2"
 
 [dev-dependencies]
 axum.workspace = true
+flow-like-offline-writes = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 wat = "1"

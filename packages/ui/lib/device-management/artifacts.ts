@@ -443,7 +443,8 @@ export async function prepareProjectArtifact(
 		check(
 			source !== "online" ||
 				!input.path.startsWith("apps/") ||
-				input.path === `apps/${project}/online-source.json`,
+				input.path === `apps/${project}/online-source.json` ||
+				input.path === `apps/${project}/online-metadata.json`,
 			"Online dependency artifacts cannot contain offline project data.",
 		);
 		check(

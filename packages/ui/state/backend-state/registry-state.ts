@@ -25,10 +25,15 @@ export interface IRegistryState {
 	searchPackages(filters?: SearchFilters): Promise<SearchResults>;
 	getOwnedPackages(filters?: SearchFilters): Promise<SearchResults>;
 	getPackage(packageId: string): Promise<InstalledPackage | null>;
+	/**
+	 * `appId` downloads through that project's licence, so members can install
+	 * a paid package an admin or the owner holds for the project.
+	 */
 	installPackage(
 		packageId: string,
 		version?: string,
 		token?: string | null,
+		appId?: string,
 	): Promise<CachedPackage>;
 	uninstallPackage(packageId: string): Promise<void>;
 	getInstalledPackages(): Promise<InstalledPackage[]>;

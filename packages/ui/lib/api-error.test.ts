@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	ApiResponseError,
 	UPSTREAM_UNAVAILABLE_CODE,
+	isMissingResourceError,
 	isTransportFailure,
 	upstreamFailureInSuccess,
 } from "./api-error";
@@ -42,6 +43,27 @@ describe("isTransportFailure", () => {
 		["a bare string", "Forbidden"],
 	])("%s is a real answer", (_label, error) => {
 		expect(isTransportFailure(error)).toBe(false);
+	});
+});
+
+describe("isMissingResourceError", () => {
+	test("the API's own 404 and 410 say the resource is gone", () => {
+		for (const status of [404, 410]) {
+			expect(
+				isMissingResourceError(
+					new ApiResponseError({ status, code: "NOT_FOUND", message: "x" }),
+				),
+			).toBe(true);
+		}
+	});
+
+	test("a bare 404 from a proxy or a hub without the route is inconclusive", () => {
+		expect(
+			isMissingResourceError(
+				new ApiResponseError({ status: 404, message: "Not Found" }),
+			),
+		).toBe(false);
+		expect(isMissingResourceError({ status: 404 })).toBe(false);
 	});
 });
 

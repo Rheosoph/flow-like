@@ -63,6 +63,7 @@ import type {
 } from "@flow-like/flow-like-ui/components/a2ui/types";
 import {
 	ApiResponseError,
+	isHubUnavailable,
 	isMissingResourceError,
 	upstreamFailureInSuccess,
 } from "@flow-like/flow-like-ui/lib/api-error";
@@ -86,10 +87,12 @@ import {
 	type IFlowScriptApplyFailureReport,
 	flowScriptApplyOutcome,
 } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
+import { isExpiredPin } from "@flow-like/flow-like-ui/lib/package-license";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { timeRunStep } from "@flow-like/flow-like-ui/lib/run-timing";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
+import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
 import type { IFlowIrCommitReadback } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import { createId } from "@paralleldrive/cuid2";
 import { getVersion } from "@tauri-apps/api/app";
@@ -106,7 +109,11 @@ import {
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import { desktopPlatform } from "../../lib/platform";
-import { withRequestDeadline } from "../../lib/request-deadline";
+import {
+	HUB_REFRESH_TIMEOUT_MS,
+	settleWithin,
+	withRequestDeadline,
+} from "../../lib/request-deadline";
 import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import {
@@ -503,6 +510,31 @@ const summarizeBoardElementRefs = (board: IBoard) => {
 	return summaries;
 };
 
+type RemoteAppPackage = Pick<AppPackage, "packageId" | "version"> &
+	Partial<Pick<AppPackage, "packageName" | "license">>;
+
+const boardNodes = (board: IBoard): INode[] => [
+	...Object.values(board.nodes),
+	...Object.values(board.layers).flatMap((layer) => Object.values(layer.nodes)),
+];
+
+/** Expired pins are disabled for the project: running their nodes locally would bypass the licence. */
+const assertNoExpiredPackagesUsed = (
+	nodes: INode[],
+	remotePackages: RemoteAppPackage[],
+): void => {
+	const expired = remotePackages.filter(isExpiredPin);
+	if (expired.length === 0 || nodes.length === 0) return;
+	const usedPackageIds = new Set(
+		nodes.flatMap((node) => node.wasm?.package_id ?? []),
+	);
+	const blocked = expired.find((pkg) => usedPackageIds.has(pkg.packageId));
+	if (!blocked) return;
+	throw new Error(
+		`${blocked.packageName ?? blocked.packageId} is disabled in this project: its licence expired because no admin or owner has the package. An admin or the owner needs to get it and reactivate it on the Packages page.`,
+	);
+};
+
 export class BoardState implements IBoardState {
 	private readonly offlineSyncDrains = new Map<
 		string,
@@ -730,9 +762,10 @@ export class BoardState implements IBoardState {
 		}
 	}
 
+	/** Every remote pin, expired ones included; only usable pins reach the local package map. */
 	private async syncRemoteAppPackages(
 		appId: string,
-	): Promise<Array<{ packageId: string; version: string }>> {
+	): Promise<RemoteAppPackage[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (
@@ -748,17 +781,19 @@ export class BoardState implements IBoardState {
 
 		try {
 			const [remotePackages, localPackages] = await Promise.all([
-				fetcher<Array<{ packageId: string; version: string }>>(
+				fetcher<RemoteAppPackage[]>(
 					this.backend.profile,
 					`apps/${appId}/packages`,
-					undefined,
+					{ timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				),
 				this.backend.appState.listPackages(appId),
 			]);
 
 			const remotePackageMap = new Map(
-				remotePackages.map((pkg) => [pkg.packageId, pkg.version]),
+				remotePackages
+					.filter((pkg) => !isExpiredPin(pkg))
+					.map((pkg) => [pkg.packageId, pkg.version]),
 			);
 
 			const syncTasks: Promise<void>[] = [];
@@ -796,9 +831,11 @@ export class BoardState implements IBoardState {
 	}
 
 	async ensureRemoteAppPackagesInstalled(
-		packages: Array<{ packageId: string; version: string }>,
+		appId: string,
+		remotePackages: RemoteAppPackage[],
 		options: { forceReload?: boolean; throwOnError?: boolean } = {},
 	): Promise<void> {
+		const packages = remotePackages.filter((pkg) => !isExpiredPin(pkg));
 		if (!this.backend.registryState || packages.length === 0) {
 			if (options.throwOnError && packages.length > 0) {
 				throw new Error("Package registry is not available on this client.");
@@ -826,6 +863,8 @@ export class BoardState implements IBoardState {
 						this.backend.registryState.installPackage(
 							pkg.packageId,
 							pkg.version,
+							undefined,
+							appId,
 						),
 					),
 				);
@@ -853,15 +892,8 @@ export class BoardState implements IBoardState {
 		appId: string,
 		board?: IBoard,
 	): Promise<void> {
-		const usesWidgets =
-			board &&
-			[
-				...Object.values(board.nodes),
-				...Object.values(board.layers).flatMap((layer) =>
-					Object.values(layer.nodes),
-				),
-			].some((node) => node.name === "a2ui_instantiate_widget");
-		if (usesWidgets) {
+		const nodes = board ? boardNodes(board) : [];
+		if (nodes.some((node) => node.name === "a2ui_instantiate_widget")) {
 			await timeRunStep("packages.widgets", async () =>
 				this.backend.widgetState.syncWidgetsForExecution?.(appId),
 			);
@@ -869,8 +901,9 @@ export class BoardState implements IBoardState {
 		const remotePackages = await timeRunStep("packages.remote_list", () =>
 			this.syncRemoteAppPackages(appId),
 		);
+		assertNoExpiredPackagesUsed(nodes, remotePackages);
 		await timeRunStep("packages.install", () =>
-			this.ensureRemoteAppPackagesInstalled(remotePackages, {
+			this.ensureRemoteAppPackagesInstalled(appId, remotePackages, {
 				forceReload: true,
 				throwOnError: true,
 			}),
@@ -1029,7 +1062,7 @@ export class BoardState implements IBoardState {
 			const response = await fetcher<IBoardSummary[]>(
 				this.backend.profile,
 				`apps/${appId}/board/summaries${query}`,
-				{ method: "GET" },
+				{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 				this.backend.auth,
 			);
 			remote = asArray(response).filter(
@@ -1145,7 +1178,7 @@ export class BoardState implements IBoardState {
 				const remote = await fetcher<IBoardVariables[]>(
 					this.backend.profile,
 					`apps/${appId}/board/variables`,
-					{ method: "GET" },
+					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				);
 				if (Array.isArray(remote)) return remote;
@@ -1165,13 +1198,14 @@ export class BoardState implements IBoardState {
 
 	async getCatalog(appId: string): Promise<INode[]> {
 		const isOffline = await this.backend.isOffline(appId);
+		let hubUnavailable = false;
 
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
 				const nodes = await fetcher<INode[]>(
 					this.backend.profile,
 					`apps/${appId}/nodes`,
-					{ method: "GET" },
+					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				);
 				if (!Array.isArray(nodes)) {
@@ -1184,6 +1218,7 @@ export class BoardState implements IBoardState {
 				this.remoteBoardSync.setCatalog(appId, nodes);
 				return nodes;
 			} catch (error) {
+				hubUnavailable = isHubUnavailable(error);
 				console.warn(
 					"Failed to fetch remote app catalog, falling back to local catalog:",
 					error,
@@ -1191,8 +1226,11 @@ export class BoardState implements IBoardState {
 			}
 		}
 
-		const remotePackages = await this.syncRemoteAppPackages(appId);
-		await this.ensureRemoteAppPackagesInstalled(remotePackages);
+		// The packages read goes to the same hub; waiting on it again only delays the editor.
+		const remotePackages = hubUnavailable
+			? []
+			: await this.syncRemoteAppPackages(appId);
+		await this.ensureRemoteAppPackagesInstalled(appId, remotePackages);
 		const nodes: INode[] = await invoke("get_catalog", { appId });
 		return nodes;
 	}
@@ -1312,85 +1350,91 @@ export class BoardState implements IBoardState {
 		// before returning. This ensures the board in local storage is up-to-date
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
-			try {
-				// Deliver whatever the last interactive edit left in the outbox first, so the remote
-				// snapshot fetched below is not older than the board that was just committed here.
-				await timeRunStep("get_board.settle_outbox", () =>
-					this.settleOutbox(appId, boardId),
-				);
-				const pendingSync = await timeRunStep("get_board.pending_sync", () =>
-					this.backend.getOfflineSyncCommands(appId, boardId),
-				);
-				const pendingMutations = pendingSync.filter(
-					commandSyncHasPendingMutation,
-				);
-				if (pendingMutations.length > 0) {
-					// Local edits are still queued for the server; the remote snapshot
-					// predates them, so the local board is the fresher one.
-					console.warn(
-						"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
-						{ boardId, pendingBatches: pendingMutations.length },
+			// Past the cap the run starts from the local board; the refresh keeps
+			// going and lands for the next reader.
+			const refreshed = (async (): Promise<IBoard> => {
+				try {
+					// Deliver whatever the last interactive edit left in the outbox first, so the remote
+					// snapshot fetched below is not older than the board that was just committed here.
+					await timeRunStep("get_board.settle_outbox", () =>
+						this.settleOutbox(appId, boardId),
 					);
-					return board;
-				}
-
-				const remoteData = await timeRunStep("get_board.remote", () =>
-					this.fetchRemoteBoard(appId, boardId),
-				);
-
-				if (remoteData) {
-					if (
-						!(await timeRunStep("get_board.lineage", () =>
-							this.lineageAllowsRemoteApply(appId, boardId, remoteData),
-						))
-					) {
+					const pendingSync = await timeRunStep("get_board.pending_sync", () =>
+						this.backend.getOfflineSyncCommands(appId, boardId),
+					);
+					const pendingMutations = pendingSync.filter(
+						commandSyncHasPendingMutation,
+					);
+					if (pendingMutations.length > 0) {
+						// Local edits are still queued for the server; the remote snapshot
+						// predates them, so the local board is the fresher one.
+						console.warn(
+							"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
+							{ boardId, pendingBatches: pendingMutations.length },
+						);
 						return board;
 					}
 
-					const { merged, changed } = await timeRunStep("get_board.merge", () =>
-						mergeBoardOffThread(remoteData, board),
+					const remoteData = await timeRunStep("get_board.remote", () =>
+						this.fetchRemoteBoard(appId, boardId),
 					);
-					if (changed && typeof version === "undefined") {
-						console.log("[BoardState] forceFresh: updating local board:", {
-							boardId,
-						});
-						await timeRunStep("get_board.upsert", () =>
-							invoke("upsert_board", {
-								appId: appId,
-								boardId: boardId,
-								name: merged.name,
-								description: merged.description,
-								logLevel: merged.log_level,
-								stage: merged.stage,
-								executionMode: merged.execution_mode,
-								boardData: merged,
-							}),
-						);
-						await timeRunStep("get_board.record_lineage", () =>
-							this.recordAppliedRemoteLineage(appId, boardId, remoteData),
-						);
-						dispatchRemoteBoardApplied(appId, boardId, "sync");
 
-						if (this.backend.queryClient) {
-							const queryKey = [
-								this.getBoard.name || "backendFn",
-								appId,
-								boardId,
-								version,
-							].filter((arg) => typeof arg !== "undefined");
-							this.backend.queryClient.setQueryData(queryKey, merged);
+					if (remoteData) {
+						if (
+							!(await timeRunStep("get_board.lineage", () =>
+								this.lineageAllowsRemoteApply(appId, boardId, remoteData),
+							))
+						) {
+							return board;
 						}
-						return merged;
+
+						const { merged, changed } = await timeRunStep(
+							"get_board.merge",
+							() => mergeBoardOffThread(remoteData, board),
+						);
+						if (changed && typeof version === "undefined") {
+							console.log("[BoardState] forceFresh: updating local board:", {
+								boardId,
+							});
+							await timeRunStep("get_board.upsert", () =>
+								invoke("upsert_board", {
+									appId: appId,
+									boardId: boardId,
+									name: merged.name,
+									description: merged.description,
+									logLevel: merged.log_level,
+									stage: merged.stage,
+									executionMode: merged.execution_mode,
+									boardData: merged,
+								}),
+							);
+							await timeRunStep("get_board.record_lineage", () =>
+								this.recordAppliedRemoteLineage(appId, boardId, remoteData),
+							);
+							dispatchRemoteBoardApplied(appId, boardId, "sync");
+
+							if (this.backend.queryClient) {
+								const queryKey = [
+									this.getBoard.name || "backendFn",
+									appId,
+									boardId,
+									version,
+								].filter((arg) => typeof arg !== "undefined");
+								this.backend.queryClient.setQueryData(queryKey, merged);
+							}
+							return merged;
+						}
+						return board;
 					}
-					return board;
+				} catch (e) {
+					console.warn(
+						"[BoardState] forceFresh sync failed, using local board:",
+						e,
+					);
 				}
-			} catch (e) {
-				console.warn(
-					"[BoardState] forceFresh sync failed, using local board:",
-					e,
-				);
-			}
-			return board;
+				return board;
+			})();
+			return settleWithin(refreshed, HUB_REFRESH_TIMEOUT_MS, board);
 		}
 
 		const promise = injectDataFunction(
@@ -2037,12 +2081,18 @@ export class BoardState implements IBoardState {
 
 		let metadata: ILogMetadata | undefined;
 		try {
-			const executionHub = isOffline
-				? undefined
-				: await this.backend.prepareExecutionAuth();
+			const executionHub =
+				isOffline && !this.backend.auth?.user?.access_token
+					? undefined
+					: await this.backend
+							.prepareExecutionAuth()
+							.catch((error: unknown) => {
+								if (isOffline) return undefined;
+								throw error;
+							});
 			metadata = await invoke("execute_board", {
 				executionHub,
-				executionSessionId: isOffline
+				executionSessionId: !executionHub
 					? undefined
 					: this.backend.executionSessionId,
 				appId: appId,
@@ -2231,7 +2281,7 @@ export class BoardState implements IBoardState {
 				const response = await fetcher<ILogMetadata[]>(
 					this.backend.profile,
 					path,
-					{ method: "GET" },
+					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				);
 

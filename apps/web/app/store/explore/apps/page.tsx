@@ -1,8 +1,7 @@
 "use client";
 
-import { ExploreAppsPage } from "@flow-like/flow-like-ui";
-import { EVENT_CONFIG } from "../../../../lib/event-config";
+import { ExploreAppsRedirect } from "@flow-like/flow-like-ui";
 
 export default function Page() {
-	return <ExploreAppsPage eventConfig={EVENT_CONFIG} />;
+	return <ExploreAppsRedirect />;
 }

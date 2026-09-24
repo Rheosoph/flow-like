@@ -341,9 +341,10 @@ impl ProjectArtifactManifest {
             if self.source == ProjectArtifactSource::Online
                 && file.path.starts_with("apps/")
                 && file.path != format!("apps/{}/online-source.json", self.project_id)
+                && file.path != format!("apps/{}/online-metadata.json", self.project_id)
             {
                 return Err(ProtocolError::Invalid(
-                    "online artifact may only contain its source marker and dependencies",
+                    "online artifact may only contain its approved metadata, source marker and dependencies",
                 ));
             }
             validate_artifact_digest(&file.sha256)?;

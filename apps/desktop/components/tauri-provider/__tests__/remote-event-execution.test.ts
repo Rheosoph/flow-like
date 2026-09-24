@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => ({
 	invoke: vi.fn(),
 	fetcher: vi.fn(),
 	streamFetcher: vi.fn(),
+	dispatchPaymentRequest: vi.fn(),
+}));
+
+vi.mock("@flow-like/flow-like-ui/components/payments/payment-events", () => ({
+	dispatchPaymentRequest: mocks.dispatchPaymentRequest,
 }));
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
@@ -97,6 +102,8 @@ function fakeBackend(overrides: { localOnly?: boolean } = {}) {
 		isLocalOnly: vi.fn().mockResolvedValue(overrides.localOnly ?? false),
 		profile: { id: "profile-1", hub: "hub-1" },
 		auth: { user: { access_token: "token-1", profile: { sub: "user-1" } } },
+		prepareExecutionAuth: vi.fn().mockResolvedValue("https://hub-1"),
+		executionSessionId: "native-window-session",
 		queryClient: { setQueryData: vi.fn(), invalidateQueries: vi.fn() },
 		backgroundTaskHandler: vi.fn(),
 		boardState: {
@@ -113,6 +120,7 @@ beforeEach(() => {
 	mocks.invoke.mockReset();
 	mocks.fetcher.mockReset();
 	mocks.streamFetcher.mockReset();
+	mocks.dispatchPaymentRequest.mockReset();
 	localStorage.clear();
 	resetPageContractDrift();
 });
@@ -400,6 +408,32 @@ describe("an event pinned to Remote execution", () => {
 		expect(prerun.runtime_variables).toHaveLength(1);
 		expect(prerun.can_execute_locally).toBe(false);
 	});
+
+	test("hands a server run's payment request to the payment prompt", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return remoteEvent();
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue(remoteEvent());
+		const request = {
+			event_type: "payment_request",
+			payload: { id: "pay_1", appId: APP, runId: "run-1" },
+		};
+		mocks.streamFetcher.mockImplementation(
+			async (
+				_profile: unknown,
+				_path: string,
+				_options: RequestInit,
+				_auth: unknown,
+				onMessage: (event: unknown) => void,
+			) => onMessage(request),
+		);
+		const state = new EventState(fakeBackend() as never);
+
+		await state.executeEvent(APP, EVENT, { id: EVENT, payload: {} } as never);
+
+		expect(mocks.dispatchPaymentRequest).toHaveBeenCalledWith(request);
+	});
 });
 
 /**
@@ -483,6 +517,102 @@ describe("a caller who may run the event but not read its board", () => {
 
 /** A Local event on a device that holds the board keeps its local preflight. */
 describe("an event that runs on this device", () => {
+	function runnableLocalEvent() {
+		const event = { ...remoteEvent(), execution_mode: "Local" };
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return event;
+			if (command === "execute_event") return undefined;
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue({
+			id: BOARD,
+			variables: {},
+			nodes: {},
+			layers: {},
+			execution_mode: "Hybrid",
+		});
+		return { backend, event, state: new EventState(backend as never) };
+	}
+
+	test("an offline project forwards its window identity and the token current after auth sync", async () => {
+		const { backend, state } = runnableLocalEvent();
+		backend.prepareExecutionAuth.mockImplementation(async () => {
+			backend.auth.user.access_token = "rotated-token";
+			return "https://hub-1";
+		});
+
+		await state.executeEvent(APP, EVENT, { id: EVENT, payload: {} } as never);
+
+		expect(backend.prepareExecutionAuth).toHaveBeenCalledTimes(1);
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"execute_event",
+			expect.objectContaining({
+				executionHub: "https://hub-1",
+				executionSessionId: "native-window-session",
+				token: "rotated-token",
+			}),
+		);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("signed-out offline execution does not require the login bridge", async () => {
+		const { backend, state } = runnableLocalEvent();
+		backend.auth = { user: null } as never;
+		backend.prepareExecutionAuth.mockRejectedValue(new Error("Sign in"));
+
+		await state.executeEvent(APP, EVENT, { id: EVENT, payload: {} } as never);
+
+		expect(backend.prepareExecutionAuth).not.toHaveBeenCalled();
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"execute_event",
+			expect.objectContaining({
+				executionHub: undefined,
+				executionSessionId: undefined,
+				token: undefined,
+			}),
+		);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("a failed login bridge still permits offline work without borrowing another session", async () => {
+		const { backend, state } = runnableLocalEvent();
+		backend.prepareExecutionAuth.mockRejectedValue(
+			new Error("Bridge unavailable"),
+		);
+
+		await state.executeEvent(APP, EVENT, { id: EVENT, payload: {} } as never);
+
+		expect(backend.prepareExecutionAuth).toHaveBeenCalledTimes(1);
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"execute_event",
+			expect.objectContaining({
+				executionHub: undefined,
+				executionSessionId: undefined,
+			}),
+		);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("a failed login bridge blocks online execution before native dispatch", async () => {
+		const { backend, event, state } = runnableLocalEvent();
+		backend.isOffline.mockResolvedValue(false);
+		backend.isLocalOnly.mockResolvedValue(false);
+		mocks.fetcher.mockResolvedValue(event);
+		backend.prepareExecutionAuth.mockRejectedValue(
+			new Error("Bridge unavailable"),
+		);
+
+		await expect(
+			state.executeEvent(APP, EVENT, { id: EVENT, payload: {} } as never),
+		).rejects.toThrow("Bridge unavailable");
+
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"execute_event",
+			expect.anything(),
+		);
+	});
+
 	test("preflight still reads the local board", async () => {
 		const localEvent = { ...remoteEvent(), execution_mode: "Local" };
 		mocks.invoke.mockImplementation(async (command: string) => {
@@ -651,6 +781,7 @@ describe("a registry-backed local Page action", () => {
 		mocks.fetcher.mockRejectedValue(
 			new ApiResponseError({
 				status: 404,
+				code: "NOT_FOUND",
 				message: "Event not found",
 				path: `apps/${APP}/events/${EVENT}`,
 			}),
@@ -678,6 +809,7 @@ describe("a registry-backed local Page action", () => {
 		mocks.fetcher.mockRejectedValue(
 			new ApiResponseError({
 				status: 404,
+				code: "NOT_FOUND",
 				message: "Event not found",
 				path: `apps/${APP}/events/${EVENT}`,
 			}),

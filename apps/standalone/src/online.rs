@@ -44,6 +44,7 @@ use tokio::sync::Mutex;
 
 mod cache;
 mod local_lance;
+mod metadata;
 pub mod outage;
 mod writes;
 
@@ -296,12 +297,22 @@ pub(crate) fn authorization_error(error: &anyhow::Error) -> AuthorizationError {
     }
     match crate::enrollment::api_status(error) {
         Some(reqwest::StatusCode::FORBIDDEN) => AuthorizationError::Denied,
-        Some(status) if status.is_server_error() => AuthorizationError::Unavailable,
+        Some(status)
+            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+        {
+            AuthorizationError::Unavailable
+        }
         Some(_) => AuthorizationError::InvalidResponse,
         None if error.chain().any(|source| {
             source
                 .downcast_ref::<reqwest::Error>()
-                .is_some_and(|error| error.is_connect() || error.is_timeout() || error.is_body())
+                .is_some_and(|error| {
+                    error.status().is_none()
+                        && (error.is_connect()
+                            || error.is_timeout()
+                            || error.is_body()
+                            || error.is_request())
+                })
         }) =>
         {
             AuthorizationError::Unavailable
@@ -970,7 +981,7 @@ async fn retain_metadata(
                 restored.context.scope == credentials.scope,
                 "Cached metadata authorization no longer matches cloud storage"
             );
-            Ok(restored.metadata)
+            Ok(metadata)
         }
         Err(error) => {
             if authorization_error(&error) == AuthorizationError::Denied {
@@ -1024,6 +1035,8 @@ pub(crate) async fn configure_preflight(
 ) -> Result<()> {
     let client = ProjectClient::new(authorizer)?;
     let metadata = Arc::new(LocalObjectStore::new(root.to_path_buf())?);
+    // Validation still proves the live grant; returned metadata is never executable input.
+    let _: serde_json::Value = client.fetch(reqwest::Method::GET, "app").await?;
     hydrate_metadata(&client, config, metadata.clone()).await?;
     runtime.register_app_meta_store(FlowLikeStore::Local(metadata).read_only());
     Ok(())
@@ -1110,33 +1123,17 @@ pub(crate) async fn configure_with_local_data(
         .clone();
     runtime.register_build_project_database(database_builder(project_location));
     runtime.register_build_user_database(database_builder(user_location));
-    let metadata: Arc<dyn ObjectStore> = match restored_metadata {
-        Some(metadata) => metadata,
-        None => {
-            let metadata: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
-            if let Err(error) = hydrate_metadata(&client, config, metadata.clone()).await {
-                if authorization_error(&error) == AuthorizationError::Denied {
-                    credentials.revoke().await?;
-                    return Err(error);
-                }
-                if authorization_error(&error) == AuthorizationError::Unavailable {
-                    if let Some(snapshot) = &credentials.snapshot {
-                        let restored = snapshot.restore().await?;
-                        ensure!(
-                            restored.context.scope == credentials.scope,
-                            "Cached metadata authorization no longer matches cloud storage"
-                        );
-                        restored.metadata
-                    } else {
-                        return Err(error);
-                    }
-                } else {
-                    return Err(error);
-                }
-            } else {
-                retain_metadata(&credentials, metadata).await?
-            }
-        }
+    // Outage snapshots authenticate resource context only. Reconstruct executable
+    // objects from the controller-approved bundle on every startup, including outages.
+    let restored_from_outage = restored_metadata.is_some();
+    let metadata: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+    hydrate_metadata(&client, config, metadata.clone()).await?;
+    let metadata = if restored_from_outage {
+        // The verified checkpoint retains its original grant deadline. Creating a
+        // new seal requires fresh cloud authorization, which an outage cannot supply.
+        metadata
+    } else {
+        retain_metadata(&credentials, metadata).await?
     };
     runtime.register_app_meta_store(
         FlowLikeStore::Other(Arc::new(outage::FencedMetadata::new(
@@ -1190,152 +1187,16 @@ fn database_uri(
         .unwrap_or_else(|| "unsupported://outside-device-storage".into())
 }
 
+pub(crate) fn validate_approved_metadata(config: &PlacementConfig) -> Result<()> {
+    metadata::validate(config)
+}
+
 async fn hydrate_metadata(
-    client: &ProjectClient,
+    _client: &ProjectClient,
     config: &PlacementConfig,
     store: Arc<dyn ObjectStore>,
 ) -> Result<()> {
-    let app: App = client.fetch(reqwest::Method::GET, "app").await?;
-    ensure!(
-        app.id == config.project_id
-            && !matches!(
-                app.visibility,
-                flow_like_runtime::app::AppVisibility::Offline
-            ),
-        "Online project manifest identity changed"
-    );
-    let root = ObjectPath::from("apps").child(config.project_id.as_str());
-    compress_to_file(store.clone(), root.child("manifest.app"), &app.to_proto()).await?;
-    for binding in &config.events {
-        let [major, minor, patch] = binding.event_version;
-        let event: Event = client
-            .fetch(
-                reqwest::Method::GET,
-                &format!(
-                    "events/{}/versions/{major}/{minor}/{patch}",
-                    binding.event_id
-                ),
-            )
-            .await?;
-        ensure!(
-            event.id == binding.event_id
-                && event.event_version == (major, minor, patch)
-                && event.board_version
-                    == Some((
-                        binding.board_version[0],
-                        binding.board_version[1],
-                        binding.board_version[2]
-                    )),
-            "Online event changed its pinned binding"
-        );
-        flow_like_device_protocol::validate_instance_identifier(&event.board_id)?;
-        let [major, minor, patch] = binding.board_version;
-        let board: Board = client
-            .fetch(
-                reqwest::Method::GET,
-                &format!("boards/{}/versions/{major}/{minor}/{patch}", event.board_id),
-            )
-            .await?;
-        ensure!(
-            board.id == event.board_id && board.version == (major, minor, patch),
-            "Online board changed its pinned binding"
-        );
-        compress_to_file(
-            store.clone(),
-            Board::proto_path(&root, &board.id, Some(board.version)),
-            &board.to_proto(),
-        )
-        .await?;
-        if let Some(page_id) = event.default_page_id.as_deref() {
-            flow_like_device_protocol::validate_instance_identifier(page_id)?;
-            ensure!(
-                board.page_ids.iter().any(|id| id == page_id),
-                "Event Page is absent from its pinned Board"
-            );
-            let page: flow_like_runtime::a2ui::widget::Page = client
-                .fetch(
-                    reqwest::Method::GET,
-                    &format!(
-                        "boards/{}/versions/{major}/{minor}/{patch}/pages/{page_id}",
-                        board.id
-                    ),
-                )
-                .await?;
-            ensure!(
-                page.id == page_id && page.board_id.as_deref().is_none_or(|id| id == board.id),
-                "Online Page changed its pinned binding"
-            );
-            let proto: flow_like_types::proto::Page = page.into();
-            compress_to_file(
-                store.clone(),
-                root.clone()
-                    .join("versions")
-                    .join(board.id.clone())
-                    .join(format!("{major}_{minor}_{patch}"))
-                    .join(format!("{page_id}.page")),
-                &proto,
-            )
-            .await?;
-        }
-        let path = root
-            .child("events")
-            .child("versions")
-            .child(event.id.as_str())
-            .child(format!(
-                "{}.{}.{}",
-                event.event_version.0, event.event_version.1, event.event_version.2
-            ));
-        compress_to_file(store.clone(), path, &event.to_proto()).await?;
-    }
-    for pin in &config.artifact_pins {
-        let [major, minor, patch] = pin.version;
-        let path = format!(
-            "{}/{}/versions/{major}/{minor}/{patch}",
-            pin.kind.path(),
-            pin.id
-        );
-        match pin.kind {
-            crate::config::ArtifactKind::Widget => {
-                let widget: flow_like_runtime::a2ui::widget::Widget =
-                    client.fetch(reqwest::Method::GET, &path).await?;
-                ensure!(
-                    widget.id == pin.id && widget.version == Some((major, minor, patch)),
-                    "Online widget changed its pinned binding"
-                );
-                let versioned = root
-                    .child("widgets")
-                    .child("versions")
-                    .child(pin.id.as_str())
-                    .child(format!("{major}-{minor}-{patch}.widget"));
-                compress_to_file_json(store.clone(), versioned, &widget).await?;
-                // Runtime widget/template lookup can use an unversioned local
-                // name. Its immutable cache alias always names this exact pin.
-                compress_to_file_json(
-                    store.clone(),
-                    root.child(format!("{}.widget", pin.id)),
-                    &widget,
-                )
-                .await?;
-            }
-            crate::config::ArtifactKind::Template => {
-                let template: Board = client.fetch(reqwest::Method::GET, &path).await?;
-                ensure!(
-                    template.id == pin.id && template.version == (major, minor, patch),
-                    "Online template changed its pinned binding"
-                );
-                let versioned = Board::versioned_template_dir(&root, &pin.id)
-                    .child(format!("{major}_{minor}_{patch}.template"));
-                compress_to_file(store.clone(), versioned, &template.to_proto()).await?;
-                compress_to_file(
-                    store.clone(),
-                    root.child(format!("{}.template", pin.id)),
-                    &template.to_proto(),
-                )
-                .await?;
-            }
-        }
-    }
-    Ok(())
+    metadata::hydrate(config, store).await
 }
 
 #[cfg(test)]
@@ -1349,6 +1210,22 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
+    pub(super) fn approve_documents(
+        config: &mut PlacementConfig,
+        documents: BTreeMap<String, serde_json::Value>,
+    ) {
+        let bytes = serde_json::to_vec(&metadata::Bundle {
+            version: 1,
+            project_id: config.project_id.clone(),
+            documents,
+        })
+        .unwrap();
+        let root = config.project_path.join("apps").join(&config.project_id);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("online-metadata.json"), &bytes).unwrap();
+        config.online_metadata_sha256 = Some(flow_like_device_protocol::artifact_sha256(&bytes));
+    }
+
     pub(super) fn config(root: &Path) -> PlacementConfig {
         PlacementConfig {
             id: "placement".into(),
@@ -1356,6 +1233,7 @@ mod tests {
             deployment_id: "deployment".into(),
             revision: "revision".into(),
             source: ProjectSource::Online,
+            online_metadata_sha256: Some("a".repeat(64)),
             project_path: root.into(),
             events: vec![EventBinding {
                 event_id: "event".into(),
@@ -2315,6 +2193,7 @@ mod tests {
             .await
             .unwrap();
         app.visibility = AppVisibility::Private;
+        let approved_app = serde_json::to_value(&app).unwrap();
         let router = axum::Router::new()
             .route(
                 "/instances/project/storage",
@@ -2332,6 +2211,10 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let mut placement = config(directory.path());
         placement.events.clear();
+        approve_documents(
+            &mut placement,
+            BTreeMap::from([("app".into(), approved_app)]),
+        );
         let mut runtime = FlowLikeConfig::with_default_store(FlowLikeStore::Other(local.clone()));
         let online = configure_with_local_data(
             &placement,
@@ -2430,6 +2313,142 @@ mod tests {
         assert!(!directory.path().join("user").exists());
         assert!(!directory.path().join("tmp").exists());
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn approved_metadata_recovers_without_resealing_and_still_rejects_tampering() -> Result<()>
+    {
+        use axum::response::IntoResponse;
+        use flow_like_runtime::{
+            app::AppVisibility, bit::Metadata, state::FlowLikeState, utils::http::HTTPClient,
+        };
+
+        #[derive(Default)]
+        struct InitialSealOnly {
+            inner: SnapshotAuthority,
+            calls: AtomicUsize,
+        }
+        #[async_trait]
+        impl outage::OutageAuthority for InitialSealOnly {
+            async fn seal(&self, claim: &outage::SnapshotClaim) -> Result<String> {
+                ensure!(
+                    self.calls.fetch_add(1, Ordering::SeqCst) == 0,
+                    "Fresh authorization is unavailable for another seal"
+                );
+                outage::OutageAuthority::seal(&self.inner, claim).await
+            }
+            async fn verify(&self, claim: &outage::SnapshotClaim, seal: &str) -> Result<()> {
+                outage::OutageAuthority::verify(&self.inner, claim, seal).await
+            }
+            async fn deny(&self, binding: &str) -> Result<()> {
+                outage::OutageAuthority::deny(&self.inner, binding).await
+            }
+        }
+
+        let revision = tempfile::tempdir()?;
+        let data = tempfile::tempdir()?;
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut app = App::new(Some("project".into()), Metadata::default(), vec![], state).await?;
+        app.visibility = AppVisibility::Private;
+        let mut placement = config(revision.path());
+        placement.events.clear();
+        approve_documents(
+            &mut placement,
+            BTreeMap::from([("app".into(), serde_json::to_value(app)?)]),
+        );
+        let status = Arc::new(std::sync::atomic::AtomicU16::new(200));
+        let api_status = status.clone();
+        let router = axum::Router::new().route(
+            "/instances/project/storage",
+            axum::routing::post(move || {
+                let status = api_status.clone();
+                async move {
+                    if status.load(Ordering::SeqCst) == 200 {
+                        axum::Json(lease()).into_response()
+                    } else {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let authorizer = Arc::new(TestAuthorizer {
+            base: format!("http://{}/instances/project", listener.local_addr()?),
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let authority = Arc::new(InitialSealOnly::default());
+        let mut first = FlowLikeConfig::new();
+        let live = configure_with_local_data(
+            &placement,
+            &identity(),
+            authorizer.clone(),
+            &mut first,
+            data.path(),
+            Some(authority.clone()),
+        )
+        .await?;
+        let checkpoint = data
+            .path()
+            .join(".standalone-cache/placement/outage/snapshot.json");
+        let saved = std::fs::read(&checkpoint)?;
+        drop(first);
+        drop(live);
+        status.store(503, Ordering::SeqCst);
+        let mut restarted = identity();
+        restarted.instance_id = "after-outage-restart".into();
+        let mut offline = FlowLikeConfig::new();
+        let recovered = configure_with_local_data(
+            &placement,
+            &restarted,
+            authorizer.clone(),
+            &mut offline,
+            data.path(),
+            Some(authority.clone()),
+        )
+        .await?;
+        assert_eq!(recovered.delegating_user_id, "owner");
+        assert!(
+            offline
+                .stores
+                .app_meta_store
+                .as_ref()
+                .unwrap()
+                .as_generic()
+                .head(&ObjectPath::from("apps/project/manifest.app"))
+                .await
+                .is_ok()
+        );
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&checkpoint)?, saved);
+
+        let approved_path = revision.path().join("apps/project/online-metadata.json");
+        let mut substituted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&approved_path)?)?;
+        substituted["documents"]["app"]["frontend"] =
+            serde_json::json!({"landing_page":"substituted"});
+        std::fs::write(&approved_path, serde_json::to_vec(&substituted)?)?;
+        let mut rejected = FlowLikeConfig::new();
+        let error = configure_with_local_data(
+            &placement,
+            &restarted,
+            authorizer,
+            &mut rejected,
+            data.path(),
+            Some(authority.clone()),
+        )
+        .await
+        .err()
+        .context("Tampered approved bytes were accepted during outage")?;
+        assert!(error.to_string().contains("digest differs"));
+        assert_eq!(authority.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&checkpoint)?, saved);
+        server.abort();
+        Ok(())
     }
 
     #[test]
@@ -2595,17 +2614,33 @@ mod tests {
             ),
             (
                 "/instances/project/boards/board/versions/1/0/0/pages/page".into(),
-                serde_json::to_value(page).unwrap(),
+                serde_json::to_value(&page).unwrap(),
             ),
             (
                 "/instances/project/widgets/widget/versions/1/0/0".into(),
                 serde_json::to_value(widget).unwrap(),
             ),
             (
+                "/instances/project/templates/template/versions/1/0/0/pages/page".into(),
+                serde_json::to_value(&page).unwrap(),
+            ),
+            (
                 "/instances/project/templates/template/versions/1/0/0".into(),
                 serde_json::to_value(template).unwrap(),
             ),
         ]));
+        approve_documents(
+            &mut placement,
+            documents
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.trim_start_matches("/instances/project/").to_owned(),
+                        value.clone(),
+                    )
+                })
+                .collect(),
+        );
         let requests = Arc::new(AtomicUsize::new(0));
         let calls = requests.clone();
         let router =
@@ -2636,7 +2671,7 @@ mod tests {
         hydrate_metadata(&client, &placement, cache.clone())
             .await
             .unwrap();
-        assert_eq!(requests.load(Ordering::SeqCst), 6);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
         let state = Arc::new(FlowLikeState::new(
             FlowLikeConfig::with_default_store(FlowLikeStore::Local(cache).read_only()),
             HTTPClient::new_without_refetch(),
@@ -2715,7 +2750,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(requests.load(Ordering::SeqCst), 12);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
         let cache_root = directory.path().join(".standalone-cache/placement");
         assert_eq!(std::fs::read_dir(&cache_root).unwrap().count(), 1);
         assert!(cache_root.join("instance").is_dir());
@@ -2745,6 +2780,46 @@ mod tests {
                 .await
                 .is_err()
         );
+        placement.events[0].board_version = [1, 0, 0];
+        let approved_path = directory.path().join("apps/project/online-metadata.json");
+        let original = std::fs::read(&approved_path).unwrap();
+        let mut substituted: metadata::Bundle = serde_json::from_slice(&original).unwrap();
+        substituted
+            .documents
+            .get_mut("boards/board/versions/1/0/0")
+            .unwrap()["name"] = serde_json::json!("Substituted under the same version");
+        std::fs::write(&approved_path, serde_json::to_vec(&substituted).unwrap()).unwrap();
+        let rejected = Arc::new(object_store::memory::InMemory::new());
+        assert!(
+            hydrate_metadata(&client, &placement, rejected.clone())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("digest differs")
+        );
+        assert_eq!(rejected.list(None).count().await, 0);
+        let mut incomplete: metadata::Bundle = serde_json::from_slice(&original).unwrap();
+        incomplete
+            .documents
+            .remove("boards/board/versions/1/0/0/pages/page");
+        approve_documents(&mut placement, incomplete.documents);
+        assert!(
+            hydrate_metadata(&client, &placement, rejected.clone())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("incomplete")
+        );
+        assert_eq!(rejected.list(None).count().await, 0);
+        placement.online_metadata_sha256 = None;
+        assert!(
+            hydrate_metadata(&client, &placement, rejected.clone())
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Prepare and deploy")
+        );
+        assert_eq!(rejected.list(None).count().await, 0);
         server.abort();
     }
 }

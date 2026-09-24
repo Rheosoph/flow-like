@@ -188,6 +188,43 @@ describe("DesktopAuthProvider", () => {
 		expect(probe.auth?.isAuthenticated).toBe(false);
 	});
 
+	test("restores the stored session from the last configuration while the hub is unreachable", async () => {
+		await render();
+		await answer(0, oidcConfig("client-a"));
+		const now = Math.floor(Date.now() / 1000);
+		const expired = new User({
+			access_token: "access-1",
+			id_token: "id-1",
+			token_type: "Bearer",
+			expires_at: now - 60,
+			profile: {
+				sub: "user-1",
+				iss: "https://auth.flow-like.test",
+				aud: "client-a",
+				exp: now - 60,
+				iat: now - 3660,
+			},
+		});
+		localStorage.setItem(
+			"oidc.user:https://auth.flow-like.test:client-a",
+			expired.toStorageString(),
+		);
+		await act(async () => root.unmount());
+		root = createRoot(container);
+
+		const logError = vi.spyOn(console, "error").mockImplementation(() => {});
+		await render();
+		await act(async () =>
+			mocks.configRequests[1].reject(new Error("network unreachable")),
+		);
+		await flush();
+		logError.mockRestore();
+
+		expect(probe.auth?.settings.client_id).toBe("client-a");
+		expect(probe.auth?.user?.profile.sub).toBe("user-1");
+		expect(probe.auth?.isAuthenticated).toBe(false);
+	});
+
 	test("remounts the app when a hub switch changes the client", async () => {
 		await render();
 		await answer(0, oidcConfig("client-a"));

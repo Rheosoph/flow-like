@@ -47,6 +47,9 @@ export interface PurchaseOrder {
 	platformOwned?: boolean;
 	orderId: string;
 	appId: string;
+	/** Absent on servers that only sold apps through the marketplace. */
+	itemKind?: "APP" | "PACKAGE";
+	itemId?: string;
 	itemName?: string;
 	status: string;
 	amount: number;
@@ -64,6 +67,21 @@ export interface WithdrawalRequest {
 	confirm: true;
 	consumerName: string;
 	confirmationEmail: string;
+}
+
+type OrderItem = Pick<PurchaseOrder, "appId" | "itemKind" | "itemId">;
+
+/** Store page of what the order bought: package orders link to the package registry. */
+export function orderItemHref(order: OrderItem): string {
+	return order.itemKind === "PACKAGE"
+		? `/store/packages?id=${encodeURIComponent(order.itemId ?? order.appId)}`
+		: `/store?id=${encodeURIComponent(order.appId)}`;
+}
+
+export function orderItemName(
+	order: OrderItem & Pick<PurchaseOrder, "itemName">,
+): string {
+	return order.itemName ?? order.itemId ?? order.appId;
 }
 
 export const pendingOrder = (status: string) =>

@@ -76,6 +76,9 @@ pub type DatabaseTableNames = Arc<dyn Fn(Path) -> DatabaseFuture<Vec<String>> + 
 #[cfg(feature = "flow-runtime")]
 pub type DatabaseTableIsManaged = Arc<dyn Fn(&Path, &str) -> bool + Send + Sync>;
 
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseTableNotice = Arc<dyn Fn(&Path, &str) -> Option<String> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct FlowLikeCallbacks {
     /// Optional logical database adapter. Hosts own its durability and local view.
@@ -85,6 +88,9 @@ pub struct FlowLikeCallbacks {
     pub database_table_names: Option<DatabaseTableNames>,
     #[cfg(feature = "flow-runtime")]
     pub database_table_is_managed: Option<DatabaseTableIsManaged>,
+    /// Host warning that Open Database logs for a table, e.g. a stale offline copy.
+    #[cfg(feature = "flow-runtime")]
+    pub database_table_notice: Option<DatabaseTableNotice>,
     #[cfg(feature = "flow-runtime")]
     pub build_project_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
     #[cfg(feature = "flow-runtime")]
@@ -108,6 +114,8 @@ impl Default for FlowLikeCallbacks {
             database_table_names: None,
             #[cfg(feature = "flow-runtime")]
             database_table_is_managed: None,
+            #[cfg(feature = "flow-runtime")]
+            database_table_notice: None,
             #[cfg(feature = "flow-runtime")]
             build_project_database: None,
             #[cfg(feature = "flow-runtime")]
@@ -143,6 +151,11 @@ impl FlowLikeConfig {
     #[cfg(feature = "flow-runtime")]
     pub fn register_database_table_is_managed(&mut self, callback: DatabaseTableIsManaged) {
         self.callbacks.database_table_is_managed = Some(callback);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_table_notice(&mut self, callback: DatabaseTableNotice) {
+        self.callbacks.database_table_notice = Some(callback);
     }
 
     pub fn new() -> Self {

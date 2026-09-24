@@ -37,6 +37,9 @@ pub enum ProtocolError {
     InvalidTime,
     #[error("device protocol proof does not match its request")]
     BindingMismatch,
+    /// Renders like `Invalid`, so size texts stay identical on the instance path.
+    #[error("invalid device protocol input: {what} exceeds {}", crate::offline::format_limit(*.limit))]
+    TooLarge { what: &'static str, limit: usize },
 }
 
 pub type Result<T> = std::result::Result<T, ProtocolError>;

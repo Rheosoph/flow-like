@@ -43,7 +43,11 @@ const APP = "app-1";
 const SUB = "user-7";
 
 const apiError = (status: number) =>
-	new ApiResponseError({ status, message: `HTTP ${status}` });
+	new ApiResponseError({
+		status,
+		code: status === 404 ? "NOT_FOUND" : undefined,
+		message: `HTTP ${status}`,
+	});
 
 function memberBackend() {
 	return {

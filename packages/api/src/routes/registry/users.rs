@@ -326,6 +326,9 @@ pub async fn accept_invitation(
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
 
+    state.invalidate_wasm_permission(&caller_id, &pu.package_id);
+    crate::package_license::refresh_package_access(&state, &caller_id, &pu.package_id).await;
+
     Ok(Json(build_user_response(pu, user_record)))
 }
 
@@ -492,6 +495,7 @@ pub async fn update_user_permission(
 
     // A demotion must take effect immediately, not after the cache TTL.
     state.invalidate_wasm_permission(&target_user_id, &package_id);
+    crate::package_license::refresh_package_access(&state, &target_user_id, &package_id).await;
 
     let user_record = user::Entity::find_by_id(&target_user_id)
         .one(&state.db)
@@ -567,6 +571,8 @@ pub async fn remove_user(
     // Revoke the cached grant so a removed user can't keep acting for up to the
     // cache TTL.
     state.invalidate_wasm_permission(&target_user_id, &package_id);
+    // Projects this user licensed the package for pass it on or lapse.
+    crate::package_license::refresh_package_access(&state, &target_user_id, &package_id).await;
 
     Ok(Json(()))
 }

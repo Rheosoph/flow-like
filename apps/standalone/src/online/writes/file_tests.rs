@@ -1,15 +1,34 @@
 use super::*;
 use crate::{
     online::cache::{CacheControl, ReadCache},
-    outbox::BufferingConfig,
+    outbox::{BufferingConfig, Outbox},
 };
-use flow_like_storage::object_store::{UpdateVersion, memory::InMemory};
+use async_trait::async_trait;
+use bytes::Bytes;
+use flow_like_device_protocol::{
+    INSTANCE_OFFLINE_LIMITS, OfflineExpected, OfflineMutation, OfflineReplayRequest, StoragePurpose,
+};
+use flow_like_offline_writes::{FileOverlay, FileOverlayParts};
+use flow_like_storage::object_store::{
+    self, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, UpdateVersion,
+    memory::InMemory, path::Path as ObjectPath,
+};
 use flow_like_types_contracts::authorization::AuthorizationError;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::{
+    fmt,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
+use tokio::sync::{Mutex, Notify};
+
+fn error(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> object_store::Error {
+    object_store::Error::Generic {
+        store: "DeviceOfflineFiles",
+        source: error.into(),
+    }
+}
 
 #[derive(Debug, Default)]
 struct Cloud {
@@ -115,15 +134,9 @@ fn fixture(root: &Path, cloud: Arc<Cloud>, scheme: &str) -> (FileOverlay, Arc<Ca
     .unwrap();
     let authorized_queue = queue.clone();
     let authorized_cache = cache.clone();
-    let store = FileOverlay {
+    let store = FileOverlay::for_tests(FileOverlayParts {
         inner: ReadCache::new(cloud, cache.clone()),
         queue,
-        routes: Arc::new(vec![Route {
-            purpose: StoragePurpose::Files,
-            root: "apps/project/upload/".into(),
-            prefix: "exports/".into(),
-            scheme: scheme.into(),
-        }]),
         authorize: Arc::new(move || {
             if authorized_cache.is_revoked() {
                 authorized_queue.quarantine("Revoked test authorization")?;
@@ -132,7 +145,19 @@ fn fixture(root: &Path, cloud: Arc<Cloud>, scheme: &str) -> (FileOverlay, Arc<Ca
         }),
         gate: Arc::new(Mutex::new(())),
         wake: Arc::new(Notify::new()),
-    };
+        replay_limits: INSTANCE_OFFLINE_LIMITS,
+        options: FileOverlayOptions {
+            routes: vec![FileRoute {
+                purpose: StoragePurpose::Files,
+                root: "apps/project/upload/".into(),
+                prefix: "exports/".into(),
+                scheme: scheme.into(),
+            }],
+            buffering: FileBuffering::Always,
+            max_file_bytes: MAX_OFFLINE_OPERATION_BYTES,
+            offline_error: offline_error(),
+        },
+    });
     (store, cache)
 }
 fn path(file: &str) -> ObjectPath {
@@ -293,7 +318,17 @@ async fn s3_rejects_existing_mutations_but_compacts_new_file_cancellation() {
     ));
     let new = path("new");
     cloud.offline.store(true, Ordering::SeqCst);
-    create(&store, &new, "new").await.unwrap();
+    assert!(
+        create(&store, &new, "new")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("may already exist in the cloud")
+    );
+    store
+        .put(&new, Bytes::from_static(b"new").into())
+        .await
+        .unwrap();
     store.delete(&new).await.unwrap();
     let head = store.queue.head().unwrap().unwrap();
     let request: OfflineReplayRequest = serde_json::from_value(head.payload).unwrap();
@@ -328,7 +363,10 @@ async fn pending_streams_stop_after_revocation_and_outside_scope_never_queues() 
             .contains("offline")
     );
     let file = path("new");
-    create(&store, &file, "sensitive").await.unwrap();
+    store
+        .put(&file, Bytes::from_static(b"sensitive").into())
+        .await
+        .unwrap();
     let stream = store.get(&file).await.unwrap();
     cache.revoke().unwrap();
     assert!(stream.bytes().await.is_err());
@@ -593,4 +631,67 @@ async fn pending_file_listing_stops_between_items_after_revocation() {
     assert!(listing.next().await.unwrap().is_err());
     assert!(listing.next().await.is_none());
     assert!(store.queue.status().unwrap().quarantined);
+}
+
+#[tokio::test]
+async fn explicit_create_of_unknown_path_fails_offline_with_e21() {
+    let root = tempfile::tempdir().unwrap();
+    let cloud = Arc::new(Cloud::default());
+    let (store, _) = fixture(root.path(), cloud.clone(), "az");
+    let file = path("unknown.json");
+    cloud.offline.store(true, Ordering::SeqCst);
+    let error = create(&store, &file, "created")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(&format!(
+        "'{file}' may already exist in the cloud, and this device cannot check while offline. Creating it only if absent needs a connection to the hub."
+    )));
+    assert_eq!(store.queue.status().unwrap().pending_count, 0);
+    store
+        .put(&file, Bytes::from_static(b"created").into())
+        .await
+        .unwrap();
+    let request: OfflineReplayRequest =
+        serde_json::from_value(store.queue.head().unwrap().unwrap().payload).unwrap();
+    assert!(matches!(request.expected, OfflineExpected::FileAbsent));
+    assert!(matches!(
+        create(&store, &file, "again").await,
+        Err(object_store::Error::AlreadyExists { .. })
+    ));
+}
+
+#[tokio::test]
+async fn table_format_commits_pass_through_online_and_fail_offline_with_e22() {
+    let root = tempfile::tempdir().unwrap();
+    let cloud = Arc::new(Cloud::default());
+    let (store, _) = fixture(root.path(), cloud.clone(), "az");
+    let commit = path("events/_delta_log/00000000000000000000.json");
+    create(&store, &commit, "commit").await.unwrap();
+    assert_eq!(body(&cloud.memory, &commit).await, "commit");
+    assert_eq!(store.queue.status().unwrap().pending_count, 0);
+    cloud.offline.store(true, Ordering::SeqCst);
+    for commit in [
+        path("events/_delta_log/00000000000000000001.json"),
+        path("iceberg/metadata/v2.metadata.json"),
+        path("iceberg/metadata/version-hint.text"),
+        path("hudi/.hoodie/20260924.commit"),
+    ] {
+        let error = create(&store, &commit, "commit")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!(
+            "'{commit}' belongs to a table format commit log (Delta, Iceberg or Hudi). These commits need a connection to the hub."
+        )));
+    }
+    assert_eq!(store.queue.status().unwrap().pending_count, 0);
+    store
+        .put(
+            &path("events/part-0001.parquet"),
+            Bytes::from_static(b"data").into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.queue.status().unwrap().pending_count, 1);
 }

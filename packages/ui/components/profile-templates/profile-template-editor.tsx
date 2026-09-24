@@ -286,7 +286,7 @@ function ProfileTemplateEditor({
 					"The server did not return the saved profile. Your draft is still here.",
 				);
 			client.setQueryData<IProfile[]>(context.queryKey, (current) => [
-				...(current ?? []).filter((item) => item.id !== saved.id),
+				...asArray(current).filter((item) => item.id !== saved.id),
 				saved,
 			]);
 			const currentDraft = readProfileTemplateDraft(draftKey);

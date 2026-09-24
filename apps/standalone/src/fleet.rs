@@ -771,11 +771,26 @@ mod tests {
             "unattended-boot".into(),
             cancel.clone(),
         ));
-        let received = tokio::time::timeout(Duration::from_secs(15), received.recv()).await;
+        // Fair publication orders streams by their hashed reader identity, so
+        // metrics can precede status when the test generates a different key.
+        let received = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let bundle = received
+                    .recv()
+                    .await
+                    .context("Publisher closed before encrypted inventory")?;
+                let header =
+                    verify_fleet_snapshot(&bundle, &device.telemetry_signer().public_key())?;
+                if header.audience.kind == FleetKind::Status {
+                    return Ok::<_, anyhow::Error>(bundle);
+                }
+            }
+        })
+        .await;
         cancel.cancel();
         let publication = publisher.await;
         server.abort();
-        let bundle = received?.context("Publisher closed before encrypted inventory")?;
+        let bundle = received??;
         publication??;
         let header = verify_fleet_snapshot(&bundle, &device.telemetry_signer().public_key())?;
         assert_eq!(header.audience.kind, FleetKind::Status);

@@ -1,8 +1,8 @@
 use crate::{broker::WorkloadBroker, config::PlacementConfig, state::StateStore};
 use anyhow::{Context, Result, ensure};
 use flow_like_types_contracts::authorization::{
-    AuthorizationError, AuthorizationFuture, AuthorizationRequest, RequestAuthorization,
-    RequestAuthorizer, ResourceAudience,
+    AuthorizationAttribution, AuthorizationError, AuthorizationFuture, AuthorizationRequest,
+    RequestAuthorization, RequestAuthorizer, ResourceAudience,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -445,6 +445,10 @@ impl ChildBroker {
 }
 
 impl RequestAuthorizer for ChildBroker {
+    fn attribution(&self) -> AuthorizationAttribution {
+        AuthorizationAttribution::InstanceGrant
+    }
+
     fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
         self.resource_base.as_ref().map(|base| match audience {
             ResourceAudience::HostedModels => base.clone(),
@@ -481,6 +485,9 @@ impl RequestAuthorizer for ChildBroker {
                 ),
                 ParentResponse::Error { code } if code == "denied" => {
                     Err(AuthorizationError::Denied)
+                }
+                ParentResponse::Error { code } if code == "expired" => {
+                    Err(AuthorizationError::Expired)
                 }
                 ParentResponse::Error { code } if code == "invalid_request" => {
                     Err(AuthorizationError::InvalidRequest)
@@ -762,6 +769,7 @@ pub(crate) async fn serve_with_drain(
                             Err(error) => ParentResponse::Error {
                                 code: match error {
                                     AuthorizationError::Denied => "denied",
+                                    AuthorizationError::Expired => "expired",
                                     AuthorizationError::InvalidRequest => "invalid_request",
                                     AuthorizationError::InvalidResponse => "invalid_response",
                                     _ => "unavailable",
@@ -1445,13 +1453,17 @@ mod tests {
             resource_base: None,
             identity: None,
         };
+        assert_eq!(
+            client.attribution(),
+            AuthorizationAttribution::InstanceGrant
+        );
         let peer = tokio::spawn(async move {
-            for i in 0..3 {
+            for i in 0..4 {
                 let request: ChildRequest = read_frame(&mut server).await.unwrap();
                 assert!(matches!(request, ChildRequest::Authorize { .. }));
-                let response = if i == 2 {
+                let response = if i >= 2 {
                     ParentResponse::Error {
-                        code: "denied".into(),
+                        code: if i == 2 { "denied" } else { "expired" }.into(),
                     }
                 } else {
                     ParentResponse::Authorization {
@@ -1466,7 +1478,7 @@ mod tests {
                 write_frame(&mut server, &response).await.unwrap();
             }
         });
-        for i in 0..3 {
+        for i in 0..4 {
             let result = client
                 .authorize(AuthorizationRequest {
                     audience: ResourceAudience::HostedModels,
@@ -1476,6 +1488,8 @@ mod tests {
                 .await;
             if i == 2 {
                 assert_eq!(result.unwrap_err(), AuthorizationError::Denied);
+            } else if i == 3 {
+                assert_eq!(result.unwrap_err(), AuthorizationError::Expired);
             } else {
                 assert_eq!(result.unwrap().dpop(), Some(format!("proof-{i}").as_str()));
             }

@@ -14,11 +14,34 @@ export class ExecutionAuthBridge {
 	private pending: Promise<void> = Promise.resolve();
 	private snapshot?: ExecutionAuthSnapshot;
 	private sequence = 0;
+	private opening?: Promise<string>;
+	private nativeSessionId?: string;
 
 	constructor(
-		readonly sessionId: string,
+		private readonly openSession: () => Promise<string>,
 		private readonly send: (update: ExecutionAuthUpdate) => Promise<void>,
 	) {}
+
+	get sessionId(): string {
+		if (!this.nativeSessionId) {
+			throw new Error("Native execution session is not ready.");
+		}
+		return this.nativeSessionId;
+	}
+
+	private session(): Promise<string> {
+		this.opening ??= this.openSession()
+			.then((sessionId) => {
+				if (!sessionId) throw new Error("Native execution session is missing.");
+				this.nativeSessionId = sessionId;
+				return sessionId;
+			})
+			.catch((error: unknown) => {
+				this.opening = undefined;
+				throw error;
+			});
+		return this.opening;
+	}
 
 	update(snapshot: ExecutionAuthSnapshot): Promise<void> {
 		if (
@@ -30,10 +53,13 @@ export class ExecutionAuthBridge {
 		}
 		this.snapshot = { ...snapshot };
 		const sequence = ++this.sequence;
-		const update = { ...snapshot, sessionId: this.sessionId, sequence };
+		const update = { ...snapshot, sequence };
 		this.pending = this.pending
 			.catch(() => undefined)
-			.then(() => this.send(update))
+			.then(async () => {
+				const sessionId = await this.session();
+				await this.send({ ...update, sessionId });
+			})
 			.catch((error: unknown) => {
 				// Permit retry without letting an older failed update erase a newer one.
 				if (sequence === this.sequence) this.snapshot = undefined;

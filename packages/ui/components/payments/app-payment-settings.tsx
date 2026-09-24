@@ -235,20 +235,43 @@ export function AppPaymentSettingsPanel({ appId }: { appId: string }) {
  */
 export function SellerTermsCard({ appId }: { appId: string }) {
 	const { t } = useTranslation("payments");
-	const payments = usePayments();
 	const readiness = usePaymentQuery<PaymentReadiness>(
 		readinessPath(appId),
 		!!appId,
 	);
+	return (
+		<SellerTermsConsentCard
+			termsPath={`apps/${encodeURIComponent(appId)}/marketplace/terms`}
+			platformOwned={readiness.data?.platformOwned}
+			description={t(
+				"sellerTermsBeforePrice",
+				"Accept the current seller terms before you set a price for this app.",
+			)}
+		/>
+	);
+}
+
+/**
+ * Records the seller agreement for one sellable item at `termsPath`. Hidden
+ * until the seller is known to be independent (`platformOwned === false`).
+ */
+export function SellerTermsConsentCard({
+	termsPath,
+	platformOwned,
+	description,
+}: {
+	termsPath: string;
+	platformOwned: boolean | undefined;
+	description: string;
+}) {
+	const { t } = useTranslation("payments");
+	const payments = usePayments();
 	const [terms, setTerms] = useState<PaymentTerms | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [accepted, setAccepted] = useState(false);
 	const [error, setError] = useState<unknown>();
 
-	if (
-		!payments.config?.marketplace_enabled ||
-		readiness.data?.platformOwned !== false
-	)
+	if (!payments.config?.marketplace_enabled || platformOwned !== false)
 		return null;
 
 	return (
@@ -257,12 +280,7 @@ export function SellerTermsCard({ appId }: { appId: string }) {
 				<CardTitle>{t("marketplaceSales", "Marketplace sales")}</CardTitle>
 			</CardHeader>
 			<CardContent className="space-y-4">
-				<p className="text-sm text-muted-foreground">
-					{t(
-						"sellerTermsBeforePrice",
-						"Accept the current seller terms before you set a price for this app.",
-					)}
-				</p>
+				<p className="text-sm text-muted-foreground">{description}</p>
 				<PaymentError error={error} />
 				<PaymentConsent kind="SELLER_TERMS" value={terms} onChange={setTerms} />
 				<Button
@@ -271,15 +289,11 @@ export function SellerTermsCard({ appId }: { appId: string }) {
 						setBusy(true);
 						setError(undefined);
 						try {
-							await payments.request(
-								`apps/${encodeURIComponent(appId)}/marketplace/terms`,
-								"POST",
-								{
-									termsVersion: terms?.version,
-									termsAccepted: true,
-									locale: terms?.locale,
-								},
-							);
+							await payments.request(termsPath, "POST", {
+								termsVersion: terms?.version,
+								termsAccepted: true,
+								locale: terms?.locale,
+							});
 							setAccepted(true);
 							await payments.refresh();
 						} catch (error) {

@@ -58,14 +58,15 @@ pub async fn start(
     parameters: Value,
 ) -> Result<Option<String>, ApiError> {
     let config = &state.platform_config.payments;
-    if kind == "app_purchase" && config.marketplace_enabled
+    // With the marketplace on, apps and packages pay their sellers through it.
+    if matches!(kind, "app_purchase" | "wasm_purchase") && config.marketplace_enabled
         || config
             .legacy_checkout_until
             .is_some_and(|until| chrono::Utc::now().timestamp_millis() >= until)
     {
         return Err(crate::payments::error(
             "CHECKOUT_UPGRADE_REQUIRED",
-            "This checkout has moved. Update FlowLike and reopen the app listing.",
+            "This checkout has moved. Update FlowLike and reopen the listing.",
         ));
     }
     let scope = crate::payments::platform_scope(state).await?;

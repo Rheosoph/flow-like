@@ -1,4 +1,7 @@
 import type {
+	ExploreQuery,
+	ExploreSearchQuery,
+	ExploreSearchResponse,
 	IApp,
 	IAppCategory,
 	IAppState,
@@ -6,6 +9,7 @@ import type {
 	IBoard,
 	IGroup,
 	IMetadata,
+	ResolvedExplore,
 } from "@flow-like/flow-like-ui";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
@@ -52,6 +56,12 @@ export class EmptyAppState implements IAppState {
 		offset?: number,
 		limit?: number,
 	): Promise<[IApp, IMetadata | undefined][]> {
+		throw new Error("Method not implemented.");
+	}
+	getExplore(query: ExploreQuery): Promise<ResolvedExplore> {
+		throw new Error("Method not implemented.");
+	}
+	searchExplore(query: ExploreSearchQuery): Promise<ExploreSearchResponse> {
 		throw new Error("Method not implemented.");
 	}
 	getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]> {

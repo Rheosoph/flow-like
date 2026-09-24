@@ -9,6 +9,7 @@ import type { IProfile } from "@flow-like/flow-like-ui";
 import { createAccountTokenProvider } from "@flow-like/flow-like-ui/components/account/account-session";
 import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -55,6 +56,38 @@ const UserManagerContext = createContext<UserManager | null>(null);
 interface OpenIdConfigResponse extends UserManagerSettings {
 	cognito?: { readonly user_pool_id: string };
 	userManager?: UserManager;
+}
+
+const OPEN_ID_CONFIG_CACHE_PREFIX = "flow-like.openid-config:";
+
+/**
+ * The last configuration the hub served. Without one an offline start builds no
+ * UserManager, so the stored session is never loaded and the app runs signed out
+ * for the whole session.
+ */
+function readCachedOpenIdConfig(hub: string): OpenIdConfigResponse | undefined {
+	try {
+		const raw = localStorage.getItem(`${OPEN_ID_CONFIG_CACHE_PREFIX}${hub}`);
+		const parsed: unknown = raw ? JSON.parse(raw) : undefined;
+		return isRecord(parsed) &&
+			typeof parsed.authority === "string" &&
+			typeof parsed.client_id === "string"
+			? (parsed as unknown as OpenIdConfigResponse)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function writeCachedOpenIdConfig(hub: string, config: OpenIdConfigResponse) {
+	try {
+		localStorage.setItem(
+			`${OPEN_ID_CONFIG_CACHE_PREFIX}${hub}`,
+			JSON.stringify(config),
+		);
+	} catch {
+		// Best effort: only an offline start benefits from the copy.
+	}
 }
 
 export class OIDCTokenProvider implements TokenProvider {
@@ -140,7 +173,7 @@ export function DesktopAuthProvider({
 	const userManager = authConfig?.userManager;
 	const scope = authConfig?.scope ?? 0;
 	const providerKey = authConfig
-		? `${authConfig.hub}|${authConfig.settings.client_id}`
+		? `${authConfig.hub}|${authConfig.settings.authority}|${authConfig.settings.client_id}`
 		: "loading-auth-config";
 	const backend = useBackend();
 	const currentProfile = useInvoke(
@@ -164,6 +197,54 @@ export function DesktopAuthProvider({
 		let cancelled = false;
 		let retryTimer: ReturnType<typeof setTimeout> | undefined;
 		let retryDelayMs = 5_000;
+		let cachedConfig: OpenIdConfigResponse | undefined;
+		const hub = getApiOrigin(effectiveProfile);
+
+		const configure = (response: OpenIdConfigResponse) => {
+			if (process.env.NEXT_PUBLIC_REDIRECT_URL)
+				response.redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URL;
+			if (process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL)
+				response.post_logout_redirect_uri =
+					process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL;
+			const store = new WebStorageStateStore({
+				store: localStorage,
+			});
+			response.userStore = store;
+			response.automaticSilentRenew = true;
+			const navigator = new TauriRedirectNavigator();
+			const userManagerInstance = new UserManager(response, navigator);
+			response.userManager = userManagerInstance;
+			const tokenProvider = new OIDCTokenProvider(userManagerInstance);
+			if (response.cognito)
+				Amplify.configure(
+					{
+						Auth: {
+							Cognito: {
+								userPoolClientId: response.client_id,
+								userPoolId: response.cognito.user_pool_id,
+							},
+						},
+					},
+					{
+						Auth: {
+							tokenProvider: tokenProvider,
+						},
+					},
+				);
+			console.log("[DESKTOPAUTH] Setting openIdAuthConfig and userManager");
+			setAuthConfig((previous) => ({
+				settings: response,
+				userManager: userManagerInstance,
+				hub,
+				scope:
+					previous &&
+					(previous.settings.client_id !== response.client_id ||
+						previous.settings.authority !== response.authority ||
+						previous.hub !== hub)
+						? previous.scope + 1
+						: (previous?.scope ?? 0),
+			}));
+		};
 
 		const loadConfig = async () => {
 			try {
@@ -173,48 +254,13 @@ export function DesktopAuthProvider({
 				);
 				if (cancelled) return;
 				if (response) {
-					if (process.env.NEXT_PUBLIC_REDIRECT_URL)
-						response.redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URL;
-					if (process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL)
-						response.post_logout_redirect_uri =
-							process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL;
-					const store = new WebStorageStateStore({
-						store: localStorage,
-					});
-					response.userStore = store;
-					response.automaticSilentRenew = true;
-					const navigator = new TauriRedirectNavigator();
-					const userManagerInstance = new UserManager(response, navigator);
-					response.userManager = userManagerInstance;
-					const tokenProvider = new OIDCTokenProvider(userManagerInstance);
-					if (response.cognito)
-						Amplify.configure(
-							{
-								Auth: {
-									Cognito: {
-										userPoolClientId: response.client_id,
-										userPoolId: response.cognito.user_pool_id,
-									},
-								},
-							},
-							{
-								Auth: {
-									tokenProvider: tokenProvider,
-								},
-							},
-						);
-					console.log("[DESKTOPAUTH] Setting openIdAuthConfig and userManager");
-					setAuthConfig((previous) => ({
-						settings: response,
-						userManager: userManagerInstance,
-						hub: getApiOrigin(effectiveProfile),
-						scope:
-							previous &&
-							(previous.settings.client_id !== response.client_id ||
-								previous.hub !== getApiOrigin(effectiveProfile))
-								? previous.scope + 1
-								: (previous?.scope ?? 0),
-					}));
+					writeCachedOpenIdConfig(hub, response);
+					// The provider keeps the UserManager it mounted with, so a matching
+					// fresh copy must not replace the one built from the cache.
+					const unchanged =
+						cachedConfig?.authority === response.authority &&
+						cachedConfig.client_id === response.client_id;
+					if (!unchanged) configure(response);
 				} else {
 					console.warn("OpenID response was falsy, not configuring auth");
 				}
@@ -226,6 +272,11 @@ export function DesktopAuthProvider({
 					!cancelled &&
 					!(error instanceof ApiResponseError && error.status < 500)
 				) {
+					const cached = cachedConfig ? undefined : readCachedOpenIdConfig(hub);
+					if (cached) {
+						cachedConfig = cached;
+						configure(cached);
+					}
 					retryTimer = setTimeout(() => {
 						retryTimer = undefined;
 						void loadConfig();

@@ -1,3 +1,4 @@
+import type { ApprovedOnlineMetadata } from "./online-metadata";
 import type { IApp } from "../schema/app/app";
 import {
 	type ArtifactBlob,
@@ -89,6 +90,7 @@ export async function prepareDesktopProject(
 	projectId: string,
 	commands: ExportCommands,
 	signal?: AbortSignal,
+	approved?: ApprovedOnlineMetadata,
 ): Promise<PreparedDesktopProject> {
 	signal?.throwIfAborted();
 	const exported = await commands.prepare(projectId);
@@ -110,17 +112,26 @@ export async function prepareDesktopProject(
 				"The prepared export belongs to another project or exceeds its limits.",
 			);
 		const assets = parseProjectArtifactAssets(JSON.stringify(exported.assets));
-		const inputs = exported.files.map(({ path, size }) => ({
-			path,
-			file: new SnapshotBlob(size, async (offset, length) => {
-				signal?.throwIfAborted();
-				if (released)
-					throw new Error(
-						"The prepared project has been released. Prepare it again.",
-					);
-				return commands.read(exported.export_id, path, offset, length);
+		const inputs: import("./artifacts").ArtifactInput[] = exported.files.map(
+			({ path, size }) => ({
+				path,
+				file: new SnapshotBlob(size, async (offset, length) => {
+					signal?.throwIfAborted();
+					if (released)
+						throw new Error(
+							"The prepared project has been released. Prepare it again.",
+						);
+					return commands.read(exported.export_id, path, offset, length);
+				}),
 			}),
-		}));
+		);
+		if (exported.source === "online") {
+			if (!approved || approved.app.id !== projectId)
+				throw new Error(
+					"Prepare controller-approved executable metadata before exporting this online project.",
+				);
+			inputs.push(approved.file);
+		}
 		const artifact = await prepareProjectArtifact(
 			projectId,
 			inputs,

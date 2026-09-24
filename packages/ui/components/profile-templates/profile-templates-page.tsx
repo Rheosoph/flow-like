@@ -62,8 +62,10 @@ function ProfileTemplatesContent({
 				context.profile.data,
 				`admin/profiles/${encodeURIComponent(deleting.id)}`,
 			);
-			client.setQueryData<IProfile[]>(context.queryKey, (current) =>
-				current?.filter((item) => item.id !== deleting.id),
+			client.setQueryData<IProfile[]>(
+				context.queryKey,
+				(current) =>
+					current && asArray(current).filter((item) => item.id !== deleting.id),
 			);
 			setDeleting(null);
 			toast.success("Starter profile deleted");

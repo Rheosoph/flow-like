@@ -112,13 +112,20 @@ export class RegistryState implements IRegistryState {
 		}
 	}
 
+	/** With `access` the caller decides the result, so a missing token or failed request throws instead of listing nothing. */
 	async getOwnedPackages(filters?: SearchFilters): Promise<SearchResults> {
-		if (!this.backend.profile || !this.backend.auth) {
+		const access = filters?.access;
+		const hasProfile = Boolean(this.backend.profile && this.backend.auth);
+		if (access && !(hasProfile && this.currentToken)) {
+			throw new Error(`Sign in to list your packages (access=${access})`);
+		}
+		if (!hasProfile) {
 			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
 		}
 		try {
 			return await this.fetchSearch({ ...filters, ownedOnly: true });
-		} catch {
+		} catch (error) {
+			if (access) throw error;
 			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
 		}
 	}
@@ -139,8 +146,11 @@ export class RegistryState implements IRegistryState {
 		if (filters?.offset) params.set("offset", String(filters.offset));
 		if (filters?.limit) params.set("limit", String(filters.limit));
 		if (filters?.language) params.set("language", filters.language);
-		if (filters?.ownedOnly) params.set("owned_only", "true");
-		if (!filters?.ownedOnly) params.set("include_own", "true");
+		const ownedOnly = filters?.ownedOnly || filters?.access !== undefined;
+		if (ownedOnly) params.set("owned_only", "true");
+		if (!ownedOnly) params.set("include_own", "true");
+		if (filters?.access) params.set("access", filters.access);
+		if (filters?.ids) params.set("ids", filters.ids.join(","));
 		const qs = params.toString();
 		const profile = this.backend.profile;
 		if (!profile)
@@ -169,12 +179,15 @@ export class RegistryState implements IRegistryState {
 	async installPackage(
 		packageId: string,
 		version?: string,
+		_token?: string | null,
+		appId?: string,
 	): Promise<CachedPackage> {
 		await this.ensureInit();
 		return invoke("registry_install_package", {
 			packageId,
 			version,
 			token: this.currentToken,
+			appId,
 		});
 	}
 

@@ -1,0 +1,64 @@
+/// Explore storefront layout header, one row per edition: "DRAFT" (admins edit) and "LIVE" (viewers read).
+model ExploreLayout {
+  edition     String    @id
+  /// Changes on every write to this edition; compare-and-swap token for admin edits and cache key for reads.
+  revision    String
+  publishedAt DateTime? @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+}
+
+/// A place on the Explore page. Grid slots are fixed (hero, notice, feature, collection, stat, categories);
+/// rows ("row:<id>") are added, removed and reordered by admins; "unplaced" parks placements off the page.
+model ExploreSlot {
+  edition  String
+  key      String
+  /// GRID | ROW | UNPLACED
+  area     String
+  /// Row order for ROW slots; fixed 0..5 for GRID slots; 0 for UNPLACED.
+  position Int
+
+  @@id([edition, key])
+}
+
+/// One curated or system placement. Inside a slot, `position` is the priority: the viewer gets the first
+/// placement that is live, matches their audience and has enough visible items.
+model ExplorePlacement {
+  edition   String
+  id        String
+  slotKey   String
+  position  Int
+  /// ANNOUNCEMENT | SPOTLIGHT | FEATURE | COLLECTION | RAIL | SPONSORED. Always derived from `content.kind` on
+  /// write and immutable after creation (PUT rejects a change); kept as a column for slot checks and the editor list.
+  kind      String
+  /// Admin-facing label (the list and canvas show it); never rendered to viewers.
+  name      String
+  /// false = Draft: visible to admins only. Scheduled / Live / Ended derive from the window at read time.
+  enabled   Boolean   @default(false)
+  startsAt  DateTime? @db.Timestamptz(3)
+  endsAt    DateTime? @db.Timestamptz(3)
+  /// Audience tags (StringList): everyone | dev | signed_in | signed_out | desktop | web | locale:<code>
+  audience  Json      @default("[]")
+  /// Kind-specific payload, typed in Rust as PlacementContent.
+  content   Json      @default("{}")
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@id([edition, id])
+  @@index([edition, slotKey, position])
+}
+
+/// Items of a placement (spotlight slides, featured item, collection picks, sponsored item). Loose references:
+/// no FK, so deleted/private apps or packages are filtered at read time and flagged in the editor.
+model ExplorePlacementItem {
+  edition     String
+  placementId String
+  position    Int
+  /// APP | PACKAGE | COLLECTION (COLLECTION = id of a COLLECTION placement in the same edition)
+  itemKind    String
+  itemId      String
+  /// ItemOverrides: headline, subline, artworkUrl, accent
+  overrides   Json   @default("{}")
+
+  @@id([edition, placementId, position])
+  @@index([edition, itemKind, itemId])
+}

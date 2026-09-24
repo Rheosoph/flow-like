@@ -32,6 +32,7 @@ import {
 	showProgressToast,
 	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui";
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	cancelDeviceCommands,
 	withDeviceCommandBridge,
@@ -67,6 +68,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
 import {
+	isHubUnavailable,
 	isMissingResourceError,
 	upstreamFailureInSuccess,
 } from "../../lib/api-error";
@@ -76,7 +78,10 @@ import {
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
-import { withRequestDeadline } from "../../lib/request-deadline";
+import {
+	HUB_REFRESH_TIMEOUT_MS,
+	withRequestDeadline,
+} from "../../lib/request-deadline";
 import { requestLocalSinkConsent } from "../local-sink/local-sink-consent";
 import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
@@ -94,12 +99,6 @@ let hubCachePromise: Promise<IHub | undefined> | undefined;
 let hubConfigRetryAt = 0;
 const HUB_CONFIG_TIMEOUT_MS = 10_000;
 const HUB_CONFIG_RETRY_MS = 60_000;
-
-/**
- * Bounds a freshness read that has a local copy to fall back to. The API's own
- * read deadline is 10 s, so a healthy hub answers well inside it.
- */
-const LOCAL_FALLBACK_TIMEOUT_MS = 15_000;
 
 function isEventRecord(value: unknown): value is IEvent {
 	return isRecord(value) && typeof value.id === "string";
@@ -431,7 +430,7 @@ export class EventState implements IEventState {
 					profile,
 					url,
 					event
-						? { method: "GET", timeoutMs: LOCAL_FALLBACK_TIMEOUT_MS }
+						? { method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS }
 						: { method: "GET" },
 					auth,
 				),
@@ -572,9 +571,7 @@ export class EventState implements IEventState {
 				const response = await fetcher<IEvent[]>(
 					this.requireHubProfile("Event sync"),
 					`apps/${appId}/events`,
-					{
-						method: "GET",
-					},
+					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				);
 				// Anything but a list is a failed sync, never "the app has no Events".
@@ -757,7 +754,7 @@ export class EventState implements IEventState {
 				? fetcher<IUserSchedules>(
 						this.backend.profile,
 						`user/schedules?${params}`,
-						{ method: "GET" },
+						{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 						this.backend.auth,
 					).catch(() => null)
 				: Promise.resolve(null),
@@ -1521,12 +1518,18 @@ export class EventState implements IEventState {
 		let metadata: ILogMetadata | undefined;
 		const dispatchStart = runTimingNow();
 		try {
-			const executionHub = isOffline
-				? undefined
-				: await this.backend.prepareExecutionAuth();
+			const executionHub =
+				isOffline && !this.backend.auth?.user?.access_token
+					? undefined
+					: await this.backend
+							.prepareExecutionAuth()
+							.catch((error: unknown) => {
+								if (isOffline) return undefined;
+								throw error;
+							});
 			metadata = await invoke("execute_event", {
 				executionHub,
-				executionSessionId: isOffline
+				executionSessionId: !executionHub
 					? undefined
 					: this.backend.executionSessionId,
 				appId: appId,
@@ -1672,6 +1675,7 @@ export class EventState implements IEventState {
 						}
 					}
 
+					dispatchPaymentRequest(event);
 					if (event.event_type === "toast") {
 						const payload = event.payload as {
 							message: string;
@@ -2236,6 +2240,7 @@ export class EventState implements IEventState {
 											body: JSON.stringify({
 												page_trigger: serializePageTrigger(pageTrigger),
 											}),
+											timeoutMs: HUB_REFRESH_TIMEOUT_MS,
 										}
 									: { method: "GET" },
 								this.backend.auth,
@@ -2272,10 +2277,21 @@ export class EventState implements IEventState {
 				);
 			}
 
-			// Hosted Page execution always obtains a fresh governed server
-			// decision first. The native command then independently rechecks the
-			// same caller and exact local contract before starting the run.
-			return fetchRemotePrerun();
+			// Hosted Page execution obtains a fresh governed server decision first.
+			// The native command then independently rechecks the same caller and the
+			// exact local contract before starting the run, so a hub that did not
+			// rule falls back to the device's contract — never for actions the
+			// server mints dynamically.
+			try {
+				return await fetchRemotePrerun();
+			} catch (error) {
+				if (dynamic || !isHubUnavailable(error)) throw error;
+				console.warn(
+					`[prerunEvent] Hub unavailable for Page Event ${eventId}; using the local contract`,
+					error,
+				);
+				return buildLocalPrerun();
+			}
 		}
 
 		// An event pinned to Remote never runs on this device, so its board is not

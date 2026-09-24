@@ -79,6 +79,33 @@ For online Apps, the App's **Packages** screen can enable automatic updates.
 Offline Apps keep an explicit linked version. Review available updates before
 changing a production App's package version.
 
+## Paid packages and project licences
+
+A paid package shows its price on the detail page. Select the price to buy it.
+The package unlocks for installing once the payment is confirmed. Your
+purchases are listed under **Account → Purchases**.
+
+Paid, private and access-request packages are licensed per App. An admin or
+the owner who has the package adds it to the App and holds its licence. Every
+member of the App can then use it, including on Desktop, without buying it
+themselves. The **Add Package** dialog marks the packages you own. For one you
+don't have yet, it sends you to the store to get it first.
+
+If the licence holder leaves the App or loses the package, the licence passes to
+another admin or the owner who has the package. If nobody else has it:
+
+- The package's licence lapses. Updates and version changes stop right away.
+- Admins and the owner get a notification. The **Packages** screen shows a
+  countdown to the day the package stops working.
+- The package keeps working for **30 days**. Reminders go out a week and a day
+  before it is disabled.
+- After 30 days the package is disabled in that App. Cloud runs and Desktop
+  downloads no longer load it, and flows that use its nodes stop running.
+
+As soon as an admin or the owner gets the package, the licence moves to them
+and the package works again. You can also select **Reactivate** on the
+**Packages** screen after getting it.
+
 ## Remove or update
 
 Open **Library → Packages** to search installed packages, apply available

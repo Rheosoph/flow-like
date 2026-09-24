@@ -46,6 +46,7 @@ import {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { HUB_REFRESH_TIMEOUT_MS } from "../../lib/request-deadline";
 import { ApiResponseError } from "../../lib/api-error";
 import { type IShortcut, appsDB } from "../../lib/apps-db";
 import {
@@ -1097,7 +1098,7 @@ export class UserState implements IUserState {
 				const remoteWidgets = await fetcher<[string, string, IMetadata][]>(
 					this.backend.profile,
 					`user/widgets${queryParams}`,
-					{ method: "GET" },
+					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				);
 

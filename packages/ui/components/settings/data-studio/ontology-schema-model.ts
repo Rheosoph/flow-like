@@ -99,7 +99,11 @@ function objectRows(
 	for (const edge of edges) {
 		if (edge.table !== node.table) continue;
 		for (const column of [edge.src_column, edge.dst_column]) {
-			if (column && column !== node.id_column && !linkColumns.includes(column)) {
+			if (
+				column &&
+				column !== node.id_column &&
+				!linkColumns.includes(column)
+			) {
 				linkColumns.push(column);
 			}
 		}
@@ -124,7 +128,11 @@ function objectRows(
 	const visible = ranked.slice(0, MAX_VISIBLE_ROWS - 1);
 	return {
 		rows: [
-			{ name: node.id_column, dataType: typeOf.get(node.id_column), role: "id" },
+			{
+				name: node.id_column,
+				dataType: typeOf.get(node.id_column),
+				role: "id",
+			},
 			...visible,
 		],
 		hiddenRows: ranked.length - visible.length,
@@ -276,16 +284,22 @@ export function boundaryPoint(
 	if ((dx === 0 && dy === 0) || halfWidth <= 0 || halfHeight <= 0) {
 		return center;
 	}
-	const scale = 1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
+	const scale =
+		1 / Math.max(Math.abs(dx) / halfWidth, Math.abs(dy) / halfHeight);
 	return { x: center.x + dx * scale, y: center.y + dy * scale };
 }
 
-/** A quadratic curve between the two rect borders, bent by `offset` px at its apex. */
-export function curveGeometry(
+interface CurvePoints {
+	start: { x: number; y: number };
+	control: { x: number; y: number };
+	end: { x: number; y: number };
+}
+
+function curvePoints(
 	source: SchemaRect,
 	target: SchemaRect,
 	offset: number,
-): SchemaEdgeGeometry {
+): CurvePoints {
 	const from = rectCenter(source);
 	const to = rectCenter(target);
 	const dx = to.x - from.x;
@@ -296,13 +310,112 @@ export function curveGeometry(
 		x: (from.x + to.x) / 2 - (dy / length) * offset * 2,
 		y: (from.y + to.y) / 2 + (dx / length) * offset * 2,
 	};
-	const start = boundaryPoint(source, offset === 0 ? to : control);
-	const end = boundaryPoint(target, offset === 0 ? from : control);
+	return {
+		start: boundaryPoint(source, offset === 0 ? to : control),
+		control,
+		end: boundaryPoint(target, offset === 0 ? from : control),
+	};
+}
+
+function pointOnCurve({ start, control, end }: CurvePoints, t: number) {
+	const u = 1 - t;
+	return {
+		x: u * u * start.x + 2 * u * t * control.x + t * t * end.x,
+		y: u * u * start.y + 2 * u * t * control.y + t * t * end.y,
+	};
+}
+
+function toGeometry(points: CurvePoints): SchemaEdgeGeometry {
+	const { start, control, end } = points;
+	const label = pointOnCurve(points, 0.5);
 	return {
 		path: `M ${start.x} ${start.y} Q ${control.x} ${control.y} ${end.x} ${end.y}`,
-		labelX: 0.25 * start.x + 0.5 * control.x + 0.25 * end.x,
-		labelY: 0.25 * start.y + 0.5 * control.y + 0.25 * end.y,
+		labelX: label.x,
+		labelY: label.y,
 	};
+}
+
+/** A quadratic curve between the two rect borders, bent by `offset` px at its apex. */
+export function curveGeometry(
+	source: SchemaRect,
+	target: SchemaRect,
+	offset: number,
+): SchemaEdgeGeometry {
+	return toGeometry(curvePoints(source, target, offset));
+}
+
+const ROUTE_STEP = 44;
+const ROUTE_ATTEMPTS = 8;
+const ROUTE_SAMPLES = 24;
+const ROUTE_CLEARANCE = 12;
+
+function curveHits(points: CurvePoints, obstacles: readonly SchemaRect[]) {
+	for (let sample = 1; sample < ROUTE_SAMPLES; sample += 1) {
+		const point = pointOnCurve(points, sample / ROUTE_SAMPLES);
+		for (const rect of obstacles) {
+			if (
+				point.x > rect.x - ROUTE_CLEARANCE &&
+				point.x < rect.x + rect.width + ROUTE_CLEARANCE &&
+				point.y > rect.y - ROUTE_CLEARANCE &&
+				point.y < rect.y + rect.height + ROUTE_CLEARANCE
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/** The quadratic between the two rect borders whose midpoint is `through`. */
+function curveThrough(
+	source: SchemaRect,
+	target: SchemaRect,
+	through: { x: number; y: number },
+): CurvePoints {
+	const from = rectCenter(source);
+	const to = rectCenter(target);
+	const aim = {
+		x: 2 * through.x - (from.x + to.x) / 2,
+		y: 2 * through.y - (from.y + to.y) / 2,
+	};
+	const start = boundaryPoint(source, aim);
+	const end = boundaryPoint(target, aim);
+	return {
+		start,
+		control: {
+			x: 2 * through.x - (start.x + end.x) / 2,
+			y: 2 * through.y - (start.y + end.y) / 2,
+		},
+		end,
+	};
+}
+
+/**
+ * The relationship's curve: through its reserved lane when it has one, else
+ * `curveGeometry` bent further in alternating directions until it clears
+ * every other card. Without either, a relationship that skips a column runs
+ * underneath the card in between and hides its label there.
+ */
+export function routedCurveGeometry(
+	source: SchemaRect,
+	target: SchemaRect,
+	offset: number,
+	obstacles: readonly SchemaRect[],
+	lane?: { x: number; y: number },
+): SchemaEdgeGeometry {
+	if (lane) {
+		const laned = curveThrough(source, target, lane);
+		if (!curveHits(laned, obstacles)) return toGeometry(laned);
+	}
+	const direct = curvePoints(source, target, offset);
+	if (!curveHits(direct, obstacles)) return toGeometry(direct);
+	for (let attempt = 1; attempt <= ROUTE_ATTEMPTS; attempt += 1) {
+		const side = attempt % 2 === 1 ? -1 : 1;
+		const shift = Math.ceil(attempt / 2) * ROUTE_STEP * side;
+		const bent = curvePoints(source, target, offset + shift);
+		if (!curveHits(bent, obstacles)) return toGeometry(bent);
+	}
+	return toGeometry(direct);
 }
 
 /** A self-reference drawn as a loop over the rect's top-right corner. */

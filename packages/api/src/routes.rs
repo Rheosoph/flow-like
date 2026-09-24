@@ -14,6 +14,7 @@ pub mod devices;
 pub mod instances;
 pub mod embeddings;
 pub mod execution;
+pub mod explore;
 pub mod flowscript;
 pub mod frontend;
 mod frontend_widgets;

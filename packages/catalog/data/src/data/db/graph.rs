@@ -24,9 +24,6 @@ async fn ensure_graph_tables_unbuffered(
     user_scoped: bool,
     overlay: &flow_like_storage::databases::graph::lancegraph::GraphOverlayDef,
 ) -> flow_like_types::Result<()> {
-    if context.credentials.is_some() {
-        return Ok(());
-    }
     let callbacks = context.app_state.config.read().await.callbacks.clone();
     if callbacks.decorate_database.is_none() {
         return Ok(());

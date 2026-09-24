@@ -15,6 +15,8 @@ import { PaymentError, PaymentPage } from "./payment-parts";
 import {
 	type PurchaseOrder,
 	type WithdrawalRequest,
+	orderItemHref,
+	orderItemName,
 	paymentMoney,
 	paymentUrl,
 	pendingOrder,
@@ -172,10 +174,10 @@ export function PurchaseCard({ order }: { order: PurchaseOrder }) {
 				<div className="flex flex-wrap items-start justify-between gap-3">
 					<div>
 						<Link
-							href={`/store?id=${encodeURIComponent(order.appId)}`}
+							href={orderItemHref(order)}
 							className="font-medium underline-offset-4 hover:underline"
 						>
-							{order.itemName ?? order.appId}
+							{orderItemName(order)}
 						</Link>
 						<p className="mt-1 text-xs text-muted-foreground">
 							{t("orderReference", "Order {{id}}", { id: order.orderId })}

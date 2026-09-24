@@ -31,6 +31,7 @@ impl Fixture {
             deployment_id: "deployment".into(),
             revision: "revision-1".into(),
             source: ProjectSource::Offline,
+            online_metadata_sha256: None,
             project_path: state_dir,
             events: vec![EventBinding {
                 event_id: "daemon".into(),

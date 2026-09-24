@@ -12,6 +12,7 @@ import {
 	foreignKeyStem,
 	isValidGraphIdentifier,
 	nodeToEndpoint,
+	preferredJoinTable,
 	reversedEdge,
 	toEdgeMapping,
 	uniqueLabel,
@@ -235,5 +236,30 @@ describe("nodeToEndpoint", () => {
 		expect(result.id).toBe("node-1");
 		expect(result.columns.map((c) => c.name)).toEqual(["id", "name"]);
 		expect(result.color).toBe("#111");
+	});
+});
+
+describe("preferredJoinTable", () => {
+	const articles = endpoint({
+		table: "articles",
+		columns: [column("id"), column("title")],
+	});
+	const faces = endpoint({
+		table: "faces",
+		columns: [column("id"), column("article_id"), column("image_id")],
+	});
+
+	test("joins on the target's table when only the target holds the key", () => {
+		expect(preferredJoinTable(articles, faces)).toBe("faces");
+	});
+
+	test("prefers the source's table when it holds the key", () => {
+		expect(preferredJoinTable(faces, articles)).toBe("faces");
+	});
+
+	test("falls back to the source's table when neither side points at the other", () => {
+		const tags = endpoint({ table: "tags", columns: [column("id")] });
+		expect(preferredJoinTable(articles, tags)).toBe("articles");
+		expect(preferredJoinTable(articles, undefined)).toBe("articles");
 	});
 });

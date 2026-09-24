@@ -905,7 +905,7 @@ model AppPackage {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  /// Nullable: set to null when the member who added this package leaves
+  /// The admin or owner who licenses the package for this project. Null while the licence is lapsed.
   membership   Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
   membershipId String?
 
@@ -915,8 +915,10 @@ model AppPackage {
   addedAt    DateTime @default(now()) @db.Timestamptz(3)
   autoUpdate Boolean  @default(false)
 
-  /// When true the package is frozen: can’t be updated, version-changed, or placed on new boards
-  stale Boolean @default(false)
+  /// Licence lapsed: no admin or owner holds the package. The pin takes no updates.
+  stale      Boolean   @default(false)
+  /// When the licence lapsed. The package is disabled in the project 30 days later.
+  staleSince DateTime? @db.Timestamptz(3)
 
   @@unique([appId, packageId])
   @@index([appId])

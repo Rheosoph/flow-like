@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	invoke: vi.fn().mockResolvedValue(undefined),
+	invoke: vi
+		.fn()
+		.mockImplementation(async (command: string) =>
+			command === "execution_open_auth_session" ? "native-session" : undefined,
+		),
 }));
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
@@ -52,6 +56,12 @@ describe("desktop execution session bridge", () => {
 			subject: "user-a",
 			token: "renewed",
 		});
+		expect(sessionId).toBe("native-session");
+		expect(
+			mocks.invoke.mock.calls.filter(
+				([command]) => command === "execution_open_auth_session",
+			),
+		).toHaveLength(1);
 	});
 
 	test("sign-out clears the native session and blocks new online runs", async () => {

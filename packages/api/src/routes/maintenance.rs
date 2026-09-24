@@ -132,6 +132,9 @@ async fn run_maintenance_job(
             crate::usage_accounting::reconcile_hosted_invocations(&state, 15).await?;
             crate::routes::chat::hosted_worker::recover_queued(&state).await?;
             crate::rolling_usage::maintain(&state).await?;
+            if let Err(error) = crate::package_license::sweep(&state).await {
+                tracing::warn!(error = %error, "Package licence sweep failed");
+            }
             let config = RunSweeperConfig::from_env();
             let swept = sweep_runs_once(
                 &crate::audit::ExecutionAuditContext::from(&state),

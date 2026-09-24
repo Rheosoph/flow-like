@@ -4,8 +4,8 @@
 //! Custom nodes are public after admin approval.
 
 use super::types::{
-    MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
-    RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
+    MetaSummary, PackageAccessFilter, PackageSource, PackageStatus, PackageSummary, PackageVersion,
+    PublishResponse, RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
 };
 use super::widget_policy::declared_widget_network;
 use crate::deletion::{DeletionRoot, job};
@@ -917,6 +917,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: None,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect();
@@ -1520,6 +1522,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect();
@@ -1536,13 +1540,17 @@ impl ServerRegistry {
     /// Public packages are always returned. When `include_own` is true and a
     /// caller_id is provided, private packages the caller has access to are
     /// included as well. When `owned_only` is true, only packages the caller
-    /// has explicit access to (via wasm_package_user) are returned.
+    /// has explicit access to (via wasm_package_user) are returned; `access`
+    /// implies `owned_only` and keeps only rows with matching permission bits.
+    /// `ids` narrows any of these to the given package ids.
     pub async fn search_with_visibility(
         &self,
         filters: &SearchFilters,
         caller_id: Option<&str>,
         include_own: bool,
         owned_only: bool,
+        access: Option<PackageAccessFilter>,
+        ids: Option<&[String]>,
     ) -> flow_like_types::Result<SearchResults> {
         use crate::entity::sea_orm_active_enums::WasmPackageStatus;
         use sea_orm::Condition;
@@ -1556,13 +1564,14 @@ impl ServerRegistry {
         // Combined status + visibility filtering.
         // The user's own packages bypass the Active-only status filter so they
         // can see PendingReview / Disabled / etc. packages they own.
-        if owned_only {
+        if owned_only || access.is_some() {
             if let Some(uid) = caller_id {
                 let user_package_ids: Vec<String> = wasm_package_user::Entity::find()
                     .filter(wasm_package_user::Column::UserId.eq(uid))
                     .all(&self.db)
                     .await?
                     .into_iter()
+                    .filter(|r| access.is_none_or(|access| access.admits(r.permission)))
                     .map(|r| r.package_id)
                     .collect();
 
@@ -1633,6 +1642,10 @@ impl ServerRegistry {
                     }
                 }
             }
+        }
+
+        if let Some(ids) = ids {
+            query = query.filter(wasm_package::Column::Id.is_in(ids.iter().map(String::as_str)));
         }
 
         if let Some(q) = &filters.query {
@@ -1735,6 +1748,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect();
@@ -2713,6 +2728,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: None,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect())

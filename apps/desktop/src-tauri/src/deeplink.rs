@@ -171,6 +171,12 @@ fn is_app_universal_link(url: &Url) -> bool {
 
 /// Accepts every documented store shape:
 /// `store?id=X`, `store/X`, `store/packages?id=X`, `store/packages/X`.
+///
+/// Two store routes are not app ids:
+/// - `store/package-workspace?id=X` opens package X's store page; a maintainer
+///   continues from there with "Manage package". Local `project` paths never
+///   travel in links, so only `id` is read.
+/// - `store/explore` and everything below it opens Explore.
 fn classify_store(url: &Url, store_path: &str) -> DeepLinkIntent {
     let query_id = url
         .query_pairs()
@@ -179,6 +185,20 @@ fn classify_store(url: &Url, store_path: &str) -> DeepLinkIntent {
         .filter(|value| !value.is_empty());
 
     let store_path = store_path.trim_matches('/');
+
+    if is_store_route(store_path, "explore") {
+        return DeepLinkIntent::Store {
+            app_id: None,
+            package_id: None,
+        };
+    }
+
+    if is_store_route(store_path, "package-workspace") {
+        return DeepLinkIntent::Store {
+            app_id: None,
+            package_id: query_id,
+        };
+    }
 
     if store_path == "packages" || store_path.starts_with("packages/") {
         let package_id = query_id.or_else(|| segment(&store_path["packages".len()..]));
@@ -192,6 +212,12 @@ fn classify_store(url: &Url, store_path: &str) -> DeepLinkIntent {
         app_id: query_id.or_else(|| segment(store_path)),
         package_id: None,
     }
+}
+
+fn is_store_route(store_path: &str, route: &str) -> bool {
+    store_path
+        .strip_prefix(route)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 fn classify_trigger(rest: &str) -> DeepLinkIntent {
@@ -418,6 +444,23 @@ mod tests {
             ("store/packages?id=pkg-1", store(None, Some("pkg-1"))),
             ("store/packages/pkg-1", store(None, Some("pkg-1"))),
             ("store/packages", store(None, None)),
+            (
+                "store/package-workspace?id=pkg-1",
+                store(None, Some("pkg-1")),
+            ),
+            (
+                "store/package-workspace?id=pkg-1&project=%2Fhome%2Fme%2Fpkg&tab=listing",
+                store(None, Some("pkg-1")),
+            ),
+            ("store/package-workspace", store(None, None)),
+            ("store/explore", store(None, None)),
+            ("store/explore?id=app-1", store(None, None)),
+            (
+                "store/explore/search?q=invoice&type=packages",
+                store(None, None),
+            ),
+            ("store/explore/apps", store(None, None)),
+            ("store/explorer", store(Some("explorer"), None)),
         ];
 
         for (path, expected) in cases {
@@ -444,6 +487,8 @@ mod tests {
             "store/app-1",
             "store/packages",
             "store/packages/pkg-1",
+            "store/explore",
+            "store/package-workspace",
         ] {
             assert_eq!(
                 intent(&format!("https://{APP_HOST}/{path}")),
@@ -454,6 +499,22 @@ mod tests {
 
         assert_eq!(
             intent(&format!("https://{APP_HOST}/store/packages/")),
+            store(None, None)
+        );
+    }
+
+    #[test]
+    fn workspace_and_explore_links_are_not_app_ids() {
+        assert_eq!(
+            intent("https://app.flow-like.com/store/package-workspace?id=x"),
+            store(None, Some("x"))
+        );
+        assert_eq!(
+            intent("https://app.flow-like.com/store/package-workspace?id=com.acme%2Fpkg"),
+            store(None, Some("com.acme/pkg"))
+        );
+        assert_eq!(
+            intent("https://app.flow-like.com/store/explore"),
             store(None, None)
         );
     }

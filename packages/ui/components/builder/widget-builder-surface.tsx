@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
-import { ApiResponseError, isTransportFailure } from "../../lib/api-error";
+import { isMissingResourceError } from "../../lib/api-error";
 import { parseDateValue } from "../../lib/date";
 import { asArray } from "../../lib/response-shape";
 import {
@@ -132,11 +132,12 @@ export function WidgetBuilderSurface({
 					setWidget(null);
 					return;
 				}
-				// An unreachable server is not a miss either.
-				if (
-					isTransportFailure(error) ||
-					(error instanceof ApiResponseError && error.status >= 500)
-				) {
+				// Nor is any failure other than a confirmed miss, e.g. an unreachable server.
+				const confirmedMiss =
+					isMissingResourceError(error) ||
+					(error instanceof Error &&
+						error.message.startsWith("Widget not found"));
+				if (!confirmedMiss) {
 					console.error("Failed to load widget", error);
 					setWidget(null);
 					return;

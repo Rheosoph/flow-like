@@ -12,9 +12,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
-import { ApiResponseError, isTransportFailure } from "../../lib/api-error";
+import { isMissingResourceError } from "../../lib/api-error";
 import { addNodeCommand } from "../../lib/command/generic-command";
 import { parseDateValue } from "../../lib/date";
+import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type {
 	IPage,
@@ -220,11 +221,10 @@ export function PageBuilderSurface({
 
 	// Build action context for the widget builder (pages, workflow events, behavior hooks)
 	const actionContext = useMemo(() => {
-		const pages =
-			allPages.data?.map((pageInfo) => ({
-				id: pageInfo.pageId,
-				name: pageInfo.name || pageInfo.pageId,
-			})) ?? [];
+		const pages = asArray(allPages.data).map((pageInfo) => ({
+			id: pageInfo.pageId,
+			name: pageInfo.name || pageInfo.pageId,
+		}));
 
 		const workflowEvents = getPageWorkflowEvents(
 			boardNodes,
@@ -286,13 +286,17 @@ export function PageBuilderSurface({
 					loadedPage.widgetRefs ?? {},
 				);
 			} catch (error) {
-				// An unreachable server says nothing about whether the page exists, and a
-				// blank stand-in would autosave over the real one on the first edit.
-				if (
-					isTransportFailure(error) ||
-					(error instanceof ApiResponseError && error.status >= 500)
-				) {
+				// Only a confirmed miss may become a blank page. After any other failure (server
+				// unreachable, payload not on this device) a stand-in would autosave over the
+				// real page.
+				const confirmedMiss =
+					isMissingResourceError(error) ||
+					(error instanceof Error &&
+						error.message.startsWith("Page not found"));
+				if (!confirmedMiss) {
 					console.error("Failed to load page", error);
+					setPage(null);
+					pageRef.current = null;
 					return;
 				}
 				const newPage: IPage = {

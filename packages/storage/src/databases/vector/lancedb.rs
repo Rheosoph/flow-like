@@ -389,7 +389,7 @@ impl LanceDBVectorStore {
         selector.validate()?;
         if selector.branch != "main" || selector.version.is_some() || selector.tag.is_some() {
             return Err(anyhow!(
-                "Buffered tables expose the current local view; historical and branch selectors require a cloud-only placement"
+                "Offline-buffered tables expose only their current version; open branches, tags or versions from a run without offline buffering"
             ));
         }
         Ok(())
@@ -2058,6 +2058,17 @@ mod tests {
         }
     }
 
+    /// Deterministic values that are independent across vector components.
+    /// A linear sequence places every row on one curve, where HNSW builds a
+    /// chain whose parallel construction can strand whole segments.
+    fn scattered_unit_value(index: usize) -> f32 {
+        let mut state = (index as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        state ^= state >> 31;
+        (state >> 40) as f32 / (1_u64 << 24) as f32
+    }
+
     #[tokio::test]
     async fn regression_lance_vector_and_auto_indices_match_cosine_searches() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
@@ -2078,12 +2089,7 @@ mod tests {
         ]));
         let ids = Arc::new(Int64Array::from_iter_values(0..512));
         let values = (0..512 * dimension as usize)
-            .map(|value| {
-                let pseudo_random = (value as u64)
-                    .wrapping_mul(1_664_525)
-                    .wrapping_add(1_013_904_223);
-                (pseudo_random & 0xffff) as f32 / u16::MAX as f32
-            })
+            .map(scattered_unit_value)
             .collect::<Vec<_>>();
         let query_vector = values
             .iter()

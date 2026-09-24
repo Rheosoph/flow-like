@@ -170,6 +170,34 @@ mod tests {
     }
 }
 
+/// A package price is free, or within the marketplace range. Private packages
+/// may carry a price ahead of publication; packages whose maintainers grant
+/// access by request are never sold.
+pub fn package_listing_price(
+    amount: i64,
+    visibility: &crate::entity::sea_orm_active_enums::WasmPackageVisibility,
+    minimum: i64,
+    maximum: i64,
+) -> Result<(), ApiError> {
+    use crate::entity::sea_orm_active_enums::WasmPackageVisibility;
+    if amount == 0 {
+        return Ok(());
+    }
+    if *visibility == WasmPackageVisibility::PublicRequestAccess {
+        return Err(error(
+            "PRICE_REQUIRES_OPEN_LISTING",
+            "Packages whose maintainers approve access requests can't be sold. Make the package public to sell it.",
+        ));
+    }
+    if amount < minimum {
+        return Err(error(
+            "PRICE_BELOW_MINIMUM",
+            "The price is below the platform minimum",
+        ));
+    }
+    validate_amount(amount, "eur", minimum, maximum)
+}
+
 pub fn listing_price(
     amount: i64,
     visibility: &crate::entity::sea_orm_active_enums::Visibility,

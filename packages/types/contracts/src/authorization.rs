@@ -8,7 +8,15 @@ pub enum ResourceAudience {
     ProjectApi,
 }
 
-/// The provider binds the caller to its instance, project and grant. A request
+/// User requests carry the run's usage headers. Instance requests obtain their
+/// billing identity and project from the server-validated delegation grant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorizationAttribution {
+    User,
+    InstanceGrant,
+}
+
+/// The provider binds the caller to its user session or instance grant. A request
 /// supplies the actual HTTP target so possession proofs cover the dispatched call.
 pub struct AuthorizationRequest<'a> {
     pub audience: ResourceAudience,
@@ -21,6 +29,10 @@ pub type AuthorizationFuture<'a> =
 
 pub trait RequestAuthorizer: Send + Sync {
     fn authorize<'a>(&'a self, request: AuthorizationRequest<'a>) -> AuthorizationFuture<'a>;
+
+    fn attribution(&self) -> AuthorizationAttribution {
+        AuthorizationAttribution::User
+    }
 
     /// An exact resource base supplied by the trusted credential broker. Clients
     /// must preserve its path instead of adding an assumed API version prefix.

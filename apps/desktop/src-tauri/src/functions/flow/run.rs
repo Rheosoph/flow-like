@@ -2,7 +2,6 @@
 
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::board::format::CURRENT_BOARD_FORMAT_VERSION;
 use flow_like::flow::compiled::{
     CompiledRunTemplate, TemplateCache,
     prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
@@ -19,7 +18,7 @@ use flow_like::state::{FlowLikeState, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, json, tokio};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -378,24 +377,6 @@ pub(crate) async fn resolve_run_template(
         .await
 }
 
-#[derive(Serialize)]
-struct ReportRunRequest {
-    run_id: String,
-    node_id: String,
-    event_id: Option<String>,
-    version: Option<String>,
-    log_level: u8,
-    start: u64,
-    end: u64,
-    error_message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    event_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nodes: Option<Vec<(String, u8)>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    logs: Option<u64>,
-}
-
 #[derive(Default)]
 struct ExecutionOverrides {
     require_remembered_automation_approval: bool,
@@ -407,106 +388,7 @@ struct ExecutionOverrides {
     run_sub_override: Option<String>,
     execution_hub: Option<String>,
     execution_session_id: Option<String>,
-}
-
-fn should_report_run_to_backend(visibility: &AppVisibility) -> bool {
-    !matches!(visibility, AppVisibility::Offline)
-}
-
-async fn report_run_to_backend(
-    app_handle: &AppHandle,
-    token: &str,
-    meta: &LogMeta,
-    visibility: &AppVisibility,
-) {
-    if !should_report_run_to_backend(visibility) {
-        return;
-    }
-
-    let hub_url = match TauriSettingsState::current_profile(app_handle).await {
-        Ok(profile) => profile.hub_profile.hub.clone(),
-        Err(_) => return,
-    };
-
-    if hub_url.is_empty() {
-        return;
-    }
-
-    let url = format!(
-        "{}/api/v1/apps/{}/board/{}/runs/report",
-        hub_url.trim_end_matches('/'),
-        meta.app_id,
-        meta.board_id,
-    );
-
-    let error_message = if meta.log_level >= 3 {
-        Some(format!(
-            "Local run failed with log_level {}",
-            meta.log_level
-        ))
-    } else {
-        None
-    };
-
-    let body = ReportRunRequest {
-        run_id: meta.run_id.clone(),
-        node_id: meta.node_id.clone(),
-        event_id: if meta.event_id.is_empty() {
-            None
-        } else {
-            Some(meta.event_id.clone())
-        },
-        version: if meta.version.is_empty() {
-            None
-        } else {
-            Some(meta.version.clone())
-        },
-        log_level: meta.log_level,
-        start: meta.start,
-        end: meta.end,
-        error_message,
-        event_version: meta.event_version.clone(),
-        nodes: meta.nodes.clone(),
-        logs: meta.logs,
-    };
-
-    let auth_val = if token.starts_with("Bearer ") {
-        token.to_string()
-    } else {
-        format!("Bearer {}", token)
-    };
-
-    let client = flow_like_types::reqwest::Client::new();
-    match client
-        .post(&url)
-        .header("Authorization", &auth_val)
-        .header(
-            "x-flow-like-board-format",
-            CURRENT_BOARD_FORMAT_VERSION.to_string(),
-        )
-        .json(&body)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            tracing::info!(run_id = %meta.run_id, "Reported local run to backend");
-        }
-        Ok(resp) => {
-            tracing::warn!(
-                run_id = %meta.run_id,
-                status = %resp.status(),
-                "Failed to report local run to backend"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                run_id = %meta.run_id,
-                error = %e,
-                "Failed to report local run to backend"
-            );
-        }
-    }
+    execution_webview: Option<String>,
 }
 
 /// Update the last_node_update timestamp for a run when we see run events
@@ -728,20 +610,40 @@ async fn execute_prepared(
     }
     timer.lap("profile");
 
+    let request_authorizer = crate::execution_credentials::request_authorizer(
+        &profile.hub_profile.hub,
+        &app_id,
+        token.as_deref(),
+        overrides.execution_session_id.as_deref(),
+        overrides.execution_webview.as_deref(),
+    );
+
     let credentials = if matches!(app.visibility, AppVisibility::Offline) {
         credentials
     } else {
-        Some(
-            crate::execution_credentials::prepare(
-                &profile.hub_profile.hub,
-                &app_id,
-                token.as_deref(),
-                overrides.execution_session_id.as_deref(),
-            )
-            .await?,
+        match crate::execution_credentials::prepare(
+            &profile.hub_profile.hub,
+            &app_id,
+            token.as_deref(),
+            overrides.execution_session_id.as_deref(),
+            overrides.execution_webview.as_deref(),
         )
+        .await
+        {
+            Ok(credentials) => Some(credentials),
+            Err(error) if crate::execution_credentials::falls_back_to_device_storage(&error) => {
+                tracing::warn!(
+                    app_id = %app_id,
+                    %error,
+                    "Hub credentials unavailable; running against device storage"
+                );
+                None
+            }
+            Err(error) => return Err(error.into()),
+        }
     };
     let mut execution_state = (*flow_like_state).clone();
+    execution_state.request_authorizer = Some(request_authorizer);
     if let Some(credentials) = &credentials {
         crate::execution_credentials::install_registry(&mut execution_state, credentials)?;
     }
@@ -1091,15 +993,20 @@ async fn execute_prepared(
         println!("Error flushing buffered sender: {}", err);
     }
 
-    // Report online local runs so backend analytics can count executions.
-    if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
-        let app_handle = app_handle_for_report.clone();
-        let token = token.clone();
-        let meta = meta.clone();
-        let visibility = app_visibility_for_report.clone();
-        tokio::spawn(async move {
-            report_run_to_backend(&app_handle, &token, &meta, &visibility).await;
-        });
+    if let Some(meta) = &meta {
+        let status = run_arc.lock().await.status.clone();
+        crate::run_reports::enqueue(
+            &app_handle_for_report,
+            crate::run_reports::FinishedRun {
+                meta,
+                status: &status,
+                visibility: &app_visibility_for_report,
+                hub: &profile.hub_profile.hub,
+                secure: profile.hub_profile.secure,
+                token: token_for_report.as_deref(),
+            },
+        )
+        .await;
     }
 
     // Release the finished run from the registry; otherwise it stays flagged
@@ -1131,53 +1038,72 @@ pub(crate) async fn execute_daemon_event(
     let (credentials, run_sub_override) = if offline {
         (None, None)
     } else {
-        let token = token.as_deref().ok_or_else(|| {
-            TauriFunctionError::new("No token registered, cannot run online daemon event")
-        })?;
-        let profile = TauriSettingsState::current_profile(&app_handle).await?;
-        let hub_url = profile.hub_profile.hub;
+        'credentials: {
+            let token = token.as_deref().ok_or_else(|| {
+                TauriFunctionError::new("No token registered, cannot run online daemon event")
+            })?;
+            let profile = TauriSettingsState::current_profile(&app_handle).await?;
+            let hub_url = profile.hub_profile.hub;
 
-        if hub_url.is_empty() {
-            return Err(TauriFunctionError::new(
-                "No hub URL configured, cannot get daemon credentials",
-            ));
-        }
+            if hub_url.is_empty() {
+                return Err(TauriFunctionError::new(
+                    "No hub URL configured, cannot get daemon credentials",
+                ));
+            }
 
-        tracing::info!(
-            app_id = %app_id,
-            event_id = %event_id,
-            token_kind = if token.starts_with("pat_") { "pat" } else { "jwt" },
-            "Fetching credentials for daemon event"
-        );
-        let shared_credentials =
-            crate::execution_credentials::prepare(&hub_url, &app_id, Some(token), None)
-                .await
-                .map_err(|err| {
+            tracing::info!(
+                app_id = %app_id,
+                event_id = %event_id,
+                token_kind = if token.starts_with("pat_") { "pat" } else { "jwt" },
+                "Fetching credentials for daemon event"
+            );
+            let shared_credentials = match crate::execution_credentials::prepare(
+                &hub_url,
+                &app_id,
+                Some(token),
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(credentials) => credentials,
+                Err(err) if crate::execution_credentials::falls_back_to_device_storage(&err) => {
+                    tracing::warn!(
+                        app_id = %app_id,
+                        event_id = %event_id,
+                        error = %err,
+                        "Hub credentials unavailable; running the daemon event against device storage"
+                    );
+                    break 'credentials (None, None);
+                }
+                Err(err) => {
                     tracing::error!(
                         app_id = %app_id,
                         event_id = %event_id,
                         error = %err,
                         "Failed to fetch credentials for daemon event"
                     );
-                    err
-                })?;
-        let content_prefix = credential_content_prefix(&shared_credentials).map(str::to_string);
-        let user_content_prefix =
-            credential_user_content_prefix(&shared_credentials).map(str::to_string);
-        let run_sub_override = if token.starts_with("pat_") {
-            daemon_sub_from_credentials(&shared_credentials, &app_id)
-        } else {
-            None
-        };
-        tracing::info!(
-            app_id = %app_id,
-            event_id = %event_id,
-            content_prefix = ?content_prefix,
-            user_content_prefix = ?user_content_prefix,
-            has_run_sub_override = run_sub_override.is_some(),
-            "Fetched credentials for daemon event"
-        );
-        (Some(shared_credentials), run_sub_override)
+                    return Err(err.into());
+                }
+            };
+            let content_prefix = credential_content_prefix(&shared_credentials).map(str::to_string);
+            let user_content_prefix =
+                credential_user_content_prefix(&shared_credentials).map(str::to_string);
+            let run_sub_override = if token.starts_with("pat_") {
+                daemon_sub_from_credentials(&shared_credentials, &app_id)
+            } else {
+                None
+            };
+            tracing::info!(
+                app_id = %app_id,
+                event_id = %event_id,
+                content_prefix = ?content_prefix,
+                user_content_prefix = ?user_content_prefix,
+                has_run_sub_override = run_sub_override.is_some(),
+                "Fetched credentials for daemon event"
+            );
+            (Some(shared_credentials), run_sub_override)
+        }
     };
 
     execute_internal(
@@ -1208,6 +1134,7 @@ pub(crate) async fn execute_daemon_event(
             run_sub_override,
             execution_hub: None,
             execution_session_id: None,
+            execution_webview: None,
         },
     )
     .await
@@ -1216,6 +1143,7 @@ pub(crate) async fn execute_daemon_event(
 #[tauri::command(async)]
 pub async fn execute_board(
     app_handle: AppHandle,
+    webview: tauri::Webview,
     app_id: String,
     board_id: String,
     payload: RunPayload,
@@ -1245,6 +1173,7 @@ pub async fn execute_board(
         ExecutionOverrides {
             execution_hub,
             execution_session_id,
+            execution_webview: Some(webview.label().to_owned()),
             ..Default::default()
         },
     )
@@ -1254,6 +1183,7 @@ pub async fn execute_board(
 #[tauri::command(async)]
 pub async fn execute_event(
     app_handle: AppHandle,
+    webview: tauri::Webview,
     app_id: String,
     event_id: String,
     payload: RunPayload,
@@ -1283,6 +1213,7 @@ pub async fn execute_event(
         ExecutionOverrides {
             execution_hub,
             execution_session_id,
+            execution_webview: Some(webview.label().to_owned()),
             ..Default::default()
         },
     )
@@ -1402,23 +1333,6 @@ mod tests {
                 }),
                 ..Default::default()
             },
-        }
-    }
-
-    #[test]
-    fn offline_apps_are_not_reported_to_the_backend() {
-        assert!(!should_report_run_to_backend(&AppVisibility::Offline));
-    }
-
-    #[test]
-    fn server_backed_apps_are_reported_to_the_backend() {
-        for visibility in [
-            AppVisibility::Public,
-            AppVisibility::PublicRequestAccess,
-            AppVisibility::Private,
-            AppVisibility::Prototype,
-        ] {
-            assert!(should_report_run_to_backend(&visibility));
         }
     }
 

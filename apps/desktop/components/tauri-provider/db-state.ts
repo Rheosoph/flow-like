@@ -19,6 +19,7 @@ import {
 	databaseQueryParams,
 } from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import { indexTypeToString } from "@flow-like/flow-like-ui/state/backend-state/db-state";
+import { i18n } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -37,8 +38,36 @@ function appendScope(
 	return `${url}${url.includes("?") ? "&" : "?"}${params}`;
 }
 
+type TableTarget = "local" | "device" | "hub";
+
+function managedStructureError(): Error {
+	return new Error(i18n.t("settings:offlineAccess.dataStudioStructureBlocked"));
+}
+
 export class DatabaseState implements IDatabaseState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	/** Rust decides an online app's route on every call; nothing is cached here. */
+	private async tableTarget(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<TableTarget> {
+		if (await this.backend.isOffline(appId)) return "local";
+		return (
+			(await this.backend.offlineWritesState?.getTableRoute(
+				appId,
+				tableName,
+				userScoped,
+			)) ?? "hub"
+		);
+	}
+
+	private deviceAuth(target: TableTarget): { token?: string } {
+		return target === "device"
+			? { token: this.backend.auth?.user?.access_token }
+			: {};
+	}
 
 	async createTable(
 		appId: string,
@@ -47,9 +76,10 @@ export class DatabaseState implements IDatabaseState {
 		ifNotExists = true,
 		userScoped?: boolean,
 	): Promise<ICreateTableResult> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -82,9 +112,10 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -122,9 +153,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -148,6 +179,7 @@ export class DatabaseState implements IDatabaseState {
 			items,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -158,9 +190,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -184,6 +216,7 @@ export class DatabaseState implements IDatabaseState {
 			query,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -195,9 +228,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return asArray(
 				await fetcher<unknown[]>(
 					this.backend.profile!,
@@ -221,6 +254,7 @@ export class DatabaseState implements IDatabaseState {
 			limit,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -233,9 +267,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return asArray(
 				await fetcher<unknown[]>(
 					this.backend.profile!,
@@ -261,6 +295,7 @@ export class DatabaseState implements IDatabaseState {
 			limit,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -270,9 +305,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<any> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -292,6 +327,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -370,9 +406,10 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -494,9 +531,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<number> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -516,6 +553,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -526,9 +564,10 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -561,9 +600,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -586,6 +625,7 @@ export class DatabaseState implements IDatabaseState {
 			updates,
 			userScoped: userScoped ?? false,
 			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -596,9 +636,10 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -630,9 +671,10 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -665,9 +707,10 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -698,9 +741,10 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		userScoped?: boolean,
 	): Promise<IDropTableResult> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -764,7 +808,9 @@ export class DatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<IDatabaseActionResult> {
-		if (await this.backend.isOffline(appId)) {
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
+		if (target === "local") {
 			return invoke("db_reference_action", {
 				appId,
 				tableName,

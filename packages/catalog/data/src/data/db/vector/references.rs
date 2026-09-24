@@ -143,6 +143,10 @@ pub(super) fn selection_cache_key(base: &str, selector: &DatabaseSelector) -> Re
 pub(super) async fn optional_reference(
     store: &LanceDBVectorStore,
 ) -> Result<Option<DatabaseReference>> {
+    // Local mirror versions and offline branches are never valid cloud references.
+    if store.is_durably_managed() {
+        return Ok(None);
+    }
     if !store.table_exists().await? {
         // Legacy Open Database creates the physical table on the first write.
         return Ok(None);
@@ -1015,5 +1019,39 @@ impl NodeLogic for CleanupDatabaseVersionsNode {
         Err(flow_like_types::anyhow!(
             "Database execution requires the execute feature"
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use flow_like_storage::databases::vector::lancedb::{
+        LocalWriteReceipt, LogicalTableMutation, LogicalTableMutationAdapter,
+    };
+
+    struct UnreachableAdapter;
+
+    #[async_trait]
+    impl LogicalTableMutationAdapter for UnreachableAdapter {
+        async fn apply(&self, _mutation: LogicalTableMutation) -> Result<LocalWriteReceipt> {
+            Err(flow_like_types::anyhow!("the adapter must not be written"))
+        }
+
+        async fn read_table(&self) -> Result<Option<flow_like_storage::lancedb::Table>> {
+            Err(flow_like_types::anyhow!("the adapter must not be read"))
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_store_reference_is_none() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut store =
+            LanceDBVectorStore::new(directory.path().to_path_buf(), "items".into()).await?;
+        store.insert(vec![json!({ "id": 1 })]).await?;
+        assert!(optional_reference(&store).await?.is_some());
+
+        let managed = store.with_mutation_adapter(Arc::new(UnreachableAdapter));
+        assert!(optional_reference(&managed).await?.is_none());
+        Ok(())
     }
 }

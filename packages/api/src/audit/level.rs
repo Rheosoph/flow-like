@@ -58,6 +58,8 @@ const VERBOSE_ACTIONS: &[&str] = &[
     "graph.nodes.upsert",
     "graph.edges.upsert",
     "file.access.authorize",
+    "database.rows.offline_replay",
+    "storage.files.offline_replay",
 ];
 
 fn matches(action: &str, prefixes: &[&str], exact: &[&str]) -> bool {
@@ -183,6 +185,7 @@ mod tests {
         ("board.version", AuditLevel::Standard),
         ("database.rows.delete", AuditLevel::Standard),
         ("database.rows.insert", AuditLevel::Standard),
+        ("database.rows.offline_replay", AuditLevel::Verbose),
         ("database.rows.update", AuditLevel::Standard),
         ("database.table.create", AuditLevel::Standard),
         ("database.table.drop", AuditLevel::Minimal),
@@ -257,6 +260,7 @@ mod tests {
         ("route.update", AuditLevel::Standard),
         ("sink.toggle", AuditLevel::Minimal),
         ("solution.deposit.paid", AuditLevel::Standard),
+        ("storage.files.offline_replay", AuditLevel::Verbose),
         ("sink.update", AuditLevel::Minimal),
         ("team.invite.accept", AuditLevel::Minimal),
         ("team.invite.reject", AuditLevel::Minimal),

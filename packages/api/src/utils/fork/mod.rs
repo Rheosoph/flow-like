@@ -2386,7 +2386,9 @@ pub(crate) fn plan_package_rows(
             version: Set(pkg.version.clone()),
             added_at: Set(ctx.now),
             auto_update: Set(pkg.auto_update),
-            stale: Set(pkg.stale),
+            // `filter_accessible_packages` only carries packages the new owner holds.
+            stale: Set(false),
+            stale_since: Set(None),
         })
         .collect()
 }

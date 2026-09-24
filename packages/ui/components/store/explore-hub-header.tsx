@@ -10,13 +10,13 @@ import { cn } from "../../lib/utils";
 const HUB_TABS = [
 	{
 		key: "apps" as const,
-		href: "/store/explore/apps",
+		href: "/store/explore",
 		label: "Apps",
 		icon: LayoutGrid,
 	},
 	{
 		key: "packages" as const,
-		href: "/store/packages",
+		href: "/store/packages?tab=explore",
 		label: "Packages",
 		icon: Package,
 	},

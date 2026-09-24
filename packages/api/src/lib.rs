@@ -45,6 +45,7 @@ pub mod error;
 pub mod mail;
 pub mod model_tier;
 pub mod notification_images;
+pub mod package_license;
 pub mod payments;
 pub mod permission;
 pub mod publication;

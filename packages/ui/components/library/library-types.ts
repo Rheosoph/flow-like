@@ -72,7 +72,10 @@ export function appPairs<T extends readonly [IApp, IMetadata | undefined]>(
 	value: readonly T[] | null | undefined,
 ): T[] {
 	return asArray(value).filter(
-		(pair) => Array.isArray(pair) && isRecord(pair[0]),
+		(pair) =>
+			Array.isArray(pair) &&
+			isRecord(pair[0]) &&
+			typeof pair[0].id === "string",
 	);
 }
 

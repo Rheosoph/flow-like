@@ -7,12 +7,12 @@ import {
 	type ProjectArtifactAssets,
 	abortProjectArtifact,
 	parseProjectArtifactAssets,
-	prepareOnlineProjectCache,
 	prepareProjectArtifact,
 	projectFilesFromSelection,
 	selectedProjectAssetFiles,
 	uploadProjectArtifact,
 } from "../../../lib/device-management/artifacts";
+import { prepareOnlineMetadata } from "../../../lib/device-management/online-metadata";
 import { prepareOnlineDependencies } from "../../../lib/device-management/online-dependencies";
 import {
 	type PreparedDesktopProject,
@@ -43,6 +43,7 @@ export function DeviceProjectUpload({
 		revision?: string;
 		source: "offline" | "online";
 		assets?: ProjectArtifactAssets;
+		online_metadata_sha256?: string;
 	}) => void;
 }) {
 	const backend = useBackend();
@@ -114,49 +115,45 @@ export function DeviceProjectUpload({
 			if (app.id !== project)
 				throw new Error("The selected project identity changed.");
 			if (app.visibility !== IAppVisibility.Offline) {
-				if (app.bits.length || Object.keys(app.packages ?? {}).length) {
-					if (isTauri()) {
-						const exported = await prepareDesktopProject(
-							project,
-							await desktopExportCommands(app),
-							abort.current.signal,
-						);
-						if (!alive.current) {
-							await exported.release();
-							return;
-						}
-						desktopSnapshot.current = exported;
+				const profile = await backend.userState.getProfile();
+				if (!profile)
+					throw new Error("Sign in to prepare executable metadata.");
+				const metadata = await prepareOnlineMetadata(
+					project,
+					backend,
+					profile,
+					abort.current.signal,
+				);
+				if (
+					isTauri() &&
+					(metadata.app.bits.length ||
+						Object.keys(metadata.app.packages ?? {}).length)
+				) {
+					const exported = await prepareDesktopProject(
+						project,
+						await desktopExportCommands(metadata.app),
+						abort.current.signal,
+						metadata,
+					);
+					if (!alive.current) {
+						await exported.release();
+						return;
+					}
+					desktopSnapshot.current = exported;
+					setAssets(exported.assets);
+					setPrepared(exported.artifact);
+				} else {
+					const exported = await prepareOnlineDependencies(
+						metadata.app,
+						backend,
+						profile,
+						abort.current.signal,
+						metadata,
+					);
+					if (alive.current) {
 						setAssets(exported.assets);
 						setPrepared(exported.artifact);
-					} else {
-						const profile = await backend.userState.getProfile();
-						if (!profile)
-							throw new Error(
-								"Sign in to resolve this project's dependencies.",
-							);
-						const exported = await prepareOnlineDependencies(
-							app,
-							backend,
-							profile,
-							abort.current.signal,
-						);
-						if (alive.current) {
-							setAssets(exported.assets);
-							setPrepared(exported.artifact);
-						}
 					}
-					return;
-				}
-				const projectPath = await run((call) =>
-					prepareOnlineProjectCache(call, project),
-				);
-				if (alive.current) {
-					setPath(projectPath);
-					onInstalled({
-						project_id: project,
-						project_path: projectPath,
-						source: "online",
-					});
 				}
 			} else {
 				if (!isTauri())
@@ -254,6 +251,16 @@ export function DeviceProjectUpload({
 						revision: prepared.descriptor.manifest_sha256,
 						source: prepared.descriptor.source ?? "offline",
 						assets,
+						online_metadata_sha256:
+							prepared.descriptor.source === "online"
+								? JSON.parse(
+										new TextDecoder().decode(prepared.manifest),
+									).files.find(
+										(file: { path: string; sha256: string }) =>
+											file.path ===
+											`apps/${prepared.descriptor.project_id}/online-metadata.json`,
+									)?.sha256
+								: undefined,
 					});
 					await desktopSnapshot.current?.release();
 					desktopSnapshot.current = undefined;

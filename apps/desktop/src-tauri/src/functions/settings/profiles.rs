@@ -13,7 +13,10 @@ use flow_like_types::tokio::task::JoinHandle;
 use futures::future::join_all;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tauri::{AppHandle, Url};
 use tauri_plugin_dialog::DialogExt;
 use tracing::instrument;
@@ -135,21 +138,33 @@ async fn get_bits(
     // Collect all futures for models and embedding models
     let mut bits: HashMap<&str, &str> = HashMap::new();
     let mut hubs: HashMap<&str, Hub> = HashMap::new();
+    let mut unreachable_hubs: HashSet<&str> = HashSet::new();
 
     for profile in profiles.iter() {
         for bit_id in profile.bits.iter() {
             let (hub, bit) = bit_id.split_once(':').unwrap_or(("", bit_id));
-            bits.insert(bit, hub);
-            if !hubs.contains_key(hub) {
-                hubs.insert(hub, Hub::new(hub, http_client.clone()).await?);
+            if unreachable_hubs.contains(hub) {
+                continue;
             }
+            if !hubs.contains_key(hub) {
+                match Hub::new(hub, http_client.clone()).await {
+                    Ok(resolved) => {
+                        hubs.insert(hub, resolved);
+                    }
+                    Err(error) => {
+                        tracing::warn!(hub, %error, "Skipping bits of an unreachable hub");
+                        unreachable_hubs.insert(hub);
+                        continue;
+                    }
+                }
+            }
+            bits.insert(bit, hub);
         }
     }
 
-    let bit_features = bits.iter().map(|(bit_id, hub_id)| {
-        let hub = hubs.get(hub_id).unwrap();
-        hub.get_bit(bit_id)
-    });
+    let bit_features = bits
+        .iter()
+        .filter_map(|(bit_id, hub_id)| Some(hubs.get(hub_id)?.get_bit(bit_id)));
 
     let bits_results = join_all(bit_features).await;
 
@@ -169,10 +184,9 @@ async fn get_bits(
             let bits = profile
                 .bits
                 .iter()
-                .map(|bit_url| {
+                .filter_map(|bit_url| {
                     let (_hub, bit) = bit_url.split_once(':').unwrap_or(("", bit_url));
-                    let bit = bits_map.get(bit).unwrap();
-                    bit.clone()
+                    bits_map.get(bit).cloned()
                 })
                 .collect();
             let user_profile = UserProfile::new(profile.clone());

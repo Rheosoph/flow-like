@@ -16,6 +16,19 @@ import {
 	isAzureBlobStorageUrl,
 } from "@flow-like/flow-like-ui";
 import type { IGroup } from "@flow-like/flow-like-ui";
+import {
+	exploreRequestPath,
+	exploreSearchRequestPath,
+	parseExploreSearch,
+	parseResolvedExplore,
+	toExploreError,
+} from "@flow-like/flow-like-ui/components/store/explore/explore-model";
+import type {
+	ExploreQuery,
+	ExploreSearchQuery,
+	ExploreSearchResponse,
+	ResolvedExplore,
+} from "@flow-like/flow-like-ui/components/store/explore/explore-types";
 import { isMissingResourceError } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	type IForkJobView,
@@ -162,6 +175,28 @@ export class WebAppState implements IAppState {
 				`apps/search?${params}`,
 				this.backend.auth,
 			),
+		);
+	}
+
+	private async fetchExplore(path: string): Promise<unknown> {
+		try {
+			return await apiGet<unknown>(path, this.backend.auth);
+		} catch (error) {
+			throw toExploreError(error);
+		}
+	}
+
+	async getExplore(query: ExploreQuery): Promise<ResolvedExplore> {
+		return parseResolvedExplore(
+			await this.fetchExplore(exploreRequestPath(query, "web")),
+		);
+	}
+
+	async searchExplore(
+		query: ExploreSearchQuery,
+	): Promise<ExploreSearchResponse> {
+		return parseExploreSearch(
+			await this.fetchExplore(exploreSearchRequestPath(query, "web")),
 		);
 	}
 

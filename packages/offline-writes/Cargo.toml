@@ -1,0 +1,51 @@
+[package]
+name = "flow-like-offline-writes"
+version = "0.1.0"
+edition = "2024"
+description = "Durable offline write outbox, table/file overlays and replay loop"
+
+[features]
+default = []
+# Manager, table and file overlays, drain loop. Pulls in Lance and DataFusion through flow-like-storage.
+runtime = [
+    "dep:async-trait",
+    "dep:base64",
+    "dep:bytes",
+    "dep:futures-util",
+    "dep:reqwest",
+    "dep:sha2",
+    "dep:tokio",
+    "dep:tracing",
+    "dep:flow-like-storage",
+    "dep:flow-like-types",
+]
+# FileOverlay::for_tests, used by the standalone's file tests.
+test-support = ["runtime"]
+
+[dependencies]
+anyhow = "1"
+blake3.workspace = true
+fs2 = "0.4.3"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2"
+uuid.workspace = true
+flow-like-device-protocol.workspace = true
+async-trait = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"], optional = true }
+tracing = { workspace = true, optional = true }
+flow-like-storage = { workspace = true, optional = true, features = ["files", "database-runtime"] }
+flow-like-types = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }

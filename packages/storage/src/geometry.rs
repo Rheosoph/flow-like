@@ -6,6 +6,8 @@ use flow_like_types::{Result, Value, anyhow};
 use geoarrow_array::GeoArrowArray;
 use std::{collections::HashMap, sync::Arc};
 
+mod nested;
+
 pub const EXTENSION_NAME: &str = "ARROW:extension:name";
 pub const EXTENSION_METADATA: &str = "ARROW:extension:metadata";
 pub const WGS84_METADATA: &str = r#"{"crs":"EPSG:4326","crs_type":"authority_code"}"#;
@@ -245,6 +247,7 @@ pub fn normalize_batch(
 pub fn register_geo_functions(context: &datafusion::prelude::SessionContext) {
     geodatafusion::register(context);
     register_ordered_relations(context);
+    nested::register_extension_preserving_nesting(context);
     context.register_udf(datafusion::logical_expr::ScalarUDF::from(
         Wgs84FromText::default(),
     ));
@@ -591,6 +594,81 @@ mod tests {
         assert_eq!(
             crate::arrow_utils::record_batch_to_value(&batches[0])?[0]["inside"],
             json!(true)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nested_results_keep_geometry_through_structs_and_array_agg() -> Result<()> {
+        let ctx = datafusion::prelude::SessionContext::new();
+        register_geo_functions(&ctx);
+        let batch = crate::arrow_utils::value_to_record_batch_with_fields(
+            vec![
+                json!({"id": 1, "layer_id": "a", "geometry": {"type": "Point", "coordinates": [1.0, 1.0]}}),
+                json!({"id": 2, "layer_id": "a", "geometry": {"type": "Point", "coordinates": [2.0, 2.0]}}),
+                json!({"id": 3, "layer_id": "b", "geometry": {"type": "Point", "coordinates": [3.0, 3.0]}}),
+                json!({"id": 4, "layer_id": "b", "geometry": {"type": "Point", "coordinates": [9.0, 9.0]}}),
+            ],
+            Some(vec![
+                Arc::new(Field::new("id", DataType::Int64, false)),
+                Arc::new(Field::new("layer_id", DataType::Utf8, false)),
+                Arc::new(geometry_field("geometry", true)),
+            ]),
+        )?;
+        ctx.register_batch("entities", batch)?;
+        let point = |x: f64| json!({"type": "Point", "coordinates": [x, x]});
+        let rows = |sql: &'static str| {
+            let ctx = ctx.clone();
+            async move {
+                let batches = ctx.sql(sql).await?.collect().await?;
+                Ok::<_, flow_like_types::Error>(
+                    batches
+                        .iter()
+                        .map(crate::arrow_utils::record_batch_to_value)
+                        .collect::<Result<Vec<_>>>()?
+                        .concat(),
+                )
+            }
+        };
+
+        assert_eq!(
+            rows("WITH viewport AS (SELECT ST_GeomFromText('POLYGON((0 0,5 0,5 5,0 5,0 0))') AS geometry) \
+                  SELECT e.layer_id, ARRAY_AGG(NAMED_STRUCT('id', e.id, 'geometry', e.geometry)) AS features \
+                  FROM entities e CROSS JOIN viewport v WHERE ST_Intersects(e.geometry, v.geometry) \
+                  GROUP BY e.layer_id ORDER BY e.layer_id")
+            .await?,
+            vec![
+                json!({"layer_id": "a", "features": [{"id": 1, "geometry": point(1.)}, {"id": 2, "geometry": point(2.)}]}),
+                json!({"layer_id": "b", "features": [{"id": 3, "geometry": point(3.)}]}),
+            ]
+        );
+        assert_eq!(
+            rows("SELECT row(geometry) AS s FROM entities WHERE id = 1").await?,
+            vec![json!({"s": {"c0": point(1.)}})]
+        );
+        assert_eq!(
+            rows("SELECT ARRAY_AGG(geometry ORDER BY id DESC) AS g FROM entities WHERE id < 3")
+                .await?,
+            vec![json!({"g": [point(2.), point(1.)]})]
+        );
+        assert_eq!(
+            rows("SELECT ARRAY_AGG(DISTINCT geometry) AS g FROM entities WHERE id = 3").await?,
+            vec![json!({"g": [point(3.)]})]
+        );
+        assert_eq!(
+            rows(
+                "SELECT ARRAY_AGG(geometry) OVER (PARTITION BY layer_id ORDER BY id) AS g \
+                  FROM entities WHERE layer_id = 'a' ORDER BY id"
+            )
+            .await?,
+            vec![
+                json!({"g": [point(1.)]}),
+                json!({"g": [point(1.), point(2.)]})
+            ]
+        );
+        assert_eq!(
+            rows("SELECT ARRAY_AGG(id) AS ids FROM entities").await?[0]["ids"],
+            json!([1, 2, 3, 4])
         );
         Ok(())
     }

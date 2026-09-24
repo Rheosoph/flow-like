@@ -130,6 +130,24 @@ pub async fn payee_for_app<C: ConnectionTrait>(db: &C, app_id: &str) -> Result<S
     Ok(rows[0].try_get("", "userId")?)
 }
 
+/// The seller of a registry package: its single Owner.
+pub async fn payee_for_package<C: ConnectionTrait>(
+    db: &C,
+    package_id: &str,
+) -> Result<String, ApiError> {
+    let rows = db.query_all_raw(sql(
+        r#"SELECT "userId" FROM "WasmPackageUser" WHERE "packageId"=$1 AND (permission & 1)=1 LIMIT 2"#,
+        vec![package_id.into()],
+    )).await?;
+    if rows.len() != 1 {
+        return Err(error(
+            "PAYMENT_OWNER_INVALID",
+            "The package must have exactly one owner",
+        ));
+    }
+    Ok(rows[0].try_get("", "userId")?)
+}
+
 pub async fn ensure_app_owner<C: ConnectionTrait>(
     db: &C,
     app_id: &str,

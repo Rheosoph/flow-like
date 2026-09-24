@@ -1281,6 +1281,7 @@ mod tests {
             deployment_id: "deployment".into(),
             revision: "r1".into(),
             source: ProjectSource::Offline,
+            online_metadata_sha256: None,
             project_path: root.into(),
             events: vec![EventBinding {
                 event_id: "event".into(),

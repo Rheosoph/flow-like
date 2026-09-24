@@ -99,6 +99,18 @@ pub(crate) async fn skip_missing_table(
     Ok(true)
 }
 
+#[cfg(feature = "execute")]
+fn log_table_notice(
+    context: &mut ExecutionContext,
+    notice: Option<&flow_like::state::DatabaseTableNotice>,
+    database_path: &flow_like_storage::object_store::path::Path,
+    table: &str,
+) {
+    if let Some(message) = notice.and_then(|notice| notice(database_path, table)) {
+        context.log_message(&message, flow_like::flow::execution::LogLevel::Warn);
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct CreateLocalDatabaseNode {}
@@ -196,16 +208,11 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 context_cache.get_storage(false)?.join("db")
             };
             let callbacks = context.app_state.config.read().await.callbacks.clone();
-            let decorator = context
-                .credentials
-                .is_none()
-                .then(|| callbacks.decorate_database.clone())
-                .flatten();
-            let managed = context.credentials.is_none()
-                && callbacks
-                    .database_table_is_managed
-                    .as_ref()
-                    .is_some_and(|selected| selected(&database_path, &table));
+            let decorator = callbacks.decorate_database.clone();
+            let managed = callbacks
+                .database_table_is_managed
+                .as_ref()
+                .is_some_and(|selected| selected(&database_path, &table));
             if managed {
                 LanceDBVectorStore::validate_overlay_selector(&selector)?;
                 if decorator.is_none() {
@@ -284,13 +291,19 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 lance_store.set_write_options(opts.clone());
             }
             if let Some(decorator) = decorator {
-                lance_store = decorator(database_path, lance_store).await?;
+                lance_store = decorator(database_path.clone(), lance_store).await?;
             }
             if managed && !lance_store.is_durably_managed() {
                 return Err(flow_like_types::anyhow!(
                     "The selected offline table did not receive its logical database adapter"
                 ));
             }
+            log_table_notice(
+                context,
+                callbacks.database_table_notice.as_ref(),
+                &database_path,
+                lance_store.table_name(),
+            );
             let buffered = BufferedVectorStore::new(lance_store, batch_size);
             let cached = CachedDB {
                 db: Arc::new(RwLock::new(buffered)),
@@ -337,5 +350,87 @@ impl NodeLogic for CreateLocalDatabaseNode {
         Err(flow_like_types::anyhow!(
             "Node execution is not enabled. Rebuild with the execute feature flag."
         ))
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use ahash::AHashMap;
+    use flow_like::{
+        flow::{
+            board::ExecutionStage,
+            execution::{LogLevel, Run, internal_node::InternalNode},
+        },
+        profile::Profile,
+        state::{DatabaseTableNotice, FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_storage::object_store::path::Path;
+    use flow_like_types::sync::Mutex;
+    use std::sync::Weak;
+
+    async fn test_context() -> ExecutionContext {
+        let logic: Arc<dyn NodeLogic> = Arc::new(CreateLocalDatabaseNode::new());
+        let node = Arc::new(InternalNode::new(
+            logic.get_node(),
+            AHashMap::new(),
+            logic,
+            AHashMap::new(),
+        ));
+        let mut nodes = AHashMap::new();
+        nodes.insert(node.node_id().to_string(), node.clone());
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let run: Weak<Mutex<Run>> = Weak::new();
+        ExecutionContext::new(
+            Arc::new(nodes),
+            &run,
+            &state,
+            &node,
+            &Arc::new(Mutex::new(AHashMap::new())),
+            &Arc::new(RwLock::new(AHashMap::new())),
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+            None,
+        )
+        .await
+    }
+
+    fn warnings(context: &ExecutionContext) -> Vec<String> {
+        context
+            .trace
+            .logs
+            .iter()
+            .filter(|log| log.log_level == LogLevel::Warn)
+            .map(|log| log.message.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn table_notice_is_logged_as_warning() {
+        let mut context = test_context().await;
+        let path = Path::from("apps/app/storage/db");
+        let notice: DatabaseTableNotice = Arc::new(|path, table| {
+            (table == "stale").then(|| format!("Table '{table}' in {path} is stale"))
+        });
+
+        log_table_notice(&mut context, None, &path, "stale");
+        log_table_notice(&mut context, Some(&notice), &path, "fresh");
+        assert!(warnings(&context).is_empty());
+
+        log_table_notice(&mut context, Some(&notice), &path, "stale");
+        assert_eq!(
+            warnings(&context),
+            vec!["Table 'stale' in apps/app/storage/db is stale".to_string()]
+        );
     }
 }

@@ -74,7 +74,7 @@ const PACKAGE_CARD_SKELETON_KEYS = Array.from(
 	(_, index) => `package-skeleton-${index}`,
 );
 
-function PackageCardSkeleton() {
+export function PackageCardSkeleton() {
 	return (
 		<div className="flex min-h-96 flex-col rounded-xl border border-border/60 bg-card p-2.5">
 			<Skeleton className="aspect-video w-full rounded-lg" />
@@ -190,7 +190,7 @@ export function PackageDetailWrapper({
 	);
 }
 
-const PACKAGE_GRID_CLASS_NAME =
+export const PACKAGE_GRID_CLASS_NAME =
 	"grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4";
 
 export function PackageListContent({

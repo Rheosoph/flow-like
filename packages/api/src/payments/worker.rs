@@ -217,6 +217,16 @@ async fn dispatch_effect(state: &AppState, row: &payment_outbox::Model) -> Resul
             crate::routes::webhook::deliver_legacy_purchase_effect(state, &row.effect, &row.payload)
                 .await
         }
+        "package_access_changed" => {
+            let user_id = row
+                .payload
+                .get("userId")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| ApiError::internal("Package access effect is missing userId"))?;
+            state.invalidate_wasm_permission(user_id, &row.source_id);
+            crate::package_license::refresh_package_access(state, user_id, &row.source_id).await;
+            Ok(())
+        }
         "PAYMENT_AUDIT" => {
             let action = row
                 .payload

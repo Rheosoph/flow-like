@@ -10,10 +10,12 @@ import {
 import {
 	ApiResponseError,
 	UPSTREAM_UNAVAILABLE_CODE,
+	isHubUnavailable,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher, fetcherConditional } from "../../lib/api";
+import { HUB_REFRESH_TIMEOUT_MS } from "../../lib/request-deadline";
 import type { TauriBackend } from "../tauri-provider";
 import { pageEtagKey, readPageEtag, writePageEtag } from "./page-etag-cache";
 
@@ -141,12 +143,24 @@ export class PageState implements IPageState {
 		const params = query.size > 0 ? `?${query.toString()}` : "";
 		const path = `apps/${appId}/pages/bootstrap${params}`;
 
-		const bootstrap = await fetcher<IPageBootstrap>(
-			this.backend.profile,
-			path,
-			{ method: "GET" },
-			this.backend.auth,
-		);
+		let bootstrap: IPageBootstrap;
+		try {
+			bootstrap = await fetcher<IPageBootstrap>(
+				this.backend.profile,
+				path,
+				{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
+				this.backend.auth,
+			);
+		} catch (error) {
+			// A hub that did not rule leaves the device's own copy of the app as the
+			// best answer; its actions are still authorized natively before they run.
+			if (!isHubUnavailable(error)) throw error;
+			console.warn(
+				`[PageState] Hub unavailable for ${path}; serving the local Page bootstrap`,
+				error,
+			);
+			return this.getLocalPageBootstrap(appId, route, eventId);
+		}
 		if (!isRecord(bootstrap) || !isRecord(bootstrap.event)) {
 			throw malformedResponseError(path, "a Page bootstrap");
 		}
@@ -364,7 +378,7 @@ export class PageState implements IPageState {
 			const remotePages = await fetcher<PageListItem[]>(
 				this.backend.profile,
 				url,
-				{ method: "GET" },
+				{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 				this.backend.auth,
 			);
 
@@ -547,7 +561,12 @@ export class PageState implements IPageState {
 			if (remotePage) {
 				return this.cacheRemotePage(appId, remotePage, boardId);
 			}
-			if (nativeMiss) throw new Error(`Page not found: ${pageId}`);
+			// No remote page means the server was not asked. Only a local-only app's own
+			// store can confirm a miss; for a hosted app "not found" would let the builder
+			// create a blank page that later syncs over the real one.
+			if (nativeMiss && (await this.backend.isLocalOnly(appId))) {
+				throw new Error(`Page not found: ${pageId}`);
+			}
 			throw localError;
 		}
 

@@ -16,6 +16,19 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IGroup } from "@flow-like/flow-like-ui";
 import {
+	exploreRequestPath,
+	exploreSearchRequestPath,
+	parseExploreSearch,
+	parseResolvedExplore,
+	toExploreError,
+} from "@flow-like/flow-like-ui/components/store/explore/explore-model";
+import type {
+	ExploreQuery,
+	ExploreSearchQuery,
+	ExploreSearchResponse,
+	ResolvedExplore,
+} from "@flow-like/flow-like-ui/components/store/explore/explore-types";
+import {
 	type IForkJobView,
 	resolveOnlineFork,
 } from "@flow-like/flow-like-ui/lib/fork-job";
@@ -229,7 +242,7 @@ export class AppState implements IAppState {
 		if (online && this.backend.profile) {
 			const app: IApp = await put(
 				this.backend.profile,
-				`apps/new`,
+				"apps/new",
 				{
 					meta: metadata,
 					bits: bits,
@@ -365,6 +378,17 @@ export class AppState implements IAppState {
 				error,
 			);
 		}
+		try {
+			await this.backend.offlineWritesState?.forgetApp(
+				appId,
+				reason === "app-deleted",
+			);
+		} catch (error) {
+			console.warn(
+				`Failed to forget offline table copies and queued changes for app ${appId}:`,
+				error,
+			);
+		}
 	}
 
 	async leaveApp(appId: string): Promise<void> {
@@ -425,15 +449,15 @@ export class AppState implements IAppState {
 
 		const queryParams: Record<string, string> = {};
 
-		if (id) queryParams["id"] = id;
-		if (query) queryParams["query"] = query;
-		if (language) queryParams["language"] = language;
-		if (category) queryParams["category"] = category;
-		if (author) queryParams["author"] = author;
-		if (sort) queryParams["sort"] = sort;
-		if (tag) queryParams["tag"] = tag;
-		if (offset) queryParams["offset"] = offset.toString();
-		if (limit) queryParams["limit"] = limit.toString();
+		if (id) queryParams.id = id;
+		if (query) queryParams.query = query;
+		if (language) queryParams.language = language;
+		if (category) queryParams.category = category;
+		if (author) queryParams.author = author;
+		if (sort) queryParams.sort = sort;
+		if (tag) queryParams.tag = tag;
+		if (offset) queryParams.offset = offset.toString();
+		if (limit) queryParams.limit = limit.toString();
 
 		const length = Array.from(Object.values(queryParams)).length;
 		if (length === 0) {
@@ -449,6 +473,36 @@ export class AppState implements IAppState {
 					this.backend.auth,
 				),
 			),
+		);
+	}
+
+	private async fetchExplore(path: string): Promise<unknown> {
+		if (!this.backend.profile) {
+			throw new Error("Explore needs a hub connection");
+		}
+		try {
+			return await fetcher<unknown>(
+				this.backend.profile,
+				path,
+				undefined,
+				this.backend.auth,
+			);
+		} catch (error) {
+			throw toExploreError(error);
+		}
+	}
+
+	async getExplore(query: ExploreQuery): Promise<ResolvedExplore> {
+		return parseResolvedExplore(
+			await this.fetchExplore(exploreRequestPath(query, "desktop")),
+		);
+	}
+
+	async searchExplore(
+		query: ExploreSearchQuery,
+	): Promise<ExploreSearchResponse> {
+		return parseExploreSearch(
+			await this.fetchExplore(exploreSearchRequestPath(query, "desktop")),
 		);
 	}
 
@@ -516,13 +570,14 @@ export class AppState implements IAppState {
 		) {
 			return localApps;
 		}
+		const profile = this.backend.profile;
 
 		const syncRemote = async () => {
 			const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
 
 			const remoteData = remoteAppEntries(
 				await fetcher<[IApp, IMetadata | undefined][]>(
-					this.backend.profile!,
+					profile,
 					"apps",
 					undefined,
 					this.backend.auth,
@@ -590,11 +645,11 @@ export class AppState implements IAppState {
 				}
 			}
 
-			localApps.forEach(([app, meta]) => {
+			for (const [app, meta] of localApps) {
 				if (!mergedData.has(app.id)) {
 					mergedData.set(app.id, [app, meta]);
 				}
-			});
+			}
 
 			return sortAppEntries(Array.from(mergedData.values()));
 		};

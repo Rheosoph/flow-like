@@ -16,6 +16,12 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** Streams are unbounded once open; only reaching the first byte is bounded. */
 export const STREAM_HEADER_TIMEOUT_MS = 30_000;
+/**
+ * How long a read waits for the hub when the device already holds a copy it can
+ * use instead. A hub that accepts connections but never answers otherwise holds
+ * opening and running a project for a full route deadline.
+ */
+export const HUB_REFRESH_TIMEOUT_MS = 15_000;
 
 /**
  * JSON routes mirror the API's deadline classes (packages/api/src/middleware/
@@ -181,4 +187,29 @@ export async function withRequestDeadline<T>(
 		release();
 		upstream?.removeEventListener("abort", forwardAbort);
 	}
+}
+
+/**
+ * The work's result when it settles within `timeoutMs`, otherwise `fallback`.
+ * The work is not cancelled: a refresh that lands later still updates the
+ * device's copy for the next reader, while this caller proceeds without it.
+ */
+export function settleWithin<T>(
+	work: Promise<T>,
+	timeoutMs: number,
+	fallback: T,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => resolve(fallback), timeoutMs);
+		work.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error: unknown) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+	});
 }

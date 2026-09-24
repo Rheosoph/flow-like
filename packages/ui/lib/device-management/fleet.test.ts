@@ -134,7 +134,7 @@ function fixture() {
 	} as unknown as BrowserController;
 	const api = {
 		get: async () => {
-			if (!remote) throw { status: 404 };
+			if (!remote) throw { status: 404, code: "NOT_FOUND" };
 			return remote;
 		},
 		put: async (

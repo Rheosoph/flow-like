@@ -27,6 +27,7 @@ function fixture() {
 	const backend = {
 		bitState: { getBit: async () => bit },
 		apiState: {
+			get: async () => ({ version: 1, project_id: app.id, documents: { app } }),
 			post: async (_: unknown, path: string, body: unknown) => {
 				calls.push([path, body]);
 				return {

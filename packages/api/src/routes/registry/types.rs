@@ -13,6 +13,7 @@ use std::time::Duration;
 use utoipa::ToSchema;
 
 use crate::entity::meta;
+use crate::permission::wasm_package_permission::WasmPackagePermission;
 
 /// Resolved metadata summary for a single language
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -217,6 +218,15 @@ pub struct PackageSummary {
     /// "declares nothing" apart from "server predates this".
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Whether the signed-in caller may install the package: free public
+    /// packages, or any access row. Absent for anonymous callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer_has_access: Option<bool>,
+    /// The signed-in caller's `WasmPackagePermission` bits on the package
+    /// (Owner 1, Maintainer 2, User 4, Buyer 8). Absent without an access
+    /// row and for anonymous callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer_permission: Option<i64>,
 }
 
 /// Search filters for registry queries
@@ -282,6 +292,26 @@ pub enum SortField {
     CreatedAt,
 }
 
+/// Which of the caller's own packages a search returns, by permission bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageAccessFilter {
+    /// Owner or Maintainer
+    Maintainer,
+    /// User or Buyer
+    Library,
+}
+
+impl PackageAccessFilter {
+    pub fn admits(self, permission: i64) -> bool {
+        let wanted = match self {
+            Self::Maintainer => WasmPackagePermission::Owner | WasmPackagePermission::Maintainer,
+            Self::Library => WasmPackagePermission::User | WasmPackagePermission::Buyer,
+        };
+        WasmPackagePermission::from_bits_truncate(permission).intersects(wanted)
+    }
+}
+
 /// Search results
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -309,6 +339,10 @@ pub struct DownloadRequest {
     /// Client platform key (e.g. "ios-pulley64-wt45") to receive precompiled artifacts
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_platform: Option<String>,
+    /// Project whose licence covers the download: members may fetch the version
+    /// the project pins while the pin has not expired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -341,4 +375,76 @@ pub struct RegistryError {
     pub message: String,
     #[serde(default)]
     pub details: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bits(permission: WasmPackagePermission) -> i64 {
+        permission.bits()
+    }
+
+    #[test]
+    fn maintainer_access_admits_owner_and_maintainer_only() {
+        let access = PackageAccessFilter::Maintainer;
+        assert!(access.admits(bits(WasmPackagePermission::Owner)));
+        assert!(access.admits(bits(WasmPackagePermission::Maintainer)));
+        assert!(access.admits(bits(
+            WasmPackagePermission::Maintainer | WasmPackagePermission::Buyer
+        )));
+        assert!(!access.admits(bits(WasmPackagePermission::User)));
+        assert!(!access.admits(bits(WasmPackagePermission::Buyer)));
+        assert!(!access.admits(0));
+    }
+
+    #[test]
+    fn library_access_admits_user_and_buyer_only() {
+        let access = PackageAccessFilter::Library;
+        assert!(access.admits(bits(WasmPackagePermission::User)));
+        assert!(access.admits(bits(WasmPackagePermission::Buyer)));
+        assert!(access.admits(bits(
+            WasmPackagePermission::Owner | WasmPackagePermission::Buyer
+        )));
+        assert!(!access.admits(bits(WasmPackagePermission::Owner)));
+        assert!(!access.admits(bits(WasmPackagePermission::Maintainer)));
+        assert!(!access.admits(0));
+    }
+
+    #[test]
+    fn access_ignores_unknown_bits() {
+        assert!(!PackageAccessFilter::Maintainer.admits(1 << 10));
+        assert!(!PackageAccessFilter::Library.admits(1 << 10));
+    }
+
+    #[test]
+    fn access_filter_parses_snake_case() {
+        let parsed: PackageAccessFilter = serde_json::from_str("\"maintainer\"").unwrap();
+        assert_eq!(parsed, PackageAccessFilter::Maintainer);
+        let parsed: PackageAccessFilter = serde_json::from_str("\"library\"").unwrap();
+        assert_eq!(parsed, PackageAccessFilter::Library);
+        assert!(serde_json::from_str::<PackageAccessFilter>("\"owner\"").is_err());
+    }
+
+    #[test]
+    fn viewer_permission_is_camel_case_and_omitted_when_absent() {
+        let mut summary: PackageSummary = serde_json::from_value(serde_json::json!({
+            "id": "pkg",
+            "name": "Pkg",
+            "description": "",
+            "latestVersion": "1.0.0",
+            "downloadCount": 0,
+            "status": "active",
+            "keywords": [],
+            "verified": false
+        }))
+        .unwrap();
+        assert_eq!(summary.viewer_permission, None);
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(json.get("viewerPermission").is_none());
+
+        summary.viewer_permission = Some(bits(WasmPackagePermission::Maintainer));
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["viewerPermission"], 2);
+    }
 }

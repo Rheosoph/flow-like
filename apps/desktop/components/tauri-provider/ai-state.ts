@@ -29,8 +29,8 @@ export class AiState implements IAIState {
 						.map((chunk) => chunk.payload as IResponseChunk);
 					controller.enqueue(responseChunks);
 					if (
-						responseChunks.some(
-							(chunk) => chunk?.choices?.[0]?.finish_reason === "stop",
+						responseChunks.some((chunk) =>
+							Boolean(chunk?.choices?.[0]?.finish_reason),
 						)
 					) {
 						closed = true;

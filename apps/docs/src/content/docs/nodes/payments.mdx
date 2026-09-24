@@ -38,9 +38,10 @@ clear name, and describe what the user receives. **Reference** is optional appli
 Keep personal information out of these text fields.
 
 Set **Product Tax Code** to the exact Stripe code for the goods or services the buyer receives.
-Choose it from [Stripe's product tax codes](https://docs.stripe.com/tax/tax-codes), with tax advice
-where the classification is unclear. The field starts empty, and real requests without a code
-are rejected. A workflow selling different products must supply the classification for each
+The field opens a searchable list of [Stripe's product tax codes](https://docs.stripe.com/tax/tax-codes)
+by category name and stores the matching `txcd_` code. A connected pin or a typed code such as
+`txcd_10000000` works the same way. Get tax advice where the classification is unclear. The
+field starts empty, and real requests without a code are rejected. A workflow selling different products must supply the classification for each
 request; the marketplace app-access category is not a default for this node.
 
 For shipped goods, set **Shipping Countries** to the delivery countries you support, separated

@@ -453,6 +453,15 @@ mod tests {
             json!({"type":"Point", "coordinates":[15.,25.]})
         );
         assert_eq!(rows[0]["bytes"], json!([97, 98, 99]));
+        let nested = ctx
+            .sql("SELECT ARRAY_AGG(NAMED_STRUCT('id', 1, 'geometry', flow_geomfromtext('POINT(13 52)'))) AS features")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            batches_to_rows(&nested)?[0]["features"],
+            json!([{"id": 1, "geometry": {"type": "Point", "coordinates": [13., 52.]}}])
+        );
         let csv = batches_to_csv_table(&batches)?;
         assert_eq!(
             csv.rows_as_values()[0]

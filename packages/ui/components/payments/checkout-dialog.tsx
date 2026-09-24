@@ -25,21 +25,38 @@ import {
 	usePayments,
 } from "./use-payments";
 
-function CheckoutDialogContent({
-	appId,
-	appName,
-	amount,
-	open,
-	onOpenChange,
-	onPurchased,
-}: {
-	appId: string;
-	appName: string;
+export type MarketplaceItemKind = NonNullable<PurchaseOrder["itemKind"]>;
+
+type MarketplaceCheckoutItem =
+	| { itemKind?: "APP"; appId: string; appName: string }
+	| { itemKind: "PACKAGE"; itemId: string; itemName: string };
+
+type MarketplaceCheckoutDialogProps = MarketplaceCheckoutItem & {
 	amount: number;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onPurchased: () => void | Promise<void>;
-}) {
+};
+
+export function marketplaceCheckoutPath(
+	itemKind: MarketplaceItemKind,
+	itemId: string,
+): string {
+	const id = encodeURIComponent(itemId);
+	return itemKind === "PACKAGE"
+		? `registry/package/${id}/marketplace/checkout`
+		: `apps/${id}/marketplace/checkout`;
+}
+
+function checkoutItem(item: MarketplaceCheckoutItem) {
+	return item.itemKind === "PACKAGE"
+		? { kind: item.itemKind, id: item.itemId, name: item.itemName }
+		: { kind: "APP" as const, id: item.appId, name: item.appName };
+}
+
+function CheckoutDialogContent(props: MarketplaceCheckoutDialogProps) {
+	const { amount, open, onOpenChange, onPurchased } = props;
+	const item = checkoutItem(props);
 	const { t, i18n } = useTranslation("payments");
 	const payments = usePayments();
 	const allowed = usePaymentDistribution();
@@ -73,7 +90,7 @@ function CheckoutDialogContent({
 		try {
 			setCreated(
 				await payments.request<PurchaseOrder>(
-					`apps/${encodeURIComponent(appId)}/marketplace/checkout`,
+					marketplaceCheckoutPath(item.kind, item.id),
 					"POST",
 					{
 						termsVersion: terms.version,
@@ -94,13 +111,18 @@ function CheckoutDialogContent({
 			<DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
 				<DialogHeader>
 					<DialogTitle>
-						{t("buyApp", "Buy {{name}}", { name: appName })}
+						{t("buyApp", "Buy {{name}}", { name: item.name })}
 					</DialogTitle>
 					<DialogDescription>
-						{t(
-							"checkoutDescription",
-							"Review the purchase terms, then continue to Stripe. Access is added after the server confirms payment.",
-						)}
+						{item.kind === "PACKAGE"
+							? t(
+									"packageCheckoutDescription",
+									"Review the purchase terms, then continue to Stripe. You can install the package once the server confirms payment.",
+								)
+							: t(
+									"checkoutDescription",
+									"Review the purchase terms, then continue to Stripe. Access is added after the server confirms payment.",
+								)}
 					</DialogDescription>
 				</DialogHeader>
 				<PaymentError error={error || order.error} />
@@ -146,7 +168,7 @@ function CheckoutDialogContent({
 }
 
 export function MarketplaceCheckoutDialog(
-	props: Parameters<typeof CheckoutDialogContent>[0],
+	props: MarketplaceCheckoutDialogProps,
 ) {
 	const { identity } = usePayments();
 	return <CheckoutDialogContent key={identity.join(":")} {...props} />;

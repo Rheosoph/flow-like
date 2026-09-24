@@ -122,6 +122,67 @@ describe("resolveNavigationItems", () => {
 	});
 });
 
+describe("host capabilities", () => {
+	const OFFLINE = "/library/config/offline";
+	const DESKTOP = new Set(["offlineWrites"]);
+
+	it("leaves Offline access out on a host without offline writes", () => {
+		expect(resolve().find((item) => item.href === OFFLINE)).toBeUndefined();
+		expect(
+			resolve({ hostCapabilities: new Set(["other"]) }).find(
+				(item) => item.href === OFFLINE,
+			),
+		).toBeUndefined();
+	});
+
+	it("lists Offline access in the Data group on a host with offline writes", () => {
+		const items = resolve({ hostCapabilities: DESKTOP });
+		const offline = find(items, OFFLINE);
+		expect(offline.lock).toBeUndefined();
+		expect(offline.group).toBe("Data");
+		const hrefs = items.map((item) => item.href);
+		expect(hrefs.indexOf(OFFLINE)).toBe(
+			hrefs.indexOf("/library/config/explore") + 1,
+		);
+	});
+
+	it("is not a developer tool", () => {
+		expect(
+			resolve({ hostCapabilities: DESKTOP, developerMode: false }).find(
+				(item) => item.href === OFFLINE,
+			),
+		).toBeDefined();
+	});
+
+	it("is hidden, not locked, for a local-only project", () => {
+		expect(
+			resolve({
+				hostCapabilities: DESKTOP,
+				visibility: IAppVisibility.Offline,
+			}).find((item) => item.href === OFFLINE),
+		).toBeUndefined();
+	});
+
+	it("locks behind ExecuteEvents", () => {
+		const withoutExecute = (...permissions: RolePermissions[]) =>
+			!permissions.some((p) => p.equals(RolePermissions.ExecuteEvents));
+		expect(
+			find(resolve({ hostCapabilities: DESKTOP, can: withoutExecute }), OFFLINE)
+				.lock,
+		).toEqual({
+			kind: "permission",
+			reason: "locked:Offline access",
+			missing: [RolePermissions.ExecuteEvents],
+		});
+		const executeOnly = (...permissions: RolePermissions[]) =>
+			permissions.some((p) => p.equals(RolePermissions.ExecuteEvents));
+		expect(
+			find(resolve({ hostCapabilities: DESKTOP, can: executeOnly }), OFFLINE)
+				.lock,
+		).toBeUndefined();
+	});
+});
+
 describe("isConfigRouteActive", () => {
 	it("matches the dashboard only on an exact route", () => {
 		expect(isConfigRouteActive("/library/config", "/library/config")).toBe(
