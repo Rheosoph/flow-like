@@ -1,4 +1,3 @@
-import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	type IBoard,
 	type IEvent,
@@ -23,6 +22,7 @@ import {
 	showProgressToast,
 	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui";
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	apiResponseError,
 	isMissingResourceError,
@@ -31,6 +31,15 @@ import {
 	cancelDeviceCommands,
 	withDeviceCommandBridge,
 } from "@flow-like/flow-like-ui/lib/device-bridge";
+import {
+	requestTimeoutMs,
+	withRequestDeadline,
+} from "@flow-like/flow-like-ui/lib/request-deadline";
+import {
+	recordRunStep,
+	runTimingNow,
+	timeRunStep,
+} from "@flow-like/flow-like-ui/lib/run-timing";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type {
 	ICanaryExplainResult,
@@ -75,7 +84,17 @@ import {
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
 
-function withFeedbackPageContext(localState?: Record<string, any>) {
+function missingOAuthError(
+	reason: string,
+	missingProviders: IOAuthProvider[],
+): Error {
+	return Object.assign(
+		new Error(`${reason}: ${missingProviders.map((p) => p.name).join(", ")}`),
+		{ missingProviders, isOAuthError: true },
+	);
+}
+
+function withFeedbackPageContext(localState?: Record<string, unknown>) {
 	if (
 		localState &&
 		Object.prototype.hasOwnProperty.call(localState, "pageContext")
@@ -104,8 +123,15 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 			? `${hubUrl}/api/v1`
 			: `https://${hubUrl}/api/v1`;
 
-	hubCachePromise = fetch(url)
-		.then((res) => res.json() as Promise<IHub>)
+	// Only a success is cached; a failed fetch clears the slot so the next call
+	// retries instead of running every later event without its OAuth providers.
+	hubCachePromise = withRequestDeadline(url, async ({ signal }) => {
+		const res = await fetch(url, { signal });
+		if (!res.ok) {
+			throw apiResponseError(res, await res.text().catch(() => ""), url);
+		}
+		return (await res.json()) as IHub;
+	})
 		.then((hub) => {
 			hubCache = hub;
 			return hub;
@@ -113,6 +139,9 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 		.catch((e) => {
 			console.warn("[OAuth] Failed to fetch Hub config:", e);
 			return undefined;
+		})
+		.finally(() => {
+			hubCachePromise = undefined;
 		});
 
 	return hubCachePromise;
@@ -173,6 +202,7 @@ function reportPageContractRejection(
 
 export class WebEventState implements IEventState {
 	readonly alwaysRemote = true;
+	private readonly runStreams = new Map<string, AbortController>();
 
 	constructor(private readonly backend: WebBackendRef) {}
 
@@ -379,9 +409,9 @@ export class WebEventState implements IEventState {
 		feedbackId: string,
 		feedback: {
 			rating: number;
-			history?: any[];
-			globalState?: Record<string, any>;
-			localState?: Record<string, any>;
+			history?: unknown[];
+			globalState?: Record<string, unknown>;
+			localState?: Record<string, unknown>;
 			comment?: string;
 		},
 	): Promise<string> {
@@ -449,7 +479,9 @@ export class WebEventState implements IEventState {
 		pageTrigger?: PageTrigger,
 		beforeDispatch?: () => void,
 	): Promise<ILogMetadata | undefined> {
-		const hub = await getHubConfig(this.backend.profile);
+		const hub = await timeRunStep("hub_config", () =>
+			getHubConfig(this.backend.profile),
+		);
 		const oauthService = getOAuthService(
 			getOAuthApiBaseUrl(this.backend.profile?.hub),
 		);
@@ -465,11 +497,8 @@ export class WebEventState implements IEventState {
 		let pagePrerun: IPrerunEventResponse | undefined;
 		if (pageTrigger) {
 			try {
-				pagePrerun = await this.prerunEvent(
-					appId,
-					eventId,
-					undefined,
-					pageTrigger,
+				pagePrerun = await timeRunStep("prerun", () =>
+					this.prerunEvent(appId, eventId, undefined, pageTrigger),
 				);
 			} catch (error) {
 				reportPageContractRejection(appId, eventId, pageTrigger, error);
@@ -482,22 +511,30 @@ export class WebEventState implements IEventState {
 		}
 
 		const oauthResult = pagePrerun
-			? await checkOAuthTokensFromPrerun(
-					pagePrerun.oauth_requirements,
-					oauthTokenStore,
-					hub,
-					oauthOptions,
+			? await timeRunStep("oauth_tokens", () =>
+					checkOAuthTokensFromPrerun(
+						pagePrerun.oauth_requirements,
+						oauthTokenStore,
+						hub,
+						oauthOptions,
+					),
 				)
 			: await (async () => {
-					const event = await this.getEvent(appId, eventId);
+					const event = await timeRunStep("get_event", () =>
+						this.getEvent(appId, eventId),
+					);
 					const boardParams = event.board_version
 						? `?version=${event.board_version.join("_")}`
 						: "";
-					const board = await apiGet<IBoard>(
-						`apps/${appId}/board/${event.board_id}${boardParams}`,
-						this.backend.auth,
+					const board = await timeRunStep("get_board", () =>
+						apiGet<IBoard>(
+							`apps/${appId}/board/${event.board_id}${boardParams}`,
+							this.backend.auth,
+						),
 					);
-					return checkOAuthTokens(board, oauthTokenStore, hub, oauthOptions);
+					return timeRunStep("oauth_tokens", () =>
+						checkOAuthTokens(board, oauthTokenStore, hub, oauthOptions),
+					);
 				})();
 
 		console.log("[OAuth] Event check result:", {
@@ -508,8 +545,9 @@ export class WebEventState implements IEventState {
 		});
 
 		if (!skipConsentCheck) {
-			const consentedIds =
-				await oauthConsentStore.getConsentedProviderIds(appId);
+			const consentedIds = await timeRunStep("oauth_consent", () =>
+				oauthConsentStore.getConsentedProviderIds(appId),
+			);
 			const providersNeedingConsent: IOAuthProvider[] = [];
 
 			// Add providers that are missing tokens
@@ -529,22 +567,18 @@ export class WebEventState implements IEventState {
 			}
 
 			if (providersNeedingConsent.length > 0) {
-				const error = new Error(
-					`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+				throw missingOAuthError(
+					"Missing OAuth authorization for",
+					providersNeedingConsent,
 				);
-				(error as any).missingProviders = providersNeedingConsent;
-				(error as any).isOAuthError = true;
-				throw error;
 			}
 		} else {
 			// Still need to check for missing tokens even if skipping consent
 			if (oauthResult.missingProviders.length > 0) {
-				const error = new Error(
-					`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+				throw missingOAuthError(
+					"Missing OAuth tokens for",
+					oauthResult.missingProviders,
 				);
-				(error as any).missingProviders = oauthResult.missingProviders;
-				(error as any).isOAuthError = true;
-				throw error;
 			}
 		}
 
@@ -554,15 +588,14 @@ export class WebEventState implements IEventState {
 				? oauthResult.tokens
 				: undefined;
 
-		const baseUrl = getApiBaseUrl();
-		const url = `${baseUrl}/api/v1/apps/${appId}/events/${eventId}/invoke`;
+		const invokePath = `apps/${appId}/events/${eventId}/invoke`;
+		const url = `${getApiBaseUrl()}/api/v1/${invokePath}`;
 
 		const headers: HeadersInit = {
 			"Content-Type": "application/json",
 		};
 		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
 		}
 
 		console.log("[OAuth] Sending event execution with tokens:", {
@@ -571,22 +604,45 @@ export class WebEventState implements IEventState {
 		});
 
 		let executionFinished = false;
+		let foundRunId = false;
+		let dispatchStart: number | undefined;
+		let runId: string | undefined;
+		const stream = new AbortController();
 		try {
 			beforeDispatch?.();
-			const response = await fetch(url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify({
-					payload: payload.payload,
-					token: this.backend.auth?.user?.access_token,
-					oauth_tokens: oauthTokens,
-					runtime_variables: payload.runtime_variables,
-					profile_id: this.backend.profile?.id,
-					page_trigger: activeTrigger
-						? serializePageTrigger(activeTrigger)
-						: undefined,
-				}),
+			dispatchStart = runTimingNow();
+			const body = JSON.stringify({
+				payload: payload.payload,
+				token: this.backend.auth?.user?.access_token,
+				oauth_tokens: oauthTokens,
+				runtime_variables: payload.runtime_variables,
+				profile_id: this.backend.profile?.id,
+				page_trigger: activeTrigger
+					? serializePageTrigger(activeTrigger)
+					: undefined,
 			});
+			// The API sends headers only once the whole dispatch is done (compile,
+			// admission, executor cold start), so they get the dispatch deadline.
+			// It is released on arrival: the SSE body streams as long as the run.
+			const response = await timeRunStep("invoke.response", () =>
+				withRequestDeadline(
+					url,
+					async ({ signal, release }) => {
+						const res = await fetch(url, {
+							method: "POST",
+							headers,
+							body,
+							signal,
+						});
+						release();
+						return res;
+					},
+					{
+						timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
+						controller: stream,
+					},
+				),
+			);
 
 			if (!response.ok) {
 				// The status alone destroys the server's reason, which is the only
@@ -602,7 +658,6 @@ export class WebEventState implements IEventState {
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
-				let foundRunId = false;
 
 				while (true) {
 					const { done, value } = await reader.read();
@@ -629,8 +684,6 @@ export class WebEventState implements IEventState {
 								// trimming destroys whitespace-only tokens.
 								const value = line.slice(5);
 								dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
-							} else if (line.startsWith(":")) {
-								continue;
 							}
 						}
 
@@ -642,14 +695,12 @@ export class WebEventState implements IEventState {
 							const event = JSON.parse(eventData) as IIntercomEvent;
 
 							// Handle run_initiated to get run ID
-							if (
-								!foundRunId &&
-								onEventId &&
-								event.event_type === "run_initiated"
-							) {
-								const runId = (event.payload as { run_id?: string })?.run_id;
+							if (!foundRunId && event.event_type === "run_initiated") {
+								runId = (event.payload as { run_id?: string })?.run_id;
 								if (runId) {
-									onEventId(runId);
+									recordRunStep("invoke.until_run_initiated", dispatchStart);
+									this.runStreams.set(runId, stream);
+									onEventId?.(runId);
 									foundRunId = true;
 								}
 							}
@@ -690,7 +741,12 @@ export class WebEventState implements IEventState {
 							});
 						}
 					}
-					if (executionFinished) break;
+					if (executionFinished) {
+						// The server may hold the body open past the terminal event;
+						// cancelling closes the connection instead of leaking it.
+						await reader.cancel().catch(() => {});
+						break;
+					}
 				}
 			}
 
@@ -701,8 +757,13 @@ export class WebEventState implements IEventState {
 
 			return undefined;
 		} catch (error) {
+			if (!foundRunId && dispatchStart !== undefined) {
+				recordRunStep("invoke.until_error", dispatchStart);
+			}
 			finishAllProgressToasts(false);
 			throw error;
+		} finally {
+			if (runId) this.runStreams.delete(runId);
 		}
 	}
 
@@ -723,7 +784,11 @@ export class WebEventState implements IEventState {
 
 	async cancelExecution(runId: string): Promise<void> {
 		cancelDeviceCommands(runId);
-		await apiPost(`runs/${runId}/cancel`, undefined, this.backend.auth);
+		this.runStreams.get(runId)?.abort();
+		await apiDelete(
+			`execution/run/${encodeURIComponent(runId)}`,
+			this.backend.auth,
+		);
 	}
 
 	async isEventSinkActive(

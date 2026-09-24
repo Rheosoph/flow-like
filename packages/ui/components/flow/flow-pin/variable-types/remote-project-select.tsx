@@ -18,6 +18,7 @@ import {
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand } from "../../../../lib";
+import { asArray } from "../../../../lib/response-shape";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -84,7 +85,7 @@ export function RemoteProjectSelect({
 				if (cancelled) return;
 
 				hasLoadedRef.current = true;
-				setApps(accessibleApps);
+				setApps(asArray(accessibleApps));
 			} catch {
 				if (!cancelled) setError(true);
 			} finally {

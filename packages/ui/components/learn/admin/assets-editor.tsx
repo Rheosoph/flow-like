@@ -20,6 +20,7 @@ import type {
 	CreateCourseAssetBody,
 	OptimizeCourseAssetResponse,
 } from "../../../lib/learn/types";
+import { asArray } from "../../../lib/response-shape";
 import type { IProfile } from "../../../types";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -147,7 +148,7 @@ export function AssetsEditor({
 		queryFn: () => api.listCourseAssets(getProfile(), auth, courseId),
 	});
 
-	const assets = assetsQuery.data ?? [];
+	const assets = asArray(assetsQuery.data);
 	const takenNames = useMemo(
 		() => new Set(assets.map((a) => a.name)),
 		[assets],

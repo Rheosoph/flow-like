@@ -5,12 +5,13 @@ edition = "2024"
 
 [features]
 default = ["all"]
-all = ["cache", "channel", "dispatch", "maintenance", "geometry"]
+all = ["cache", "channel", "dispatch", "maintenance", "geometry", "storage-paths"]
 geometry = ["dep:serde_json", "dep:schemars"]
 cache = ["dep:schemars"]
 channel = ["dep:serde_json", "dep:schemars"]
 dispatch = ["dep:blake3", "dep:serde_json", "channel"]
 maintenance = ["cache"]
+storage-paths = ["dep:blake3"]
 
 [dependencies]
 blake3 = { version = "1.8.2", optional = true }

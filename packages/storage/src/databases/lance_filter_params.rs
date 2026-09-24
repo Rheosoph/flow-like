@@ -73,6 +73,7 @@ struct Occurrence {
     start: Location,
     end: Location,
     in_list: bool,
+    in_wkt_call: bool,
 }
 
 fn scan(filter: &str) -> Result<Vec<Occurrence>> {
@@ -115,6 +116,9 @@ fn scan(filter: &str) -> Result<Vec<Occurrence>> {
                 end: token.span.end,
                 in_list: matches!(previous, Some(Token::LParen))
                     && matches!(&before_previous, Some(Token::Word(word)) if word.keyword == Keyword::IN),
+                in_wkt_call: matches!(previous, Some(Token::LParen))
+                    && matches!(&before_previous, Some(Token::Word(word))
+                        if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("st_geomfromtext")),
             });
         }
 
@@ -186,7 +190,12 @@ pub fn bind_filter_params(filter: &str, params: &[(String, Value)]) -> Result<St
         let start = byte_offset(&offsets, occurrence.start, filter)?;
         let end = byte_offset(&offsets, occurrence.end, filter)?;
         bound.push_str(&filter[cursor..start]);
-        bound.push_str(&render(&occurrence.name, value, occurrence.in_list)?);
+        bound.push_str(&render(
+            &occurrence.name,
+            value,
+            occurrence.in_list,
+            occurrence.in_wkt_call,
+        )?);
         cursor = end;
     }
     bound.push_str(&filter[cursor..]);
@@ -230,7 +239,10 @@ fn byte_offset(
         })
 }
 
-fn render(name: &str, value: &Value, in_list: bool) -> Result<String> {
+fn render(name: &str, value: &Value, in_list: bool, in_wkt_call: bool) -> Result<String> {
+    if value.is_object() {
+        return render_geometry(name, value, in_wkt_call);
+    }
     let Value::Array(items) = value else {
         return render_scalar(name, value);
     };
@@ -254,6 +266,35 @@ fn render(name: &str, value: &Value, in_list: bool) -> Result<String> {
     Ok(elements.join(", "))
 }
 
+/// A GeoJSON geometry, as a Geometry pin supplies it, binds as WKT through Lance's
+/// `ST_GeomFromText`, or as the bare WKT literal when the placeholder already is that
+/// call's argument.
+#[cfg(feature = "database-runtime")]
+fn render_geometry(name: &str, value: &Value, in_wkt_call: bool) -> Result<String> {
+    if !crate::geometry::names_geometry_kind(value) {
+        return Err(object_parameter_error(name));
+    }
+    let wkt = flow_like_geometry::to_wkt(value)
+        .map_err(|error| anyhow!("Parameter ${name} is not a valid geometry: {error}"))?;
+    let literal = sql_string_literal(&wkt);
+    Ok(if in_wkt_call {
+        literal
+    } else {
+        format!("ST_GeomFromText({literal})")
+    })
+}
+
+#[cfg(not(feature = "database-runtime"))]
+fn render_geometry(name: &str, _value: &Value, _in_wkt_call: bool) -> Result<String> {
+    Err(object_parameter_error(name))
+}
+
+fn object_parameter_error(name: &str) -> anyhow::Error {
+    anyhow!(
+        "Parameter ${name} holds an object that is not a GeoJSON geometry; bind the individual fields as separate parameters"
+    )
+}
+
 fn render_scalar(name: &str, value: &Value) -> Result<String> {
     Ok(match value {
         Value::Null => "NULL".to_string(),
@@ -267,11 +308,126 @@ fn render_scalar(name: &str, value: &Value) -> Result<String> {
                 "Parameter ${name} holds a nested list, which has no filter literal"
             ));
         }
-        Value::Object(_) => {
-            return Err(anyhow!(
-                "Parameter ${name} holds an object; bind the individual fields as separate parameters"
-            ));
+        Value::Object(_) => return Err(object_parameter_error(name)),
+    })
+}
+
+const CONVERSE_RELATIONS: [(&str, &str); 4] = [
+    ("st_contains", "ST_Within"),
+    ("st_within", "ST_Contains"),
+    ("st_covers", "ST_CoveredBy"),
+    ("st_coveredby", "ST_Covers"),
+];
+
+/// Rewrites `ST_Contains(<constant>, <column expression>)`, and likewise `ST_Within`,
+/// `ST_Covers` and `ST_CoveredBy`, into the converse relation with its arguments swapped.
+///
+/// Lance evaluates spatial filters with geodatafusion, which relates a constant first
+/// argument to a column in reverse and so answers the converse question; the column-first
+/// form is evaluated correctly and still uses an RTree index. Only the function name and the
+/// two argument spans are rewritten; every other byte of the filter is kept. A first argument
+/// that might reference a column is left alone.
+pub fn orient_spatial_relations(filter: &str) -> Result<String> {
+    let lowered = filter.to_ascii_lowercase();
+    if !CONVERSE_RELATIONS
+        .iter()
+        .any(|(name, _)| lowered.contains(name))
+    {
+        return Ok(filter.to_string());
+    }
+
+    let dialect = LanceFilterDialect::default();
+    let tokens: Vec<_> = Tokenizer::new(&dialect, filter)
+        .tokenize_with_location()
+        .map_err(|error| anyhow!("Could not read the filter: {error}"))?
+        .into_iter()
+        .filter(|token| !matches!(token.token, Token::Whitespace(_)))
+        .collect();
+    let offsets = byte_offsets(filter);
+    let at = |location| byte_offset(&offsets, location, filter);
+
+    let mut oriented = String::with_capacity(filter.len());
+    let mut cursor = 0usize;
+    let mut index = 0usize;
+    while index < tokens.len() {
+        let converse = match &tokens[index].token {
+            Token::Word(word) if word.quote_style.is_none() => CONVERSE_RELATIONS
+                .iter()
+                .find(|(name, _)| word.value.eq_ignore_ascii_case(name))
+                .map(|(_, converse)| *converse),
+            _ => None,
+        };
+        let arguments = converse.and_then(|_| two_arguments(&tokens, index + 1));
+        let (Some(converse), Some((comma, close))) = (converse, arguments) else {
+            index += 1;
+            continue;
+        };
+        let (first, second) = (&tokens[index + 2..comma], &tokens[comma + 1..close]);
+        if references_column(first) || !references_column(second) {
+            index = close + 1;
+            continue;
         }
+
+        let first = at(first[0].span.start)?..at(first[first.len() - 1].span.end)?;
+        let second = at(second[0].span.start)?..at(second[second.len() - 1].span.end)?;
+        oriented.push_str(&filter[cursor..at(tokens[index].span.start)?]);
+        oriented.push_str(converse);
+        oriented.push_str(&filter[at(tokens[index].span.end)?..first.start]);
+        oriented.push_str(&filter[second.clone()]);
+        oriented.push_str(&filter[first.end..second.start]);
+        oriented.push_str(&filter[first]);
+        cursor = second.end;
+        index = close + 1;
+    }
+    oriented.push_str(&filter[cursor..]);
+
+    Ok(oriented)
+}
+
+/// Positions of the separating comma and the closing parenthesis when `tokens[open]` opens
+/// a call with exactly two non-empty arguments.
+fn two_arguments(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    open: usize,
+) -> Option<(usize, usize)> {
+    if !matches!(tokens.get(open)?.token, Token::LParen) {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut comma = None;
+    for (position, token) in tokens.iter().enumerate().skip(open + 1) {
+        match token.token {
+            Token::LParen => depth += 1,
+            Token::RParen if depth > 0 => depth -= 1,
+            Token::RParen => {
+                let comma = comma?;
+                return (comma > open + 1 && position > comma + 1).then_some((comma, position));
+            }
+            Token::Comma if depth == 0 => {
+                if comma.is_some() {
+                    return None;
+                }
+                comma = Some(position);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether an argument may read a column: any word that is neither a function name nor a
+/// NULL/TRUE/FALSE literal counts, so an unrecognized form is treated as a column.
+fn references_column(tokens: &[sqlparser::tokenizer::TokenWithSpan]) -> bool {
+    tokens.iter().enumerate().any(|(position, token)| {
+        let Token::Word(word) = &token.token else {
+            return false;
+        };
+        let is_call = word.quote_style.is_none()
+            && matches!(
+                tokens.get(position + 1).map(|next| &next.token),
+                Some(Token::LParen)
+            );
+        !is_call && !matches!(word.keyword, Keyword::NULL | Keyword::TRUE | Keyword::FALSE)
     })
 }
 
@@ -292,6 +448,46 @@ mod tests {
     fn bind(filter: &str, params: Value) -> Result<String> {
         let resolved = resolve_filter_params(filter, &params)?;
         bind_filter_params(filter, &resolved)
+    }
+
+    #[test]
+    fn constant_first_relations_are_rewritten_column_first() {
+        let area = "ST_GeomFromText('POLYGON ((0 0,4 0,4 4,0 4,0 0))')";
+        for (filter, expected) in [
+            (
+                format!("kind = 'a' AND ST_Contains({area}, geometry) -- st_contains"),
+                format!("kind = 'a' AND ST_Within(geometry, {area}) -- st_contains"),
+            ),
+            (
+                format!("st_within({area},geometry)"),
+                format!("ST_Contains(geometry,{area})"),
+            ),
+            (
+                format!("ST_Covers({area}, `geo col`) OR ST_CoveredBy({area}, geo)"),
+                format!("ST_CoveredBy(`geo col`, {area}) OR ST_Covers(geo, {area})"),
+            ),
+        ] {
+            assert_eq!(
+                orient_spatial_relations(&filter).expect("orients"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn relations_that_already_evaluate_correctly_are_left_alone() {
+        let area = "ST_GeomFromText('POINT (1 2)')";
+        for filter in [
+            format!("ST_Contains(geometry, {area})"),
+            format!("ST_Contains(ST_Buffer(geometry, 1), {area})"),
+            format!("ST_Contains({area}, {area})"),
+            format!("ST_Intersects({area}, geometry)"),
+            format!("ST_Contains({area}, geometry, 1)"),
+            "note = 'ST_Contains(a, b)'".to_string(),
+            "`st_contains`(a, b)".to_string(),
+        ] {
+            assert_eq!(orient_spatial_relations(&filter).expect("orients"), filter);
+        }
     }
 
     #[test]
@@ -427,6 +623,35 @@ mod tests {
     fn objects_have_no_literal_form() {
         let error = bind("id = $id", json!({"id": {"a": 1}})).expect_err("rejected");
         assert!(error.to_string().contains("separate parameters"), "{error}");
+    }
+
+    #[cfg(feature = "database-runtime")]
+    #[test]
+    fn geometry_parameters_bind_as_wkt_geometries() {
+        let area = json!({"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]});
+        let wkt = flow_like_geometry::to_wkt(&area).expect("valid");
+        assert_eq!(
+            bind("ST_Intersects(geometry, $area)", json!({"area": area})).expect("binds"),
+            format!("ST_Intersects(geometry, ST_GeomFromText('{wkt}'))")
+        );
+        assert_eq!(
+            bind(
+                "ST_Within(geometry, st_geomfromtext( $area ))",
+                json!({"area": area})
+            )
+            .expect("binds"),
+            format!("ST_Within(geometry, st_geomfromtext( '{wkt}' ))")
+        );
+
+        let error = bind(
+            "ST_Intersects(geometry, $area)",
+            json!({"area": {"type": "Point", "coordinates": [500.0, 0.0]}}),
+        )
+        .expect_err("outside WGS 84");
+        assert!(
+            error.to_string().contains("not a valid geometry"),
+            "{error}"
+        );
     }
     /// The single invariant everything else rests on: whatever the value was, the filter Lance
     /// tokenizes carries it back exactly, as one literal.

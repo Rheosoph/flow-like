@@ -1330,23 +1330,27 @@ export function useExecuteAction() {
 									hasWidgetScope: Boolean(widgetScope),
 								});
 
+								// Diagnostics only: a board read that has to reach the server must not delay the run.
 								if (!pageAction && effectiveBoardId) {
-									try {
-										const currentBoard = await backend.boardState.getBoard(
+									void backend.boardState
+										.getBoard(
 											effectiveAppId,
 											effectiveBoardId,
 											inheritedBoardVersion,
-										);
-										console.log("[A2UI] workflow_event board diagnostics", {
-											pageCount: currentBoard.page_ids.length,
-											nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
-											layerCount: Object.keys(currentBoard.layers ?? {}).length,
+										)
+										.then((currentBoard) => {
+											console.log("[A2UI] workflow_event board diagnostics", {
+												pageCount: currentBoard.page_ids.length,
+												nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
+												layerCount: Object.keys(currentBoard.layers ?? {})
+													.length,
+											});
+										})
+										.catch(() => {
+											console.warn(
+												"[A2UI] Failed to fetch current board for workflow_event diagnostics",
+											);
 										});
-									} catch {
-										console.warn(
-											"[A2UI] Failed to fetch current board for workflow_event diagnostics",
-										);
-									}
 								}
 
 								// Always fetch the current element demand in preview mode.

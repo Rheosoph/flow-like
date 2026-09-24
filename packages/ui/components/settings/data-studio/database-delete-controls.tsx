@@ -5,6 +5,7 @@ import { Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "../../../lib/error-message";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type { IDatabaseSelector } from "../../../state/backend-state/db-state";
 import { Button } from "../../ui/button";
@@ -111,7 +112,7 @@ export function DatabaseDeleteDialog({
 				userScoped,
 				selector,
 			);
-			setPreview({ filter: filter.trim(), rows });
+			setPreview({ filter: filter.trim(), rows: asArray(rows) });
 		} catch (err) {
 			setPreview(null);
 			setError(getErrorMessage(err));
@@ -147,14 +148,17 @@ export function DatabaseDeleteDialog({
 					table,
 					userScoped,
 				);
+				// The drop already happened; a bodiless reply must not report it as failed.
+				const ontologies = asArray(result?.ontologies);
+				const savedQueries = asArray(result?.saved_queries);
 				const details = [
-					result.ontologies.length
-						? `Updated ontologies: ${result.ontologies.join(", ")}.`
+					ontologies.length
+						? `Updated ontologies: ${ontologies.join(", ")}.`
 						: "",
-					result.saved_queries.length
-						? `Saved queries still reference this table: ${result.saved_queries.join(", ")}.`
+					savedQueries.length
+						? `Saved queries still reference this table: ${savedQueries.join(", ")}.`
 						: "",
-					...result.warnings,
+					...asArray(result?.warnings),
 				]
 					.filter(Boolean)
 					.join(" ");

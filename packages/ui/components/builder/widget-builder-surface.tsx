@@ -17,7 +17,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
+import { ApiResponseError, isTransportFailure } from "../../lib/api-error";
 import { parseDateValue } from "../../lib/date";
+import { asArray } from "../../lib/response-shape";
 import {
 	type WidgetActionIdIssue,
 	checkWidgetActionId,
@@ -127,6 +129,15 @@ export function WidgetBuilderSurface({
 					toast.error(
 						t("failedToLoadWidgetVersion", "Failed to load widget version"),
 					);
+					setWidget(null);
+					return;
+				}
+				// An unreachable server is not a miss either.
+				if (
+					isTransportFailure(error) ||
+					(error instanceof ApiResponseError && error.status >= 500)
+				) {
+					console.error("Failed to load widget", error);
 					setWidget(null);
 					return;
 				}
@@ -515,7 +526,7 @@ export function WidgetBuilderSurface({
 							onRenameAction={handleRenameAction}
 							onSave={handleSaveMetadata}
 							isSaving={isSaving}
-							versions={versions.data ?? []}
+							versions={asArray(versions.data)}
 							currentVersion={version}
 							onCreateVersion={handleCreateVersion}
 							onSwitchVersion={handleSwitchVersion}

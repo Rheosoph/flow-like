@@ -119,7 +119,7 @@ export function LegacyPurchaseHistory({
 		!!cursor,
 	);
 	const current = cursor ? page.data : initial;
-	if (!initial?.items.length) return null;
+	if (!initial?.items?.length) return null;
 	return (
 		<section className="space-y-4">
 			<h2 className="text-lg font-semibold">

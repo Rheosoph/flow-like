@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, MessageSquare, Star } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type {
 	AppCommentItem,
@@ -188,7 +189,7 @@ export function AppReviewsSection({
 	}
 
 	const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
-	const comments = data?.comments ?? [];
+	const comments = asArray(data?.comments);
 
 	return (
 		<div className="space-y-4">

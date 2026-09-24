@@ -181,6 +181,8 @@ function publicWidgetRegistry(): IRegistryState {
 }
 
 class HostedEventState extends EmptyEventState {
+	private readonly runs = new Map<string, AbortController>();
+
 	constructor(
 		private readonly data: HostedBootstrap,
 		private readonly request: HostedRequest,
@@ -246,20 +248,37 @@ class HostedEventState extends EmptyEventState {
 			);
 		}
 		beforeDispatch?.();
-		const response = await this.request("/invoke", {
-			method: "POST",
-			body: JSON.stringify({
-				payload: payload.payload,
-				page_trigger: activeTrigger
-					? serializePageTrigger(activeTrigger)
-					: undefined,
-			}),
-		});
-		if (!response.body)
-			throw new Error("The server did not return an execution stream.");
-		await consumeHostedStream(response.body, onEvents, onRunId);
-		return undefined;
+		const controller = new AbortController();
+		let runId: string | undefined;
+		try {
+			const response = await this.request("/invoke", {
+				method: "POST",
+				body: JSON.stringify({
+					payload: payload.payload,
+					page_trigger: activeTrigger
+						? serializePageTrigger(activeTrigger)
+						: undefined,
+				}),
+				signal: controller.signal,
+			});
+			if (!response.body)
+				throw new Error("The server did not return an execution stream.");
+			await consumeHostedStream(response.body, onEvents, (id) => {
+				if (!runId) {
+					runId = id;
+					this.runs.set(id, controller);
+				}
+				onRunId?.(id);
+			});
+			return undefined;
+		} finally {
+			if (runId) this.runs.delete(runId);
+		}
 	};
+	// The hosted surface has no cancel route; closing the stream stops this client listening.
+	async cancelExecution(runId: string): Promise<void> {
+		this.runs.get(runId)?.abort();
+	}
 }
 
 /** Matches `MAX_PREFIXES` in packages/api/src/routes/app/data/batch.rs. */

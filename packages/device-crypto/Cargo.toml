@@ -1,0 +1,39 @@
+[package]
+name = "flow-like-device-crypto"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+sqlite = ["dep:rusqlite"]
+wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen", "dep:js-sys", "dep:getrandom_02", "openmls/js"]
+
+[dependencies]
+flow-like-device-protocol.workspace = true
+anyhow = "1"
+base64.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+zeroize = { workspace = true, features = ["derive"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror = "2"
+snow = "0.9.6"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+openmls = "0.9.0"
+openmls_basic_credential = "0.6.0"
+openmls_traits = "0.6.0"
+openmls_rust_crypto = "0.6.0"
+tls_codec = "0.5"
+rusqlite = { version = "0.32.1", features = ["bundled"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+js-sys = { version = "0.3", optional = true }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"

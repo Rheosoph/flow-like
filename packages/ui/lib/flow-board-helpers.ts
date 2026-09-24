@@ -9,7 +9,7 @@ import {
 	updateNodeCommand,
 	upsertLayerCommand,
 } from ".";
-import { isOpenObjectSchema } from "./flow-board-utils";
+import { doPinsMatch, isOpenObjectSchema } from "./flow-board-utils";
 import { isWebkitLite } from "./platform";
 import { ILayerType } from "./schema/flow/board/commands/upsert-layer";
 import type { INode } from "./schema/flow/node";
@@ -139,6 +139,34 @@ interface RegularPinConnectionParams {
 	executeCommand: (command: any) => Promise<any>;
 }
 
+/** Reference pins a preset node arrives bound through (Get/Set Variable, Call Function/Event). */
+const BINDING_PINS = new Set(["var_ref", "fn_ref", "function_layer_id"]);
+
+const isBoundReference = (pin: IPin) =>
+	BINDING_PINS.has(pin.name) && (pin.default_value?.length ?? 0) > 0;
+
+/**
+ * The pin on `pins` that a wire dropped from `droppedPin` connects to when the node is placed.
+ * Only pins the editor's own connection check (`doPinsMatch`) accepts qualify, so a drop never
+ * wires what a manual connect would reject, and a preset node's bound reference is never rewired.
+ */
+export function findDropTargetPin(
+	pins: Record<string, IPin>,
+	droppedPin: IPin,
+	refs: Record<string, string>,
+): IPin | undefined {
+	return matchingPins(pins, {
+		pinType: droppedPin.pin_type === "Input" ? "Output" : "Input",
+		pinValueType: droppedPin.value_type,
+		pinDataType: droppedPin.data_type,
+		schema: refs?.[droppedPin.schema ?? ""] ?? droppedPin.schema,
+		options: droppedPin.options,
+		refs,
+	}).find(
+		(pin) => !isBoundReference(pin) && doPinsMatch(pin, droppedPin, refs),
+	);
+}
+
 async function handleRegularPinConnection({
 	droppedPin,
 	newNode,
@@ -146,20 +174,7 @@ async function handleRegularPinConnection({
 	pinCache,
 	executeCommand,
 }: RegularPinConnectionParams) {
-	const pinType = droppedPin.pin_type === "Input" ? "Output" : "Input";
-	const pinValueType = droppedPin.value_type;
-	const pinDataType = droppedPin.data_type;
-	const schema = refs?.[droppedPin.schema ?? ""] ?? droppedPin.schema;
-	const options = droppedPin.options;
-
-	const pin = findMatchingPin(newNode.pins, {
-		pinType,
-		pinValueType,
-		pinDataType,
-		schema,
-		options,
-		refs,
-	});
+	const pin = findDropTargetPin(newNode.pins, droppedPin, refs);
 
 	const [sourcePin, sourceNode] = pinCache.get(droppedPin.id) || [];
 	if (!sourcePin || !sourceNode || !pin) return;
@@ -183,7 +198,7 @@ interface FindMatchingPinParams {
 	refs: Record<string, any>;
 }
 
-function findMatchingPin(
+function matchingPins(
 	pins: Record<string, IPin>,
 	{
 		pinType,
@@ -193,7 +208,7 @@ function findMatchingPin(
 		options,
 		refs,
 	}: FindMatchingPinParams,
-): IPin | undefined {
+): IPin[] {
 	// An open-object schema declares that the shape is open, not a contract to match, so it counts
 	// as "no schema" here exactly as it does in `doPinsMatch`. Without this, dragging off a typed
 	// struct pin would stop offering Break Struct, whose `struct_in` accepts any struct.
@@ -206,7 +221,7 @@ function findMatchingPin(
 	// instead of whichever the map happened to yield.
 	const ordered = Object.values(pins).sort((a, b) => a.index - b.index);
 
-	return ordered.find((pin) => {
+	return ordered.filter((pin) => {
 		const rawPinSchema = refs?.[pin.schema ?? ""] ?? pin.schema;
 		const pinSchema =
 			typeof rawPinSchema === "string" && !isOpenObjectSchema(rawPinSchema)

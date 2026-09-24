@@ -129,6 +129,7 @@ afterEach(() => {
 });
 
 describe("AWS delivery and HTTP fallback", () => {
+	const fallbackUrl = "https://api.example/push";
 	const handle: IChannelHandle = {
 		channel_id: "run-1",
 		request_id: "req-1",
@@ -148,7 +149,7 @@ describe("AWS delivery and HTTP fallback", () => {
 		},
 		fallback: {
 			type: "http",
-			push_url: "https://api.example/push",
+			push_url: fallbackUrl,
 			token: "token",
 		},
 	};
@@ -172,9 +173,7 @@ describe("AWS delivery and HTTP fallback", () => {
 			expect(byteLength(call.body)).toBeLessThanOrEqual(AWS_MQTT_PAYLOAD_BYTES);
 			expect(JSON.parse(call.body).kind).toBe("reply_chunk");
 		}
-		expect(calls[2].url).toBe(
-			handle.fallback?.type === "http" && handle.fallback.push_url,
-		);
+		expect(calls[2].url).toBe(fallbackUrl);
 		expect(JSON.parse(calls[2].body)).toEqual(reply(value));
 	});
 });

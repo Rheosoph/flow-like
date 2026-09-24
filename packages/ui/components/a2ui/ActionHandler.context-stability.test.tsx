@@ -1,8 +1,18 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import {
+	afterEach,
+	describe,
+	expect,
+	setDefaultTimeout,
+	spyOn,
+	test,
+} from "bun:test";
 import { Window } from "happy-dom";
 import { act, memo } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import type { SurfaceComponent } from "./types";
+
+// A cold import of the ActionHandler module graph alone takes 6–15 s.
+setDefaultTimeout(60_000);
 
 let root: Root | undefined;
 const cleanup: (() => void)[] = [];
@@ -16,7 +26,7 @@ afterEach(async () => {
 
 const text = (id: string, value: string): SurfaceComponent => ({
 	id,
-	component: { type: "text", content: { literalString: value } },
+	component: { id, type: "text", content: { literalString: value } },
 });
 
 describe("ActionProvider context stability", () => {

@@ -1,19 +1,59 @@
 import { afterAll, expect, mock, test } from "bun:test";
+import { Window } from "happy-dom";
 import type { HTMLAttributes } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { QuotaDetail } from "../../lib/quota";
 import type { ITierInfo } from "../../state/backend-state/user-state";
 import type { UpgradeDialogBodyProps } from "./upgrade-dialog";
 
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll. Radix picks its layout effect when first imported,
+// so the real modules load under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	oidc: { ...(await import("react-oidc-context")) },
+	features: { ...(await import("../../hooks/use-features")) },
+	hub: { ...(await import("../../hooks/use-hub")) },
+	invoke: { ...(await import("../../hooks/use-invoke")) },
+	backendState: { ...(await import("../../state/backend-state")) },
+	tierCard: { ...(await import("./tier-card")) },
+	dialog: { ...(await import("../ui/dialog")) },
+};
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
+
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: (_: string, value: string) => value }),
 }));
-mock.module("react-oidc-context", () => ({ useAuth: () => ({}) }));
-mock.module("../../hooks/use-features", () => ({ useFeatures: () => ({}) }));
-mock.module("../../hooks/use-hub", () => ({ useHub: () => ({}) }));
-mock.module("../../hooks/use-invoke", () => ({ useInvoke: () => ({}) }));
-mock.module("../../state/backend-state", () => ({ useBackend: () => ({}) }));
+mock.module("react-oidc-context", () => ({
+	...actual.oidc,
+	useAuth: () => ({}),
+}));
+mock.module("../../hooks/use-features", () => ({
+	...actual.features,
+	useFeatures: () => ({}),
+}));
+mock.module("../../hooks/use-hub", () => ({
+	...actual.hub,
+	useHub: () => ({}),
+}));
+mock.module("../../hooks/use-invoke", () => ({
+	...actual.invoke,
+	useInvoke: () => ({}),
+}));
+mock.module("../../state/backend-state", () => ({
+	...actual.backendState,
+	useBackend: () => ({}),
+}));
 mock.module("./tier-card", () => ({
+	...actual.tierCard,
 	ENTERPRISE_TIER: {},
 	TIER_ORDER: [],
 	TierCard: ({
@@ -26,6 +66,7 @@ mock.module("./tier-card", () => ({
 	),
 }));
 mock.module("../ui/dialog", () => ({
+	...actual.dialog,
 	Dialog: () => null,
 	DialogContent: () => null,
 	DialogTitle: (props: HTMLAttributes<HTMLHeadingElement>) => <h2 {...props} />,
@@ -33,7 +74,17 @@ mock.module("../ui/dialog", () => ({
 		<p {...props} />
 	),
 }));
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("react-oidc-context", () => actual.oidc);
+	mock.module("../../hooks/use-features", () => actual.features);
+	mock.module("../../hooks/use-hub", () => actual.hub);
+	mock.module("../../hooks/use-invoke", () => actual.invoke);
+	mock.module("../../state/backend-state", () => actual.backendState);
+	mock.module("./tier-card", () => actual.tierCard);
+	mock.module("../ui/dialog", () => actual.dialog);
+});
 
 test("shared model access directs users to the owner without zero-limit counters or checkout", async () => {
 	const { SharedPlanLimit } = await import("./upgrade-dialog");

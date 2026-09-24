@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { GEOMETRY_BOARD_FORMAT_VERSION } from "../../../lib/board-format";
@@ -11,7 +11,43 @@ import {
 import { convertJsonToUint8Array } from "../../../lib/uint8";
 import type { IBackendState } from "../../../state/backend-state";
 
-mock.module("../../ui/geometry-editor-map", () => ({ default: () => null }));
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const actualGeometryEditorMap = {
+	...(await import("../../ui/geometry-editor-map")),
+};
+const globalDescriptors = [
+	"document",
+	"Element",
+	"Event",
+	"HTMLElement",
+	"HTMLTextAreaElement",
+	"HTMLInputElement",
+	"MouseEvent",
+	"Node",
+	"navigator",
+	"window",
+	"Document",
+	"DocumentFragment",
+	"Text",
+	"getComputedStyle",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+mock.module("../../ui/geometry-editor-map", () => ({
+	...actualGeometryEditorMap,
+	default: () => null,
+}));
+afterAll(() => {
+	mock.module("../../ui/geometry-editor-map", () => actualGeometryEditorMap);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 async function setup() {
 	const window = new Window();
@@ -37,12 +73,13 @@ async function setup() {
 	});
 	const { createRoot } = await import("react-dom/client");
 	const { GeometryValueInput } = await import("./geometry-variable");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const host = window.document.createElement("div");
+	window.document.body.append(host);
+	const container = host as unknown as HTMLElement;
 	return {
 		window,
 		container,
-		root: createRoot(container as unknown as HTMLElement),
+		root: createRoot(container),
 		GeometryValueInput,
 	};
 }
@@ -88,7 +125,8 @@ describe("Geometry editor rendering", () => {
 				),
 			);
 		};
-		const input = () => container.querySelector('input[type="password"]');
+		const input = () =>
+			container.querySelector<HTMLInputElement>('input[type="password"]');
 		await render(variable);
 		expect(input()?.value).toBe("");
 		const point = { type: "Point", coordinates: [13, 52] };
@@ -232,11 +270,11 @@ describe("Geometry editor rendering", () => {
 			],
 		});
 		expect(numberInputs(container)).toHaveLength(6);
-		const remove = container.querySelectorAll(
+		const remove = container.querySelectorAll<HTMLButtonElement>(
 			'button[aria-label="Remove vertex"]',
 		);
 		expect(remove).toHaveLength(3);
-		await act(async () => (remove[0] as HTMLButtonElement).click());
+		await act(async () => remove[0].click());
 		await act(async () => {
 			container
 				.querySelectorAll('button[aria-label="Remove vertex"]')[0]

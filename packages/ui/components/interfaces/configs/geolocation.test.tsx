@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { type ComponentProps, type ReactNode, act } from "react";
+import { type Root, createRoot } from "react-dom/client";
 import type { GeofencePermissionStatus } from "../../../lib/location";
 
 let status: GeofencePermissionStatus;
@@ -14,35 +14,67 @@ const commands = mock(
 	async (_command: string, _args: unknown, _context: unknown) => status,
 );
 const update = mock((_config: unknown) => {});
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll. Radix picks its layout effect when first imported,
+// so the real modules load under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	deviceBridge: { ...(await import("../../../lib/device-bridge")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	oidc: { ...(await import("react-oidc-context")) },
+	geometryEditor: { ...(await import("../../flow/variables/geometry-editor")) },
+	button: { ...(await import("../../ui/button")) },
+	input: { ...(await import("../../ui/input")) },
+	label: { ...(await import("../../ui/label")) },
+};
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
 mock.module("../../../lib/device-bridge", () => ({
+	...actual.deviceBridge,
 	executeDeviceCommand: commands,
 }));
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({
 		profile: { id: "profile", hub: "api.test", secure: true },
 	}),
 }));
 mock.module("react-oidc-context", () => ({
+	...actual.oidc,
 	useAuth: () => ({
 		isAuthenticated: true,
 		user: { profile: { sub: "account" } },
 	}),
 }));
 mock.module("../../flow/variables/geometry-editor", () => ({
+	...actual.geometryEditor,
 	GeometryEditor: (props: typeof editor) => {
 		editor = props;
 		return <div data-testid="geometry" />;
 	},
 }));
 mock.module("../../ui/button", () => ({
-	Button: ({ children, variant: _variant, size: _size, ...props }: any) => (
+	...actual.button,
+	Button: ({
+		children,
+		variant: _variant,
+		size: _size,
+		...props
+	}: ComponentProps<"button"> & { variant?: string; size?: string }) => (
 		<button {...props}>{children}</button>
 	),
 }));
 mock.module("../../ui/input", () => ({
-	Input: (props: any) => <input {...props} />,
+	...actual.input,
+	Input: (props: ComponentProps<"input">) => <input {...props} />,
 }));
 mock.module("../../ui/label", () => ({
+	...actual.label,
 	Label: ({ children }: { children: ReactNode }) => <label>{children}</label>,
 }));
 
@@ -98,7 +130,19 @@ afterEach(async () => {
 		else Reflect.deleteProperty(globalThis, key);
 	}
 });
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../../lib/device-bridge", () => actual.deviceBridge);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("react-oidc-context", () => actual.oidc);
+	mock.module(
+		"../../flow/variables/geometry-editor",
+		() => actual.geometryEditor,
+	);
+	mock.module("../../ui/button", () => actual.button);
+	mock.module("../../ui/input", () => actual.input);
+	mock.module("../../ui/label", () => actual.label);
+});
 
 const config = {
 	sink_type: "geolocation",

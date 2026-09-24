@@ -365,6 +365,17 @@ export class WebBoardState implements IBoardState {
 		);
 	}
 
+	async getBoardSummariesSnapshot(appId: string): Promise<IBoardSummary[]> {
+		return apiGet<IBoardSummary[]>(
+			`apps/${appId}/board/summaries`,
+			this.backend.auth,
+		);
+	}
+
+	async getBoardSnapshot(appId: string, boardId: string): Promise<IBoard> {
+		return apiGet<IBoard>(`apps/${appId}/board/${boardId}`, this.backend.auth);
+	}
+
 	private async presignMediaComments(
 		appId: string,
 		boardId: string,

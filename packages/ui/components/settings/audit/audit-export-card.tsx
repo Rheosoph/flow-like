@@ -375,7 +375,7 @@ export function AuditExportCard({
 			{ url, active },
 			{
 				onSuccess: (saved) => {
-					if (saved.secret) setSecret(saved.secret);
+					if (saved?.secret) setSecret(saved.secret);
 					toast.success(t("webhookSaved", "Webhook saved"));
 				},
 				onError: (error) =>
@@ -390,8 +390,8 @@ export function AuditExportCard({
 
 	const handleRotate = () =>
 		rotate.mutate(undefined, {
-			onSuccess: ({ secret: next }) => {
-				setSecret(next);
+			onSuccess: (rotated) => {
+				setSecret(rotated?.secret ?? null);
 				toast.success(t("secretRotated", "Signing secret rotated"));
 			},
 			onError: (error) =>

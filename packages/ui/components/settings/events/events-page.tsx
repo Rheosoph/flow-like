@@ -73,6 +73,7 @@ import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
 } from "@flow-like/flow-like-ui/lib/oauth/types";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { normalizeRoutePath } from "@flow-like/flow-like-ui/lib/route-path";
 import {
 	isEventOverridable,
@@ -255,15 +256,17 @@ export default function EventsPage({
 		(id ?? "") !== "" && canReadBoards,
 	);
 
+	const eventList = useMemo(() => asArray(events.data), [events.data]);
+
 	const boardsMap = useMemo(() => {
 		const map = new Map<string, string>();
-		boards.data?.forEach((board) => map.set(board.id, board.name));
+		for (const board of asArray(boards.data)) map.set(board.id, board.name);
 		return map;
 	}, [boards.data]);
 
 	useEffect(() => {
-		setEditingEvent(events.data?.find((event) => event.id === eventId) ?? null);
-	}, [editingEvent, id, eventId, events.data]);
+		setEditingEvent(eventList.find((event) => event.id === eventId) ?? null);
+	}, [editingEvent, id, eventId, eventList]);
 
 	// A route cannot be orphaned: server-side it is the `route` column on the
 	// event row itself, so it disappears with the event. Reconciling the two
@@ -651,7 +654,7 @@ export default function EventsPage({
 						</Card>
 					) : (
 						<EventsOverview
-							events={events.data ?? []}
+							events={eventList}
 							boardsMap={boardsMap}
 							appId={id ?? ""}
 							eventMapping={eventMapping}
@@ -818,7 +821,7 @@ function EventConfiguration({
 	);
 
 	const routeForEvent = useMemo(() => {
-		return routes.data?.find((r) => r.eventId === event.id) ?? null;
+		return asArray(routes.data).find((r) => r.eventId === event.id) ?? null;
 	}, [routes.data, event.id]);
 
 	// Until the route list has actually loaded, `routeForEvent` is null for an
@@ -952,7 +955,7 @@ function EventConfiguration({
 
 		// The draft is only trustworthy once the existing routes are known —
 		// otherwise the placeholder "/" would be written over the real path.
-		if (shouldHaveRoute && !routes.isSuccess) {
+		if (shouldHaveRoute && !(routes.isSuccess && Array.isArray(routes.data))) {
 			setRoutePathError("Route path is still loading, please retry");
 			toast.error("Route path is still loading, please retry");
 			return;
@@ -2020,7 +2023,7 @@ function EventConfiguration({
 												value={formData.default_page_id ?? ""}
 												onValueChange={(value) => {
 													handleInputChange("default_page_id", value);
-													const page = (pages.data ?? []).find(
+													const page = asArray(pages.data).find(
 														(p: PageListItem) => p.pageId === value,
 													);
 													if (page?.boardId) {
@@ -2035,7 +2038,7 @@ function EventConfiguration({
 													/>
 												</SelectTrigger>
 												<SelectContent>
-													{(pages.data ?? []).map((p: PageListItem) => (
+													{asArray(pages.data).map((p: PageListItem) => (
 														<SelectItem key={p.pageId} value={p.pageId}>
 															{p.name}
 														</SelectItem>
@@ -2065,7 +2068,7 @@ function EventConfiguration({
 													<SelectItem value="latest">
 														{t("latest", "Latest")}
 													</SelectItem>
-													{versions.data?.map((version) => (
+													{asArray(versions.data).map((version) => (
 														<SelectItem
 															key={version.join(".")}
 															value={version.join(".")}
@@ -2098,7 +2101,7 @@ function EventConfiguration({
 														/>
 													</SelectTrigger>
 													<SelectContent>
-														{boards.data?.map((board) => (
+														{asArray(boards.data).map((board) => (
 															<SelectItem key={board.id} value={board.id}>
 																{board.name}
 															</SelectItem>
@@ -2134,7 +2137,7 @@ function EventConfiguration({
 														<SelectItem value="latest">
 															{t("latest", "Latest")}
 														</SelectItem>
-														{versions.data?.map((board) => (
+														{asArray(versions.data).map((board) => (
 															<SelectItem
 																key={board.join(".")}
 																value={board.join(".")}
@@ -2164,7 +2167,7 @@ function EventConfiguration({
 															/>
 														</SelectTrigger>
 														<SelectContent>
-															{Object.values(board.data.nodes)
+															{Object.values(board.data.nodes ?? {})
 																.filter((node) => node.start)
 																.map((node) => (
 																	<SelectItem key={node.id} value={node.id}>

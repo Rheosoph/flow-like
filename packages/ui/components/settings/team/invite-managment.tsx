@@ -67,6 +67,7 @@ import {
 } from "../../../";
 import { useProjectUserSearch } from "../../../hooks/use-project-user-search";
 import { apiErrorMessage } from "../../../lib/api-error";
+import { asArray } from "../../../lib/response-shape";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -363,6 +364,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 		[appId],
 		access.canAdminister && !access.isLoading,
 	);
+	const linkList = asArray(links.data);
 	const [showCreateLinkDialog, setShowCreateLinkDialog] = useState(false);
 	const [newLinkName, setNewLinkName] = useState("");
 	const [newLinkMaxUses, setNewLinkMaxUses] = useState<string>("");
@@ -476,7 +478,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 				<SectionHeading
 					icon={LinkIcon}
 					title={t("inviteLinks", "Invite links")}
-					count={links.data?.length ?? 0}
+					count={linkList.length}
 					description={t(
 						"shareableLinksThatAddWhoeverOpensThemCapTheUsesOrLeaveThemOpen",
 						"Shareable links that add whoever opens them. Cap the uses, or leave them open.",
@@ -629,7 +631,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 					/>
 				)}
 
-				{!links.isError && (links.data?.length ?? 0) === 0 && (
+				{!links.isError && linkList.length === 0 && (
 					<EmptyState
 						className="max-w-full"
 						title={t("noInviteLinks", "No Invite Links")}
@@ -641,9 +643,9 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 					/>
 				)}
 
-				{(links.data?.length ?? 0) > 0 && (
+				{linkList.length > 0 && (
 					<div className="flex flex-col gap-2">
-						{links.data?.map((link) => (
+						{linkList.map((link) => (
 							<div key={link.id} className={teamRowClass({ align: "start" })}>
 								<TeamRowIcon icon={LinkIcon} className="mt-0.5" />
 								<div className="min-w-0 flex-1">

@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, MessageSquare, Star, Trash2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { asArray } from "../../lib/response-shape";
 import type {
 	PackageCommentItem,
 	PackageCommentsResponse,
@@ -245,7 +246,7 @@ export function PackageReviewsTab({ packageId }: PackageReviewsTabProps) {
 	}, [rating, t, text, upsertMutation]);
 
 	const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
-	const comments = data?.comments ?? [];
+	const comments = asArray(data?.comments);
 
 	return (
 		<div className="space-y-4">

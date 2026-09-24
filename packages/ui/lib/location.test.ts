@@ -182,7 +182,7 @@ describe("foreground browser location", () => {
 		});
 		mockBrowser.position({ ...fix(), latitude: 100 });
 		await expect(pending).rejects.toMatchObject({ code: "invalid_location" });
-		expect(mockBrowser.clearWatch).toHaveBeenCalledOnce();
+		expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(1);
 	});
 	test("rejects hidden or insecure contexts without starting a watch", async () => {
 		const mockBrowser = browser();
@@ -237,7 +237,7 @@ describe("foreground browser location", () => {
 			await expect(pending).rejects.toMatchObject({
 				code: "foreground_required",
 			});
-			expect(mockBrowser.clearWatch).toHaveBeenCalledOnce();
+			expect(mockBrowser.clearWatch).toHaveBeenCalledTimes(1);
 		}
 	});
 	test("permission errors and timeouts clear the watch", async () => {
@@ -282,7 +282,7 @@ describe("workflow location sharing", () => {
 		expect(adapter).not.toHaveBeenCalled();
 		approve();
 		await pending;
-		expect(adapter).toHaveBeenCalledOnce();
+		expect(adapter).toHaveBeenCalledTimes(1);
 	});
 	test("an explicit local Locate click avoids an extra sharing dialog", async () => {
 		browser();

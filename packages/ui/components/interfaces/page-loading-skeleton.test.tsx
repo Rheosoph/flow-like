@@ -38,8 +38,8 @@ async function setup({ reducedMotion = false } = {}) {
 		IS_REACT_ACT_ENVIRONMENT: true,
 	});
 	const { createRoot } = await import("react-dom/client");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	return { container, root: createRoot(container) };
 }
 
@@ -86,6 +86,9 @@ describe("PageLoadingSkeleton", () => {
 			await act(async () => {
 				root.render(<PageLoadingSkeleton />);
 			});
+			expect(container.querySelector(".fxl-kicker")?.textContent).toBe(
+				"Running workflow",
+			);
 
 			await act(async () => {
 				await Bun.sleep(PHASE_MS + 120);

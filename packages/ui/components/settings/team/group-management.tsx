@@ -36,6 +36,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../..";
+import { asArray } from "../../../lib/response-shape";
 import { SectionLockedPanel } from "../permission";
 import {
 	VISIBILITY_META,
@@ -82,14 +83,14 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 		const data = connections.data;
 		if (!data) return [] as { id: string; name: string }[];
 		const list: { id: string; name: string }[] = [];
-		for (const conn of data.incoming ?? []) {
+		for (const conn of asArray(data.incoming)) {
 			if (conn.status === "ACTIVE")
 				list.push({
 					id: conn.source_app_id,
 					name: conn.app_name ?? conn.source_app_id,
 				});
 		}
-		for (const conn of data.outgoing ?? []) {
+		for (const conn of asArray(data.outgoing)) {
 			if (conn.status === "ACTIVE")
 				list.push({
 					id: conn.target_app_id,
@@ -145,8 +146,8 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 		}
 	};
 
-	const groupList = groups.data ?? [];
-	const pendingRequests = requests.data ?? [];
+	const groupList = asArray(groups.data);
+	const pendingRequests = asArray(requests.data);
 
 	if (!access.canReadTeam && !access.isLoading) {
 		return (
@@ -411,6 +412,7 @@ function GroupCard({
 	const [consoleOpen, setConsoleOpen] = useState(false);
 	const label = group.use_case || group.name || "Untitled suite";
 	const meta = VISIBILITY_META[fromWireVisibility(group.visibility)];
+	const members = asArray(group.members);
 
 	return (
 		<div className="rounded-xl border bg-card overflow-hidden flex flex-col">
@@ -463,7 +465,7 @@ function GroupCard({
 
 				<div className="flex items-center justify-between mt-auto pt-1">
 					<div className="flex items-center -space-x-2">
-						{group.members.slice(0, 5).map((member) => (
+						{members.slice(0, 5).map((member) => (
 							<Avatar
 								key={member.id}
 								className="h-6 w-6 rounded-md ring-2 ring-card"

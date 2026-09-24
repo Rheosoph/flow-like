@@ -1,3 +1,4 @@
+import { asArray } from "../response-shape";
 import type {
 	IBoard,
 	IExecutionMode,
@@ -53,8 +54,8 @@ export function buildOAuthProviderFromHub(
 	nodeScopes: string[],
 	hubConfig: IOAuthProviderConfig,
 ): IOAuthProvider {
-	const baseScopes = hubConfig.scopes ?? [];
-	const allScopes = [...new Set([...baseScopes, ...nodeScopes])];
+	const baseScopes = asArray(hubConfig.scopes);
+	const allScopes = [...new Set([...baseScopes, ...asArray(nodeScopes)])];
 
 	return {
 		id: providerId,
@@ -163,7 +164,8 @@ export function buildOAuthProvidersFromPrerun(
 	const hubOAuthProviders = hub?.oauth_providers ?? {};
 	const providers: IOAuthProvider[] = [];
 
-	for (const req of requirements) {
+	// Prerun answers come from the hub; a run must not die on a list an older hub omitted.
+	for (const req of asArray(requirements)) {
 		const hubConfig = hubOAuthProviders[req.provider_id];
 		if (!hubConfig) {
 			console.warn(

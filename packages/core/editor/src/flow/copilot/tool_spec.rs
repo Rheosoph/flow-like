@@ -1402,6 +1402,7 @@ Side-effecting; requires approval."#,
                         "on_load_event_id": { "type": "string", "description": "Board NODE id (events_simple) to run when the page opens. From a flowpilot_board result's `event_nodes`." },
                         "on_interval_event_id": { "type": "string", "description": "Optional: node id to run on a timer." },
                         "on_interval_seconds": { "type": "number", "description": "Optional: interval in seconds for on_interval_event_id." },
+                        "no_cache": { "type": "boolean", "description": "true: loading screen until onLoad renders, no replay of the last output. Omit to keep." },
                         "board_id": { "type": "string", "description": "The page's board id (optional)." }
                     },
                     "required": ["app_id", "page_id", "on_load_event_id"]

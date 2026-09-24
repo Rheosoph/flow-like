@@ -17,10 +17,33 @@ const capture =
 		options: { description: string; action: { onClick: () => void } },
 	) =>
 		notices.push({ type, title, ...options });
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualSonner = { ...(await import("sonner")) };
 mock.module("sonner", () => ({
+	...actualSonner,
 	toast: { warning: capture("warning"), info: capture("info") },
 }));
-afterAll(() => mock.restore());
+const globalDescriptors = [
+	"window",
+	"document",
+	"HTMLElement",
+	"Node",
+	"Event",
+	"navigator",
+	"localStorage",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+afterAll(() => {
+	mock.restore();
+	mock.module("sonner", () => actualSonner);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 test("quota warnings deduplicate thresholds, ignore temporary reservations and rearm storage", async () => {
 	const window = new Window({ url: "https://example.com" });

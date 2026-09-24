@@ -61,6 +61,62 @@ export interface IPurchasesResponse {
 	limit: number;
 }
 
+export interface IFlowPaymentDay {
+	date: string;
+	revenue: number;
+	collected: number;
+	refunded: number;
+	payments: number;
+}
+
+export interface IFlowPaymentItem {
+	id: string;
+	productName: string | null;
+	reference: string | null;
+	payerUserId: string | null;
+	payerName: string | null;
+	payerAvatar: string | null;
+	boardId: string | null;
+	runId: string | null;
+	amount: number;
+	collected: number;
+	refunded: number;
+	currency: string;
+	/** Unix milliseconds */
+	createdAt: number;
+}
+
+/** Money the app's flows collected through payment nodes, in cents. */
+export interface IFlowPaymentsReport {
+	totalRevenue: number;
+	totalCollected: number;
+	totalRefunded: number;
+	totalPayments: number;
+	refundedPayments: number;
+	uniquePayers: number;
+	periodRevenue: number;
+	periodPayments: number;
+	revenueChangePercent: number | null;
+	paymentsChangePercent: number | null;
+	dailyStats: IFlowPaymentDay[];
+	recentPayments: IFlowPaymentItem[];
+}
+
+export function flowPaymentsPath(
+	appId: string,
+	startDate?: string,
+	endDate?: string,
+	limit?: number,
+): string {
+	const params = new URLSearchParams();
+	if (startDate) params.set("start_date", startDate);
+	if (endDate) params.set("end_date", endDate);
+	if (limit !== undefined) params.set("limit", limit.toString());
+	const query = params.toString();
+	const path = `apps/${encodeURIComponent(appId)}/sales/flow-payments`;
+	return query ? `${path}?${query}` : path;
+}
+
 export interface IDiscount {
 	id: string;
 	appId: string;
@@ -119,6 +175,17 @@ export interface ISalesState {
 		endDate?: string,
 		period?: "day" | "week" | "month",
 	): Promise<ISalesStats>;
+
+	/**
+	 * Get the revenue the app's flows collected, with a daily breakdown for
+	 * the range and the most recent payments
+	 */
+	getFlowPayments(
+		appId: string,
+		startDate?: string,
+		endDate?: string,
+		limit?: number,
+	): Promise<IFlowPaymentsReport>;
 
 	/**
 	 * List purchases for an app

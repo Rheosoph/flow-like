@@ -63,11 +63,35 @@ type QueryStub = { isPending: boolean; data?: IOwnRole };
 
 let queryStub: QueryStub = { isPending: true };
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const actual = {
+	hooks: { ...(await import("../../../hooks")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	verificationDialog: { ...(await import("../../verification-dialog")) },
+	alertDialog: { ...(await import("../../ui/alert-dialog")) },
+};
+const globalDescriptors = [
+	"document",
+	"HTMLElement",
+	"Node",
+	"navigator",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"getComputedStyle",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+
 mock.module("../../../hooks", () => ({
+	...actual.hooks,
 	useInvoke: () => queryStub,
 }));
 
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({ roleState: { getOwnRole: () => Promise.resolve() } }),
 }));
 
@@ -75,6 +99,7 @@ mock.module("../../../state/backend-state", () => ({
 // sibling suite's own mocking can leave half-wired. These tests are about which
 // affordance is offered, so the confirmations are reduced to their triggers.
 mock.module("../../verification-dialog", () => ({
+	...actual.verificationDialog,
 	VerificationDialog: ({ children }: { children: React.ReactNode }) => children,
 }));
 
@@ -82,6 +107,7 @@ mock.module("../../ui/alert-dialog", () => {
 	const passthrough = ({ children }: { children?: React.ReactNode }) =>
 		children;
 	return {
+		...actual.alertDialog,
 		AlertDialog: passthrough,
 		AlertDialogTrigger: passthrough,
 		AlertDialogContent: passthrough,
@@ -94,7 +120,17 @@ mock.module("../../ui/alert-dialog", () => {
 	};
 });
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../../hooks", () => actual.hooks);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("../../verification-dialog", () => actual.verificationDialog);
+	mock.module("../../ui/alert-dialog", () => actual.alertDialog);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 async function renderZone(stub: QueryStub) {
 	queryStub = stub;

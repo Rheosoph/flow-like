@@ -127,7 +127,7 @@ function RevenueSummary({
 			{store && (
 				<StatCard
 					title={t("storePurchases", "Store purchases")}
-					value={store.overview.totalPurchases.toString()}
+					value={String(store.overview.totalPurchases ?? 0)}
 					change={store.overview.purchasesChangePercent}
 					subtitle={t(
 						"buyersAndAverageOrder",
@@ -143,7 +143,7 @@ function RevenueSummary({
 			{flows && (
 				<StatCard
 					title={t("flowPayments", "Flow payments")}
-					value={flows.totalPayments.toString()}
+					value={String(flows.totalPayments ?? 0)}
 					change={flows.paymentsChangePercent}
 					subtitle={t(
 						"payersAndRefunds",

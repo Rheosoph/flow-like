@@ -18,20 +18,27 @@ import {
 	updateDraftPosition,
 } from "./geometry-draft";
 
-const square = [
+const square: GeoJSON.Position[] = [
 	[0, 0],
 	[1, 0],
 	[1, 1],
 	[0, 1],
 	[0, 0],
 ];
-const hole = [
+const hole: GeoJSON.Position[] = [
 	[0.2, 0.2],
 	[0.2, 0.4],
 	[0.4, 0.4],
 	[0.2, 0.2],
 ];
-const geometries = [
+const geometries: [
+	GeoJSON.Point,
+	GeoJSON.MultiPoint,
+	GeoJSON.LineString,
+	GeoJSON.MultiLineString,
+	GeoJSON.Polygon,
+	GeoJSON.MultiPolygon,
+] = [
 	{ type: "Point", coordinates: [13.405, 52.52] },
 	{
 		type: "MultiPoint",

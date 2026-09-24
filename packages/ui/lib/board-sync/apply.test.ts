@@ -7,6 +7,7 @@ import {
 	applyBoardSync,
 	catalogByName,
 	nodeSegment,
+	toNode,
 } from "./apply";
 import { BoardSyncClient } from "./client";
 import type {
@@ -131,6 +132,20 @@ describe("nodeSegment", () => {
 });
 
 describe("applyBoardSync", () => {
+	test("preserves per-instance auto reroute markers through catalog hydration", () => {
+		const catalog = catalogByName([{ ...catalogNode, auto_reroute: true }]);
+		for (const h of [false, true]) {
+			for (const marker of [undefined, null, false, true]) {
+				const { node, hydratable } = toNode(
+					wireNode("a", null, { h, auto_reroute: marker }),
+					catalog,
+				);
+				expect(hydratable).toBe(true);
+				expect(node.auto_reroute).toBe(marker ?? null);
+			}
+		}
+	});
+
 	test("keeps board format requirements through full sync and partial updates", () => {
 		const legacy = applyBoardSync(undefined, fullResponse(), undefined).board;
 		expect(legacy.format_version).toBe(1);

@@ -294,7 +294,8 @@ impl From<Page> for proto::Page {
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
-            cache: value.cache,
+            cache: false,
+            no_cache: value.no_cache,
         }
     }
 }
@@ -333,7 +334,7 @@ impl From<proto::Page> for Page {
                 .into_iter()
                 .map(|(k, v)| (k, v.into()))
                 .collect(),
-            cache: proto.cache,
+            no_cache: proto.no_cache,
         }
     }
 }
@@ -633,5 +634,40 @@ impl From<proto::WidgetRef> for WidgetRef {
             widget_id: proto.widget_id,
             version: proto.version.map(|v| (v.major, v.minor, v.patch)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types_proto::Message;
+
+    fn decode_page(bytes: &[u8]) -> Page {
+        proto::Page::decode(bytes).expect("decode page").into()
+    }
+
+    #[test]
+    fn page_no_cache_survives_the_wire() {
+        for no_cache in [false, true] {
+            let mut page = Page::new("page-1", "Home", "/");
+            page.no_cache = no_cache;
+            let bytes = proto::Page::from(page).encode_to_vec();
+
+            assert_eq!(decode_page(&bytes).no_cache, no_cache);
+        }
+    }
+
+    #[test]
+    fn stored_pages_with_the_retired_cache_flag_still_decode() {
+        let stored = proto::Page {
+            id: "page-1".to_string(),
+            cache: true,
+            ..Default::default()
+        };
+
+        let page = decode_page(&stored.encode_to_vec());
+        assert_eq!(page.id, "page-1");
+        assert!(!page.no_cache);
+        assert!(!proto::Page::from(page).cache);
     }
 }

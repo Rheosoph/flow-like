@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
 import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import type { IForkPolicy } from "../../../lib/schema/app/fork";
 import { useBackend } from "../../../state/backend-state";
 import type { IBackendRole } from "../../../state/backend-state/types";
@@ -150,7 +151,7 @@ export function ForkPermissionWarning({
 			return { defaultRole: undefined, missing: [] as ForkRequirement[] };
 		}
 		const defaultRoleId = roles.data[0];
-		const allRoles = roles.data[1];
+		const allRoles = asArray(roles.data[1]);
 		const role = allRoles.find((r) => r.id === defaultRoleId);
 		if (!role) {
 			return { defaultRole: undefined, missing: [] as ForkRequirement[] };

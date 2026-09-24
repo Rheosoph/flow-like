@@ -52,6 +52,7 @@ pub mod internal_pin;
 pub mod log;
 pub mod rejection;
 pub mod resources;
+pub mod service;
 pub mod run_index;
 pub mod trace;
 pub mod user_context;

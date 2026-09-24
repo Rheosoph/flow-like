@@ -5,6 +5,28 @@ import { act, createElement } from "react";
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"window",
+	"document",
+	"navigator",
+	"HTMLElement",
+	"Element",
+	"Node",
+	"MutationObserver",
+	"SVGElement",
+	"Event",
+	"getComputedStyle",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"ResizeObserver",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+const actualLocales = { ...(await import("@flow-like/locales")) };
+
 function installDomGlobals() {
 	Object.assign(globalThis, {
 		window,
@@ -33,6 +55,7 @@ installDomGlobals();
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
 
@@ -44,11 +67,16 @@ const { DEFAULT_APPEARANCE_STATE, buildAppearanceBlock } = await import(
 
 beforeAll(() => installDomGlobals());
 const roots: ReturnType<typeof createRoot>[] = [];
-afterAll(() =>
-	act(() => {
+afterAll(async () => {
+	await act(async () => {
 		for (const root of roots) root.unmount();
-	}),
-);
+	});
+	mock.module("@flow-like/locales", () => actualLocales);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 test("the preview carries the scoped sheet and the app surfaces", () => {
 	const container = window.document.createElement(

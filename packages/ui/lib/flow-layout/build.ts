@@ -10,6 +10,7 @@ import {
 	measureLayerBox,
 	measureNodeBox,
 	pinOffsetY,
+	stableHandleOffset,
 	visiblePinsOf,
 } from "./measure";
 import type {
@@ -21,11 +22,14 @@ import type {
 	PinRef,
 } from "./types";
 
-function makePinRef(pin: IPin, isReroute: boolean): PinRef {
+function makePinRef(pin: IPin, isReroute: boolean, offsetY?: number): PinRef {
 	return {
 		id: pin.id,
 		index: pin.index,
-		offsetY: pinOffsetY(pin, isReroute),
+		offsetY:
+			offsetY === undefined
+				? pinOffsetY(pin, isReroute)
+				: stableHandleOffset(offsetY),
 		isExec: isExecPin(pin),
 	};
 }
@@ -148,7 +152,7 @@ export function buildLayoutGraph(input: AutoLayoutInput): LGraph {
 		const dataIn: PinRef[] = [];
 		const dataOut: PinRef[] = [];
 		for (const pin of pins) {
-			const ref = makePinRef(pin, isReroute);
+			const ref = makePinRef(pin, isReroute, input.pinOffsets?.get(pin.id)?.y);
 			if (isExecPin(pin)) {
 				if (isInputPin(pin)) execIn.push(ref);
 				else if (isOutputPin(pin)) execOut.push(ref);
@@ -212,7 +216,10 @@ export function buildLayoutGraph(input: AutoLayoutInput): LGraph {
 			? Object.values(node.pins ?? {})
 			: visiblePinsOf(node);
 		for (const pin of pins) {
-			pinRefById.set(pin.id, makePinRef(pin, isReroute));
+			pinRefById.set(
+				pin.id,
+				makePinRef(pin, isReroute, input.pinOffsets?.get(pin.id)?.y),
+			);
 		}
 	}
 

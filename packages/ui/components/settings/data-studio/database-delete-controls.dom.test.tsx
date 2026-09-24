@@ -11,14 +11,31 @@ import {
 import type { IDatabaseSelector } from "../../../state/backend-state/db-state";
 
 const window = new Window();
-Object.assign(globalThis, {
+const globals = {
 	window,
 	document: window.document,
 	navigator: window.navigator,
 	HTMLElement: window.HTMLElement,
 	Event: window.Event,
 	IS_REACT_ACT_ENVIRONMENT: true,
-});
+};
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = Object.keys(globals).map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+Object.assign(globalThis, globals);
+const actual = {
+	backendState: { ...(await import("../../../state/backend-state")) },
+	reactQuery: { ...(await import("@tanstack/react-query")) },
+	sonner: { ...(await import("sonner")) },
+	button: { ...(await import("../../ui/button")) },
+	dialog: { ...(await import("../../ui/dialog")) },
+	input: { ...(await import("../../ui/input")) },
+	textarea: { ...(await import("../../ui/textarea")) },
+	dropdownMenu: { ...(await import("../../ui/dropdown-menu")) },
+	label: { ...(await import("../../ui/label")) },
+};
 const { createRoot } = await import("react-dom/client");
 const calls: { method: string; args: unknown[] }[] = [];
 const dbState = {
@@ -35,13 +52,19 @@ const dbState = {
 	},
 };
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({ dbState }),
 }));
 mock.module("@tanstack/react-query", () => ({
+	...actual.reactQuery,
 	useQueryClient: () => ({ invalidateQueries: async () => {} }),
 }));
-mock.module("sonner", () => ({ toast: { success: () => {} } }));
+mock.module("sonner", () => ({
+	...actual.sonner,
+	toast: { success: () => {} },
+}));
 mock.module("../../ui/button", () => ({
+	...actual.button,
 	Button: ({
 		children,
 		onClick,
@@ -56,6 +79,7 @@ const container = ({ children }: { children?: ReactNode }) => (
 	<div>{children}</div>
 );
 mock.module("../../ui/dialog", () => ({
+	...actual.dialog,
 	Dialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
 		open ? <div>{children}</div> : null,
 	DialogContent: container,
@@ -65,6 +89,7 @@ mock.module("../../ui/dialog", () => ({
 	DialogFooter: container,
 }));
 mock.module("../../ui/input", () => ({
+	...actual.input,
 	Input: ({ onChange, ...props }: InputHTMLAttributes<HTMLInputElement>) => (
 		<input
 			{...props}
@@ -73,6 +98,7 @@ mock.module("../../ui/input", () => ({
 	),
 }));
 mock.module("../../ui/textarea", () => ({
+	...actual.textarea,
 	Textarea: ({
 		onChange,
 		...props
@@ -84,6 +110,7 @@ mock.module("../../ui/textarea", () => ({
 	),
 }));
 mock.module("../../ui/dropdown-menu", () => ({
+	...actual.dropdownMenu,
 	DropdownMenuItem: ({
 		children,
 		onSelect,
@@ -94,6 +121,7 @@ mock.module("../../ui/dropdown-menu", () => ({
 	),
 }));
 mock.module("../../ui/label", () => ({
+	...actual.label,
 	Label: ({ children, htmlFor }: { children: ReactNode; htmlFor: string }) => (
 		<label htmlFor={htmlFor}>{children}</label>
 	),
@@ -161,6 +189,19 @@ beforeEach(async () => {
 afterAll(async () => {
 	await act(async () => root.unmount());
 	mock.restore();
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("@tanstack/react-query", () => actual.reactQuery);
+	mock.module("sonner", () => actual.sonner);
+	mock.module("../../ui/button", () => actual.button);
+	mock.module("../../ui/dialog", () => actual.dialog);
+	mock.module("../../ui/input", () => actual.input);
+	mock.module("../../ui/textarea", () => actual.textarea);
+	mock.module("../../ui/dropdown-menu", () => actual.dropdownMenu);
+	mock.module("../../ui/label", () => actual.label);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
 });
 
 describe("database destructive action targets", () => {

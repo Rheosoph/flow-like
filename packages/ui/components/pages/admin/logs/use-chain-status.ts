@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { isRecord } from "../../../../lib/response-shape";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
 import { useBackend } from "../../../../state/backend-state";
 import type { IChainStatusResponse } from "./types";
@@ -17,11 +18,24 @@ export function useChainStatus(profile: IProfile | undefined) {
 	const backend = useBackend();
 	return useQuery({
 		queryKey: ["admin", "logs", "chain-status", profile?.hub, profile?.id],
-		queryFn: () => {
+		queryFn: async (): Promise<IChainStatusResponse> => {
 			if (!profile) throw new Error("Profile not loaded");
-			return backend.apiState.get<IChainStatusResponse>(
+			const status = await backend.apiState.get<IChainStatusResponse>(
 				profile,
 				"admin/logs/chain-status",
+			);
+			// Hubs before 2026-09-21 answer this path with the retired AuditEntry summary.
+			if (
+				isRecord(status) &&
+				isRecord(status.epochs) &&
+				isRecord(status.platform) &&
+				Array.isArray(status.recent_chains) &&
+				Array.isArray(status.verifying_kids)
+			) {
+				return status;
+			}
+			throw new Error(
+				"admin/logs/chain-status returned an unrecognized shape (expected epochs, platform, recent_chains, verifying_kids); the hub may predate sealed audit chains",
 			);
 		},
 		enabled: !!profile,

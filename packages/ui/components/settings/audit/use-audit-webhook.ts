@@ -51,7 +51,13 @@ export function useAuditWebhook(profile: IProfile | undefined, appId: string) {
 				input,
 			);
 		},
-		onSuccess: ({ secret: _secret, ...view }) => {
+		onSuccess: (saved) => {
+			// A bodiless 2xx saved the webhook but gives nothing to cache.
+			if (!saved) {
+				void queryClient.invalidateQueries({ queryKey });
+				return;
+			}
+			const { secret: _secret, ...view } = saved;
 			queryClient.setQueryData<IAuditWebhook | null>(queryKey, view);
 		},
 	});

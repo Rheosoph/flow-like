@@ -198,7 +198,7 @@ function PayoutsPageContent() {
 										<option value="">
 											{t("chooseCountry", "Choose a country")}
 										</option>
-										{countries.data?.countries.map((code) => (
+										{countries.data?.countries?.map((code) => (
 											<option key={code} value={code}>
 												{new Intl.DisplayNames(["en"], { type: "region" }).of(
 													code,

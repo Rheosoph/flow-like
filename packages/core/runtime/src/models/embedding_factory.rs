@@ -179,6 +179,16 @@ impl EmbeddingFactory {
 
         #[cfg(feature = "remote-ml")]
         if !prefers_local && supports_remote {
+            if let Some(authorizer) = &app_state.request_authorizer {
+                return self
+                    .build_text_proxy_authorized(
+                        bit,
+                        String::new(),
+                        usage_context,
+                        Some(authorizer.clone()),
+                    )
+                    .await;
+            }
             let access_token = app_state.hosted_model_token.clone().or(access_token);
             if let Some(access_token) = access_token.filter(|token| !token.trim().is_empty()) {
                 return self
@@ -264,6 +274,18 @@ impl EmbeddingFactory {
         access_token: String,
         usage_context: Option<ModelUsageContext>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
+        self.build_text_proxy_authorized(bit, access_token, usage_context, None)
+            .await
+    }
+
+    #[cfg(feature = "remote-ml")]
+    async fn build_text_proxy_authorized(
+        &mut self,
+        bit: &Bit,
+        access_token: String,
+        usage_context: Option<ModelUsageContext>,
+        authorizer: Option<Arc<dyn flow_like_types::authorization::RequestAuthorizer>>,
+    ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
         let embedding_provider = bit
             .try_to_embedding()
             .ok_or(flow_like_types::anyhow!("Model type not supported"))?;
@@ -291,6 +313,10 @@ impl EmbeddingFactory {
             usage_headers,
             api_base_url,
         );
+        let proxy_model = match authorizer {
+            Some(authorizer) => proxy_model.with_authorizer(authorizer)?,
+            None => proxy_model,
+        };
         let model: Arc<dyn EmbeddingModelLogic> = Arc::new(proxy_model);
 
         Ok(model)

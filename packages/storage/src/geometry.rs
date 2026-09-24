@@ -52,6 +52,37 @@ pub fn validate_geometry_field(field: &Field) -> Result<()> {
     Ok(())
 }
 
+/// A GeoJSON geometry that a WKB column stores without loss: a flow Geometry
+/// profile value without `bbox` or foreign members, whose WKB fits the limit.
+pub fn is_geometry_value(value: &Value) -> bool {
+    fn bare(value: &Value) -> bool {
+        let Some(object) = value.as_object() else {
+            return false;
+        };
+        names_geometry_kind(value)
+            && object.iter().all(|(key, member)| match key.as_str() {
+                "type" | "coordinates" => true,
+                "geometries" => member
+                    .as_array()
+                    .is_some_and(|children| children.iter().all(bare)),
+                _ => false,
+            })
+    }
+    bare(value) && flow_like_geometry::to_wkb(value).is_ok()
+}
+
+/// An object whose `type` names a geometry kind is meant as a geometry: a
+/// query parameter shaped like this binds as one, and must validate as one.
+pub fn names_geometry_kind(value: &Value) -> bool {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| {
+            kind.parse::<flow_like_types::geometry::GeometryKind>()
+                .is_ok()
+        })
+}
+
 pub fn geometry_field(name: &str, nullable: bool) -> Field {
     Field::new(name, DataType::Binary, nullable).with_metadata(HashMap::from([
         (EXTENSION_NAME.into(), "geoarrow.wkb".into()),
@@ -213,9 +244,73 @@ pub fn normalize_batch(
 /// Register spatial SQL and an explicit WGS84 import operation.
 pub fn register_geo_functions(context: &datafusion::prelude::SessionContext) {
     geodatafusion::register(context);
+    register_ordered_relations(context);
     context.register_udf(datafusion::logical_expr::ScalarUDF::from(
         Wgs84FromText::default(),
     ));
+}
+
+const CONVERSE_RELATIONS: [(&str, &str); 4] = [
+    ("st_contains", "st_within"),
+    ("st_within", "st_contains"),
+    ("st_covers", "st_coveredby"),
+    ("st_coveredby", "st_covers"),
+];
+
+fn register_ordered_relations(context: &datafusion::prelude::SessionContext) {
+    use datafusion::execution::FunctionRegistry;
+    let originals: HashMap<&str, Arc<datafusion::logical_expr::ScalarUDF>> = CONVERSE_RELATIONS
+        .iter()
+        .filter_map(|(name, _)| Some((*name, context.udf(name).ok()?)))
+        .collect();
+    for (name, converse) in CONVERSE_RELATIONS {
+        if let (Some(relation), Some(converse)) = (originals.get(name), originals.get(converse)) {
+            context.register_udf(datafusion::logical_expr::ScalarUDF::from(OrderedRelation {
+                relation: relation.clone(),
+                converse: converse.clone(),
+            }));
+        }
+    }
+}
+
+/// geodatafusion 0.4 evaluates a constant first argument against a column as
+/// `column.relate(constant)` without transposing the matrix, so asymmetric
+/// relations answer their converse. Swapping the arguments into the converse
+/// relation routes the call through its correct `(column, constant)` path.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct OrderedRelation {
+    relation: Arc<datafusion::logical_expr::ScalarUDF>,
+    converse: Arc<datafusion::logical_expr::ScalarUDF>,
+}
+
+impl datafusion::logical_expr::ScalarUDFImpl for OrderedRelation {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn name(&self) -> &str {
+        self.relation.name()
+    }
+    fn signature(&self) -> &datafusion::logical_expr::Signature {
+        self.relation.signature()
+    }
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion::error::Result<DataType> {
+        self.relation.return_type(arg_types)
+    }
+    fn invoke_with_args(
+        &self,
+        mut args: datafusion::logical_expr::ScalarFunctionArgs,
+    ) -> datafusion::error::Result<datafusion::logical_expr::ColumnarValue> {
+        use datafusion::logical_expr::ColumnarValue;
+        if let [ColumnarValue::Scalar(_), ColumnarValue::Array(_)] = args.args.as_slice() {
+            args.args.swap(0, 1);
+            args.arg_fields.swap(0, 1);
+            return self.converse.invoke_with_args(args);
+        }
+        self.relation.invoke_with_args(args)
+    }
+    fn documentation(&self) -> Option<&datafusion::logical_expr::Documentation> {
+        self.relation.documentation()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -224,9 +319,13 @@ struct Wgs84FromText {
 }
 impl Default for Wgs84FromText {
     fn default() -> Self {
+        use datafusion::logical_expr::TypeSignature;
         Self {
-            signature: datafusion::logical_expr::Signature::exact(
-                vec![DataType::Utf8],
+            signature: datafusion::logical_expr::Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::Binary]),
+                ],
                 datafusion::logical_expr::Volatility::Immutable,
             ),
         }
@@ -258,6 +357,17 @@ impl datafusion::logical_expr::ScalarUDFImpl for Wgs84FromText {
         use datafusion::{
             common::ScalarValue, error::DataFusionError, logical_expr::ColumnarValue,
         };
+        // A bound Geometry parameter already is a WGS 84 geometry.
+        if args.args[0].data_type() == DataType::Binary {
+            let field = &args.arg_fields[0];
+            if !is_geometry_field(field) {
+                return Err(DataFusionError::Execution(
+                    "flow_geomfromtext takes WKT text or a WGS84 geometry".into(),
+                ));
+            }
+            validate_crs(field).map_err(|e| DataFusionError::Execution(e.to_string()))?;
+            return Ok(args.args.into_iter().next().expect("one argument"));
+        }
         let arrays = ColumnarValue::values_to_arrays(&args.args)?;
         let input = arrays[0]
             .as_any()
@@ -427,6 +537,61 @@ mod tests {
             .collect()
             .await?;
         assert!(normalize_batch(&unknown[0], &target).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn asymmetric_relations_hold_in_both_argument_orders() -> Result<()> {
+        let ctx = datafusion::prelude::SessionContext::new();
+        register_geo_functions(&ctx);
+        let batch = crate::arrow_utils::value_to_record_batch_with_fields(
+            vec![
+                json!({"id": 1, "geom": {"type": "Point", "coordinates": [2.0, 2.0]}}),
+                json!({"id": 2, "geom": {"type": "Point", "coordinates": [9.0, 9.0]}}),
+                json!({"id": 3, "geom": {"type": "Polygon", "coordinates": [[[-1.0, -1.0], [5.0, -1.0], [5.0, 5.0], [-1.0, 5.0], [-1.0, -1.0]]]}}),
+            ],
+            Some(vec![
+                Arc::new(Field::new("id", DataType::Int64, false)),
+                Arc::new(geometry_field("geom", true)),
+            ]),
+        )?;
+        ctx.register_batch("shapes", batch)?;
+
+        let area = "flow_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))')";
+        for (predicate, expected) in [
+            (format!("ST_Contains({area}, geom)"), vec![1]),
+            (format!("ST_Within(geom, {area})"), vec![1]),
+            (format!("ST_Covers({area}, geom)"), vec![1]),
+            (format!("ST_CoveredBy(geom, {area})"), vec![1]),
+            (format!("ST_Within({area}, geom)"), vec![3]),
+            (format!("ST_Contains(geom, {area})"), vec![3]),
+            (format!("ST_CoveredBy({area}, geom)"), vec![3]),
+            (format!("ST_Covers(geom, {area})"), vec![3]),
+        ] {
+            let sql = format!("SELECT id FROM shapes WHERE {predicate} ORDER BY id");
+            let batches = ctx.sql(&sql).await?.collect().await?;
+            let ids: Vec<i64> = batches
+                .iter()
+                .map(crate::arrow_utils::record_batch_to_value)
+                .collect::<Result<Vec<_>>>()?
+                .concat()
+                .iter()
+                .filter_map(|row| row["id"].as_i64())
+                .collect();
+            assert_eq!(ids, expected, "{predicate}");
+        }
+
+        let batches = ctx
+            .sql(&format!(
+                "SELECT ST_Contains({area}, flow_geomfromtext('POINT(2 2)')) AS inside"
+            ))
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            crate::arrow_utils::record_batch_to_value(&batches[0])?[0]["inside"],
+            json!(true)
+        );
         Ok(())
     }
 

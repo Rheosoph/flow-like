@@ -12,11 +12,37 @@ import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import type { Lesson, LessonAssetView } from "../../lib/learn/types";
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"document",
+	"Element",
+	"Event",
+	"HTMLElement",
+	"HTMLImageElement",
+	"Node",
+	"navigator",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+// Radix picks its layout effect when first imported, so the real modules load under a document.
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	nextDynamic: { ...(await import("next/dynamic")) },
+	textEditor: { ...(await import("../ui/text-editor")) },
+};
+
 mock.module("next/dynamic", () => ({
+	...actual.nextDynamic,
 	default: () => () => null,
 }));
 
 mock.module("../ui/text-editor", () => ({
+	...actual.textEditor,
 	TextEditor: ({ initialContent }: { initialContent: string }) => (
 		<div data-slate-editor data-initial-content={initialContent}>
 			<figure data-testid="generated-caption">
@@ -80,8 +106,9 @@ beforeEach(() => {
 		window: browserWindow,
 		IS_REACT_ACT_ENVIRONMENT: true,
 	});
-	host = browserWindow.document.createElement("div") as unknown as HTMLElement;
-	browserWindow.document.body.append(host);
+	const container = browserWindow.document.createElement("div");
+	browserWindow.document.body.append(container);
+	host = container as unknown as HTMLElement;
 	root = createRoot(host);
 });
 
@@ -90,7 +117,15 @@ afterEach(async () => {
 	browserWindow.close();
 });
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("next/dynamic", () => actual.nextDynamic);
+	mock.module("../ui/text-editor", () => actual.textEditor);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 async function renderLesson() {
 	const { LessonContent } = await import("./lesson-content");
@@ -133,9 +168,7 @@ describe("lesson content DOM", () => {
 		) as HTMLElement;
 		const generatedImage = generated.querySelector("img") as HTMLImageElement;
 		await act(async () => {
-			generatedImage.dispatchEvent(
-				new browserWindow.Event("load", { bubbles: true }),
-			);
+			generatedImage.dispatchEvent(new Event("load", { bubbles: true }));
 		});
 		expect(generatedImage.alt).toBe("App Anatomy");
 		expect(generated.dataset.lessonMediaCaption).toBe("App Anatomy");
@@ -145,9 +178,7 @@ describe("lesson content DOM", () => {
 		) as HTMLElement;
 		const authoredImage = authored.querySelector("img") as HTMLImageElement;
 		await act(async () => {
-			authoredImage.dispatchEvent(
-				new browserWindow.Event("load", { bubbles: true }),
-			);
+			authoredImage.dispatchEvent(new Event("load", { bubbles: true }));
 		});
 		expect(authored.dataset.lessonMediaCaption).toBeUndefined();
 		expect(authored.querySelector("figcaption")?.textContent).toBe(
@@ -155,9 +186,7 @@ describe("lesson content DOM", () => {
 		);
 
 		await act(async () => {
-			generatedImage.dispatchEvent(
-				new browserWindow.Event("error", { bubbles: true }),
-			);
+			generatedImage.dispatchEvent(new Event("error", { bubbles: true }));
 		});
 		expect(generatedImage.dataset.lessonMediaFailed).toBe("true");
 		expect(generated.dataset.lessonMediaFailed).toBe("true");

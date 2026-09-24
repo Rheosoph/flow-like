@@ -16,7 +16,7 @@ import {
 export type { LayoutStyle };
 
 interface LayoutOption {
-	id: LayoutStyle;
+	id: Extract<LayoutStyle, "compact" | "routed">;
 	label: string;
 	description: string;
 }
@@ -32,12 +32,6 @@ const LAYOUT_OPTIONS: LayoutOption[] = [
 		label: "Routed",
 		description:
 			"Compact spacing with reroutes to avoid nodes and reduce crossings.",
-	},
-	{
-		id: "expanded",
-		label: "Expanded",
-		description:
-			"Extra room between event groups and branches for readability.",
 	},
 ];
 
@@ -342,197 +336,9 @@ function AnimatedRouted() {
 	);
 }
 
-function AnimatedExpanded() {
-	return (
-		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden="true">
-			<style>
-				{
-					"@keyframes expSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } } .exp-node { animation: expSlide 0.6s ease-out both; } .exp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: expDash 1s ease-out 0.4s forwards; } @keyframes expDash { to { stroke-dashoffset: 0; } }"
-				}
-			</style>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0s" }}
-				x="2"
-				y="10"
-				width="20"
-				height="13"
-				rx="3"
-				fill="hsl(30 80% 55%)"
-				opacity="0.6"
-				stroke="hsl(30 80% 55%)"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.12s" }}
-				x="36"
-				y="10"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.24s" }}
-				x="70"
-				y="3"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.24s" }}
-				x="70"
-				y="20"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.36s" }}
-				x="100"
-				y="10"
-				width="17"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<line
-				className="exp-edge"
-				x1="22"
-				y1="16"
-				x2="36"
-				y2="16"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="56"
-				y1="16"
-				x2="70"
-				y2="9"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="56"
-				y1="16"
-				x2="70"
-				y2="26"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="90"
-				y1="9"
-				x2="100"
-				y2="16"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="90"
-				y1="26"
-				x2="100"
-				y2="16"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0s" }}
-				x="2"
-				y="58"
-				width="20"
-				height="13"
-				rx="3"
-				fill="hsl(30 80% 55%)"
-				opacity="0.6"
-				stroke="hsl(30 80% 55%)"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.12s" }}
-				x="36"
-				y="58"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.24s" }}
-				x="70"
-				y="58"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<line
-				className="exp-edge"
-				x1="22"
-				y1="64"
-				x2="36"
-				y2="64"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="56"
-				y1="64"
-				x2="70"
-				y2="64"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-		</svg>
-	);
-}
-
-const PREVIEW_MAP: Record<LayoutStyle, () => React.JSX.Element> = {
+const PREVIEW_MAP: Record<LayoutOption["id"], () => React.JSX.Element> = {
 	compact: AnimatedCompact,
-	balanced: AnimatedRouted,
 	routed: AnimatedRouted,
-	expanded: AnimatedExpanded,
 };
 
 export interface AutoLayoutDialogProps {
@@ -588,7 +394,7 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
-				className="sm:max-w-2xl"
+				className="sm:max-w-lg"
 				onDoubleClick={(e) => e.stopPropagation()}
 			>
 				<DialogHeader>
@@ -606,7 +412,7 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 								)}
 					</DialogDescription>
 				</DialogHeader>
-				<div className="grid grid-cols-3 gap-3 mt-1">{cards}</div>
+				<div className="grid grid-cols-2 gap-3 mt-1">{cards}</div>
 				<p className="text-xs text-muted-foreground">
 					{scoped
 						? t(

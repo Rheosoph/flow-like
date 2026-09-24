@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	test,
+} from "bun:test";
 import { Window } from "happy-dom";
 import { registerLivePage } from "../components/a2ui/live-page-registry";
 import {
@@ -12,8 +20,17 @@ import {
 
 let browserWindow: Window;
 const rasterizedElements: HTMLElement[] = [];
+const previousGlobals = {
+	document: Object.getOwnPropertyDescriptor(globalThis, "document"),
+	window: Object.getOwnPropertyDescriptor(globalThis, "window"),
+};
+
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualHtml2Canvas = { ...(await import("html2canvas-pro")) };
 
 mock.module("html2canvas-pro", () => ({
+	...actualHtml2Canvas,
 	default: async (element: HTMLElement) => {
 		rasterizedElements.push(element);
 		return {
@@ -35,6 +52,15 @@ beforeEach(() => {
 
 afterEach(() => {
 	browserWindow.close();
+	// A closed window left on globalThis breaks later files that dispatch Node events on it.
+	for (const [key, descriptor] of Object.entries(previousGlobals)) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
+
+afterAll(() => {
+	mock.module("html2canvas-pro", () => actualHtml2Canvas);
 });
 
 describe("app page capture hardening", () => {

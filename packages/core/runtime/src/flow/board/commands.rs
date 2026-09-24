@@ -17,6 +17,9 @@ pub mod nodes;
 pub mod pins;
 pub mod variables;
 
+#[cfg(test)]
+mod auto_reroute_tests;
+
 macro_rules! impl_command_methods {
     ($($variant:ident),*) => {
         impl GenericCommand {

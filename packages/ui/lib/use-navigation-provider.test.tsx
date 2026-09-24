@@ -16,7 +16,11 @@ afterEach(() => {
 	else Reflect.deleteProperty(globalThis, "window");
 });
 
-function setup(path: string, origin = "https://app.test") {
+function setup(
+	path: string,
+	origin = "https://app.test",
+	routeMode: "path" | "query" = "path",
+) {
 	let current = new URL(path, origin);
 	const location = {
 		get href() {
@@ -69,7 +73,7 @@ function setup(path: string, origin = "https://app.test") {
 	}
 	renderToStaticMarkup(
 		<AppRouterContext.Provider value={native}>
-			<UseNavigationProvider>
+			<UseNavigationProvider routeMode={routeMode}>
 				<Probe />
 			</UseNavigationProvider>
 		</AppRouterContext.Provider>,
@@ -195,5 +199,98 @@ describe("static use navigation", () => {
 			if (original) Object.defineProperty(globalThis, "document", original);
 			else Reflect.deleteProperty(globalThis, "document");
 		}
+	});
+});
+
+describe("desktop query route navigation", () => {
+	test("keeps app routes on the exported shell when entering an app", () => {
+		for (const origin of [
+			"http://localhost:3000",
+			"tauri://localhost",
+			"http://tauri.localhost",
+			"https://tauri.localhost",
+		]) {
+			const { router, href, native, history, location } = setup(
+				"/library",
+				origin,
+				"query",
+			);
+			const target =
+				"/use?id=app&route=%2Forders&appQuery=tag%3Done%26tag%3Dtwo#totals";
+			expect(href(target)).toBe(target);
+			router.push(target);
+			expect(native.push).toHaveBeenCalledWith(target, undefined);
+			expect(history.pushState).not.toHaveBeenCalled();
+			expect(history.replaceState).not.toHaveBeenCalled();
+			expect(location.assign).not.toHaveBeenCalled();
+		}
+	});
+
+	test("converts incoming path links while preserving app data and fragments", () => {
+		const { router, href, native, history } = setup(
+			"/use?id=app&route=%2Fold",
+			"tauri://localhost",
+			"query",
+		);
+		const target =
+			"/use/orders/daily?id=app&route=%2Fstale&appQuery=tag%3Done%26tag%3Dtwo#totals";
+		const destination = href(target);
+		const url = new URL(destination, "tauri://localhost");
+		expect(url.pathname).toBe("/use");
+		expect(url.searchParams.get("route")).toBe("/orders/daily");
+		expect(url.searchParams.get("id")).toBe("app");
+		expect(url.searchParams.get("appQuery")).toBe("tag=one&tag=two");
+		expect(url.hash).toBe("#totals");
+		router.push(target, { scroll: false });
+		expect(native.push).toHaveBeenCalledWith(destination, { scroll: false });
+		router.replace(target);
+		expect(native.replace).toHaveBeenCalledWith(destination, undefined);
+		expect(history.pushState).not.toHaveBeenCalled();
+		expect(history.replaceState).not.toHaveBeenCalled();
+	});
+
+	test("uses the Next router for route changes and query updates within an app", () => {
+		const { router, query, native, history } = setup(
+			"/use?id=app&route=%2Forders#details",
+			"tauri://localhost",
+			"query",
+		);
+		const target = "/use?id=app&route=%2Freports";
+		router.push(target);
+		expect(native.push).toHaveBeenCalledWith(target, undefined);
+		router.replace("/use?id=app&eventId=chat", { scroll: false });
+		expect(native.replace).toHaveBeenCalledWith("/use?id=app&eventId=chat", {
+			scroll: false,
+		});
+		query("?id=app&route=%2Forders&sessionId=one", true);
+		expect(native.replace).toHaveBeenLastCalledWith(
+			"/use?id=app&route=%2Forders&sessionId=one#details",
+			{ scroll: false },
+		);
+		expect(history.pushState).not.toHaveBeenCalled();
+		expect(history.replaceState).not.toHaveBeenCalled();
+		router.back();
+		router.forward();
+		expect(native.back).toHaveBeenCalledTimes(1);
+		expect(native.forward).toHaveBeenCalledTimes(1);
+	});
+
+	test("leaves non-app paths and external origins unchanged", () => {
+		const { router, href, native, history } = setup(
+			"/use?id=app&route=%2Forders",
+			"tauri://localhost",
+			"query",
+		);
+		for (const target of [
+			"/settings",
+			"https://app.test/use/orders?route=%2Fold",
+			"tauri://other/use/orders?route=%2Fold",
+			"other://localhost/use/orders?route=%2Fold",
+		]) {
+			expect(href(target)).toBe(target);
+			router.push(target);
+			expect(native.push).toHaveBeenLastCalledWith(target, undefined);
+		}
+		expect(history.pushState).not.toHaveBeenCalled();
 	});
 });

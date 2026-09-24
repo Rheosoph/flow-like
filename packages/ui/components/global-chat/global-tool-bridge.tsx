@@ -3206,6 +3206,8 @@ export function GlobalToolBridge() {
 					const livePage = captureSourceCurrent
 						? snapshot.source?.handle
 						: findLivePage(appId, { eventId: pageEvent.id });
+					// A page registers at mount, so the fallback can find one whose onLoad is still filling it.
+					const livePageLoading = Boolean(livePage?.isLoading());
 					let inspection: ReturnType<typeof inspectLiveAppPage> | undefined;
 					let semanticInspectionFailure: string | undefined;
 					if (livePage) {
@@ -3217,13 +3219,16 @@ export function GlobalToolBridge() {
 								"The rendered component tree could not be inspected.",
 							);
 						}
+						if (livePageLoading && !semanticInspectionFailure) {
+							semanticInspectionFailure =
+								"The page was still running its onLoad workflow, so the inspected elements are its layout before that workflow's updates.";
+						}
 					} else {
 						semanticInspectionFailure =
 							"No matching live page registered a rendered component tree.";
 					}
-					const semanticInspectionComplete = Boolean(
-						inspection?.root_component_id,
-					);
+					const semanticInspectionComplete =
+						Boolean(inspection?.root_component_id) && !livePageLoading;
 					const evidenceComplete =
 						screenshotComplete && semanticInspectionComplete;
 					const failureDetail =
@@ -3646,6 +3651,7 @@ export function GlobalToolBridge() {
 					const onInterval =
 						argString(args, "on_interval_event_id") ||
 						argString(args, "onIntervalEventId");
+					const noCache = argBool(args, "no_cache") ?? argBool(args, "noCache");
 					if (boardId && page.boardId && boardId !== page.boardId) {
 						return {
 							status: "error",
@@ -3728,6 +3734,7 @@ export function GlobalToolBridge() {
 							if (typeof secs === "number" && secs > 0)
 								page.onIntervalSeconds = secs;
 						}
+						if (noCache !== undefined) page.noCache = noCache || undefined;
 						try {
 							await backend.pageState.updatePage(appId, page);
 						} catch (error) {
@@ -3742,6 +3749,7 @@ export function GlobalToolBridge() {
 							note: onLoad
 								? "Page onLoad event wired — it runs when the page opens."
 								: "Page onLoad event cleared.",
+							no_cache: page.noCache === true,
 						};
 					} finally {
 						releasePageLifecycle();

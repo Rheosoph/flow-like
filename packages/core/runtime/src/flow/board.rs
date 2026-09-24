@@ -1774,9 +1774,30 @@ impl Board {
         let mut floating = Self::from_proto(proto);
         floating.board_dir = self.board_dir.clone();
         floating.app_state = self.app_state.clone();
-        floating
-            .snapshot_matches_current(version, Some(store))
-            .await
+        floating.stored_draft_matches(version, store).await
+    }
+
+    /// Whether this stored draft, as read or once cleaned, is the snapshot at `version`.
+    ///
+    /// `cleanup` is the exception to reading the draft verbatim: every load runs it without
+    /// saving, so an unedited legacy draft (duplicate layer bridges) only matches the snapshot of
+    /// the board it loads as once cleaned too. A board published without ever being loaded or
+    /// edited is not cleaned either, hence the stored form first. Cleanup is deterministic, so
+    /// the second try can only turn a false mismatch into a match. On a match the draft is left
+    /// in whichever form matched, so a caller that writes it back persists that form.
+    async fn stored_draft_matches(
+        &mut self,
+        version: (u32, u32, u32),
+        store: Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<bool> {
+        if self
+            .snapshot_matches_current(version, Some(store.clone()))
+            .await?
+        {
+            return Ok(true);
+        }
+        self.cleanup();
+        self.snapshot_matches_current(version, Some(store)).await
     }
 
     /// Storage revision of the persisted floating draft.
@@ -1798,10 +1819,13 @@ impl Board {
         }
     }
 
-    /// Read the authoritative floating draft as its own board, exactly as
-    /// stored - `from_loaded_proto` would re-derive it and settle schema
+    /// Read the authoritative floating draft as its own board, as stored plus
+    /// `cleanup` - `from_loaded_proto` would re-derive it and settle schema
     /// propagation further than an interactive edit, which is the difference
-    /// that makes an unedited board look changed.
+    /// that makes an unedited board look changed. Unlike `node_updates`,
+    /// `cleanup` is applied: every load runs it without saving, so a legacy
+    /// draft publishes what a fresh load of it would, and
+    /// [`Self::snapshot_matches_persisted_draft`] accepts the cleaned draft.
     async fn reloaded_persisted_draft(
         &self,
         store: Option<Arc<dyn ObjectStore>>,
@@ -1811,6 +1835,7 @@ impl Board {
         let proto: proto::Board = from_compressed(store, floating_path).await?;
         Self::validate_proto_types(&proto)?;
         let mut floating = Self::from_proto(proto);
+        floating.cleanup();
         floating.board_dir = self.board_dir.clone();
         floating.app_state = self.app_state.clone();
         Ok(floating)
@@ -2028,7 +2053,7 @@ impl Board {
         floating.board_dir = self.board_dir.clone();
         if floating.version > prepared.version
             || !floating
-                .snapshot_matches_current(prepared.version, Some(store.clone()))
+                .stored_draft_matches(prepared.version, store.clone())
                 .await?
         {
             return Ok(false);
@@ -5107,6 +5132,111 @@ mod tests {
                 .unwrap(),
             "an unedited draft must not read as changed during its own publication"
         );
+    }
+
+    /// A draft saved by an older build: one producer feeds a collapsed layer through one boundary
+    /// pin per consumer. Loading merges them in memory without saving the draft.
+    fn board_with_legacy_duplicate_bridges(
+        state: Arc<crate::state::FlowLikeState>,
+        base_dir: Path,
+    ) -> super::Board {
+        use crate::flow::{node::Node, variable::VariableType};
+        use std::collections::BTreeSet;
+
+        let mut board = super::Board::new(None, base_dir, state);
+        let mut layer = super::Layer::new(
+            "group".to_string(),
+            "Group".to_string(),
+            super::LayerType::Collapsed,
+        );
+        let mut producer = Node::new("producer", "Producer", "", "test");
+        let output = producer
+            .add_output_pin("payload", "Payload", "", VariableType::String)
+            .id
+            .clone();
+        for position in 0..3u16 {
+            let mut consumer = Node::new("consumer", "Consumer", "", "test");
+            consumer.layer = Some(layer.id.clone());
+            let input = consumer
+                .add_input_pin("in", "In", "", VariableType::String)
+                .id
+                .clone();
+            let mut bridge = consumer.pins[&input].clone();
+            bridge.id = format!("legacy-bridge-{position}");
+            bridge.index = position + 1;
+            bridge.depends_on = BTreeSet::from([output.clone()]);
+            bridge.connected_to = BTreeSet::from([input.clone()]);
+            if let Some(pin) = consumer.pins.get_mut(&input) {
+                pin.depends_on.insert(bridge.id.clone());
+            }
+            if let Some(pin) = producer.pins.get_mut(&output) {
+                pin.connected_to.insert(bridge.id.clone());
+            }
+            layer.pins.insert(bridge.id.clone(), bridge);
+            board.nodes.insert(consumer.id.clone(), consumer);
+        }
+        board.nodes.insert(producer.id.clone(), producer);
+        board.layers.insert(layer.id.clone(), layer);
+        board.mark_changed();
+        board
+    }
+
+    #[tokio::test]
+    async fn an_unedited_legacy_draft_recognizes_the_snapshot_of_its_loaded_board() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let legacy = board_with_legacy_duplicate_bridges(state.clone(), base_dir.clone());
+        legacy.save(None).await.unwrap();
+        assert_eq!(legacy.layers["group"].pins.len(), 3);
+
+        let loaded = super::Board::load(base_dir, &legacy.id, state, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            loaded.layers["group"].pins.len(),
+            1,
+            "loading merges the legacy duplicates in memory"
+        );
+        let version = loaded.version;
+
+        loaded
+            .snapshot_at_version(version, None)
+            .await
+            .expect("publishing an unedited legacy draft must not report a draft change");
+
+        assert!(
+            loaded
+                .snapshot_matches_persisted_draft(version, None)
+                .await
+                .unwrap(),
+            "the stored legacy draft must match the snapshot of the board it loads as"
+        );
+        let reloaded = loaded.reloaded_persisted_draft(None).await.unwrap();
+        assert_eq!(reloaded.layers["group"].pins.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unedited_legacy_draft_commits_a_fresh_patch() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let legacy = board_with_legacy_duplicate_bridges(state.clone(), base_dir.clone());
+        legacy.save(None).await.unwrap();
+
+        let mut loaded = super::Board::load(base_dir.clone(), &legacy.id, state.clone(), None)
+            .await
+            .unwrap();
+        let fresh = loaded
+            .snapshot_at_fresh_patch_version(None)
+            .await
+            .expect("committing a fresh patch of an unedited legacy draft must succeed");
+        assert_eq!(loaded.version, fresh);
+
+        let draft = loaded.reloaded_persisted_draft(None).await.unwrap();
+        assert_eq!(draft.version, fresh, "the draft pointer moved to the patch");
+        let stored = super::Board::load(base_dir, &legacy.id, state, Some(fresh))
+            .await
+            .unwrap();
+        assert_eq!(stored.layers["group"].pins.len(), 1);
     }
 
     #[tokio::test]

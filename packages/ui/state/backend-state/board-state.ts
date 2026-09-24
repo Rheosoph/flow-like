@@ -186,6 +186,16 @@ export interface IBoardState {
 		boardId: string,
 		version?: [number, number, number],
 	): Promise<IBoard>;
+	/**
+	 * Read one board for background analysis without opening it: no editor registry entry and no
+	 * sync cache keeps it alive afterwards. Hosts without it fall back to `getBoard`.
+	 */
+	getBoardSnapshot?(appId: string, boardId: string): Promise<IBoard>;
+	/**
+	 * List boards for background analysis without side effects: unlike `getBoardSummaries`, a host
+	 * never hydrates remote boards from here. The desktop lists only what is already on the device.
+	 */
+	getBoardSummariesSnapshot?(appId: string): Promise<IBoardSummary[]>;
 
 	// Realtime collaboration
 	getRealtimeAccess(appId: string, boardId: string): Promise<IRealtimeAccess>;

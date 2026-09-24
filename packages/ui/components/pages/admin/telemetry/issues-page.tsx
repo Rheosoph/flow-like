@@ -462,14 +462,14 @@ export function AdminTelemetryIssuesPage({
 									<Skeleton className="h-16 w-full" />
 									<Skeleton className="h-16 w-full" />
 								</div>
-							) : (issues.data?.issues.length ?? 0) === 0 ? (
+							) : (issues.data?.issues?.length ?? 0) === 0 ? (
 								<EmptyState
 									message="No issues match the current filters."
 									className="m-4 py-10 text-sm"
 								/>
 							) : (
 								<div>
-									{issues.data?.issues.map((issue) => (
+									{issues.data?.issues?.map((issue) => (
 										<IssueRow key={issue.id} issue={issue} onOpen={openIssue} />
 									))}
 								</div>

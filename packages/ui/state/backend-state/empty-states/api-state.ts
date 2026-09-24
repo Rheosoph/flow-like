@@ -1,3 +1,4 @@
+import { upstreamFailureInSuccess } from "../../../lib/api-error";
 import { getApiUrl } from "../../../lib/api-url";
 import type { IProfile } from "../../../types";
 import type { IApiState } from "../api-state";
@@ -131,7 +132,10 @@ export class EmptyApiState implements IApiState {
 			throw new Error(`Error fetching data: ${response.statusText}`);
 		}
 
-		return response.json() as Promise<T>;
+		const data: unknown = await response.json();
+		const upstreamError = upstreamFailureInSuccess(response, data, path);
+		if (upstreamError) throw upstreamError;
+		return data as T;
 	}
 
 	async get<T>(profile: IProfile, path: string): Promise<T> {

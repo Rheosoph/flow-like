@@ -41,6 +41,7 @@ import {
 	isMaintainer,
 	isOwner,
 } from "../../lib/permission/wasm-package-permission";
+import { asArray } from "../../lib/response-shape";
 import {
 	type PackageMeta,
 	type PackageReview,
@@ -250,7 +251,7 @@ function PublicationReviewCard({
 		retry: false,
 	});
 
-	const reviews = reviewQuery.data ?? [];
+	const reviews = asArray(reviewQuery.data);
 	const statusLabel =
 		status === PackageStatus.PendingReview
 			? t("pendingReview", "Pending Review")

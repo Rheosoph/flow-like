@@ -128,6 +128,7 @@ impl ToProto<flow_like_types::proto::Node> for Node {
             alias: self.alias.clone(),
             receiver: self.receiver.clone(),
             pins_collapsed: self.pins_collapsed,
+            auto_reroute: self.auto_reroute,
         }
     }
 }
@@ -188,6 +189,31 @@ impl FromProto<flow_like_types::proto::Node> for Node {
             alias: proto.alias,
             receiver: proto.receiver,
             pins_collapsed: proto.pins_collapsed,
+            auto_reroute: proto.auto_reroute,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::Message;
+
+    #[test]
+    fn auto_reroute_round_trips_through_json_and_protobuf() {
+        for marker in [None, Some(false), Some(true)] {
+            let mut node = Node::new("reroute", "Reroute", "", "Control");
+            node.auto_reroute = marker;
+
+            let json = serde_json::to_value(&node).expect("node JSON");
+            assert_eq!(json.get("auto_reroute").is_some(), marker.is_some());
+            let restored: Node = serde_json::from_value(json).expect("restore node JSON");
+            assert_eq!(restored.auto_reroute, marker);
+
+            let bytes = node.to_proto().encode_to_vec();
+            let proto =
+                flow_like_types::proto::Node::decode(bytes.as_slice()).expect("decode saved node");
+            assert_eq!(Node::from_proto(proto).auto_reroute, marker);
         }
     }
 }

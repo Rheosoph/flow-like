@@ -25,6 +25,18 @@ describe("classifyColumn", () => {
 		expect(classifyColumn(column("owner", "Struct"))).toBe("json");
 	});
 
+	test("reads every Arrow binary type as bytes, whatever the column is called", () => {
+		for (const type of [
+			"Binary",
+			"LargeBinary",
+			"BinaryView",
+			"FixedSizeBinary(8)",
+		]) {
+			expect(classifyColumn(column("properties", type))).toBe("binary");
+		}
+		expect(classifyColumn(column("created_by", "Binary"))).toBe("binary");
+	});
+
 	test("leaves text that only sounds like a person", () => {
 		expect(classifyColumn(column("username"))).toBe("text");
 		expect(classifyColumn(column("group_by"))).toBe("text");
@@ -183,6 +195,8 @@ describe("declared geometry columns", () => {
 	test("never infers geometry from objects or arbitrary binary", () => {
 		const rows = [{ shape: { type: "Point", coordinates: [1, 2] } }];
 		expect(classifyResultColumn(column("shape", "Struct"), rows)).toBe("json");
-		expect(classifyResultColumn(column("shape", "Binary"), rows)).toBe("text");
+		expect(classifyResultColumn(column("shape", "Binary"), rows)).toBe(
+			"binary",
+		);
 	});
 });

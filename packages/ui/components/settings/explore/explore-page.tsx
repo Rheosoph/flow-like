@@ -42,6 +42,7 @@ import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	IDatabaseSelector,
 	ITableSummary,
@@ -153,13 +154,13 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 		[appId],
 	);
 	const overlayNames = useMemo(
-		() => (surfaceOverlays.data ?? []).map((overlay) => overlay.name),
+		() => asArray(surfaceOverlays.data).map((overlay) => overlay.name),
 		[surfaceOverlays.data],
 	);
 	const overlayName = useMemo(
 		() =>
 			overlayParam
-				? (surfaceOverlays.data ?? []).find(
+				? asArray(surfaceOverlays.data).find(
 						(overlay) => overlay.id === overlayParam,
 					)?.name
 				: undefined,
@@ -240,7 +241,6 @@ function TableView({
 	userScoped?: boolean;
 	onBack: () => void;
 }>) {
-	const { t } = useTranslation("settings");
 	const router = useRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
@@ -315,12 +315,8 @@ function TableView({
 			page={page}
 			pageSize={pageSize}
 			onPageChange={updateUrlParams}
-		>
-			<Button variant={"default"} size={"sm"} onClick={onBack}>
-				<ArrowLeftIcon />
-				{t("back", "Back")}
-			</Button>
-		</TableInspector>
+			onBack={onBack}
+		/>
 	);
 }
 
@@ -460,14 +456,14 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const [deleting, setDeleting] = useState(false);
 	const processedTables = useMemo(() => {
 		const byName = (summaries: ITableSummary[] | undefined) =>
-			new Map((summaries ?? []).map((summary) => [summary.name, summary]));
+			new Map(asArray(summaries).map((summary) => [summary.name, summary]));
 		const projectSummaries = byName(tableSummaries.data);
 		const userSummaries = byName(userTableSummaries.data);
 
-		const projectTables = (tables.data ?? []).map(
+		const projectTables = asArray(tables.data).map(
 			(name): Table => ({ name, summary: projectSummaries.get(name) }),
 		);
-		const userScopedTables = (userTables.data ?? []).map(
+		const userScopedTables = asArray(userTables.data).map(
 			(name): Table => ({
 				name,
 				userScoped: true,
@@ -630,7 +626,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			actions: NonNullable<GraphOverlay["actions"]>,
 		) => {
 			if (!canWriteActions) throw new Error(actionWriteDeniedMessage);
-			const ontology = ontologies.data?.find(
+			const ontology = asArray(ontologies.data).find(
 				(candidate) => candidate.id === ontologyId,
 			);
 			await backend.graphState.updateOverlay(appId, ontologyId, {
@@ -688,7 +684,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			patch: Partial<Pick<GraphOverlay, "exposed" | "bindings_enabled">>,
 		) => {
 			if (!canWriteData) throw new Error(writeDeniedMessage);
-			const ontology = ontologies.data?.find(
+			const ontology = asArray(ontologies.data).find(
 				(candidate) => candidate.id === ontologyId,
 			);
 			await backend.graphState.updateOverlay(appId, ontologyId, {
@@ -738,8 +734,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			}
 			let governedPayload = payload;
 			const isOffline = await backend.isOffline(appId);
-			const action = ontologies.data
-				?.find((ontology) => ontology.id === ontologyId)
+			const action = asArray(ontologies.data)
+				.find((ontology) => ontology.id === ontologyId)
 				?.actions?.find((candidate) => candidate.id === actionId);
 
 			if (!isOffline && backend.eventState.checkOAuthRequirements) {
@@ -853,8 +849,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		const seen = new Set<string>();
 		const names: string[] = [];
 		for (const overlay of [
-			...(ontologies.data ?? []),
-			...(userOntologies.data ?? []),
+			...asArray(ontologies.data),
+			...asArray(userOntologies.data),
 		]) {
 			if (seen.has(overlay.id)) continue;
 			seen.add(overlay.id);
@@ -879,11 +875,19 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		setDeleting(true);
 		setDeleteError(null);
 		try {
-			const result = await backend.dbState.dropTable(
+			const response = await backend.dbState.dropTable(
 				appId,
 				deleteTarget.name,
 				deleteTarget.userScoped,
 			);
+			// A bodiless 2xx still means the table is gone.
+			const result = {
+				table_name: response?.table_name ?? deleteTarget.name,
+				dropped: response?.dropped ?? true,
+				ontologies: asArray(response?.ontologies),
+				saved_queries: asArray(response?.saved_queries),
+				warnings: asArray(response?.warnings),
+			};
 
 			// The catalog exposes tables to boards, and the sources/queries surfaces
 			// read both scopes — a table drop invalidates all of them, not just the
@@ -1042,12 +1046,12 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		return <ErrorState onRetry={refreshStudio} />;
 	}
 
-	const ontologyData = ontologies.data ?? [];
+	const ontologyData = asArray(ontologies.data);
 	const connections = [
-		...(appConnections.data?.incoming ?? []),
-		...(appConnections.data?.outgoing ?? []),
+		...asArray(appConnections.data?.incoming),
+		...asArray(appConnections.data?.outgoing),
 	];
-	const installedData = installedOntologies.data ?? [];
+	const installedData = asArray(installedOntologies.data);
 	// Only imports with live bindings are usable as data sources; disabled ones
 	// stay visible for management in the sharing/model tabs.
 	const usableImports = installedData.filter(
@@ -1215,7 +1219,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					<OntologyModelPanel
 						appId={appId}
 						ontologies={ontologyData}
-						installedOntologies={installedOntologies.data ?? []}
+						installedOntologies={installedData}
 						onCreateOntology={requestOntologySetup}
 						onOpenOntology={navigateToOntology}
 						onSaveEdges={canWriteData ? saveEdges : undefined}
@@ -1252,7 +1256,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					)}
 					<OntologyActionsPanel
 						ontologies={ontologyData}
-						boards={boards.data ?? []}
+						boards={asArray(boards.data)}
 						appId={appId}
 						onCreateOntology={requestOntologySetup}
 						onNeedBoards={() => setActionBoardsRequested(true)}
@@ -1287,8 +1291,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					<OntologySharingPanel
 						ontologies={ontologyData}
 						connections={connections}
-						remoteConnections={appConnections.data?.outgoing ?? []}
-						installedOntologies={installedOntologies.data ?? []}
+						remoteConnections={asArray(appConnections.data?.outgoing)}
+						installedOntologies={installedData}
 						installedOntologiesLoading={installedOntologies.isLoading}
 						installedOntologiesError={installedOntologies.error?.message}
 						onCreateOntology={requestOntologySetup}
@@ -1418,13 +1422,13 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						appId={appId}
 						ontologies={
 							searchParams.get("scope") === "user"
-								? (userOntologies.data ?? [])
+								? asArray(userOntologies.data)
 								: ontologyData
 						}
 						remoteImports={usableImports}
 						resolveSourceName={resolveSourceName}
-						projectTables={tables.data ?? []}
-						userTables={userTables.data ?? []}
+						projectTables={asArray(tables.data)}
+						userTables={asArray(userTables.data)}
 						userScoped={searchParams.get("scope") === "user"}
 						onScopeChange={setQueryScope}
 					/>

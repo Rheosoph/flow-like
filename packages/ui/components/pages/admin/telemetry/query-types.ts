@@ -615,7 +615,7 @@ export function telemetryQueryLayout(
 	request: ITelemetryQueryRequest,
 	response: ITelemetryQueryResponse | undefined,
 ): ITelemetryQueryLayout {
-	const columnCount = response?.columns.length ?? 0;
+	const columnCount = response?.columns?.length ?? 0;
 	const valueIndex = Math.max(0, columnCount - 1);
 	const timed = (request.interval ?? "none") !== "none";
 	const tsIndex = timed && columnCount >= 2 ? 0 : -1;

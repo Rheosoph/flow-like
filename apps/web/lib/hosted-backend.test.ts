@@ -162,6 +162,57 @@ describe("hosted API contract", () => {
 			backend.storageState.downloadStorageItems("other-app", ["a/0.png"]),
 		).rejects.toThrow("another app");
 	});
+	it("cancelling a hosted run closes its invoke stream instead of throwing", async () => {
+		const data = {
+			app_id: "published-app",
+			auth_proxy: false,
+			bootstrap: { event: { id: "published-event" } },
+		} as HostedBootstrap;
+		let signal: AbortSignal | undefined;
+		const encoder = new TextEncoder();
+		const backend = createHostedBackend(data, async (_suffix, init) => {
+			signal = init?.signal ?? undefined;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(
+							encoder.encode(
+								'data: {"event_type":"run_initiated","payload":{"run_id":"run-1"}}\n\n',
+							),
+						);
+						signal?.addEventListener("abort", () =>
+							controller.error(
+								new DOMException("The operation was aborted.", "AbortError"),
+							),
+						);
+					},
+				}),
+			);
+		});
+		const runIds: string[] = [];
+		const running = backend.eventState
+			.executeEvent(
+				"published-app",
+				"published-event",
+				{ id: "node", payload: {} },
+				false,
+				(runId) => runIds.push(runId),
+			)
+			.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+		while (runIds.length === 0) await Bun.sleep(1);
+
+		await backend.eventState.cancelExecution("unknown-run");
+		expect(signal?.aborted).toBe(false);
+		await backend.eventState.cancelExecution("run-1");
+		expect(signal?.aborted).toBe(true);
+		expect(await running).toBeInstanceOf(DOMException);
+		await expect(
+			backend.eventState.cancelExecution("run-1"),
+		).resolves.toBeUndefined();
+	});
 	it("reads the API error envelope instead of printing a bare status", () => {
 		expect(
 			hostedErrorMessage(

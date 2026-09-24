@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { asArray } from "../../lib/response-shape";
 import type { IApp } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 
@@ -9,7 +10,8 @@ export function AboutSection({
 	meta,
 }: Readonly<{ app: IApp; meta: IMetadata }>) {
 	const { t } = useTranslation("store");
-	const hasMedia = (meta.preview_media?.length ?? 0) > 0;
+	const tags = asArray(meta.tags);
+	const media = asArray(meta.preview_media);
 	const hasRelease = !!(meta.release_notes || app.changelog);
 
 	return (
@@ -18,9 +20,9 @@ export function AboutSection({
 				{meta.description ?? t("noDescriptionFound", "No description found.")}
 			</p>
 
-			{meta.tags?.length ? (
+			{tags.length ? (
 				<div className="flex flex-wrap gap-1.5">
-					{meta.tags.map((t) => (
+					{tags.map((t) => (
 						<span
 							key={t}
 							className="rounded-full bg-muted/30 px-2.5 py-0.5 text-[11px] text-muted-foreground capitalize"
@@ -31,13 +33,13 @@ export function AboutSection({
 				</div>
 			) : null}
 
-			{hasMedia && (
+			{media.length > 0 && (
 				<div className="-mx-6 md:-mx-10">
 					<div
 						className="flex gap-3 overflow-x-auto px-6 md:px-10 snap-x snap-mandatory pb-2"
 						style={{ scrollbarWidth: "none" }}
 					>
-						{meta.preview_media!.map((m, i) => (
+						{media.map((m, i) => (
 							<div key={`${m}-${i}`} className="snap-start shrink-0">
 								<img
 									src={m}

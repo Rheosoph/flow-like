@@ -104,9 +104,13 @@ async function renderInstance(
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		});
 		// React Query retains successful data when its refetch fails.
-		expect(client.getQueryData(["getWidget", "app-1", "artikel"])).toEqual(
-			inlineWidgetDef,
-		);
+		expect(
+			client.getQueryData<typeof inlineWidgetDef>([
+				"getWidget",
+				"app-1",
+				"artikel",
+			]),
+		).toEqual(inlineWidgetDef);
 	}
 
 	return host as unknown as HTMLElement;

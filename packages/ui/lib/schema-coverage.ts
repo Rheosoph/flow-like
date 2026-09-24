@@ -94,10 +94,77 @@ export function parseSchemaText(schema: string): unknown {
  */
 export function schemaCovers(output: string, input: string): boolean {
 	if (output === input) return true;
-	const outputRoot = parseSchemaText(output);
-	const inputRoot = parseSchemaText(input);
-	if (outputRoot === undefined || inputRoot === undefined) return false;
+	const parsedOutput = parseSchemaText(output);
+	const parsedInput = parseSchemaText(input);
+	if (parsedOutput === undefined || parsedInput === undefined) return false;
+	const outputRoot = typeUnionsSplit(parsedOutput);
+	const inputRoot = typeUnionsSplit(parsedInput);
 	return new Coverage(outputRoot, inputRoot).covers(outputRoot, inputRoot, 0);
+}
+
+/** Keywords holding one sub-schema that coverage compares structurally. */
+const SUBSCHEMA_KEYWORDS = new Set(["additionalProperties", "items"]);
+/** Keywords holding a map of sub-schemas that coverage compares structurally. */
+const SUBSCHEMA_MAP_KEYWORDS = new Set(["properties", "$defs", "definitions"]);
+/** Keywords holding a list of sub-schemas that coverage compares structurally. */
+const SUBSCHEMA_LIST_KEYWORDS = new Set(["allOf", "anyOf", "oneOf"]);
+const splitSchemas = new WeakMap<object, unknown>();
+
+/** `splitTypeUnions` of a parsed (shared, immutable) schema, computed once per parse. */
+function typeUnionsSplit(schema: unknown): unknown {
+	if (typeof schema !== "object" || schema === null) return schema;
+	let split = splitSchemas.get(schema);
+	if (split === undefined) {
+		split = splitTypeUnions(schema);
+		splitSchemas.set(schema, split);
+	}
+	return split;
+}
+
+/**
+ * Mirrors `split_type_unions`: `{type: [A, B], ...rest}` becomes
+ * `{anyOf: [{type: A, ...rest}, {type: B, ...rest}]}`, annotations (`$defs` among them) staying
+ * outside. A type list is a union, but coverage only splits explicit `anyOf` outputs, so serde's
+ * `Option<Vec<T>>` was never covered by the `anyOf` the same field projects to.
+ */
+function splitTypeUnions(schema: unknown): unknown {
+	if (!isSchema(schema)) return schema;
+	const entries = Object.entries(schema).map(
+		([key, value]): [string, unknown] => [key, splitSubschemas(key, value)],
+	);
+	const kinds = Object.hasOwn(schema, "type") ? schema.type : undefined;
+	if (!Array.isArray(kinds) || kinds.length < 2)
+		return Object.fromEntries(entries);
+	const annotations = entries.filter(([key]) => ANNOTATIONS.has(key));
+	const rest = entries.filter(
+		([key]) => key !== "type" && !ANNOTATIONS.has(key),
+	);
+	return Object.fromEntries([
+		...annotations,
+		[
+			"anyOf",
+			kinds.map((kind) => Object.fromEntries([...rest, ["type", kind]])),
+		],
+	]);
+}
+
+/**
+ * Only structurally compared sub-schemas are rewritten; both roots are, so keywords compared
+ * verbatim (`prefixItems`, array-form `items`, `not`, …) still compare like with like.
+ */
+function splitSubschemas(key: string, value: unknown): unknown {
+	if (SUBSCHEMA_KEYWORDS.has(key) && isSchema(value))
+		return splitTypeUnions(value);
+	if (SUBSCHEMA_MAP_KEYWORDS.has(key) && isSchema(value))
+		return Object.fromEntries(
+			Object.entries(value).map(([name, member]) => [
+				name,
+				splitTypeUnions(member),
+			]),
+		);
+	if (SUBSCHEMA_LIST_KEYWORDS.has(key) && Array.isArray(value))
+		return value.map(splitTypeUnions);
+	return value;
 }
 
 class Coverage {

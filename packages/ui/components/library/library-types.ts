@@ -1,3 +1,4 @@
+import { asArray, isRecord } from "../../lib/response-shape";
 import type { IApp } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import type { ISystemTime } from "../../lib/schema/flow/event";
@@ -64,6 +65,15 @@ export function compareItems(
 /** Pairs an app record with its metadata into the shape the sorters expect. */
 export function toLibraryItem(app: IApp, metadata: IMetadata): LibraryItem {
 	return { ...metadata, id: app.id, app };
+}
+
+/** A remote `[app, metadata]` list without the entries that are not such a pair. */
+export function appPairs<T extends readonly [IApp, IMetadata | undefined]>(
+	value: readonly T[] | null | undefined,
+): T[] {
+	return asArray(value).filter(
+		(pair) => Array.isArray(pair) && isRecord(pair[0]),
+	);
 }
 
 /**

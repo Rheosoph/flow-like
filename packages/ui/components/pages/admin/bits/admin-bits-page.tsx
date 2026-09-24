@@ -12,6 +12,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useInvoke } from "../../../../hooks/use-invoke";
+import { asArray } from "../../../../lib/response-shape";
 import { type IBit, IBitTypes } from "../../../../lib/schema/bit/bit";
 import { useBackend } from "../../../../state/backend-state";
 import { BitEditorDialog } from "../../../bits/bit-editor-dialog";
@@ -81,7 +82,7 @@ export function AdminBitsPage() {
 		},
 		staleTime: 0,
 	});
-	const visible = (bits.data ?? []).filter(
+	const visible = asArray(bits.data).filter(
 		(bit) =>
 			type !== "hosted" ||
 			/^(hosted(?::|$)|premium$|internal$)/i.test(
@@ -271,7 +272,7 @@ export function AdminBitsPage() {
 							size="icon"
 							variant="outline"
 							aria-label="Next page"
-							disabled={(bits.data?.length ?? 0) < limit || bits.isFetching}
+							disabled={asArray(bits.data).length < limit || bits.isFetching}
 							onClick={() => setPage((value) => value + 1)}
 						>
 							<ChevronRight className="size-4" />

@@ -44,6 +44,9 @@ use zip::{
     write::{ExtendedFileOptions, FileOptions},
 };
 
+#[cfg(feature = "flow-runtime")]
+pub mod device;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PathKind {
     Prio,

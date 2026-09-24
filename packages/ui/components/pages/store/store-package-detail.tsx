@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { isRecord } from "../../../lib/response-shape";
 import type { IProfile } from "../../../lib/schema/profile/profile";
 import type { RegistryEntry } from "../../../lib/schema/wasm";
 import { PackageStatus } from "../../../lib/schema/wasm";
@@ -68,14 +69,22 @@ export function StorePackageDetail({
 		retry: false,
 	});
 
+	// The detail view dereferences `manifest` and `versions` unguarded.
+	const remotePkg =
+		isRecord(packageData.data) &&
+		isRecord(packageData.data.manifest) &&
+		Array.isArray(packageData.data.versions)
+			? packageData.data
+			: undefined;
+
 	const localPackageData = useQuery({
 		queryKey: ["local-package-fallback", packageId],
 		queryFn: () => backend.registryState.getPackage(packageId),
-		enabled: !!packageId && !packageData.isLoading && !packageData.data,
+		enabled: !!packageId && !packageData.isLoading && !remotePkg,
 	});
 
 	const resolvedPkg = useMemo(() => {
-		if (packageData.data) return packageData.data;
+		if (remotePkg) return remotePkg;
 		if (!localPackageData.data) return undefined;
 		const local = localPackageData.data;
 		return {
@@ -100,7 +109,7 @@ export function StorePackageDetail({
 			price: 0,
 			visibility: "local",
 		} as RegistryEntry;
-	}, [packageData.data, localPackageData.data]);
+	}, [remotePkg, localPackageData.data]);
 
 	// A deep link can mount this before the settings profile resolves; both remote queries are
 	// disabled until then, so without this the view would claim the package does not exist.
@@ -108,7 +117,7 @@ export function StorePackageDetail({
 		profile.isLoading ||
 		packageData.isLoading ||
 		(!packageData.data && !packageData.isError && packageData.isFetching) ||
-		(!packageData.data && localPackageData.isLoading);
+		(!remotePkg && localPackageData.isLoading);
 
 	const loadError = packageData.error ?? profile.error ?? null;
 

@@ -17,6 +17,7 @@ export * from "./sinks";
 export * from "./sales";
 export * from "./endpoints/endpoints-page";
 export * from "./developer-mode-card";
+export * from "./devices/devices-page";
 export * from "./forking/allow-forking-card";
 export * from "./forking/allow-forking-switcher";
 export * from "./forking/fork-permission-warning";

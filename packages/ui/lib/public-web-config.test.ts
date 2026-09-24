@@ -67,6 +67,7 @@ describe("public web runtime configuration", () => {
 				{
 					encoding: "utf8",
 					env: {
+						NODE_ENV: process.env.NODE_ENV,
 						PATH: process.env.PATH,
 						FLOW_LIKE_WEB_API_URL: apiUrl,
 						DATABASE_URL: "private-test-marker",

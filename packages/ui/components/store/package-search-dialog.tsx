@@ -7,6 +7,7 @@ import { Download, HardDrive, Loader2, Package, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useSearch } from "../../hooks/use-search-index";
+import { asArray } from "../../lib/response-shape";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -92,8 +93,8 @@ export function PackageSearchDialog({
 			);
 		},
 		getNextPageParam: (last) => {
-			const next = last.offset + last.packages.length;
-			return next < last.totalCount ? next : undefined;
+			const next = (last?.offset ?? 0) + asArray(last?.packages).length;
+			return next < (last?.totalCount ?? 0) ? next : undefined;
 		},
 		enabled: !!profile.data && open && !isOffline.data,
 	});
@@ -105,7 +106,8 @@ export function PackageSearchDialog({
 	});
 
 	const remotePackages = useMemo<PackageSummary[]>(
-		() => remote.data?.pages.flatMap((p) => p.packages) ?? [],
+		() =>
+			asArray(remote.data?.pages).flatMap((page) => asArray(page?.packages)),
 		[remote.data],
 	);
 

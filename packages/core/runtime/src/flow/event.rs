@@ -376,6 +376,41 @@ fn load_error_is_not_found(error: &flow_like_types::Error) -> bool {
     })
 }
 
+async fn load_pinned_with<R, F>(
+    id: &str,
+    version: (u32, u32, u32),
+    mut read: R,
+) -> flow_like_types::Result<Event>
+where
+    R: FnMut(Option<(u32, u32, u32)>) -> F,
+    F: std::future::Future<Output = flow_like_types::Result<Event>>,
+{
+    if [version.0, version.1, version.2].contains(&u32::MAX) {
+        flow_like_types::bail!("Pinned event version must be concrete");
+    }
+    let event = match read(Some(version)).await {
+        Ok(event) => event,
+        Err(error) if load_error_is_not_found(&error) => {
+            let current = read(None).await?;
+            if current.id != id {
+                flow_like_types::bail!("Current event identity differs from its pin");
+            }
+            if current.event_version == version {
+                current
+            } else {
+                // Upsert archives the old head before replacing it. The exact archive
+                // may have appeared between the first read and this current-head read.
+                read(Some(version)).await?
+            }
+        }
+        Err(error) => return Err(error),
+    };
+    if event.id != id || event.event_version != version {
+        flow_like_types::bail!("Event identity or version differs from its pin");
+    }
+    Ok(event)
+}
+
 /// Filter out secret variable values from an event.
 /// Secret variables will have their `default_value` set to `None`.
 /// This should be used when returning events to clients, as secrets
@@ -1577,6 +1612,16 @@ impl Event {
         Ok(event)
     }
 
+    /// Load one exact event version, including a current head that has not been archived yet.
+    /// Unreadable archives fail rather than selecting another copy of the event.
+    pub async fn load_pinned(
+        id: &str,
+        app: &App,
+        version: (u32, u32, u32),
+    ) -> flow_like_types::Result<Event> {
+        load_pinned_with(id, version, |selected| Self::load(id, app, selected)).await
+    }
+
     pub async fn save(
         &self,
         app: &App,
@@ -1755,6 +1800,127 @@ mod tests {
         }
         .into();
         assert!(!load_error_is_not_found(&other_store_error));
+    }
+
+    #[tokio::test]
+    async fn pinned_event_load_accepts_current_only_and_preserves_archive_precedence() {
+        let app = test_app().await;
+        let mut event = storage_event("evt-pinned");
+        event.event_version = (1, 0, 0);
+        event.save(&app, None).await.unwrap();
+        assert!(
+            Event::load(&event.id, &app, Some(event.event_version))
+                .await
+                .is_err()
+        );
+        let current = Event::load_pinned(&event.id, &app, event.event_version)
+            .await
+            .unwrap();
+        assert_eq!(current.name, event.name);
+        event.save(&app, Some(event.event_version)).await.unwrap();
+        let mut newer = event.clone();
+        newer.event_version = (1, 0, 1);
+        newer.name = "Newer head".into();
+        newer.save(&app, None).await.unwrap();
+        let pinned = Event::load_pinned(&event.id, &app, event.event_version)
+            .await
+            .unwrap();
+        assert_eq!(pinned.name, event.name);
+        assert_eq!(pinned.event_version, (1, 0, 0));
+        assert!(
+            Event::load_pinned(&event.id, &app, (9, 0, 0))
+                .await
+                .is_err()
+        );
+        assert!(
+            Event::load_pinned(&event.id, &app, (u32::MAX, 0, 0))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn pinned_event_load_rejects_corrupt_and_misbound_archives() {
+        let app = test_app().await;
+        let mut live = storage_event("evt-corrupt-pin");
+        live.event_version = (2, 0, 0);
+        live.save(&app, None).await.unwrap();
+        let store = FlowLikeState::project_meta_store(app.app_state.as_ref().unwrap())
+            .await
+            .unwrap()
+            .as_generic();
+        let archive = Event::version_path(&app.id, &live.id, live.event_version);
+        store
+            .put(&archive, PutPayload::from_static(b"not lz4 protobuf"))
+            .await
+            .unwrap();
+        assert!(
+            Event::load_pinned(&live.id, &app, live.event_version)
+                .await
+                .is_err()
+        );
+        let mut wrong = live.clone();
+        wrong.id = "another-event".into();
+        crate::utils::compression::compress_to_file(
+            store.clone(),
+            archive.clone(),
+            &flow_like_types::ToProto::to_proto(&wrong),
+        )
+        .await
+        .unwrap();
+        assert!(
+            Event::load_pinned(&live.id, &app, live.event_version)
+                .await
+                .is_err()
+        );
+        wrong.id = live.id.clone();
+        wrong.event_version = (3, 0, 0);
+        crate::utils::compression::compress_to_file(
+            store,
+            archive,
+            &flow_like_types::ToProto::to_proto(&wrong),
+        )
+        .await
+        .unwrap();
+        assert!(
+            Event::load_pinned(&live.id, &app, live.event_version)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn pinned_event_load_retries_only_exact_archive_after_head_advances() {
+        let old = storage_event("evt-race");
+        let mut newer = old.clone();
+        newer.event_version = (0, 0, 1);
+        let absent = object_store::Error::NotFound {
+            path: "archive".into(),
+            source: "missing".into(),
+        };
+        let mut reads =
+            std::collections::VecDeque::from([Err(absent.into()), Ok(newer), Ok(old.clone())]);
+        let mut requested = Vec::new();
+        let loaded = super::load_pinned_with(&old.id, old.event_version, |version| {
+            requested.push(version);
+            std::future::ready(reads.pop_front().unwrap())
+        })
+        .await
+        .unwrap();
+        assert_eq!(loaded.event_version, old.event_version);
+        assert_eq!(requested, vec![Some((0, 0, 0)), None, Some((0, 0, 0))]);
+        let mut calls = 0;
+        let failure = super::load_pinned_with(&old.id, old.event_version, |_| {
+            calls += 1;
+            std::future::ready(Err(object_store::Error::Generic {
+                store: "fixture",
+                source: "temporarily unavailable".into(),
+            }
+            .into()))
+        })
+        .await;
+        assert!(failure.is_err());
+        assert_eq!(calls, 1);
     }
 
     #[tokio::test]

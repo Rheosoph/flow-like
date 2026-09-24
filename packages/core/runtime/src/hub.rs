@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 mod payments;
+mod standalone;
+pub use standalone::StandaloneConfig;
 pub use payments::{
     PaymentFeeBasis, PaymentLegalText, PaymentTaxMode, PaymentsConfig, valid_product_tax_code,
 };
@@ -265,6 +267,8 @@ pub struct Hub {
     /// Realtime transport configuration. Signaling remains configured separately.
     #[serde(default)]
     pub realtime: RealtimeConfig,
+    #[serde(default)]
+    pub standalone: StandaloneConfig,
     pub cdn: Option<String>,
     pub app: Option<String>,
     pub web: Option<String>,

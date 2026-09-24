@@ -612,6 +612,47 @@ mod tests {
     }
 
     #[flow_like_types::tokio::test]
+    async fn auto_reroute_survives_paste_update_and_undo() {
+        use super::super::update_node::UpdateNodeCommand;
+
+        let mut board = Board::new_detached(Some("board".into()), Path::default());
+        let mut source = Node::new("reroute", "Reroute", "", "Control");
+        source.auto_reroute = Some(true);
+        let original_id = source.id.clone();
+        let mut paste =
+            CopyPasteCommand::new(vec![source], Vec::new(), Vec::new(), (20.0, 20.0, 0.0));
+        paste
+            .execute(&mut board, state())
+            .await
+            .expect("paste reroute");
+        let pasted_id = paste.new_nodes[0].id.clone();
+        assert_ne!(pasted_id, original_id);
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, Some(true));
+
+        let mut changed = board.nodes[&pasted_id].clone();
+        changed.auto_reroute = None;
+        let mut update = UpdateNodeCommand::new(changed);
+        update
+            .execute(&mut board, state())
+            .await
+            .expect("keep reroute manually");
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, None);
+        update
+            .undo(&mut board, state())
+            .await
+            .expect("undo node update");
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, Some(true));
+
+        paste.undo(&mut board, state()).await.expect("undo paste");
+        assert!(!board.nodes.contains_key(&pasted_id));
+        paste
+            .execute(&mut board, state())
+            .await
+            .expect("redo paste");
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, Some(true));
+    }
+
+    #[flow_like_types::tokio::test]
     async fn paste_reuses_enclosing_function_local_on_execute_and_redo() {
         let mut board = Board::new_detached(Some("board".into()), Path::default());
         let mut function = Layer::new("function".into(), "Function".into(), LayerType::Function);

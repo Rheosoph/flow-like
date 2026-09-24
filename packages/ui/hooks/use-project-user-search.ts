@@ -13,6 +13,7 @@ import {
 	createProjectUserSearch,
 	mergeProjectUserResults,
 } from "../lib/project-user-search";
+import { asArray } from "../lib/response-shape";
 import { useBackend } from "../state/backend-state";
 import type {
 	IProjectContactsPage,
@@ -53,7 +54,7 @@ export function useProjectUserSearch(
 		queryKey: contactsKey,
 		queryFn: ({ pageParam }) => source.getProjectContacts(appId, pageParam),
 		initialPageParam: undefined as string | undefined,
-		getNextPageParam: (page) => page.next_cursor ?? undefined,
+		getNextPageParam: (page) => page?.next_cursor ?? undefined,
 		enabled: open,
 		staleTime: CACHE_TIME,
 		gcTime: CACHE_TIME,
@@ -70,7 +71,7 @@ export function useProjectUserSearch(
 	const index = useMemo(
 		() =>
 			createProjectUserSearch(
-				contacts.data?.pages.flatMap((p) => p.users) ?? [],
+				asArray(contacts.data?.pages).flatMap((p) => asArray(p?.users)),
 			),
 		[contacts.data],
 	);
@@ -90,7 +91,8 @@ export function useProjectUserSearch(
 	const remoteResults =
 		canSearchDirectory && !isDebouncing ? directory.data : undefined;
 	const results = useMemo(
-		() => mergeProjectUserResults(localResults, remoteResults ?? [], trimmed),
+		() =>
+			mergeProjectUserResults(localResults, asArray(remoteResults), trimmed),
 		[localResults, remoteResults, trimmed],
 	);
 
@@ -118,15 +120,17 @@ export function useProjectUserSearch(
 				(data) =>
 					data && {
 						...data,
-						pages: data.pages.map((page) => ({
+						pages: asArray(data.pages).map((page) => ({
 							...page,
-							users: page.users.filter((user) => user.id !== invitedId),
+							users: asArray(page?.users).filter(
+								(user) => user.id !== invitedId,
+							),
 						})),
 					},
 			);
 			queryClient.setQueriesData<IUserLookup[]>(
 				{ queryKey: directoryKey },
-				(data) => data?.filter((user) => user.id !== invitedId),
+				(data) => data && asArray(data).filter((user) => user.id !== invitedId),
 			);
 			return Promise.all([
 				queryClient.invalidateQueries({ queryKey: contactsKey }),

@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import type {
 	InviteUserRequest,
 	PackageUser,
@@ -36,7 +37,7 @@ export function PackageUsersContainer({
 	const queryClient = useQueryClient();
 	const queryKey = ["package-users", packageId];
 
-	const { data: users = [], isLoading } = useQuery<PackageUser[]>({
+	const { data: userData, isLoading } = useQuery<PackageUser[]>({
 		queryKey,
 		queryFn: () =>
 			fetcher<PackageUser[]>(
@@ -47,6 +48,7 @@ export function PackageUsersContainer({
 			),
 		enabled: !!profile.data,
 	});
+	const users = asArray(userData);
 
 	const invite = useMutation({
 		mutationFn: (request: InviteUserRequest) =>

@@ -31,6 +31,7 @@ import {
 	nowSystemTime,
 	useSetQueryParams,
 } from "../../lib";
+import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import type { IDate } from "../../types";
@@ -106,22 +107,23 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 	);
 
 	// widgets are [appId, widgetId, metadata] tuples
-	const matched = useSearch(widgets.data, searchTerm, {
+	const entries = useMemo(() => asArray(widgets.data), [widgets.data]);
+	const matched = useSearch(entries, searchTerm, {
 		fields: ["2.name", "2.description", "2.long_description", "2.tags"],
 		boost: { "2.name": 3, "2.tags": 1.5 },
 	}) as WidgetEntry[];
 
 	const tags = useMemo(() => {
 		const counts = new Map<string, number>();
-		for (const [, , meta] of widgets.data ?? []) {
-			for (const tag of meta?.tags ?? []) {
+		for (const [, , meta] of entries) {
+			for (const tag of asArray(meta?.tags)) {
 				counts.set(tag, (counts.get(tag) ?? 0) + 1);
 			}
 		}
 		return Array.from(counts.entries())
 			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 			.slice(0, 8);
-	}, [widgets.data]);
+	}, [entries]);
 
 	const visible = useMemo(() => {
 		const filtered = activeTag
@@ -196,7 +198,7 @@ export function WidgetList({ appId }: Readonly<{ appId: string }>) {
 					variant="secondary"
 					className="font-mono text-[11px] tabular-nums"
 				>
-					{widgets.data?.length ?? 0}
+					{entries.length}
 				</Badge>
 
 				<div className="relative min-w-[200px] flex-1 max-w-sm">

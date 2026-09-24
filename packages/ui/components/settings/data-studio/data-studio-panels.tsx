@@ -37,6 +37,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
+import { asArray } from "../../../lib/response-shape";
 import type { IBoardSummary } from "../../../lib/schema/flow/board-summary";
 import { IVersionType } from "../../../lib/schema/flow/version-type";
 import { useBackend } from "../../../state/backend-state";
@@ -2507,7 +2508,9 @@ export function OntologyActionsPanel({
 	const board = selectedBoard.data;
 	const startNodes = useMemo(
 		() =>
-			board ? Object.values(board.nodes).filter((node) => node.start) : [],
+			board
+				? Object.values(board.nodes ?? {}).filter((node) => node.start)
+				: [],
 		[board],
 	);
 	const startNode = startNodes.find((node) => node.id === startNodeId);
@@ -3404,7 +3407,7 @@ export function OntologySharingPanel({
 				if (remoteLoadGenerationRef.current[connection.id] === generation) {
 					setRemoteOntologies((current) => ({
 						...current,
-						[connection.id]: contracts,
+						[connection.id]: asArray(contracts),
 					}));
 				}
 			} catch (error) {

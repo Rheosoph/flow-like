@@ -438,7 +438,12 @@ impl LanceGraphStore {
             .await
             .map_err(|error| anyhow!("Failed to open table '{}': {}", table_name, error))?;
 
-        let batch = crate::arrow_utils::value_to_record_batch(rows)?;
+        let table_schema = table
+            .schema()
+            .await
+            .map_err(|error| anyhow!("Failed to read schema of '{}': {}", table_name, error))?;
+        let batch =
+            crate::arrow_utils::value_to_record_batch_for_schema(rows, &table_schema, table_name)?;
         let schema = batch.schema();
         let reader: Box<dyn crate::arrow::record_batch::RecordBatchReader + Send> = Box::new(
             crate::arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)], schema),

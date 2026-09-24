@@ -69,7 +69,10 @@ export function useAppPermissions(
 	);
 
 	return useMemo(() => {
-		const data = ownRole.data;
+		// A role without integer bits (older hub, restored cache) is not a known role.
+		const data = Number.isInteger(ownRole.data?.permissions)
+			? ownRole.data
+			: undefined;
 		const known = !!data;
 		const permissions = data
 			? new RolePermissions(BigInt(data.permissions))

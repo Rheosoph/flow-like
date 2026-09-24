@@ -8,6 +8,7 @@ import { addAppToProfile } from "../../lib/add-app-to-profile";
 import { usePaymentDistribution, usePayments } from "../payments/use-payments";
 import { apiErrorMessage } from "../../lib/api-error";
 import { openExternalUrl } from "../../lib/open-external";
+import { asArray } from "../../lib/response-shape";
 import type { IApp } from "../../lib/schema/app/app";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
@@ -75,12 +76,12 @@ export function useStoreData(
 	const useAppHref = useMemo(() => {
 		if (!id || !isMember) return null;
 
-		const activeEvents = (events.data ?? []).filter((event) => event.active);
+		const activeEvents = asArray(events.data).filter((event) => event.active);
 		const activeEventsById = new Map(
 			activeEvents.map((event) => [event.id, event] as const),
 		);
 
-		const hasUsableRoute = (routes.data ?? []).some((route) => {
+		const hasUsableRoute = asArray(routes.data).some((route) => {
 			const routeEvent = activeEventsById.get(route.eventId);
 			if (!routeEvent) return false;
 			return (

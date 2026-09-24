@@ -21,7 +21,10 @@ use anyhow::{Result, anyhow};
 #[cfg(feature = "database-runtime")]
 use datafusion::arrow::datatypes::DataType;
 #[cfg(feature = "database-runtime")]
-use datafusion::common::{ParamValues, ScalarValue};
+use datafusion::common::{
+    ParamValues, ScalarValue,
+    metadata::{FieldMetadata, ScalarAndMetadata},
+};
 use serde_json::Value;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -161,13 +164,13 @@ pub fn resolve_declared(
 /// DataFusion named parameter values for an already-resolved parameter list.
 #[cfg(feature = "database-runtime")]
 pub fn to_param_values(params: &[(String, Value)]) -> Result<ParamValues> {
-    let mut values: HashMap<String, ScalarValue> = HashMap::with_capacity(params.len());
+    let mut values: HashMap<String, ScalarAndMetadata> = HashMap::with_capacity(params.len());
     for (name, value) in params {
-        let scalar = json_to_scalar(value)
+        let scalar = json_to_param(value)
             .map_err(|error| anyhow!("Parameter '{}' cannot be used in SQL: {}", name, error))?;
         values.insert(name.clone(), scalar);
     }
-    Ok(ParamValues::from(values))
+    Ok(ParamValues::Map(values))
 }
 
 /// Coerces a JSON parameter map into DataFusion named parameter values. Types are
@@ -181,13 +184,13 @@ pub fn to_param_values(params: &[(String, Value)]) -> Result<ParamValues> {
 pub fn bind_params(params: &Value) -> Result<ParamValues> {
     let map = as_param_object(params)?;
 
-    let mut values: HashMap<String, ScalarValue> = HashMap::new();
+    let mut values: HashMap<String, ScalarAndMetadata> = HashMap::new();
     for (name, value) in map.into_iter().flatten() {
         let scalar =
-            json_to_scalar(value).map_err(|error| anyhow!("Parameter '{}': {}", name, error))?;
+            json_to_param(value).map_err(|error| anyhow!("Parameter '{}': {}", name, error))?;
         values.insert(name.clone(), scalar);
     }
-    Ok(ParamValues::from(values))
+    Ok(ParamValues::Map(values))
 }
 
 /// A parameter bag is a JSON object; null stands for "no parameters" so an unset pin or
@@ -200,6 +203,23 @@ fn as_param_object(params: &Value) -> Result<Option<&serde_json::Map<String, Val
     }
 }
 
+/// A GeoJSON geometry, as a Geometry pin supplies it, binds as WKB carrying the same
+/// WGS 84 GeoArrow metadata as a geometry column, so `ST_Intersects(geometry, $area)`
+/// needs no conversion. Every other value binds as its plain scalar.
+#[cfg(feature = "database-runtime")]
+fn json_to_param(value: &Value) -> Result<ScalarAndMetadata> {
+    if !crate::geometry::names_geometry_kind(value) {
+        return Ok(json_to_scalar(value)?.into());
+    }
+    let wkb = flow_like_geometry::to_wkb(value)
+        .map_err(|error| anyhow!("not a valid geometry: {error}"))?;
+    let field = crate::geometry::geometry_field("", true);
+    Ok(ScalarAndMetadata::new(
+        ScalarValue::Binary(Some(wkb)),
+        Some(FieldMetadata::from(field.metadata())),
+    ))
+}
+
 #[cfg(feature = "database-runtime")]
 fn json_to_scalar(value: &Value) -> Result<ScalarValue> {
     Ok(match value {
@@ -210,7 +230,7 @@ fn json_to_scalar(value: &Value) -> Result<ScalarValue> {
         Value::Array(items) => json_array_to_scalar(items)?,
         Value::Object(_) => {
             return Err(anyhow!(
-                "object parameters are not supported; pass the individual fields as separate parameters"
+                "object parameters other than GeoJSON geometries are not supported; pass the individual fields as separate parameters"
             ));
         }
     })
@@ -526,6 +546,40 @@ mod tests {
             ParamValues::Map(map) if map.len() == 1
         ));
         assert!(bind_params(&json!([1, 2])).is_err());
+    }
+
+    #[cfg(feature = "database-runtime")]
+    #[tokio::test]
+    async fn geometry_parameters_bind_as_wgs84_geometries() -> Result<()> {
+        use datafusion::prelude::SessionContext;
+
+        let ctx = SessionContext::new();
+        crate::geometry::register_geo_functions(&ctx);
+        let params = json!({
+            "area": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]},
+            "inside": {"type": "Point", "coordinates": [2.0, 2.0]},
+        });
+        for sql in [
+            "SELECT ST_Contains($area, $inside) AS v",
+            "SELECT ST_Within($inside, flow_geomfromtext($area)) AS v",
+            "SELECT ST_Intersects($inside, flow_geomfromtext('POINT(2 2)')) AS v",
+        ] {
+            let batches = ctx
+                .sql(sql)
+                .await?
+                .with_param_values(bind_params(&params)?)?
+                .collect()
+                .await?;
+            let value =
+                datafusion::arrow::util::display::array_value_to_string(batches[0].column(0), 0)?;
+            assert_eq!(value, "true", "{sql}");
+        }
+
+        let error = bind_params(&json!({"area": {"type": "Point", "coordinates": [500.0, 0.0]}}))
+            .expect_err("outside WGS 84")
+            .to_string();
+        assert!(error.contains("not a valid geometry"), "{error}");
+        Ok(())
     }
 
     #[cfg(feature = "database-runtime")]

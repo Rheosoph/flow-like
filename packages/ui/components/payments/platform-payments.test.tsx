@@ -1,10 +1,29 @@
-import { beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, test } from "bun:test";
+import { Window } from "happy-dom";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 let responses: Record<string, unknown>;
 
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll.
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	payments: { ...(await import("./use-payments")) },
+	nextNavigation: { ...(await import("next/navigation")) },
+	nextLink: { ...(await import("next/link")) },
+	appPermissions: { ...(await import("../../hooks/use-app-permissions")) },
+};
+afterAll(() => {
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("./use-payments", () => actual.payments);
+	mock.module("next/navigation", () => actual.nextNavigation);
+	mock.module("next/link", () => actual.nextLink);
+	mock.module("../../hooks/use-app-permissions", () => actual.appPermissions);
+});
+
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({
 		t: (
 			key: string,
@@ -23,6 +42,7 @@ mock.module("@flow-like/locales", () => ({
 	}),
 }));
 mock.module("./use-payments", () => ({
+	...actual.payments,
 	usePayments: () => ({
 		identity: ["test", "owner"],
 		config: { onboarding_enabled: true, marketplace_enabled: true },
@@ -31,17 +51,26 @@ mock.module("./use-payments", () => ({
 	usePaymentDistribution: () => true,
 }));
 mock.module("next/navigation", () => ({
+	...actual.nextNavigation,
 	useSearchParams: () => new URLSearchParams("id=app"),
 }));
 mock.module("next/link", () => ({
+	...actual.nextLink,
 	default: ({ children, href }: { children: ReactNode; href: string }) => (
 		<a href={href}>{children}</a>
 	),
 }));
 mock.module("../../hooks/use-app-permissions", () => ({
+	...actual.appPermissions,
 	useAppPermissions: () => ({ can: () => true }),
 }));
 
+// Radix picks its layout effect when first imported, so the pages load under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
 const { PayoutsPage } = await import("./payouts-page");
 const { AppPaymentSettingsPanel, SellerTermsCard } = await import(
 	"./app-payment-settings"
@@ -50,6 +79,9 @@ const { EarningsPage } = await import("./earnings-page");
 const { NodePaymentCard } = await import("./node-payment");
 const { WithdrawalConfirmation, PurchaseLookupResult, PurchasesPage } =
 	await import("./purchases-page");
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
 
 beforeEach(() => {
 	responses = {};

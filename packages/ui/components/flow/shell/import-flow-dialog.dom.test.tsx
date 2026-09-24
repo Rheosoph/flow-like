@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import audit from "@flow-like/locales/locales/en/audit.json";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import type { IGenericCommand } from "../../../lib";
@@ -9,6 +10,39 @@ import { ICommandType } from "../../../lib/schema/flow/board/commands/generic-co
 
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
+
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"window",
+	"document",
+	"navigator",
+	"localStorage",
+	"HTMLElement",
+	"Element",
+	"Node",
+	"MutationObserver",
+	"NodeFilter",
+	"HTMLInputElement",
+	"HTMLTextAreaElement",
+	"HTMLButtonElement",
+	"SVGElement",
+	"Event",
+	"CustomEvent",
+	"FocusEvent",
+	"KeyboardEvent",
+	"MouseEvent",
+	"PointerEvent",
+	"File",
+	"getComputedStyle",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"ResizeObserver",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+const actualLocales = { ...(await import("@flow-like/locales")) };
 
 /**
  * Every DOM global Radix and React reach for. Installed in `beforeAll` rather
@@ -80,6 +114,7 @@ const fakeI18n = {
 	off: () => {},
 };
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({ t: translate, i18n: fakeI18n }),
 	Trans: ({ children }: { children?: unknown }) => children ?? null,
 	i18n: fakeI18n,
@@ -92,7 +127,9 @@ mock.module("@flow-like/locales", () => ({
 	DEFAULT_NAMESPACE: "common",
 	SOURCE_LANGUAGE: "en",
 	LOCALE_CONFIG: {},
-	SOURCE_RESOURCES: {},
+	// audit-sentence.ts reads these at import time. Read from the JSON, since
+	// other files' mocks of this module may already be in place.
+	SOURCE_RESOURCES: { audit },
 	LANGUAGE_STORAGE_KEY: "language",
 	listLanguages: () => [],
 	describeLanguage: () => undefined,
@@ -136,12 +173,19 @@ function render(element: React.ReactElement): HTMLElement {
 	return container;
 }
 
-afterAll(() => {
-	act(() => {
+afterAll(async () => {
+	await act(async () => {
 		for (const root of roots) root.unmount();
 	});
 	useBackendStore.setState({ backend: previousBackend });
+	// Radix's FocusScope dispatches its unmount event on a timer, with this window's globals.
+	await new Promise((resolve) => setTimeout(resolve, 0));
 	mock.restore();
+	mock.module("@flow-like/locales", () => actualLocales);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
 });
 
 const bpmn = readFileSync(

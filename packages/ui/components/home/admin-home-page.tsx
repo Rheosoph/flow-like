@@ -10,6 +10,7 @@ import { useInvoke } from "../../hooks/use-invoke";
 import { ApiResponseError } from "../../lib/api-error";
 import { getApiOrigin } from "../../lib/api-url";
 import { GlobalPermission } from "../../lib/permission/global-permission";
+import { asArray, isRecord } from "../../lib/response-shape";
 import type { IProfile } from "../../lib/schema/profile/profile";
 import { useBackend, useBackendReady } from "../../state/backend-state";
 import { Button } from "../ui/button";
@@ -278,9 +279,10 @@ function AdminHomePageContent() {
 								onChange={(event) => setDefaultId(event.target.value)}
 							>
 								<option value="main">Main backend default</option>
-								{(templates.data ?? [])
+								{asArray(templates.data)
 									.filter(
 										(item): item is IProfile & { id: string } =>
+											isRecord(item) &&
 											typeof item.id === "string" &&
 											item.id.length > 0 &&
 											item.id !== "main",

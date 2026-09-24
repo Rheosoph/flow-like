@@ -78,8 +78,11 @@ export function AppSetupPage() {
 	 * command itself be the authority.
 	 */
 	const canWriteShared = useMemo(() => {
-		if (!ownRole.data) return true;
-		return new RolePermissions(BigInt(ownRole.data.permissions)).hasPermission(
+		const permissions = ownRole.data?.permissions;
+		// A restored cache entry can hold an older, non-role shape.
+		if (typeof permissions !== "number" || !Number.isInteger(permissions))
+			return true;
+		return new RolePermissions(BigInt(permissions)).hasPermission(
 			RolePermissions.WriteBoards,
 		);
 	}, [ownRole.data]);

@@ -1,11 +1,20 @@
-import { expect, mock, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
+import { Window } from "happy-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import type {
 	IFlowPaymentsReport,
 	ISalesOverview,
 } from "../../../state/backend-state/sales-state";
 
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualLocales = { ...(await import("@flow-like/locales")) };
+afterAll(() => {
+	mock.module("@flow-like/locales", () => actualLocales);
+});
+
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({
 		t: (key: string, fallback: string, options?: Record<string, unknown>) =>
 			(fallback ?? key).replace(/\{\{(\w+)\}\}/g, (match, name: string) =>
@@ -15,7 +24,16 @@ mock.module("@flow-like/locales", () => ({
 	}),
 }));
 
+// Radix picks its layout effect when first imported, so the component loads under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
 const { OverviewTab } = await import("./overview-tab");
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
 
 const flows: IFlowPaymentsReport = {
 	totalRevenue: 3000,

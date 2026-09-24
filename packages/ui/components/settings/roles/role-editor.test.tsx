@@ -13,13 +13,39 @@ import {
 
 // Radix's Switch calls element.closest("form") on mount, which happy-dom's selector parser
 // cannot handle. Swap it for a checkbox so these tests assert this component's decisions.
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"document",
+	"HTMLElement",
+	"Node",
+	"navigator",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"getComputedStyle",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+// Radix picks its layout effect when first imported, so the real module loads under a document.
+Object.assign(globalThis, { document: new Window().document });
+const actualSwitch = { ...(await import("../../ui/switch")) };
 mock.module("../../ui/switch", () => ({
+	...actualSwitch,
 	Switch: ({ checked }: { checked?: boolean }) => (
 		<input type="checkbox" readOnly checked={Boolean(checked)} />
 	),
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../ui/switch", () => actualSwitch);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 function roleWith(
 	permissions: RolePermissions,
@@ -53,8 +79,8 @@ async function renderEditor(role: IBackendRole, memberCount?: number) {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 	const { RoleEditor } = await import("./role-editor");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	const root = createRoot(container);
 	await act(async () => {
 		root.render(

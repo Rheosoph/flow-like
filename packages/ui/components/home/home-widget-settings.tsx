@@ -14,6 +14,7 @@ import { type ReactNode, useEffect, useId, useState } from "react";
 import { useAppCategoryLabel } from "../../lib/app-category";
 import { APP_CATEGORY_ORDER } from "../../lib/category-meta";
 import { useBackend } from "../../state/backend-state";
+import { appPairs } from "../library/library-types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -167,13 +168,14 @@ export function HomeAppPicker({
 		enabled: allowExplore,
 		staleTime: 60_000,
 	});
+	const explored = appPairs(results.data);
 	const selectedDetails = useQueries({
 		queries: value.map((id) => ({
 			queryKey: ["home", ...scope, "app-picker-name", id],
 			queryFn: () => backend.appState.getAppMeta(id),
 			enabled:
 				!(library.data ?? []).some(([app]) => app.id === id) &&
-				!(results.data ?? []).some(([app]) => app.id === id),
+				!explored.some(([app]) => app.id === id),
 			staleTime: 60_000,
 		})),
 	});
@@ -183,7 +185,7 @@ export function HomeAppPicker({
 			{ id: app.id, name: metadata?.name ?? app.id, inLibrary: true },
 		]),
 	);
-	for (const [app, metadata] of allowExplore ? (results.data ?? []) : [])
+	for (const [app, metadata] of allowExplore ? explored : [])
 		if (!available.has(app.id))
 			available.set(app.id, {
 				id: app.id,

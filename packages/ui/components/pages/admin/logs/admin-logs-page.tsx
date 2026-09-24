@@ -728,7 +728,7 @@ export function AdminLogsPage({
 											<Skeleton className="h-12 w-full" />
 											<Skeleton className="h-12 w-full" />
 										</div>
-									) : (errorsQuery.data?.errors.length ?? 0) === 0 ? (
+									) : (errorsQuery.data?.errors?.length ?? 0) === 0 ? (
 										<div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
 											{t(
 												"noErrorsMatchTheCurrentFilters",
@@ -737,7 +737,7 @@ export function AdminLogsPage({
 										</div>
 									) : (
 										<ul className="divide-y divide-border">
-											{errorsQuery.data?.errors.map((err) => {
+											{errorsQuery.data?.errors?.map((err) => {
 												const tone = statusCodeTone(err.status_code);
 												return (
 													<li

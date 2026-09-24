@@ -659,7 +659,7 @@ async fn execute_inner(
             claims.callback_url.trim_end_matches('/')
         );
         let client = callback_client();
-        loop {
+        {
             check_execution_deadline(&config)?;
             let start_update = lease_progress_update(&lease, config.strict_lease_duration_ms());
             let acknowledgement = send_progress(
@@ -672,7 +672,7 @@ async fn execute_inner(
             .await?;
 
             match interpret_start_acknowledgement(&acknowledgement)? {
-                StartAcknowledgement::Execute => break,
+                StartAcknowledgement::Execute => (),
                 StartAcknowledgement::Busy { expires_at } => {
                     tracing::info!(
                         run_id = %claims.run_id,

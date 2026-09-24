@@ -1,6 +1,32 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { Window } from "happy-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LanceDBExplorerProps } from "../../ui/lance-viewer";
+
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll. Radix picks its layout effect when first imported,
+// so the real modules load under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	appPermissions: { ...(await import("../../../hooks/use-app-permissions")) },
+	invoke: { ...(await import("../../../hooks/use-invoke")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	lib: { ...(await import("../../../lib")) },
+	lanceViewer: { ...(await import("../../ui/lance-viewer")) },
+	historyControls: {
+		...(await import("../data-studio/database-history-controls")),
+	},
+	permissionGate: { ...(await import("../permission/permission-gate")) },
+	permissionNotice: { ...(await import("../permission/permission-notice")) },
+};
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
 
 const calls: { name: string; args: unknown[] }[] = [];
 let explorer: LanceDBExplorerProps | undefined;
@@ -32,12 +58,15 @@ const dbState = Object.fromEntries(
 	]),
 );
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: (_: string, fallback: string) => fallback }),
 }));
 mock.module("../../../hooks/use-app-permissions", () => ({
+	...actual.appPermissions,
 	useAppPermissions: () => ({ can: () => true, isLoading: false }),
 }));
 mock.module("../../../hooks/use-invoke", () => ({
+	...actual.invoke,
 	useInvoke: (fn: { name: string }, _: unknown, args: unknown[]) => {
 		calls.push({ name: fn.name, args });
 		return {
@@ -65,27 +94,51 @@ mock.module("../../../hooks/use-invoke", () => ({
 	useInvalidateInvoke: () => async () => {},
 }));
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({ dbState }),
 }));
 mock.module("../../../lib", () => ({
+	...actual.lib,
 	cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 mock.module("../../ui/lance-viewer", () => ({
+	...actual.lanceViewer,
 	default: (props: LanceDBExplorerProps) => {
 		explorer = props;
 		return <div>rows</div>;
 	},
+	LanceTableHeading: ({ name }: { name: string }) => <h2>{name}</h2>,
 }));
 mock.module("../data-studio/database-history-controls", () => ({
+	...actual.historyControls,
 	DatabaseHistoryControls: () => <div>history</div>,
 }));
 mock.module("../permission/permission-gate", () => ({
+	...actual.permissionGate,
 	SectionLockedPanel: () => null,
 }));
 mock.module("../permission/permission-notice", () => ({
+	...actual.permissionNotice,
 	PermissionNotice: () => null,
 }));
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module(
+		"../../../hooks/use-app-permissions",
+		() => actual.appPermissions,
+	);
+	mock.module("../../../hooks/use-invoke", () => actual.invoke);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("../../../lib", () => actual.lib);
+	mock.module("../../ui/lance-viewer", () => actual.lanceViewer);
+	mock.module(
+		"../data-studio/database-history-controls",
+		() => actual.historyControls,
+	);
+	mock.module("../permission/permission-gate", () => actual.permissionGate);
+	mock.module("../permission/permission-notice", () => actual.permissionNotice);
+});
 beforeEach(() => {
 	calls.length = 0;
 	explorer = undefined;

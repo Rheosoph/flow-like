@@ -87,6 +87,25 @@ describe("resolveNavigationItems", () => {
 		).toBeDefined();
 	});
 
+	it("folds payment settings into Monetization, which a local-only app lacks", () => {
+		const items = resolve();
+		expect(
+			items.find((item) => item.href === "/library/config/payments"),
+		).toBeUndefined();
+		expect(find(items, "/library/config/sales").label).toBe("Monetization");
+		expect(
+			resolve({ visibility: IAppVisibility.Offline }).find(
+				(item) => item.href === "/library/config/sales",
+			),
+		).toBeUndefined();
+	});
+
+	it("keeps each group contiguous so the sidebar prints every heading once", () => {
+		const groups = buildNavigationItems(t).map((item) => item.group);
+		const runs = groups.filter((group, index) => group !== groups[index - 1]);
+		expect(runs).toEqual([...new Set(groups)]);
+	});
+
 	it("locks nothing while the role is unknown", () => {
 		// `can` degrades open for an offline or local-only app, which has no
 		// permission model at all; locking it would strand its owner.

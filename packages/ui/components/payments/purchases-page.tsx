@@ -357,7 +357,7 @@ export function PurchasesPage() {
 		legacyPurchases?: LegacyPurchasePage;
 	}>("user/purchases", true, poll);
 	const pending =
-		purchases.data?.orders.some(
+		purchases.data?.orders?.some(
 			(order) => pendingOrder(order.status) || order.pendingRefundAmount > 0,
 		) ?? false;
 	useEffect(() => {
@@ -381,7 +381,7 @@ export function PurchasesPage() {
 				{t("refreshStatus", "Refresh status")}
 			</Button>
 			{purchases.isLoading && <output>{t("loading", "Loading…")}</output>}
-			{purchases.data?.orders.length === 0 && (
+			{purchases.data?.orders?.length === 0 && (
 				<p className="rounded-lg border p-6 text-sm text-muted-foreground">
 					{t("noPurchases", "No marketplace purchases yet.")}
 				</p>
@@ -393,7 +393,7 @@ export function PurchasesPage() {
 				{t("manageAccount", "Manage your payment account")}
 			</Link>
 			<div className="space-y-4">
-				{purchases.data?.orders.map((order) => (
+				{purchases.data?.orders?.map((order) => (
 					<PurchaseCard key={order.orderId} order={order} />
 				))}
 			</div>

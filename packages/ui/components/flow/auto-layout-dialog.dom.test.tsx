@@ -5,7 +5,7 @@ import type { LayoutStyle } from "../../lib/flow-auto-layout";
 
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
-Object.assign(globalThis, {
+const globals = {
 	window,
 	document: window.document,
 	navigator: window.navigator,
@@ -22,7 +22,14 @@ Object.assign(globalThis, {
 		setTimeout(() => callback(0), 0),
 	cancelAnimationFrame: (id: number) => clearTimeout(id),
 	IS_REACT_ACT_ENVIRONMENT: true,
-});
+};
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = Object.keys(globals).map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+Object.assign(globalThis, globals);
+const actualLocales = { ...(await import("@flow-like/locales")) };
 
 const translate = (
 	_key: string,
@@ -31,18 +38,25 @@ const translate = (
 ) =>
 	fallback.replace(/\{\{(\w+)\}\}/g, (_, key) => String(variables[key] ?? ""));
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({ t: translate }),
 }));
 
 const { createRoot } = await import("react-dom/client");
 const { AutoLayoutDialog } = await import("./auto-layout-dialog");
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => actualLocales);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 for (const [label, expected] of [
 	["Compact", "compact"],
 	["Routed", "routed"],
-	["Expanded", "expanded"],
 ] as const) {
 	test(`${label} applies only after selection and closes the dialog`, async () => {
 		const selected: LayoutStyle[] = [];
@@ -66,6 +80,7 @@ for (const [label, expected] of [
 			expect(dialog).not.toBeNull();
 			expect(selected).toEqual([]);
 			expect(dialog?.textContent).not.toContain("Balanced");
+			expect(dialog?.textContent).not.toContain("Expanded");
 			expect(dialog?.textContent).toContain("3 selected nodes");
 			const button = Array.from(dialog?.querySelectorAll("button") ?? []).find(
 				(candidate) => candidate.querySelector("span")?.textContent === label,

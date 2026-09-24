@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
+import { ApiResponseError, isTransportFailure } from "../../lib/api-error";
 import { addNodeCommand } from "../../lib/command/generic-command";
 import { parseDateValue } from "../../lib/date";
 import { useBackend } from "../../state/backend-state";
@@ -38,6 +39,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
 import { WidgetBuilder } from "./WidgetBuilder";
+import { PageNoCacheSetting } from "./page-no-cache-setting";
 import {
 	type CreateWorkflowEventRequest,
 	WORKFLOW_EVENT_NODE_NAMES,
@@ -283,7 +285,16 @@ export function PageBuilderSurface({
 				lastSavedWidgetRefsRef.current = JSON.stringify(
 					loadedPage.widgetRefs ?? {},
 				);
-			} catch {
+			} catch (error) {
+				// An unreachable server says nothing about whether the page exists, and a
+				// blank stand-in would autosave over the real one on the first edit.
+				if (
+					isTransportFailure(error) ||
+					(error instanceof ApiResponseError && error.status >= 500)
+				) {
+					console.error("Failed to load page", error);
+					return;
+				}
 				const newPage: IPage = {
 					id: pageId,
 					name: t("newPage", "New Page"),
@@ -813,6 +824,12 @@ function PageSettingsPanel({
 							"Executes when the page first loads",
 						)}
 					</p>
+					{page.onLoadEventId && (
+						<PageNoCacheSetting
+							noCache={page.noCache === true}
+							onChange={(noCache) => onUpdatePage("noCache", noCache)}
+						/>
+					)}
 				</div>
 
 				<div className="space-y-2">

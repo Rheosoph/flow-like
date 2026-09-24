@@ -280,6 +280,9 @@ pub struct SyncNode {
     /// Editor latch state; per instance, so it always ships.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pins_collapsed: Option<bool>,
+    /// Generated reroutes remain identifiable after catalog hydration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_reroute: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<u64>,
     /// `fn_refs.fn_refs` is per-instance wiring, so the whole struct always ships.
@@ -343,6 +346,7 @@ impl SyncNode {
             start: node.start,
             error: node.error.clone(),
             pins_collapsed: node.pins_collapsed,
+            auto_reroute: node.auto_reroute,
             hash: node.hash,
             fn_refs: node.fn_refs.clone(),
             wasm: node.wasm.clone(),
@@ -1063,6 +1067,36 @@ mod tests {
             patch: true,
             ..BoardSyncRequest::from_manifest(manifest, false)
         }
+    }
+
+    #[test]
+    fn auto_reroute_changes_sync_revision_and_survives_hydration() {
+        let catalog = catalog_node();
+        let node = placed(&catalog, None);
+        let id = node.id.clone();
+        let mut board = board_with(vec![node]);
+        let before =
+            BoardSyncSnapshot::from_board(&board, &[catalog.clone()]).expect("initial snapshot");
+
+        board.nodes.get_mut(&id).unwrap().auto_reroute = Some(true);
+        let after = BoardSyncSnapshot::from_board_incremental(&board, &[catalog], Some(&before))
+            .expect("generated reroute snapshot");
+        assert_ne!(
+            before.manifest.segments[ROOT_SEGMENT],
+            after.manifest.segments[ROOT_SEGMENT]
+        );
+        let response = after.diff(
+            &BoardSyncRequest::from_manifest(&before.manifest, true),
+            &no_segment_bases,
+        );
+        let wire = &response.segments[ROOT_SEGMENT].nodes[&id];
+        assert!(wire.hydrate);
+        assert_eq!(wire.auto_reroute, Some(true));
+
+        let restored: SyncNode =
+            serde_json::from_slice(&serde_json::to_vec(wire).expect("serialize sync node"))
+                .expect("restore sync node");
+        assert_eq!(restored.auto_reroute, Some(true));
     }
 
     #[test]

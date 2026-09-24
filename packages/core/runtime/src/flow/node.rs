@@ -211,6 +211,9 @@ pub struct Node {
     /// Presentation only; execution never reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pins_collapsed: Option<bool>,
+    /// The editor generated this reroute and may replace it during automatic layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_reroute: Option<bool>,
 }
 
 impl Node {
@@ -243,6 +246,7 @@ impl Node {
             alias: None,
             receiver: None,
             pins_collapsed: None,
+            auto_reroute: None,
         }
     }
 
@@ -843,6 +847,11 @@ impl Node {
             hasher.append(&[*pins_collapsed as u8]);
         }
 
+        if let Some(auto_reroute) = &self.auto_reroute {
+            hasher.append(b"auto_reroute");
+            hasher.append(&[*auto_reroute as u8]);
+        }
+
         self.hash = Some(hasher.finalize64());
     }
 
@@ -938,6 +947,7 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             | "string_render_template"
             // Mode-driven: pins swap with a dropdown.
             | "a2ui_push_csv_to_chart"
+            | "onnx_laya"
             // Case-driven: one exec pin per case, from a literal or a wired enum.
             | "control_switch"
             // Mirror-driven: pins copied from a target function layer.
@@ -1285,6 +1295,24 @@ mod tests {
         assert_eq!(explicit.namespace.as_deref(), Some("text"));
         assert_eq!(explicit.alias.as_deref(), Some("strip"));
         assert_eq!(explicit.receiver.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn auto_reroute_changes_node_hash_without_changing_semantic_hash() {
+        let mut node = super::Node::new("reroute", "Reroute", "", "Control");
+        let semantic = node.semantic_hash();
+        node.hash();
+        let manual = node.hash;
+
+        node.auto_reroute = Some(true);
+        node.hash();
+        let generated = node.hash;
+        assert_ne!(manual, generated);
+        assert_eq!(semantic, node.semantic_hash());
+
+        node.auto_reroute = Some(false);
+        node.hash();
+        assert_ne!(generated, node.hash);
     }
 
     #[test]

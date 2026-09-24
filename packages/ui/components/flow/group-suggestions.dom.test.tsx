@@ -6,7 +6,7 @@ import { IVariableType } from "../../lib/schema/flow/node";
 
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
-Object.assign(globalThis, {
+const globals = {
 	window,
 	document: window.document,
 	navigator: window.navigator,
@@ -18,7 +18,11 @@ Object.assign(globalThis, {
 	CustomEvent: window.CustomEvent,
 	getComputedStyle: window.getComputedStyle.bind(window),
 	IS_REACT_ACT_ENVIRONMENT: true,
-});
+};
+const globalDescriptors = Object.keys(globals).map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+Object.assign(globalThis, globals);
 
 const translate = (
 	_key: string,
@@ -26,11 +30,14 @@ const translate = (
 	variables: Record<string, unknown> = {},
 ) =>
 	fallback.replace(/\{\{(\w+)\}\}/g, (_, key) => String(variables[key] ?? ""));
+// bun keeps module mocks for later test files, so override only what this file needs.
+const locales = { ...(await import("@flow-like/locales")) };
 mock.module("@flow-like/locales", () => ({
+	...locales,
 	useTranslation: () => ({ t: translate }),
 }));
 
-const { getBezierPath, Position } = await import("@xyflow/react");
+const flow = { ...(await import("@xyflow/react")) };
 let renderedNodes: {
 	id: string;
 	position: { x: number; y: number };
@@ -38,12 +45,14 @@ let renderedNodes: {
 	height: number;
 }[] = [];
 const getInternalNode = () => undefined;
+const fitView = mock(
+	async (_options: { nodes: { id: string }[]; maxZoom?: number }) => true,
+);
 mock.module("@xyflow/react", () => ({
+	...flow,
 	useNodes: () => renderedNodes,
-	useReactFlow: () => ({ getInternalNode }),
+	useReactFlow: () => ({ getInternalNode, fitView }),
 	useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
-	getBezierPath,
-	Position,
 	Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 	ViewportPortal: ({ children }: { children: ReactNode }) => (
 		<div>{children}</div>
@@ -69,8 +78,17 @@ afterEach(async () => {
 	});
 	window.document.body.innerHTML = "";
 	renderedNodes = [];
+	fitView.mockClear();
 });
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => locales);
+	mock.module("@xyflow/react", () => flow);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 function suggestion(id: string): GroupSuggestion {
 	return {
@@ -114,11 +132,32 @@ function button(text: string) {
 const noAction = () => {};
 const callbacks = {
 	onSelect: noAction,
+	onNext: noAction,
+	onPrevious: noAction,
 	onPreview: noAction,
 	onCollapse: noAction,
-	onDismiss: noAction,
+	onSkip: noAction,
+	onFindMore: noAction,
 	onClose: noAction,
 };
+
+const jumpedTo = () =>
+	fitView.mock.calls.map(([options]) => options.nodes.map(({ id }) => id));
+
+function press(
+	target: { dispatchEvent(event: never): boolean },
+	key: string,
+	init: { metaKey?: boolean; repeat?: boolean } = {},
+) {
+	const event = new window.KeyboardEvent("keydown", {
+		key,
+		bubbles: true,
+		cancelable: true,
+		...init,
+	});
+	target.dispatchEvent(event as never);
+	return event;
+}
 
 describe("GroupSuggestionsOverlay", () => {
 	test("limits review to three suggestions and changes the reviewed group without collapsing it", async () => {
@@ -295,7 +334,9 @@ describe("GroupSuggestionsOverlay", () => {
 		expect(paths).toHaveLength(2);
 		expect(paths[0].getAttribute("d")).toStartWith("M10,25");
 		expect(paths[1].getAttribute("d")).toEndWith("700,250");
-		await act(async () => button("Hide preview").click());
+		expect(button("Preview").getAttribute("aria-pressed")).toBe("true");
+		await act(async () => button("Preview").click());
+		expect(button("Preview").getAttribute("aria-pressed")).toBe("false");
 		expect(container.querySelector("[data-group-preview]")).toBeNull();
 	});
 
@@ -417,7 +458,7 @@ describe("GroupSuggestionsOverlay", () => {
 		let closes = 0;
 		await render(
 			<GroupSuggestionsOverlay
-				suggestions={[suggestion("a")]}
+				suggestions={[suggestion("a"), suggestion("b")]}
 				preview={false}
 				busy={true}
 				onSelect={() => {
@@ -429,7 +470,16 @@ describe("GroupSuggestionsOverlay", () => {
 				onCollapse={() => {
 					actions++;
 				}}
-				onDismiss={() => {
+				onSkip={() => {
+					actions++;
+				}}
+				onNext={() => {
+					actions++;
+				}}
+				onPrevious={() => {
+					actions++;
+				}}
+				onFindMore={() => {
 					actions++;
 				}}
 				onClose={() => {
@@ -437,9 +487,16 @@ describe("GroupSuggestionsOverlay", () => {
 				}}
 			/>,
 		);
-		for (const label of ["1. Group a", "Preview", "Collapsing…", "Dismiss"]) {
+		for (const label of ["1. Group a", "Preview", "Collapsing…", "Skip"]) {
 			expect(button(label).disabled).toBe(true);
 			await act(async () => button(label).click());
+		}
+		for (const label of ["Previous suggestion", "Next suggestion"]) {
+			const control = window.document.querySelector(
+				`button[aria-label="${label}"]`,
+			) as unknown as HTMLButtonElement;
+			expect(control.disabled).toBe(true);
+			await act(async () => control.click());
 		}
 		expect(actions).toBe(0);
 		const close = window.document.querySelector(
@@ -468,5 +525,177 @@ describe("GroupSuggestionsOverlay", () => {
 		expect(container.querySelectorAll("button")).toHaveLength(1);
 		await act(async () => container.querySelector("button")?.click());
 		expect(closes).toBe(1);
+	});
+
+	test("jumps to the reviewed group on open and on every change of membership", async () => {
+		const [a, b] = [suggestion("a"), suggestion("b")];
+		const element = (
+			selectedId: string,
+			suggestions: GroupSuggestion[] = [a, b],
+		) => (
+			<GroupSuggestionsOverlay
+				{...callbacks}
+				suggestions={suggestions}
+				selectedId={selectedId}
+				preview={false}
+				busy={false}
+			/>
+		);
+		const { root } = await render(element("a"));
+		expect(jumpedTo()).toEqual([a.memberIds]);
+		expect(fitView.mock.calls[0][0].maxZoom).toBe(1.25);
+		const rewired = { ...a, id: "a-rewired" };
+		await act(async () => root.render(element("a-rewired", [rewired, b])));
+		expect(jumpedTo()).toEqual([a.memberIds]);
+		await act(async () => root.render(element("b", [rewired, b])));
+		expect(jumpedTo()).toEqual([a.memberIds, b.memberIds]);
+		const target = [...window.document.querySelectorAll("button")].find(
+			(entry) => entry.textContent?.startsWith("Group b"),
+		);
+		await act(async () => target?.click());
+		expect(jumpedTo()).toEqual([a.memberIds, b.memberIds, b.memberIds]);
+	});
+
+	test("shows the position with previous and next only when there is more than one", async () => {
+		const moves: string[] = [];
+		const { root, container } = await render(
+			<GroupSuggestionsOverlay
+				{...callbacks}
+				suggestions={["a", "b", "c"].map(suggestion)}
+				selectedId="b"
+				preview={false}
+				busy={false}
+				onNext={() => moves.push("next")}
+				onPrevious={() => moves.push("previous")}
+			/>,
+		);
+		expect(container.querySelector("section")?.textContent).toContain("2/3");
+		expect(container.textContent).toContain("Suggestion 2 of 3");
+		const nav = (label: string) =>
+			container.querySelector(
+				`button[aria-label="${label}"]`,
+			) as unknown as HTMLButtonElement;
+		await act(async () => nav("Next suggestion").click());
+		await act(async () => nav("Previous suggestion").click());
+		expect(moves).toEqual(["next", "previous"]);
+		await act(async () =>
+			root.render(
+				<GroupSuggestionsOverlay
+					{...callbacks}
+					suggestions={[suggestion("a")]}
+					preview={false}
+					busy={false}
+				/>,
+			),
+		);
+		expect(nav("Next suggestion")).toBeNull();
+		expect(container.textContent).not.toContain("1/1");
+	});
+
+	test("keyboard steps, previews, skips and collapses without hijacking typing or nodes", async () => {
+		const actions: string[] = [];
+		const record = (name: string) => () => {
+			actions.push(name);
+		};
+		const element = (busy: boolean) => (
+			<GroupSuggestionsOverlay
+				suggestions={["a", "b"].map(suggestion)}
+				preview={false}
+				busy={busy}
+				onSelect={record("select")}
+				onNext={record("next")}
+				onPrevious={record("previous")}
+				onPreview={record("preview")}
+				onCollapse={record("collapse")}
+				onSkip={record("skip")}
+				onFindMore={record("more")}
+				onClose={record("close")}
+			/>
+		);
+		const { root, container } = await render(element(false));
+		const strip = container.querySelector("section");
+		if (!strip) throw new Error("Missing review strip");
+		for (const key of ["ArrowRight", "ArrowLeft", "p", "S", "Enter"]) {
+			expect(press(strip, key).defaultPrevented).toBe(true);
+		}
+		expect(actions).toEqual([
+			"next",
+			"previous",
+			"preview",
+			"skip",
+			"collapse",
+		]);
+		actions.length = 0;
+		press(button("Skip"), "Enter");
+		press(strip, "s", { metaKey: true });
+		press(strip, "p", { repeat: true });
+		const input = window.document.createElement("input");
+		const node = window.document.createElement("div");
+		node.className = "react-flow__node";
+		container.append(input, node);
+		for (const target of [input, node]) {
+			for (const key of ["ArrowRight", "p", "s", "Enter"]) press(target, key);
+		}
+		expect(actions).toEqual([]);
+		press(window.document.body, "ArrowRight");
+		expect(actions).toEqual(["next"]);
+		await act(async () => root.render(element(true)));
+		actions.length = 0;
+		for (const key of ["ArrowRight", "p", "s", "Enter"]) press(strip, key);
+		expect(actions).toEqual([]);
+		press(strip, "Escape");
+		expect(actions).toEqual(["close"]);
+	});
+
+	test("finished review summarises decisions and offers another search until exhausted", async () => {
+		let searches = 0;
+		const element = (
+			exhausted: boolean,
+			summary = { collapsed: 2, skipped: 1 },
+		) => (
+			<GroupSuggestionsOverlay
+				{...callbacks}
+				suggestions={[]}
+				preview={false}
+				busy={false}
+				summary={summary}
+				exhausted={exhausted}
+				onFindMore={() => {
+					searches++;
+				}}
+			/>
+		);
+		const { root, container } = await render(element(false));
+		const strip = () => container.querySelector("section")?.textContent;
+		expect(strip()).toContain("All suggestions reviewed");
+		expect(strip()).toContain("2 collapsed · 1 skipped");
+		await act(async () => button("Find more").click());
+		expect(searches).toBe(1);
+		await act(async () => root.render(element(true)));
+		expect(strip()).toContain("No more groups to suggest");
+		expect(strip()).toContain("2 collapsed · 1 skipped");
+		expect(
+			[...container.querySelectorAll("button")].some(
+				(entry) => entry.textContent === "Find more",
+			),
+		).toBe(false);
+		await act(async () =>
+			root.render(element(false, { collapsed: 0, skipped: 0 })),
+		);
+		expect(strip()).toContain("Suggestions no longer apply");
+		expect(button("Find more")).not.toBeNull();
+		await act(async () =>
+			root.render(
+				<GroupSuggestionsOverlay
+					{...callbacks}
+					suggestions={[]}
+					preview={false}
+					busy={false}
+					scope="selection"
+				/>,
+			),
+		);
+		expect(strip()).toContain("No groups to suggest in the selection.");
+		expect(fitView).not.toHaveBeenCalled();
 	});
 });

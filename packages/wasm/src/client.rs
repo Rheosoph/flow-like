@@ -407,6 +407,112 @@ impl RegistryClient {
         existing
     }
 
+    /// Fetch the exact portable node package for a deployment without changing
+    /// the desktop's installed version or downloading host-specific code.
+    pub async fn export_package_version(
+        &self,
+        package_id: &str,
+        version: &str,
+        maximum_bytes: usize,
+    ) -> Result<(PackageManifest, Vec<u8>)> {
+        anyhow::ensure!(
+            maximum_bytes > 0 && maximum_bytes <= 64 * 1024 * 1024,
+            "Deployment package byte limit is invalid"
+        );
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(120))
+            .build()?;
+        let request = DownloadRequest {
+            package_id: package_id.to_owned(),
+            version: Some(version.to_owned()),
+            target_platform: None,
+        };
+        let mut request = client
+            .post(format!("{}/download", self.config.default_registry))
+            .json(&request);
+        if let Some(token) = &self.config.auth_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.map_err(reqwest::Error::without_url)?;
+        let bytes =
+            Self::bounded_export_response(response, maximum_bytes.div_ceil(3) * 4 + 1024 * 1024)
+                .await?;
+        let download: DownloadResponse = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow!("Registry returned invalid deployment package metadata"))?;
+        anyhow::ensure!(
+            download.package_id == package_id
+                && download.version == version
+                && download.manifest.id == package_id
+                && download.manifest.version == version,
+            "Registry returned a different package version than the project pin"
+        );
+        download
+            .manifest
+            .validate()
+            .map_err(|_| anyhow!("Registry returned an invalid package manifest"))?;
+        let wasm = if let Some(url) = &download.download_url {
+            let url =
+                reqwest::Url::parse(url).map_err(|_| anyhow!("Invalid package download URL"))?;
+            anyhow::ensure!(
+                url.scheme() == "https"
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.fragment().is_none(),
+                "Deployment package downloads require HTTPS without embedded credentials"
+            );
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .map_err(reqwest::Error::without_url)?;
+            Self::bounded_export_response(response, maximum_bytes).await?
+        } else {
+            let bytes = base64_decode(&download.wasm_base64)
+                .map_err(|_| anyhow!("Registry returned invalid portable WASM bytes"))?;
+            anyhow::ensure!(
+                bytes.len() <= maximum_bytes,
+                "Deployment package exceeds its byte limit"
+            );
+            bytes
+        };
+        anyhow::ensure!(
+            wasm.starts_with(b"\0asm"),
+            "Package must contain portable WASM bytes"
+        );
+        Ok((download.manifest, wasm))
+    }
+
+    async fn bounded_export_response(
+        mut response: reqwest::Response,
+        maximum: usize,
+    ) -> Result<Vec<u8>> {
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Deployment dependency request failed ({})",
+            response.status()
+        );
+        anyhow::ensure!(
+            response
+                .content_length()
+                .is_none_or(|size| size <= maximum as u64),
+            "Deployment package exceeds its byte limit"
+        );
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(reqwest::Error::without_url)?
+        {
+            anyhow::ensure!(
+                chunk.len() <= maximum.saturating_sub(bytes.len()),
+                "Deployment package exceeds its byte limit"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
     /// Download and cache a package
     pub async fn download_package(
         &self,
@@ -1793,6 +1899,91 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deployment_export_authenticates_exact_pins_and_bounds_portable_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (returned_version, wasm, limit, accepted) in [
+            ("1.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], 16, true),
+            ("2.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], 16, false),
+            ("1.0.0", vec![0; 32], 16, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let package_id = "com.example.deployment";
+            let response = serde_json::to_vec(&DownloadResponse {
+                package_id: package_id.into(),
+                version: returned_version.into(),
+                manifest: PackageManifest::new(
+                    package_id,
+                    "Deployment",
+                    returned_version,
+                    "Deployment test",
+                ),
+                wasm_base64: base64_encode(&wasm),
+                download_url: None,
+                metadata: None,
+                cwasm_download_url: None,
+                cwasm_checksum: None,
+                widget_bundle_download_url: None,
+            })
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let length = stream.read(&mut chunk).await.unwrap();
+                    assert!(length > 0);
+                    request.extend_from_slice(&chunk[..length]);
+                    assert!(request.len() <= 8192);
+                    if let Some(end) = request.windows(4).position(|value| value == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&request[..end]);
+                        let length: usize = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|size| size.trim().parse().unwrap())
+                            })
+                            .unwrap();
+                        if request.len() < end + 4 + length {
+                            continue;
+                        }
+                        assert!(head
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer selected-account"));
+                        let body: DownloadRequest =
+                            serde_json::from_slice(&request[end + 4..]).unwrap();
+                        assert_eq!(body.package_id, package_id);
+                        assert_eq!(body.version.as_deref(), Some("1.0.0"));
+                        assert_eq!(body.target_platform, None);
+                        break;
+                    }
+                }
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                stream.write_all(&response).await.unwrap();
+            });
+            let temporary = tempfile::tempdir().unwrap();
+            let mut client = registry_client(temporary.path(), &base);
+            client.set_auth_token(Some("selected-account".into()));
+            let result = client
+                .export_package_version(package_id, "1.0.0", limit)
+                .await;
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            server.await.unwrap();
+            assert!(client.list_installed().await.unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

@@ -42,6 +42,16 @@ function routePathname(route: string): string {
 	return `/use${route.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** Keep native navigation on the exported shell, with the app route in its query. */
+export function queryUseUrl(url: URL): string {
+	const route = readUseRoutePath(url.pathname);
+	if (route === undefined) return `${url.pathname}${url.search}${url.hash}`;
+	const next = new URL(url);
+	next.pathname = "/use";
+	next.searchParams.set("route", route);
+	return `${next.pathname}${next.search}${next.hash}`;
+}
+
 /** Move only the shell's route parameter into the path, leaving app data intact. */
 export function pathUseUrl(url: URL): string {
 	const original = `${url.pathname}${url.search}${url.hash}`;

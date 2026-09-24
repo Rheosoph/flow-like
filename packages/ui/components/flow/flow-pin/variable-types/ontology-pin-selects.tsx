@@ -13,6 +13,7 @@ import {
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand, upsertLayerCommand } from "../../../../lib";
+import { asArray } from "../../../../lib/response-shape";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -206,7 +207,7 @@ function useOverlays(appId: string, open: boolean) {
 		backend.graphState
 			.listOverlays(appId)
 			.then((result) => {
-				if (!cancelled) setOverlays(result);
+				if (!cancelled) setOverlays(asArray(result));
 			})
 			.catch(() => {
 				if (!cancelled) setError(true);
@@ -664,7 +665,7 @@ function useImports(appId: string, open: boolean) {
 		backend.graphState
 			.listRemoteOntologyImports(appId)
 			.then((result) => {
-				if (!cancelled) setImports(result);
+				if (!cancelled) setImports(asArray(result));
 			})
 			.catch(() => {
 				if (!cancelled) setError(true);

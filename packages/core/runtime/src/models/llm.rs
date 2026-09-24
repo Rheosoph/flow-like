@@ -381,25 +381,25 @@ impl ModelFactory {
         }
 
         if is_hosted_provider_name(&provider) {
-            // Never serve hosted models from cache — the user's JWT (used as
-            // api_key) is ephemeral and will expire. A cached model would carry
-            // a stale token, causing "Unauthorized" errors on the API proxy.
+            // Legacy callers still supply a token snapshot. Live-authorized
+            // clients resolve their lease at dispatch, including retained agents.
             self.cached_models.remove(&bit.id);
             self.ttl_list.remove(&bit.id);
 
+            let authorizer = app_state.request_authorizer.clone();
             let access_token = app_state
                 .hosted_model_token
                 .as_deref()
                 .or(access_token.as_deref())
                 .map(str::trim)
                 .filter(|token| !token.is_empty())
-                .ok_or_else(|| {
-                    flow_like_types::anyhow!(
-                        "Hosted model {} requires an access token for the API proxy",
-                        bit.id
-                    )
-                })?
-                .to_string();
+                .map(ToOwned::to_owned);
+            if authorizer.is_none() && access_token.is_none() {
+                return Err(flow_like_types::anyhow!(
+                    "Hosted model {} requires an access token for the API proxy",
+                    bit.id
+                ));
+            }
             tracing::debug!(
                 bit_id = %bit.id,
                 provider = %provider,
@@ -412,10 +412,14 @@ impl ModelFactory {
             // catalog metadata and are never forwarded as request options.
             let mut params = HashMap::new();
 
-            params.insert(
-                "api_key".into(),
-                flow_like_types::Value::String(access_token),
-            );
+            if authorizer.is_none()
+                && let Some(access_token) = access_token
+            {
+                params.insert(
+                    "api_key".into(),
+                    flow_like_types::Value::String(access_token),
+                );
+            }
 
             params.insert(
                 "model_id".into(),
@@ -429,7 +433,20 @@ impl ModelFactory {
                 .filter(|url| !url.is_empty())
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(flow_like_model_provider::embedding::proxy_config::api_base_url);
-            ensure_hosted_proxy_endpoint(&mut params, &api_base_url);
+            if let Some(resource_base) = authorizer.as_ref().and_then(|provider| {
+                provider.resource_base_url(
+                    flow_like_types::authorization::ResourceAudience::HostedModels,
+                )
+            }) {
+                params.insert(
+                    "endpoint".into(),
+                    flow_like_types::Value::String(resource_base),
+                );
+                // Instance billing attribution comes from its signed grant.
+                params.remove("headers");
+            } else {
+                ensure_hosted_proxy_endpoint(&mut params, &api_base_url);
+            }
             params.remove("is_azure");
 
             model_provider.model_id = Some(bit.id.clone());
@@ -467,25 +484,32 @@ impl ModelFactory {
                     return Err(reject_responses("openrouter"));
                 }
                 "openrouter" => Arc::new(
-                    OpenRouterModel::from_provider(&model_provider)
-                        .await
-                        .map_err(|e| {
-                            flow_like_types::anyhow!(
-                                "Failed to create hosted:openrouter proxy model: {}",
-                                e
-                            )
-                        })?,
+                    OpenRouterModel::from_provider_with_authorizer(
+                        &model_provider,
+                        authorizer.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        flow_like_types::anyhow!(
+                            "Failed to create hosted:openrouter proxy model: {}",
+                            e
+                        )
+                    })?,
                 ),
                 "openai" => Arc::new(
-                    OpenAIModel::from_provider_with_surface(&model_provider, api_surface)
-                        .await
-                        .map_err(|e| {
-                            flow_like_types::anyhow!(
-                                "Failed to create hosted:openai proxy model ({}): {}",
-                                api_surface.as_str(),
-                                e
-                            )
-                        })?,
+                    OpenAIModel::from_provider_with_surface_and_authorizer(
+                        &model_provider,
+                        api_surface,
+                        authorizer.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        flow_like_types::anyhow!(
+                            "Failed to create hosted:openai proxy model ({}): {}",
+                            api_surface.as_str(),
+                            e
+                        )
+                    })?,
                 ),
                 "anthropic" => {
                     return Err(flow_like_types::anyhow!(
@@ -500,14 +524,20 @@ impl ModelFactory {
                 "bedrock" if api_surface.is_responses() => {
                     return Err(reject_responses("bedrock"));
                 }
-                "bedrock" => Arc::new(BedrockModel::from_proxy(&model_provider).await.map_err(
-                    |e| {
+                "bedrock" => Arc::new(
+                    OpenAIModel::from_provider_with_surface_and_authorizer(
+                        &model_provider,
+                        ModelApiSurface::ChatCompletions,
+                        authorizer.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
                         flow_like_types::anyhow!(
                             "Failed to create hosted:bedrock proxy model: {}",
                             e
                         )
-                    },
-                )?),
+                    })?,
+                ),
                 "vertex" => {
                     return Err(flow_like_types::anyhow!(
                         "hosted:vertex requires a native Vertex proxy adapter; Rig's Vertex client cannot target the Flow-Like HTTP proxy"
@@ -915,6 +945,81 @@ mod tests {
         assert_eq!(request.body["model"], "bit_opaque_123");
         assert_eq!(request.body["usage"]["include"], true);
         assert_eq!(request.body["stream"], true);
+    }
+
+    #[tokio::test]
+    async fn instance_factory_preserves_exact_broker_endpoint_and_ignores_app_headers() {
+        use flow_like_types::authorization::{
+            AuthorizationFuture, AuthorizationRequest, RequestAuthorization, RequestAuthorizer,
+            ResourceAudience,
+        };
+        struct InstanceAuthorizer {
+            base: String,
+        }
+        impl RequestAuthorizer for InstanceAuthorizer {
+            fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
+                (audience == ResourceAudience::HostedModels).then(|| self.base.clone())
+            }
+            fn authorize<'a>(
+                &'a self,
+                request: AuthorizationRequest<'a>,
+            ) -> AuthorizationFuture<'a> {
+                Box::pin(async move {
+                    assert_eq!(request.method, "POST");
+                    assert_eq!(request.url, format!("{}/chat/completions", self.base));
+                    RequestAuthorization::new(
+                        "DPoP workload-lease".into(),
+                        Some("fresh-workload-proof".into()),
+                        SystemTime::now() + Duration::from_secs(60),
+                    )
+                })
+            }
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let base = format!("http://{}/api/v1/instances", listener.local_addr().unwrap());
+        let capture = tokio::spawn(capture_one_http_request(listener));
+        let store = FlowLikeStore::Memory(Arc::new(
+            flow_like_storage::object_store::memory::InMemory::new(),
+        ));
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(store),
+            crate::utils::http::HTTPClient::new_without_refetch(),
+        );
+        state.request_authorizer = Some(Arc::new(InstanceAuthorizer { base }));
+        let mut factory = ModelFactory::new();
+        let model = factory
+            .build(
+                &completion_bit("offline-bit", "hosted:openrouter"),
+                Arc::new(state),
+                Some("obsolete-human-token".into()),
+                Some(ModelUsageContext {
+                    app_id: Some("offline-project-is-not-a-hosted-app".into()),
+                    run_id: Some("local-run".into()),
+                    api_base_url: Some("https://wrong.example/api/v1".into()),
+                }),
+            )
+            .await
+            .unwrap();
+        let mut history = History::new(
+            "ignored-model".into(),
+            vec![HistoryMessage::from_string(Role::User, "hello")],
+        );
+        history.set_stream(true);
+        let callback: LLMCallback = Arc::new(|_| Box::pin(async { Ok(()) }));
+        assert!(model.invoke(&history, Some(callback)).await.is_err());
+        let request = tokio::time::timeout(Duration::from_secs(10), capture)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            request.request_line,
+            "POST /api/v1/instances/chat/completions HTTP/1.1"
+        );
+        let headers = request.headers.to_ascii_lowercase();
+        assert!(headers.contains("authorization: dpop workload-lease\r\n"));
+        assert!(headers.contains("dpop: fresh-workload-proof\r\n"));
+        assert!(!headers.contains("x-flow-like-app-id"));
+        assert!(!headers.contains("obsolete-human-token"));
     }
 
     #[tokio::test]

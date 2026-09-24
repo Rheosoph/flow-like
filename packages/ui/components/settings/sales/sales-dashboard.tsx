@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray, isRecord } from "../../../lib/response-shape";
 import { IAppVisibility } from "../../../lib/schema/app/app";
 import { useBackend } from "../../../state/backend-state";
 import type {
@@ -151,21 +152,32 @@ export function SalesDashboard() {
 		if (storeResult.status === "fulfilled") {
 			const value = storeResult.value;
 			setStore(
-				value && {
-					overview: value[0],
-					dailyStats: value[1].dailyStats,
-					purchases: value[2].purchases,
-					purchaseTotal: value[2].total,
-				},
+				value && isRecord(value[0])
+					? {
+							overview: value[0],
+							dailyStats: asArray(value[1]?.dailyStats),
+							purchases: asArray(value[2]?.purchases),
+							purchaseTotal: value[2]?.total ?? 0,
+						}
+					: null,
 			);
-			setDiscounts(value?.[3] ?? []);
+			setDiscounts(asArray(value?.[3]));
 		} else {
 			setStore(null);
 			loadError(storeResult.reason);
 		}
 
 		if (flowResult.status === "fulfilled") {
-			setFlows(flowResult.value);
+			const report = flowResult.value;
+			setFlows(
+				isRecord(report)
+					? {
+							...report,
+							dailyStats: asArray(report.dailyStats),
+							recentPayments: asArray(report.recentPayments),
+						}
+					: null,
+			);
 		} else {
 			setFlows(null);
 			loadError(flowResult.reason);

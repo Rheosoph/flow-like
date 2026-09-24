@@ -3,6 +3,7 @@
 import { ArrowLeftRight, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { getErrorMessage } from "../../../lib/error-message";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	IDatabaseDiff,
@@ -159,8 +160,8 @@ export function DatabaseCompareDialog({
 					{result && (
 						<div className="space-y-3">
 							<p className="text-sm">
-								{result.source.branch} v{result.source.version} →{" "}
-								{result.target.branch} v{result.target.version}
+								{result.source?.branch} v{result.source?.version} →{" "}
+								{result.target?.branch} v{result.target?.version}
 							</p>
 							<div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
 								{[
@@ -175,11 +176,11 @@ export function DatabaseCompareDialog({
 									</div>
 								))}
 							</div>
-							{result.schema_changes.length > 0 && (
+							{asArray(result.schema_changes).length > 0 && (
 								<div className="space-y-1">
 									<h3 className="text-sm font-medium">Schema changes</h3>
 									<ul className="list-inside list-disc text-sm">
-										{result.schema_changes.map((change) => (
+										{asArray(result.schema_changes).map((change) => (
 											<li key={change}>{change}</li>
 										))}
 									</ul>
@@ -190,7 +191,7 @@ export function DatabaseCompareDialog({
 									Showing the first 100 changed rows.
 								</p>
 							)}
-							{result.rows.map((row, index) => (
+							{asArray(result.rows).map((row, index) => (
 								<details
 									key={`${row.kind}:${index}`}
 									className="rounded-md border p-2 text-sm"

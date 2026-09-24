@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
 import { Checkbox, Label, ScrollArea } from "../../ui";
@@ -25,8 +26,9 @@ export function GenericFormConfig({
 	);
 
 	const routes = useMemo(() => {
-		const list = routesQuery.data ?? [];
-		return list.slice().sort((a, b) => a.path.localeCompare(b.path));
+		return asArray(routesQuery.data)
+			.slice()
+			.sort((a, b) => a.path.localeCompare(b.path));
 	}, [routesQuery.data]);
 
 	const setValue = (key: string, value: any, deleteKeys: string[] = []) => {

@@ -31,6 +31,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { asArray } from "../../../lib/response-shape";
 import {
 	type ISolutionListResponse,
 	type ISolutionLog,
@@ -195,6 +196,8 @@ export function SolutionsPage({
 		[onAddLog, onFetchSolution],
 	);
 
+	const solutions = asArray(data?.solutions);
+
 	const totalPages = useMemo(() => {
 		if (!data) return 1;
 		return Math.ceil(data.total / limit);
@@ -260,7 +263,7 @@ export function SolutionsPage({
 
 			{isLoading ? (
 				<SolutionsTableSkeleton />
-			) : data?.solutions.length === 0 ? (
+			) : data && solutions.length === 0 ? (
 				<Card>
 					<CardContent className="flex flex-col items-center justify-center py-12 gap-4">
 						<FileText className="h-12 w-12 text-muted-foreground" />
@@ -280,7 +283,7 @@ export function SolutionsPage({
 			) : (
 				<>
 					<SolutionsTable
-						solutions={data?.solutions ?? []}
+						solutions={solutions}
 						onViewDetails={handleViewDetails}
 					/>
 

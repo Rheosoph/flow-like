@@ -25,6 +25,7 @@ import {
 	listableModels,
 	searchAllBitsOfType,
 } from "../../lib/bit/model-listing";
+import { asArray, isRecord } from "../../lib/response-shape";
 import { IBitTypes } from "../../lib/schema/hub/bit-search-query";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
 import { nowSystemTime } from "../../lib/time/now";
@@ -135,7 +136,7 @@ export function LibraryPage({
 				pinned_order?: number | null;
 			}
 		>();
-		for (const a of currentProfile.data?.hub_profile.apps ?? []) {
+		for (const a of asArray(currentProfile.data?.hub_profile?.apps)) {
 			map.set(a.app_id, {
 				favorite: a.favorite,
 				pinned: a.pinned,
@@ -149,14 +150,14 @@ export function LibraryPage({
 	const activeAppIds = useMemo(
 		() =>
 			new Set(
-				(currentProfile.data?.hub_profile.apps ?? []).map((a) => a.app_id),
+				asArray(currentProfile.data?.hub_profile?.apps).map((a) => a.app_id),
 			),
 		[currentProfile.data],
 	);
 
 	const allAvailableItems = useMemo(() => {
 		const map = new Map<string, LibraryItem>();
-		for (const [app, meta] of apps.data ?? []) {
+		for (const [app, meta] of asArray(apps.data)) {
 			if (meta) map.set(app.id, toLibraryItem(app, meta));
 		}
 		return Array.from(map.values());
@@ -241,12 +242,13 @@ export function LibraryPage({
 	// suite is shown inside that suite's element, never twice.
 	const suiteGroups = useMemo(() => {
 		const byId = new Map(itemsForDisplay.map((item) => [item.id, item]));
-		return (myGroups.data ?? [])
+		return asArray(myGroups.data)
+			.filter((group) => isRecord(group) && typeof group.id === "string")
 			.map((group) => ({
 				group,
 				items: sortItems(
-					group.members
-						.map((member) => byId.get(member.app_id))
+					asArray(group.members)
+						.map((member) => byId.get(member?.app_id))
 						.filter((item): item is LibraryItem => item !== undefined),
 					sortMode,
 				),
@@ -343,7 +345,9 @@ export function LibraryPage({
 				preview_media: [],
 			};
 
-			const profileBits = new Set(currentProfile.data.hub_profile.bits ?? []);
+			const profileBits = new Set(
+				asArray(currentProfile.data.hub_profile?.bits),
+			);
 			// A retired model stays resolvable for the boards that already use it,
 			// but a project created today must not start out depending on one.
 			const allBits = listableModels(embeddingBits).filter((bit) =>

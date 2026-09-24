@@ -24,6 +24,7 @@ import {
 	useState,
 } from "react";
 import { toast } from "sonner";
+import { asArray } from "../../lib/response-shape";
 import {
 	IConnectionMode,
 	type IProfile,
@@ -89,7 +90,7 @@ function ProfileTemplateEditorRoute({
 	const id = params.get("id");
 	const copy = params.get("copy");
 	const sourceId = id ?? copy;
-	const source = context.templates.data?.find(
+	const source = asArray(context.templates.data).find(
 		(profile) => profile.id === sourceId,
 	);
 	if (context.loading || (sourceId && context.templates.isLoading))

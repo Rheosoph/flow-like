@@ -874,7 +874,7 @@ mod tests {
         let prompt = global_assistant_system_prompt();
 
         assert!(prompt.contains("Intake answers are not a spec"));
-        assert!(prompt.contains("lead your reply with it"));
+        assert!(prompt.contains("Lead your reply with it"));
         assert!(prompt.contains("dispatch in the SAME turn"));
         assert!(prompt.contains("Never wait for approval of the brief"));
         assert!(prompt.contains("reusing those exact identifiers verbatim"));
@@ -892,7 +892,7 @@ mod tests {
         assert!(prompt.contains("Open Database (LanceDB) table with snake_case physical names"));
         assert!(prompt.contains("Boards of an app cannot call each other"));
         assert!(prompt.contains("that is a GAP"));
-        assert!(prompt.contains("they are house style, not gaps to ask about"));
+        assert!(prompt.contains("Resolve these silently because they follow house style"));
     }
 
     #[test]
@@ -933,13 +933,15 @@ mod tests {
         // single batched `ask_user` pass, and the vague-request → Flow-Like-noun translation
         // rules). This block is part of the stable cached prefix, so the cost is paid once per
         // conversation; it replaces build runs lost to a misread request, which cost far more.
+        // Reviewed 2026-09-23: +~2.7 KB, almost all DURABLE APP BUILDS (PREVIEW); the `app_build`
+        // tool is registered unconditionally, so its routing rules belong in the stable prefix.
         assert!(
-            first.len() <= 17_000,
-            "standard prompt grew beyond the reviewed 17 KB budget: {} bytes",
+            first.len() <= 20_000,
+            "standard prompt grew beyond the reviewed 20 KB budget: {} bytes",
             first.len()
         );
         assert!(
-            first.split_whitespace().count() <= 2_500,
+            first.split_whitespace().count() <= 3_000,
             "standard prompt grew beyond the reviewed word budget: {} words",
             first.split_whitespace().count()
         );

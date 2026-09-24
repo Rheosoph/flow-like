@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { ArrowLeft, Globe, Layers } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useInvoke } from "../../hooks/use-invoke";
+import { asArray, isRecord } from "../../lib/response-shape";
 import { initials, seedGradient } from "../../lib/seed-gradient";
 import { useBackend } from "../../state/backend-state";
 import type { IGroup, IGroupMember } from "../../state/backend-state/types";
@@ -24,6 +25,7 @@ export function SuiteCard({
 }: Readonly<{ group: IGroup; onOpen: (group: IGroup) => void }>) {
 	const { t } = useTranslation("store");
 	const label = group.use_case || group.name || "Suite";
+	const members = asArray(group.members);
 	return (
 		<button
 			type="button"
@@ -75,7 +77,7 @@ export function SuiteCard({
 				)}
 				<div className="flex items-center justify-between mt-3 pt-3 border-t">
 					<div className="flex items-center -space-x-2">
-						{group.members.slice(0, 5).map((member) => (
+						{members.slice(0, 5).map((member) => (
 							<Avatar
 								key={member.id}
 								className="h-6 w-6 rounded-md ring-2 ring-card"
@@ -111,10 +113,11 @@ export function SuitesRail() {
 		backend.appState,
 		[0, 12],
 	);
-	const groups = suites.data ?? [];
+	const groups = asArray(suites.data).filter(
+		(group) => isRecord(group) && typeof group.id === "string",
+	);
 
-	if (suites.data && groups.length === 0) return null;
-	if (!suites.data) return null;
+	if (groups.length === 0) return null;
 
 	return (
 		<section
@@ -187,7 +190,7 @@ export function SuiteDetail({ groupId }: Readonly<{ groupId: string }>) {
 	]);
 	const group = suite.data;
 
-	if (!group) {
+	if (!isRecord(group) || typeof group.id !== "string") {
 		return (
 			<div className="p-10 text-center text-muted-foreground">
 				{t("loadingSuite", "Loading suite…")}
@@ -258,7 +261,7 @@ export function SuiteDetail({ groupId }: Readonly<{ groupId: string }>) {
 					{t("appsInThisSuite", "Apps in this suite")}
 				</h2>
 				<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-					{group.members.map((member) => (
+					{asArray(group.members).map((member) => (
 						<MemberTile key={member.id} member={member} />
 					))}
 				</div>

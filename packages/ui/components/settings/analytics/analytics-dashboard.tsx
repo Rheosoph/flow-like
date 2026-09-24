@@ -38,6 +38,7 @@ import {
 	formatDurationShare,
 } from "../../../lib/compute-cost";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type {
@@ -1054,10 +1055,10 @@ export function AnalyticsDashboard() {
 			]);
 
 			setOverview(dashboardData.stats.summary ?? dashboardData.overview);
-			setDailyStats(dashboardData.stats.dailyStats);
-			setFeedbackItems(feedbackData.items);
-			setFeedbackTotal(feedbackData.total);
-			setEvents(eventsData);
+			setDailyStats(asArray(dashboardData.stats.dailyStats));
+			setFeedbackItems(asArray(feedbackData?.items));
+			setFeedbackTotal(feedbackData?.total ?? 0);
+			setEvents(asArray(eventsData));
 		} catch (error) {
 			toast.error(
 				error instanceof Error

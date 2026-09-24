@@ -29,6 +29,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { getApiOrigin } from "../../../lib/api-url";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	IEventAlias,
@@ -2159,9 +2160,9 @@ export function McpConfig({
 	const registrationData = registrations.data as
 		| IListRegistrationsResponse
 		| undefined;
-	const registrationRows = registrationData?.registrations ?? [];
-	const authRows = registrationData?.auths ?? [];
-	const mcpRegs = registrationRows.filter((r) => r.kind.startsWith("mcp_"));
+	const registrationRows = asArray(registrationData?.registrations);
+	const authRows = asArray(registrationData?.auths);
+	const mcpRegs = registrationRows.filter((r) => r.kind?.startsWith("mcp_"));
 	const knownAuthIds = new Set(authRows.map((auth) => auth.id));
 	const missingAuthIds = Array.from(
 		new Set(

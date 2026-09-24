@@ -14,6 +14,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { getErrorMessage } from "../../../lib/error-message";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	IDatabaseAction,
@@ -82,6 +83,9 @@ export function DatabaseHistoryControls({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const reference = history.error ? undefined : history.data?.reference;
+	const branches = asArray(history.data?.branches);
+	const tags = asArray(history.data?.tags);
+	const versions = asArray(history.data?.versions);
 	const branch = reference?.branch ?? selector.branch ?? "main";
 	const readonly = isDatabaseSnapshot(selector) || reference?.read_only;
 	const canManage = canWrite && !selector.read_only && Boolean(reference);
@@ -186,11 +190,7 @@ export function DatabaseHistoryControls({
 				</SelectTrigger>
 				<SelectContent>
 					{Array.from(
-						new Set([
-							"main",
-							branch,
-							...(history.data?.branches.map((item) => item.name) ?? []),
-						]),
+						new Set(["main", branch, ...branches.map((item) => item.name)]),
 					).map((value) => (
 						<SelectItem key={value} value={value}>
 							{value}
@@ -220,21 +220,20 @@ export function DatabaseHistoryControls({
 							? `Latest · v${reference.version}`
 							: "Latest version"}
 					</SelectItem>
-					{selector.tag &&
-						!history.data?.tags.some((tag) => tag.name === selector.tag) && (
-							<SelectItem value={`tag:${selector.tag}`}>
-								Tag: {selector.tag}
-							</SelectItem>
-						)}
+					{selector.tag && !tags.some((tag) => tag.name === selector.tag) && (
+						<SelectItem value={`tag:${selector.tag}`}>
+							Tag: {selector.tag}
+						</SelectItem>
+					)}
 					{selector.version !== undefined &&
-						!history.data?.versions.some(
+						!versions.some(
 							(version) => version.version === selector.version,
 						) && (
 							<SelectItem value={`version:${selector.version}`}>
 								Version {selector.version}
 							</SelectItem>
 						)}
-					{history.data?.versions.map((version) => (
+					{versions.map((version) => (
 						<SelectItem
 							key={version.version}
 							value={`version:${version.version}`}
@@ -242,7 +241,7 @@ export function DatabaseHistoryControls({
 							Version {version.version}
 						</SelectItem>
 					))}
-					{history.data?.tags.map((tag) => (
+					{tags.map((tag) => (
 						<SelectItem key={tag.name} value={`tag:${tag.name}`}>
 							Tag: {tag.name}
 						</SelectItem>
@@ -357,7 +356,7 @@ export function DatabaseHistoryControls({
 					)}
 					<section className="space-y-2">
 						<h3 className="text-sm font-semibold">Branches</h3>
-						{history.data?.branches.map((item) => (
+						{branches.map((item) => (
 							<div
 								key={item.name}
 								className="flex items-center gap-2 rounded-md border p-2 text-sm"
@@ -403,12 +402,12 @@ export function DatabaseHistoryControls({
 					</section>
 					<section className="space-y-2">
 						<h3 className="text-sm font-semibold">Tags</h3>
-						{history.data?.tags.length === 0 && (
+						{history.data && tags.length === 0 && (
 							<p className="text-sm text-muted-foreground">
 								No tagged snapshots yet.
 							</p>
 						)}
-						{history.data?.tags.map((tag) => (
+						{tags.map((tag) => (
 							<div
 								key={tag.name}
 								className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm"
@@ -469,7 +468,7 @@ export function DatabaseHistoryControls({
 					</section>
 					<section className="space-y-2">
 						<h3 className="text-sm font-semibold">Versions on {branch}</h3>
-						{history.data?.versions.map((version) => (
+						{versions.map((version) => (
 							<div
 								key={version.version}
 								className="flex items-center gap-2 rounded-md border p-2 text-sm"

@@ -10,6 +10,7 @@ import {
 	Search,
 } from "lucide-react";
 import { useId, useState } from "react";
+import { asArray } from "../../lib/response-shape";
 import {
 	STORAGE_ROOT_PREFIX,
 	sortStorageEntries,
@@ -59,7 +60,7 @@ export function HomeStorageImagePicker({
 		retry: false,
 	});
 	const entries = sortStorageEntries(
-		(listing.data ?? [])
+		asArray(listing.data)
 			.map((item) => storageTreeEntry(item, prefix, "app"))
 			.filter(
 				(entry) =>

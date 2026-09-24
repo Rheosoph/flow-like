@@ -10,15 +10,26 @@ import {
 	useReactFlow,
 	useViewport,
 } from "@xyflow/react";
+import ChevronLeftIcon from "lucide-react/dist/esm/icons/chevron-left.js";
+import ChevronRightIcon from "lucide-react/dist/esm/icons/chevron-right.js";
+import CircleCheckIcon from "lucide-react/dist/esm/icons/circle-check.js";
+import EyeIcon from "lucide-react/dist/esm/icons/eye.js";
+import LocateFixedIcon from "lucide-react/dist/esm/icons/locate-fixed.js";
 import XIcon from "lucide-react/dist/esm/icons/x.js";
 import {
+	type ReactElement,
 	memo,
+	useCallback,
 	useEffect,
 	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
+import type {
+	GroupReviewScope,
+	GroupReviewSummary,
+} from "../../hooks/use-group-suggestions";
 import type { GroupSuggestion } from "../../lib/flow-grouping";
 import {
 	ENTITY_MIN_HEIGHT,
@@ -30,6 +41,7 @@ import {
 import { IVariableType } from "../../lib/schema/flow/variable";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { typeToColor } from "./utils";
 
 type Point = { x: number; y: number };
@@ -39,15 +51,51 @@ export interface GroupSuggestionsOverlayProps {
 	selectedId?: string;
 	preview: boolean;
 	busy: boolean;
+	scope?: GroupReviewScope;
+	summary?: GroupReviewSummary;
+	/** The last search found nothing new, so "Find more" would only repeat it. */
+	exhausted?: boolean;
 	onSelect: (id: string) => void;
+	onNext: () => void;
+	onPrevious: () => void;
 	onPreview: () => void;
 	onCollapse: () => void;
-	onDismiss: () => void;
+	onSkip: () => void;
+	onFindMore: () => void;
 	onClose: () => void;
 	getPinPosition?: (nodeId: string, pinId: string) => Point | undefined;
 }
 
 const GROUP_PADDING = 20;
+/** Room above the outline for its badge, so a jump never tucks it under the strip. */
+const BADGE_ROOM = 72;
+const JUMP_PADDING = 64;
+const JUMP_MAX_ZOOM = 1.25;
+const NO_DECISIONS: GroupReviewSummary = { collapsed: 0, skipped: 0 };
+const IGNORED_KEY_TARGETS =
+	"input, textarea, select, [contenteditable='true'], .monaco-editor, .react-flow__node, .react-flow__edge";
+
+function Hint({
+	label,
+	shortcut,
+	children,
+}: {
+	label: string;
+	shortcut?: string;
+	children: ReactElement;
+}) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{children}</TooltipTrigger>
+			<TooltipContent side="bottom" className="flex items-center gap-2">
+				{label}
+				{shortcut && (
+					<kbd className="font-mono text-[10px] opacity-70">{shortcut}</kbd>
+				)}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
 
 function portColor(dataType: string): string {
 	const type = Object.values(IVariableType).find((value) => value === dataType);
@@ -162,22 +210,251 @@ function GroupPreview({
 	);
 }
 
+function ReviewNavigation({
+	index,
+	count,
+	busy,
+	onNext,
+	onPrevious,
+}: {
+	index: number;
+	count: number;
+	busy: boolean;
+	onNext: () => void;
+	onPrevious: () => void;
+}) {
+	const { t } = useTranslation("flow");
+	return (
+		<div className="flex shrink-0 items-center border-r border-border pr-1.5">
+			<Hint
+				label={t("previousGroupSuggestion", "Previous suggestion")}
+				shortcut="←"
+			>
+				<Button
+					type="button"
+					size="icon"
+					variant="ghost"
+					className="size-7"
+					aria-label={t("previousGroupSuggestion", "Previous suggestion")}
+					disabled={busy}
+					onClick={onPrevious}
+				>
+					<ChevronLeftIcon aria-hidden="true" className="size-4" />
+				</Button>
+			</Hint>
+			<span className="min-w-9 text-center text-xs tabular-nums text-muted-foreground">
+				<span aria-hidden="true">
+					{index + 1}/{count}
+				</span>
+				<span className="sr-only">
+					{t("groupSuggestionPosition", "Suggestion {{index}} of {{count}}", {
+						index: index + 1,
+						count,
+					})}
+				</span>
+			</span>
+			<Hint label={t("nextGroupSuggestion", "Next suggestion")} shortcut="→">
+				<Button
+					type="button"
+					size="icon"
+					variant="ghost"
+					className="size-7"
+					aria-label={t("nextGroupSuggestion", "Next suggestion")}
+					disabled={busy}
+					onClick={onNext}
+				>
+					<ChevronRightIcon aria-hidden="true" className="size-4" />
+				</Button>
+			</Hint>
+		</div>
+	);
+}
+
+function ReviewTarget({
+	suggestion,
+	onJump,
+}: {
+	suggestion: GroupSuggestion;
+	onJump: () => void;
+}) {
+	const { t } = useTranslation("flow");
+	return (
+		<Hint label={t("showGroupOnBoard", "Show on board")}>
+			<button
+				type="button"
+				className="group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				onClick={onJump}
+			>
+				<LocateFixedIcon
+					aria-hidden="true"
+					className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground"
+				/>
+				<span className="min-w-0">
+					<span className="block truncate text-sm font-medium">
+						{suggestion.label}
+					</span>
+					<span className="block truncate text-xs text-muted-foreground">
+						{t(
+							"groupSuggestionCounts",
+							"{{nodes}} nodes · {{wires}} internal wires · {{inputs}} in / {{outputs}} out",
+							{
+								nodes: suggestion.nodeCount,
+								wires: suggestion.internalEdgeCount,
+								inputs: suggestion.inputCount,
+								outputs: suggestion.outputCount,
+							},
+						)}
+					</span>
+				</span>
+			</button>
+		</Hint>
+	);
+}
+
+function ReviewActions({
+	preview,
+	busy,
+	onPreview,
+	onSkip,
+	onCollapse,
+}: {
+	preview: boolean;
+	busy: boolean;
+	onPreview: () => void;
+	onSkip: () => void;
+	onCollapse: () => void;
+}) {
+	const { t } = useTranslation("flow");
+	return (
+		<div className="flex shrink-0 items-center gap-1.5">
+			<Hint
+				label={t("previewGroupHint", "Show the collapsed result")}
+				shortcut="P"
+			>
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					className={cn(
+						preview &&
+							"border-primary/70 bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary dark:border-primary/70 dark:bg-primary/15 dark:hover:bg-primary/20",
+					)}
+					disabled={busy}
+					aria-pressed={preview}
+					onClick={onPreview}
+				>
+					<EyeIcon aria-hidden="true" className="size-4" />
+					{t("previewGroup", "Preview")}
+				</Button>
+			</Hint>
+			<Hint
+				label={t("skipGroupHint", "Not this one — it won't be suggested again")}
+				shortcut="S"
+			>
+				<Button
+					type="button"
+					size="sm"
+					variant="ghost"
+					disabled={busy}
+					onClick={onSkip}
+				>
+					{t("skipGroup", "Skip")}
+				</Button>
+			</Hint>
+			<Hint
+				label={t("collapseGroupHint", "Collapse into a layer")}
+				shortcut="↵"
+			>
+				<Button type="button" size="sm" disabled={busy} onClick={onCollapse}>
+					{busy
+						? t("collapsingGroup", "Collapsing…")
+						: t("collapseGroup", "Collapse")}
+				</Button>
+			</Hint>
+		</div>
+	);
+}
+
+function ReviewOutcome({
+	scope,
+	summary,
+	exhausted,
+}: {
+	scope: GroupReviewScope;
+	summary: GroupReviewSummary;
+	exhausted: boolean;
+}) {
+	const { t } = useTranslation("flow");
+	const decided = summary.collapsed + summary.skipped > 0;
+	const tally = t(
+		"groupReviewSummary",
+		"{{collapsed}} collapsed · {{skipped}} skipped",
+		{ collapsed: summary.collapsed, skipped: summary.skipped },
+	);
+	const [title, detail] = decided
+		? [
+				exhausted
+					? t("noMoreGroupSuggestions", "No more groups to suggest")
+					: t("groupReviewComplete", "All suggestions reviewed"),
+				tally,
+			]
+		: exhausted
+			? [
+					t("groupSuggestions", "Group suggestions"),
+					scope === "selection"
+						? t(
+								"noGroupSuggestionsInSelection",
+								"No groups to suggest in the selection.",
+							)
+						: t("noGroupSuggestions", "No groups to suggest in this layer."),
+				]
+			: [
+					t("groupSuggestionsOutdated", "Suggestions no longer apply"),
+					t(
+						"groupSuggestionsOutdatedDetail",
+						"The board changed since they were found.",
+					),
+				];
+	return (
+		<div className="flex min-w-0 flex-1 items-center gap-2 px-1.5">
+			{decided && (
+				<CircleCheckIcon
+					aria-hidden="true"
+					className="size-4 shrink-0 text-primary"
+				/>
+			)}
+			<span className="min-w-0">
+				<span className="block truncate text-sm font-medium">{title}</span>
+				<span className="block truncate text-xs text-muted-foreground">
+					{detail}
+				</span>
+			</span>
+		</div>
+	);
+}
+
 export const GroupSuggestionsOverlay = memo(function GroupSuggestionsOverlay({
 	suggestions,
 	selectedId,
 	preview,
 	busy,
+	scope = "layer",
+	summary = NO_DECISIONS,
+	exhausted = true,
 	onSelect,
+	onNext,
+	onPrevious,
 	onPreview,
 	onCollapse,
-	onDismiss,
+	onSkip,
+	onFindMore,
 	onClose,
 	getPinPosition,
 }: GroupSuggestionsOverlayProps) {
 	const { t } = useTranslation("flow");
 	const stripRef = useRef<HTMLElement>(null);
 	const nodes = useNodes();
-	const { getInternalNode } = useReactFlow();
+	const { getInternalNode, fitView } = useReactFlow();
 	const viewport = useViewport();
 	const labelRefs = useRef(new Map<string, HTMLButtonElement>());
 	const [bottomLabels, setBottomLabels] = useState<ReadonlySet<string>>(
@@ -226,8 +503,41 @@ export const GroupSuggestionsOverlay = memo(function GroupSuggestionsOverlay({
 			};
 		});
 	}, [suggestions, nodes, getInternalNode]);
-	const selected =
-		visible.find((suggestion) => suggestion.id === selectedId) ?? visible[0];
+	const selectedIndex = Math.max(
+		0,
+		visible.findIndex((suggestion) => suggestion.id === selectedId),
+	);
+	const selected = visible[selectedIndex];
+
+	const jump = useCallback(
+		(memberIds: readonly string[]) => {
+			const strip = stripRef.current;
+			const canvas = strip?.closest(".react-flow");
+			const covered =
+				strip && canvas
+					? Math.max(
+							0,
+							strip.getBoundingClientRect().bottom -
+								canvas.getBoundingClientRect().top,
+						)
+					: 0;
+			const reduceMotion = strip?.ownerDocument.defaultView?.matchMedia?.(
+				"(prefers-reduced-motion: reduce)",
+			).matches;
+			void fitView({
+				nodes: memberIds.map((id) => ({ id })),
+				padding: {
+					top: `${Math.round(covered + BADGE_ROOM)}px`,
+					right: `${JUMP_PADDING}px`,
+					bottom: `${JUMP_PADDING}px`,
+					left: `${JUMP_PADDING}px`,
+				},
+				maxZoom: JUMP_MAX_ZOOM,
+				duration: reduceMotion ? 0 : 350,
+			});
+		},
+		[fitView],
+	);
 
 	useLayoutEffect(() => {
 		const strip = stripRef.current;
@@ -294,13 +604,38 @@ export const GroupSuggestionsOverlay = memo(function GroupSuggestionsOverlay({
 		};
 	}, []);
 
+	const keys = useRef({
+		onClose,
+		onNext,
+		onPrevious,
+		onPreview,
+		onCollapse,
+		onSkip,
+		ready: false,
+	});
+	keys.current = {
+		onClose,
+		onNext,
+		onPrevious,
+		onPreview,
+		onCollapse,
+		onSkip,
+		ready: Boolean(selected) && !busy,
+	};
+
 	useEffect(() => {
 		const strip = stripRef.current;
 		const board = strip?.closest(".react-flow");
 		const document = strip?.ownerDocument;
 		if (!strip || !document) return;
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || event.defaultPrevented || event.isComposing)
+			if (
+				event.defaultPrevented ||
+				event.isComposing ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.altKey
+			)
 				return;
 			const target = event.target;
 			if (target instanceof Element) {
@@ -312,13 +647,53 @@ export const GroupSuggestionsOverlay = memo(function GroupSuggestionsOverlay({
 				)
 					return;
 			}
+			const handlers = keys.current;
+			let run: (() => void) | undefined;
+			if (event.key === "Escape") run = handlers.onClose;
+			else if (
+				handlers.ready &&
+				!event.repeat &&
+				!(target instanceof Element && target.closest(IGNORED_KEY_TARGETS))
+			) {
+				const onButton =
+					target instanceof Element && target.closest("button, a") !== null;
+				switch (event.key.toLowerCase()) {
+					case "arrowright":
+						run = handlers.onNext;
+						break;
+					case "arrowleft":
+						run = handlers.onPrevious;
+						break;
+					case "p":
+						run = handlers.onPreview;
+						break;
+					case "s":
+						run = handlers.onSkip;
+						break;
+					case "enter":
+						if (!onButton) run = handlers.onCollapse;
+						break;
+				}
+			}
+			if (!run) return;
 			event.preventDefault();
 			event.stopPropagation();
-			onClose();
+			run();
 		};
 		document.addEventListener("keydown", onKeyDown, true);
 		return () => document.removeEventListener("keydown", onKeyDown, true);
-	}, [onClose]);
+	}, []);
+
+	// Keyed by membership, not topology id, so rewiring inside the group never re-jumps.
+	const focusKey = selected?.memberIds.join("\0");
+	useEffect(() => {
+		if (!focusKey) return;
+		jump(focusKey.split("\0"));
+		const strip = stripRef.current;
+		const active = strip?.ownerDocument.activeElement;
+		if (strip && (!active || active === strip.ownerDocument.body))
+			strip.focus({ preventScroll: true });
+	}, [focusKey, jump]);
 
 	return (
 		<>
@@ -395,76 +770,67 @@ export const GroupSuggestionsOverlay = memo(function GroupSuggestionsOverlay({
 					tabIndex={-1}
 					aria-label={t("groupSuggestions", "Group suggestions")}
 					aria-busy={busy}
-					className="nodrag nopan nowheel pointer-events-auto flex flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 px-3 py-2 shadow-lg backdrop-blur-sm"
+					className="nodrag nopan nowheel pointer-events-auto flex w-2xl max-w-full flex-wrap items-center gap-2 rounded-xl border border-border bg-background/95 px-2 py-1.5 shadow-lg backdrop-blur-sm focus-visible:outline-none"
 					onPointerDown={(event) => event.stopPropagation()}
 				>
-					<div className="mr-2 min-w-0 flex-1" aria-live="polite">
-						<p className="truncate text-sm font-medium">
-							{selected?.label ?? t("groupSuggestions", "Group suggestions")}
-						</p>
-						<p className="text-xs text-muted-foreground">
-							{selected
-								? t(
-										"groupSuggestionCounts",
-										"{{nodes}} nodes · {{wires}} internal wires · {{inputs}} in / {{outputs}} out",
-										{
-											nodes: selected.nodeCount,
-											wires: selected.internalEdgeCount,
-											inputs: selected.inputCount,
-											outputs: selected.outputCount,
-										},
-									)
-								: t(
-										"noGroupSuggestions",
-										"No groups to suggest in this layer.",
-									)}
-						</p>
+					{visible.length > 1 && (
+						<ReviewNavigation
+							index={selectedIndex}
+							count={visible.length}
+							busy={busy}
+							onNext={onNext}
+							onPrevious={onPrevious}
+						/>
+					)}
+					<div className="flex min-w-0 flex-1 items-center" aria-live="polite">
+						{selected ? (
+							<ReviewTarget
+								suggestion={selected}
+								onJump={() => jump(selected.memberIds)}
+							/>
+						) : (
+							<ReviewOutcome
+								scope={scope}
+								summary={summary}
+								exhausted={exhausted}
+							/>
+						)}
 					</div>
-					{selected && (
-						<>
+					{selected ? (
+						<ReviewActions
+							preview={preview}
+							busy={busy}
+							onPreview={onPreview}
+							onSkip={onSkip}
+							onCollapse={onCollapse}
+						/>
+					) : (
+						!exhausted && (
 							<Button
 								type="button"
 								size="sm"
 								variant="outline"
-								disabled={busy}
-								aria-pressed={preview}
-								onClick={onPreview}
+								onClick={onFindMore}
 							>
-								{preview
-									? t("hideGroupPreview", "Hide preview")
-									: t("previewGroup", "Preview")}
+								{t("findMoreGroups", "Find more")}
 							</Button>
-							<Button
-								type="button"
-								size="sm"
-								disabled={busy}
-								onClick={onCollapse}
-							>
-								{busy
-									? t("collapsingGroup", "Collapsing…")
-									: t("collapseGroup", "Collapse")}
-							</Button>
-							<Button
-								type="button"
-								size="sm"
-								variant="ghost"
-								disabled={busy}
-								onClick={onDismiss}
-							>
-								{t("dismissGroup", "Dismiss")}
-							</Button>
-						</>
+						)
 					)}
-					<Button
-						type="button"
-						size="icon"
-						variant="ghost"
-						className="size-8"
-						aria-label={t("closeGroupSuggestions", "Close group suggestions")}
-						onClick={onClose}
+					<Hint
+						label={t("closeGroupSuggestions", "Close group suggestions")}
+						shortcut="Esc"
 					>
-						<XIcon aria-hidden="true" className="size-4" />
-					</Button>
+						<Button
+							type="button"
+							size="icon"
+							variant="ghost"
+							className="size-8 shrink-0"
+							aria-label={t("closeGroupSuggestions", "Close group suggestions")}
+							onClick={onClose}
+						>
+							<XIcon aria-hidden="true" className="size-4" />
+						</Button>
+					</Hint>
 				</section>
 			</Panel>
 		</>

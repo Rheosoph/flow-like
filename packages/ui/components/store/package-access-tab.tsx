@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import type { AccessRequest } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
@@ -40,7 +41,7 @@ export function PackageAccessTab({
 
 	const queryKey = ["access-requests", packageId];
 
-	const { data: requests = [], isLoading } = useQuery<AccessRequest[]>({
+	const { data: requestData, isLoading } = useQuery<AccessRequest[]>({
 		queryKey,
 		queryFn: () =>
 			fetcher<AccessRequest[]>(
@@ -51,6 +52,7 @@ export function PackageAccessTab({
 			),
 		enabled: !!profile.data,
 	});
+	const requests = asArray(requestData);
 
 	const accept = useMutation({
 		mutationFn: (requestId: string) =>

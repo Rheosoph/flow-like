@@ -3,6 +3,7 @@ import {
 	type QueryStorageBackend,
 	createBoundedStorage,
 	createSmartQueryPersister,
+	isUnconfirmedRestore,
 	shouldPersistQuery,
 } from "./query-persister";
 
@@ -171,7 +172,7 @@ describe("createSmartQueryPersister end to end", () => {
 
 		// A fresh query with empty cache restores from storage without fetching
 		const restored = await persister.persisterFn(
-			async () => {
+			async (): Promise<{ apps: number[] }> => {
 				throw new Error("should not fetch");
 			},
 			ctx,
@@ -231,5 +232,62 @@ describe("createSmartQueryPersister end to end", () => {
 		await new Promise((r) => setTimeout(r, 60));
 		await persister.persisterGc();
 		expect(backend.map.size).toBe(0);
+	});
+
+	it("marks restored data until a query function confirms it", async () => {
+		const backend = memoryBackend();
+		const persister = createSmartQueryPersister({ backend });
+		const seeded = fakeQuery(["getApps"]);
+		seeded.state.data = { apps: [1] };
+		await persister.persisterFn(
+			async () => ({ apps: [1] }),
+			ctx,
+			seeded as never,
+		);
+		await new Promise((r) => setTimeout(r, 10));
+		expect(isUnconfirmedRestore(seeded.state.data)).toBe(false);
+
+		const cold = fakeQuery(["getApps"]);
+		const restored = await persister.persisterFn(
+			async (): Promise<{ apps: number[] }> => {
+				throw new Error("should not fetch");
+			},
+			ctx,
+			cold as never,
+		);
+		expect(isUnconfirmedRestore(restored)).toBe(true);
+
+		cold.state.data = restored;
+		await persister.persisterFn(
+			async () => ({ apps: [1] }),
+			ctx,
+			cold as never,
+		);
+		expect(isUnconfirmedRestore(restored)).toBe(false);
+	});
+
+	it("refetches a stale restore and keeps a failed refetch on the query", async () => {
+		const backend = memoryBackend();
+		const persister = createSmartQueryPersister({ backend });
+		const seeded = fakeQuery(["getApps"]);
+		seeded.state.data = { apps: [] };
+		await persister.persisterFn(
+			async () => ({ apps: [] }),
+			ctx,
+			seeded as never,
+		);
+		await new Promise((r) => setTimeout(r, 10));
+
+		let refetches = 0;
+		const cold = fakeQuery(["getApps"]);
+		cold.isStale = () => true;
+		cold.fetch = () => {
+			refetches += 1;
+			return Promise.reject(new Error("Failed to fetch"));
+		};
+		await persister.persisterFn(async () => ({ apps: [] }), ctx, cold as never);
+		// An unhandled rejection from the refetch would fail this test.
+		await new Promise((r) => setTimeout(r, 10));
+		expect(refetches).toBe(1);
 	});
 });

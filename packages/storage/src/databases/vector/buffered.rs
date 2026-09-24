@@ -476,6 +476,9 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         origin: Option<BufferedWriteOrigin>,
     ) -> Result<()> {
         self.inner.ensure_writable()?;
+        if self.inner.is_durably_managed() {
+            return self.inner.upsert(items, id_field).await;
+        }
         let count = items.len();
         let items = items
             .into_iter()
@@ -495,6 +498,9 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         origin: Option<BufferedWriteOrigin>,
     ) -> Result<()> {
         self.inner.ensure_writable()?;
+        if self.inner.is_durably_managed() {
+            return self.inner.insert(items).await;
+        }
         let count = items.len();
         let items = items
             .into_iter()
@@ -528,6 +534,10 @@ impl<T: VectorStore> BufferedVectorStore<T> {
 
 #[async_trait]
 impl<T: VectorStore + 'static> VectorStore for BufferedVectorStore<T> {
+    fn is_durably_managed(&self) -> bool {
+        self.inner.is_durably_managed()
+    }
+
     fn ensure_writable(&self) -> Result<()> {
         self.inner.ensure_writable()
     }

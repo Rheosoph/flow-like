@@ -4,7 +4,12 @@ import { useRouter } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { ClientNavigationContext } from "./client-navigation";
 import { QueryParamNavigationContext } from "./set-query-params";
-import { isUsePathname, pathUseUrl, readUseRoutePath } from "./use-route-url";
+import {
+	isUsePathname,
+	pathUseUrl,
+	queryUseUrl,
+	readUseRoutePath,
+} from "./use-route-url";
 
 // Custom Tauri schemes have opaque origins. Compare their complete authority
 // instead of treating every URL with a "null" origin as local.
@@ -20,24 +25,34 @@ function isLocalUrl(url: URL): boolean {
 
 export function UseNavigationProvider({
 	children,
+	routeMode = "path",
 }: {
 	children: React.ReactNode;
+	routeMode?: "path" | "query";
 }) {
 	const router = useRouter();
-	const href = useCallback((value: string) => {
-		if (typeof window === "undefined") return value;
-		try {
-			const url = new URL(value, window.location.href);
-			return isLocalUrl(url) && isUsePathname(url.pathname)
-				? pathUseUrl(url)
-				: value;
-		} catch {
-			return value;
-		}
-	}, []);
+	const href = useCallback(
+		(value: string) => {
+			if (typeof window === "undefined") return value;
+			try {
+				const url = new URL(value, window.location.href);
+				if (!isLocalUrl(url) || !isUsePathname(url.pathname)) return value;
+				return routeMode === "query" ? queryUseUrl(url) : pathUseUrl(url);
+			} catch {
+				return value;
+			}
+		},
+		[routeMode],
+	);
 	const navigate = useCallback(
 		(value: string, replace: boolean, options?: { scroll?: boolean }) => {
 			const destination = href(value);
+			if (routeMode === "query") {
+				// Native assets export /use, so let Next navigate that shell instead
+				// of restoring history entries for paths without exported payloads.
+				router[replace ? "replace" : "push"](destination, options);
+				return;
+			}
 			const url = new URL(destination, window.location.href);
 			if (isLocalUrl(url) && isUsePathname(url.pathname)) {
 				if (isUsePathname(window.location.pathname)) {
@@ -86,7 +101,7 @@ export function UseNavigationProvider({
 			}
 			router[replace ? "replace" : "push"](destination, options);
 		},
-		[href, router],
+		[href, router, routeMode],
 	);
 	const navigateQuery = useCallback(
 		(value: string, replace: boolean) => {

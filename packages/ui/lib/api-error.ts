@@ -193,7 +193,73 @@ export function apiResponseError(
 		quota,
 	});
 	if (typeof window !== "undefined" && isUpgradeRequiredError(error)) {
-		window.dispatchEvent(new window.CustomEvent(PLAN_LIMIT_EVENT, { detail: error }));
+		window.dispatchEvent(
+			new window.CustomEvent(PLAN_LIMIT_EVENT, { detail: error }),
+		);
 	}
 	return error;
+}
+
+/**
+ * A request that timed out or never reached the server says nothing about the
+ * caller's access or the resource: only a server refusal does.
+ */
+export function isTransportFailure(error: unknown): boolean {
+	if (!error || error instanceof ApiResponseError) return false;
+	const { name, message } = error as { name?: unknown; message?: unknown };
+	if (name === "RequestTimeoutError") return true;
+	if (typeof message !== "string") return false;
+	return (
+		message.startsWith("Network unavailable") ||
+		message.includes("Failed to fetch") ||
+		message.includes("NetworkError") ||
+		message.includes("Network request failed") ||
+		message.includes("fetch failed") ||
+		message.includes("Load failed")
+	);
+}
+
+export const UPSTREAM_UNAVAILABLE_CODE = "UPSTREAM_UNAVAILABLE";
+
+/**
+ * A 2xx carrying a body the API never sends on success. A Lambda whose runtime
+ * died (startup panic, OOM, timeout) still answers its Function URL with 200 and
+ * `{errorType, errorMessage}`; captive portals and proxies answer with an HTML
+ * page. Returned as data, either reaches every caller in the wrong shape, so
+ * both become a 502 — the status offline and transient paths already handle.
+ *
+ * `data` is the body as the caller parsed it: the JSON value, or the raw text.
+ */
+export function upstreamFailureInSuccess(
+	response: Pick<Response, "status" | "headers">,
+	data: unknown,
+	path?: string,
+): ApiResponseError | undefined {
+	const requestId =
+		nonEmptyString(response.headers.get("x-amzn-requestid")) ??
+		nonEmptyString(response.headers.get("x-request-id"));
+	if (response.headers.get("content-type")?.includes("text/html")) {
+		return new ApiResponseError({
+			status: 502,
+			code: UPSTREAM_UNAVAILABLE_CODE,
+			message: `Expected API data but received an HTML page (HTTP ${response.status})`,
+			errorId: requestId,
+			path,
+		});
+	}
+	if (
+		typeof data === "object" &&
+		data !== null &&
+		typeof (data as { errorType?: unknown }).errorType === "string" &&
+		typeof (data as { errorMessage?: unknown }).errorMessage === "string"
+	) {
+		return new ApiResponseError({
+			status: 502,
+			code: UPSTREAM_UNAVAILABLE_CODE,
+			message: `The API runtime failed (${(data as { errorType: string }).errorType})`,
+			errorId: requestId,
+			path,
+		});
+	}
+	return undefined;
 }

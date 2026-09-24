@@ -340,7 +340,7 @@ export function LlmSection({
 
 	const totals = llm.data?.totals;
 	const bucket = trendBucketForHours(llm.data?.hours ?? hours);
-	const modelCount = llm.data?.byModel.length ?? 0;
+	const modelCount = llm.data?.byModel?.length ?? 0;
 	const daily = isDailyGranularity(llm.data);
 	const p95Available = Number.isFinite(totals?.p95DurationMs);
 

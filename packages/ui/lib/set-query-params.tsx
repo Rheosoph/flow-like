@@ -88,6 +88,11 @@ export function nextQueryParamRequest(
 
 let inFlight: IQueryParamRequest | null = null;
 
+/** Test seam — this module holds the process-global request in flight. */
+export function resetQueryParamRequests(): void {
+	inFlight = null;
+}
+
 export function useSetQueryParams(): ISetQueryParams {
 	const router = useClientRouter();
 	const navigate = useContext(QueryParamNavigationContext);

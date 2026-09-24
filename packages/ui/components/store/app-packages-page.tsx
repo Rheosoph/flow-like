@@ -16,6 +16,7 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import type { INode } from "../../lib/schema/flow/node";
 import type {
 	AddAppPackageRequest,
@@ -143,11 +144,12 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			isOffline.data !== undefined &&
 			(isOffline.data || !!profile.data),
 	});
+	const packageRows = useMemo(() => asArray(packages.data), [packages.data]);
 
 	const catalog = useQuery<INode[]>({
 		queryKey: ["app-catalog-nodes", appId],
 		queryFn: () => backend.boardState.getCatalog(appId),
-		enabled: !!appId && !!packages.data?.length,
+		enabled: !!appId && packageRows.length > 0,
 	});
 
 	const updates = useQuery<PackageUpdate[]>({
@@ -163,7 +165,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			!!appId &&
 			isOffline.data === false &&
 			!!profile.data &&
-			!!packages.data?.length,
+			packageRows.length > 0,
 	});
 
 	const nodesByPackage = useMemo(() => {
@@ -183,7 +185,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 
 	const updatesByPackage = useMemo(() => {
 		const map = new Map<string, PackageUpdate>();
-		for (const update of updates.data ?? []) {
+		for (const update of asArray(updates.data)) {
 			map.set(update.packageId, update);
 		}
 		return map;
@@ -365,25 +367,22 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	// newer version available. Stale packages must be reactivated first.
 	const applicableUpdates = useMemo(
 		() =>
-			(packages.data ?? [])
+			packageRows
 				.filter((p) => !p.stale)
 				.flatMap((p) => updatesByPackage.get(p.packageId) ?? []),
-		[packages.data, updatesByPackage],
+		[packageRows, updatesByPackage],
 	);
 
 	const packageNames = useMemo(
 		() =>
 			new Map(
-				(packages.data ?? []).map((p) => [
-					p.packageId,
-					p.packageName ?? p.packageId,
-				]),
+				packageRows.map((p) => [p.packageId, p.packageName ?? p.packageId]),
 			),
-		[packages.data],
+		[packageRows],
 	);
 
-	const excludeIds = packages.data?.map((p) => p.packageId) ?? [];
-	const staleCount = packages.data?.filter((p) => p.stale).length ?? 0;
+	const excludeIds = packageRows.map((p) => p.packageId);
+	const staleCount = packageRows.filter((p) => p.stale).length;
 
 	if (packages.isLoading || isOffline.isLoading)
 		return <PackagesPageSkeleton />;
@@ -442,7 +441,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						</AlertDescription>
 					</Alert>
 				)}
-				{!packages.data?.length ? (
+				{!packageRows.length ? (
 					<EmptyState
 						className="w-full max-w-none grow"
 						icons={[Package]}
@@ -454,7 +453,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					/>
 				) : (
 					<div className="space-y-3">
-						{packages.data.map((pkg) => (
+						{packageRows.map((pkg) => (
 							<PackageCard
 								key={pkg.id}
 								pkg={pkg}

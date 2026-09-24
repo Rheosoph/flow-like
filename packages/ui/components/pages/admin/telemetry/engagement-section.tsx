@@ -370,7 +370,7 @@ export function EngagementSection({
 					<CardContent>
 						<BarList
 							rows={
-								data?.dropOffPaths.map((p) => ({
+								data?.dropOffPaths?.map((p) => ({
 									key: p.path,
 									label: p.path,
 									count: p.count,

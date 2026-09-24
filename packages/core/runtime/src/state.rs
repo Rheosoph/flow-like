@@ -54,8 +54,37 @@ pub struct FlowLikeStores {
     pub log_store: Option<FlowLikeStore>,
 }
 
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseFuture<T> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = flow_like_types::Result<T>> + Send + 'static>,
+>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseStoreDecorator = Arc<
+    dyn Fn(
+            Path,
+            flow_like_storage::databases::vector::lancedb::LanceDBVectorStore,
+        )
+            -> DatabaseFuture<flow_like_storage::databases::vector::lancedb::LanceDBVectorStore>
+        + Send
+        + Sync,
+>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseTableNames = Arc<dyn Fn(Path) -> DatabaseFuture<Vec<String>> + Send + Sync>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseTableIsManaged = Arc<dyn Fn(&Path, &str) -> bool + Send + Sync>;
+
 #[derive(Clone)]
 pub struct FlowLikeCallbacks {
+    /// Optional logical database adapter. Hosts own its durability and local view.
+    #[cfg(feature = "flow-runtime")]
+    pub decorate_database: Option<DatabaseStoreDecorator>,
+    #[cfg(feature = "flow-runtime")]
+    pub database_table_names: Option<DatabaseTableNames>,
+    #[cfg(feature = "flow-runtime")]
+    pub database_table_is_managed: Option<DatabaseTableIsManaged>,
     #[cfg(feature = "flow-runtime")]
     pub build_project_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
     #[cfg(feature = "flow-runtime")]
@@ -73,6 +102,12 @@ pub struct FlowLikeCallbacks {
 impl Default for FlowLikeCallbacks {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "flow-runtime")]
+            decorate_database: None,
+            #[cfg(feature = "flow-runtime")]
+            database_table_names: None,
+            #[cfg(feature = "flow-runtime")]
+            database_table_is_managed: None,
             #[cfg(feature = "flow-runtime")]
             build_project_database: None,
             #[cfg(feature = "flow-runtime")]
@@ -95,6 +130,21 @@ pub struct FlowLikeConfig {
 }
 
 impl FlowLikeConfig {
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_decorator(&mut self, callback: DatabaseStoreDecorator) {
+        self.callbacks.decorate_database = Some(callback);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_table_names(&mut self, callback: DatabaseTableNames) {
+        self.callbacks.database_table_names = Some(callback);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_table_is_managed(&mut self, callback: DatabaseTableIsManaged) {
+        self.callbacks.database_table_is_managed = Some(callback);
+    }
+
     pub fn new() -> Self {
         FlowLikeConfig {
             callbacks: FlowLikeCallbacks::default(),
@@ -484,8 +534,14 @@ impl RunData {
 pub struct FlowLikeState {
     pub config: Arc<RwLock<FlowLikeConfig>>,
     pub http_client: Arc<HTTPClient>,
+    /// Shared authority resolves a fresh resource lease for each cloud request.
+    /// Persistent contexts retain this provider instead of a startup token.
+    pub request_authorizer: Option<Arc<dyn flow_like_types::authorization::RequestAuthorizer>>,
     #[cfg(feature = "flow-runtime")]
     pub lance_session: Arc<LanceSession>,
+    #[cfg(feature = "flow-runtime")]
+    lance_store_registry:
+        Option<Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>>,
 
     #[cfg(feature = "bit")]
     pub download_manager: Arc<Mutex<DownloadManager>>,
@@ -550,8 +606,11 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            request_authorizer: None,
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
+            #[cfg(feature = "flow-runtime")]
+            lance_store_registry: None,
             #[cfg(feature = "flow-metadata")]
             execution_environment: ExecutionEnvironment::default(),
 
@@ -595,8 +654,11 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            request_authorizer: None,
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
+            #[cfg(feature = "flow-runtime")]
+            lance_store_registry: None,
             #[cfg(feature = "flow-metadata")]
             execution_environment: ExecutionEnvironment::default(),
 
@@ -670,6 +732,27 @@ impl FlowLikeState {
         builder.session(self.lance_session.clone())
     }
 
+    #[cfg(feature = "flow-runtime")]
+    pub fn set_lance_store_registry(
+        &mut self,
+        registry: Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>,
+    ) {
+        self.lance_store_registry = Some(registry);
+        self.lance_session = self.fresh_lance_session();
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    fn fresh_lance_session(&self) -> Arc<LanceSession> {
+        match &self.lance_store_registry {
+            Some(registry) => Arc::new(LanceSession::new(
+                flow_like_storage::lance::dataset::DEFAULT_INDEX_CACHE_SIZE,
+                flow_like_storage::lance::dataset::DEFAULT_METADATA_CACHE_SIZE,
+                registry.clone(),
+            )),
+            None => Arc::new(LanceSession::default()),
+        }
+    }
+
     /// Persist a trigger that never became a run, so it still shows up in the
     /// board's run history with the reason attached.
     #[cfg(feature = "flow-runtime")]
@@ -711,8 +794,11 @@ impl FlowLikeState {
         FlowLikeState {
             config: self.config.clone(),
             http_client: self.http_client.clone(),
+            request_authorizer: self.request_authorizer.clone(),
             #[cfg(feature = "flow-runtime")]
-            lance_session: Arc::new(LanceSession::default()),
+            lance_session: self.fresh_lance_session(),
+            #[cfg(feature = "flow-runtime")]
+            lance_store_registry: self.lance_store_registry.clone(),
             #[cfg(feature = "flow-metadata")]
             execution_environment: self.execution_environment,
 
@@ -1222,6 +1308,58 @@ mod tests {
 
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn execution_states_share_live_authority() {
+        use flow_like_types::authorization::{
+            AuthorizationError, AuthorizationRequest, RequestAuthorization, RequestAuthorizer,
+        };
+        struct Denied;
+        impl RequestAuthorizer for Denied {
+            fn authorize<'a>(
+                &'a self,
+                _: AuthorizationRequest<'a>,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn Future<Output = Result<RequestAuthorization, AuthorizationError>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async { Err(AuthorizationError::Denied) })
+            }
+        }
+        let provider: Arc<dyn RequestAuthorizer> = Arc::new(Denied);
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        );
+        state.request_authorizer = Some(provider.clone());
+        let run_state = state.for_execution_run();
+        assert!(Arc::ptr_eq(
+            run_state.request_authorizer.as_ref().unwrap(),
+            &provider
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "flow-runtime")]
+    fn execution_states_keep_scoped_lance_registry_with_separate_session_caches() {
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        );
+        let registry =
+            Arc::new(flow_like_storage::lance_io::object_store::ObjectStoreRegistry::empty());
+        state.set_lance_store_registry(registry.clone());
+        let run = state.for_execution_run();
+        assert!(!Arc::ptr_eq(&state.lance_session, &run.lance_session));
+        assert!(Arc::ptr_eq(&registry, &run.lance_session.store_registry()));
+    }
 
     #[test]
     fn object_store_path_serialization() {

@@ -18,6 +18,27 @@ describe("plainTextFromRichContent", () => {
 		).toBe("one bold\ntwo");
 	});
 
+	test("reads quotes saved before and after Plate 53 made them containers", () => {
+		expect(
+			plainTextFromRichContent(
+				'plate_json::[{"type":"blockquote","children":[{"text":"flat "},{"text":"quote","italic":true}]}]',
+			),
+		).toBe("flat quote");
+		expect(
+			plainTextFromRichContent(
+				'plate_json::[{"type":"blockquote","children":[{"type":"p","children":[{"text":"first"}]},{"type":"p","children":[{"text":""}]},{"type":"blockquote","children":[{"type":"p","children":[{"text":"nested "},{"type":"a","url":"https://x.dev","children":[{"text":"link"}]}]}]}]}]',
+			),
+		).toBe("first\nnested link");
+	});
+
+	test("puts every table cell on its own line", () => {
+		expect(
+			plainTextFromRichContent(
+				'plate_json::[{"type":"table","children":[{"type":"tr","children":[{"type":"td","children":[{"type":"p","children":[{"text":"a"}]}]},{"type":"td","children":[{"type":"p","children":[{"type":"a","url":"https://x.dev","children":[{"text":"b"}]}]}]}]}]}]',
+			),
+		).toBe("a\nb");
+	});
+
 	test("leaves markdown content untouched", () => {
 		expect(plainTextFromRichContent("# Heading\n\nbody")).toBe(
 			"# Heading\n\nbody",

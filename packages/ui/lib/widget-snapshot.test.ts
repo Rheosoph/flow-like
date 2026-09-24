@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	test,
+} from "bun:test";
 import { Window } from "happy-dom";
 import {
 	captureWidgetSnapshots,
@@ -264,7 +272,12 @@ describe("encodeSnapshotCanvas", () => {
 const rasterized: { element: HTMLElement; options: Record<string, unknown> }[] =
 	[];
 
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualHtml2Canvas = { ...(await import("html2canvas-pro")) };
+
 mock.module("html2canvas-pro", () => ({
+	...actualHtml2Canvas,
 	default: async (element: HTMLElement, options: Record<string, unknown>) => {
 		rasterized.push({ element, options });
 		return {
@@ -278,6 +291,17 @@ mock.module("html2canvas-pro", () => ({
 describe("captureWidgetSnapshots", () => {
 	let browserWindow: Window;
 	const mounted: string[] = [];
+	const globalDescriptors = ["document", "window", "CSS"].map(
+		(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+	);
+
+	afterAll(() => {
+		for (const [key, descriptor] of globalDescriptors) {
+			if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+			else Reflect.deleteProperty(globalThis, key);
+		}
+		mock.module("html2canvas-pro", () => actualHtml2Canvas);
+	});
 
 	const mountWidget = (instanceId: string, width = 320, height = 200) => {
 		const element = document.createElement("div");
