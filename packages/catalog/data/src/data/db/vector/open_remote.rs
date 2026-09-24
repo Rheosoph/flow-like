@@ -160,7 +160,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         );
         node.set_flowscript_name("db", "openRemote");
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -193,7 +193,6 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         .set_default_value(Some(json!(1000)));
 
         super::references::add_selector_pins(&mut node);
-        super::references::add_reference_output(&mut node);
 
         node.add_output_pin(
             "exec_out",
@@ -201,6 +200,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
             "Done opening the remote database",
             VariableType::Execution,
         );
+        super::references::add_reference_output(&mut node);
         node.add_output_pin(
             "database",
             "Database",

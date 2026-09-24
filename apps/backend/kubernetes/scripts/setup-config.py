@@ -235,7 +235,7 @@ def database_values(namespace, release, secret):
             except (OSError, UnicodeError):
                 raise ValueError("DATABASE_CA_FILE cannot be read as UTF-8 PEM") from None
             values["caSecret"] = secret("database-ca", {"ca.crt": certificate})
-        return values, secret("database-audit", {"DATABASE_URL": urls["audit"]}), urllib.parse.unquote(users[1])
+        return values, secret("database-audit", {"DATABASE_URL": urls["audit"]})
     certs = database_certificates(namespace, release)
     ca = secret("database-ca", {"ca.crt": certs["ca.crt"]})
     # The signing CA is retained for operator-led renewal and never mounted into a pod.
@@ -249,7 +249,7 @@ def database_values(namespace, release, secret):
     api = secret("database", {"DATABASE_URL": url("flowlike_api", secrets.token_hex(32))})
     worker = secret("database-audit", {"DATABASE_URL": url("flowlike_audit", secrets.token_hex(32))})
     migration = secret("database-migration", {"DATABASE_URL": url("flowlike_migration", owner_password)})
-    return {"type": "internal", "caSecret": ca, "apiExistingSecret": api, "migration": {"existingSecret": migration}, "internal": {"auth": {"username": "flowlike_migration", "database": "flowlike"}, "tls": {"nodeSecret": node, "initSecret": init}}}, worker, "flowlike_api"
+    return {"type": "internal", "caSecret": ca, "apiExistingSecret": api, "migration": {"existingSecret": migration}, "internal": {"auth": {"username": "flowlike_migration", "database": "flowlike"}, "tls": {"nodeSecret": node, "initSecret": init}}}, worker
 
 
 def origin(value, name):
@@ -293,9 +293,9 @@ def generate(namespace, release, image_pull_secrets=()):
     values["api"]["frontendBaseUrl"] = web
     hub_json, hub_ref = runtime_config()
     if hub_ref is not None:
-        raise ValueError("The dedicated audit worker cannot resolve FLOW_LIKE_CONFIG_SECRET_REF; provide the hub config through FLOW_LIKE_CONFIG_FILE or FLOW_LIKE_CONFIG_JSON")
-    # API and audit worker read the same document; the worker takes its audit section.
-    values["api"]["runtimeConfig"] = {"existingSecret": secret("hub-config", {"flow-like.config.json": hub_json})}
+        values["api"]["runtimeConfig"] = {"secretRef": hub_ref}
+    else:
+        values["api"]["runtimeConfig"] = {"existingSecret": secret("hub-config", {"flow-like.config.json": hub_json})}
     values["rustfs"] = {"enabled": bundled}
     storage = {}
     for key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "STS_ISSUER_ACCESS_KEY", "STS_ISSUER_SECRET_KEY"]:
@@ -306,9 +306,8 @@ def generate(namespace, release, image_pull_secrets=()):
     else:
         values["storage"]["s3"].update({"internalEndpoint": origin(required("S3_INTERNAL_ENDPOINT"), "S3_INTERNAL_ENDPOINT"), "stsEndpoint": origin(required("STS_ENDPOINT_URL"), "STS_ENDPOINT_URL"), "runtimeCredentialsProvider": os.environ.get("S3_STS_PROVIDER", "rustfs")})
     audit = audit_values(bundled, secret)
-    values["database"], audit_database, api_role = database_values(namespace, release, secret)
+    values["database"], audit_database = database_values(namespace, release, secret)
     audit["database"] = {"existingSecret": audit_database}
-    audit["apiDatabaseRole"] = api_role
     audit["exportSecret"] = system
     values["audit"] = audit
     password = os.environ.get("REDIS_PASSWORD") or secrets.token_hex(32)

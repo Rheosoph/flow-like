@@ -97,12 +97,18 @@ COPY packages/api/prisma/pre-push ./prisma/pre-push
 COPY packages/api/scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
 COPY packages/api/scripts/make-postgres-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh
 COPY apps/backend/gcp/migration/prisma.config.ts apps/backend/gcp/migration/migrate.ts ./
+# The API/audit-worker privilege boundary migrate.ts applies after the push,
+# imported as ./audit_database_roles; it must sit next to node_modules for pg
+# to resolve, exactly as in the compose db-init image.
+COPY apps/backend/shared/audit_database_roles.ts ./audit_database_roles.ts
 
 # The throwaway loopback URL only satisfies prisma.config.ts's `env()` guard;
 # `prisma format` / `prisma validate` never open a connection. The two greps make
-# the rewrite an assertion rather than a hope, and running the schema engine
-# with --version proves the native binary loads (libssl present, right target)
-# before the image is ever pushed.
+# the rewrite an assertion rather than a hope, running the schema engine with
+# --version proves the native binary loads (libssl present, right target), and
+# importing migrate.ts (its main() runs only as the entrypoint) proves every
+# module it needs, the boundary helper and pg included, resolves inside the
+# image - all before the image is ever pushed.
 RUN chmod +x /usr/local/bin/make-prisma-mirror.sh /usr/local/bin/make-postgres-prisma-mirror.sh \
     && DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build make-postgres-prisma-mirror.sh \
     && rm -rf prisma/schema \
@@ -111,7 +117,8 @@ RUN chmod +x /usr/local/bin/make-prisma-mirror.sh /usr/local/bin/make-postgres-p
     && grep -rEq 'provider *= *"postgresql"' prisma/schema/ \
     && ! grep -rEq 'provider *= *"cockroachdb"' prisma/schema/ \
     && DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build bun x --bun prisma validate --schema=prisma/schema \
-    && node_modules/@prisma/engines/schema-engine-* --version
+    && node_modules/@prisma/engines/schema-engine-* --version \
+    && bun -e 'await import("/app/migrate.ts")'
 
 FROM oven/bun:1.3.8-debian AS runtime
 

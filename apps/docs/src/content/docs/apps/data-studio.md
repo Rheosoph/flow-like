@@ -29,7 +29,7 @@ The **Explore** tab turns ontology mappings into searchable business objects. Se
 
 ## Native tables
 
-The **Sources** tab lists project and personal relational tables. Tables may be created directly in Data Studio or by flows that persist structured results. Open a source to inspect its rows, schema, and indexes:
+The **Sources** tab lists project and personal relational tables. Tables may be created directly in Data Studio or by flows that persist structured results. A table created by a flow takes its column types from its [first write](/topics/datascience/loading/#column-types-from-the-first-write). Open a source to inspect its rows, schema, and indexes:
 
 ![A screenshot of Flow-Like Desktop showing a preview of a custom database populated with data from flow executions](../../../assets/AppDatabases.webp)
 

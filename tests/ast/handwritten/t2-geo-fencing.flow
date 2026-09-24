@@ -57,16 +57,16 @@ let stopReports: StopReport[] = []
 @category("Geo/Fence")
 let detourKilometres: float[] = []
 
-@description("Coordinates of the stops that were geocoded successfully")
+@description("Points of the stops that were geocoded successfully")
 @category("Geo/Fence")
-let stopCoordinates: Struct[] = []
+let stopPoints: geometry<Point>[] = []
 
 function fenceKey(district: string, cell: string): (key: string) {
     return `${district}/${cell}`
 }
 
-function indexStop(coordinate: Struct, stopRes: int, fenceRes: int): (stopCell: string, fenceCell: string) {
-    const stopCell = h3::latlngToCell({ coordinate: coordinate, resolution: stopRes })
+function indexStop(point: geometry<Point>, stopRes: int, fenceRes: int): (stopCell: string, fenceCell: string) {
+    const stopCell = h3::latlngToCell({ geometry: point, resolution: stopRes })
     const { parent } = h3::cellToParent({ cell: stopCell, parentResolution: fenceRes })
     return stopCell, parent
 }
@@ -89,8 +89,8 @@ eventsSimple recomputeServiceArea() {
     const depotLookup = geo::searchLocation({ query: depotAddress, limit: 1, countryCodes: "de" })
     depotLookup {
         execSuccess: {
-            const { value: depotCoordinate } = struct::get({ struct: depotLookup.firstResult, field: "coordinate" })
-            const depotCell = h3::latlngToCell({ coordinate: depotCoordinate, resolution: fenceResolution })
+            const depotPoint = depotLookup.geometryOut
+            const depotCell = h3::latlngToCell({ geometry: depotPoint, resolution: fenceResolution })
             const { cells: fenceCells, count: fenceCellCount } = h3::gridDisk({ cell: depotCell, k: fenceRings })
             const { cellAreaKm2, cellCount, edgeKm } = fenceFootprint(fenceCells, fenceResolution)
             const { compacted, compactedCount } = h3::compactCells({ cells: fenceCells })
@@ -103,11 +103,11 @@ eventsSimple recomputeServiceArea() {
                     const stopLookup = geo::searchLocation({ query: stop.query, limit: 1, countryCodes: "de" })
                     stopLookup {
                         execSuccess: {
-                            const { value: stopCoordinate } = struct::get({ struct: stopLookup.firstResult, field: "coordinate" })
-                            const { stopCell, fenceCell } = indexStop(stopCoordinate, stopResolution, fenceResolution)
+                            const stopPoint = stopLookup.geometryOut
+                            const { stopCell, fenceCell } = indexStop(stopPoint, stopResolution, fenceResolution)
                             const insideFence = fenceCells.includes({ value: fenceCell })
                             const ringOffset = h3::gridDistance({ cellA: depotCell, cellB: fenceCell })
-                            const leg = geo::planRoute({ start: depotCoordinate, end: stopCoordinate, profile: "Bike", alternatives: false })
+                            const leg = geo::planRoute({ startGeometry: depotPoint, endGeometry: stopPoint, profile: "Bike", alternatives: false })
                             leg {
                                 execSuccess: {
                                     const detourKm = leg.distance.divide(1000.0).round(2)
@@ -124,7 +124,7 @@ eventsSimple recomputeServiceArea() {
                                         .set("drive_minutes", driveMinutes)
                                     stopReports = stopReports.push({ value: report })
                                     detourKilometres = detourKilometres.push({ value: detourKm })
-                                    stopCoordinates = stopCoordinates.push({ value: stopCoordinate })
+                                    stopPoints = stopPoints.push({ value: stopPoint })
                                     fenceIndex = map::set({ mapIn: fenceIndex, key: fenceKey(districtName, fenceCell), value: report })
                                     if (insideFence) {
                                         info({ message: `${headline} is in-area: ${detourKm} km / ${driveMinutes} min`, toast: false })
@@ -162,7 +162,7 @@ eventsSimple recomputeServiceArea() {
                 info({ message: `${indexedCells} fence cells indexed, median ${medianDetour} km, spread ${spread} km over ${fenceCellCount} candidate cells`, toast: false })
             }
 
-            const shiftLoop = geo::osrmTrip({ coordinates: stopCoordinates, profile: "Bike", roundtrip: true })
+            const shiftLoop = geo::osrmTrip({ geometries: stopPoints, profile: "Bike", roundtrip: true })
             shiftLoop {
                 execSuccess: {
                     const loopKm = shiftLoop.distance.divide(1000.0).round(2)

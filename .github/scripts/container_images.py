@@ -149,7 +149,11 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
     api = entry["workload"] in API_WORKLOADS or (entry["cloud"] == "aws" and entry["workload"] == "audit-worker")
     if entry["audit_features"]:
         build_inputs["audit_features"] = entry["audit_features"]
-        build_inputs["runtime_config"] = "audit-worker-env-v1"
+        # Dedicated workers compile the audit section of their API's build config.
+        config = ("apps/backend/docker-compose/flow-like.config.example.json"
+                  if entry["cloud"] in SELF_HOSTED_CLOUDS else "flow-like.config.json")
+        build_inputs["runtime_config"] = "compiled-audit-section-v1"
+        build_inputs["flow_like_config_sha256"] = hashlib.sha256((REPOSITORY_ROOT / config).read_bytes()).hexdigest()
     if entry["workload"] == "audit-worker" and entry["cloud"] in ("azure", "gcp"):
         launcher = REPOSITORY_ROOT / f"apps/backend/{entry['cloud']}/audit-worker/entrypoint.py"
         build_inputs["entrypoint_sha256"] = hashlib.sha256(launcher.read_bytes()).hexdigest()

@@ -719,6 +719,11 @@ impl NodeLogic for McpServerNode {
             context.deactivate_exec_pin("exec_error").await?;
             context.activate_exec_pin("on_listening").await?;
             trigger_connected_exec(context, "on_listening", "MCP server on_listening").await;
+            context
+                .signal_service_ready(
+                    flow_like::flow::execution::service::ServiceReadyKind::McpListener,
+                )
+                .await?;
 
             let parent_node_id = context.node.node.lock().await.id.clone();
             let config = Arc::new(config);
@@ -726,12 +731,17 @@ impl NodeLogic for McpServerNode {
             let resources = Arc::new(resources);
             let oauth_validator = Arc::new(oauth_validator);
             let sessions: SessionMap = Arc::new(flow_like_types::sync::Mutex::new(HashMap::new()));
-            let cancellation_token = context.get_cancellation_token();
+            let cancellation_token = context
+                .service_drain_token()
+                .await
+                .or_else(|| context.get_cancellation_token());
             let active_connections = Arc::new(AtomicU32::new(0));
-            let mut handles = Vec::new();
+            // JoinSet aborts handlers if the enclosing workflow future is dropped.
+            let mut handles = tokio::task::JoinSet::new();
             let mut cancelled = false;
 
             loop {
+                while handles.try_join_next().is_some() {}
                 let accept = if config.timeout_seconds > 0 {
                     tokio::select! {
                         result = listener.accept() => Some(result),
@@ -809,7 +819,7 @@ impl NodeLogic for McpServerNode {
                 let active_connections = active_connections.clone();
                 let parent_node_id = parent_node_id.clone();
                 let conn_cancel = cancellation_token.clone();
-                handles.push(tokio::spawn(async move {
+                handles.spawn(async move {
                     handle_connection(
                         stream,
                         remote_addr.to_string(),
@@ -823,14 +833,17 @@ impl NodeLogic for McpServerNode {
                     )
                     .await;
                     active_connections.fetch_sub(1, Ordering::Relaxed);
-                }));
+                });
             }
 
-            for handle in handles {
-                if !handle.is_finished() {
-                    handle.abort();
-                }
-            }
+            drop(listener);
+            // Stop accepting before draining established requests. The supervisor
+            // allows twelve seconds before cancelling this run altogether.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while handles.join_next().await.is_some() {}
+            })
+            .await;
+            handles.shutdown().await;
             context.deactivate_exec_pin("on_listening").await?;
             context.activate_exec_pin("on_close").await?;
             trigger_connected_exec(context, "on_close", "MCP server on_close").await;

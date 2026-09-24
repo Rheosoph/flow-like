@@ -38,8 +38,66 @@ pub mod optimize;
 pub mod purge;
 pub mod references;
 pub mod schema;
+pub mod update;
 pub mod upsert;
 pub mod vector_search;
+
+pub(super) fn add_write_receipt_outputs(node: &mut Node) {
+    node.add_output_pin(
+        "write_state",
+        "Write State",
+        "pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write",
+        VariableType::String,
+    );
+    node.add_output_pin(
+        "operation_id",
+        "Operation ID",
+        "Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.",
+        VariableType::String,
+    );
+}
+
+#[cfg(feature = "execute")]
+pub(super) async fn publish_write_receipt(
+    context: &mut ExecutionContext,
+    receipt: Option<flow_like_storage::databases::vector::lancedb::LocalWriteReceipt>,
+    fallback: &str,
+) -> flow_like_types::Result<()> {
+    let (state, operation_id) = receipt.map_or_else(
+        || (fallback.to_string(), String::new()),
+        |receipt| (receipt.state, receipt.operation_id),
+    );
+    // Older pinned boards do not have these optional outputs.
+    for (name, value) in [("write_state", state), ("operation_id", operation_id)] {
+        if context.get_pin_by_name(name).await.is_ok() {
+            context
+                .set_pin_value(name, flow_like_types::json::json!(value))
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Cleanup operations on a table that does not exist yet have nothing to do.
+/// Returns `true` (after logging a warning) when the caller should skip.
+#[cfg(feature = "execute")]
+pub(crate) async fn skip_missing_table(
+    context: &mut ExecutionContext,
+    database: &BufferedVectorStore<LanceDBVectorStore>,
+    operation: &str,
+) -> flow_like_types::Result<bool> {
+    if database.inner().table_exists().await? {
+        return Ok(false);
+    }
+    context.log_message(
+        &format!(
+            "Skipped {operation}: table '{}' does not exist yet",
+            database.inner().table_name()
+        ),
+        flow_like::flow::execution::LogLevel::Warn,
+    );
+    Ok(true)
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -62,7 +120,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
         );
         node.set_flowscript_name("db", "open");
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -88,7 +146,6 @@ impl NodeLogic for CreateLocalDatabaseNode {
         .set_default_value(Some(flow_like_types::json::json!(1000)));
 
         references::add_selector_pins(&mut node);
-        references::add_reference_output(&mut node);
 
         node.add_output_pin(
             "exec_out",
@@ -96,6 +153,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
             "Done Creating Database",
             VariableType::Execution,
         );
+        references::add_reference_output(&mut node);
 
         node.add_output_pin(
             "database",
@@ -132,6 +190,30 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 .clone()
                 .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
             let app_id = context_cache.app_id.clone();
+            let database_path = if user_scoped {
+                context_cache.get_user_dir(false)?.join("db")
+            } else {
+                context_cache.get_storage(false)?.join("db")
+            };
+            let callbacks = context.app_state.config.read().await.callbacks.clone();
+            let decorator = context
+                .credentials
+                .is_none()
+                .then(|| callbacks.decorate_database.clone())
+                .flatten();
+            let managed = context.credentials.is_none()
+                && callbacks
+                    .database_table_is_managed
+                    .as_ref()
+                    .is_some_and(|selected| selected(&database_path, &table));
+            if managed {
+                LanceDBVectorStore::validate_overlay_selector(&selector)?;
+                if decorator.is_none() {
+                    return Err(flow_like_types::anyhow!(
+                        "The selected offline table has no logical database adapter"
+                    ));
+                }
+            }
 
             let db = if let Some(credentials) = &context.credentials {
                 if user_scoped {
@@ -171,8 +253,18 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 )
             };
 
+            let db = if managed {
+                // LanceDB 0.31 creates a directory namespace on connection.
+                // Its optional manifest must not probe cloud storage before
+                // the complete local table adapter is installed.
+                db.namespace_client_property("manifest_enabled", "false")
+            } else {
+                db
+            };
             let db = context.app_state.with_lance_session(db).execute().await?;
-            let mut lance_store = if selector.branch == "main"
+            let mut lance_store = if managed {
+                LanceDBVectorStore::from_connection_for_overlay(db, table, selector)?
+            } else if selector.branch == "main"
                 && selector.version.is_none()
                 && selector.tag.is_none()
                 && !selector.read_only
@@ -190,6 +282,14 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 .lance_write_options
             {
                 lance_store.set_write_options(opts.clone());
+            }
+            if let Some(decorator) = decorator {
+                lance_store = decorator(database_path, lance_store).await?;
+            }
+            if managed && !lance_store.is_durably_managed() {
+                return Err(flow_like_types::anyhow!(
+                    "The selected offline table did not receive its logical database adapter"
+                ));
             }
             let buffered = BufferedVectorStore::new(lance_store, batch_size);
             let cached = CachedDB {

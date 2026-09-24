@@ -7,6 +7,8 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IProfile } from "@flow-like/flow-like-ui";
 import { createAccountTokenProvider } from "@flow-like/flow-like-ui/components/account/account-session";
+import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -24,8 +26,21 @@ import {
 	type UserManagerSettings,
 	WebStorageStateStore,
 } from "oidc-client-ts";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { AuthProvider, useAuth } from "react-oidc-context";
+import {
+	Fragment,
+	createContext,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
+import {
+	AuthContext,
+	type AuthContextProps,
+	AuthProvider,
+	useAuth,
+} from "react-oidc-context";
 import { get } from "../lib/api";
 import { ProfileSyncer, TauriBackend } from "./tauri-provider";
 
@@ -36,6 +51,11 @@ function emitAuthChanged() {
 }
 
 const UserManagerContext = createContext<UserManager | null>(null);
+
+interface OpenIdConfigResponse extends UserManagerSettings {
+	cognito?: { readonly user_pool_id: string };
+	userManager?: UserManager;
+}
 
 export class OIDCTokenProvider implements TokenProvider {
 	private readonly provider;
@@ -82,12 +102,46 @@ class TauriRedirectNavigator implements INavigator {
 	}
 }
 
+interface AuthConfigState {
+	readonly settings: UserManagerSettings;
+	readonly userManager: UserManager;
+	readonly scope: number;
+	readonly hub: string;
+}
+
+interface LiftedAuth {
+	readonly auth: AuthContextProps;
+	readonly providerKey: string;
+	readonly scope: number;
+}
+
+function AuthContextBridge({
+	providerKey,
+	scope,
+	onChange,
+}: Readonly<{
+	providerKey: string;
+	scope: number;
+	onChange: (lifted: LiftedAuth) => void;
+}>) {
+	const auth = useAuth();
+	useLayoutEffect(() => {
+		onChange({ auth, providerKey, scope });
+	}, [auth, providerKey, scope, onChange]);
+	return null;
+}
+
 export function DesktopAuthProvider({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
-	const [openIdAuthConfig, setOpenIdAuthConfig] =
-		useState<UserManagerSettings>();
-	const [userManager, setUserManager] = useState<UserManager>();
+	const [authConfig, setAuthConfig] = useState<AuthConfigState>();
+	const [lifted, setLifted] = useState<LiftedAuth>();
+	const openIdAuthConfig = authConfig?.settings;
+	const userManager = authConfig?.userManager;
+	const scope = authConfig?.scope ?? 0;
+	const providerKey = authConfig
+		? `${authConfig.hub}|${authConfig.settings.client_id}`
+		: "loading-auth-config";
 	const backend = useBackend();
 	const currentProfile = useInvoke(
 		backend.userState.getProfile,
@@ -107,10 +161,17 @@ export function DesktopAuthProvider({
 			updated: new Date().toISOString(),
 			name: "default",
 		} as IProfile;
+		let cancelled = false;
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		let retryDelayMs = 5_000;
 
-		(async () => {
+		const loadConfig = async () => {
 			try {
-				const response = await get<any>(effectiveProfile, "auth/openid");
+				const response = await get<OpenIdConfigResponse | undefined>(
+					effectiveProfile,
+					"auth/openid",
+				);
+				if (cancelled) return;
 				if (response) {
 					if (process.env.NEXT_PUBLIC_REDIRECT_URL)
 						response.redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URL;
@@ -143,15 +204,49 @@ export function DesktopAuthProvider({
 							},
 						);
 					console.log("[DESKTOPAUTH] Setting openIdAuthConfig and userManager");
-					setUserManager(userManagerInstance);
-					setOpenIdAuthConfig(response);
+					setAuthConfig((previous) => ({
+						settings: response,
+						userManager: userManagerInstance,
+						hub: getApiOrigin(effectiveProfile),
+						scope:
+							previous &&
+							(previous.settings.client_id !== response.client_id ||
+								previous.hub !== getApiOrigin(effectiveProfile))
+								? previous.scope + 1
+								: (previous?.scope ?? 0),
+					}));
 				} else {
 					console.warn("OpenID response was falsy, not configuring auth");
 				}
 			} catch (error) {
 				console.error("Failed to fetch OpenID config:", error);
+				// Without a config sign-in stays impossible until restart, so an
+				// unreachable or failing hub is retried; a 4xx refusal is final.
+				if (
+					!cancelled &&
+					!(error instanceof ApiResponseError && error.status < 500)
+				) {
+					retryTimer = setTimeout(() => {
+						retryTimer = undefined;
+						void loadConfig();
+					}, retryDelayMs);
+					retryDelayMs = Math.min(retryDelayMs * 2, 300_000);
+				}
 			}
-		})();
+		};
+		const retryNow = () => {
+			if (retryTimer === undefined) return;
+			clearTimeout(retryTimer);
+			retryTimer = undefined;
+			void loadConfig();
+		};
+		window.addEventListener("online", retryNow);
+		void loadConfig();
+		return () => {
+			cancelled = true;
+			clearTimeout(retryTimer);
+			window.removeEventListener("online", retryNow);
+		};
 	}, [hubUrl, hubSecure]);
 
 	useEffect(() => {
@@ -309,28 +404,49 @@ export function DesktopAuthProvider({
 		};
 	}, [userManager, openIdAuthConfig]);
 
-	if (!openIdAuthConfig)
-		return <AuthProvider key="loading-auth-config">{children}</AuthProvider>;
-
 	return (
 		<UserManagerContext.Provider value={userManager ?? null}>
-			<AuthProvider
-				key={openIdAuthConfig.client_id}
-				{...openIdAuthConfig}
-				automaticSilentRenew={true}
-				userStore={
-					new WebStorageStateStore({
-						store: localStorage,
-					})
-				}
-			>
-				<AuthInner>{children}</AuthInner>
-			</AuthProvider>
+			{openIdAuthConfig ? (
+				<AuthProvider
+					key={providerKey}
+					{...openIdAuthConfig}
+					automaticSilentRenew={true}
+					userStore={
+						new WebStorageStateStore({
+							store: localStorage,
+						})
+					}
+				>
+					<AuthContextBridge
+						providerKey={providerKey}
+						scope={scope}
+						onChange={setLifted}
+					/>
+				</AuthProvider>
+			) : (
+				<AuthProvider key={providerKey}>
+					<AuthContextBridge
+						providerKey={providerKey}
+						scope={scope}
+						onChange={setLifted}
+					/>
+				</AuthProvider>
+			)}
+			<AuthContext.Provider value={lifted?.auth}>
+				{lifted?.scope === scope && (
+					<Fragment key={scope}>
+						{authConfig && lifted.providerKey === providerKey && (
+							<AuthInner hub={authConfig.hub} />
+						)}
+						{children}
+					</Fragment>
+				)}
+			</AuthContext.Provider>
 		</UserManagerContext.Provider>
 	);
 }
 
-function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
+function AuthInner({ hub }: Readonly<{ hub: string }>) {
 	const auth = useAuth();
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -368,12 +484,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
 		return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
 	}, [userManager]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: The backend gets the auth context when the session changes, not on every new auth context identity.
 	useEffect(() => {
 		if (!auth) return;
 
 		if (backend instanceof TauriBackend) {
 			console.log("Pushing auth context to backend");
-			backend.pushAuthContext(auth);
+			backend.pushAuthContext(auth, hub);
 		}
 
 		if (!auth.isAuthenticated) return;
@@ -392,8 +509,10 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		auth?.user?.access_token,
 		auth?.user?.id_token,
 		backend,
+		hub,
 	]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Expired-session recovery runs once per signed-in subject, not on every auth state change.
 	useEffect(() => {
 		if (!auth) return;
 
@@ -430,6 +549,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		})();
 	}, [auth.user?.profile?.sub]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: The signed-in subject is a refetch trigger; another account must reload hub-backed queries.
 	useEffect(() => {
 		if (!(backend instanceof TauriBackend)) return;
 
@@ -471,14 +591,11 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	]);
 
 	return (
-		<>
-			<ProfileSyncer
-				auth={{
-					isAuthenticated: auth.isAuthenticated,
-					accessToken: auth.user?.access_token,
-				}}
-			/>
-			{children}
-		</>
+		<ProfileSyncer
+			auth={{
+				isAuthenticated: auth.isAuthenticated,
+				accessToken: auth.user?.access_token,
+			}}
+		/>
 	);
 }

@@ -23,7 +23,7 @@
 //! no apply is recorded twice.
 
 use axum::{Extension, Json, Router, extract::State, routing::post};
-use flow_like::flow::ast::redact_flowscript;
+use flow_like::flow::ast::{is_destructive_block, redact_flowscript};
 use sea_orm::{EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -45,7 +45,7 @@ pub const ORIGIN_AGENT: &str = "agent";
 
 /// The apply threw: the source did not parse, or the plan could not be built.
 pub const OUTCOME_ERROR: &str = "error";
-/// The apply produced no commands and only diagnostics — a destructive block or an unresolvable edit.
+/// The apply produced no commands and only diagnostics: an edit that could not be resolved.
 pub const OUTCOME_BLOCKED: &str = "blocked";
 /// The apply changed the board but skipped part of what the source asked for.
 pub const OUTCOME_PARTIAL: &str = "partial";
@@ -153,6 +153,14 @@ fn cause_of(error_message: Option<&str>, diagnostics: &[String]) -> String {
 /// their edit, so a failed insert is logged and dropped rather than surfaced.
 pub fn record_flowscript_apply_failure(state: &AppState, failure: FlowScriptApplyFailure) {
     if !state.platform_config.features.telemetry {
+        return;
+    }
+    // The deletion gate is the editor asking for confirmation before it removes work; the user
+    // answers it and re-applies. Recorded as a failure, every confirmed delete showed up as a
+    // "blocked" row. Checked here rather than in the clients so shipped desktop builds stop too.
+    if failure.error_message.is_none()
+        && is_destructive_block(failure.command_count, &failure.diagnostics)
+    {
         return;
     }
 
@@ -350,6 +358,18 @@ mod tests {
     fn diagnostics_without_commands_are_blocked_and_with_commands_are_partial() {
         assert_eq!(outcome_for(0, 1), Some(OUTCOME_BLOCKED));
         assert_eq!(outcome_for(4, 2), Some(OUTCOME_PARTIAL));
+    }
+
+    #[test]
+    fn the_deletion_confirmation_gate_is_recognised_as_not_a_failure() {
+        let gate =
+            flow_like::flow::ast::blocked_destructive_flowscript_message(&["node `a`".to_string()]);
+        assert!(is_destructive_block(0, std::slice::from_ref(&gate)));
+        assert!(!is_destructive_block(3, std::slice::from_ref(&gate)));
+        assert!(!is_destructive_block(
+            0,
+            &["node `get` is missing required inputs: field".to_string()]
+        ));
     }
 
     #[test]

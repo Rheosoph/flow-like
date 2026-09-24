@@ -89,6 +89,7 @@ model PlacementBillingGrant {
 
 model WorkloadInstance {
   id              String @id
+  purpose         String?
   deviceId        String
   grantId         String
   billingGrantId  String?
@@ -133,4 +134,23 @@ model InstanceUsageAdmission {
 
   @@index([billingGrantId, status])
   @@index([instanceId, createdAt])
+}
+
+/// A retained attempt is never dispatched again after an uncertain cloud outcome.
+/// Keep receipts for the grant's lifetime; expiring one could repeat a mutation.
+model InstanceOfflineReceipt {
+  grantId          String
+  authzVersion     BigInt
+  operationId      String
+  digest           String
+  instanceId       String
+  projectId        String
+  delegatingUserId String
+  status           String
+  result           String?
+  createdAt        BigInt
+  updatedAt        BigInt
+
+  @@id([grantId, authzVersion, operationId])
+  @@index([projectId, createdAt])
 }

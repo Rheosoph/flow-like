@@ -12,8 +12,16 @@ import {
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
-import { ensureProtectedAppRouteAuth, requestSilentRenew } from "../../lib/api";
-import { apiResponseError } from "../../lib/api-error";
+import {
+	ensureProtectedAppRouteAuth,
+	requestFailure,
+	requestSilentRenew,
+} from "../../lib/api";
+import {
+	ApiResponseError,
+	apiResponseError,
+	upstreamFailureInSuccess,
+} from "../../lib/api-error";
 import {
 	DEFAULT_CONNECT_TIMEOUT_MS,
 	STREAM_HEADER_TIMEOUT_MS,
@@ -57,6 +65,26 @@ function tryParseJSON<T>(text: string): T | null {
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Parse a 2xx JSON body. A dead Lambda (200 + `{errorType, errorMessage}`) or an
+ * HTML page becomes an UPSTREAM_UNAVAILABLE error instead of data of type T.
+ */
+export async function readApiJson<T>(
+	response: Response,
+	path: string,
+): Promise<T> {
+	const text = await response.text();
+	let data: unknown;
+	try {
+		data = JSON.parse(text);
+	} catch (error) {
+		throw upstreamFailureInSuccess(response, text, path) ?? error;
+	}
+	const upstreamError = upstreamFailureInSuccess(response, data, path);
+	if (upstreamError) throw upstreamError;
+	return data as T;
 }
 
 function buildSSEError(
@@ -195,23 +223,13 @@ export class TauriApiState implements IApiState {
 
 					if (response.status === 204) return undefined as T;
 
-					return (await response.json()) as T;
+					return await readApiJson<T>(response, path);
 				},
 				{ signal: options?.signal },
 			);
 		} catch (error) {
-			if (error instanceof Error) {
-				if (
-					error.message.includes("Failed to fetch") ||
-					error.message.includes("NetworkError") ||
-					error.message.includes("Network request failed") ||
-					error.message.includes("fetch failed")
-				) {
-					throw new Error(`Network unavailable: ${path}`);
-				}
-			}
-			if (error instanceof Error) throw error;
-			throw new Error(`Error fetching data: ${String(error)}`);
+			if (error instanceof ApiResponseError) throw error;
+			throw requestFailure(error, path);
 		}
 	}
 
@@ -306,6 +324,16 @@ export class TauriApiState implements IApiState {
 			}
 			const errorText = await response.text();
 			throw apiResponseError(response, errorText, url);
+		}
+
+		const htmlInsteadOfStream = upstreamFailureInSuccess(
+			response,
+			undefined,
+			url,
+		);
+		if (htmlInsteadOfStream) {
+			abortController.abort();
+			throw htmlInsteadOfStream;
 		}
 
 		if (!response.body) {

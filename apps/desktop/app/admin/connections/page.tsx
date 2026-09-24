@@ -8,6 +8,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { Waypoints } from "lucide-react";
 import { useCallback, useState } from "react";
@@ -88,7 +89,7 @@ export default function AdminConnectionsPage() {
 					</div>
 
 					<ProcessGraph
-						data={graph.data}
+						data={isRecord(graph.data) ? graph.data : undefined}
 						isLoading={graph.isFetching}
 						days={days}
 						onDaysChange={setDays}

@@ -353,7 +353,10 @@ async fn verify_chain_inner<C: ConnectionTrait>(
         ..Default::default()
     };
     let class = chain_class(chain_id).as_str();
-    let keys = accepted_entry_keys();
+    let keys: Vec<Hash> = accepted_entry_keys()
+        .into_iter()
+        .map(|(_, key)| key)
+        .collect();
     report.held = audit_held_chain::Entity::find_by_id(chain_id)
         .one(db)
         .await?

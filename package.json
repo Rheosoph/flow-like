@@ -11,7 +11,8 @@
 		"university": "bun apps/desktop/scripts/university.ts",
 		"icons:lint": "bun scripts/sync-node-icons.ts --check",
 		"icons:sync": "bun scripts/sync-node-icons.ts",
-		"test:e2e:package-security": "bun test tests/package-manager-security.e2e.test.ts"
+		"test:e2e:package-security": "bun test tests/package-manager-security.e2e.test.ts",
+		"build:device-crypto": "node packages/device-crypto/build-web.mjs"
 	},
 	"workspaces": [
 		"packages/*",

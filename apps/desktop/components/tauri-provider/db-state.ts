@@ -9,6 +9,7 @@ import type {
 	IQueryTablePayload,
 	ITableSummary,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	type IDatabaseAction,
 	type IDatabaseActionResult,
@@ -197,17 +198,19 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(
-					`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
-					userScoped,
-					selector,
+			return asArray(
+				await fetcher<unknown[]>(
+					this.backend.profile!,
+					appendScope(
+						`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+						userScoped,
+						selector,
+					),
+					{
+						method: "GET",
+					},
+					this.backend.auth,
 				),
-				{
-					method: "GET",
-				},
-				this.backend.auth,
 			);
 		}
 
@@ -233,18 +236,20 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(
-					`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
-					userScoped,
-					selector,
+			return asArray(
+				await fetcher<unknown[]>(
+					this.backend.profile!,
+					appendScope(
+						`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+						userScoped,
+						selector,
+					),
+					{
+						method: "POST",
+						body: JSON.stringify(query),
+					},
+					this.backend.auth,
 				),
-				{
-					method: "POST",
-					body: JSON.stringify(query),
-				},
-				this.backend.auth,
 			);
 		}
 
@@ -334,17 +339,19 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(
-					`apps/${appId}/db/${parseTableName(tableName)}/indices`,
-					userScoped,
-					selector,
+			return asArray(
+				await fetcher<IIndexConfig[]>(
+					this.backend.profile!,
+					appendScope(
+						`apps/${appId}/db/${parseTableName(tableName)}/indices`,
+						userScoped,
+						selector,
+					),
+					{
+						method: "GET",
+					},
+					this.backend.auth,
 				),
-				{
-					method: "GET",
-				},
-				this.backend.auth,
 			);
 		}
 
@@ -394,13 +401,15 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				`apps/${appId}/db`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
+			return asArray(
+				await fetcher<string[]>(
+					this.backend.profile!,
+					`apps/${appId}/db`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -420,25 +429,34 @@ export class DatabaseState implements IDatabaseState {
 				"Hosted database inventory requires an authenticated hub session",
 			);
 		}
-		return fetcher<string[]>(
+		const tables = await fetcher<string[]>(
 			this.backend.profile,
 			`apps/${appId}/db`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// An unreadable inventory must never read as "this app has no tables".
+		if (!Array.isArray(tables)) {
+			throw new Error(
+				`Hosted database inventory for app ${appId} returned ${typeof tables} instead of a table list`,
+			);
+		}
+		return tables;
 	}
 
 	async listTablesUser(appId: string): Promise<string[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				`apps/${appId}/db/user`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
+			return asArray(
+				await fetcher<string[]>(
+					this.backend.profile!,
+					`apps/${appId}/db/user`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -452,13 +470,15 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				`apps/${appId}/db${userScoped ? "/user" : ""}?detail=summary`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
+			return asArray(
+				await fetcher<ITableSummary[]>(
+					this.backend.profile!,
+					`apps/${appId}/db${userScoped ? "/user" : ""}?detail=summary`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -714,7 +734,7 @@ export class DatabaseState implements IDatabaseState {
 				selector,
 			});
 		}
-		return fetcher(
+		const history = await fetcher<IDatabaseHistory>(
 			this.backend.profile!,
 			appendScope(
 				`apps/${appId}/db/${parseTableName(tableName)}/references`,
@@ -724,6 +744,17 @@ export class DatabaseState implements IDatabaseState {
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(history)) {
+			throw new Error(
+				`Database history for table ${tableName} returned ${typeof history} instead of an object`,
+			);
+		}
+		return {
+			...history,
+			versions: asArray(history.versions),
+			branches: asArray(history.branches),
+			tags: asArray(history.tags),
+		};
 	}
 
 	async databaseAction(
@@ -773,7 +804,7 @@ export class DatabaseState implements IDatabaseState {
 				selector,
 			});
 		}
-		return fetcher(
+		const diff = await fetcher<IDatabaseDiff>(
 			this.backend.profile!,
 			appendScope(
 				`apps/${appId}/db/${parseTableName(tableName)}/compare`,
@@ -786,5 +817,15 @@ export class DatabaseState implements IDatabaseState {
 			},
 			this.backend.auth,
 		);
+		if (!isRecord(diff) || !isRecord(diff.source) || !isRecord(diff.target)) {
+			throw new Error(
+				`Database compare for table ${tableName} returned an unexpected response instead of a diff`,
+			);
+		}
+		return {
+			...diff,
+			schema_changes: asArray(diff.schema_changes),
+			rows: asArray(diff.rows),
+		};
 	}
 }

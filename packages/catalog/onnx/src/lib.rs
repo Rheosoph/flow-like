@@ -12,6 +12,7 @@
 //! - Batch inference
 //! - Named Entity Recognition (NER)
 //! - Zero-shot NER (GLiNER)
+//! - Typed decisions (Laya)
 
 extern crate flow_like_runtime as flow_like;
 
@@ -28,8 +29,8 @@ pub use onnx::*;
 
 // Re-export submodules for external access
 pub use onnx::{
-    audio, batch, classification, depth, detection, face, face_id, feature, gliner, load, ner, ocr,
-    pose, segmentation,
+    audio, batch, classification, depth, detection, face, face_id, feature, gliner, laya, load,
+    ner, ocr, pose, segmentation,
 };
 
 include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));

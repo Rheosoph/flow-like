@@ -14,7 +14,7 @@ to the audit bucket. The Terraform lives in the deployment repository.
 | Resource | Settings |
 | --- | --- |
 | Function | Image from `Dockerfile` (arm64), 1024 MB, timeout 900 s, reserved concurrency 1. Same VPC, database and secret access as the API Lambda |
-| Schedule | EventBridge Scheduler, `rate(1 minute)`, target this function, input `{}`, retries 0 (the next tick retries). Overlapping runs are harmless: the worker lease stays with the container that keeps ticking and any other reports `skipped` |
+| Schedule | EventBridge Scheduler, `rate(1 minute)`, target this function, input `{}`, retries 0 (the next tick retries). Overlapping runs are harmless: the worker lease stays with the container that keeps ticking and any other reports `skipped`. Disabling the schedule pauses the worker; records stay pending until it is enabled again |
 | Audit bucket | S3 with Object Lock enabled at creation and a default retention in governance mode (compliance for regulated profiles). The lock starts when an object is written, so 1461 days covers every manifest's `retain_until` (end of the third calendar year after the month); 3 years leaves January to November archives unlocked for their last months. Block Public Access on, TLS-only bucket policy. Lifecycle: `archive/` to Glacier Deep Archive from day 0, `heads/` stays in Standard, abort incomplete multipart uploads after 7 days, expire objects once their lock has passed |
 | Audit key | KMS asymmetric key, key spec `ECC_NIST_P256`, key usage `SIGN_VERIFY`. Asymmetric keys do not rotate; a new key gets a new key id |
 | Worker role | Audit bucket: `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` only (`s3:AbortMultipartUpload` optional; the lifecycle rule cleans up otherwise). Audit key: `kms:Sign`, `kms:GetPublicKey`. With `AUDIT_BUCKET_KMS_KEY_ARN` also `kms:GenerateDataKey` and `kms:Decrypt` on that key. No delete, no `s3:BypassGovernanceRetention` |
@@ -38,6 +38,13 @@ The function role supplies the bucket and key credentials, so `AUDIT_BUCKET_ACCE
 `AUDIT_KMS_AWS_SECRET_ACCESS_KEY` stay unset, and so does `AUDIT_SIGNING_KEY`: the worker
 refuses to start when it is set together with `AUDIT_KMS_KEY_ID`.
 
+On Aurora DSQL set `DSQL_USER` to the worker's own role (`flow_like_audit_worker`); the
+connector falls back to `admin` when it is unset. The migration job
+(`../migration/migrate.ts`) creates that role, maps it to the function role and fails
+unless the API role is limited to reading evidence and appending `AuditRecord`; it logs
+`AUDIT_BOUNDARY_VERIFIED api=<role> worker=<role>`. The worker does not check grants
+itself.
+
 These are read through the secret store like the API's other secrets: SecureString
 parameters named `<SECRET_PREFIX>/<NAME>` in Parameter Store, the same parameters the API
 Lambda reads. A plain environment variable of that name is not used while `SECRET_PREFIX`
@@ -46,8 +53,9 @@ is set.
 | Name | Meaning |
 | --- | --- |
 | `AUDIT_KID` | Optional key id recorded in epochs; defaults to the public key fingerprint. When `AUDIT_VERIFYING_KEYS` already holds this id, the worker never calls `kms:GetPublicKey` |
-| `AUDIT_ENTRY_KEY` | Must equal the API's value (or both derive it from the same `BACKEND_KEY`), otherwise pending records are quarantined |
+| `AUDIT_ENTRY_KEY` | Optional; without it the worker derives the key from `BACKEND_KEY` exactly as the API does. A key the API never used quarantines nothing: every record carries the id of the key that authenticated it, so the chain is held (`held_chains` in the `TickReport`, log line `audit entry key mismatch: chain <id> carries kid <x\|null>, worker holds [<kids>]`) and retried each tick until the worker holds that key |
 | `AUDIT_ENTRY_KEY_PREVIOUS` | Only while rotating the entry key: the previous key, still accepted for records and seals written before the switch |
+| `BACKEND_KEY_PREVIOUS` | Only while rotating `BACKEND_KEY`: the previous value, so the entry key derived from it is still accepted for records written before the switch |
 | `AUDIT_VERIFYING_KEYS` | Public keys of audit keys, as `{"<kid>": "<PEM>"}` |
 
 The container that first wins the worker lease connects the audit key and logs
@@ -56,3 +64,9 @@ never get the lease never call KMS. Add that pair to `AUDIT_VERIFYING_KEYS` so e
 process can verify epochs without the key. An ECS API next to this function sets
 `AUDIT_WORKER=off`. Entry key rotation and held chains are described in the self-hosting
 documentation (`apps/docs/src/content/docs/self-hosting/audit-trail.md`).
+
+## Log lines that fail closed
+
+| Line | Level | Effect |
+| --- | --- | --- |
+| `audit entry key mismatch: chain <id> carries kid <x\|null>, worker holds [<kids>]` | error | That chain is held; nothing of it is sealed or quarantined. `held_chains` counts it in the `TickReport`. The tick fails only when every due chain was held |

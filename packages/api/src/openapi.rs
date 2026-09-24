@@ -399,6 +399,7 @@ impl Modify for SecurityAddon {
         // Sales routes
         crate::routes::app::sales::overview::get_sales_overview,
         crate::routes::app::sales::overview::get_sales_stats,
+        crate::routes::app::sales::flow_payments::get_flow_payments,
         crate::routes::app::sales::purchases::list_purchases,
         crate::routes::app::sales::price::update_price,
         crate::routes::app::sales::discounts::list_discounts,
@@ -934,6 +935,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::sales::overview::SalesOverview,
         crate::routes::app::sales::overview::DailyStat,
         crate::routes::app::sales::overview::SalesStats,
+        crate::routes::app::sales::flow_payments::FlowPaymentsReport,
+        crate::routes::app::sales::flow_payments::FlowPaymentDay,
+        crate::routes::app::sales::flow_payments::FlowPaymentItem,
         crate::routes::app::sales::price::UpdatePriceRequest,
         crate::routes::app::sales::price::PriceResponse,
         crate::routes::app::sales::discounts::ListDiscountsQuery,

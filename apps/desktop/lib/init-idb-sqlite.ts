@@ -23,6 +23,7 @@ const KNOWN_DATABASES = [
 	"FlowPilotHistory",
 	"Global-Chat-History",
 	"LanceDBExplorerSettings",
+	"NodeSuggestions",
 	"Notifications",
 	"OAuthTokens",
 	"OfflineSync",

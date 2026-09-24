@@ -255,7 +255,7 @@ test("a prerun older than the reuse window is fetched again", async () => {
 	try {
 		const { state } = pageFixture();
 		await state.prerunEvent("app", "event", undefined, LOAD_TRIGGER);
-		vi.advanceTimersByTime(5_001);
+		vi.advanceTimersByTime(15_001);
 		await dispatchLoad(state);
 		expect(prerunCalls()).toHaveLength(2);
 		expectNativeRuns(1);

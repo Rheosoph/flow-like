@@ -92,6 +92,7 @@ mimalloc.workspace = true
 
 blake3.workspace = true
 tauri-plugin-flow-like-dexie-blob-offload.workspace = true
+sha2 = "0.10"
 copilot-sdk.workspace = true
 rmcp.workspace = true
 uuid.workspace = true

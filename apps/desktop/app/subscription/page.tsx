@@ -6,6 +6,7 @@ import {
 	useHub,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
@@ -135,7 +136,7 @@ export default function SubscriptionPageWrapper() {
 		);
 	}
 
-	if (!pricing.data) {
+	if (!isRecord(pricing.data) || !isRecord(pricing.data.tiers)) {
 		return (
 			<main className="flex w-full flex-1 min-h-0 items-center justify-center py-12">
 				<div className="max-w-md space-y-3 px-6 text-center">

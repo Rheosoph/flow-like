@@ -373,22 +373,18 @@ storage:
 # =============================================================================
 # A separate worker seals, signs, archives and prunes. API pods only ingest and
 # verify records. Disabling this Deployment stops sealing and signing. The worker
-# takes its audit policy from the API's hub config (api.runtimeConfig) and, like
-# the API, waits for the database migration Job before starting.
+# takes its audit policy from the `audit` section of the flow-like.config.json
+# its image was built with; api.runtimeConfig does not reach it. Like the API, it
+# waits for the database migration Job before starting.
 audit:
   worker: true
-  # Keeps the Deployment: the worker logs, exits before taking its lease and is
-  # restarted by the kubelet. Nothing is sealed or archived while paused; grants
-  # and credentials are untouched.
-  paused: false
-  # Database login of the API. The worker verifies at startup that this role can
-  # no longer alter evidence. scripts/setup-config.py fills it from API_DATABASE_URL.
-  apiDatabaseRole: flowlike_api
   image:
     repository: ghcr.io/rheosoph/flow-like-audit-worker
     tag: dev
     digest: ""
     pullPolicy: Always
+  # 0 pauses the worker: nothing is sealed or archived, grants and credentials
+  # are untouched.
   replicaCount: 1
   entrySecret: ""
   bucketSecret: ""

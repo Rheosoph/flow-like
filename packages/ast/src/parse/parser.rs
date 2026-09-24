@@ -1159,6 +1159,11 @@ impl Parser<'_> {
             return Ok(stmt);
         }
         let name = self.ident()?;
+        // `const count: int = 0` is how most authors write a typed binding. The value's own type
+        // is what wires, so the annotation is accepted and the canonical render drops it.
+        if self.eat(&Tok::Colon) {
+            self.type_ref()?;
+        }
         self.expect(&Tok::Assign)?;
         let value = self.expr()?;
         let anchor = self.take_anchor();
@@ -2185,14 +2190,55 @@ impl Parser<'_> {
             }
             Tok::LBrace | Tok::LBracket => {
                 if let Some(raw) = self.try_canonical_json()? {
-                    Ok(Literal::Json(raw))
-                } else {
-                    Err(self.err("a `{…}`/`[…]` initializer must be compact canonical JSON: double-quoted keys, no spaces, JSON escapes only"))
+                    return Ok(Literal::Json(raw));
                 }
+                // Hand-written initializers are spaced and often use bare keys; any literal-only
+                // object or array means the same value, so store it in the rendered compact form.
+                let start = self.cur_token().clone();
+                let expr = if matches!(self.cur(), Tok::LBrace) {
+                    self.object_or_json()?
+                } else {
+                    self.array_or_json()?
+                };
+                literal_expr_json(&expr)
+                    .map(|value| Literal::Json(value.to_string()))
+                    .ok_or_else(|| {
+                        ParseError::new(
+                            "a `{…}`/`[…]` initializer may only contain literals (strings, numbers, booleans, null, and nested objects/arrays of those); compute other values in the body instead",
+                            start.line,
+                            start.col,
+                        )
+                    })
             }
             other => Err(self.err(format!("expected literal, found `{other:?}`"))),
         }
     }
+}
+
+/// The JSON value of a literal-only object/array expression, or `None` when any part of it is
+/// computed (a reference, call, operator, …).
+fn literal_expr_json(expr: &Expr) -> Option<serde_json::Value> {
+    Some(match expr {
+        Expr::Literal(Literal::String(value)) => serde_json::Value::String(value.clone()),
+        Expr::Literal(Literal::Int(value)) => serde_json::Value::from(*value),
+        Expr::Literal(Literal::Float(value)) => serde_json::Value::from(*value),
+        Expr::Literal(Literal::Bool(value)) => serde_json::Value::Bool(*value),
+        Expr::Literal(Literal::Null) => serde_json::Value::Null,
+        Expr::Literal(Literal::Json(raw)) => serde_json::from_str(raw).ok()?,
+        Expr::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(literal_expr_json)
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Expr::Object(fields) => serde_json::Value::Object(
+            fields
+                .iter()
+                .map(|field| Some((field.key.clone(), literal_expr_json(&field.value)?)))
+                .collect::<Option<serde_json::Map<_, _>>>()?,
+        ),
+        _ => return None,
+    })
 }
 
 /// Loop keywords carried by [`Stmt::Loop`]; core maps them to the loop node types.

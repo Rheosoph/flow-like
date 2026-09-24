@@ -10,6 +10,8 @@ pub mod bit;
 pub mod channel;
 pub mod chat;
 pub mod course;
+pub mod devices;
+pub mod instances;
 pub mod embeddings;
 pub mod execution;
 pub mod flowscript;

@@ -79,7 +79,8 @@ mock.module("../../verification-dialog", () => ({
 }));
 
 mock.module("../../ui/alert-dialog", () => {
-	const passthrough = ({ children }: { children?: React.ReactNode }) => children;
+	const passthrough = ({ children }: { children?: React.ReactNode }) =>
+		children;
 	return {
 		AlertDialog: passthrough,
 		AlertDialogTrigger: passthrough,
@@ -111,8 +112,8 @@ async function renderZone(stub: QueryStub) {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 	const { AppDangerZone } = await import("./app-danger-zone");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	const root = createRoot(container);
 	await act(async () => {
 		root.render(

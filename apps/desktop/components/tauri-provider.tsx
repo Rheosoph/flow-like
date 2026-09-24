@@ -50,6 +50,8 @@ import type {
 	ICommandSyncArchive,
 } from "@flow-like/flow-like-ui/lib";
 import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { createId } from "@paralleldrive/cuid2";
@@ -58,6 +60,7 @@ import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
 import { installNativeDeviceAdapter } from "../lib/device-adapter";
+import { ExecutionAuthBridge } from "../lib/execution-auth";
 import { scheduleIDBCleanup } from "../lib/idb-maintenance";
 import { isIOSDevice } from "../lib/platform";
 import {
@@ -66,10 +69,15 @@ import {
 	mergeRemoteProfileMetadata,
 	toLocalProfile,
 } from "../lib/profile-sync";
+import {
+	DEFAULT_CONNECT_TIMEOUT_MS,
+	requestTimeoutMs,
+	withRequestDeadline,
+} from "../lib/request-deadline";
 import { AiState } from "./tauri-provider/ai-state";
 import { AnalyticsState } from "./tauri-provider/analytics-state";
 import { ApiKeyState } from "./tauri-provider/api-key-state";
-import { TauriApiState } from "./tauri-provider/api-state";
+import { TauriApiState, readApiJson } from "./tauri-provider/api-state";
 import { AppState } from "./tauri-provider/app-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
@@ -152,6 +160,11 @@ export class TauriBackend implements IBackendState {
 	analyticsState: IAnalyticsState;
 
 	private _apiState: TauriApiState;
+	private executionAuthHub?: string;
+	private readonly executionAuth = new ExecutionAuthBridge(
+		createId(),
+		(update) => invoke<void>("execution_set_auth", { ...update }),
+	);
 
 	constructor(
 		public readonly backgroundTaskHandler: (task: Promise<any>) => void,
@@ -201,11 +214,18 @@ export class TauriBackend implements IBackendState {
 
 	pushProfile(profile: IProfile) {
 		this.profile = profile;
+		this.syncExecutionAuth().catch(() =>
+			console.warn("[ExecutionAuth] Failed to update native session"),
+		);
 		this.refreshRemoteCatalogQueries();
 	}
 
-	pushAuthContext(auth: AuthContextProps) {
+	pushAuthContext(auth: AuthContextProps, hub = getApiOrigin(this.profile)) {
 		this.auth = auth;
+		this.executionAuthHub = hub;
+		this.syncExecutionAuth().catch(() =>
+			console.warn("[ExecutionAuth] Failed to update native session"),
+		);
 		this._apiState.setAuth(auth);
 		useAuthStatusStore
 			.getState()
@@ -217,6 +237,38 @@ export class TauriBackend implements IBackendState {
 				console.warn("[RegistryAuth] Failed to set auth token:", e),
 			);
 		this.refreshRemoteCatalogQueries();
+	}
+
+	private syncExecutionAuth(): Promise<void> {
+		const hub = getApiOrigin(this.profile);
+		const authenticated =
+			this.executionAuthHub === hub && this.auth?.isAuthenticated;
+		const token = authenticated ? this.auth?.user?.access_token : null;
+		const subject = authenticated ? this.auth?.user?.profile.sub : null;
+		return this.executionAuth.update({
+			hub,
+			token: token && subject ? token : null,
+			subject: token && subject ? subject : null,
+		});
+	}
+
+	async prepareExecutionAuth(): Promise<string> {
+		await this.syncExecutionAuth();
+		await this.executionAuth.ready();
+		if (
+			this.executionAuthHub !== getApiOrigin(this.profile) ||
+			!this.auth?.isAuthenticated ||
+			!this.auth.user?.access_token
+		) {
+			throw new Error(
+				"Sign in to this hub before running an online project locally.",
+			);
+		}
+		return getApiOrigin(this.profile);
+	}
+
+	get executionSessionId(): string {
+		return this.executionAuth.sessionId;
 	}
 
 	pushQueryClient(queryClient: QueryClient) {
@@ -920,6 +972,58 @@ export function TauriProvider({
 	return <>{children}</>;
 }
 
+/**
+ * The profile sync queue awaits every request in turn, so one left on a
+ * half-open socket (network lost mid-request) would stall profile sync for the
+ * session. The deadline spans the body read, which is buffered here.
+ */
+async function fetchWithDeadline(
+	url: string,
+	init: RequestInit,
+): Promise<Response> {
+	const bodyBytes =
+		typeof init.body === "string"
+			? init.body.length
+			: init.body instanceof Uint8Array
+				? init.body.byteLength
+				: 0;
+	return withRequestDeadline(
+		url.split("?")[0],
+		async ({ signal }) => {
+			const response = await tauriFetch(url, {
+				...init,
+				connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+				signal,
+			});
+			const body = response.body === null ? null : await response.arrayBuffer();
+			const buffered = new Response(body, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			});
+			Object.defineProperty(buffered, "url", { value: response.url });
+			return buffered;
+		},
+		{ timeoutMs: requestTimeoutMs("profile", init.method, bodyBytes) },
+	);
+}
+
+async function readOnlineProfiles(
+	response: Response,
+	url: string,
+): Promise<OnlineProfile[]> {
+	const profiles = await readApiJson<unknown>(response, url);
+	// Local profiles absent from this list are deleted as stale, so a list with
+	// an unidentifiable entry must not drive that reconciliation.
+	if (
+		!Array.isArray(profiles) ||
+		!profiles.every((item) => isRecord(item) && typeof item.id === "string")
+	) {
+		throw new Error(`Unexpected profile list shape from ${url}`);
+	}
+	return profiles as OnlineProfile[];
+}
+
 export function ProfileSyncer({
 	auth,
 }: { auth: { isAuthenticated: boolean; accessToken?: string } }) {
@@ -1047,7 +1151,7 @@ export function ProfileSyncer({
 				};
 				if (isAzureBlobStorageUrl(signedUrl))
 					headers["x-ms-blob-type"] = "BlockBlob";
-				const uploadResponse = await tauriFetch(signedUrl, {
+				const uploadResponse = await fetchWithDeadline(signedUrl, {
 					method: "PUT",
 					headers,
 					body: bytes,
@@ -1055,7 +1159,7 @@ export function ProfileSyncer({
 				if (!uploadResponse.ok)
 					throw new Error(`Image upload failed (${uploadResponse.status}).`);
 				await completeMediaUpload(async () => {
-					const response = await tauriFetch(
+					const response = await fetchWithDeadline(
 						`${apiBase}/api/v1/profile/${encodeURIComponent(serverProfileId)}`,
 						{
 							method: "POST",
@@ -1068,10 +1172,10 @@ export function ProfileSyncer({
 					);
 					if (!response.ok)
 						throw new Error(`Image confirmation failed (${response.status}).`);
-					const result = (await response.json()) as {
-						upload_pending?: boolean;
-					};
-					return result;
+					return readApiJson<{ upload_pending?: boolean }>(
+						response,
+						response.url,
+					);
 				});
 				return true;
 			} catch (error) {
@@ -1096,7 +1200,7 @@ export function ProfileSyncer({
 			}
 
 			try {
-				const response = await tauriFetch(
+				const response = await fetchWithDeadline(
 					`${apiBase}/api/v1/profile/${encodeURIComponent(profileId)}`,
 					{
 						method: "POST",
@@ -1122,13 +1226,12 @@ export function ProfileSyncer({
 					return null;
 				}
 
-				const result = (await response.json()) as {
+				return await readApiJson<{
 					icon_upload_url?: string | null;
 					thumbnail_upload_url?: string | null;
 					icon_upload_id?: string | null;
 					thumbnail_upload_id?: string | null;
-				};
-				return result;
+				} | null>(response, response.url);
 			} catch (error) {
 				console.error(
 					"[ProfileSync] Error requesting fallback media upload URLs:",
@@ -1206,17 +1309,22 @@ export function ProfileSyncer({
 						"[ProfileSync] No local profiles — pulling from server first...",
 					);
 					try {
-						const pullResponse = await tauriFetch(`${apiBase}/api/v1/profile`, {
-							method: "GET",
-							headers: {
-								"Content-Type": "application/json",
-								Authorization: `Bearer ${accessToken}`,
+						const pullResponse = await fetchWithDeadline(
+							`${apiBase}/api/v1/profile`,
+							{
+								method: "GET",
+								headers: {
+									"Content-Type": "application/json",
+									Authorization: `Bearer ${accessToken}`,
+								},
 							},
-						});
+						);
 
 						if (pullResponse.ok) {
-							const allServerProfiles =
-								(await pullResponse.json()) as OnlineProfile[];
+							const allServerProfiles = await readOnlineProfiles(
+								pullResponse,
+								pullResponse.url,
+							);
 							const serverProfiles = allServerProfiles.filter(
 								(p) => !p.deleted_at,
 							);
@@ -1246,10 +1354,8 @@ export function ProfileSyncer({
 										);
 									}
 
-									if (onlineProfile.shortcuts) {
-										for (const shortcut of onlineProfile.shortcuts) {
-											await appsDB.shortcuts.put(shortcut);
-										}
+									for (const shortcut of asArray(onlineProfile.shortcuts)) {
+										await appsDB.shortcuts.put(shortcut);
 									}
 								}
 
@@ -1397,14 +1503,17 @@ export function ProfileSyncer({
 					JSON.stringify(profilesToSync, null, 2),
 				);
 
-				const response = await tauriFetch(`${apiBase}/api/v1/profile/sync`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${accessToken}`,
+				const response = await fetchWithDeadline(
+					`${apiBase}/api/v1/profile/sync`,
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							Authorization: `Bearer ${accessToken}`,
+						},
+						body: JSON.stringify(profilesToSync),
 					},
-					body: JSON.stringify(profilesToSync),
-				});
+				);
 
 				type SyncResult = {
 					synced: string[];
@@ -1445,7 +1554,22 @@ export function ProfileSyncer({
 					);
 					return;
 				} else {
-					result = (await response.json()) as SyncResult;
+					const synced = await readApiJson<Partial<SyncResult> | null>(
+						response,
+						response.url,
+					);
+					// Without the created id remaps, the pull below would delete each
+					// freshly created profile as stale under its local id.
+					if (!isRecord(synced) || !Array.isArray(synced.created)) {
+						throw new Error("Unexpected profile sync response shape");
+					}
+					result = {
+						synced: asArray(synced.synced),
+						created: synced.created,
+						updated: asArray(synced.updated),
+						skipped: asArray(synced.skipped),
+						deleted: asArray(synced.deleted),
+					};
 					console.log(
 						"[ProfileSync] Sync result:",
 						JSON.stringify(result, null, 2),
@@ -1568,7 +1692,7 @@ export function ProfileSyncer({
 					`${apiBase}/api/v1/profile`,
 				);
 				try {
-					const profilesResponse = await tauriFetch(
+					const profilesResponse = await fetchWithDeadline(
 						`${apiBase}/api/v1/profile`,
 						{
 							method: "GET",
@@ -1591,8 +1715,10 @@ export function ProfileSyncer({
 						return;
 					}
 
-					const allOnlineProfiles =
-						(await profilesResponse.json()) as OnlineProfile[];
+					const allOnlineProfiles = await readOnlineProfiles(
+						profilesResponse,
+						profilesResponse.url,
+					);
 					let tombstoneIds = new Set(
 						allOnlineProfiles.filter((p) => p.deleted_at).map((p) => p.id),
 					);
@@ -1663,13 +1789,19 @@ export function ProfileSyncer({
 
 					if (fallbackMediaChanged) {
 						// Read signed image URLs after confirmation; the mutation returns storage IDs.
-						const refreshed = await tauriFetch(`${apiBase}/api/v1/profile`, {
-							method: "GET",
-							headers: { Authorization: `Bearer ${accessToken}` },
-						});
+						const refreshed = await fetchWithDeadline(
+							`${apiBase}/api/v1/profile`,
+							{
+								method: "GET",
+								headers: { Authorization: `Bearer ${accessToken}` },
+							},
+						);
 						if (!refreshed.ok)
 							throw new Error("Could not refresh uploaded profile images.");
-						const freshProfiles = (await refreshed.json()) as OnlineProfile[];
+						const freshProfiles = await readOnlineProfiles(
+							refreshed,
+							refreshed.url,
+						);
 						onlineProfiles = freshProfiles.filter((item) => !item.deleted_at);
 						onlineProfilesById = new Map(
 							onlineProfiles.map((item) => [item.id, item]),
@@ -1898,7 +2030,7 @@ export function ProfileSyncer({
 						}
 
 						// Sync shortcuts
-						if (onlineProfile.shortcuts) {
+						if (Array.isArray(onlineProfile.shortcuts)) {
 							const localShortcuts = await appsDB.shortcuts
 								.where("profileId")
 								.equals(onlineProfile.id)

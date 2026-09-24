@@ -19,7 +19,7 @@ ARGS = [
     "--api-service-account", "api@audit-project.iam.gserviceaccount.com",
     "--database-instance", "audit-postgres", "--database-host", "10.2.3.4", "--database-name", "flowlike",
     "--database-ca-secret", "database-ca", "--entry-key-secret", "entry-key",
-    "--encryption-secret", "sink-key", "--config-secret", "worker-config",
+    "--encryption-secret", "sink-key",
     "--network", "private", "--subnet", "database",
 ]
 WORKER = "flow-like-audit-worker@audit-project.iam.gserviceaccount.com"
@@ -48,8 +48,9 @@ class DeployTests(unittest.TestCase):
             del args[index:index + 2]
             with self.subTest(missing=missing), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 deploy.parser().parse_args(args)
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            deploy.parser().parse_args(ARGS + ["--database-secret", "password-url"])
+        for removed in (["--database-secret", "password-url"], ["--config-secret", "worker-config"]):
+            with self.subTest(removed=removed), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                deploy.parser().parse_args(ARGS + removed)
 
     def test_job_uses_iam_env_and_shared_keys_and_preserves_single_tick(self):
         steps = deploy.plan(deploy.parser().parse_args(ARGS + [
@@ -69,6 +70,7 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(secrets["AUDIT_ENTRY_KEY_PREVIOUS"], "previous-entry-key:latest")
         self.assertNotIn("DATABASE_URL", secrets)
         self.assertNotIn("DATABASE_URL", env)
+        self.assertNotIn("FLOW_LIKE_CONFIG_JSON", secrets)
         self.assertIn("--args=--once", job)
         self.assertIn("--parallelism=1", job)
         self.assertIn("--vpc-egress=private-ranges-only", job)
@@ -85,7 +87,7 @@ class DeployTests(unittest.TestCase):
 
     def test_rejects_identity_mismatch_and_unpaired_public_keys(self):
         for extra in (["--database-user", "api@audit-project.iam"], ["--audit-kid", "timeline-1"],
-                      ["--verifying-keys-secret", "public-keys"], ["--config-secret", "entry-key"],
+                      ["--verifying-keys-secret", "public-keys"], ["--previous-entry-key-secret", "entry-key"],
                       ["--database-host", "db/?sslmode=disable"]):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 deploy.plan(deploy.parser().parse_args(ARGS + extra))

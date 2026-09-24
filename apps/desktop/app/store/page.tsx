@@ -13,6 +13,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { MarketplaceCheckoutDialog } from "@flow-like/flow-like-ui/components/payments/checkout-dialog";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
@@ -97,7 +98,7 @@ export default function Page() {
 		);
 	}
 
-	if (isError || notFound || !appData || !metaData) {
+	if (isError || notFound || !isRecord(appData) || !isRecord(metaData)) {
 		return (
 			<div className="flex-1 flex items-center justify-center p-6">
 				<StoreEmptyState

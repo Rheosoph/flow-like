@@ -15,6 +15,7 @@ import {
 	useBackend,
 } from "@flow-like/flow-like-ui";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	InstalledPackage,
 	PackageSummary,
@@ -79,6 +80,7 @@ function PackageItem({
 		| "stale";
 }) {
 	const { t } = useTranslation("common");
+	const keywords = asArray(pkg.keywords);
 	return (
 		<div
 			className="rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer"
@@ -111,9 +113,9 @@ function PackageItem({
 				</p>
 			)}
 
-			{pkg.keywords.length > 0 && (
+			{keywords.length > 0 && (
 				<div className="flex flex-wrap gap-1.5 mb-3">
-					{pkg.keywords.slice(0, 4).map((keyword) => (
+					{keywords.slice(0, 4).map((keyword) => (
 						<Badge
 							key={keyword}
 							variant="outline"
@@ -122,9 +124,9 @@ function PackageItem({
 							{keyword}
 						</Badge>
 					))}
-					{pkg.keywords.length > 4 && (
+					{keywords.length > 4 && (
 						<span className="text-[10px] text-muted-foreground/40 self-center">
-							+{pkg.keywords.length - 4}
+							+{keywords.length - 4}
 						</span>
 					)}
 				</div>
@@ -132,7 +134,7 @@ function PackageItem({
 
 			<div className="flex items-center justify-between">
 				<span className="text-[11px] text-muted-foreground/50">
-					{pkg.downloadCount.toLocaleString()} downloads
+					{(pkg.downloadCount ?? 0).toLocaleString()} downloads
 				</span>
 				{isInstalled ? (
 					<div className="flex items-center gap-2">
@@ -256,7 +258,7 @@ export default function ExplorePackagesPage() {
 				limit: 20,
 			};
 			const results = await backend.registryState.searchPackages(filters);
-			setSearchResults(results);
+			setSearchResults(isRecord(results) ? results : null);
 		} catch (err) {
 			console.error("Failed to search packages:", err);
 		} finally {
@@ -323,6 +325,7 @@ export default function ExplorePackagesPage() {
 	const installedVersionMap = new Map(
 		installedPackages.map((p) => [p.id, p.version]),
 	);
+	const resultPackages = asArray(searchResults?.packages);
 
 	if (isInitializing) {
 		return (
@@ -416,7 +419,7 @@ export default function ExplorePackagesPage() {
 					{t("countPackagesFound", {
 						defaultValue_one: "{{count}} package found",
 						defaultValue_other: "{{count}} packages found",
-						count: searchResults.totalCount,
+						count: searchResults.totalCount ?? resultPackages.length,
 					})}
 				</p>
 			)}
@@ -433,14 +436,14 @@ export default function ExplorePackagesPage() {
 							<PackageItemSkeleton key={i} />
 						))}
 					</div>
-				) : searchResults?.packages.length ? (
+				) : resultPackages.length ? (
 					<div
 						className="grid gap-3"
 						style={{
 							gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
 						}}
 					>
-						{searchResults.packages.map((pkg) => (
+						{resultPackages.map((pkg) => (
 							<PackageItem
 								key={pkg.id}
 								pkg={pkg}

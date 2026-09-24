@@ -14,6 +14,7 @@ import {
 	type IOAuthProvider,
 	type IOAuthToken,
 	type IPrerunEventResponse,
+	type IProfile,
 	type IRunPayload,
 	type IVersionType,
 	type PageTrigger,
@@ -35,6 +36,13 @@ import {
 	cancelDeviceCommands,
 	withDeviceCommandBridge,
 } from "@flow-like/flow-like-ui/lib/device-bridge";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import {
+	recordNativePreamble,
+	recordRunStep,
+	runTimingNow,
+	timeRunStep,
+} from "@flow-like/flow-like-ui/lib/run-timing";
 import type {
 	IEventAlias,
 	IEventCorpusResult,
@@ -58,13 +66,17 @@ import type {
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
-import { isMissingResourceError } from "../../lib/api-error";
+import {
+	isMissingResourceError,
+	upstreamFailureInSuccess,
+} from "../../lib/api-error";
 import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
 } from "../../lib/flow-notification-events";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
+import { withRequestDeadline } from "../../lib/request-deadline";
 import { requestLocalSinkConsent } from "../local-sink/local-sink-consent";
 import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
@@ -79,6 +91,24 @@ type LocalSinkPlan = "none" | "existing" | "new";
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
+let hubConfigRetryAt = 0;
+const HUB_CONFIG_TIMEOUT_MS = 10_000;
+const HUB_CONFIG_RETRY_MS = 60_000;
+
+/**
+ * Bounds a freshness read that has a local copy to fall back to. The API's own
+ * read deadline is 10 s, so a healthy hub answers well inside it.
+ */
+const LOCAL_FALLBACK_TIMEOUT_MS = 15_000;
+
+function isEventRecord(value: unknown): value is IEvent {
+	return isRecord(value) && typeof value.id === "string";
+}
+
+function boardUsesOAuth(board: IBoard): boolean {
+	const { oauth_requirements } = extractOAuthRequirementsFromBoard(board);
+	return asArray(oauth_requirements).length > 0;
+}
 
 const LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX = "lda1_";
 const SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX = "da1_";
@@ -99,7 +129,7 @@ function isServerDynamicPageTrigger(trigger?: PageTrigger): boolean {
 	);
 }
 
-function withFeedbackPageContext(localState?: Record<string, any>) {
+function withFeedbackPageContext(localState?: Record<string, unknown>) {
 	if (
 		localState &&
 		Object.prototype.hasOwnProperty.call(localState, "pageContext")
@@ -128,18 +158,38 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 > {
 	if (hubCache) return hubCache;
 	if (hubCachePromise) return hubCachePromise;
+	// Every local run awaits this, so a failing hub is asked again at most once per window.
+	if (Date.now() < hubConfigRetryAt) return undefined;
 
 	const hubUrl = profile?.hub;
 	if (!hubUrl) return undefined;
 
-	hubCachePromise = fetch(`https://${hubUrl}/api/v1`)
-		.then((res) => res.json() as Promise<IHub>)
+	const url = `https://${hubUrl}/api/v1`;
+	hubCachePromise = withRequestDeadline(
+		url,
+		async (deadline) => {
+			const res = await fetch(url, { signal: deadline.signal });
+			if (!res.ok) {
+				throw new Error(
+					`Hub config request to ${url} returned HTTP ${res.status}`,
+				);
+			}
+			const hub = (await res.json()) as IHub;
+			if (!isRecord(hub) || upstreamFailureInSuccess(res, hub, url)) {
+				throw new Error(`Hub config response from ${url} is not a hub`);
+			}
+			return hub;
+		},
+		{ timeoutMs: HUB_CONFIG_TIMEOUT_MS },
+	)
 		.then((hub) => {
 			hubCache = hub;
 			return hub;
 		})
 		.catch((e) => {
 			console.warn("[OAuth] Failed to fetch Hub config:", e);
+			hubConfigRetryAt = Date.now() + HUB_CONFIG_RETRY_MS;
+			hubCachePromise = undefined;
 			return undefined;
 		});
 
@@ -283,6 +333,8 @@ export class EventState implements IEventState {
 		string,
 		{ attempts: number; retryAt: number; error: unknown }
 	>();
+	/** Server run id → mutes and aborts that run's stream on this device. */
+	private readonly remoteRuns = new Map<string, () => void>();
 
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -291,9 +343,10 @@ export class EventState implements IEventState {
 		{ readonly result: IPrerunEventResponse; readonly at: number }
 	>();
 
-	private requireAuthoritativeHostedRead(): void {
+	private requireAuthoritativeHostedRead(): IProfile {
+		const profile = this.backend.profile;
 		if (
-			!this.backend.profile ||
+			!profile ||
 			!this.backend.auth?.isAuthenticated ||
 			!this.backend.auth.user?.access_token
 		) {
@@ -301,6 +354,13 @@ export class EventState implements IEventState {
 				"Hosted Event read requires an authenticated hub session",
 			);
 		}
+		return profile;
+	}
+
+	private requireHubProfile(operation: string): IProfile {
+		const profile = this.backend.profile;
+		if (!profile) throw new Error(`${operation} requires a hub profile`);
+		return profile;
 	}
 
 	private async ensureRpaApprovalForEvent(
@@ -339,16 +399,20 @@ export class EventState implements IEventState {
 	): Promise<IEvent> {
 		let event: IEvent | undefined;
 		try {
-			event = await invoke<IEvent>("get_event", {
-				appId: appId,
-				eventId: eventId,
-				version: version,
-			});
+			event = await timeRunStep("get_event.local", () =>
+				invoke<IEvent>("get_event", {
+					appId: appId,
+					eventId: eventId,
+					version: version,
+				}),
+			);
 		} catch {
 			event = undefined;
 		}
 
-		const isOffline = await this.backend.isOffline(appId);
+		const isOffline = await timeRunStep("get_event.is_offline", () =>
+			this.backend.isOffline(appId),
+		);
 		if (isOffline || !this.backend.profile || !this.backend.auth) {
 			if (event) return event;
 			throw new Error(`Event not found: ${eventId}`);
@@ -359,16 +423,24 @@ export class EventState implements IEventState {
 			url += `?version=${version.join("_")}`;
 		}
 
+		const profile = this.backend.profile;
+		const auth = this.backend.auth;
 		try {
-			const remoteData = await fetcher<IEvent>(
-				this.backend.profile,
-				url,
-				{ method: "GET" },
-				this.backend.auth,
+			const remoteData = await timeRunStep("get_event.remote", () =>
+				fetcher<IEvent>(
+					profile,
+					url,
+					event
+						? { method: "GET", timeoutMs: LOCAL_FALLBACK_TIMEOUT_MS }
+						: { method: "GET" },
+					auth,
+				),
 			);
 
-			if (!remoteData) {
-				throw new Error("Failed to fetch event data");
+			if (!isEventRecord(remoteData)) {
+				throw new Error(
+					`Event ${eventId} fetch returned an unexpected response`,
+				);
 			}
 
 			markEventsRemoteKnown(appId, [eventId]);
@@ -382,19 +454,21 @@ export class EventState implements IEventState {
 				Number.isNaN(remoteUpdated) ||
 				remoteUpdated >= localUpdated;
 
-			if (!shouldUseRemote) {
-				return event!;
+			if (!shouldUseRemote && event) {
+				return event;
 			}
 
 			if (typeof version === "undefined") {
-				await invoke("upsert_event", {
-					appId: appId,
-					event: remoteData,
-					enforceId: true,
-					offline: isOffline,
-					// A cache mirror never starts a trigger on this device.
-					registerSink: "keep",
-				}).catch(() => {});
+				await timeRunStep("get_event.upsert_local", () =>
+					invoke("upsert_event", {
+						appId: appId,
+						event: remoteData,
+						enforceId: true,
+						offline: isOffline,
+						// A cache mirror never starts a trigger on this device.
+						registerSink: "keep",
+					}).catch(() => {}),
+				);
 			}
 
 			if (this.backend.queryClient) {
@@ -460,14 +534,20 @@ export class EventState implements IEventState {
 		if (await this.backend.isLocalOnly(appId)) {
 			return invoke<IEvent>("get_event", { appId, eventId, version });
 		}
-		this.requireAuthoritativeHostedRead();
+		const profile = this.requireAuthoritativeHostedRead();
 		const params = version ? `?version=${version.join("_")}` : "";
-		return fetcher<IEvent>(
-			this.backend.profile!,
+		const event = await fetcher<IEvent>(
+			profile,
 			`apps/${appId}/events/${eventId}${params}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isEventRecord(event)) {
+			throw new Error(
+				`Authoritative read of event ${eventId} returned an unexpected response`,
+			);
+		}
+		return event;
 	}
 
 	async getEvents(appId: string, force?: boolean): Promise<IEvent[]> {
@@ -488,16 +568,22 @@ export class EventState implements IEventState {
 			const active = this.remoteEventSyncs.get(appId);
 			if (active) return active;
 
-			let task: Promise<IEvent[]>;
-			task = (async () => {
-				const remoteData = await fetcher<IEvent[]>(
-					this.backend.profile!,
+			const task: Promise<IEvent[]> = (async () => {
+				const response = await fetcher<IEvent[]>(
+					this.requireHubProfile("Event sync"),
 					`apps/${appId}/events`,
 					{
 						method: "GET",
 					},
 					this.backend.auth,
 				);
+				// Anything but a list is a failed sync, never "the app has no Events".
+				if (!Array.isArray(response)) {
+					throw new Error(
+						`Event sync for app ${appId} returned an unexpected response`,
+					);
+				}
+				const remoteData = response.filter(isEventRecord);
 				markEventsRemoteKnown(
 					appId,
 					remoteData.map((event) => event.id),
@@ -678,8 +764,9 @@ export class EventState implements IEventState {
 			this.offlineSchedules(appId),
 		]);
 
+		const remoteSchedules = asArray(remote?.schedules).filter(isRecord);
 		const byKey = new Map<string, IUserSchedule>();
-		for (const schedule of [...(remote?.schedules ?? []), ...local.schedules]) {
+		for (const schedule of [...remoteSchedules, ...local.schedules]) {
 			byKey.set(`${schedule.app_id}:${schedule.event_id}`, schedule);
 		}
 		const schedules = [...byKey.values()];
@@ -696,13 +783,19 @@ export class EventState implements IEventState {
 		if (await this.backend.isLocalOnly(appId)) {
 			return invoke<IEvent[]>("get_events", { appId });
 		}
-		this.requireAuthoritativeHostedRead();
-		return fetcher<IEvent[]>(
-			this.backend.profile!,
+		const profile = this.requireAuthoritativeHostedRead();
+		const events = await fetcher<IEvent[]>(
+			profile,
 			`apps/${appId}/events`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!Array.isArray(events)) {
+			throw new Error(
+				`Authoritative event inventory for app ${appId} returned an unexpected response`,
+			);
+		}
+		return events;
 	}
 	async getEventVersions(
 		appId: string,
@@ -729,15 +822,20 @@ export class EventState implements IEventState {
 		const promise = injectDataFunction(
 			async () => {
 				const remoteData = await fetcher<[number, number, number][]>(
-					this.backend.profile!,
+					this.requireHubProfile("Event version sync"),
 					`apps/${appId}/events/${eventId}/versions`,
 					{
 						method: "GET",
 					},
 					this.backend.auth,
 				);
+				if (!Array.isArray(remoteData)) {
+					throw new Error(
+						`Event ${eventId} version sync returned an unexpected response`,
+					);
+				}
 
-				return remoteData;
+				return remoteData.filter((version) => Array.isArray(version));
 			},
 			this,
 			this.backend.queryClient,
@@ -913,6 +1011,11 @@ export class EventState implements IEventState {
 			},
 			this.backend.auth,
 		);
+		if (!isEventRecord(response)) {
+			throw new Error(
+				`Saving event ${event.id} returned an unexpected response; the local copy was not updated`,
+			);
+		}
 		await invoke("upsert_event", {
 			appId: appId,
 			event: response,
@@ -1035,9 +1138,9 @@ export class EventState implements IEventState {
 		feedbackId: string,
 		feedback: {
 			rating: number;
-			history?: any[];
-			globalState?: Record<string, any>;
-			localState?: Record<string, any>;
+			history?: unknown[];
+			globalState?: Record<string, unknown>;
+			localState?: Record<string, unknown>;
 			comment?: string;
 		},
 	): Promise<string> {
@@ -1097,7 +1200,7 @@ export class EventState implements IEventState {
 			this.backend.auth,
 		);
 
-		return response.feedback_id;
+		return response?.feedback_id ?? feedbackId;
 	}
 
 	async executeEvent(
@@ -1168,10 +1271,18 @@ export class EventState implements IEventState {
 
 			let prerun: IPrerunEventResponse;
 			try {
+				const reusedPrerun = this.takeRecentPageTriggerPrerun(
+					this.pageTriggerPrerunKey(appId, eventId, undefined, pageTrigger),
+				);
+				if (reusedPrerun) {
+					const reusedAt = runTimingNow();
+					recordRunStep("prerun.reused", reusedAt, reusedAt);
+				}
 				prerun =
-					this.takeRecentPageTriggerPrerun(
-						this.pageTriggerPrerunKey(appId, eventId, undefined, pageTrigger),
-					) ?? (await this.resolvePrerun(appId, eventId, undefined, pageTrigger));
+					reusedPrerun ??
+					(await timeRunStep("prerun", () =>
+						this.resolvePrerun(appId, eventId, undefined, pageTrigger),
+					));
 			} catch (error) {
 				// The server prerun resolves the trigger, so a removed action is
 				// refused HERE and the run is never built. Publishing before the
@@ -1210,12 +1321,14 @@ export class EventState implements IEventState {
 				let holdsLocalContract = false;
 				let deviceRevision: string | undefined;
 				try {
-					const localBootstrap = await invoke<{
-						executionRevision?: string;
-					}>("get_local_page_bootstrap", {
-						appId,
-						eventId,
-					});
+					const localBootstrap = await timeRunStep("local_page_bootstrap", () =>
+						invoke<{
+							executionRevision?: string;
+						}>("get_local_page_bootstrap", {
+							appId,
+							eventId,
+						}),
+					);
 					deviceRevision = localBootstrap.executionRevision ?? undefined;
 					holdsLocalContract = Boolean(
 						pageTrigger.manifestRevision && deviceRevision,
@@ -1227,7 +1340,11 @@ export class EventState implements IEventState {
 					);
 				}
 				if (!holdsLocalContract) {
-					if (!(await this.canReachServer(appId))) {
+					if (
+						!(await timeRunStep("can_reach_server", () =>
+							this.canReachServer(appId),
+						))
+					) {
 						notifyPageContractRejected({
 							appId,
 							eventId,
@@ -1247,7 +1364,9 @@ export class EventState implements IEventState {
 			}
 		}
 
-		const event = await this.getEvent(appId, eventId);
+		const event = await timeRunStep("get_event", () =>
+			this.getEvent(appId, eventId),
+		);
 
 		// An event pinned to Remote has no board on this device. Reading one only
 		// fails on the way to a run that belongs on the server anyway, so the
@@ -1258,7 +1377,9 @@ export class EventState implements IEventState {
 					"A local Page action cannot be sent to a Remote Event; reload the Page",
 				);
 			}
-			if (await this.canReachServer(appId)) {
+			if (
+				await timeRunStep("can_reach_server", () => this.canReachServer(appId))
+			) {
 				return runRemotely();
 			}
 		}
@@ -1267,24 +1388,9 @@ export class EventState implements IEventState {
 		let closed = false;
 		let foundRunId = false;
 
-		const isOffline = await this.backend.isOffline(appId);
-		let credentials = undefined;
-
-		if (!isOffline && this.backend.auth && this.backend.profile) {
-			try {
-				credentials = await fetcher(
-					this.backend.profile,
-					`apps/${appId}/invoke/presign`,
-					{
-						method: "GET",
-					},
-					this.backend.auth,
-				);
-			} catch (e) {
-				console.warn(e);
-			}
-		}
-
+		const isOffline = await timeRunStep("is_offline", () =>
+			this.backend.isOffline(appId),
+		);
 		// Collect OAuth tokens from event's board using shared helper
 		let oauthTokens:
 			| Record<
@@ -1299,11 +1405,13 @@ export class EventState implements IEventState {
 			| undefined;
 		let board: IBoard;
 		try {
-			board = await this.backend.boardState.getBoard(
-				appId,
-				event.board_id,
-				(event.board_version as [number, number, number]) ?? undefined,
-				true,
+			board = await timeRunStep("get_board", () =>
+				this.backend.boardState.getBoard(
+					appId,
+					event.board_id,
+					(event.board_version as [number, number, number]) ?? undefined,
+					true,
+				),
 			);
 		} catch (error) {
 			// Everything below reads the flow to prepare a local run: packages,
@@ -1311,7 +1419,12 @@ export class EventState implements IEventState {
 			// its board — the normal shape of a published app — gets nothing back
 			// from any of it, and the server can run it instead: it holds the
 			// board, and resolves permissions, secrets and OAuth on its own.
-			if (localDynamicPageAction || !(await this.canReachServer(appId))) {
+			if (
+				localDynamicPageAction ||
+				!(await timeRunStep("can_reach_server", () =>
+					this.canReachServer(appId),
+				))
+			) {
 				throw error;
 			}
 			console.warn(
@@ -1321,19 +1434,32 @@ export class EventState implements IEventState {
 			return runRemotely();
 		}
 
-		await this.backend.boardState.ensureAppPackagesInstalledForExecution?.(
-			appId,
-			board,
+		await timeRunStep("packages", async () =>
+			this.backend.boardState.ensureAppPackagesInstalledForExecution?.(
+				appId,
+				board,
+			),
 		);
-		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
+		await timeRunStep("rpa_approval", () =>
+			this.ensureRpaApprovalForEvent(appId, event, board, "execution"),
+		);
 		beforeDispatch?.();
-		const hub = await getHubConfig(this.backend.profile);
-		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
-			refreshToken: oauthService.refreshToken.bind(oauthService),
-		});
+		// Provider configs are only looked up for OAuth nodes; other runs never wait on the hub.
+		const hub = boardUsesOAuth(board)
+			? await timeRunStep("hub_config", () =>
+					getHubConfig(this.backend.profile),
+				)
+			: undefined;
+		const oauthResult = await timeRunStep("oauth_tokens", () =>
+			checkOAuthTokens(board, oauthTokenStore, hub, {
+				refreshToken: oauthService.refreshToken.bind(oauthService),
+			}),
+		);
 
 		// Check consent for providers that have tokens but might not have consent for this app
-		const consentedIds = await oauthConsentStore.getConsentedProviderIds(appId);
+		const consentedIds = await timeRunStep("oauth_consent", () =>
+			oauthConsentStore.getConsentedProviderIds(appId),
+		);
 		const providersNeedingConsent: IOAuthProvider[] = [];
 
 		// Add providers that are missing tokens
@@ -1353,12 +1479,12 @@ export class EventState implements IEventState {
 		}
 
 		if (providersNeedingConsent.length > 0 && !skipConsentCheck) {
-			const error = new Error(
-				`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+			throw Object.assign(
+				new Error(
+					`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+				),
+				{ missingProviders: providersNeedingConsent, isOAuthError: true },
 			);
-			(error as any).missingProviders = providersNeedingConsent;
-			(error as any).isOAuthError = true;
-			throw error;
 		}
 
 		if (Object.keys(oauthResult.tokens).length > 0) {
@@ -1378,6 +1504,8 @@ export class EventState implements IEventState {
 
 				if (runId_event) {
 					const runId = runId_event.payload.run_id;
+					recordNativePreamble(runId, runId_event.payload?.preamble);
+					recordRunStep("execute_event.until_run_initiated", dispatchStart);
 					onEventId?.(runId);
 					foundRunId = true;
 				}
@@ -1389,24 +1517,32 @@ export class EventState implements IEventState {
 		};
 
 		beforeDispatch?.();
-		const token = this.backend.auth?.user?.access_token;
 
 		let metadata: ILogMetadata | undefined;
+		const dispatchStart = runTimingNow();
 		try {
+			const executionHub = isOffline
+				? undefined
+				: await this.backend.prepareExecutionAuth();
 			metadata = await invoke("execute_event", {
+				executionHub,
+				executionSessionId: isOffline
+					? undefined
+					: this.backend.executionSessionId,
 				appId: appId,
 				eventId: eventId,
 				payload: payload,
 				events: channel,
 				streamState: streamState,
-				credentials,
-				token,
+				token: this.backend.auth?.user?.access_token,
 				oauthTokens,
 				pageTrigger: localTrigger
 					? serializePageTrigger(localTrigger)
 					: undefined,
 			});
 		} catch (error) {
+			if (!foundRunId)
+				recordRunStep("execute_event.until_error", dispatchStart);
 			this.reportPageContractRejection(appId, eventId, localTrigger, error);
 			throw error;
 		}
@@ -1490,6 +1626,9 @@ export class EventState implements IEventState {
 
 		let closed = false;
 		let foundRunId = false;
+		let remoteRunId: string | undefined;
+		const stream = new AbortController();
+		const dispatchStart = runTimingNow();
 
 		try {
 			beforeDispatch?.();
@@ -1509,6 +1648,7 @@ export class EventState implements IEventState {
 							? serializePageTrigger(pageTrigger)
 							: undefined,
 					}),
+					signal: stream.signal,
 				},
 				this.backend.auth,
 				(event: IIntercomEvent) => {
@@ -1521,6 +1661,12 @@ export class EventState implements IEventState {
 					) {
 						const runId = (event.payload as { run_id?: string })?.run_id;
 						if (runId) {
+							recordRunStep("remote.until_run_id", dispatchStart);
+							remoteRunId = runId;
+							this.remoteRuns.set(runId, () => {
+								closed = true;
+								stream.abort();
+							});
 							onEventId(runId);
 							foundRunId = true;
 						}
@@ -1566,8 +1712,14 @@ export class EventState implements IEventState {
 				},
 			);
 		} catch (error) {
-			this.reportPageContractRejection(appId, eventId, pageTrigger, error);
-			throw error;
+			// A cancelled run's stream was aborted on purpose and ends like one the server closed.
+			if (!stream.signal.aborted) {
+				if (!foundRunId) recordRunStep("remote.until_error", dispatchStart);
+				this.reportPageContractRejection(appId, eventId, pageTrigger, error);
+				throw error;
+			}
+		} finally {
+			if (remoteRunId) this.remoteRuns.delete(remoteRunId);
 		}
 
 		closed = true;
@@ -1592,7 +1744,7 @@ export class EventState implements IEventState {
 				"Hosted MCP operations require an authenticated hub session",
 			);
 		}
-		return fetcher<Record<string, unknown>>(
+		const result = await fetcher<Record<string, unknown>>(
 			this.backend.profile,
 			`apps/${appId}/events/${eventId}/mcp-operation`,
 			{
@@ -1605,13 +1757,32 @@ export class EventState implements IEventState {
 			},
 			this.backend.auth,
 		);
+		if (!isRecord(result)) {
+			throw new Error(
+				`MCP ${method} on event ${eventId} returned an unexpected response`,
+			);
+		}
+		return result;
 	}
 
 	async cancelExecution(runId: string): Promise<void> {
 		cancelDeviceCommands(runId);
-		await invoke("cancel_execution", {
-			runId: runId,
-		});
+		const closeRemoteRun = this.remoteRuns.get(runId);
+		if (!closeRemoteRun) {
+			await invoke("cancel_execution", {
+				runId: runId,
+			});
+			return;
+		}
+		// A server run has no local handle: close its stream here, then ask the API to stop it.
+		closeRemoteRun();
+		if (!this.backend.profile) return;
+		await fetcher(
+			this.backend.profile,
+			`execution/run/${encodeURIComponent(runId)}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
 	}
 
 	async isEventSinkActive(
@@ -1701,12 +1872,22 @@ export class EventState implements IEventState {
 		if (version) params.set("version", version);
 		if (variant) params.set("variant", variant);
 		const qs = params.size > 0 ? `?${params.toString()}` : "";
-		return await fetcher<IListRegistrationsResponse>(
+		const response = await fetcher<IListRegistrationsResponse>(
 			this.backend.profile,
 			`apps/${appId}/events/${eventId}/registrations${qs}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(response)) {
+			throw new Error(
+				`Event ${eventId} registrations returned an unexpected response`,
+			);
+		}
+		return {
+			...response,
+			registrations: asArray(response.registrations),
+			auths: asArray(response.auths),
+		};
 	}
 
 	async listEventAliases(
@@ -1716,11 +1897,13 @@ export class EventState implements IEventState {
 		if (!this.backend.profile || !this.backend.auth) {
 			return [];
 		}
-		return await fetcher<IEventAlias[]>(
-			this.backend.profile,
-			`apps/${appId}/events/${eventId}/alias`,
-			{ method: "GET" },
-			this.backend.auth,
+		return asArray(
+			await fetcher<IEventAlias[]>(
+				this.backend.profile,
+				`apps/${appId}/events/${eventId}/alias`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -1807,7 +1990,9 @@ export class EventState implements IEventState {
 			return { missingProviders: [] };
 		}
 
-		const hub = await getHubConfig(this.backend.profile);
+		const hub = boardUsesOAuth(board)
+			? await getHubConfig(this.backend.profile)
+			: undefined;
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
 		});
@@ -1859,7 +2044,10 @@ export class EventState implements IEventState {
 		tokens?: Record<string, IOAuthToken>;
 		missingProviders: IOAuthProvider[];
 	}> {
-		const hub = await getHubConfig(this.backend.profile);
+		const hub =
+			asArray(requirements).length > 0
+				? await getHubConfig(this.backend.profile)
+				: undefined;
 		const oauthResult = await checkOAuthTokensFromPrerun(
 			requirements,
 			oauthTokenStore,
@@ -1894,7 +2082,12 @@ export class EventState implements IEventState {
 		version?: [number, number, number],
 		pageTrigger?: PageTrigger,
 	): Promise<IPrerunEventResponse> {
-		const result = await this.resolvePrerun(appId, eventId, version, pageTrigger);
+		const result = await this.resolvePrerun(
+			appId,
+			eventId,
+			version,
+			pageTrigger,
+		);
 		if (pageTrigger) {
 			this.rememberPageTriggerPrerun(
 				this.pageTriggerPrerunKey(appId, eventId, version, pageTrigger),
@@ -1956,17 +2149,21 @@ export class EventState implements IEventState {
 
 		// Helper to build prerun response from local event/board
 		const buildLocalPrerun = async (): Promise<IPrerunEventResponse> => {
-			const event: IEvent = await loadLocalEvent();
+			const event: IEvent = await timeRunStep("prerun.local_event", () =>
+				loadLocalEvent(),
+			);
 			if (pageTrigger && (!event.active || !event.default_page_id)) {
 				throw new Error(
 					"Page triggers require an active Event with a configured Page",
 				);
 			}
-			const board: IBoard = await invoke("get_board", {
-				appId,
-				boardId: event.board_id,
-				version: event.board_version,
-			});
+			const board: IBoard = await timeRunStep("prerun.local_board", () =>
+				invoke<IBoard>("get_board", {
+					appId,
+					boardId: event.board_id,
+					version: event.board_version,
+				}),
+			);
 
 			const runtimeVariables = Object.values(board.variables)
 				.filter((v) => v.runtime_configured)
@@ -2029,19 +2226,31 @@ export class EventState implements IEventState {
 							url += `?version=${version.join("_")}`;
 						}
 
-						return fetcher<IPrerunEventResponse>(
-							this.backend.profile!,
-							url,
-							pageTrigger
-								? {
-										method: "POST",
-										body: JSON.stringify({
-											page_trigger: serializePageTrigger(pageTrigger),
-										}),
-									}
-								: { method: "GET" },
-							this.backend.auth!,
+						const result = await timeRunStep("prerun.remote", () =>
+							fetcher<IPrerunEventResponse>(
+								this.requireHubProfile("Event prerun"),
+								url,
+								pageTrigger
+									? {
+											method: "POST",
+											body: JSON.stringify({
+												page_trigger: serializePageTrigger(pageTrigger),
+											}),
+										}
+									: { method: "GET" },
+								this.backend.auth,
+							),
 						);
+						if (!isRecord(result)) {
+							throw new Error(
+								`Event ${eventId} prerun returned an unexpected response`,
+							);
+						}
+						return {
+							...result,
+							runtime_variables: asArray(result.runtime_variables),
+							oauth_requirements: asArray(result.oauth_requirements),
+						};
 					}
 				: undefined;
 
@@ -2050,9 +2259,9 @@ export class EventState implements IEventState {
 				return buildLocalPrerun();
 			}
 			const dynamic = isServerDynamicPageTrigger(pageTrigger);
-			const localOnly = await this.backend
-				.isLocalOnly(appId)
-				.catch(() => false);
+			const localOnly = await timeRunStep("prerun.is_local_only", () =>
+				this.backend.isLocalOnly(appId).catch(() => false),
+			);
 
 			if (localOnly && !dynamic) {
 				return buildLocalPrerun();
@@ -2073,10 +2282,8 @@ export class EventState implements IEventState {
 		// expected to be here. Answering that preflight from a local board would
 		// report on a machine the run never touches — and usually just fails,
 		// sending the caller down the local path it must not take.
-		const remoteEvent = await this.resolveRemotePinnedEvent(
-			appId,
-			eventId,
-			loadLocalEvent,
+		const remoteEvent = await timeRunStep("prerun.remote_pinned_event", () =>
+			this.resolveRemotePinnedEvent(appId, eventId, loadLocalEvent),
 		);
 		if (remoteEvent) {
 			if (fetchRemotePrerun) {
@@ -2108,7 +2315,11 @@ export class EventState implements IEventState {
 		// Local-only apps have no server answer to ask for. An app whose
 		// visibility is merely uncached is not one of them — treating it as one
 		// is what left this preflight with only a board it does not have.
-		if (await this.backend.isLocalOnly(appId).catch(() => false)) {
+		if (
+			await timeRunStep("prerun.is_local_only", () =>
+				this.backend.isLocalOnly(appId).catch(() => false),
+			)
+		) {
 			return buildLocalPrerun();
 		}
 

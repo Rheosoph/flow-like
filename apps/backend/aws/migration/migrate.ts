@@ -90,6 +90,7 @@ export type {
 const LOG_PREFIX = "[aws-migration]";
 const APPLICATION_NAME = "flow-like-aws-migration";
 const DEFAULT_RUNTIME_DB_ROLE = "flow_like_api";
+const DEFAULT_AUDIT_DB_ROLE = "flow_like_audit_worker";
 const DEFAULT_MIGRATIONS_DIR = "prisma/migrations-dsql";
 const LEASE_TABLE = "_flow_migration_lock";
 const LEASE_MINUTES = 30;
@@ -100,8 +101,10 @@ const DEFAULT_JOB_WAIT_TIMEOUT_SECS = 2 * 60 * 60;
 const MIN_JOB_WAIT_TIMEOUT_SECS = 60;
 const MAX_JOB_WAIT_TIMEOUT_SECS = 24 * 60 * 60;
 
-export const RUNTIME_ROLE_ARN_ENV = "DSQL_RUNTIME_ROLE_ARN";
+export const RUNTIME_ROLE_ARNS_ENV = "DSQL_RUNTIME_ROLE_ARNS";
 export const RUNTIME_DB_ROLE_ENV = "DSQL_RUNTIME_DB_ROLE";
+export const AUDIT_ROLE_ARN_ENV = "DSQL_AUDIT_ROLE_ARN";
+export const AUDIT_DB_ROLE_ENV = "DSQL_AUDIT_DB_ROLE";
 export const MIGRATIONS_DIR_ENV = "DSQL_MIGRATIONS_DIR";
 export const JOB_WAIT_TIMEOUT_ENV = "DSQL_JOB_WAIT_TIMEOUT_SECS";
 
@@ -112,9 +115,15 @@ const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export interface MigrationConfig extends DsqlTarget {
-	// null: no runtime role is bound yet (dev clusters); the grant step is skipped.
-	readonly runtimeRoleArn: string | null;
+	// Every IAM role that logs in as the runtime role (API and file tracker).
+	// Empty: no mapping on this run (dev clusters); grants still reconcile once
+	// the role exists.
+	readonly runtimeRoleArns: readonly string[];
 	readonly runtimeDbRole: string;
+	// null: the audit worker role is not (re)mapped on this run. Once the role
+	// exists, every run still applies the audit privilege boundary.
+	readonly auditRoleArn: string | null;
+	readonly auditDbRole: string;
 	readonly migrationsDir: string;
 	// Upper bound for one wait on async jobs (per migration, and for the
 	// cluster-wide drains); the jobs themselves keep running past it.
@@ -132,20 +141,54 @@ export function parseConfig(env: Environment): MigrationConfig {
 	const target = parseDsqlTarget(env);
 	const { optional } = envReader(env);
 
-	const runtimeRoleArn = optional(RUNTIME_ROLE_ARN_ENV) ?? null;
-	if (runtimeRoleArn !== null && !ROLE_ARN_PATTERN.test(runtimeRoleArn)) {
-		invalid(
-			RUNTIME_ROLE_ARN_ENV,
-			"must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)",
-		);
-	}
+	const validRoleArn = (name: string, arn: string): string => {
+		if (!ROLE_ARN_PATTERN.test(arn)) {
+			invalid(
+				name,
+				`must be an IAM role ARN (arn:aws:iam::<account>:role/<name>), got ${JSON.stringify(arn)}`,
+			);
+		}
+		return arn;
+	};
+	const roleArn = (name: string): string | null => {
+		const arn = optional(name);
+		return arn === undefined ? null : validRoleArn(name, arn);
+	};
+	const roleArnList = (name: string): string[] => {
+		const raw = optional(name);
+		if (raw === undefined) return [];
+		const arns = raw.split(",").map((entry) => entry.trim());
+		if (arns.includes("")) {
+			invalid(name, "must be a comma-separated list without empty entries");
+		}
+		const duplicate = arns.find((arn, index) => arns.indexOf(arn) !== index);
+		if (duplicate !== undefined) {
+			invalid(name, `lists ${duplicate} more than once`);
+		}
+		return arns.map((arn) => validRoleArn(name, arn));
+	};
+	const dbRole = (name: string, fallback: string): string => {
+		const role = optional(name) ?? fallback;
+		if (!IDENTIFIER_PATTERN.test(role) || role === ADMIN_USER) {
+			invalid(
+				name,
+				"must be a lowercase PostgreSQL identifier other than admin",
+			);
+		}
+		return role;
+	};
 
-	const runtimeDbRole =
-		optional(RUNTIME_DB_ROLE_ENV) ?? DEFAULT_RUNTIME_DB_ROLE;
-	if (!IDENTIFIER_PATTERN.test(runtimeDbRole) || runtimeDbRole === ADMIN_USER) {
+	const runtimeRoleArns = roleArnList(RUNTIME_ROLE_ARNS_ENV);
+	const runtimeDbRole = dbRole(RUNTIME_DB_ROLE_ENV, DEFAULT_RUNTIME_DB_ROLE);
+	const auditRoleArn = roleArn(AUDIT_ROLE_ARN_ENV);
+	const auditDbRole = dbRole(AUDIT_DB_ROLE_ENV, DEFAULT_AUDIT_DB_ROLE);
+	if (auditDbRole === runtimeDbRole) {
+		invalid(AUDIT_DB_ROLE_ENV, `must differ from ${RUNTIME_DB_ROLE_ENV}`);
+	}
+	if (auditRoleArn !== null && runtimeRoleArns.includes(auditRoleArn)) {
 		invalid(
-			RUNTIME_DB_ROLE_ENV,
-			"must be a lowercase PostgreSQL identifier other than admin",
+			AUDIT_ROLE_ARN_ENV,
+			`must be the audit worker's own IAM role, not one listed in ${RUNTIME_ROLE_ARNS_ENV}`,
 		);
 	}
 
@@ -173,8 +216,10 @@ export function parseConfig(env: Environment): MigrationConfig {
 
 	return {
 		...target,
-		runtimeRoleArn,
+		runtimeRoleArns,
 		runtimeDbRole,
+		auditRoleArn,
+		auditDbRole,
 		migrationsDir,
 		jobWaitTimeoutMs: jobWaitTimeoutSecs * 1_000,
 	};
@@ -863,22 +908,26 @@ async function assertSchemaValid(session: Executor): Promise<void> {
 
 // Design §3: the runtime Lambdas connect as a dedicated role bound to their IAM
 // role with dsql:DbConnect; admin (dsql:DbConnectAdmin) stays with this job.
+// Tables are granted one by one (reconcileRuntimeGrants) so the audit evidence
+// tables never enter the runtime role's grant; the default privileges still
+// cover a table created by a run that ends before the grant step.
 export function grantStatements(config: MigrationConfig): string[] {
 	const role = config.runtimeDbRole;
 	return [
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`,
 		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`,
 		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${role}`,
 		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ${role}`,
 	];
 }
 
-export async function grantRuntimeRole(
+// Creates `role` and maps it to `roleArn`. An IAM role mapped to both the API
+// and the audit worker role could log in as either, so that mapping is refused.
+async function ensureMappedRole(
 	session: Executor,
-	config: MigrationConfig,
-	runtimeRoleArn: string,
+	role: string,
+	roleArn: string,
+	exclusiveOf: string,
 ): Promise<void> {
-	const role = config.runtimeDbRole;
 	const exists = await session.run(
 		"SELECT 1 FROM pg_roles WHERE rolname = $1",
 		[role],
@@ -898,18 +947,333 @@ export async function grantRuntimeRole(
 			`database role ${role} lacks inherited USAGE on schema public; Aurora DSQL does not support granting privileges on this system schema`,
 		);
 	}
+	const shared = await session.run(
+		"SELECT 1 FROM sys.iam_pg_role_mappings WHERE pg_role_name = $1 AND arn = $2",
+		[exclusiveOf, roleArn],
+	);
+	if ((shared.rowCount ?? 0) > 0) {
+		throw new MigrationError(
+			`${roleArn} is already mapped to database role ${exclusiveOf}; ${role} needs a separate IAM role (AWS IAM REVOKE ${exclusiveOf} FROM '${roleArn}' if that mapping is a mistake)`,
+		);
+	}
 	const mapped = await session.run(
 		"SELECT 1 FROM sys.iam_pg_role_mappings WHERE pg_role_name = $1 AND arn = $2",
-		[role, runtimeRoleArn],
+		[role, roleArn],
 	);
 	if ((mapped.rowCount ?? 0) === 0) {
-		await session.run(`AWS IAM GRANT ${role} TO '${runtimeRoleArn}'`);
-		log(`granted ${runtimeRoleArn} the database role ${role}`);
+		await session.run(`AWS IAM GRANT ${role} TO '${roleArn}'`);
+		log(`granted ${roleArn} the database role ${role}`);
 	}
-	for (const statement of grantStatements(config)) await session.run(statement);
-	log(
-		`privileges on schema public granted to ${role} (existing and future tables)`,
+}
+
+// Maps every IAM role in one run (API and file tracker share the database
+// role), then reconciles the grants once.
+export async function grantRuntimeRole(
+	session: Executor,
+	config: MigrationConfig,
+	runtimeRoleArns: readonly string[],
+): Promise<void> {
+	for (const arn of runtimeRoleArns) {
+		await ensureMappedRole(
+			session,
+			config.runtimeDbRole,
+			arn,
+			config.auditDbRole,
+		);
+	}
+	await reconcileRuntimeGrants(session, config);
+}
+
+// Grants without a mapping, for runs that leave DSQL_RUNTIME_ROLE_ARNS unset.
+export async function applyRuntimeGrants(
+	session: Executor,
+	config: MigrationConfig,
+): Promise<void> {
+	const role = config.runtimeDbRole;
+	if (!(await existingRoles(session, [role])).has(role)) {
+		log(
+			`runtime role ${role} does not exist; only admin can connect until the job runs with ${RUNTIME_ROLE_ARNS_ENV}`,
+		);
+		return;
+	}
+	await reconcileRuntimeGrants(session, config);
+}
+
+async function defaultPrivilegesPresent(
+	session: Executor,
+	role: string,
+): Promise<boolean> {
+	const found = await session.run(
+		`SELECT 1 FROM pg_default_acl d
+		 JOIN pg_roles r ON r.oid = d.defaclrole
+		 JOIN pg_namespace n ON n.oid = d.defaclnamespace
+		 WHERE r.rolname = current_user AND n.nspname = 'public' AND d.defaclobjtype = 'r'
+		   AND d.defaclacl::text LIKE $1`,
+		[`%${role}=arwd/%`],
 	);
+	return (found.rowCount ?? 0) > 0;
+}
+
+const RUNTIME_PRIVILEGES: readonly TablePrivilege[] = [
+	"SELECT",
+	"INSERT",
+	"UPDATE",
+	"DELETE",
+];
+
+async function reconcileRuntimeGrants(
+	session: Executor,
+	config: MigrationConfig,
+): Promise<void> {
+	const role = config.runtimeDbRole;
+	if (!(await defaultPrivilegesPresent(session, role))) {
+		for (const statement of grantStatements(config))
+			await session.run(statement);
+	}
+	const evidence = new Set<string>(AUDIT_EVIDENCE_TABLES);
+	let emitted = 0;
+	for (const name of await publicTables(session)) {
+		if (evidence.has(name)) continue;
+		const statements = await reconcileTable(session, {
+			role,
+			table: quotedTable(name),
+			wanted: RUNTIME_PRIVILEGES,
+			exact: false,
+		});
+		emitted += statements.length;
+	}
+	log(
+		`privileges on schema public reconciled for ${role}: ${emitted} statement(s), audit evidence tables excluded`,
+	);
+}
+
+export async function grantAuditWorkerRole(
+	session: Executor,
+	config: MigrationConfig,
+	auditRoleArn: string,
+): Promise<void> {
+	await ensureMappedRole(
+		session,
+		config.auditDbRole,
+		auditRoleArn,
+		config.runtimeDbRole,
+	);
+}
+
+// Mirrors evidenceTables in apps/backend/shared/audit_database_roles.ts.
+export const AUDIT_EVIDENCE_TABLES = [
+	"AuditEntry",
+	"AuditRecord",
+	"AuditSeal",
+	"AuditEpoch",
+	"AuditWatermark",
+	"AuditArchive",
+	"AuditHeldChain",
+	"AuditWorkerLease",
+] as const;
+// Tables the worker may touch besides the evidence tables.
+const WORKER_SUPPORT_TABLES = ["AiActAssessment", "AuditExportTarget"] as const;
+export const quotedTable = (name: string) =>
+	`public."${name.replaceAll('"', '""')}"`;
+
+// The privileges DSQL knows on a table. TRUNCATE and TRIGGER do not exist
+// there, and a REVOKE naming them is rejected.
+export const TABLE_PRIVILEGES = [
+	"SELECT",
+	"INSERT",
+	"UPDATE",
+	"DELETE",
+	"REFERENCES",
+] as const;
+export type TablePrivilege = (typeof TABLE_PRIVILEGES)[number];
+
+export interface TableGrant {
+	readonly role: string;
+	readonly table: string;
+	readonly wanted: readonly TablePrivilege[];
+	// true: every other privilege is revoked; false: only the missing ones are granted.
+	readonly exact: boolean;
+}
+
+// The API reads evidence and appends records; only the worker seals, signs,
+// archives and prunes. Unlike PostgreSQL, the API keeps table-level INSERT on
+// AuditRecord: every GRANT/REVOKE is its own DDL transaction on DSQL, and
+// swapping it for a column grant without sealId would reject record inserts in
+// between. A record inserted with an invented sealId fails verification.
+// Worker entries come first so the API never loses access the worker has not
+// gained yet.
+export function auditBoundary(config: MigrationConfig): TableGrant[] {
+	const { runtimeDbRole: api, auditDbRole: worker } = config;
+	const apiWanted = (name: string): TablePrivilege[] => {
+		if (name === "AuditWorkerLease") return [];
+		if (name === "AuditRecord") return ["SELECT", "INSERT"];
+		return ["SELECT"];
+	};
+	return [
+		...AUDIT_EVIDENCE_TABLES.map(
+			(name): TableGrant => ({
+				role: worker,
+				table: quotedTable(name),
+				wanted: ["SELECT", "INSERT", "UPDATE", "DELETE"],
+				exact: true,
+			}),
+		),
+		{
+			role: worker,
+			table: quotedTable("AiActAssessment"),
+			wanted: ["SELECT"],
+			exact: true,
+		},
+		{
+			role: worker,
+			table: quotedTable("AuditExportTarget"),
+			wanted: ["SELECT", "UPDATE"],
+			exact: true,
+		},
+		...AUDIT_EVIDENCE_TABLES.map(
+			(name): TableGrant => ({
+				role: api,
+				table: quotedTable(name),
+				wanted: apiWanted(name),
+				exact: true,
+			}),
+		),
+	];
+}
+
+async function existingRoles(
+	session: Executor,
+	roles: readonly string[],
+): Promise<Set<string>> {
+	const found = await session.run<{ rolname: string }>(
+		`SELECT rolname FROM pg_roles WHERE rolname IN (${roles.map((_, i) => `$${i + 1}`).join(", ")})`,
+		[...roles],
+	);
+	return new Set(found.rows.map((row) => row.rolname));
+}
+
+async function publicTables(session: Executor): Promise<string[]> {
+	const found = await session.run<{ relname: string }>(
+		"SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY c.relname",
+	);
+	return found.rows.map((row) => row.relname);
+}
+
+async function heldPrivileges(
+	session: Executor,
+	role: string,
+	table: string,
+): Promise<Set<TablePrivilege>> {
+	const probe = TABLE_PRIVILEGES.map(
+		(privilege) =>
+			`has_table_privilege($1, $2, '${privilege}') AS "${privilege}"`,
+	).join(", ");
+	const row =
+		(
+			await session.run<Record<string, boolean>>(`SELECT ${probe}`, [
+				role,
+				table,
+			])
+		).rows[0] ?? {};
+	return new Set(
+		TABLE_PRIVILEGES.filter((privilege) => row[privilege] === true),
+	);
+}
+
+function privilegeDrift(
+	grant: TableGrant,
+	held: Set<TablePrivilege>,
+): { missing: TablePrivilege[]; extra: TablePrivilege[] } {
+	return {
+		missing: grant.wanted.filter((privilege) => !held.has(privilege)),
+		extra: grant.exact
+			? TABLE_PRIVILEGES.filter(
+					(privilege) =>
+						held.has(privilege) && !grant.wanted.includes(privilege),
+				)
+			: [],
+	};
+}
+
+// Emits at most one GRANT and one REVOKE, and nothing when the catalog already
+// matches: on DSQL every DCL statement is a catalog change that warm API
+// sessions pay for with one OC001 on their next statement.
+async function reconcileTable(
+	session: Executor,
+	grant: TableGrant,
+): Promise<string[]> {
+	const { missing, extra } = privilegeDrift(
+		grant,
+		await heldPrivileges(session, grant.role, grant.table),
+	);
+	const statements: string[] = [];
+	if (missing.length)
+		statements.push(
+			`GRANT ${missing.join(", ")} ON TABLE ${grant.table} TO ${grant.role}`,
+		);
+	if (extra.length)
+		statements.push(
+			`REVOKE ${extra.join(", ")} ON TABLE ${grant.table} FROM ${grant.role}`,
+		);
+	for (const statement of statements) await session.run(statement);
+	return statements;
+}
+
+async function verifyTable(
+	session: Executor,
+	grant: TableGrant,
+): Promise<void> {
+	const { missing, extra } = privilegeDrift(
+		grant,
+		await heldPrivileges(session, grant.role, grant.table),
+	);
+	if (missing.length || extra.length) {
+		const problem = missing.length
+			? `lacks ${missing.join(", ")}`
+			: `still holds ${extra.join(", ")}`;
+		throw new MigrationError(
+			`audit privilege boundary not in effect: ${grant.role} ${problem} on ${grant.table}`,
+		);
+	}
+}
+
+// Runs after every migration once the worker role exists: admin's default
+// privileges hand the runtime role every table a migration creates.
+export async function applyAuditBoundary(
+	session: Executor,
+	config: MigrationConfig,
+): Promise<void> {
+	const { runtimeDbRole: api, auditDbRole: worker } = config;
+	const roles = await existingRoles(session, [api, worker]);
+	if (!roles.has(worker)) {
+		log(
+			`audit worker role ${worker} does not exist; ${api} keeps write access to the audit tables until the job runs with ${AUDIT_ROLE_ARN_ENV}`,
+		);
+		return;
+	}
+	const grants = auditBoundary(config).filter((grant) => roles.has(grant.role));
+	let emitted = 0;
+	for (const grant of grants)
+		emitted += (await reconcileTable(session, grant)).length;
+	for (const grant of grants) await verifyTable(session, grant);
+	const auditTables = new Set<string>([
+		...AUDIT_EVIDENCE_TABLES,
+		...WORKER_SUPPORT_TABLES,
+	]);
+	for (const name of await publicTables(session)) {
+		if (auditTables.has(name)) continue;
+		const held = await heldPrivileges(session, worker, quotedTable(name));
+		if (held.size) {
+			throw new MigrationError(
+				`audit worker role ${worker} holds ${[...held].join(", ")} on ${name}; the worker must not reach application tables`,
+			);
+		}
+	}
+	log(
+		`audit privilege boundary verified: ${worker} writes evidence${roles.has(api) ? `, ${api} reads it and appends AuditRecord only` : ""}; ${emitted} statement(s) emitted`,
+	);
+	// Stable marker for the deployment pipeline (grepped from the task log).
+	log(`AUDIT_BOUNDARY_VERIFIED api=${api} worker=${worker}`);
 }
 
 async function prismaMigrateStatus(
@@ -972,10 +1336,15 @@ async function main(): Promise<number> {
 		}
 		throw error;
 	}
-	const grantPlan =
-		config.runtimeRoleArn === null
-			? `no runtime role grant (${RUNTIME_ROLE_ARN_ENV} unset)`
-			: `runtime role ${config.runtimeDbRole} ← ${config.runtimeRoleArn}`;
+	const runtimePlan =
+		config.runtimeRoleArns.length === 0
+			? `no runtime role mapping (${RUNTIME_ROLE_ARNS_ENV} unset)`
+			: `runtime role ${config.runtimeDbRole} ← ${config.runtimeRoleArns.join(", ")}`;
+	const auditPlan =
+		config.auditRoleArn === null
+			? `no audit role mapping (${AUDIT_ROLE_ARN_ENV} unset)`
+			: `audit role ${config.auditDbRole} ← ${config.auditRoleArn}`;
+	const grantPlan = `${runtimePlan}; ${auditPlan}`;
 	log(
 		`target ${ADMIN_USER}@${config.endpoint} (${config.region}); migrations from ${config.migrationsDir}; ${grantPlan}; wait budget ${config.jobWaitTimeoutMs / 1000} s per drain`,
 	);
@@ -1037,13 +1406,18 @@ async function main(): Promise<number> {
 			await session.run(RECORD_FINISHED_SQL, [row.id]);
 			log(`recorded ${row.migration_name} as applied`);
 		}
-		if (config.runtimeRoleArn === null) {
+		if (config.runtimeRoleArns.length === 0) {
 			log(
-				`warning: ${RUNTIME_ROLE_ARN_ENV} is not set; skipping the runtime role grant - only admin can connect until it is set and the job runs again`,
+				`warning: ${RUNTIME_ROLE_ARNS_ENV} is not set; no IAM role is mapped to ${config.runtimeDbRole} by this run`,
 			);
+			await applyRuntimeGrants(session, config);
 		} else {
-			await grantRuntimeRole(session, config, config.runtimeRoleArn);
+			await grantRuntimeRole(session, config, config.runtimeRoleArns);
 		}
+		if (config.auditRoleArn !== null) {
+			await grantAuditWorkerRole(session, config, config.auditRoleArn);
+		}
+		await applyAuditBoundary(session, config);
 
 		const status = await prismaMigrateStatus(config, session);
 		if (status !== 0) {

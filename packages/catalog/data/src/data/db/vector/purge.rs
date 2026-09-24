@@ -61,7 +61,9 @@ impl NodeLogic for PurgeLocalDatabaseNode {
         let cached_db = database.load(context).await?;
         cached_db.ensure_flushed().await?;
         let database = cached_db.db.read().await;
-        database.purge().await?;
+        if !super::skip_missing_table(context, &database, "purge").await? {
+            database.purge().await?;
+        }
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

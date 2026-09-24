@@ -472,7 +472,7 @@ function DeveloperPublishPageContent() {
 			);
 
 			toast.success(
-				response.message ??
+				response?.message ??
 					`Package published as private! You can manage it from the registry.`,
 			);
 			router.push("/developer");

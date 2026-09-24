@@ -11,12 +11,17 @@
 // in the environment of the two child processes it spawns in turn: the
 // pre-push SQL runner (packages/api/prisma/pre-push.ts - column type changes
 // Prisma emits without the USING clause they need) and `prisma db push`. They
-// are never logged and never written to disk.
+// are never logged and never written to disk. After a successful push the same
+// token opens one in-process connection that applies the API/audit-worker
+// privilege boundary (apps/backend/shared/audit_database_roles.ts, grant-only
+// mode) when Terraform has named the two roles.
 //
 // `--accept-data-loss` is intentionally not passed. See the Dockerfile header
 // for what Prisma does instead and what the operator does then.
 
 import { ManagedIdentityCredential } from "@azure/identity";
+import { Client } from "pg";
+import { provisionAuditDatabaseRoles } from "./audit_database_roles";
 
 const POSTGRES_SCOPE = "https://ossrdbms-aad.database.windows.net/.default";
 const AZURE_POSTGRES_SUFFIX = ".postgres.database.azure.com";
@@ -24,6 +29,9 @@ const APPLICATION_NAME = "flow-like-azure-migration";
 const SCHEMA_DIR = "prisma/schema";
 const PRE_PUSH_SCRIPT = "prisma/pre-push.ts";
 const LOG_PREFIX = "[azure-migration]";
+// Role names of the API and the audit worker, set by Terraform on the job.
+export const API_ROLE_SETTING = "API_DATABASE_ROLE";
+export const AUDIT_ROLE_SETTING = "AUDIT_DATABASE_ROLE";
 
 const REQUIRED_SETTINGS = [
 	"AZURE_POSTGRES_AUTH_MODE",
@@ -335,6 +343,72 @@ async function runChild(
 	}
 }
 
+export interface AuditRoleDependencies {
+	readonly connect: (databaseUrl: string) => Promise<Client>;
+	readonly provision: typeof provisionAuditDatabaseRoles;
+}
+
+async function connectClient(databaseUrl: string): Promise<Client> {
+	const client = new Client({ connectionString: databaseUrl });
+	await client.connect();
+	return client;
+}
+
+const AUDIT_ROLE_DEPENDENCIES: AuditRoleDependencies = {
+	connect: connectClient,
+	provision: provisionAuditDatabaseRoles,
+};
+
+// Applies the API/audit-worker privilege boundary on the pushed schema and
+// returns the job's exit code for that step. Until Terraform names the worker
+// role, or while the role does not exist yet, the step is skipped and the push
+// alone is the job's success; once the role exists the boundary is part of the
+// migration and its failure is the job's failure.
+export async function applyAuditRoles(
+	env: Environment,
+	databaseUrl: string,
+	deps: AuditRoleDependencies = AUDIT_ROLE_DEPENDENCIES,
+): Promise<number> {
+	const auditRole = env[AUDIT_ROLE_SETTING];
+	if (auditRole === undefined || auditRole === "") {
+		log(`audit role provisioning skipped: ${AUDIT_ROLE_SETTING} is not set`);
+		return 0;
+	}
+	let client: Client | undefined;
+	try {
+		client = await deps.connect(databaseUrl);
+		const existing = await client.query(
+			"SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1",
+			[auditRole],
+		);
+		if (existing.rows.length === 0) {
+			log(
+				`audit role provisioning skipped: role "${auditRole}" does not exist in pg_roles`,
+			);
+			return 0;
+		}
+		await deps.provision(client, {
+			...env,
+			AUDIT_DB_GRANTS_ONLY: "true",
+			API_DATABASE_ROLE: env[API_ROLE_SETTING],
+			AUDIT_DATABASE_ROLE: auditRole,
+		});
+		log(
+			`audit privilege boundary applied: api="${env[API_ROLE_SETTING]}" worker="${auditRole}"`,
+		);
+		return 0;
+	} catch (error) {
+		// Grant-only mode issues no statement that carries a credential and the
+		// token never appears in a driver error, so the message is safe to print.
+		logError(
+			`audit role provisioning failed: ${(error as Error)?.message ?? String(error)}`,
+		);
+		return 1;
+	} finally {
+		await client?.end().catch(() => undefined);
+	}
+}
+
 async function main(): Promise<number> {
 	let config: MigrationConfig;
 	try {
@@ -384,9 +458,7 @@ async function main(): Promise<number> {
 		["bunx", "--bun", "prisma", "db", "push", `--schema=${SCHEMA_DIR}`],
 		composeDatabaseUrl(config, token),
 	);
-	if (exitCode === 0) {
-		log("schema push complete");
-	} else {
+	if (exitCode !== 0) {
 		logError(`prisma db push exited with code ${exitCode}.`);
 		logError(
 			"If Prisma listed data-loss warnings above, that refusal is intentional: this job never passes --accept-data-loss.",
@@ -394,8 +466,12 @@ async function main(): Promise<number> {
 		logError(
 			"Review the change and, if it really is intended, apply the destructive step by hand from the management host per the runbook, then re-run this job.",
 		);
+		return exitCode;
 	}
-	return exitCode;
+	log("schema push complete");
+	// Same identity and token as the push; node-postgres needs its own TLS
+	// spelling of verify-full, which is the pre-push URL.
+	return applyAuditRoles(process.env, composePrePushDatabaseUrl(config, token));
 }
 
 if (import.meta.main) {

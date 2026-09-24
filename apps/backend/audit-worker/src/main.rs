@@ -16,8 +16,12 @@ use flow_like_types::{Context, Result, anyhow};
 use sea_orm::{ConnectOptions, Database};
 use serde::Deserialize;
 
+const CONFIG: &str = include_str!("../../../../flow-like.config.json");
+
+/// The `audit` section of the compiled-in hub config. Absent fields take the API's defaults.
 #[derive(Deserialize)]
 struct Config {
+    #[serde(default)]
     audit: AuditConfig,
 }
 
@@ -72,7 +76,6 @@ fn load_secrets() -> Result<()> {
         "AUDIT_KMS_AWS_ACCESS_KEY_ID",
         "AUDIT_KMS_AWS_SECRET_ACCESS_KEY",
         "SINK_TOKEN_ENCRYPTION_KEY",
-        "FLOW_LIKE_CONFIG_JSON",
     ] {
         let Some(path) = value(&format!("{name}_FILE")) else {
             continue;
@@ -94,27 +97,13 @@ fn load_secrets() -> Result<()> {
     Ok(())
 }
 
-fn config() -> Result<AuditConfig> {
-    let json = match (
-        value("FLOW_LIKE_CONFIG_JSON"),
-        value("FLOW_LIKE_CONFIG_PATH"),
-    ) {
-        (Some(_), Some(_)) => {
-            return Err(anyhow!(
-                "set only one of FLOW_LIKE_CONFIG_JSON and FLOW_LIKE_CONFIG_PATH"
-            ));
-        }
-        (Some(json), None) => json,
-        (None, Some(path)) => fs::read_to_string(path).context("reading audit worker config")?,
-        (None, None) => {
-            return Err(anyhow!(
-                "an explicit audit policy is required via FLOW_LIKE_CONFIG_JSON or FLOW_LIKE_CONFIG_PATH"
-            ));
-        }
-    };
-    let mut config: Config = serde_json::from_str(&json).context("invalid audit worker config")?;
+fn parse_config(document: &str) -> Result<AuditConfig> {
+    let mut config: Config =
+        serde_json::from_str(document).context("invalid compiled-in flow-like.config.json")?;
     if !config.audit.enabled {
-        return Err(anyhow!("audit is disabled in the worker configuration"));
+        return Err(anyhow!(
+            "audit is disabled in the compiled-in flow-like.config.json"
+        ));
     }
     config.audit.require_signing = true;
     Ok(config.audit)
@@ -143,7 +132,7 @@ async fn run(once: bool) -> Result<()> {
     }
     let entry = required("AUDIT_ENTRY_KEY")?;
     keys::init_entry_key(Some(&entry), None)?;
-    keys::init_previous_entry_key(value("AUDIT_ENTRY_KEY_PREVIOUS").as_deref())?;
+    keys::init_previous_entry_key(value("AUDIT_ENTRY_KEY_PREVIOUS").as_deref(), None)?;
     let mut options = ConnectOptions::new(required("DATABASE_URL")?);
     options
         .max_connections(5)
@@ -156,7 +145,8 @@ async fn run(once: bool) -> Result<()> {
     let dialect = DbDialect::detect(&db).await;
     let encryption_key = value("SINK_TOKEN_ENCRYPTION_KEY")
         .map(|secret| *blake3::hash(secret.as_bytes()).as_bytes());
-    let context = AuditWorkerContext::from_env(db, dialect, config()?, encryption_key, !once)?;
+    let context =
+        AuditWorkerContext::from_env(db, dialect, parse_config(CONFIG)?, encryption_key, !once)?;
     if context.bucket.is_none() {
         return Err(anyhow!("an immutable audit bucket/container is required"));
     }
@@ -255,12 +245,40 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, checkpoint_is_fresh};
+    use super::{CONFIG, checkpoint_is_fresh, parse_config};
+    use flow_like::hub::{AuditLevel, AuditRetention};
 
     #[test]
-    fn worker_configuration_requires_an_explicit_audit_policy() {
-        assert!(serde_json::from_str::<Config>("{}").is_err());
-        assert!(serde_json::from_str::<Config>(r#"{"audit": {}}"#).is_ok());
+    fn the_compiled_in_config_yields_an_enabled_signed_policy() {
+        let config = parse_config(CONFIG).unwrap();
+        assert!(config.enabled);
+        assert!(config.require_signing);
+    }
+
+    #[test]
+    fn a_partial_or_full_document_yields_the_audit_section_with_defaults() {
+        let partial = parse_config(r#"{"audit": {"level": "verbose", "log_ip": true}}"#).unwrap();
+        assert_eq!(partial.level, AuditLevel::Verbose);
+        assert!(partial.log_ip);
+        assert!(partial.require_signing);
+        assert_eq!(
+            partial.retention.seal_after_records,
+            AuditRetention::default().seal_after_records
+        );
+
+        let full = parse_config(
+            r#"{"authentication": {"openid": {}}, "features": {}, "audit": {"retention": {"activity_days": 7}}}"#,
+        )
+        .unwrap();
+        assert_eq!(full.retention.activity_days, 7);
+        assert_eq!(full.level, AuditLevel::Standard);
+
+        let empty = parse_config("{}").unwrap();
+        assert!(empty.enabled);
+        assert!(empty.require_signing);
+
+        assert!(parse_config(r#"{"audit": {"enabled": false}}"#).is_err());
+        assert!(parse_config("not json").is_err());
     }
 
     #[test]

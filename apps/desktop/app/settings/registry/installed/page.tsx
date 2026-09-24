@@ -16,6 +16,7 @@ import {
 import { ClearWidgetPermissionsButton } from "@flow-like/flow-like-ui/components/store/widget-permissions";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { readManifestWidgets } from "@flow-like/flow-like-ui/lib/package-widgets";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -236,6 +237,7 @@ function OwnedRegistryItem({
 		| "stale";
 }) {
 	const { t } = useTranslation("common");
+	const keywords = asArray(pkg.keywords);
 	return (
 		<div
 			className={`rounded-xl border border-border/20 bg-card/50 hover:bg-muted/10 p-4 transition-all cursor-pointer ${pkg.status === PackageStatus.Disabled ? "opacity-60" : ""}`}
@@ -280,9 +282,9 @@ function OwnedRegistryItem({
 							{pkg.description}
 						</p>
 					)}
-					{pkg.keywords.length > 0 && (
+					{keywords.length > 0 && (
 						<div className="flex flex-wrap gap-1 pt-0.5">
-							{pkg.keywords.slice(0, 4).map((keyword) => (
+							{keywords.slice(0, 4).map((keyword) => (
 								<span
 									key={keyword}
 									className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted/40 text-muted-foreground/60"
@@ -372,12 +374,18 @@ export default function InstalledPackagesPage() {
 		if (!backend?.registryState || !isInitialized) return;
 		setIsLoading(true);
 		try {
+			// Registry lookups must not hide locally installed packages when offline.
 			const [packages, updateList, ownedResults] = await Promise.all([
 				backend.registryState.getInstalledPackages(),
-				backend.registryState.checkForUpdates(),
-				backend.registryState.getOwnedPackages({
-					includeDisabled: showDisabled,
+				backend.registryState.checkForUpdates().catch((err) => {
+					console.warn("Failed to check for package updates:", err);
+					return [];
 				}),
+				backend.registryState
+					.getOwnedPackages({
+						includeDisabled: showDisabled,
+					})
+					.catch(() => null),
 			]);
 			const registry = packages.filter((p) => !p.id.startsWith("local."));
 			const local = packages.filter((p) => p.id.startsWith("local."));
@@ -387,7 +395,7 @@ export default function InstalledPackagesPage() {
 
 			const installedIds = new Set(packages.map((p) => p.id));
 			setOwnedPackages(
-				ownedResults.packages.filter((p) => !installedIds.has(p.id)),
+				asArray(ownedResults?.packages).filter((p) => !installedIds.has(p.id)),
 			);
 		} catch (err) {
 			console.error("Failed to fetch installed packages:", err);

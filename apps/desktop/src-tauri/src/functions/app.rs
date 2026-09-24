@@ -29,6 +29,7 @@ pub mod fork;
 pub mod graph;
 pub mod saved_queries;
 pub mod sharing;
+pub mod device_export;
 pub mod tables;
 
 async fn presign_meta(

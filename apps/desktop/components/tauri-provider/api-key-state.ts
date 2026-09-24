@@ -4,6 +4,7 @@ import type {
 	ITechnicalUserCreateInput,
 	ITechnicalUserCreateResult,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -37,7 +38,7 @@ export class ApiKeyState implements IApiKeyState {
 			this.backend.auth,
 		);
 
-		return result.map((item) => ({
+		return asArray(result).map((item) => ({
 			...item,
 			role_permissions: item.role_permissions
 				? BigInt(item.role_permissions)

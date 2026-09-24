@@ -8,6 +8,9 @@ default-members = [
     "packages/types/contracts",
 ]
 members = [
+    "apps/standalone",
+    "packages/device-crypto",
+    "packages/device-protocol",
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
     "apps/backend/local/runtime",
@@ -187,6 +190,8 @@ flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = fals
 flow-like-secrets = { path = "packages/secrets" }
 flow-like-aws-data = { path = "packages/aws-data" }
 flow-like-db = { path = "packages/db" }
+flow-like-device-protocol = { path = "packages/device-protocol" }
+flow-like-device-crypto = { path = "packages/device-crypto" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }
 flow-like-scheduler-tick = { path = "packages/scheduler-tick" }

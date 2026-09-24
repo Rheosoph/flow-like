@@ -2197,6 +2197,10 @@ impl ServerRegistry {
                     wasm_hash: Set(compile_hash.clone()),
                     wasm_size: Set(size),
                     widgets: Set(widgets_json.clone()),
+                    // No nodes, so no node capabilities: keep tiers and hosts only.
+                    permissions: Set(serde_json::to_value(
+                        manifest.permissions.with_node_capabilities(&[]),
+                    )?),
                     widget_bundle_hash: Set(widget_bundle_hash.clone()),
                     widget_bundle_size: Set(widget_bundle_size),
                     updated_at: Set(now_approve),
@@ -2449,6 +2453,11 @@ impl ServerRegistry {
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
                     update_model.nodes = Set(latest.nodes.clone());
+                    if let Some(permissions) =
+                        permissions_with_node_capabilities(&pkg.permissions, &latest.nodes)
+                    {
+                        update_model.permissions = Set(permissions);
+                    }
                     update_model.widgets = Set(latest.widgets.clone());
                     update_model.widget_bundle_hash = Set(latest.widget_bundle_hash.clone());
                     update_model.widget_bundle_size = Set(latest.widget_bundle_size);
@@ -2710,11 +2719,30 @@ impl ServerRegistry {
     }
 }
 
+/// The stored permissions with their capability flags replaced by what the
+/// package's compiled nodes declare. Resource tiers, the host allowlist and
+/// OAuth scopes stay as authored. `None` when the nodes are not known — the
+/// blob does not parse, or it is still the empty placeholder a version carries
+/// until node extraction succeeds — so callers keep the previous value instead
+/// of listing nothing.
+pub(crate) fn permissions_with_node_capabilities(
+    stored: &serde_json::Value,
+    nodes: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let authored: PackagePermissions = serde_json::from_value(stored.clone()).unwrap_or_default();
+    let nodes: Vec<PackageNodeEntry> = serde_json::from_value(nodes.clone()).ok()?;
+    if nodes.is_empty() {
+        return None;
+    }
+    serde_json::to_value(authored.with_node_capabilities(&nodes)).ok()
+}
+
 /// Derive the listing capability tags from a stored `permissions` blob.
 ///
-/// The permissions column is written by the publish flow, so a row that predates
-/// a manifest change (or carries anything unparseable) simply lists no
-/// capabilities rather than failing the whole listing.
+/// The publish flow writes the authored manifest to the permissions column and
+/// the compile callback and approval replace its capability flags with the
+/// ones the nodes declare, so a row that predates that (or carries anything
+/// unparseable) simply lists no capabilities rather than failing the listing.
 fn capability_tags_from_json(raw: serde_json::Value) -> Vec<String> {
     serde_json::from_value::<PackagePermissions>(raw)
         .map(|permissions| permissions.capability_tags())

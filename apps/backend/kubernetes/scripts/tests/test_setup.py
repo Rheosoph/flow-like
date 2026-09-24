@@ -50,26 +50,20 @@ class SetupTest(unittest.TestCase):
                 self.assertEqual(json.loads(secret["stringData"]["flow-like.config.json"]), marker)
                 self.assertNotIn("configured.example.test", json.dumps(values))
 
-    def test_secret_reference_is_refused_because_the_worker_cannot_resolve_it(self):
+    def test_secret_reference_generates_no_hub_json_secret(self):
         with patch.dict(os.environ, {"FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"}, clear=True):
-            with self.assertRaisesRegex(ValueError, "FLOW_LIKE_CONFIG_SECRET_REF") as error:
-                setup.generate("flow-like", "flow-like")
-        self.assertNotIn("hub-reference", str(error.exception))
+            objects, values = setup.generate("flow-like", "flow-like")
+        self.assertEqual(values["api"]["runtimeConfig"], {"secretRef": "hub-reference"})
+        self.assertFalse(any("flow-like.config.json" in x["stringData"] for x in objects["items"]))
 
-    def test_worker_shares_the_hub_config_and_learns_the_api_database_role(self):
+    def test_worker_gets_no_runtime_config_or_api_role(self):
         with patch.dict(os.environ, {}, clear=True):
             objects, values = setup.generate("flow-like", "flow-like")
         names = [x["metadata"]["name"] for x in objects["items"]]
         self.assertIn("flow-like-hub-config", names)
         self.assertFalse(any(name.endswith("-audit-config") for name in names))
         self.assertNotIn("runtimeConfig", values["audit"])
-        self.assertEqual(values["audit"]["apiDatabaseRole"], "flowlike_api")
-        urls = {"DATABASE_URL": "postgresql://owner:o@db.example.test:5432/flowlike?sslmode=verify-full",
-                "API_DATABASE_URL": "postgresql://api%2Duser:a@db.example.test:5432/flowlike?sslmode=verify-full",
-                "AUDIT_DATABASE_URL": "postgresql://audit:w@db.example.test:5432/flowlike?sslmode=verify-full"}
-        with patch.dict(os.environ, urls, clear=True):
-            _, values = setup.generate("flow-like", "flow-like")
-        self.assertEqual(values["audit"]["apiDatabaseRole"], "api-user")
+        self.assertNotIn("apiDatabaseRole", values["audit"])
 
     def test_invalid_or_conflicting_runtime_sources_fail_without_content(self):
         for environment in ({"FLOW_LIKE_CONFIG_JSON": "sensitive-invalid-marker"}, {"FLOW_LIKE_CONFIG_FILE": "/not-present-sensitive-marker"}, {"FLOW_LIKE_CONFIG_JSON": "{}", "FLOW_LIKE_CONFIG_SECRET_REF": "sensitive-marker"}):
@@ -145,10 +139,12 @@ if sys.argv[1:3]==['image','inspect']:
             self.assertEqual(values["executorPool"]["image"], values["executor"]["image"])
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertFalse(any("--build-arg" in call for call in calls))
-            env.update({"COMPONENTS": "api", "FLOW_LIKE_BUILD_CONFIG": "flow-like.kubernetes.config.json"})
+            env.update({"COMPONENTS": "api audit-worker", "FLOW_LIKE_BUILD_CONFIG": "flow-like.kubernetes.config.json"})
             subprocess.run(script, env=env, check=True, capture_output=True)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertTrue(any("FLOW_LIKE_CONFIG=flow-like.kubernetes.config.json" in call for call in calls))
+            configured = [call for call in calls if "FLOW_LIKE_CONFIG=flow-like.kubernetes.config.json" in call]
+            self.assertEqual(len(configured), 2)
+            self.assertTrue(any(arg.endswith("audit-worker/Dockerfile") for arg in configured[1]))
             env.update({"PUSH": "false", "COMPONENTS": "executor"})
             subprocess.run(script, env=env, check=True, capture_output=True)
             values = json.loads(output.read_text())

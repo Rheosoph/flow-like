@@ -93,6 +93,9 @@ pub struct AzureRuntimeCredentials {
     /// Directory signed by `draft_meta_sas_token` (e.g., "tmp/apps/{app_id}")
     #[serde(default)]
     pub draft_meta_path_prefix: Option<String>,
+    /// Azure signs each allowed directory independently within one device lease.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub device_sas_tokens: std::collections::BTreeMap<String, String>,
 }
 
 #[cfg(feature = "azure")]
@@ -160,6 +163,7 @@ impl AzureRuntimeCredentials {
             content_path_prefix: None,
             user_content_path_prefix: None,
             draft_meta_path_prefix: None,
+            device_sas_tokens: Default::default(),
         }
     }
 
@@ -192,6 +196,7 @@ impl AzureRuntimeCredentials {
             content_path_prefix: None,
             user_content_path_prefix: None,
             draft_meta_path_prefix: None,
+            device_sas_tokens: Default::default(),
         }
     }
 
@@ -212,6 +217,7 @@ impl AzureRuntimeCredentials {
             content_path_prefix: None,
             user_content_path_prefix: None,
             draft_meta_path_prefix: None,
+            device_sas_tokens: Default::default(),
         }
     }
 
@@ -301,6 +307,31 @@ impl AzureRuntimeCredentials {
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
 
+        if let CredentialsAccess::DeviceExecute { write, expires_at } = mode {
+            let expiry = super::device_execute_expiry(expires_at)?;
+            let expiry_str = expiry.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let mut device_sas_tokens = std::collections::BTreeMap::new();
+            for (purpose, prefix) in super::device_execute_prefixes(sub, app_id)? {
+                let token = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    prefix.trim_end_matches('/'),
+                    if write { "racwdl" } else { "rl" },
+                    &expiry_str,
+                    &issuer,
+                )?;
+                device_sas_tokens.insert(purpose.as_str().to_owned(), token);
+            }
+            let mut scoped = Self::new(
+                &self.meta_container,
+                &self.content_container,
+                &self.logs_container,
+                &self.account_name,
+            );
+            scoped.expiration = Some(expiry);
+            scoped.device_sas_tokens = device_sas_tokens;
+            return Ok(scoped);
+        }
         let expiry = chrono::Utc::now() + chrono::Duration::minutes(SCOPED_SAS_LIFETIME_MINUTES);
         let expiry_str = expiry.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -690,6 +721,7 @@ impl AzureRuntimeCredentials {
                     Some(format!("users/{}/apps/{}", sub, app_id)),
                 )
             }
+            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
             CredentialsAccess::ReadLogs => {
                 // ReadLogs: read access to logs container only
                 let logs_sas = generate_directory_sas(
@@ -720,6 +752,7 @@ impl AzureRuntimeCredentials {
             content_path_prefix,
             user_content_path_prefix,
             draft_meta_path_prefix,
+            device_sas_tokens: Default::default(),
         })
     }
 
@@ -983,6 +1016,113 @@ fn generate_directory_sas(
                 account_key,
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod instance_directory_tests {
+    use super::*;
+    #[test]
+    fn device_execute_signs_four_directories_in_one_expiring_lease() {
+        use base64::Engine;
+        let key = base64::engine::general_purpose::STANDARD.encode([17u8; 32]);
+        let credentials =
+            AzureRuntimeCredentials::new("private-meta", "content", "private-logs", "testaccount");
+        for write in [false, true] {
+            let expires_at = chrono::Utc::now().timestamp() + 3590;
+            let scoped = credentials
+                .scoped_credentials_with_issuer(
+                    "owner",
+                    "project",
+                    CredentialsAccess::DeviceExecute { write, expires_at },
+                    AzureDirectorySasIssuer::SharedKey(key.clone()),
+                )
+                .unwrap();
+            assert_eq!(scoped.expiration.unwrap().timestamp(), expires_at);
+            assert_eq!(scoped.device_sas_tokens.len(), 4);
+            assert!(
+                scoped.meta_sas_token.is_none()
+                    && scoped.logs_sas_token.is_none()
+                    && scoped.content_sas_token.is_none()
+            );
+            for (purpose, prefix) in
+                crate::credentials::device_execute_prefixes("owner", "project").unwrap()
+            {
+                let token = &scoped.device_sas_tokens[purpose.as_str()];
+                let url = reqwest::Url::parse(&format!(
+                    "https://testaccount.blob.core.windows.net/content?{}",
+                    token.trim_start_matches('?')
+                ))
+                .unwrap();
+                let query = url
+                    .query_pairs()
+                    .into_owned()
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                assert_eq!(query["sr"], "d");
+                assert_eq!(
+                    query["sdd"],
+                    prefix.trim_matches('/').split('/').count().to_string()
+                );
+                assert_eq!(query["sp"], if write { "racwdl" } else { "rl" });
+                assert_eq!(
+                    chrono::DateTime::parse_from_rfc3339(&query["se"])
+                        .unwrap()
+                        .timestamp(),
+                    expires_at
+                );
+                let expected = generate_shared_key_directory_sas(
+                    "testaccount",
+                    "content",
+                    prefix.trim_end_matches('/'),
+                    &query["sp"],
+                    &query["st"],
+                    &query["se"],
+                    &key,
+                )
+                .unwrap();
+                assert_eq!(&expected, token);
+                let other = generate_shared_key_directory_sas(
+                    "testaccount",
+                    "content",
+                    "apps/project/metadata",
+                    &query["sp"],
+                    &query["st"],
+                    &query["se"],
+                    &key,
+                )
+                .unwrap();
+                assert_ne!(other, *token);
+            }
+        }
+    }
+
+    #[test]
+    fn directory_sas_has_no_container_scope_or_write_permission() {
+        use base64::Engine;
+        let key = base64::engine::general_purpose::STANDARD.encode([17u8; 32]);
+        let sas = generate_directory_sas(
+            "testaccount",
+            "content",
+            "apps/project/metadata",
+            "rl",
+            "2027-01-02T03:04:05Z",
+            &AzureDirectorySasIssuer::SharedKey(key),
+        )
+        .unwrap();
+        let url = reqwest::Url::parse(&format!(
+            "https://testaccount.blob.core.windows.net/content?{}",
+            sas.trim_start_matches('?')
+        ))
+        .unwrap();
+        let params = url
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(params.get("sr").unwrap(), "d");
+        assert_eq!(params.get("sdd").unwrap(), "3");
+        assert_eq!(params.get("sp").unwrap(), "rl");
+        assert_eq!(params.get("se").unwrap(), "2027-01-02T03:04:05Z");
+        assert_eq!(params.get("spr").unwrap(), "https");
+        assert!(!params.contains_key("ss"));
     }
 }
 
@@ -1268,6 +1408,7 @@ mod integration_tests {
             content_path_prefix: None,
             user_content_path_prefix: None,
             draft_meta_path_prefix: None,
+            device_sas_tokens: Default::default(),
         }
     }
 
@@ -1843,6 +1984,7 @@ mod integration_tests {
             content_path_prefix: None,
             user_content_path_prefix: None,
             draft_meta_path_prefix: None,
+            device_sas_tokens: Default::default(),
             user_content_sas_token: None,
         };
 

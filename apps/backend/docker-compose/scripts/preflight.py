@@ -10,7 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_WORKLOADS = {"API_IMAGE": "api", "DB_INIT_IMAGE": "db-init", "WEB_IMAGE": "web", "RUNTIME_IMAGE": "runtime",
@@ -111,11 +111,8 @@ def validate(values, config):
         errors.append("Migration, API and audit worker need distinct database login URLs")
     if worker.get("DATABASE_URL") != values.get("AUDIT_DATABASE_URL"):
         errors.append("audit-worker must use AUDIT_DATABASE_URL")
-    if worker.get("AUDIT_API_DATABASE_ROLE") != unquote(identities[1] or ""):
-        errors.append("AUDIT_API_DATABASE_ROLE must name the DATABASE_URL login; the audit worker verifies that role's privilege boundary at startup")
     if worker.get("BACKEND_KEY"):
         errors.append("audit-worker must not receive BACKEND_KEY")
-    errors.extend(audit_config_errors(config, api, worker))
     runtime_sources = ("FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF")
     for key in runtime_sources:
         value = str(api.get(key, ""))
@@ -270,28 +267,6 @@ def validate(values, config):
         errors.append("AUDIT_BUCKET_ENDPOINT names the bundled object store, which this deployment does not run; configure the external endpoint or clear AUDIT_BUCKET")
     errors.extend(audit_key_errors(worker, "object-store" in services))
     return errors
-
-
-def audit_config_errors(config, api, worker):
-    """The worker reads the API's runtime config document and takes its audit policy."""
-    if api.get("FLOW_LIKE_CONFIG_SECRET_REF"):
-        return ["The dedicated audit worker cannot resolve FLOW_LIKE_CONFIG_SECRET_REF; provide the API config through FLOW_LIKE_RUNTIME_CONFIG_FILE or FLOW_LIKE_CONFIG_JSON"]
-    if worker.get("FLOW_LIKE_CONFIG_JSON", "") != api.get("FLOW_LIKE_CONFIG_JSON", "") or worker.get("FLOW_LIKE_CONFIG_PATH", "") != api.get("FLOW_LIKE_CONFIG_FILE", ""):
-        return ["audit-worker must read the same API runtime config source as the API"]
-    try:
-        if api.get("FLOW_LIKE_CONFIG_JSON"):
-            source = json.loads(api["FLOW_LIKE_CONFIG_JSON"])
-        elif api.get("FLOW_LIKE_CONFIG_FILE") == "/app/flow-like.config.json":
-            source = json.loads(Path(config["configs"]["flowlike_runtime_config"]["file"]).read_text())
-        else:
-            return ["The dedicated audit worker needs the mounted API config or FLOW_LIKE_CONFIG_JSON; the embedded fallback carries no audit policy"]
-    except (ValueError, TypeError, KeyError, OSError):
-        return ["Cannot read the API runtime config JSON"]
-    if not isinstance(source, dict) or not isinstance(source.get("audit", {}), dict):
-        return ["The API runtime config must be a JSON object whose audit entry is an object"]
-    if source.get("audit", {}).get("enabled") is False:
-        return ["The dedicated audit worker requires audit to be enabled"]
-    return []
 
 
 def audit_kms_provider(key_id, explicit, vault_address):

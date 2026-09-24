@@ -15,7 +15,8 @@ use crate::{
     state::AppState,
     usage_accounting::{
         HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
-        record_provider_request_id, settle_hosted_usage_invocation, start_usage_invocation,
+        record_provider_request_id, settle_hosted_usage_invocation,
+        start_instance_usage_invocation, start_usage_invocation,
     },
 };
 use axum::{
@@ -29,8 +30,8 @@ use flow_like_types::Bytes;
 use flow_like_types::anyhow;
 use flow_like_types::create_id;
 use futures_util::StreamExt;
-use sea_orm::EntityTrait;
 use sea_orm::Set;
+use sea_orm::{ActiveEnum, ConnectionTrait, EntityTrait};
 use serde_json::Value as JsonValue;
 use std::convert::Infallible;
 
@@ -348,11 +349,7 @@ async fn enforce_tier(
     provider: &ModelProvider,
 ) -> Result<(), ApiError> {
     let (plan, user_tier) = crate::quota::payer_plan(state, payer_id).await?;
-    let params = provider.params.clone().unwrap_or_default();
-    let tier = params
-        .get("tier")
-        .and_then(|v| v.as_str())
-        .unwrap_or("ENTERPRISE");
+    let tier = required_model_tier(provider);
     if !user_tier.llm_tiers.iter().any(|t| t == tier) {
         tracing::warn!(
             "User tier {:?} does not allow access to model tier {}",
@@ -362,6 +359,65 @@ async fn enforce_tier(
         return Err(ApiError::hosted_model_unavailable(payer_id, &plan, tier));
     }
     Ok(())
+}
+
+fn required_model_tier(provider: &ModelProvider) -> &str {
+    provider
+        .params
+        .as_ref()
+        .and_then(|params| params.get("tier"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("ENTERPRISE")
+}
+
+pub(crate) async fn current_instance_model_tier(
+    transaction: &sea_orm::DatabaseTransaction,
+    bit_id: &str,
+    request_path: &str,
+) -> Result<String, ApiError> {
+    let row = transaction
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT type::text AS type,parameters FROM \"Bit\" WHERE id=$1",
+            [bit_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| ApiError::forbidden("The approved model is no longer available"))?;
+    let bit_type = crate::entity::sea_orm_active_enums::BitType::try_from_value(
+        &row.try_get::<String>("", "type")?,
+    )?;
+    let bit = Bit {
+        id: bit_id.to_owned(),
+        bit_type: bit_type.into(),
+        parameters: row
+            .try_get::<Option<JsonValue>>("", "parameters")?
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    instance_model_tier(&bit, request_path)
+}
+
+fn instance_model_tier(bit: &Bit, request_path: &str) -> Result<String, ApiError> {
+    if request_path == "/instances/embeddings/embed" {
+        crate::routes::embeddings::embed::embedding_provider_for_bit(bit)?;
+        return Ok(String::new());
+    }
+    let expected_surface = match request_path {
+        "/instances/chat/completions" => ModelApiSurface::ChatCompletions,
+        "/instances/responses" => ModelApiSurface::Responses,
+        _ => return Err(ApiError::forbidden("Unsupported instance model endpoint")),
+    };
+    let provider = bit
+        .try_to_provider()
+        .ok_or_else(|| ApiError::forbidden("The approved Bit is no longer a model provider"))?;
+    if HostedProvider::from_provider_name(&provider.provider_name).is_none()
+        || provider.api_surface_or_default() != expected_surface
+    {
+        return Err(ApiError::forbidden(
+            "The approved model no longer supports this hosted endpoint",
+        ));
+    }
+    Ok(required_model_tier(&provider).to_owned())
 }
 
 /// Drop repeated tool declarations, keeping the first of each name.
@@ -1012,6 +1068,59 @@ pub(super) async fn relay_request(
     surface: ModelApiSurface,
     prepare_upstream_body: PrepareUpstreamBody,
 ) -> Result<AxumResponse, ApiError> {
+    relay_authorized_request(
+        state,
+        RelayCaller::Human(user),
+        headers,
+        payload,
+        surface,
+        prepare_upstream_body,
+    )
+    .await
+}
+
+pub(super) async fn relay_instance_request(
+    state: AppState,
+    headers: HeaderMap,
+    mut payload: JsonValue,
+    surface: ModelApiSurface,
+    path: &str,
+    prepare_upstream_body: PrepareUpstreamBody,
+) -> Result<AxumResponse, ApiError> {
+    let model = payload
+        .get("model")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| ApiError::bad_request("Missing 'model' field"))?;
+    let usage =
+        crate::instances::authenticate_model_request(&state, &headers, "POST", path, model).await?;
+    // Provider attribution must not be supplied by the workload itself.
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("user");
+    }
+    relay_authorized_request(
+        state,
+        RelayCaller::Instance(usage),
+        headers,
+        payload,
+        surface,
+        prepare_upstream_body,
+    )
+    .await
+}
+
+enum RelayCaller {
+    Human(AppUser),
+    Instance(crate::instances::VerifiedInstanceUsage),
+}
+
+async fn relay_authorized_request(
+    state: AppState,
+    caller: RelayCaller,
+    headers: HeaderMap,
+    payload: JsonValue,
+    surface: ModelApiSurface,
+    prepare_upstream_body: PrepareUpstreamBody,
+) -> Result<AxumResponse, ApiError> {
     let model_field = payload
         .get("model")
         .and_then(|v| v.as_str())
@@ -1027,19 +1136,31 @@ pub(super) async fn relay_request(
         )));
     }
 
-    let usage_context = resolve_usage_context(&state, &user, &headers).await?;
-    let payer_id = crate::quota::resolve_payer(
-        &state,
-        Some(&usage_context.user_id),
-        usage_context.app_id.as_deref(),
-    )
-    .await?;
-    enforce_tier(&payer_id, &state, &provider).await?;
+    let (usage_context, tracking_id_opt) = match &caller {
+        RelayCaller::Human(user) => {
+            let context = resolve_usage_context(&state, user, &headers).await?;
+            let payer_id = crate::quota::resolve_payer(
+                &state,
+                Some(&context.user_id),
+                context.app_id.as_deref(),
+            )
+            .await?;
+            enforce_tier(&payer_id, &state, &provider).await?;
+            (context, user.tracking_id(&state).await.ok().flatten())
+        }
+        RelayCaller::Instance(usage) => (
+            UsageRequestContext {
+                app_id: usage.app_id.clone(),
+                user_id: usage.delegated_user_id.clone(),
+                technical_user_id: None,
+            },
+            None,
+        ),
+    };
     let upstream_model_id = provider
         .model_id
         .clone()
         .unwrap_or_else(|| model_field.to_string());
-    let tracking_id_opt = user.tracking_id(&state).await.ok().flatten();
     let (mut upstream_body, stream) = prepare_upstream_body(
         &payload,
         &upstream_model_id,
@@ -1053,22 +1174,25 @@ pub(super) async fn relay_request(
     super::hosted_worker::apply_worker_tariff(&mut rate);
     let (estimated_tokens, estimated_cost) =
         bound_hosted_request(&mut upstream_body, surface, &rate, &hosted_provider)?;
-    let invocation_id = start_usage_invocation(
-        &state,
-        UsageInvocationStart {
-            kind: "llm",
-            user_id: Some(&user_sub),
-            technical_user_id: usage_context.technical_user_id.as_deref(),
-            app_id: usage_context.app_id.as_deref(),
-            provider: Some(&provider_label),
-            endpoint: Some(&url),
-            model_id: Some(&upstream_model_id),
-            estimated_tokens,
-            estimated_cost_micro_dollars: estimated_cost,
-            rate: Some(rate.clone()),
-        },
-    )
-    .await?;
+    let start = UsageInvocationStart {
+        kind: "llm",
+        user_id: Some(&user_sub),
+        technical_user_id: usage_context.technical_user_id.as_deref(),
+        app_id: usage_context.app_id.as_deref(),
+        provider: Some(&provider_label),
+        endpoint: Some(&url),
+        model_id: Some(&upstream_model_id),
+        estimated_tokens,
+        estimated_cost_micro_dollars: estimated_cost,
+        rate: Some(rate.clone()),
+    };
+    let invocation_id = match &caller {
+        RelayCaller::Human(_) => start_usage_invocation(&state, start).await?,
+        RelayCaller::Instance(usage) => {
+            start_instance_usage_invocation(&state, start, usage, required_model_tier(&provider))
+                .await?
+        }
+    };
     let id = invocation_id
         .as_deref()
         .ok_or_else(|| ApiError::internal("Hosted AI reservation is missing"))?;
@@ -1234,6 +1358,7 @@ mod tests {
             bit_type: flow_like::bit::BitTypes::Llm,
             parameters: serde_json::json!({
                 "context_length": 32_768,
+                "model_classification": flow_like::bit::BitModelClassification::default(),
                 "provider": {"provider_name": "hosted:openrouter", "model_id": "@preset/claude-sonnet"},
                 "pricing": pricing,
             }),
@@ -1247,6 +1372,32 @@ mod tests {
             "output_micro_usd_per_million_tokens": 4_000_000,
         })))
         .0
+    }
+
+    #[test]
+    fn instance_model_policy_rechecks_provider_surface_and_tier() {
+        let mut bit = test_bit(JsonValue::Null);
+        bit.parameters["provider"]["params"] = serde_json::json!({"tier":"FREE"});
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/chat/completions").unwrap(),
+            "FREE"
+        );
+        assert!(instance_model_tier(&bit, "/instances/responses").is_err());
+        assert!(instance_model_tier(&bit, "/chat/completions").is_err());
+        assert!(instance_model_tier(&bit, "/instances/embeddings/embed").is_err());
+        bit.parameters["provider"]["api_surface"] = serde_json::json!(ModelApiSurface::Responses);
+        assert!(instance_model_tier(&bit, "/instances/chat/completions").is_err());
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/responses").unwrap(),
+            "FREE"
+        );
+        bit.parameters["provider"]["params"]["tier"] = serde_json::json!("ENTERPRISE");
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/responses").unwrap(),
+            "ENTERPRISE"
+        );
+        bit.parameters["provider"]["provider_name"] = serde_json::json!("local");
+        assert!(instance_model_tier(&bit, "/instances/responses").is_err());
     }
 
     #[test]

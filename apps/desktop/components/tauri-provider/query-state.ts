@@ -6,6 +6,7 @@ import type {
 	SavedQuery,
 	UpdateSavedQueryPayload,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -13,6 +14,23 @@ import type { TauriBackend } from "../tauri-provider";
 function appendScope(url: string, userScoped?: boolean): string {
 	if (!userScoped) return url;
 	return url.includes("?") ? `${url}&scope=user` : `${url}?scope=user`;
+}
+
+/** Result grids render `columns` and `rows` directly, so a hosted reply must carry both. */
+export function normalizeExecuteSqlResult(
+	result: ExecuteSqlResult,
+	source: string,
+): ExecuteSqlResult {
+	if (!isRecord(result)) {
+		throw new Error(
+			`${source} returned ${typeof result} instead of a query result`,
+		);
+	}
+	return {
+		...result,
+		columns: asArray(result.columns),
+		rows: asArray(result.rows),
+	};
 }
 
 export class QueryState implements IQueryState {
@@ -25,11 +43,14 @@ export class QueryState implements IQueryState {
 	): Promise<ExecuteSqlResult> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(`apps/${appId}/db/queries/execute`, userScoped),
-				{ method: "POST", body: JSON.stringify(payload) },
-				this.backend.auth,
+			return normalizeExecuteSqlResult(
+				await fetcher<ExecuteSqlResult>(
+					this.backend.profile!,
+					appendScope(`apps/${appId}/db/queries/execute`, userScoped),
+					{ method: "POST", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
+				`SQL execution for app ${appId}`,
 			);
 		}
 		return await invoke<ExecuteSqlResult>("query_execute_sql", {
@@ -45,11 +66,13 @@ export class QueryState implements IQueryState {
 	): Promise<SavedQuery[]> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(`apps/${appId}/db/queries`, userScoped),
-				{ method: "GET" },
-				this.backend.auth,
+			return asArray(
+				await fetcher<SavedQuery[]>(
+					this.backend.profile!,
+					appendScope(`apps/${appId}/db/queries`, userScoped),
+					{ method: "GET" },
+					this.backend.auth,
+				),
 			);
 		}
 		return await invoke<SavedQuery[]>("query_saved_list", {

@@ -19,6 +19,7 @@ import {
 	type IForkJobView,
 	resolveOnlineFork,
 } from "@flow-like/flow-like-ui/lib/fork-job";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -59,6 +60,36 @@ function sortAppEntries(
 	);
 }
 
+function isAppEntry(entry: unknown): entry is [IApp, IMetadata | undefined] {
+	if (!Array.isArray(entry)) return false;
+	const [app, meta] = entry;
+	return (
+		isRecord(app) &&
+		typeof app.id === "string" &&
+		(meta === undefined || meta === null || isRecord(meta))
+	);
+}
+
+function remoteAppEntries(
+	entries: [IApp, IMetadata | undefined][] | undefined,
+): [IApp, IMetadata | undefined][] {
+	return asArray(entries).filter(isAppEntry);
+}
+
+function expectRemoteApp(app: IApp | undefined, appId: string): IApp {
+	if (isRecord(app) && typeof app.id === "string") return app;
+	throw new Error(`Unexpected response for app ${appId}: not an app record`);
+}
+
+function normalizeGroup(group: IGroup | undefined): IGroup | undefined {
+	if (!isRecord(group) || typeof group.id !== "string") return undefined;
+	return { ...group, members: asArray(group.members) };
+}
+
+function normalizeGroups(groups: IGroup[] | undefined): IGroup[] {
+	return asArray(groups).flatMap((group) => normalizeGroup(group) ?? []);
+}
+
 export class AppState implements IAppState {
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -78,11 +109,14 @@ export class AppState implements IAppState {
 			throw new Error("Profile not set. Cannot get app.");
 		}
 
-		const remoteData = await fetcher<IApp>(
-			this.backend.profile,
-			`apps/${appId}`,
-			undefined,
-			this.getRemoteAuth(),
+		const remoteData = expectRemoteApp(
+			await fetcher<IApp>(
+				this.backend.profile,
+				`apps/${appId}`,
+				undefined,
+				this.getRemoteAuth(),
+			),
+			appId,
 		);
 
 		try {
@@ -113,14 +147,18 @@ export class AppState implements IAppState {
 			throw new Error("Profile not set. Cannot get app meta.");
 		}
 
-		const remoteMeta = stabilizeMetadata(
-			await fetcher<IMetadata>(
-				this.backend.profile,
-				`apps/${appId}/meta?language=${language ?? "en"}`,
-				undefined,
-				this.getRemoteAuth(),
-			),
+		const fetchedMeta = await fetcher<IMetadata>(
+			this.backend.profile,
+			`apps/${appId}/meta?language=${language ?? "en"}`,
+			undefined,
+			this.getRemoteAuth(),
 		);
+		if (!isRecord(fetchedMeta)) {
+			throw new Error(
+				`Unexpected response for app ${appId} metadata: not a metadata record`,
+			);
+		}
+		const remoteMeta = stabilizeMetadata(fetchedMeta);
 
 		try {
 			// This mirrors metadata we just read from the server, not a local
@@ -403,11 +441,13 @@ export class AppState implements IAppState {
 		}
 
 		return stabilizeMetadataEntries(
-			await fetcher<[IApp, IMetadata | undefined][]>(
-				this.backend.profile,
-				`apps/search?${new URLSearchParams(queryParams)}`,
-				undefined,
-				this.backend.auth,
+			remoteAppEntries(
+				await fetcher<[IApp, IMetadata | undefined][]>(
+					this.backend.profile,
+					`apps/search?${new URLSearchParams(queryParams)}`,
+					undefined,
+					this.backend.auth,
+				),
 			),
 		);
 	}
@@ -419,11 +459,13 @@ export class AppState implements IAppState {
 		const params = new URLSearchParams();
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
-		return await fetcher(
-			this.backend.profile,
-			`store/groups?${params}`,
-			undefined,
-			this.backend.auth,
+		return normalizeGroups(
+			await fetcher<IGroup[]>(
+				this.backend.profile,
+				`store/groups?${params}`,
+				undefined,
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -431,23 +473,33 @@ export class AppState implements IAppState {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
-		return await fetcher(
-			this.backend.profile,
-			`store/groups/${groupId}`,
-			undefined,
-			this.backend.auth,
+		const group = normalizeGroup(
+			await fetcher<IGroup>(
+				this.backend.profile,
+				`store/groups/${groupId}`,
+				undefined,
+				this.backend.auth,
+			),
 		);
+		if (!group) {
+			throw new Error(
+				`Unexpected response for store group ${groupId}: not a group record`,
+			);
+		}
+		return group;
 	}
 
 	async getMyGroups(): Promise<IGroup[]> {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
-		return await fetcher(
-			this.backend.profile,
-			"user/groups",
-			undefined,
-			this.backend.auth,
+		return normalizeGroups(
+			await fetcher<IGroup[]>(
+				this.backend.profile,
+				"user/groups",
+				undefined,
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -468,11 +520,13 @@ export class AppState implements IAppState {
 		const syncRemote = async () => {
 			const mergedData = new Map<string, [IApp, IMetadata | undefined]>();
 
-			const remoteData = await fetcher<[IApp, IMetadata | undefined][]>(
-				this.backend.profile!,
-				"apps",
-				undefined,
-				this.backend.auth,
+			const remoteData = remoteAppEntries(
+				await fetcher<[IApp, IMetadata | undefined][]>(
+					this.backend.profile!,
+					"apps",
+					undefined,
+					this.backend.auth,
+				),
 			);
 
 			for (const [app, meta] of remoteData) {
@@ -514,12 +568,20 @@ export class AppState implements IAppState {
 				mergedData.set(app.id, [app, meta]);
 
 				if (meta) {
-					await invoke("create_app", {
-						metadata: meta,
-						bits: app.bits,
-						template: "",
-						id: app.id,
-					});
+					try {
+						await invoke("create_app", {
+							metadata: meta,
+							bits: app.bits,
+							template: "",
+							id: app.id,
+						});
+					} catch (error) {
+						console.warn(
+							`Failed to cache remote app ${app.id} locally:`,
+							error,
+						);
+						continue;
+					}
 					// create_app stamps a brand-new manifest with the current time,
 					// which would make every app pulled down for the first time look
 					// freshly updated on the next local-first paint. Write the remote
@@ -613,11 +675,14 @@ export class AppState implements IAppState {
 		) {
 			throw new Error("Hosted App read requires an authenticated hub session");
 		}
-		return fetcher<IApp>(
-			this.backend.profile,
-			`apps/${appId}`,
-			{ method: "GET" },
-			this.backend.auth,
+		return expectRemoteApp(
+			await fetcher<IApp>(
+				this.backend.profile,
+				`apps/${appId}`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
+			appId,
 		);
 	}
 
@@ -943,7 +1008,7 @@ export class AppState implements IAppState {
 				"Profile, auth or query client not set. Cannot push app meta.",
 			);
 		}
-		const { signed_url }: { signed_url: string } = await fetcher(
+		const presigned = await fetcher<{ signed_url?: string }>(
 			this.backend.profile,
 			`apps/${appId}/meta/media?language=${language ?? "en"}&item=${item}&extension=${file.name.split(".").pop()}`,
 			{
@@ -951,14 +1016,25 @@ export class AppState implements IAppState {
 			},
 			this.backend.auth,
 		);
+		const signedUrl = isRecord(presigned) ? presigned.signed_url : undefined;
+		if (typeof signedUrl !== "string" || !signedUrl) {
+			throw new Error(
+				`Media upload for app ${appId} failed: the server returned no upload URL`,
+			);
+		}
 
-		await fetch(signed_url, {
+		const upload = await fetch(signedUrl, {
 			method: "PUT",
 			body: file,
 			headers: {
 				"Content-Type": file.type,
 			},
 		});
+		if (!upload.ok) {
+			throw new Error(
+				`Media upload for app ${appId} failed (${upload.status} ${upload.statusText})`,
+			);
+		}
 	}
 
 	async changeAppVisibility(
@@ -1010,7 +1086,15 @@ export class AppState implements IAppState {
 			{ method: "GET" },
 			this.backend.auth,
 		);
-		return response.custom_css ?? undefined;
+		// Callers write this sheet back; garbage must not read as "no stylesheet".
+		if (!isRecord(response)) {
+			throw new Error(
+				`Unexpected response for app ${appId} appearance settings: not a settings record`,
+			);
+		}
+		return typeof response.custom_css === "string"
+			? response.custom_css
+			: undefined;
 	}
 
 	async setAppStylesheet(appId: string, css: string): Promise<void> {
@@ -1098,12 +1182,18 @@ export class AppState implements IAppState {
 		if (!this.backend.profile) {
 			throw new Error("Profile not set. Cannot preview fork.");
 		}
-		return fetcher<IForkPreviewResponse>(
+		const preview = await fetcher<IForkPreviewResponse>(
 			this.backend.profile,
 			`apps/${appId}/fork/preview?target=${target}`,
 			{ method: "GET" },
 			this.getRemoteAuth(),
 		);
+		if (!isRecord(preview)) {
+			throw new Error(
+				`Unexpected response for app ${appId} fork preview: not a preview record`,
+			);
+		}
+		return preview;
 	}
 
 	async beginOfflineFork(
@@ -1261,7 +1351,7 @@ export class AppState implements IAppState {
 		);
 
 		return {
-			commentId: response.commentId ?? response.comment_id ?? "",
+			commentId: response?.commentId ?? response?.comment_id ?? "",
 		};
 	}
 

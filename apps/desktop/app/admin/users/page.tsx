@@ -41,6 +41,7 @@ import {
 	userDisplayName,
 	userInitials,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
@@ -380,6 +381,7 @@ export default function AdminUsersPage() {
 	});
 
 	const totalPages = Math.ceil((users.data?.total ?? 0) / limit);
+	const userRows = asArray(users.data?.users);
 
 	const handleRefresh = useCallback(() => {
 		queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
@@ -493,9 +495,7 @@ export default function AdminUsersPage() {
 								<CheckCircle className="h-4 w-4 text-muted-foreground" />
 							</CardHeader>
 							<CardContent>
-								<div className="text-2xl font-bold">
-									{users.data?.users.length ?? 0}
-								</div>
+								<div className="text-2xl font-bold">{userRows.length}</div>
 							</CardContent>
 						</Card>
 					</div>
@@ -596,7 +596,7 @@ export default function AdminUsersPage() {
 										</TableRow>
 									</TableHeader>
 									<TableBody>
-										{users.data?.users.map((u) => (
+										{userRows.map((u) => (
 											<UserRow
 												key={u.id}
 												user={u}
@@ -605,7 +605,7 @@ export default function AdminUsersPage() {
 												onUpdatePermission={handleUpdatePermission}
 											/>
 										))}
-										{(users.data?.users.length ?? 0) === 0 && (
+										{userRows.length === 0 && (
 											<TableRow>
 												<TableCell
 													colSpan={7}

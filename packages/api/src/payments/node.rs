@@ -22,6 +22,9 @@ use serde_json::{Value, json};
 #[cfg(test)]
 #[path = "node_tests.rs"]
 mod integration_tests;
+#[cfg(test)]
+#[path = "node_replay_tests.rs"]
+mod replay_tests;
 #[path = "node_settlement.rs"]
 mod settlement;
 pub use settlement::{handle_effect, handle_event, reconcile, reconcile_request};
@@ -32,6 +35,8 @@ pub const SOURCE: &str = "REQUEST";
 pub struct CreatePayment {
     pub node_id: String,
     pub nonce: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     pub amount_minor: i64,
     pub currency: String,
     pub product_name: String,
@@ -75,6 +80,8 @@ pub struct PaymentView {
     pub checkout_url: Option<String>,
     pub refunded_amount: i64,
     pub pending_refund_amount: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replayed: Option<bool>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -110,6 +117,15 @@ fn claims(headers: &HeaderMap) -> Result<ExecutionClaims, ApiError> {
     Ok(claims)
 }
 fn validate(input: &CreatePayment) -> Result<(), ApiError> {
+    if input
+        .idempotency_key
+        .as_deref()
+        .is_some_and(|key| key.len() > 200 || key.chars().any(char::is_control))
+    {
+        return Err(ApiError::bad_request(
+            "Idempotency keys must contain at most 200 bytes without control characters",
+        ));
+    }
     if !valid_tax_code(&input.product_tax_code) {
         return Err(error(
             "PAYMENT_TAX_CODE_REQUIRED",
@@ -141,6 +157,105 @@ fn validate(input: &CreatePayment) -> Result<(), ApiError> {
         return Err(ApiError::bad_request("Invalid payment request fields"));
     }
     Ok(())
+}
+fn idempotency_key(input: &CreatePayment) -> Option<&str> {
+    input
+        .idempotency_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+}
+fn request_identity(
+    input: &CreatePayment,
+    signed: &ExecutionClaims,
+    config: &flow_like::hub::PaymentsConfig,
+) -> Result<(String, String), ApiError> {
+    let (identity, parameters) = if let Some(key) = idempotency_key(input) {
+        let identity = json!([
+            "payment-idempotency-v1",
+            config.platform_account_id,
+            config.livemode,
+            signed.sub,
+            signed.app_id,
+            signed.board_id,
+            signed.event_id,
+            input.node_id,
+            key
+        ]);
+        let mut parameters = serde_json::to_value(input)?;
+        let fields = parameters
+            .as_object_mut()
+            .expect("Payment input is an object");
+        // Retry timing and invocation IDs do not change the purchase being requested.
+        fields.remove("nonce");
+        fields.remove("ttlSeconds");
+        fields.insert("idempotencyKey".into(), json!(key));
+        (identity, serde_json::to_vec(&parameters)?)
+    } else {
+        let mut legacy = input.clone();
+        legacy.idempotency_key = None;
+        (
+            json!([signed.run_id, input.node_id, input.nonce]),
+            serde_json::to_vec(&legacy)?,
+        )
+    };
+    Ok((
+        blake3::hash(&serde_json::to_vec(&identity)?)
+            .to_hex()
+            .to_string(),
+        blake3::hash(&parameters).to_hex().to_string(),
+    ))
+}
+fn replay_scope(
+    signed: &ExecutionClaims,
+    input: &CreatePayment,
+    row: &payment_request::Model,
+    digest: &str,
+) -> Result<(), ApiError> {
+    if idempotency_key(input).is_some() {
+        if signed.app_id != row.app_id
+            || signed.sub != row.payer_user_id
+            || signed.payer_sub.as_deref() != Some(row.payer_user_id.as_str())
+            || row.board_id.as_deref() != Some(signed.board_id.as_str())
+            || signed.event_id != row.event_id
+            || input.node_id != row.node_id
+        {
+            return Err(ApiError::NOT_FOUND);
+        }
+    } else {
+        executor_scope(signed, row)?;
+    }
+    if row.request_digest != digest {
+        return Err(error(
+            "PAYMENT_REPLAY_MISMATCH",
+            "This invocation already has different payment parameters",
+        ));
+    }
+    Ok(())
+}
+async fn replay_view(
+    state: &AppState,
+    signed: &ExecutionClaims,
+    input: &CreatePayment,
+    mut row: payment_request::Model,
+    digest: &str,
+) -> Result<Value, ApiError> {
+    replay_scope(signed, input, &row, digest)?;
+    let replayed = signed.run_id != row.run_id;
+    if replayed
+        && matches!(
+            row.status.as_str(),
+            "CREATED" | "OPENING" | "OPEN" | "PROCESSING" | "CANCEL_PENDING"
+        )
+        && row.next_check_at <= now()
+    {
+        // Keep settlement attached to the original run, including late-capture refunds.
+        reconcile_request(state, &row.id).await?;
+        row = load(state, &row.id).await?;
+    }
+    let mut response = view(state, &row, false).await?;
+    response["replayed"] = json!(replayed);
+    Ok(response)
 }
 fn valid_tax_code(code: &str) -> bool {
     flow_like::hub::valid_product_tax_code(code)
@@ -191,6 +306,15 @@ pub async fn create(
     let signed = claims(&headers)?;
     validate(&input)?;
     let config = &state.platform_config.payments;
+    let (id, digest) = request_identity(&input, &signed, config)?;
+    if let Some(existing) = payment_request::Entity::find_by_id(&id)
+        .one(&state.db)
+        .await?
+    {
+        return Ok(Json(
+            replay_view(&state, &signed, &input, existing, &digest).await?,
+        ));
+    }
     if !config.node_payments_enabled {
         return Err(error(
             "PAYMENTS_DISABLED",
@@ -206,29 +330,6 @@ pub async fn create(
         50,
         config.max_payment_amount,
     )?;
-    let digest = blake3::hash(&serde_json::to_vec(&input)?)
-        .to_hex()
-        .to_string();
-    let id = blake3::hash(&serde_json::to_vec(&json!([
-        signed.run_id,
-        input.node_id,
-        input.nonce
-    ]))?)
-    .to_hex()
-    .to_string();
-    if let Some(existing) = payment_request::Entity::find_by_id(&id)
-        .one(&state.db)
-        .await?
-    {
-        executor_scope(&signed, &existing)?;
-        if existing.request_digest != digest {
-            return Err(error(
-                "PAYMENT_REPLAY_MISMATCH",
-                "This invocation already has different payment parameters",
-            ));
-        }
-        return Ok(Json(view(&state, &existing, false).await?));
-    }
     let payee = payee_for_app(&state.db, &signed.app_id).await?;
     if payee == signed.sub {
         return Err(error(
@@ -256,12 +357,7 @@ pub async fn create(
     crate::db::coordination::coordinate(txn, "payments-app", &[&signed.app_id]).await?;
     crate::db::coordination::coordinate(txn, "payment-request", &[&id]).await?;
     if let Some(existing) = payment_request::Entity::find_by_id(&id).one(txn).await? {
-        if existing.request_digest != digest {
-            return Err(error(
-                "PAYMENT_REPLAY_MISMATCH",
-                "This invocation already has different payment parameters",
-            ));
-        }
+        replay_scope(&signed, &input, &existing, &digest)?;
         return Ok::<_,ApiError>(());
     }
     let (deadline, generation) =
@@ -310,7 +406,9 @@ pub async fn create(
     Ok::<_,ApiError>(())
         })
     }).await?;
-    Ok(Json(view(&state, &load(&state, &id).await?, false).await?))
+    Ok(Json(
+        replay_view(&state, &signed, &input, load(&state, &id).await?, &digest).await?,
+    ))
 }
 pub(super) async fn admission<C: ConnectionTrait>(
     db: &C,
@@ -821,6 +919,7 @@ mod tests {
         let mut input = CreatePayment {
             node_id: "node".into(),
             nonce: "invocation".into(),
+            idempotency_key: None,
             amount_minor: 100,
             currency: "eur".into(),
             product_name: "Access".into(),
@@ -840,7 +939,7 @@ mod tests {
     pub(super) fn request_fixture() -> payment_request::Model {
         serde_json::from_value(json!({"id":"payment","run_id":"run","node_id":"node","nonce":"nonce","request_digest":"digest","app_id":"app","board_id":"board","event_id":"event","payer_user_id":"payer","payee_user_id":"seller","connected_account_id":"acct_seller","platform_account_id":"acct_platform","livemode":false,"amount":100,"currency":"eur","application_fee_amount":1,"fee_bps":100,"product_name":"Product","description":"","snapshot":{},"status":"OPEN","cancel_requested":false,"expires_at":1000,"next_check_at":0,"revision":0,"created_at":0,"updated_at":0})).unwrap()
     }
-    fn executor_fixture() -> ExecutionClaims {
+    pub(super) fn executor_fixture() -> ExecutionClaims {
         serde_json::from_value(json!({"sub":"payer","payer_sub":"payer","run_id":"run","app_id":"app","board_id":"board","event_id":"event","callback_url":"https://api.example","typ":"executor","iss":"flow-like","aud":"flow-like-executor","iat":1,"nbf":1,"exp":100,"jti":"token"})).unwrap()
     }
     #[test]

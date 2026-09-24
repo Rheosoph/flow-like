@@ -96,8 +96,6 @@ def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=No
         runtime_config["FLOW_LIKE_CONFIG_JSON"] = json.dumps(parsed, separators=(",", ":"))
     if any(key in sources for key in ("FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF")):
         runtime_config["FLOW_LIKE_CONFIG_FILE"] = ""
-    if runtime_config.get("FLOW_LIKE_CONFIG_SECRET_REF", ""):
-        raise ValueError("The dedicated audit worker cannot resolve FLOW_LIKE_CONFIG_SECRET_REF; provide the API config through FLOW_LIKE_RUNTIME_CONFIG_FILE or FLOW_LIKE_CONFIG_JSON")
     # Single-quoted dotenv values preserve dollar signs and JSON quotes as data.
     values.update({key: "'" + value.replace("'", "\\'") + "'" if value else "" for key, value in runtime_config.items()})
     for key in ["POSTGRES_PASSWORD", "REDIS_API_PASSWORD", "REDIS_RUNTIME_PASSWORD",

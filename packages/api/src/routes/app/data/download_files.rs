@@ -22,13 +22,13 @@ use utoipa::ToSchema;
 /// credential's own lifetime is taken into account. See
 /// [`RuntimeCredentials::signing_ttl`] — the credential, not this constant, is
 /// what decides the deadline the URL actually advertises.
-const DOWNLOAD_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24);
+pub(crate) const DOWNLOAD_URL_TTL: Duration = Duration::from_secs(60 * 60 * 24);
 
 /// Signs a GET URL per prefix, preserving request order.
 ///
 /// A prefix that cannot be signed yields an `error` entry instead of failing
 /// the batch, so one unreadable path does not cost the rest of the selection.
-async fn sign_downloads(
+pub(crate) async fn sign_downloads(
     store: &FlowLikeStore,
     entries: Vec<(String, flow_like_storage::Path)>,
     ttl: Duration,

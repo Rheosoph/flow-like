@@ -128,6 +128,7 @@ impl NodeLogic for QueryOntologyObjectsNode {
                 return Ok(());
             }
         };
+        super::ensure_graph_tables_unbuffered(context, false, &ontology).await?;
         if !ontology.bindings_enabled {
             context
                 .set_pin_value(

@@ -39,16 +39,23 @@ const MAX_NON_MULTIPART_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 ))]
 const MAX_NON_MULTIPART_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// Quota for all managed model files in one cache directory, across every model family.
-#[cfg(all(
-    feature = "execute",
-    any(target_os = "android", target_os = "ios", target_os = "tvos")
-))]
-const MAX_MODEL_CACHE_BYTES: u64 = 512 * 1024 * 1024;
-#[cfg(all(
-    feature = "execute",
-    not(any(target_os = "android", target_os = "ios", target_os = "tvos"))
-))]
-const MAX_MODEL_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+#[cfg(feature = "execute")]
+const MAX_MODEL_CACHE_BYTES: u64 = model_cache_quota_bytes(cfg!(any(
+    target_os = "android",
+    target_os = "ios",
+    target_os = "tvos"
+)));
+
+#[cfg(feature = "execute")]
+pub(crate) const fn model_cache_quota_bytes(mobile: bool) -> u64 {
+    // The full Laya bundle needs 681 MB of disk space. Transfers still use bounded chunks;
+    // this disk quota does not control the in-memory fallback upload limit.
+    if mobile {
+        1024 * 1024 * 1024
+    } else {
+        2 * 1024 * 1024 * 1024
+    }
+}
 
 /// A group of cached models. Cache files are named
 /// `{file_prefix}-{role}-{sha256(hash_domain, role, expected_sha256)}.onnx`; changing any of
@@ -79,9 +86,17 @@ pub(crate) const REID_MODELS: ModelFamily = ModelFamily {
     roles: &["person-openvino-0270", "person-openvino-0265"],
 };
 
+#[cfg(any(feature = "execute", test))]
+pub(crate) const LAYA_MODELS: ModelFamily = ModelFamily {
+    label: "Laya",
+    hash_domain: b"flowlike-laya-model-cache-v1",
+    file_prefix: "laya",
+    roles: &["weights", "tokenizer", "config"],
+};
+
 /// Every family whose files count towards, and may be evicted by, the shared directory quota.
 #[cfg(any(feature = "execute", test))]
-const MANAGED_FAMILIES: &[&ModelFamily] = &[&FACE_ID_MODELS, &REID_MODELS];
+const MANAGED_FAMILIES: &[&ModelFamily] = &[&FACE_ID_MODELS, &REID_MODELS, &LAYA_MODELS];
 
 #[cfg(any(feature = "execute", test))]
 pub(crate) fn validate_model_cache_dir(cache_dir: &FlowPath, label: &str) -> Result<()> {
@@ -191,15 +206,15 @@ fn child_flow_path(cache_dir: &FlowPath, file_name: &str) -> FlowPath {
 }
 
 #[cfg(feature = "execute")]
-fn validate_model_set_size(label: &str, model_sizes: &[u64]) -> Result<u64> {
+fn validate_model_set_size(label: &str, model_sizes: &[u64], quota: u64) -> Result<u64> {
     let total = model_sizes.iter().try_fold(0u64, |total, &size| {
         total
             .checked_add(size)
             .ok_or_else(|| anyhow!("Combined {label} model size overflow"))
     })?;
-    if total > MAX_MODEL_CACHE_BYTES {
+    if total > quota {
         return Err(anyhow!(
-            "Combined {label} models require {total} bytes, exceeding this target's {MAX_MODEL_CACHE_BYTES} byte cache quota"
+            "Combined {label} models require {total} bytes, exceeding this target's {quota} byte cache quota"
         ));
     }
     Ok(total)
@@ -367,7 +382,7 @@ where
     for path in &model_paths {
         model_sizes.push(flow_like_types::tokio::fs::metadata(path).await?.len());
     }
-    validate_model_set_size(label, &model_sizes)?;
+    validate_model_set_size(label, &model_sizes, MAX_MODEL_CACHE_BYTES)?;
 
     let build_paths = model_paths.clone();
     // The blocking task owns the temp dir so a cancelled load cannot delete files ORT still reads.
@@ -1008,7 +1023,10 @@ mod tests {
     mod execute {
         use super::super::*;
         use flow_like_catalog_core::FlowPathRuntime;
-        use flow_like_storage::{files::store::FlowLikeStore, object_store::memory::InMemory};
+        use flow_like_storage::{
+            files::store::{FlowLikeStore, local_store::LocalObjectStore},
+            object_store::memory::InMemory,
+        };
 
         const DEFAULT_FACE_CACHE_NAMES: [&str; 3] = [
             "face-id-detector-d5a05dd4dec91e85676fd1342db9b4e940439ffe9c18a1eadf48e9e1922d8ef3.onnx",
@@ -1240,12 +1258,15 @@ mod tests {
 
         #[test]
         fn combined_model_set_must_fit_the_target_cache_quota() {
-            assert_eq!(
-                validate_model_set_size("face", &[MAX_MODEL_CACHE_BYTES, 0, 0]).unwrap(),
-                MAX_MODEL_CACHE_BYTES
-            );
-            assert!(validate_model_set_size("face", &[MAX_MODEL_CACHE_BYTES, 1, 0]).is_err());
-            assert!(validate_model_set_size("face", &[u64::MAX, 1, 0]).is_err());
+            for mobile in [false, true] {
+                let quota = model_cache_quota_bytes(mobile);
+                assert_eq!(
+                    validate_model_set_size("face", &[quota, 0, 0], quota).unwrap(),
+                    quota
+                );
+                assert!(validate_model_set_size("face", &[quota, 1, 0], quota).is_err());
+                assert!(validate_model_set_size("face", &[u64::MAX, 1, 0], quota).is_err());
+            }
         }
 
         #[test]
@@ -1418,6 +1439,50 @@ mod tests {
                 .await
                 .unwrap();
             assert!(store.head(&model_cache_etag_path(&untagged)).await.is_err());
+        }
+
+        #[tokio::test]
+        async fn local_and_android_stores_roundtrip_models_larger_than_one_upload_chunk() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let source = temp_dir.path().join("model.onnx");
+            let contents: Vec<u8> = (0..MODEL_UPLOAD_CHUNK_BYTES + 4099)
+                .map(|index| (index % 251) as u8)
+                .collect();
+            std::fs::write(&source, &contents).unwrap();
+            let spec = ModelSpec::new(
+                &LAYA_MODELS,
+                "weights",
+                contents.len() as u64,
+                "https://example.com/model.onnx",
+                &sha256_hex(&contents),
+            )
+            .unwrap();
+            let destination = object(&format!("models/laya/{}", spec.cache_file_name()));
+
+            for android_safe in [false, true] {
+                let store = Arc::new(
+                    LocalObjectStore::new_with_android_safe(
+                        temp_dir.path().join(format!("cache-{android_safe}")),
+                        android_safe,
+                    )
+                    .unwrap(),
+                );
+                let uploaded = upload_model_file(store.clone(), &destination, &source)
+                    .await
+                    .unwrap();
+                let materialized = temp_dir.path().join(format!("read-{android_safe}.onnx"));
+                let (verified, cached_etag) = stream_cached_model(
+                    store.get(&destination).await.unwrap(),
+                    &spec,
+                    &materialized,
+                )
+                .await
+                .unwrap();
+
+                assert!(verified);
+                assert_eq!(cached_etag, uploaded.e_tag);
+                assert_eq!(std::fs::read(materialized).unwrap(), contents);
+            }
         }
 
         #[tokio::test]

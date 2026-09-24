@@ -3,6 +3,7 @@ import {
 	resetPageContractDrift,
 	subscribeToPageContractDrift,
 } from "@flow-like/flow-like-ui";
+import { startRunTrace } from "@flow-like/flow-like-ui/lib/run-timing";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiResponseError } from "../../../lib/api-error";
 
@@ -116,6 +117,17 @@ beforeEach(() => {
 	resetPageContractDrift();
 });
 
+async function tracedStepNames(run: () => Promise<unknown>) {
+	const info = vi.spyOn(console, "info").mockImplementation(() => {});
+	try {
+		const trace = startRunTrace("test");
+		await run().catch(() => undefined);
+		return trace.finish()?.steps.map((step) => step.name) ?? [];
+	} finally {
+		info.mockRestore();
+	}
+}
+
 describe("event snapshot freshness", () => {
 	test("offline upserts preserve reserved Event IDs on creation and retry", async () => {
 		const backend = fakeBackend({ localOnly: true });
@@ -138,6 +150,29 @@ describe("event snapshot freshness", () => {
 		expect((await state.upsertEvent(APP, event)).id).toBe(event.id);
 		expect(saved.size).toBe(1);
 		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
+
+	test("times the local mirror write after a remote read", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event" || command === "upsert_event")
+				return remoteEvent();
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue(remoteEvent());
+		const backend = fakeBackend();
+		backend.isOffline.mockResolvedValue(false);
+		const state = new EventState(backend as never);
+
+		expect(await tracedStepNames(() => state.getEvent(APP, EVENT))).toEqual([
+			"get_event.local",
+			"get_event.is_offline",
+			"get_event.remote",
+			"get_event.upsert_local",
+		]);
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"upsert_event",
+			expect.objectContaining({ appId: APP, enforceId: true }),
+		);
 	});
 
 	test("keeps a strictly newer local Hybrid event", () => {
@@ -214,6 +249,97 @@ describe("an event pinned to Remote execution", () => {
 			"execute_event",
 			expect.anything(),
 		);
+	});
+
+	test("times a stream that fails before the run id arrives", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return remoteEvent();
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockResolvedValue(remoteEvent());
+		mocks.streamFetcher.mockRejectedValue(new Error("gateway timeout"));
+		const state = new EventState(fakeBackend() as never);
+
+		const steps = await tracedStepNames(() =>
+			state.executeEvent(
+				APP,
+				EVENT,
+				{ id: EVENT, payload: {} } as never,
+				undefined,
+				() => {},
+			),
+		);
+
+		expect(steps).toContain("remote.until_error");
+		expect(steps).not.toContain("remote.until_run_id");
+	});
+
+	test("cancelling a server run stops it on the API and aborts its stream here", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return remoteEvent();
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		mocks.fetcher.mockImplementation(
+			async (_profile: unknown, _path: string, options?: RequestInit) =>
+				options?.method === "DELETE" ? { cancelled: true } : remoteEvent(),
+		);
+		let emit: (event: unknown) => void = () => {};
+		let signal: AbortSignal | undefined;
+		// Like the real stream, an aborted signal errors the body being read.
+		mocks.streamFetcher.mockImplementation(
+			(
+				_profile: unknown,
+				_path: string,
+				options: RequestInit,
+				_auth: unknown,
+				onMessage: (event: unknown) => void,
+			) =>
+				new Promise<void>((_, reject) => {
+					emit = onMessage;
+					signal = options.signal ?? undefined;
+					signal?.addEventListener("abort", () => reject("Request cancelled"));
+				}),
+		);
+		const backend = fakeBackend();
+		const state = new EventState(backend as never);
+		const cb = vi.fn();
+		const onEventId = vi.fn();
+		const running = state.executeEvent(
+			APP,
+			EVENT,
+			{ id: EVENT, payload: {} } as never,
+			undefined,
+			onEventId,
+			cb,
+		);
+		await vi.waitFor(() => expect(mocks.streamFetcher).toHaveBeenCalled());
+		emit({ event_type: "run_initiated", payload: { run_id: "server/run" } });
+		expect(onEventId).toHaveBeenCalledWith("server/run");
+		expect(signal?.aborted).toBe(false);
+
+		await state.cancelExecution("server/run");
+		expect(signal?.aborted).toBe(true);
+		expect(mocks.fetcher).toHaveBeenCalledWith(
+			backend.profile,
+			"execution/run/server%2Frun",
+			{ method: "DELETE" },
+			backend.auth,
+		);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"cancel_execution",
+			expect.anything(),
+		);
+		const delivered = cb.mock.calls.length;
+		emit({ event_type: "a2ui", payload: { type: "showScreen" } });
+		expect(cb).toHaveBeenCalledTimes(delivered);
+
+		// The aborted stream ends the run the way a server-closed one does.
+		await expect(running).resolves.toBeUndefined();
+		mocks.invoke.mockResolvedValue(undefined);
+		await state.cancelExecution("server/run");
+		expect(mocks.invoke).toHaveBeenCalledWith("cancel_execution", {
+			runId: "server/run",
+		});
 	});
 
 	test("preflight reports remote-only even when the API is unreachable", async () => {
@@ -916,6 +1042,43 @@ describe("the pre-run Page contract gate", () => {
 		off();
 
 		expect(seen).toEqual(["stale_action"]);
+	});
+
+	test("times a native dispatch that fails before run_initiated", async () => {
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command === "get_event") return localPageEvent();
+			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_local_page_bootstrap") {
+				return { executionRevision: "per2-device" };
+			}
+			if (command === "execute_event") {
+				throw { error: "Page local execution is not authorized" };
+			}
+			throw new Error(`unexpected invoke: ${command}`);
+		});
+		const backend = fakeBackend({ localOnly: true });
+		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		const state = new EventState(backend as never);
+
+		const steps = await tracedStepNames(() =>
+			state.executeEvent(
+				APP,
+				EVENT,
+				{ id: EVENT, payload: {} } as never,
+				undefined,
+				() => {},
+				undefined,
+				undefined,
+				{
+					kind: "action",
+					actionId: "pa1_static",
+					manifestRevision: "per2-device",
+				},
+			),
+		);
+
+		expect(steps).toContain("execute_event.until_error");
+		expect(steps).not.toContain("execute_event.until_run_initiated");
 	});
 
 	test("a successful run publishes nothing", async () => {

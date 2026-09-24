@@ -12,6 +12,7 @@ import {
 	widgetRuntimeSourcesErrorCode,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	AccessRequest,
 	CachedPackage,
@@ -103,6 +104,7 @@ export class RegistryState implements IRegistryState {
 		try {
 			return await this.fetchSearch(filters);
 		} catch {
+			await this.ensureInit();
 			return invoke("registry_search_packages", {
 				filters: filters ?? {},
 				token: this.currentToken,
@@ -140,12 +142,19 @@ export class RegistryState implements IRegistryState {
 		if (filters?.ownedOnly) params.set("owned_only", "true");
 		if (!filters?.ownedOnly) params.set("include_own", "true");
 		const qs = params.toString();
-		return fetcher<SearchResults>(
-			this.backend.profile!,
+		const profile = this.backend.profile;
+		if (!profile)
+			throw new Error("Profile not set. Cannot search the registry.");
+		const results = await fetcher<SearchResults>(
+			profile,
 			`registry/search${qs ? `?${qs}` : ""}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(results) || !Array.isArray(results.packages)) {
+			throw new Error("registry/search returned no package list");
+		}
+		return results;
 	}
 
 	private get currentToken(): string | undefined {

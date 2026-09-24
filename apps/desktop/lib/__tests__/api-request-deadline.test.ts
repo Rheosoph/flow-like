@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 
@@ -7,12 +7,14 @@ vi.mock("@flow-like/flow-like-ui/lib/api-url", () => ({
 	getApiUrl: (_profile: unknown, path: string) => `https://api.test/${path}`,
 }));
 
-import { fetcher, fetcherConditional } from "../api";
+import { isTransportFailure } from "@flow-like/flow-like-ui/lib/api-error";
+import { fetcher, fetcherConditional, streamFetcher } from "../api";
 import { ApiResponseError } from "../api-error";
 import {
 	DATA_REQUEST_TIMEOUT_MS,
 	DISPATCH_REQUEST_TIMEOUT_MS,
 	RequestTimeoutError,
+	STREAM_HEADER_TIMEOUT_MS,
 	UPLOAD_FLOOR_BYTES_PER_SECOND,
 	WRITE_REQUEST_TIMEOUT_MS,
 } from "../request-deadline";
@@ -218,4 +220,207 @@ test("a server refusal is surfaced as the API error, not rewrapped", async () =>
 	);
 	expect(error).toBeInstanceOf(ApiResponseError);
 	expect(vi.getTimerCount()).toBe(0);
+});
+
+test("a crashed API Lambda answering 200 with its error envelope is a 502, not data", async () => {
+	mocks.fetch.mockResolvedValue(
+		jsonResponse(200, {
+			errorType: "Runtime.ExitError",
+			errorMessage: "RequestId: r Error: Runtime exited with error",
+		}),
+	);
+
+	const { error } = await outcomeOf(
+		fetcher(profile, "user/groups", undefined, auth),
+	);
+	expect(error).toBeInstanceOf(ApiResponseError);
+	expect((error as ApiResponseError).status).toBe(502);
+	expect(vi.getTimerCount()).toBe(0);
+});
+
+test("a connection plugin-http rejects with bare text is reported as a transport failure", async () => {
+	const rejection =
+		"error sending request for url (https://api.test/apps/app-1/pages/bootstrap)";
+	mocks.fetch.mockRejectedValue(rejection);
+
+	const { error } = await outcomeOf(
+		fetcher(profile, "apps/app-1/pages/bootstrap", undefined, auth),
+	);
+	expect(isTransportFailure(error)).toBe(true);
+	expect((error as Error).cause).toBe(rejection);
+});
+
+const SIXTEEN_MINUTES_MS = 16 * 60_000;
+
+/** An SSE body the test feeds by hand; like plugin-http, aborting the signal errors it. */
+function manualStream() {
+	const seen: {
+		signal?: AbortSignal;
+		body?: ReadableStreamDefaultController<Uint8Array>;
+	} = {};
+	mocks.fetch.mockImplementation(
+		async (_url: string, init: { signal?: AbortSignal }) => {
+			seen.signal = init.signal;
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						seen.body = controller;
+						init.signal?.addEventListener("abort", () =>
+							controller.error("Request cancelled"),
+						);
+					},
+				}),
+				{ status: 200, headers: { "content-type": "text/event-stream" } },
+			);
+		},
+	);
+	return seen;
+}
+
+const sseFrame = (event: Record<string, unknown>) =>
+	new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+
+function stream(path: string, init?: RequestInit, onMessage = vi.fn()) {
+	return streamFetcher(
+		profile,
+		path,
+		{ method: "POST", body: "{}", ...init },
+		auth,
+		onMessage,
+	);
+}
+
+describe("POST streams", () => {
+	beforeEach(() => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	test.each([
+		"apps/app-1/events/ev-1/invoke",
+		"apps/app-1/board/board-1/invoke",
+	])("%s waits for its headers as long as its dispatch", async (path) => {
+		const seen = hangingFetch();
+		const outcome = outcomeOf(stream(path));
+
+		await vi.advanceTimersByTimeAsync(STREAM_HEADER_TIMEOUT_MS);
+		expect(seen.signal?.aborted).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(
+			DISPATCH_REQUEST_TIMEOUT_MS - STREAM_HEADER_TIMEOUT_MS - 1,
+		);
+		expect(seen.signal?.aborted).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect((await outcome).error).toBeInstanceOf(RequestTimeoutError);
+		expect(seen.signal?.aborted).toBe(true);
+	});
+
+	test("a large invoke body extends the header deadline by its upload time", async () => {
+		const seen = hangingFetch();
+		const body = "x".repeat(4 * 1024 * 1024);
+		const allowance =
+			Math.floor(body.length / UPLOAD_FLOOR_BYTES_PER_SECOND) * 1000;
+		const outcome = outcomeOf(
+			stream("apps/app-1/events/ev-1/invoke", { body }),
+		);
+
+		await vi.advanceTimersByTimeAsync(
+			DISPATCH_REQUEST_TIMEOUT_MS + allowance - 1,
+		);
+		expect(seen.signal?.aborted).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect((await outcome).error).toBeInstanceOf(RequestTimeoutError);
+	});
+
+	test("a stream on any other route keeps the plain header deadline", async () => {
+		const seen = hangingFetch();
+		const outcome = outcomeOf(stream("apps/app-1/events/ev-1/prerun"));
+
+		await vi.advanceTimersByTimeAsync(STREAM_HEADER_TIMEOUT_MS - 1);
+		expect(seen.signal?.aborted).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect((await outcome).error).toBeInstanceOf(RequestTimeoutError);
+		expect(seen.signal?.aborted).toBe(true);
+	});
+
+	test("a 16-minute body keeps streaming once headers arrived", async () => {
+		const seen = manualStream();
+		const onMessage = vi.fn();
+		const outcome = outcomeOf(
+			stream("apps/app-1/events/ev-1/invoke", undefined, onMessage),
+		);
+
+		await vi.advanceTimersByTimeAsync(0);
+		seen.body?.enqueue(sseFrame({ event_type: "run_initiated" }));
+		await vi.advanceTimersByTimeAsync(SIXTEEN_MINUTES_MS);
+		seen.body?.enqueue(sseFrame({ event_type: "chat_out" }));
+		await vi.advanceTimersByTimeAsync(SIXTEEN_MINUTES_MS);
+		expect(seen.signal?.aborted).toBe(false);
+		expect(onMessage).toHaveBeenCalledTimes(2);
+
+		seen.body?.enqueue(sseFrame({ event_type: "completed" }));
+		expect((await outcome).error).toBeUndefined();
+		expect(onMessage).toHaveBeenCalledTimes(3);
+		// The terminal event closes the connection.
+		expect(seen.signal?.aborted).toBe(true);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test("the caller's signal aborts the stream after its headers arrived", async () => {
+		const seen = manualStream();
+		const caller = new AbortController();
+		const onMessage = vi.fn();
+		const outcome = outcomeOf(
+			stream(
+				"apps/app-1/events/ev-1/invoke",
+				{ signal: caller.signal },
+				onMessage,
+			),
+		);
+
+		await vi.advanceTimersByTimeAsync(0);
+		seen.body?.enqueue(sseFrame({ event_type: "run_initiated" }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(onMessage).toHaveBeenCalledTimes(1);
+
+		caller.abort();
+		expect(seen.signal?.aborted).toBe(true);
+		expect((await outcome).error).toBe("Request cancelled");
+	});
+
+	test("a caller that aborted before sending never opens the stream", async () => {
+		// Like plugin-http, an already aborted signal fails before any IPC.
+		mocks.fetch.mockImplementation(
+			async (_url: string, init: { signal?: AbortSignal }) => {
+				if (init.signal?.aborted) throw new Error("Request cancelled");
+				throw new Error("sent despite the abort");
+			},
+		);
+		const caller = new AbortController();
+		caller.abort();
+
+		const { error } = await outcomeOf(
+			stream("apps/app-1/events/ev-1/invoke", { signal: caller.signal }),
+		);
+		expect((error as Error).message).toBe("Request cancelled");
+		expect(vi.getTimerCount()).toBe(0);
+	});
+});
+
+test("any other bare plugin-http rejection keeps its text", async () => {
+	mocks.fetch.mockRejectedValue(
+		"url not allowed on the configured scope: https://api.test/apps",
+	);
+
+	const { error } = await outcomeOf(
+		fetcher(profile, "apps/app-1/pages/bootstrap", undefined, auth),
+	);
+	expect(isTransportFailure(error)).toBe(false);
+	expect((error as Error).message).toContain("url not allowed");
 });

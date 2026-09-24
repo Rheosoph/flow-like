@@ -166,6 +166,7 @@ impl NodeLogic for OntologyActionRequestNode {
             Ok(ontology) => ontology,
             Err(error) => return fail(context, error).await,
         };
+        super::ensure_graph_tables_unbuffered(context, false, &ontology).await?;
         let action = ontology
             .actions
             .iter()

@@ -2447,6 +2447,24 @@
     "class": null,
     "category": "AI/ML/ONNX/Audio"
   },
+  "automation_check_capability": {
+    "qualified": "automation::checkCapability",
+    "namespace": "automation",
+    "alias": "checkCapability",
+    "flat": "automationCheckCapability",
+    "receiver": null,
+    "class": null,
+    "category": "Automation"
+  },
+  "automation_request_capability": {
+    "qualified": "automation::requestCapability",
+    "namespace": "automation",
+    "alias": "requestCapability",
+    "flat": "automationRequestCapability",
+    "receiver": null,
+    "class": null,
+    "category": "Automation"
+  },
   "automation_start_session": {
     "qualified": "automation::startSession",
     "namespace": "automation",
@@ -2636,6 +2654,15 @@
     "class": "bool",
     "category": "Utils/Bool"
   },
+  "browser_attach": {
+    "qualified": "browser::attach",
+    "namespace": "browser",
+    "alias": "attach",
+    "flat": "browserAttach",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_back": {
     "qualified": "browser::back",
     "namespace": "browser",
@@ -2708,6 +2735,24 @@
     "class": null,
     "category": "Automation/Browser/Interact"
   },
+  "browser_drag": {
+    "qualified": "browser::drag",
+    "namespace": "browser",
+    "alias": "drag",
+    "flat": "browserDrag",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_enter_frame": {
+    "qualified": "browser::enterFrame",
+    "namespace": "browser",
+    "alias": "enterFrame",
+    "flat": "browserEnterFrame",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_execute_js": {
     "qualified": "browser::executeJs",
     "namespace": "browser",
@@ -2716,6 +2761,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Extract"
+  },
+  "browser_execute_plan": {
+    "qualified": "browser::executePlan",
+    "namespace": "browser",
+    "alias": "executePlan",
+    "flat": "browserExecutePlan",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "browser_forward": {
     "qualified": "browser::forward",
@@ -2834,6 +2888,15 @@
     "class": null,
     "category": "Automation/Browser/Navigation"
   },
+  "browser_handle_dialog": {
+    "qualified": "browser::handleDialog",
+    "namespace": "browser",
+    "alias": "handleDialog",
+    "flat": "browserHandleDialog",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_hover": {
     "qualified": "browser::hover",
     "namespace": "browser",
@@ -2842,6 +2905,33 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Interact"
+  },
+  "browser_key_chord": {
+    "qualified": "browser::keyChord",
+    "namespace": "browser",
+    "alias": "keyChord",
+    "flat": "browserKeyChord",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_leave_frame": {
+    "qualified": "browser::leaveFrame",
+    "namespace": "browser",
+    "alias": "leaveFrame",
+    "flat": "browserLeaveFrame",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_list_tabs": {
+    "qualified": "browser::listTabs",
+    "namespace": "browser",
+    "alias": "listTabs",
+    "flat": "browserListTabs",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "browser_load_cookies": {
     "qualified": "browser::loadCookies",
@@ -2888,6 +2978,15 @@
     "class": null,
     "category": "Automation/Browser/Navigation"
   },
+  "browser_right_click": {
+    "qualified": "browser::rightClick",
+    "namespace": "browser",
+    "alias": "rightClick",
+    "flat": "browserRightClick",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_save_cookies": {
     "qualified": "browser::saveCookies",
     "namespace": "browser",
@@ -2933,6 +3032,15 @@
     "class": null,
     "category": "Automation/Browser/Input"
   },
+  "browser_select_tab": {
+    "qualified": "browser::selectTab",
+    "namespace": "browser",
+    "alias": "selectTab",
+    "flat": "browserSelectTab",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_set_basic_auth": {
     "qualified": "browser::setBasicAuth",
     "namespace": "browser",
@@ -2969,6 +3077,24 @@
     "class": null,
     "category": "Automation/Browser/Storage"
   },
+  "browser_start_console_observer": {
+    "qualified": "browser::startConsoleObserver",
+    "namespace": "browser",
+    "alias": "startConsoleObserver",
+    "flat": "browserStartConsoleObserver",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_start_driver": {
+    "qualified": "browser::startDriver",
+    "namespace": "browser",
+    "alias": "startDriver",
+    "flat": "browserStartDriver",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_start_network_observer": {
     "qualified": "browser::startNetworkObserver",
     "namespace": "browser",
@@ -2977,6 +3103,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Observe"
+  },
+  "browser_stop_driver": {
+    "qualified": "browser::stopDriver",
+    "namespace": "browser",
+    "alias": "stopDriver",
+    "flat": "browserStopDriver",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "browser_trigger_download": {
     "qualified": "browser::triggerDownload",
@@ -3049,6 +3184,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Observe"
+  },
+  "browser_wait_for_url": {
+    "qualified": "browser::waitForUrl",
+    "namespace": "browser",
+    "alias": "waitForUrl",
+    "flat": "browserWaitForUrl",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "bytes_concat": {
     "qualified": "bytes::concat",
@@ -3256,6 +3400,15 @@
     "receiver": null,
     "class": null,
     "category": "AI/ML/ONNX/Face"
+  },
+  "computer_accessibility_action": {
+    "qualified": "computer::accessibilityAction",
+    "namespace": "computer",
+    "alias": "accessibilityAction",
+    "flat": "computerAccessibilityAction",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Computer/Accessibility"
   },
   "computer_capture_window": {
     "qualified": "computer::captureWindow",
@@ -3481,6 +3634,24 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Wait"
+  },
+  "computer_wait_for_window": {
+    "qualified": "computer::waitForWindow",
+    "namespace": "computer",
+    "alias": "waitForWindow",
+    "flat": "computerWaitForWindow",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Computer/Window"
+  },
+  "computer_window_operation": {
+    "qualified": "computer::manageWindow",
+    "namespace": "computer",
+    "alias": "manageWindow",
+    "flat": "computerWindowOperation",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Computer/Window"
   },
   "construct_array": {
     "qualified": "array::construct",
@@ -7144,6 +7315,141 @@
     "receiver": null,
     "class": null,
     "category": "Data/Notion"
+  },
+  "database_branches": {
+    "qualified": "db::branches",
+    "namespace": "db",
+    "alias": "branches",
+    "flat": "databaseBranches",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_checkout": {
+    "qualified": "db::checkout",
+    "namespace": "db",
+    "alias": "checkout",
+    "flat": "databaseCheckout",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_cleanup_versions": {
+    "qualified": "db::cleanupVersions",
+    "namespace": "db",
+    "alias": "cleanupVersions",
+    "flat": "databaseCleanupVersions",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_clone": {
+    "qualified": "db::clone",
+    "namespace": "db",
+    "alias": "clone",
+    "flat": "databaseClone",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_compare": {
+    "qualified": "db::compare",
+    "namespace": "db",
+    "alias": "compare",
+    "flat": "databaseCompare",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_create_branch": {
+    "qualified": "db::createBranch",
+    "namespace": "db",
+    "alias": "createBranch",
+    "flat": "databaseCreateBranch",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_create_tag": {
+    "qualified": "db::createTag",
+    "namespace": "db",
+    "alias": "createTag",
+    "flat": "databaseCreateTag",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_delete_branch": {
+    "qualified": "db::deleteBranch",
+    "namespace": "db",
+    "alias": "deleteBranch",
+    "flat": "databaseDeleteBranch",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_delete_tag": {
+    "qualified": "db::deleteTag",
+    "namespace": "db",
+    "alias": "deleteTag",
+    "flat": "databaseDeleteTag",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_reference": {
+    "qualified": "db::reference",
+    "namespace": "db",
+    "alias": "reference",
+    "flat": "databaseReference",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_restore": {
+    "qualified": "db::restore",
+    "namespace": "db",
+    "alias": "restore",
+    "flat": "databaseRestore",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_snapshot": {
+    "qualified": "db::snapshot",
+    "namespace": "db",
+    "alias": "snapshot",
+    "flat": "databaseSnapshot",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_tags": {
+    "qualified": "db::tags",
+    "namespace": "db",
+    "alias": "tags",
+    "flat": "databaseTags",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_update_tag": {
+    "qualified": "db::moveTag",
+    "namespace": "db",
+    "alias": "moveTag",
+    "flat": "databaseUpdateTag",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_versions": {
+    "qualified": "db::versions",
+    "namespace": "db",
+    "alias": "versions",
+    "flat": "databaseVersions",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
   },
   "delay": {
     "qualified": "control::delay",

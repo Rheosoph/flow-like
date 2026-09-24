@@ -81,6 +81,13 @@ impl NodeLogic for RequestPaymentNode {
             VariableType::Integer,
         )
         .set_default_value(Some(json!(300)));
+        node.add_input_pin(
+            "idempotency_key",
+            "Idempotency Key",
+            "Reuse a stable key for the same payment across workflow retries. Completed payments immediately select their previous result. Leave empty for a new payment.",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         for status in ["paid", "canceled", "expired", "failed"] {
             node.add_output_pin(
                 status,
@@ -192,9 +199,16 @@ impl NodeLogic for RequestPaymentNode {
             .collect::<Vec<_>>();
         let description = context.evaluate_pin::<String>("description").await?;
         let reference = context.evaluate_pin::<String>("reference").await?;
+        let idempotency_key = match context.get_pin_by_name("idempotency_key").await {
+            Ok(pin) => context.evaluate_pin_ref::<String>(pin).await?,
+            Err(_) => String::new(),
+        };
         let ttl = context.evaluate_pin::<i64>("ttl_seconds").await?;
         let nonce = flow_like_types::create_id();
-        let body = json!({"nodeId":context.id.as_ref(),"nonce":nonce,"amountMinor":amount,"currency":currency,"productName":product,"productTaxCode":product_tax_code,"shippingCountries":shipping_countries,"description":description,"reference":reference,"ttlSeconds":ttl});
+        let mut body = json!({"nodeId":context.id.as_ref(),"nonce":nonce,"amountMinor":amount,"currency":currency,"productName":product,"productTaxCode":product_tax_code,"shippingCountries":shipping_countries,"description":description,"reference":reference,"ttlSeconds":ttl});
+        if !idempotency_key.trim().is_empty() {
+            body["idempotencyKey"] = json!(idempotency_key.trim());
+        }
         let mut created = None;
         for attempt in 0..3 {
             match client
@@ -241,12 +255,18 @@ impl NodeLogic for RequestPaymentNode {
             return Err(anyhow!("Invalid payment identifier"));
         }
         context.set_pin_value("payment_id", json!(id)).await?;
-        context
-            .stream_response(
-                "payment_request",
-                json!({"id":id,"appId":status["appId"],"runId":status["runId"]}),
-            )
-            .await?;
+        if let Some((pin, reason)) = terminal(&status) {
+            return finish(context, pin, &reason).await;
+        }
+        let replayed = status["replayed"].as_bool().unwrap_or(false);
+        if !replayed {
+            context
+                .stream_response(
+                    "payment_request",
+                    json!({"id":id,"appId":status["appId"],"runId":status["runId"]}),
+                )
+                .await?;
+        }
         let url = format!("{endpoint}/{id}");
         let cancellation = context.cancellation_token();
         let jitter = nonce.bytes().fold(0u64, |sum, b| sum + u64::from(b)) % 700;
@@ -262,11 +282,12 @@ impl NodeLogic for RequestPaymentNode {
                     .as_ref()
                     .is_some_and(|token| token.is_cancelled())
             {
-                if let Ok(response) = client
-                    .post(format!("{url}/cancel"))
-                    .bearer_auth(auth.token())
-                    .send()
-                    .await
+                if !replayed
+                    && let Ok(response) = client
+                        .post(format!("{url}/cancel"))
+                        .bearer_auth(auth.token())
+                        .send()
+                        .await
                 {
                     if response.status().is_success()
                         && let Ok(value) = response.json::<Value>().await
@@ -294,7 +315,13 @@ impl NodeLogic for RequestPaymentNode {
             } else {
                 tokio::time::sleep(Duration::from_millis(1500 + jitter)).await;
             }
-            if let Ok(response) = client.get(&url).bearer_auth(auth.token()).send().await {
+            // Replays can belong to an earlier run, so resolve them with the same scoped key.
+            let request = if replayed {
+                client.post(&endpoint).json(&body)
+            } else {
+                client.get(&url)
+            };
+            if let Ok(response) = request.bearer_auth(auth.token()).send().await {
                 if response.status().is_success() {
                     if let Ok(value) = response.json().await {
                         status = value;
@@ -336,6 +363,39 @@ async fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn idempotency_key_defaults_to_a_new_payment() {
+        let node = RequestPaymentNode.get_node();
+        let pin = node
+            .pins
+            .values()
+            .find(|pin| pin.name == "idempotency_key")
+            .expect("payment node has an idempotency key input");
+        assert_eq!(pin.pin_type, flow_like::flow::pin::PinType::Input);
+        assert_eq!(pin.data_type, VariableType::String);
+        assert_eq!(pin.index, 11);
+        assert_eq!(node.get_pin_by_name("ttl_seconds").unwrap().index, 10);
+        assert_eq!(
+            flow_like_types::json::from_slice::<Value>(pin.default_value.as_ref().unwrap())
+                .unwrap(),
+            json!("")
+        );
+    }
+    #[test]
+    fn terminal_results_resume_their_original_branch_and_reason() {
+        for (status, pin, reason) in [
+            ("PAID", "paid", "VERIFIED"),
+            ("CANCELED", "canceled", "USER_CANCELED"),
+            ("EXPIRED", "expired", "DEADLINE_EXPIRED"),
+            ("FAILED", "failed", "PAYMENT_FAILED"),
+        ] {
+            assert_eq!(
+                terminal(&json!({"status":status,"reason":reason})),
+                Some((pin, reason.into()))
+            );
+            assert_eq!(terminal(&json!({"status":status})), Some((pin, "".into())));
+        }
+    }
     #[test]
     fn simulation_requires_a_local_board_test_even_when_remote_alias_is_test() {
         assert!(simulation_allowed(ExecutionEnvironment::Local, true));

@@ -13,7 +13,7 @@ def parser():
     result = argparse.ArgumentParser(description=__doc__)
     for name in ("project", "region", "bucket", "image", "key-version", "api-service-account",
                  "database-instance", "database-host", "database-name", "database-ca-secret",
-                 "entry-key-secret", "encryption-secret", "config-secret", "network", "subnet"):
+                 "entry-key-secret", "encryption-secret", "network", "subnet"):
         result.add_argument(f"--{name}", required=True)
     result.add_argument("--name", default="flow-like-audit-worker")
     result.add_argument("--database-user", help="Existing Cloud SQL IAM username; defaults to the worker email without .gserviceaccount.com")
@@ -41,7 +41,7 @@ def plan(args):
         raise ValueError("--name must be a 6-22 character service account ID, leaving room for '-trigger'")
     for value in (args.project, args.region, args.bucket, args.name, args.network, args.subnet,
                   args.database_instance, args.database_host, args.database_name, args.database_user,
-                  args.entry_key_secret, args.config_secret, args.encryption_secret, args.database_ca_secret,
+                  args.entry_key_secret, args.encryption_secret, args.database_ca_secret,
                   args.previous_entry_key_secret, args.audit_kid, args.verifying_keys_secret):
         if value is not None and (not value or re.search(r"[\s,=]", value) or value.startswith("-")):
             raise ValueError("resource names must not contain whitespace, commas, equals signs or start with '-' ")
@@ -75,8 +75,7 @@ def plan(args):
         raise ValueError("--database-user must match the worker service account without .gserviceaccount.com")
     secrets = {"GCP_POSTGRES_SERVER_CA": args.database_ca_secret,
                "AUDIT_ENTRY_KEY": args.entry_key_secret,
-               "SINK_TOKEN_ENCRYPTION_KEY": args.encryption_secret,
-               "FLOW_LIKE_CONFIG_JSON": args.config_secret}
+               "SINK_TOKEN_ENCRYPTION_KEY": args.encryption_secret}
     shared_secrets = {args.entry_key_secret, args.encryption_secret}
     if args.previous_entry_key_secret:
         secrets["AUDIT_ENTRY_KEY_PREVIOUS"] = args.previous_entry_key_secret
@@ -85,7 +84,7 @@ def plan(args):
         secrets["AUDIT_VERIFYING_KEYS"] = args.verifying_keys_secret
         shared_secrets.add(args.verifying_keys_secret)
     if len(set(secrets.values())) != len(secrets):
-        raise ValueError("CA, configuration, entry, encryption and verifying-key secrets must be distinct")
+        raise ValueError("CA, entry, encryption and verifying-key secrets must be distinct")
     trigger_name = f"{args.name}-trigger"
     trigger = f"{trigger_name}@{args.project}.iam.gserviceaccount.com"
     if args.api_service_account in (worker, trigger):
@@ -100,9 +99,6 @@ def plan(args):
     deny_api(f"//cloudresourcemanager.googleapis.com/projects/{args.project}", "resourcemanager.projects.setIamPolicy")
     deny_api("//cloudkms.googleapis.com/" + args.key_version.rsplit("/cryptoKeyVersions/", 1)[0],
              "cloudkms.cryptoKeyVersions.useToSign", "cloudkms.cryptoKeys.setIamPolicy")
-    for secret in (args.config_secret,):
-        deny_api(f"//secretmanager.googleapis.com/projects/{args.project}/secrets/{secret}",
-                 "secretmanager.versions.access", "secretmanager.versions.add", "secretmanager.secrets.setIamPolicy")
     # SQL identity and grants are provisioned by the database owner before this job.
     steps.append({"validate_database": {"host": database_host},
                   "inspect": command("sql", "instances", "describe", args.database_instance)})

@@ -130,6 +130,7 @@ fn store_kind(store: &FlowLikeStore) -> &'static str {
         FlowLikeStore::Azure(_) => "azure-blob",
         FlowLikeStore::Google(_) => "gcs",
         FlowLikeStore::Memory(_) => "memory",
+        FlowLikeStore::Signed(_) => "custom-signed",
         FlowLikeStore::Other(_) => "other",
     }
 }

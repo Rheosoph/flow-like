@@ -161,6 +161,12 @@ async fn run_maintenance_job(
             )))
         }
         MaintenanceRunRequest::StateCleanup => {
+            if state.platform_config.standalone.enabled {
+                match crate::devices::archives::sweep_expired(&state).await {
+                    Ok(deleted) => tracing::info!(deleted, "Expired encrypted device history removed"),
+                    Err(error) => tracing::error!(%error, "Device history retention cleanup failed"),
+                }
+            }
             // Storage-accounting tombstones are SQL rows rather than execution
             // state, but they expire on a daily horizon and no deployment
             // should need a second trigger for them, the way the channel sweep

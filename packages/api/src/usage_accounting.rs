@@ -7,8 +7,8 @@ use crate::{
 use chrono::{Duration, Utc};
 use flow_like_types::{Value, create_id};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -178,6 +178,31 @@ pub async fn start_usage_invocation(
     state: &AppState,
     start: UsageInvocationStart<'_>,
 ) -> Result<Option<String>, ApiError> {
+    start_usage_invocation_authorized(state, start, None).await
+}
+
+pub(crate) async fn start_instance_usage_invocation(
+    state: &AppState,
+    start: UsageInvocationStart<'_>,
+    instance: &crate::instances::VerifiedInstanceUsage,
+    required_model_tier: &str,
+) -> Result<Option<String>, ApiError> {
+    if start.user_id != Some(instance.delegated_user_id.as_str())
+        || start.app_id != instance.app_id.as_deref()
+        || start.technical_user_id.is_some()
+    {
+        return Err(ApiError::forbidden(
+            "Instance usage attribution does not match its grant",
+        ));
+    }
+    start_usage_invocation_authorized(state, start, Some((instance, required_model_tier))).await
+}
+
+async fn start_usage_invocation_authorized(
+    state: &AppState,
+    start: UsageInvocationStart<'_>,
+    instance: Option<(&crate::instances::VerifiedInstanceUsage, &str)>,
+) -> Result<Option<String>, ApiError> {
     let rate = start
         .rate
         .clone()
@@ -188,11 +213,20 @@ pub async fn start_usage_invocation(
         payer_id: String::new(),
         actor_id: start.user_id.map(ToOwned::to_owned),
         app_id: start.app_id.map(ToOwned::to_owned),
-        model_id: start.model_id.map(ToOwned::to_owned),
+        // Provider model names may differ from the approved Bit identifier.
+        // Instance authorization and account quota retain the granted Bit.
+        model_id: instance
+            .map(|(usage, _)| usage.model_id.clone())
+            .or_else(|| start.model_id.map(ToOwned::to_owned)),
         provider: start.provider.map(ToOwned::to_owned),
         kind: start.kind.to_owned(),
         funding_class: "hosted".to_owned(),
-        execution_mode: "hosted_ai".to_owned(),
+        execution_mode: if instance.is_some() {
+            "instance_hosted_ai"
+        } else {
+            "hosted_ai"
+        }
+        .to_owned(),
         amounts: crate::quota::QuotaAmounts {
             ai_cost_micros: rate
                 .all_in_micro_eur(start.estimated_cost_micro_dollars, rate.max_request_ms),
@@ -209,15 +243,14 @@ pub async fn start_usage_invocation(
     request.deadline = request
         .deadline
         .min(original.created_at.with_timezone(&Utc) + Duration::milliseconds(rate.max_request_ms));
-    let payer = match crate::quota::reserve_for_owner(
-        state,
-        crate::quota::QuotaRequest {
-            operation_id: id.clone(),
-            ..request
-        },
-    )
-    .await
-    {
+    request.operation_id = id.clone();
+    let reservation = match instance {
+        Some((instance, required_model_tier)) => {
+            crate::quota::reserve_instance(state, request, instance, required_model_tier).await
+        }
+        None => crate::quota::reserve_for_owner(state, request).await,
+    };
+    let payer = match reservation {
         Ok(payer) => payer,
         Err(error) => {
             settle_usage_invocation_with_dialect(
@@ -395,16 +428,17 @@ async fn settle_usage_invocation_with_dialect(
                 let app = match known_app {
                     Some(app) => app,
                     None => {
-                        let Some(app) = usage_invocation::Entity::find_by_id(&id)
-                            .select_only()
-                            .column(usage_invocation::Column::AppId)
-                            .into_tuple::<Option<String>>()
-                            .one(txn)
+                        let Some(row) = txn
+                            .query_one_raw(sea_orm::Statement::from_sql_and_values(
+                                sea_orm::DatabaseBackend::Postgres,
+                                "SELECT \"appId\" FROM \"UsageInvocation\" WHERE id=$1",
+                                [id.clone().into()],
+                            ))
                             .await?
                         else {
                             return Ok::<_, sea_orm::DbErr>(());
                         };
-                        app
+                        row.try_get::<Option<String>>("", "appId")?
                     }
                 };
                 if let Some(app) = app.as_deref() {

@@ -3,6 +3,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { IBoard } from "@flow-like/flow-like-ui/lib/schema/flow/board";
+import { workflowBoardSyncResponse } from "../lib/workflow-screenshot/fixture";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -979,6 +981,9 @@ const fixture = {
 		get_app_meta: metadata,
 		get_app_boards: [board],
 		get_board: board,
+		// The desktop loads boards through the incremental sync protocol; without this
+		// response an offline fixture app renders an empty canvas.
+		sync_board: workflowBoardSyncResponse(board as unknown as IBoard),
 		get_catalog: catalog,
 		get_events: [],
 		get_app_routes: [],

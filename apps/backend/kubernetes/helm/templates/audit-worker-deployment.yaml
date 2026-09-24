@@ -1,6 +1,4 @@
 {{- if .Values.audit.worker }}
-{{- $runtime := .Values.api.runtimeConfig }}
-{{- $mountRuntime := or $runtime.existingSecret $runtime.existingConfigMap }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -89,12 +87,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.audit.database.existingSecret | quote }}
                   key: DATABASE_URL
-            - name: AUDIT_API_DATABASE_ROLE
-              value: {{ .Values.audit.apiDatabaseRole | quote }}
-            {{- if .Values.audit.paused }}
-            - name: AUDIT_WORKER_PAUSED
-              value: "true"
-            {{- end }}
             - name: AUDIT_ENTRY_KEY
               valueFrom:
                 secretKeyRef:
@@ -106,16 +98,6 @@ spec:
                   name: {{ .Values.audit.entrySecret | quote }}
                   key: AUDIT_ENTRY_KEY_PREVIOUS
                   optional: true
-            {{- if $mountRuntime }}
-            - name: FLOW_LIKE_CONFIG_PATH
-              value: /etc/flow-like/flow-like.config.json
-            {{- else }}
-            - name: FLOW_LIKE_CONFIG_JSON
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $runtime.secretKeyRef.name | quote }}
-                  key: {{ required "api.runtimeConfig.secretKeyRef.key is required" $runtime.secretKeyRef.key | quote }}
-            {{- end }}
             - name: AUDIT_HEALTH_FILE
               value: /tmp/audit-worker-health
             - name: AUDIT_BUCKET
@@ -169,11 +151,6 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if $mountRuntime }}
-            - name: hub-config
-              mountPath: /etc/flow-like
-              readOnly: true
-            {{- end }}
             {{- if .Values.database.caSecret }}
             - name: database-ca
               mountPath: /etc/database
@@ -204,21 +181,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: 256Mi}
-        {{- if $mountRuntime }}
-        - name: hub-config
-          {{- if $runtime.existingSecret }}
-          secret:
-            secretName: {{ $runtime.existingSecret | quote }}
-            defaultMode: 0440
-          {{- else }}
-          configMap:
-            name: {{ $runtime.existingConfigMap | quote }}
-            defaultMode: 0444
-          {{- end }}
-            items:
-              - key: {{ required "api.runtimeConfig.key is required" $runtime.key | quote }}
-                path: flow-like.config.json
-        {{- end }}
         {{- if .Values.database.migration.enabled }}
         - name: migration-api-access
           projected:

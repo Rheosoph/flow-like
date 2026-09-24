@@ -142,6 +142,22 @@ pub fn control_plane_http_client() -> reqwest::Client {
         .clone()
 }
 
+fn live_control_plane_http_client() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .timeout(CONTROL_PLANE_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                // Each DPoP dispatch requires a newly minted proof.
+                .retry(reqwest::retry::never())
+                .build()
+                .expect("live control-plane HTTP client should build")
+        })
+        .clone()
+}
+
 /// Follow a GET redirect without copying any headers from the authenticated
 /// request that produced it. Used for signed object-store downloads.
 pub async fn follow_get_redirect_without_credentials(
@@ -486,10 +502,12 @@ impl RemoteAppSession {
         let token = context
             .token
             .clone()
-            .filter(|token| !token.trim().is_empty())
-            .ok_or(flow_like_types::anyhow!(
+            .filter(|token| !token.trim().is_empty());
+        if context.request_authorizer().is_none() && token.is_none() {
+            return Err(flow_like_types::anyhow!(
                 "Working with a connected app requires a connected session (no auth token available)"
-            ))?;
+            ));
+        }
         let base_url = api_base_url(&context.profile.hub, context.profile.secure).ok_or(
             flow_like_types::anyhow!("No hub URL configured on the execution profile"),
         )?;
@@ -506,18 +524,31 @@ impl RemoteAppSession {
             }),
             None => json!({ "run_id": context.run_id() }),
         };
-        let response = control_plane_http_client()
+        let client = if context.request_authorizer().is_some() {
+            live_control_plane_http_client()
+        } else {
+            control_plane_http_client()
+        };
+        let mut request = client
             .post(&token_url)
-            .bearer_auth(token.trim())
             // The run id ties the minted token — and every run it triggers
             // downstream — into this run's process case, even when the bearer
             // is a user token instead of an executor JWT.
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|err| {
-                flow_like_types::anyhow!("Failed to request app connection token: {}", err)
-            })?;
+            .json(&request_body);
+        if context.request_authorizer().is_none()
+            && let Some(token) = token
+        {
+            request = request.bearer_auth(token.trim());
+        }
+        let request = context
+            .authorize_request(
+                request.build()?,
+                flow_like_types::authorization::ResourceAudience::ProjectApi,
+            )
+            .await?;
+        let response = client.execute(request).await.map_err(|err| {
+            flow_like_types::anyhow!("Failed to request app connection token: {}", err)
+        })?;
         let response = error_for_status(response, "App connection token request").await?;
         let token_response: AppConnectionTokenResponse = response.json().await?;
 

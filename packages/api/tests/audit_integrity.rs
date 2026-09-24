@@ -9,7 +9,7 @@
 //! only moves forward so epochs stay in time order, share the archive bucket, and
 //! restore every row they tamper with so a later tick can still archive the month.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, PoisonError};
 
@@ -52,6 +52,13 @@ const DATABASE_URL_ENV: &str = "AUDIT_TEST_DATABASE_URL";
 const KID: &str = "audit-integrity-test";
 const MIGRATION: &str =
     include_str!("../prisma/migrations/20260919120001_audit_seals/migration.sql");
+const ENTRY_KID_MIGRATION: &str =
+    include_str!("../prisma/migrations/20260922140000_audit_entry_kid/migration.sql");
+/// The process accepts the explicit current key, the explicit previous key and the key
+/// derived from this backend key.
+const ENTRY_KEY: Hash = [7; 32];
+const PREVIOUS_ENTRY_KEY: Hash = [8; 32];
+const BACKEND_KEY: &str = "audit-integrity-backend-key";
 
 /// Tables the worker reads besides its own: the lease row, the legacy trail it
 /// exports, and the AI Act assessments that lengthen activity retention.
@@ -110,11 +117,19 @@ async fn harness() -> Harness {
                 .await
                 .expect("create the audit tables; the database must be empty");
             setup
+                .execute_unprepared(ENTRY_KID_MIGRATION)
+                .await
+                .expect("add the entry kid column");
+            setup
                 .execute_unprepared(SUPPORT_TABLES)
                 .await
                 .expect("create the lease, legacy and AI Act tables");
-            let entry_key = STANDARD.encode([7u8; 32]);
-            keys::init_entry_key(Some(entry_key.as_str()), None).expect("fixed audit entry key");
+            let entry_key = STANDARD.encode(ENTRY_KEY);
+            keys::init_entry_key(Some(entry_key.as_str()), Some(BACKEND_KEY))
+                .expect("fixed audit entry key");
+            let previous = STANDARD.encode(PREVIOUS_ENTRY_KEY);
+            keys::init_previous_entry_key(Some(previous.as_str()), None)
+                .expect("fixed previous audit entry key");
             signer::register_verifying_key(KID, test_signer().verifying_key())
                 .expect("register the test audit key");
         })
@@ -311,12 +326,24 @@ async fn insert_records(
     at: DateTime<Utc>,
     count: usize,
 ) -> Vec<String> {
+    insert_records_with(db, scope, action, at, count, keys::entry_key()).await
+}
+
+/// Records as an API holding `entry_key` writes them: MAC and kid of that key.
+async fn insert_records_with(
+    db: &DatabaseConnection,
+    scope: &str,
+    action: &str,
+    at: DateTime<Utc>,
+    count: usize,
+    entry_key: &Hash,
+) -> Vec<String> {
     let mut ids = Vec::with_capacity(count);
     for index in 0..count {
         let model = build_record(
             input(scope, action, &format!("resource-{index}")),
             WriteMode::Append,
-            keys::entry_key(),
+            entry_key,
             at + Duration::milliseconds(index as i64),
         );
         ids.push(model.id.clone().unwrap());
@@ -1124,6 +1151,226 @@ async fn tampered_pending_records_are_quarantined() {
             .expect("remove the quarantined fixture");
     }
     assert_valid(db, &app).await;
+}
+
+async fn quarantined_count(db: &DatabaseConnection) -> u64 {
+    audit_record::Entity::find()
+        .filter(audit_record::Column::SealId.eq(INVALID_SEAL_ID))
+        .count(db)
+        .await
+        .expect("count quarantined records")
+}
+
+async fn pending_chains(db: &DatabaseConnection) -> BTreeSet<String> {
+    audit_record::Entity::find()
+        .filter(audit_record::Column::SealId.is_null())
+        .all(db)
+        .await
+        .expect("read pending records")
+        .into_iter()
+        .map(|record| record.chain_id)
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires AUDIT_TEST_DATABASE_URL pointing to a disposable PostgreSQL database"]
+async fn records_under_the_previous_entry_key_seal_next_to_current_ones() {
+    let harness = harness().await;
+    let db = &harness.db;
+    let app = create_id();
+    let old = insert_records_with(
+        db,
+        &app,
+        "board.update",
+        clock(Duration::seconds(1)),
+        2,
+        &PREVIOUS_ENTRY_KEY,
+    )
+    .await;
+    let new = insert_records_with(
+        db,
+        &app,
+        "board.update",
+        clock(Duration::seconds(1)),
+        2,
+        &ENTRY_KEY,
+    )
+    .await;
+    let kids: BTreeSet<Option<String>> = records(db, &app)
+        .await
+        .into_iter()
+        .map(|record| record.entry_kid)
+        .collect();
+    assert_eq!(
+        kids,
+        BTreeSet::from([
+            Some(keys::entry_kid(&PREVIOUS_ENTRY_KEY)),
+            Some(keys::entry_kid(&ENTRY_KEY)),
+        ])
+    );
+
+    let report = tick(
+        &worker_context(&harness, retention(), None),
+        clock(Duration::seconds(1)),
+    )
+    .await;
+    assert_eq!(
+        (report.held_chains, report.quarantined),
+        (0, 0),
+        "{report:?}"
+    );
+    let sealed = records(db, &app).await;
+    assert_eq!(sealed.len(), old.len() + new.len());
+    for record in &sealed {
+        assert!(old.contains(&record.id) || new.contains(&record.id));
+        assert!(
+            record
+                .seal_id
+                .as_deref()
+                .is_some_and(|id| id != INVALID_SEAL_ID)
+                && record.mac.is_none(),
+            "{record:?}"
+        );
+    }
+    assert_valid(db, &app).await;
+}
+
+#[tokio::test]
+#[ignore = "requires AUDIT_TEST_DATABASE_URL pointing to a disposable PostgreSQL database"]
+async fn records_without_a_kid_seal_under_any_accepted_key() {
+    let harness = harness().await;
+    let db = &harness.db;
+    let app = create_id();
+    let derived = keys::derive_entry_key(BACKEND_KEY);
+    assert_ne!(derived, ENTRY_KEY);
+    let ids = insert_records_with(
+        db,
+        &app,
+        "board.update",
+        clock(Duration::seconds(1)),
+        3,
+        &derived,
+    )
+    .await;
+    exec(
+        db,
+        r#"UPDATE "AuditRecord" SET "entryKid" = NULL WHERE "chainId" = $1"#,
+        vec![app.clone().into()],
+    )
+    .await;
+    assert!(
+        records(db, &app)
+            .await
+            .iter()
+            .all(|record| record.entry_kid.is_none())
+    );
+
+    let report = tick(
+        &worker_context(&harness, retention(), None),
+        clock(Duration::seconds(1)),
+    )
+    .await;
+    assert_eq!(
+        (report.held_chains, report.quarantined),
+        (0, 0),
+        "{report:?}"
+    );
+    let sealed = records(db, &app).await;
+    assert_eq!(sealed.len(), ids.len());
+    assert!(
+        sealed.iter().all(|record| record
+            .seal_id
+            .as_deref()
+            .is_some_and(|id| id != INVALID_SEAL_ID)),
+        "{sealed:?}"
+    );
+    assert_valid(db, &app).await;
+}
+
+#[tokio::test]
+#[ignore = "requires AUDIT_TEST_DATABASE_URL pointing to a disposable PostgreSQL database"]
+async fn a_chain_under_a_key_the_worker_lacks_is_held_not_quarantined() {
+    let harness = harness().await;
+    let db = &harness.db;
+    let foreign = create_id();
+    let other = create_id();
+    let unknown: Hash = [9; 32];
+    let held = insert_records_with(
+        db,
+        &foreign,
+        "board.update",
+        clock(Duration::seconds(1)),
+        2,
+        &unknown,
+    )
+    .await;
+    exec(
+        db,
+        r#"UPDATE "AuditRecord" SET "entryKid" = NULL WHERE "id" = $1"#,
+        vec![held[1].clone().into()],
+    )
+    .await;
+    let sealed = insert_records_with(
+        db,
+        &other,
+        "board.update",
+        clock(Duration::seconds(1)),
+        2,
+        &ENTRY_KEY,
+    )
+    .await;
+    let quarantined_before = quarantined_count(db).await;
+
+    let report = tick(
+        &worker_context(&harness, retention(), None),
+        clock(Duration::seconds(1)),
+    )
+    .await;
+    assert_eq!(
+        (report.held_chains, report.quarantined),
+        (1, 0),
+        "{report:?}"
+    );
+    assert_eq!(quarantined_count(db).await, quarantined_before);
+    let waiting = records(db, &foreign).await;
+    assert_eq!(waiting.len(), held.len());
+    assert!(
+        waiting
+            .iter()
+            .all(|record| record.seal_id.is_none() && record.mac.is_some()),
+        "held records keep their MAC and stay pending: {waiting:?}"
+    );
+    let sealed_records = records(db, &other).await;
+    assert_eq!(sealed_records.len(), sealed.len());
+    assert!(
+        sealed_records.iter().all(|record| record
+            .seal_id
+            .as_deref()
+            .is_some_and(|id| id != INVALID_SEAL_ID)),
+        "{sealed_records:?}"
+    );
+    assert_valid(db, &other).await;
+
+    // With the held chain the only due one, the seal step fails so the tick is visible.
+    assert_eq!(pending_chains(db).await, BTreeSet::from([foreign.clone()]));
+    let again = worker::tick(
+        &worker_context(&harness, retention(), None),
+        clock(Duration::seconds(1)),
+    )
+    .await
+    .expect("audit worker tick");
+    assert_eq!((again.held_chains, again.quarantined), (1, 0), "{again:?}");
+    assert_eq!(again.failed_steps, vec!["seal".to_owned()], "{again:?}");
+    assert_eq!(records(db, &foreign).await.len(), held.len());
+
+    // The chain waits for its key; remove the fixture so later tests can archive the month.
+    for id in &held {
+        audit_record::Entity::delete_by_id(id.clone())
+            .exec(db)
+            .await
+            .expect("remove the held fixture");
+    }
+    assert!(pending_chains(db).await.is_empty());
 }
 
 #[tokio::test]

@@ -1443,6 +1443,7 @@ mod tests {
             details_salt: None,
             mac: None,
             seal_id: Some("seal".into()),
+            entry_kid: None,
         }
     }
 

@@ -48,6 +48,9 @@ pub struct WasmConfig {
     /// Use iOS-compatible Wasmtime memory reservations even when compiling
     /// off-device, for example when producing Pulley artifacts for iOS.
     pub ios_memory_layout: bool,
+    /// Use Unix signals for traps on macOS. Every engine in the process must
+    /// use the same trap handler; other platforms ignore this setting.
+    pub macos_signal_traps: bool,
 }
 
 impl Default for WasmConfig {
@@ -64,6 +67,7 @@ impl Default for WasmConfig {
             target: None,
             compiler_enabled: true,
             ios_memory_layout: false,
+            macos_signal_traps: false,
         }
     }
 }
@@ -87,6 +91,7 @@ impl WasmConfig {
             target: None,
             compiler_enabled: true,
             ios_memory_layout: false,
+            macos_signal_traps: false,
         }
     }
 
@@ -104,6 +109,7 @@ impl WasmConfig {
             target: None,
             compiler_enabled: true,
             ios_memory_layout: false,
+            macos_signal_traps: false,
         }
     }
 
@@ -121,6 +127,7 @@ impl WasmConfig {
             target: None,
             compiler_enabled: true,
             ios_memory_layout: false,
+            macos_signal_traps: false,
         }
     }
 
@@ -159,6 +166,13 @@ impl WasmConfig {
         self
     }
 
+    /// Use Unix signal traps on macOS for processes that supervise child
+    /// processes. Configure every engine in the process consistently.
+    pub fn with_macos_signal_traps(mut self) -> Self {
+        self.macos_signal_traps = true;
+        self
+    }
+
     fn uses_ios_memory_layout(&self) -> bool {
         cfg!(target_os = "ios")
             || self.ios_memory_layout
@@ -171,6 +185,9 @@ impl WasmConfig {
     /// Build wasmtime Config from our config
     fn to_wasmtime_config(&self) -> WasmResult<Config> {
         let mut config = Config::new();
+        if cfg!(target_os = "macos") && self.macos_signal_traps {
+            config.macos_use_mach_ports(false);
+        }
 
         if self.compiler_enabled {
             config.parallel_compilation(self.parallel_compilation);
@@ -580,5 +597,72 @@ mod tests {
     fn test_without_cache() {
         let config = WasmConfig::production().without_cache();
         assert!(config.cache_dir.is_none());
+    }
+
+    #[test]
+    fn test_macos_signal_traps_are_opt_in() {
+        for config in [
+            WasmConfig::default(),
+            WasmConfig::development(),
+            WasmConfig::production(),
+            WasmConfig::lambda(),
+        ] {
+            assert!(!config.macos_signal_traps);
+            assert!(config.with_macos_signal_traps().macos_signal_traps);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_macos_signal_traps_handle_out_of_bounds_in_isolated_process() {
+        const CHILD_MARKER: &str = "FLOW_LIKE_WASM_SIGNAL_TRAP_TEST_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            // Wasmtime's trap handler is process-global. Other tests retain the
+            // default Mach handler, so this mode needs its own process.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "engine::tests::test_macos_signal_traps_handle_out_of_bounds_in_isolated_process",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "signal trap subprocess failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        // Wasmtime rejects engines configured with different trap handlers.
+        // Initializing the known signal mode first verifies our config mapping.
+        let mut signal_config = Config::new();
+        signal_config.macos_use_mach_ports(false);
+        let _signal_engine = Engine::new(&signal_config).unwrap();
+        let engine = WasmEngine::new(WasmConfig::development().with_macos_signal_traps()).unwrap();
+        let bytes = wat::parse_str(
+            r#"(module
+                (memory 1)
+                (func (export "read_out_of_bounds") (result i32)
+                    i32.const 65536
+                    i32.load))"#,
+        )
+        .unwrap();
+        let module = wasmtime::Module::new(engine.engine(), bytes).unwrap();
+        let mut store = wasmtime::Store::new(engine.engine(), ());
+        store.set_fuel(10_000).unwrap();
+        store.set_epoch_deadline(1);
+        let instance = wasmtime::Instance::new(&mut store, &module, &[]).unwrap();
+        let read = instance
+            .get_typed_func::<(), i32>(&mut store, "read_out_of_bounds")
+            .unwrap();
+        let error = read.call(&mut store, ()).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<wasmtime::Trap>(),
+            Some(wasmtime::Trap::MemoryOutOfBounds)
+        ));
     }
 }

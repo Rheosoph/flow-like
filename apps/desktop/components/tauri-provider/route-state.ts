@@ -3,6 +3,7 @@ import {
 	type IRouteMapping,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -14,8 +15,41 @@ interface RemoteRouteMapping {
 	isDefault: boolean;
 }
 
+function isRemoteRoute(value: unknown): value is RemoteRouteMapping {
+	return (
+		isRecord(value) &&
+		typeof value.path === "string" &&
+		typeof value.eventId === "string"
+	);
+}
+
 function toRouteMapping(r: RemoteRouteMapping): IRouteMapping {
 	return { path: r.path, eventId: r.eventId };
+}
+
+function toRemoteRouteMappings(
+	appId: string,
+	remote: unknown,
+): IRouteMapping[] {
+	if (!Array.isArray(remote)) {
+		throw new Error(`Route list for app ${appId} is not an array`);
+	}
+	return remote.filter(isRemoteRoute).map(toRouteMapping);
+}
+
+/**
+ * The hub answers "no route" with JSON `null`, which the fetcher hands back as the text
+ * "null". Any other body that is not a mapping is a broken response, never "no route".
+ */
+function toOptionalRouteMapping(
+	appId: string,
+	remote: unknown,
+): IRouteMapping | null {
+	if (remote === null || remote === "null") return null;
+	if (!isRemoteRoute(remote)) {
+		throw new Error(`Route response for app ${appId} is not a route mapping`);
+	}
+	return toRouteMapping(remote);
 }
 
 /**
@@ -58,13 +92,13 @@ export class RouteState implements IAppRouteState {
 		}
 
 		const syncRemote = async () => {
-			const remote = await fetcher<RemoteRouteMapping[]>(
+			const remote = await fetcher<unknown>(
 				this.backend.profile!,
 				`apps/${appId}/routes`,
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			const mapped = remote.map(toRouteMapping);
+			const mapped = toRemoteRouteMappings(appId, remote);
 
 			// Mirroring the routes locally is one IPC round trip each, and nothing in the
 			// returned mapping depends on those writes having landed — they only serve the next
@@ -143,13 +177,13 @@ export class RouteState implements IAppRouteState {
 		}
 
 		try {
-			const remote = await fetcher<RemoteRouteMapping | null>(
+			const remote = await fetcher<unknown>(
 				this.backend.profile!,
 				`apps/${appId}/routes/by-path?path=${encodeURIComponent(path)}`,
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			const mapped = remote ? toRouteMapping(remote) : null;
+			const mapped = toOptionalRouteMapping(appId, remote);
 			this.backend.queryClient?.setQueryData(
 				[this.getRouteByPath.name || "backendFn", appId, path],
 				mapped,
@@ -191,13 +225,13 @@ export class RouteState implements IAppRouteState {
 				"Hosted route reads require an authenticated hub session",
 			);
 		}
-		const remote = await fetcher<RemoteRouteMapping | null>(
+		const remote = await fetcher<unknown>(
 			this.backend.profile,
 			`apps/${appId}/routes/by-path?path=${encodeURIComponent(path)}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
-		return remote ? toRouteMapping(remote) : null;
+		return toOptionalRouteMapping(appId, remote);
 	}
 
 	async getDefaultRoute(appId: string): Promise<IRouteMapping | null> {
@@ -211,13 +245,13 @@ export class RouteState implements IAppRouteState {
 		}
 
 		try {
-			const remote = await fetcher<RemoteRouteMapping | null>(
+			const remote = await fetcher<unknown>(
 				this.backend.profile!,
 				`apps/${appId}/routes/default`,
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			const mapped = remote ? toRouteMapping(remote) : null;
+			const mapped = toOptionalRouteMapping(appId, remote);
 			this.backend.queryClient?.setQueryData(
 				[this.getDefaultRoute.name || "backendFn", appId],
 				mapped,

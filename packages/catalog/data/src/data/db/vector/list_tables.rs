@@ -67,6 +67,27 @@ impl NodeLogic for ListTablesNode {
             .clone()
             .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
         let app_id = context_cache.app_id.clone();
+        let list_local = context
+            .app_state
+            .config
+            .read()
+            .await
+            .callbacks
+            .database_table_names
+            .clone();
+        if context.credentials.is_none()
+            && let Some(list_local) = list_local
+        {
+            let path = if user_scoped {
+                context_cache.get_user_dir(false)?.join("db")
+            } else {
+                context_cache.get_storage(false)?.join("db")
+            };
+            let tables = list_local(path).await?;
+            context.set_pin_value("tables", json!(tables)).await?;
+            context.activate_exec_pin("exec_out").await?;
+            return Ok(());
+        }
 
         let db = if let Some(credentials) = &context.credentials {
             if user_scoped {

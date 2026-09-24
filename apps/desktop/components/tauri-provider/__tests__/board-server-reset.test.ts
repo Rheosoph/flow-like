@@ -1,4 +1,8 @@
 import type { IBoard, IGenericCommand } from "@flow-like/flow-like-ui";
+import {
+	type IBoardSyncResponse,
+	ROOT_SEGMENT,
+} from "@flow-like/flow-like-ui/lib/board-sync";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -45,6 +49,46 @@ const board = (seconds: number, nodeId: string): IBoard =>
 		page_ids: [],
 		updated_at: { secs_since_epoch: seconds, nanos_since_epoch: 0 },
 	}) as unknown as IBoard;
+
+/** The server's full sync answer for `source`, as a client holding nothing receives it. */
+const syncResponse = (source: IBoard): IBoardSyncResponse =>
+	({
+		manifest: {
+			meta: `meta-${source.updated_at.secs_since_epoch}`,
+			variables: "vars",
+			comments: "comments",
+			layers: {},
+			segments: { [ROOT_SEGMENT]: "root" },
+		},
+		meta: {
+			id: source.id,
+			name: source.name,
+			description: source.description,
+			viewport: [0, 0, 0],
+			version: [0, 0, 1],
+			stage: "Dev",
+			log_level: "Info",
+			execution_mode: "Hybrid",
+			page_ids: source.page_ids,
+			created_at: source.updated_at,
+			updated_at: source.updated_at,
+		},
+		variables: {},
+		comments: {},
+		layers: {},
+		refs: {},
+		segments: {
+			[ROOT_SEGMENT]: {
+				hash: "root",
+				nodes: Object.fromEntries(
+					Object.keys(source.nodes).map((id) => [
+						id,
+						{ id, name: id, friendly_name: id, pins: {} },
+					]),
+				),
+			},
+		},
+	}) as unknown as IBoardSyncResponse;
 
 const queuedRow = (
 	overrides: Partial<CommandSyncQueueRow> = {},
@@ -188,7 +232,7 @@ describe("resetBoardFromServer", () => {
 		const local = board(10, "local-node");
 		const remote = board(5, "remote-node");
 		mocks.invoke.mockImplementation(nativeInvoke(local));
-		mocks.fetcher.mockResolvedValue(remote);
+		mocks.fetcher.mockResolvedValue(syncResponse(remote));
 		const state = new BoardState(backend as never);
 
 		const result = await state.resetBoardFromServer(APP, BOARD, {
@@ -218,7 +262,7 @@ describe("resetBoardFromServer", () => {
 	test("an older server revision still wins — the reset bypasses the freshness guards", async () => {
 		const backend = fakeBackend([queuedRow()]);
 		mocks.invoke.mockImplementation(nativeInvoke(board(9_999, "local-node")));
-		mocks.fetcher.mockResolvedValue(board(1, "remote-node"));
+		mocks.fetcher.mockResolvedValue(syncResponse(board(1, "remote-node")));
 		const state = new BoardState(backend as never);
 
 		const result = await state.resetBoardFromServer(APP, BOARD, {
@@ -282,7 +326,7 @@ describe("resetBoardFromServer", () => {
 			} as Partial<CommandSyncQueueRow>),
 		]);
 		mocks.invoke.mockImplementation(nativeInvoke(board(10, "local-node")));
-		mocks.fetcher.mockResolvedValue(board(20, "remote-node"));
+		mocks.fetcher.mockResolvedValue(syncResponse(board(20, "remote-node")));
 		const state = new BoardState(backend as never);
 
 		const result = await state.resetBoardFromServer(APP, BOARD, {
@@ -297,7 +341,7 @@ describe("resetBoardFromServer", () => {
 	test("a board missing locally is fetched and written without a merge partner", async () => {
 		const backend = fakeBackend();
 		mocks.invoke.mockImplementation(nativeInvoke(undefined));
-		mocks.fetcher.mockResolvedValue(board(7, "remote-node"));
+		mocks.fetcher.mockResolvedValue(syncResponse(board(7, "remote-node")));
 		const state = new BoardState(backend as never);
 
 		const result = await state.resetBoardFromServer(APP, BOARD, {

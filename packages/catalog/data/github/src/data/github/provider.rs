@@ -47,6 +47,7 @@ impl GitHubProvider {
         format!("Bearer {}", self.access_token)
     }
 
+    /// Authentication is supplied to the Git process, never stored in the remote URL.
     pub fn clone_url(&self, owner: &str, repo: &str) -> String {
         let base = self.base_url.trim_end_matches('/');
         let web_base = if base == "https://api.github.com" {
@@ -57,20 +58,7 @@ impl GitHubProvider {
                 .unwrap_or(base)
         };
 
-        let authed_base = if let Some(rest) = web_base.strip_prefix("https://") {
-            format!("https://{}@{}", self.access_token, rest)
-        } else if let Some(rest) = web_base.strip_prefix("http://") {
-            format!("http://{}@{}", self.access_token, rest)
-        } else {
-            format!("{}@", self.access_token)
-        };
-
-        format!(
-            "{}/{}/{}.git",
-            authed_base.trim_end_matches('/'),
-            owner,
-            repo
-        )
+        format!("{}/{}/{}.git", web_base.trim_end_matches('/'), owner, repo)
     }
 }
 

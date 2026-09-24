@@ -7,11 +7,42 @@ import {
 	applyWidgetRename,
 	normalizeWidgetForPersistence,
 } from "@flow-like/flow-like-ui";
+import {
+	ApiResponseError,
+	UPSTREAM_UNAVAILABLE_CODE,
+	isTransportFailure,
+} from "@flow-like/flow-like-ui/lib/api-error";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import { isMissingResourceError } from "../../lib/api-error";
 import { withWidgetName } from "../../lib/widget-metadata";
 import type { TauriBackend } from "../tauri-provider";
+
+/** A 2xx body of the wrong shape reads as an unavailable hub, never as data. */
+function malformedResponseError(path: string, expected: string) {
+	return new ApiResponseError({
+		status: 502,
+		code: UPSTREAM_UNAVAILABLE_CODE,
+		message: `Expected ${expected} but the API returned a malformed response`,
+		path,
+	});
+}
+
+function isWidgetPayload(value: unknown): value is IWidget {
+	return (
+		isRecord(value) &&
+		typeof value.id === "string" &&
+		Array.isArray(value.components)
+	);
+}
+
+function isHubUnreachable(error: unknown): boolean {
+	return (
+		isTransportFailure(error) ||
+		(error instanceof ApiResponseError && error.status >= 500)
+	);
+}
 
 export class WidgetState implements IWidgetState {
 	constructor(private readonly backend: TauriBackend) {}
@@ -42,14 +73,25 @@ export class WidgetState implements IWidgetState {
 
 	async syncWidgetsForExecution(appId: string): Promise<void> {
 		if (await this.backend.isLocalOnly(appId)) return;
-		// Do not let fallback reads turn a failed sync into a run with old files.
-		const inventory = await this.getWidgetsAuthoritative(appId);
-		const widgets = await Promise.all(
-			inventory.map(([, widgetId]) =>
-				this.getWidgetAuthoritative(appId, widgetId),
-			),
-		);
-		await invoke("cache_widgets", { appId, widgets });
+		// Without a session or a reachable hub, the untouched cache is the newest state this
+		// device can run; a hub that answers with a refusal still fails the run.
+		if (!this.hasRemote()) return;
+		try {
+			// Do not let fallback reads turn a failed sync into a run with old files.
+			const inventory = await this.getWidgetsAuthoritative(appId);
+			const widgets = await Promise.all(
+				inventory.map(([, widgetId]) =>
+					this.getWidgetAuthoritative(appId, widgetId),
+				),
+			);
+			await invoke("cache_widgets", { appId, widgets });
+		} catch (error) {
+			if (!isHubUnreachable(error)) throw error;
+			console.warn(
+				"[WidgetState] Hub unreachable, running with cached widgets:",
+				error,
+			);
+		}
 	}
 
 	private async pushWidgetRemote(
@@ -78,12 +120,17 @@ export class WidgetState implements IWidgetState {
 			throw new Error("Profile not set. Cannot fetch remote widget.");
 		}
 		const versionQuery = version ? `?version=${version.join("_")}` : "";
-		return fetcher<IWidget>(
+		const path = `apps/${appId}/widgets/${widgetId}${versionQuery}`;
+		const widget = await fetcher<unknown>(
 			this.backend.profile,
-			`apps/${appId}/widgets/${widgetId}${versionQuery}`,
+			path,
 			{ method: "GET" },
 			this.getRemoteAuth(),
 		);
+		// Callers cache and render this payload, so a body that is no widget must not stand in.
+		if (!isWidgetPayload(widget))
+			throw malformedResponseError(path, "a Widget");
+		return widget;
 	}
 
 	private async buildListResult(
@@ -118,14 +165,17 @@ export class WidgetState implements IWidgetState {
 				const params = language
 					? `?language=${encodeURIComponent(language)}`
 					: "";
+				const path = `apps/${appId}/widgets${params}`;
 				// A local cache entry absent from this inventory may have been deleted
 				// on another device. Reading the inventory must never upload it again.
-				return await fetcher<[string, string, IMetadata | undefined][]>(
+				const remote = await fetcher<[string, string, IMetadata | undefined][]>(
 					profile,
-					`apps/${appId}/widgets${params}`,
+					path,
 					{ method: "GET" },
 					this.getRemoteAuth(),
 				);
+				if (Array.isArray(remote)) return remote;
+				throw malformedResponseError(path, "a Widget list");
 			} catch (error) {
 				if (isMissingResourceError(error)) throw error;
 				console.warn(
@@ -161,12 +211,18 @@ export class WidgetState implements IWidgetState {
 			);
 		}
 		const params = language ? `?language=${language}` : "";
-		return fetcher<[string, string, IMetadata | undefined][]>(
+		const path = `apps/${appId}/widgets${params}`;
+		const inventory = await fetcher<[string, string, IMetadata | undefined][]>(
 			this.backend.profile,
-			`apps/${appId}/widgets${params}`,
+			path,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// An empty inventory would read as "no widgets exist" and clear the execution cache.
+		if (!Array.isArray(inventory)) {
+			throw malformedResponseError(path, "a Widget list");
+		}
+		return inventory;
 	}
 
 	async getWidget(
@@ -248,13 +304,7 @@ export class WidgetState implements IWidgetState {
 				"Hosted Widget read requires an authenticated hub session",
 			);
 		}
-		const params = version ? `?version=${version.join("_")}` : "";
-		return fetcher<IWidget>(
-			this.backend.profile,
-			`apps/${appId}/widgets/${widgetId}${params}`,
-			{ method: "GET" },
-			this.backend.auth,
-		);
+		return this.fetchRemoteWidget(appId, widgetId, version);
 	}
 
 	async createWidget(
@@ -370,12 +420,15 @@ export class WidgetState implements IWidgetState {
 		const profile = this.backend.profile;
 		if (profile && (await this.canFetchRemoteWidget(appId))) {
 			try {
-				return await fetcher<Version[]>(
+				const path = `apps/${appId}/widgets/${widgetId}/versions`;
+				const versions = await fetcher<Version[]>(
 					profile,
-					`apps/${appId}/widgets/${widgetId}/versions`,
+					path,
 					{ method: "GET" },
 					this.getRemoteAuth(),
 				);
+				if (Array.isArray(versions)) return versions;
+				throw malformedResponseError(path, "a Widget version list");
 			} catch (error) {
 				if (isMissingResourceError(error)) throw error;
 				console.warn(
@@ -402,12 +455,15 @@ export class WidgetState implements IWidgetState {
 	): Promise<IMetadata> {
 		if (this.backend.profile && (await this.canFetchRemoteWidget(appId))) {
 			try {
-				return await fetcher<IMetadata>(
+				const path = `apps/${appId}/meta?language=${encodeURIComponent(language ?? "en")}&widget_id=${encodeURIComponent(widgetId)}`;
+				const metadata = await fetcher<IMetadata>(
 					this.backend.profile,
-					`apps/${appId}/meta?language=${encodeURIComponent(language ?? "en")}&widget_id=${encodeURIComponent(widgetId)}`,
+					path,
 					{ method: "GET" },
 					this.getRemoteAuth(),
 				);
+				if (isRecord(metadata)) return metadata;
+				throw malformedResponseError(path, "Widget metadata");
 			} catch (error) {
 				if (isMissingResourceError(error)) throw error;
 				console.warn(

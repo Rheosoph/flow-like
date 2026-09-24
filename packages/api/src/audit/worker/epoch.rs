@@ -137,7 +137,11 @@ async fn write_epoch(
         ))
         .all(db)
         .await?;
-    let (seals, held) = intact_seals(window, &accepted_entry_keys());
+    let keys: Vec<Hash> = accepted_entry_keys()
+        .into_iter()
+        .map(|(_, key)| key)
+        .collect();
+    let (seals, held) = intact_seals(window, &keys);
     if !held.is_empty() {
         hold(db, &held, now).await?;
     }

@@ -132,21 +132,17 @@ services:
     build:
       context: ../../..
       dockerfile: apps/backend/audit-worker/Dockerfile
+      args:
+        # The worker's audit policy is the audit section of this file, compiled in.
+        FLOW_LIKE_CONFIG: ${FLOW_LIKE_CONFIG:-apps/backend/docker-compose/flow-like.config.example.json}
     depends_on:
       db-init:
         condition: service_completed_successfully
       object-store-init:
         condition: service_completed_successfully
-    configs:
-      - source: flowlike_runtime_config
-        target: /app/flow-like.config.json
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      # The worker takes its audit policy from the same API config source.
-      FLOW_LIKE_CONFIG_PATH: ${FLOW_LIKE_CONFIG_FILE-/app/flow-like.config.json}
-      FLOW_LIKE_CONFIG_JSON: ${FLOW_LIKE_CONFIG_JSON:-}
       DATABASE_URL: ${AUDIT_DATABASE_URL:?Configure the audit worker database URL}
-      AUDIT_API_DATABASE_ROLE: ${AUDIT_API_DATABASE_ROLE:-flowlike_api}
       SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_USE_PATH_STYLE: ${AWS_USE_PATH_STYLE:-true}

@@ -107,8 +107,6 @@ audit:
   retentionYears: 4
   database:
     existingSecret: flow-like-database-audit
-  # Login used in flow-like-database's DATABASE_URL.
-  apiDatabaseRole: flowlike_api
   image:
     repository: flow-like-audit-worker
     tag: "1.0.0"

@@ -7,7 +7,6 @@ import {
 	Loader2,
 	LockKeyhole,
 	Plus,
-	RefreshCw,
 	Tag,
 	Trash2,
 } from "lucide-react";
@@ -40,6 +39,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { DatabaseCompareDialog } from "./database-compare-dialog";
 import { isDatabaseSnapshot } from "./database-reference";
 
@@ -170,115 +170,109 @@ export function DatabaseHistoryControls({
 	};
 
 	return (
-		<div className="shrink-0 space-y-2 border-b px-4 py-3">
-			<div className="flex flex-wrap items-center gap-2">
-				<GitBranch className="h-4 w-4 text-muted-foreground" />
-				<Select
-					value={branch}
-					onValueChange={(value) => onSelect({ branch: value })}
-					disabled={busy}
+		<div className="flex min-w-0 flex-wrap items-center gap-1.5">
+			<Select
+				value={branch}
+				onValueChange={(value) => onSelect({ branch: value })}
+				disabled={busy}
+			>
+				<SelectTrigger
+					aria-label="Database branch"
+					size="sm"
+					className="max-w-48 gap-1.5 px-2.5 text-xs"
 				>
-					<SelectTrigger aria-label="Database branch" className="h-8 w-44">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						{Array.from(
-							new Set([
-								"main",
-								branch,
-								...(history.data?.branches.map((item) => item.name) ?? []),
-							]),
-						).map((value) => (
-							<SelectItem key={value} value={value}>
-								{value}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-				<Select
-					value={revision}
-					onValueChange={(value) => {
-						if (value === "latest") onSelect({ branch });
-						else if (value.startsWith("tag:"))
-							onSelect({ tag: value.slice(4) });
-						else onSelect({ branch, version: Number(value.slice(8)) });
-					}}
-					disabled={busy}
+					<GitBranch className="size-3.5" />
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					{Array.from(
+						new Set([
+							"main",
+							branch,
+							...(history.data?.branches.map((item) => item.name) ?? []),
+						]),
+					).map((value) => (
+						<SelectItem key={value} value={value}>
+							{value}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			<Select
+				value={revision}
+				onValueChange={(value) => {
+					if (value === "latest") onSelect({ branch });
+					else if (value.startsWith("tag:")) onSelect({ tag: value.slice(4) });
+					else onSelect({ branch, version: Number(value.slice(8)) });
+				}}
+				disabled={busy}
+			>
+				<SelectTrigger
+					aria-label="Database revision"
+					size="sm"
+					className="max-w-52 gap-1.5 px-2.5 text-xs"
 				>
-					<SelectTrigger aria-label="Database revision" className="h-8 w-48">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="latest">Latest version</SelectItem>
-						{selector.tag &&
-							!history.data?.tags.some((tag) => tag.name === selector.tag) && (
-								<SelectItem value={`tag:${selector.tag}`}>
-									Tag: {selector.tag}
-								</SelectItem>
-							)}
-						{selector.version !== undefined &&
-							!history.data?.versions.some(
-								(version) => version.version === selector.version,
-							) && (
-								<SelectItem value={`version:${selector.version}`}>
-									Version {selector.version}
-								</SelectItem>
-							)}
-						{history.data?.versions.map((version) => (
-							<SelectItem
-								key={version.version}
-								value={`version:${version.version}`}
-							>
-								Version {version.version}
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="latest">
+						{revision === "latest" && reference
+							? `Latest · v${reference.version}`
+							: "Latest version"}
+					</SelectItem>
+					{selector.tag &&
+						!history.data?.tags.some((tag) => tag.name === selector.tag) && (
+							<SelectItem value={`tag:${selector.tag}`}>
+								Tag: {selector.tag}
 							</SelectItem>
-						))}
-						{history.data?.tags.map((tag) => (
-							<SelectItem key={tag.name} value={`tag:${tag.name}`}>
-								Tag: {tag.name}
+						)}
+					{selector.version !== undefined &&
+						!history.data?.versions.some(
+							(version) => version.version === selector.version,
+						) && (
+							<SelectItem value={`version:${selector.version}`}>
+								Version {selector.version}
 							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-				{readonly && (
-					<Badge variant="secondary" className="gap-1">
-						<LockKeyhole className="h-3 w-3" />
-						Read-only snapshot
-					</Badge>
-				)}
-				{reference && (
-					<span className="text-xs text-muted-foreground">
-						Version {reference.version}
-					</span>
-				)}
-				<Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-					<History className="h-4 w-4" />
-					History & branches
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon"
-					className="h-8 w-8"
-					aria-label="Refresh database reference"
-					disabled={history.isFetching || busy}
-					onClick={() => void refresh()}
-				>
-					<RefreshCw
-						className={`h-4 w-4 ${history.isFetching ? "animate-spin" : ""}`}
-					/>
-				</Button>
-			</div>
-			{history.error && (
-				<p role="alert" className="text-xs text-destructive">
-					{getErrorMessage(history.error)}
-				</p>
-			)}
+						)}
+					{history.data?.versions.map((version) => (
+						<SelectItem
+							key={version.version}
+							value={`version:${version.version}`}
+						>
+							Version {version.version}
+						</SelectItem>
+					))}
+					{history.data?.tags.map((tag) => (
+						<SelectItem key={tag.name} value={`tag:${tag.name}`}>
+							Tag: {tag.name}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
 			{readonly && (
-				<p className="text-xs text-muted-foreground">
-					Rows, schema, and indexes are pinned to this snapshot. Select the
-					latest version to edit its branch, or create a branch from this
-					snapshot.
-				</p>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Badge variant="secondary" className="h-6 gap-1" tabIndex={0}>
+							<LockKeyhole className="size-3" />
+							Read-only snapshot
+						</Badge>
+					</TooltipTrigger>
+					<TooltipContent className="max-w-64">
+						Rows, schema, and indexes are pinned to this snapshot. Select the
+						latest version to edit its branch, or create a branch from this
+						snapshot.
+					</TooltipContent>
+				</Tooltip>
 			)}
+			<Button
+				variant="ghost"
+				size="sm"
+				className="text-muted-foreground"
+				onClick={() => setOpen(true)}
+			>
+				<History />
+				History
+			</Button>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
 					<DialogHeader>

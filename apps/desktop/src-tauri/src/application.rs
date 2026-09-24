@@ -13,6 +13,7 @@ mod e2e_isolation;
 mod e2e_runtime;
 mod event_bus;
 mod event_sink;
+mod execution_credentials;
 mod execution_identity;
 mod frontend_assets;
 mod functions;
@@ -1102,6 +1103,9 @@ pub fn run() {
             functions::app::app_set_stylesheet,
             functions::app::app_list_packages,
             functions::app::sharing::export_app_to_file,
+            functions::app::device_export::prepare_device_project_export,
+            functions::app::device_export::read_device_project_export_chunk,
+            functions::app::device_export::release_device_project_export,
             functions::app::sharing::import_app_from_file,
             functions::app::sharing::get_app_export_preflight,
             functions::app::sharing::inspect_app_archive,
@@ -1337,6 +1341,7 @@ pub fn run() {
             functions::registry::registry_load_local,
             functions::registry::registry_init,
             functions::registry::registry_set_auth_token,
+            execution_credentials::execution_set_auth,
             functions::registry::registry_describe_widget_policy,
             functions::registry::registry_mint_widget_grant,
             functions::registry::registry_revoke_widget_grants,

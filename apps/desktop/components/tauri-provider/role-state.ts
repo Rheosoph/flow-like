@@ -1,4 +1,5 @@
 import { type IRoleState, RolePermissions } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	IBackendRole,
 	IOwnRole,
@@ -20,7 +21,14 @@ export class RoleState implements IRoleState {
 			this.backend.auth,
 		);
 		console.dir(roles);
-		return roles;
+		if (!Array.isArray(roles)) {
+			throw new Error(`Unexpected response from apps/${appId}/roles`);
+		}
+		const [defaultRoleId, list] = roles;
+		return [
+			typeof defaultRoleId === "string" ? defaultRoleId : undefined,
+			asArray(list),
+		];
 	}
 	async getOwnRole(appId: string): Promise<IOwnRole> {
 		// A local-only app has no hub to ask and no team to belong to. Whoever
@@ -42,12 +50,17 @@ export class RoleState implements IRoleState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher<IOwnRole>(
+		const role = await fetcher<IOwnRole>(
 			this.backend.profile,
 			`apps/${appId}/roles/me`,
 			undefined,
 			this.backend.auth,
 		);
+		// Callers build `BigInt(permissions)` during render.
+		if (!isRecord(role) || !Number.isInteger(role.permissions)) {
+			throw new Error(`Unexpected response from apps/${appId}/roles/me`);
+		}
+		return role;
 	}
 	async deleteRole(appId: string, roleId: string): Promise<void> {
 		if (!this.backend.profile || !this.backend.auth) {

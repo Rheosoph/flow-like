@@ -15,6 +15,7 @@ import type {
 	ITemporaryPresignedUpload,
 	ITemporaryUploadResult,
 } from "@flow-like/flow-like-ui/lib";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { createId } from "@paralleldrive/cuid2";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appCacheDir } from "@tauri-apps/api/path";
@@ -123,6 +124,15 @@ export class HelperState implements IHelperState {
 					`tmp?${params.toString()}`,
 					this.backend.auth,
 				);
+				if (
+					!isRecord(response) ||
+					typeof response.uploadUrl !== "string" ||
+					typeof response.downloadUrl !== "string"
+				) {
+					throw new Error(
+						`Temporary file upload for ${file.name} failed: the server returned no upload URL`,
+					);
+				}
 
 				const uploadResponse = await fetch(response.uploadUrl, {
 					method: "PUT",

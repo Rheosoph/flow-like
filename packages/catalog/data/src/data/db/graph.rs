@@ -17,6 +17,49 @@ pub mod analytics;
 pub mod cypher;
 pub mod drop_overlay;
 pub mod list_overlays;
+
+#[cfg(feature = "execute")]
+async fn ensure_graph_tables_unbuffered(
+    context: &ExecutionContext,
+    user_scoped: bool,
+    overlay: &flow_like_storage::databases::graph::lancegraph::GraphOverlayDef,
+) -> flow_like_types::Result<()> {
+    if context.credentials.is_some() {
+        return Ok(());
+    }
+    let callbacks = context.app_state.config.read().await.callbacks.clone();
+    if callbacks.decorate_database.is_none() {
+        return Ok(());
+    }
+    let selected = callbacks.database_table_is_managed.ok_or_else(|| {
+        flow_like_types::anyhow!(
+            "The database adapter does not declare which graph tables are buffered"
+        )
+    })?;
+    let cache = context
+        .execution_cache
+        .as_ref()
+        .ok_or_else(|| flow_like_types::anyhow!("No execution cache found"))?;
+    let path = if user_scoped {
+        cache.get_user_dir(false)?
+    } else {
+        cache.get_storage(false)?
+    }
+    .join("db");
+    for table in overlay
+        .nodes
+        .iter()
+        .map(|node| &node.table)
+        .chain(overlay.edges.iter().map(|edge| &edge.table))
+    {
+        if selected(&path, table) {
+            return Err(flow_like_types::anyhow!(
+                "Graph table '{table}' has offline write buffering enabled. Graph operations cannot observe or replay its local table overlay"
+            ));
+        }
+    }
+    Ok(())
+}
 pub mod neighbors;
 pub mod ontology_action;
 pub mod ontology_action_input;
@@ -222,6 +265,7 @@ impl NodeLogic for OpenGraphOverlayNode {
                 }
             };
 
+            ensure_graph_tables_unbuffered(context, user_scoped, &overlay).await?;
             let store = match LanceGraphStore::new(connection, overlay, None).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -466,6 +510,7 @@ impl NodeLogic for CreateGraphOverlayNode {
             updated_at: now,
         };
 
+        ensure_graph_tables_unbuffered(context, user_scoped, &def).await?;
         let validation = lancegraph::validate_overlay_definition(&connection, &def).await?;
         if !validation.ok {
             let mut issues = validation.issues;

@@ -6,6 +6,7 @@ import {
 	type ReactNode,
 	type TextareaHTMLAttributes,
 	act,
+	useState,
 } from "react";
 import type { IDatabaseSelector } from "../../../state/backend-state/db-state";
 
@@ -82,28 +83,59 @@ mock.module("../../ui/textarea", () => ({
 		/>
 	),
 }));
+mock.module("../../ui/dropdown-menu", () => ({
+	DropdownMenuItem: ({
+		children,
+		onSelect,
+	}: { children: ReactNode; onSelect: () => void }) => (
+		<button type="button" onClick={onSelect}>
+			{children}
+		</button>
+	),
+}));
 mock.module("../../ui/label", () => ({
 	Label: ({ children, htmlFor }: { children: ReactNode; htmlFor: string }) => (
 		<label htmlFor={htmlFor}>{children}</label>
 	),
 }));
-const { DatabaseDeleteControls } = await import("./database-delete-controls");
+const {
+	DatabaseDeleteDialog,
+	DatabaseDeleteMenuItems,
+	databaseDeleteOperations,
+} = await import("./database-delete-controls");
+type Operation = Parameters<
+	typeof DatabaseDeleteMenuItems
+>[0]["operations"][number];
 const host = document.createElement("div");
 document.body.append(host);
 const root = createRoot(host);
 
-async function render(selector: IDatabaseSelector) {
-	await act(async () =>
-		root.render(
-			<DatabaseDeleteControls
-				key={JSON.stringify(selector)}
+function Controls({ selector }: { selector: IDatabaseSelector }) {
+	const [operation, setOperation] = useState<Operation | null>(null);
+	return (
+		<>
+			<DatabaseDeleteMenuItems
+				operations={databaseDeleteOperations(selector, true)}
+				onSelect={setOperation}
+			/>
+			<DatabaseDeleteDialog
+				operation={operation}
+				onOperationChange={setOperation}
 				appId="app"
 				table="events"
 				userScoped
 				selector={selector}
 				onChanged={() => {}}
 				onTableDeleted={() => {}}
-			/>,
+			/>
+		</>
+	);
+}
+
+async function render(selector: IDatabaseSelector) {
+	await act(async () =>
+		root.render(
+			<Controls key={JSON.stringify(selector)} selector={selector} />,
 		),
 	);
 }
@@ -118,7 +150,7 @@ async function input(id: string, value: string) {
 	const field = document.getElementById(id) as HTMLInputElement;
 	await act(async () => {
 		field.value = value;
-		field.dispatchEvent(new window.Event("input", { bubbles: true }));
+		field.dispatchEvent(new Event("input", { bubbles: true }));
 	});
 }
 
@@ -135,7 +167,7 @@ describe("database destructive action targets", () => {
 	test("preview and deletion preserve the explicit filter, branch and user scope", async () => {
 		const selector = { branch: "experiment" };
 		await render(selector);
-		await click("Delete rows");
+		await click("Delete rows…");
 		await input("database-delete-filter", "id = 'row-1'");
 		await click("Preview matching rows");
 		await input("database-delete-confirmation", "events");
@@ -161,7 +193,7 @@ describe("database destructive action targets", () => {
 	});
 	test("changing the filter invalidates preview and confirmation", async () => {
 		await render({ branch: "main" });
-		await click("Delete rows");
+		await click("Delete rows…");
 		await input("database-delete-filter", "id = 'row-1'");
 		await click("Preview matching rows");
 		await input("database-delete-confirmation", "events");
@@ -172,7 +204,7 @@ describe("database destructive action targets", () => {
 	test("snapshots hide row deletion and explicitly describe table-wide deletion", async () => {
 		await render({ branch: "experiment", version: 7 });
 		expect(host.textContent).not.toContain("Delete rows");
-		await click("Delete table");
+		await click("Delete table…");
 		expect(host.textContent).toContain("including every branch, version, tag");
 		await input("database-delete-confirmation", "events");
 		await click("Delete entire table");

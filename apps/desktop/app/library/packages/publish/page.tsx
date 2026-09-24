@@ -247,7 +247,7 @@ export default function PublishPackagePage() {
 			message?: string;
 		}) => {
 			toast.success(
-				response.message ??
+				response?.message ??
 					t(
 						"packageSubmittedForReviewItWillBeAvailableAfterAdminApproval",
 						"Package submitted for review! It will be available after admin approval.",

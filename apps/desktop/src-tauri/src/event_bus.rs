@@ -7,7 +7,6 @@ use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{InternalRun, LogMeta, UserExecutionContext};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::hub::Hub;
 use flow_like::state::RunData;
 use flow_like::{flow::execution::RunPayload, state::FlowLikeState};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
@@ -226,7 +225,7 @@ impl EventBusEvent {
         };
 
         let mut credentials = None;
-        if !self.offline {
+        if !matches!(app.visibility, flow_like::app::AppVisibility::Offline) {
             let token = self.token.as_ref().ok_or_else(|| {
                 flow_like_types::anyhow!("No token registered, cannot run online event")
             })?;
@@ -237,10 +236,17 @@ impl EventBusEvent {
                 ));
             }
 
-            let hub = Hub::new(&hub_url, flow_like_state.http_client.clone()).await?;
-            let shared_credentials = hub.shared_credentials(token, &self.app_id).await?;
+            let shared_credentials =
+                crate::execution_credentials::prepare(&hub_url, &self.app_id, Some(token), None)
+                    .await?;
             credentials = Some(shared_credentials);
         }
+
+        let mut renewable_state = (*execution_state).clone();
+        if let Some(credentials) = &credentials {
+            crate::execution_credentials::install_registry(&mut renewable_state, credentials)?;
+        }
+        let execution_state = Arc::new(renewable_state);
 
         let event_name = loaded_event.name.clone();
         let event_type = loaded_event.event_type.clone();

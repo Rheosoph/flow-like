@@ -1189,13 +1189,17 @@ export function NavUser({
 				profile.data
 					? async () => {
 							if (!profile.data) return;
-							const urlRequest = await fetcher<{ url: string }>(
-								profile.data,
-								"user/billing",
-								{ method: "GET" },
-								auth,
-							);
-							await openUrl(urlRequest.url);
+							try {
+								const urlRequest = await fetcher<{ url: string }>(
+									profile.data,
+									"user/billing",
+									{ method: "GET" },
+									auth,
+								);
+								await openUrl(urlRequest.url);
+							} catch (err) {
+								toast.error(`${err}`);
+							}
 						}
 					: undefined
 			}

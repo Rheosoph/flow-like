@@ -81,7 +81,7 @@ pub async fn block_seller(
     let effect_id = flow_like_types::create_id();
     state.transaction(|txn| {let user_id=user_id.clone();let actor=actor.clone();let reason=body.reason.clone();let effect_id=effect_id.clone();Box::pin(async move {
         if body.blocked {
-            txn.execute_raw(sql(r#"INSERT INTO "PaymentsBlock" ("userId",reason,"blockedBy","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$4) ON CONFLICT ("userId") DO UPDATE SET reason=EXCLUDED.reason,"blockedBy"=EXCLUDED."blockedBy",revision="PaymentsBlock".revision+1,"updatedAt"=EXCLUDED."updatedAt"#,vec![user_id.clone().into(),reason.clone().into(),actor.clone().into(),now.into()])).await?;
+            txn.execute_raw(sql(r#"INSERT INTO "PaymentsBlock" ("userId",reason,"blockedBy","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$4) ON CONFLICT ("userId") DO UPDATE SET reason=EXCLUDED.reason,"blockedBy"=EXCLUDED."blockedBy",revision="PaymentsBlock".revision+1,"updatedAt"=EXCLUDED."updatedAt""#,vec![user_id.clone().into(),reason.clone().into(),actor.clone().into(),now.into()])).await?;
             let accounts=txn.query_all_raw(sql(r#"UPDATE "ConnectedAccount" SET revision=revision+1,"updatedAt"=$2 WHERE "userId"=$1 RETURNING id,"stripeAccountId""#,vec![user_id.clone().into(),now.into()])).await?;
             for account in accounts {
                 let id:String=account.try_get("","id")?;

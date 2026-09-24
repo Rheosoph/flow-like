@@ -143,7 +143,7 @@ pub(super) fn selection_cache_key(base: &str, selector: &DatabaseSelector) -> Re
 pub(super) async fn optional_reference(
     store: &LanceDBVectorStore,
 ) -> Result<Option<DatabaseReference>> {
-    if store.raw().await.is_err() {
+    if !store.table_exists().await? {
         // Legacy Open Database creates the physical table on the first write.
         return Ok(None);
     }
@@ -186,7 +186,7 @@ impl CachedDBRefresher for ViewRefresher {
         let source = source.db.read().await;
         let replacement = target
             .inner()
-            .reopen(source.inner().connection().clone())
+            .reopen(source.inner().connection()?.clone())
             .await?;
         *target.inner_mut() = replacement;
         self.source_generation.store(generation, Ordering::Release);

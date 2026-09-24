@@ -64,6 +64,7 @@ import type {
 import {
 	ApiResponseError,
 	isMissingResourceError,
+	upstreamFailureInSuccess,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	type BoardFormatCapabilities,
@@ -85,6 +86,8 @@ import {
 	type IFlowScriptApplyFailureReport,
 	flowScriptApplyOutcome,
 } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import { timeRunStep } from "@flow-like/flow-like-ui/lib/run-timing";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type { IFlowIrCommitReadback } from "@flow-like/flow-like-ui/state/backend-state/board-state";
@@ -103,6 +106,7 @@ import {
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import { desktopPlatform } from "../../lib/platform";
+import { withRequestDeadline } from "../../lib/request-deadline";
 import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import {
@@ -137,6 +141,13 @@ const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
 /** How many stale boards may hydrate at once from a summaries listing. */
 const BOARD_HYDRATION_CONCURRENCY = 3;
+
+/**
+ * Comment media URLs are display-only, yet presigning them is awaited before a board is
+ * returned — an unresponsive hub must not hold opening or running a board for the full
+ * write deadline.
+ */
+const MEDIA_PRESIGN_TIMEOUT_MS = 8_000;
 
 /** Run `worker` over `items`, keeping at most `limit` in flight. */
 async function mapWithConcurrency<T>(
@@ -243,24 +254,47 @@ function describeOfflineSyncFailure(failure?: OfflineSyncFailure): string {
 // Hub configuration cache
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
+let hubConfigRetryAt = 0;
+const HUB_CONFIG_TIMEOUT_MS = 10_000;
+const HUB_CONFIG_RETRY_MS = 60_000;
 
 async function getHubConfig(profile?: { hub?: string }): Promise<
 	IHub | undefined
 > {
 	if (hubCache) return hubCache;
 	if (hubCachePromise) return hubCachePromise;
+	// Runs await this, so a failing hub is asked again at most once per window.
+	if (Date.now() < hubConfigRetryAt) return undefined;
 
 	const hubUrl = profile?.hub;
 	if (!hubUrl) return undefined;
 
-	hubCachePromise = fetch(`https://${hubUrl}/api/v1`)
-		.then((res) => res.json() as Promise<IHub>)
+	const url = `https://${hubUrl}/api/v1`;
+	hubCachePromise = withRequestDeadline(
+		url,
+		async (deadline) => {
+			const res = await fetch(url, { signal: deadline.signal });
+			if (!res.ok) {
+				throw new Error(
+					`Hub config request to ${url} returned HTTP ${res.status}`,
+				);
+			}
+			const hub = (await res.json()) as IHub;
+			if (!isRecord(hub) || upstreamFailureInSuccess(res, hub, url)) {
+				throw new Error(`Hub config response from ${url} is not a hub`);
+			}
+			return hub;
+		},
+		{ timeoutMs: HUB_CONFIG_TIMEOUT_MS },
+	)
 		.then((hub) => {
 			hubCache = hub;
 			return hub;
 		})
 		.catch((e) => {
 			console.warn("[OAuth] Failed to fetch Hub config:", e);
+			hubConfigRetryAt = Date.now() + HUB_CONFIG_RETRY_MS;
+			hubCachePromise = undefined;
 			return undefined;
 		});
 
@@ -403,6 +437,14 @@ const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
 		console.groupEnd();
 	});
 };
+const flowScriptFromResponse = (response: unknown, boardId: string): string => {
+	const flowscript = isRecord(response) ? response.flowscript : undefined;
+	if (typeof flowscript !== "string") {
+		throw new Error(`The hub returned no FlowScript for board ${boardId}`);
+	}
+	return flowscript;
+};
+
 const getAppPackageCatalogNodes = (
 	catalogNodes: INode[] | undefined,
 ): INode[] | undefined => {
@@ -510,7 +552,7 @@ export class BoardState implements IBoardState {
 	 * The server's current board, transferred as a diff against the last one this client
 	 * assembled. Semantically identical to a full GET, including for `resetBoardFromServer`.
 	 */
-	private fetchRemoteBoard(
+	private async fetchRemoteBoard(
 		appId: string,
 		boardId: string,
 		version?: [number, number, number],
@@ -519,18 +561,34 @@ export class BoardState implements IBoardState {
 	): Promise<IBoard> {
 		if (!profile) throw new Error("No profile set for remote board fetch");
 		const params = version ? `?version=${version.join("_")}` : "";
-		return this.remoteBoardSync.sync(
+		const board = await this.remoteBoardSync.sync(
 			appId,
 			boardId,
 			version,
-			(request: IBoardSyncRequest) =>
-				fetcher<IBoardSyncResponse>(
+			async (request: IBoardSyncRequest) => {
+				const response = await fetcher<IBoardSyncResponse>(
 					profile,
 					`apps/${appId}/board/${boardId}/sync${params}`,
 					{ method: "POST", body: JSON.stringify(request) },
 					auth,
-				),
+				);
+				// The server always sends a manifest or its delta; without one `{}` would read as "unchanged".
+				if (
+					!isRecord(response) ||
+					(!isRecord(response.manifest) && !isRecord(response.manifest_delta))
+				) {
+					throw new Error(
+						`Board sync for ${boardId} returned no sync manifest (${typeof response})`,
+					);
+				}
+				return response;
+			},
 		);
+		// Every caller merges this into the local board; an unidentified board must never reach it.
+		if (typeof board?.id !== "string") {
+			throw new Error(`Board sync for ${boardId} produced no board identity`);
+		}
+		return board;
 	}
 
 	constructor(private readonly backend: TauriBackend) {}
@@ -749,8 +807,10 @@ export class BoardState implements IBoardState {
 		}
 
 		try {
-			const installedPackages =
-				await this.backend.registryState.getInstalledPackages();
+			const installedPackages = await timeRunStep(
+				"packages.install.list_installed",
+				() => this.backend.registryState.getInstalledPackages(),
+			);
 			const installedVersionMap = new Map(
 				installedPackages.map((pkg) => [pkg.id, pkg.version]),
 			);
@@ -762,7 +822,12 @@ export class BoardState implements IBoardState {
 						installedVersionMap.get(pkg.packageId) !== pkg.version,
 				)
 				.map((pkg) =>
-					this.backend.registryState.installPackage(pkg.packageId, pkg.version),
+					timeRunStep(`packages.install.${pkg.packageId}`, () =>
+						this.backend.registryState.installPackage(
+							pkg.packageId,
+							pkg.version,
+						),
+					),
 				);
 
 			if (installTasks.length > 0) {
@@ -797,13 +862,19 @@ export class BoardState implements IBoardState {
 				),
 			].some((node) => node.name === "a2ui_instantiate_widget");
 		if (usesWidgets) {
-			await this.backend.widgetState.syncWidgetsForExecution?.(appId);
+			await timeRunStep("packages.widgets", async () =>
+				this.backend.widgetState.syncWidgetsForExecution?.(appId),
+			);
 		}
-		const remotePackages = await this.syncRemoteAppPackages(appId);
-		await this.ensureRemoteAppPackagesInstalled(remotePackages, {
-			forceReload: true,
-			throwOnError: true,
-		});
+		const remotePackages = await timeRunStep("packages.remote_list", () =>
+			this.syncRemoteAppPackages(appId),
+		);
+		await timeRunStep("packages.install", () =>
+			this.ensureRemoteAppPackagesInstalled(remotePackages, {
+				forceReload: true,
+				throwOnError: true,
+			}),
+		);
 	}
 
 	async getBoards(appId: string): Promise<IBoard[]> {
@@ -845,7 +916,8 @@ export class BoardState implements IBoardState {
 					mergedBoards.set(board.id, board);
 				}
 
-				for (const board of remoteData) {
+				for (const board of asArray(remoteData)) {
+					if (!isRecord(board) || typeof board.id !== "string") continue;
 					const localBoard = mergedBoards.get(board.id);
 
 					if (localBoard && !shouldApplyRemoteBoard(board, localBoard)) {
@@ -954,11 +1026,14 @@ export class BoardState implements IBoardState {
 		const query = include?.length ? `?include=${include.join(",")}` : "";
 		let remote: IBoardSummary[];
 		try {
-			remote = await fetcher<IBoardSummary[]>(
+			const response = await fetcher<IBoardSummary[]>(
 				this.backend.profile,
 				`apps/${appId}/board/summaries${query}`,
 				{ method: "GET" },
 				this.backend.auth,
+			);
+			remote = asArray(response).filter(
+				(summary) => isRecord(summary) && typeof summary.id === "string",
 			);
 		} catch (error) {
 			console.warn(
@@ -1048,23 +1123,35 @@ export class BoardState implements IBoardState {
 		}
 		this.requireAuthoritativeHostedRead();
 		const query = include?.length ? `?include=${include.join(",")}` : "";
-		return fetcher<IBoardSummary[]>(
+		const summaries = await fetcher<IBoardSummary[]>(
 			this.backend.profile!,
 			`apps/${appId}/board/summaries${query}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// Authoritative readers act on absence, so a garbled list must fail rather than read as empty.
+		if (!Array.isArray(summaries)) {
+			throw new Error(
+				`Hosted board summaries for app ${appId} were not a list (${typeof summaries})`,
+			);
+		}
+		return summaries;
 	}
 
 	async getBoardVariables(appId: string): Promise<IBoardVariables[]> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (!isOffline && this.backend.profile && this.backend.auth) {
 			try {
-				return await fetcher<IBoardVariables[]>(
+				const remote = await fetcher<IBoardVariables[]>(
 					this.backend.profile,
 					`apps/${appId}/board/variables`,
 					{ method: "GET" },
 					this.backend.auth,
+				);
+				if (Array.isArray(remote)) return remote;
+				console.warn(
+					"[BoardState] remote board variables were not a list, using local:",
+					typeof remote,
 				);
 			} catch (error) {
 				console.warn(
@@ -1087,6 +1174,11 @@ export class BoardState implements IBoardState {
 					{ method: "GET" },
 					this.backend.auth,
 				);
+				if (!Array.isArray(nodes)) {
+					throw new Error(
+						`Remote catalog for app ${appId} was not a node list (${typeof nodes})`,
+					);
+				}
 				// The remote catalog is what the server compares against when it decides which
 				// nodes may ship lean, so only it may feed remote-board hydration.
 				this.remoteBoardSync.setCatalog(appId, nodes);
@@ -1185,15 +1277,23 @@ export class BoardState implements IBoardState {
 	): Promise<IBoard> {
 		let board: IBoard;
 		try {
-			board = await this.fetchLocalBoard(appId, boardId, version);
+			board = await timeRunStep("get_board.local", () =>
+				this.fetchLocalBoard(appId, boardId, version),
+			);
 		} catch {
-			return this.materializeBoardFromRemote(appId, boardId, version);
+			return timeRunStep("get_board.materialize_remote", () =>
+				this.materializeBoardFromRemote(appId, boardId, version),
+			);
 		}
 
-		const isOffline = await this.backend.isOffline(appId);
+		const isOffline = await timeRunStep("get_board.is_offline", () =>
+			this.backend.isOffline(appId),
+		);
 
 		// Presign media comments for display
-		await this.presignMediaComments(appId, boardId, board, isOffline);
+		await timeRunStep("get_board.presign_media", () =>
+			this.presignMediaComments(appId, boardId, board, isOffline),
+		);
 
 		if (typeof version !== "undefined") {
 			return board;
@@ -1215,10 +1315,11 @@ export class BoardState implements IBoardState {
 			try {
 				// Deliver whatever the last interactive edit left in the outbox first, so the remote
 				// snapshot fetched below is not older than the board that was just committed here.
-				await this.settleOutbox(appId, boardId);
-				const pendingSync = await this.backend.getOfflineSyncCommands(
-					appId,
-					boardId,
+				await timeRunStep("get_board.settle_outbox", () =>
+					this.settleOutbox(appId, boardId),
+				);
+				const pendingSync = await timeRunStep("get_board.pending_sync", () =>
+					this.backend.getOfflineSyncCommands(appId, boardId),
 				);
 				const pendingMutations = pendingSync.filter(
 					commandSyncHasPendingMutation,
@@ -1233,34 +1334,41 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
-				const remoteData = await this.fetchRemoteBoard(appId, boardId);
+				const remoteData = await timeRunStep("get_board.remote", () =>
+					this.fetchRemoteBoard(appId, boardId),
+				);
 
 				if (remoteData) {
 					if (
-						!(await this.lineageAllowsRemoteApply(appId, boardId, remoteData))
+						!(await timeRunStep("get_board.lineage", () =>
+							this.lineageAllowsRemoteApply(appId, boardId, remoteData),
+						))
 					) {
 						return board;
 					}
 
-					const { merged, changed } = await mergeBoardOffThread(
-						remoteData,
-						board,
+					const { merged, changed } = await timeRunStep("get_board.merge", () =>
+						mergeBoardOffThread(remoteData, board),
 					);
 					if (changed && typeof version === "undefined") {
 						console.log("[BoardState] forceFresh: updating local board:", {
 							boardId,
 						});
-						await invoke("upsert_board", {
-							appId: appId,
-							boardId: boardId,
-							name: merged.name,
-							description: merged.description,
-							logLevel: merged.log_level,
-							stage: merged.stage,
-							executionMode: merged.execution_mode,
-							boardData: merged,
-						});
-						await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
+						await timeRunStep("get_board.upsert", () =>
+							invoke("upsert_board", {
+								appId: appId,
+								boardId: boardId,
+								name: merged.name,
+								description: merged.description,
+								logLevel: merged.log_level,
+								stage: merged.stage,
+								executionMode: merged.execution_mode,
+								boardData: merged,
+							}),
+						);
+						await timeRunStep("get_board.record_lineage", () =>
+							this.recordAppliedRemoteLineage(appId, boardId, remoteData),
+						);
 						dispatchRemoteBoardApplied(appId, boardId, "sync");
 
 						if (this.backend.queryClient) {
@@ -1379,12 +1487,51 @@ export class BoardState implements IBoardState {
 		}
 		this.requireAuthoritativeHostedRead();
 		const params = version ? `?version=${version.join("_")}` : "";
-		return fetcher<IBoard>(
+		const board = await fetcher<IBoard>(
 			this.backend.profile!,
 			`apps/${appId}/board/${boardId}${params}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(board)) {
+			throw new Error(
+				`Hosted board ${boardId} of app ${appId} read returned ${typeof board}`,
+			);
+		}
+		return board;
+	}
+
+	async getBoardSummariesSnapshot(appId: string): Promise<IBoardSummary[]> {
+		return invoke<IBoardSummary[]>("get_app_board_summaries", {
+			appId,
+			withNodeTypes: false,
+			withMetrics: false,
+		});
+	}
+
+	async getBoardSnapshot(appId: string, boardId: string): Promise<IBoard> {
+		try {
+			return await invoke<IBoard>("get_app_board", {
+				appId,
+				boardId,
+				pushToRegistry: false,
+			});
+		} catch (error) {
+			if (
+				(await this.backend.isLocalOnly(appId)) ||
+				(await this.backend.isOffline(appId)) ||
+				!this.backend.profile ||
+				!this.backend.auth
+			) {
+				throw error;
+			}
+			return fetcher<IBoard>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+		}
 	}
 
 	async getRealtimeAccess(
@@ -1501,6 +1648,7 @@ export class BoardState implements IBoardState {
 					{
 						method: "POST",
 						body: JSON.stringify({ prefixes }),
+						timeoutMs: MEDIA_PRESIGN_TIMEOUT_MS,
 					},
 					this.backend.auth,
 				);
@@ -1569,7 +1717,7 @@ export class BoardState implements IBoardState {
 					this.backend.auth,
 				);
 
-				return remoteData;
+				return Array.isArray(remoteData) ? remoteData : newVersion;
 			},
 			this,
 			this.backend.queryClient,
@@ -1616,7 +1764,10 @@ export class BoardState implements IBoardState {
 					this.backend.auth,
 				);
 
-				return remoteData;
+				// This replaces the local list in the query cache; only a real list may.
+				return Array.isArray(remoteData)
+					? remoteData.filter((entry) => Array.isArray(entry))
+					: boardVersions;
 			},
 			this,
 			this.backend.queryClient,
@@ -1741,7 +1892,7 @@ export class BoardState implements IBoardState {
 		}
 
 		await this.ensureAppPackagesInstalledForExecution(appId, board);
-		const { requires_local_execution } =
+		const { requires_local_execution, oauth_requirements } =
 			extractOAuthRequirementsFromBoard(board);
 
 		console.log("[BoardState] executeBoard board summary:", {
@@ -1789,23 +1940,6 @@ export class BoardState implements IBoardState {
 		let foundRunId = false;
 
 		const isOffline = await this.backend.isOffline(appId);
-		let credentials = undefined;
-
-		if (!isOffline && this.backend.auth && this.backend.profile) {
-			try {
-				credentials = await fetcher(
-					this.backend.profile,
-					`apps/${appId}/invoke/presign`,
-					{
-						method: "GET",
-					},
-					this.backend.auth,
-				);
-			} catch (e) {
-				console.warn(e);
-			}
-		}
-
 		// Collect OAuth tokens from board nodes using shared helper
 		let oauthTokens:
 			| Record<
@@ -1818,7 +1952,11 @@ export class BoardState implements IBoardState {
 					}
 			  >
 			| undefined;
-		const hub = await getHubConfig(this.backend.profile);
+		// Provider configs are only looked up for OAuth nodes; other runs never wait on the hub.
+		const hub =
+			oauth_requirements.length > 0
+				? await getHubConfig(this.backend.profile)
+				: undefined;
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
 			refreshToken: oauthService.refreshToken.bind(oauthService),
 		});
@@ -1897,19 +2035,23 @@ export class BoardState implements IBoardState {
 			if (cb) cb(events);
 		};
 
-		const token = this.backend.auth?.user?.access_token;
-
 		let metadata: ILogMetadata | undefined;
 		try {
+			const executionHub = isOffline
+				? undefined
+				: await this.backend.prepareExecutionAuth();
 			metadata = await invoke("execute_board", {
+				executionHub,
+				executionSessionId: isOffline
+					? undefined
+					: this.backend.executionSessionId,
 				appId: appId,
 				boardId: boardId,
 				payload: payload,
 				version: normalizeBoardVersion(payload.version),
 				events: channel,
 				streamState: streamState,
-				credentials,
-				token,
+				token: this.backend.auth?.user?.access_token,
 				oauthTokens,
 			});
 
@@ -2093,7 +2235,9 @@ export class BoardState implements IBoardState {
 					this.backend.auth,
 				);
 
-				remoteRuns = response ?? [];
+				remoteRuns = asArray(response).filter(
+					(run) => isRecord(run) && typeof run.run_id === "string",
+				);
 
 				for (const run of remoteRuns) {
 					run.is_remote = true;
@@ -2175,7 +2319,7 @@ export class BoardState implements IBoardState {
 					{ method: "GET" },
 					this.backend.auth,
 				);
-				return logs ?? [];
+				return asArray(logs);
 			} catch (e) {
 				console.error("Failed to fetch remote logs:", e);
 				return [];
@@ -3631,7 +3775,7 @@ export class BoardState implements IBoardState {
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			return response.flowscript;
+			return flowScriptFromResponse(response, boardId);
 		}
 	}
 
@@ -3659,7 +3803,7 @@ export class BoardState implements IBoardState {
 			{ method: "GET" },
 			this.backend.auth,
 		);
-		return response.flowscript;
+		return flowScriptFromResponse(response, boardId);
 	}
 
 	async getFlowScriptScoped(
@@ -3693,8 +3837,8 @@ export class BoardState implements IBoardState {
 				this.backend.auth,
 			);
 			return {
-				flowscript: response.flowscript,
-				scope_anchors: response.scope_anchors ?? [],
+				flowscript: flowScriptFromResponse(response, boardId),
+				scope_anchors: asArray(response.scope_anchors),
 			};
 		}
 	}
@@ -3730,8 +3874,8 @@ export class BoardState implements IBoardState {
 				this.backend.auth,
 			);
 			return {
-				flowscript: response.flowscript,
-				scope_anchors: response.scope_anchors ?? [],
+				flowscript: flowScriptFromResponse(response, boardId),
+				scope_anchors: asArray(response.scope_anchors),
 			};
 		}
 	}
@@ -3819,10 +3963,10 @@ export class BoardState implements IBoardState {
 						boardId,
 						pageId,
 						wildcard,
-						remoteElementKeys: Object.keys(response.elements ?? {}),
+						remoteElementKeys: Object.keys(response?.elements ?? {}),
 					},
 				);
-				return response.elements;
+				if (isRecord(response?.elements)) return response.elements;
 			} catch (error) {
 				console.warn("Failed to fetch execution elements from API:", error);
 			}
@@ -3850,12 +3994,19 @@ export class BoardState implements IBoardState {
 		// Online apps may execute on the server: the API's answer (or its 404 on an
 		// older deployment, which makes the caller send the full map) is authoritative.
 		const query = version ? `?version=${version.join("_")}` : "";
-		return await fetcher<IElementDemand>(
+		const demand = await fetcher<IElementDemand>(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}/element-demand${query}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// Rejecting makes the caller send the run's own scope, as it does for a 404.
+		if (!isRecord(demand) || !Array.isArray(demand.selectors)) {
+			throw new Error(
+				`Element demand for board ${boardId} of app ${appId} is malformed`,
+			);
+		}
+		return demand;
 	}
 
 	async copilot_chat(
@@ -4256,12 +4407,13 @@ export class BoardState implements IBoardState {
 								url += `?version=${version.join("_")}`;
 							}
 
-							return fetcher<IPrerunBoardResponse>(
+							const response = await fetcher<IPrerunBoardResponse>(
 								this.backend.profile!,
 								url,
 								{ method: "GET" },
 								this.backend.auth!,
 							);
+							return isRecord(response) ? response : undefined;
 						}
 					: undefined,
 		});

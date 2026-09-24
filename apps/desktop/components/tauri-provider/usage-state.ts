@@ -7,11 +7,26 @@ import type {
 	IUsageState,
 	IUsageSummary,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
+function expectPage<T>(
+	page: IPaginatedResponse<T>,
+	route: string,
+): IPaginatedResponse<T> {
+	if (!isRecord(page)) throw new Error(`Unexpected response from ${route}`);
+	return { ...page, items: asArray(page.items) };
+}
+
 export class UsageState implements IUsageState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private profile(): NonNullable<TauriBackend["profile"]> {
+		const profile = this.backend.profile;
+		if (!profile) throw new Error("Profile context is not available");
+		return profile;
+	}
 
 	async getLlmHistory(
 		page = 0,
@@ -24,11 +39,14 @@ export class UsageState implements IUsageState {
 		});
 		if (appId) params.set("app_id", appId);
 
-		return fetcher<IPaginatedResponse<ILlmUsageRecord>>(
-			this.backend.profile!,
-			`usage/llm?${params}`,
-			{ method: "GET" },
-			this.backend.auth,
+		return expectPage(
+			await fetcher<IPaginatedResponse<ILlmUsageRecord>>(
+				this.profile(),
+				`usage/llm?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
+			"usage/llm",
 		);
 	}
 
@@ -43,11 +61,14 @@ export class UsageState implements IUsageState {
 		});
 		if (appId) params.set("app_id", appId);
 
-		return fetcher<IPaginatedResponse<IEmbeddingUsageRecord>>(
-			this.backend.profile!,
-			`usage/embeddings?${params}`,
-			{ method: "GET" },
-			this.backend.auth,
+		return expectPage(
+			await fetcher<IPaginatedResponse<IEmbeddingUsageRecord>>(
+				this.profile(),
+				`usage/embeddings?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
+			"usage/embeddings",
 		);
 	}
 
@@ -62,11 +83,14 @@ export class UsageState implements IUsageState {
 		});
 		if (appId) params.set("app_id", appId);
 
-		return fetcher<IPaginatedResponse<IExecutionUsageRecord>>(
-			this.backend.profile!,
-			`usage/executions?${params}`,
-			{ method: "GET" },
-			this.backend.auth,
+		return expectPage(
+			await fetcher<IPaginatedResponse<IExecutionUsageRecord>>(
+				this.profile(),
+				`usage/executions?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
+			"usage/executions",
 		);
 	}
 
@@ -77,20 +101,33 @@ export class UsageState implements IUsageState {
 		const params = new URLSearchParams({ days: String(days) });
 		if (appId) params.set("app_id", appId);
 
-		return fetcher<IExecutionActivity>(
-			this.backend.profile!,
+		const activity = await fetcher<IExecutionActivity>(
+			this.profile(),
 			`usage/executions/activity?${params}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(activity)) {
+			throw new Error("Unexpected response from usage/executions/activity");
+		}
+		return {
+			...activity,
+			buckets: asArray(activity.buckets),
+			apps: asArray(activity.apps),
+			attention: asArray(activity.attention),
+		};
 	}
 
 	async getUsageSummary(): Promise<IUsageSummary> {
-		return fetcher<IUsageSummary>(
-			this.backend.profile!,
+		const summary = await fetcher<IUsageSummary>(
+			this.profile(),
 			"usage/summary",
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(summary)) {
+			throw new Error("Unexpected response from usage/summary");
+		}
+		return summary;
 	}
 }
