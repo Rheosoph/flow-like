@@ -13,8 +13,8 @@ If you are looking for something and cannot find it, this switch is almost alway
 
 With Developer Mode **off**, Flow-Like hides:
 
-- **Developer Tools** in the sidebar (WASM node package development)
-- The **Packages** tab in the store and the package **Registry** in settings
+- **Packages** in the sidebar: the WASM node packages you build (**Mine**) and the ones you use (**Library**)
+- Node packages in **Explore**, which then shows apps only
 - Most tabs inside a project's configuration: **Flows**, **Events**, **Templates**, **Widgets**, **Data Studio**, **User Storage**, **Packages**, **Suites**, **Roles**, **Sales**, **Analytics**, **Endpoints**, and **Publication** — the project keeps its Dashboard, **Setup**, **Storage**, and Team pages
 - **Sinks & Triggers**, **Board Statistics**, and the API **Token** page in settings and the account menu
 - Store listing, compliance, and release panels in the project dashboard

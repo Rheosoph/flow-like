@@ -146,7 +146,8 @@ and model-authored expectations still need to reflect the user's request.
 
 ## Workflow behavior benchmark
 
-Open **Developer tools → Workflow benchmark** in the desktop app, select a configured agent
+In the desktop app, open **Packages**, click the **Developer Settings** button next to
+**New package**, and choose **Workflow behavior benchmarks**. Select a configured agent
 backend, and enter an explicit model ID. Choose cases and repetitions, then start the run.
 Each case uses the ordinary board authoring tools on a disposable board with a five-minute
 generation deadline. The suite has 16 tasks and 64 fixed input/output checks covering JSON

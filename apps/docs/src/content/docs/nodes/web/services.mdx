@@ -1,0 +1,30 @@
+---
+title: "Services Node Catalog"
+description: "Web/Services Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Services"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Services nodes, Web/Services, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Web/Services"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Services Node Catalog\",\"description\":\"Web/Services Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/web/services/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Web/Services\",\"keywords\":\"Services nodes, Web/Services, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Web/Services"}
+	label="Services"
+	nodes={nodesByCategory["Web/Services"] ?? []}
+	client:load
+/>

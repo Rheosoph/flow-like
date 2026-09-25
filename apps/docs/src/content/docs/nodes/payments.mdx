@@ -1,117 +1,26 @@
 ---
-title: "Payments"
-description: "Request a payment during an attended remote workflow and test the result branches locally."
+title: "Payments Node Catalog"
+description: "Payments Flow-Like node category with 1 generated node reference."
 sidebar:
   order: 0
   label: "Payments"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Payments nodes, Payments, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Payments"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Payments Node Catalog\",\"description\":\"Payments Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/payments/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Payments\",\"keywords\":\"Payments nodes, Payments, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
 ---
 
 import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
 import { nodesByCategory } from "../../../generated/catalog-nodes";
-
-Request Payment pauses a workflow while its signed-in user pays the app owner in hosted Checkout.
-The user sees the product, amount, recipient, and deadline before confirming and opening Checkout.
-The workflow continues through **paid** only after the server verifies the captured payment.
-
-## Before requesting a payment
-
-The beta supports EUR payments in streamed remote board runs and remote Event runs with a
-signed-in user present. The deployment must enable payments. The app owner must enable payment
-requests in the app's payment settings, accept the current terms, and complete Stripe account
-onboarding. For an app owned by a global Flow-Like admin, payments go to Flow-Like's Stripe account
-and connected-account onboarding is unavailable. The payer must be a different user from the app owner.
-
-Local runs, schedules, background jobs, isolated execution, API keys, personal tokens, and calls
-from another app cannot request real payments. The editor's payment readiness warning identifies
-these prerequisites; board analysis cannot confirm an owner's account readiness.
-
-Checkout offers eligible payment methods enabled by the deployment and the recipient's Stripe
-account. Apple Pay and Google Pay can appear with card payments when the device and account qualify.
-The node does not collect card details or choose a different payment recipient.
-
-## Configure the node
-
-Set **Amount** to the final price, including applicable tax and any delivery charge, in integer
-minor units: `119` means EUR 1.19. The minimum is `50` for EUR 0.50;
-the deployment and app can impose lower maximums. Set **Currency** to `eur`, give the product a
-clear name, and describe what the user receives. **Reference** is optional application context.
-Keep personal information out of these text fields.
-
-Set **Product Tax Code** to the exact Stripe code for the goods or services the buyer receives.
-The field opens a searchable list of [Stripe's product tax codes](https://docs.stripe.com/tax/tax-codes)
-by category name and stores the matching `txcd_` code. A connected pin or a typed code such as
-`txcd_10000000` works the same way. Get tax advice where the classification is unclear. The
-field starts empty, and real requests without a code are rejected. A workflow selling different products must supply the classification for each
-request; the marketplace app-access category is not a default for this node.
-
-For shipped goods, set **Shipping Countries** to the delivery countries you support, separated
-by commas, such as `DE,FR`. Checkout collects a delivery address and uses it for tax calculation.
-Leave this field empty when no delivery address is needed. Country codes must use two uppercase
-letters; Stripe also checks whether each country is supported. The total must already include
-delivery because the node does not calculate shipping rates or add a shipping charge.
-
-Stripe calculates applicable tax within the approved total and issues an invoice. The server
-requires completed tax calculation before continuing through **paid**. For other app owners,
-the connected account is the supplier; for global-admin-owned apps, Flow-Like is the supplier.
-Refund reconciliation links refunds to invoice credit notes on the account that took the payment.
-
-The supplier's Stripe Tax settings must be active and have at least one active tax registration
-before checkout opens. This deployment policy does not support onboarding a supplier with no tax
-registrations. An active registration does not cover every destination: suppliers must configure
-the registrations required for their sales and arrange filing and remittance. Stripe may correctly
-calculate zero tax, including in places where it is not configured to collect.
-
-Tax IDs are not collected by this payment flow, so it does not provide a business tax-ID exemption
-or reverse-charge workflow. Eligible wallets remain available, but Google Pay with Stripe Tax
-requires a collected or saved shipping address.
-
-**Timeout** is a requested number of seconds. The server shortens it when the remaining run quota
-requires an earlier deadline. Wire all four execution outputs:
-
-- **paid**: the server accepted this captured payment, including a saved result reused by its idempotency key.
-- **canceled**: the payer declined, the run ended, or payment admission was revoked.
-- **expired**: the payment request deadline passed.
-- **failed**: the node could not request or verify a result. Inspect **Reason**.
-
-**Payment ID** identifies the request. A browser returning from Checkout does not prove payment.
-Closing a prompt or leaving the run can race with payment completion. A payment captured after
-its run loses eligibility enters refund recovery and does not resume the workflow. Refunds can
-remain pending while the payment provider processes them.
-
-The node appears in FlowScript as `payments::request`. Keep it outside cached functions so a saved
-function result cannot skip the payer interaction.
-
-## Retry a workflow without charging again
-
-Set **Idempotency Key** to a stable identifier for one purchase, such as `order-4821`.
-Pass the same value when restarting the workflow. Once the request has finished, the node
-immediately follows its saved **paid**, **canceled**, **expired**, or **failed** branch, with the
-same **Payment ID** and **Reason**. It does not open another payment prompt or charge again.
-
-Keys are scoped to the signed-in payer, app, board, Event, and payment node, within the deployment's
-payment account and test or live mode. Keep those identifiers and the key unchanged across retries.
-Each new purchase needs a new key. Leaving the input empty preserves the behavior of creating a
-new request each time the node runs. Keys may contain at most 200 bytes and no control characters;
-leading and trailing spaces are removed.
-
-Keep the amount, currency, product, tax code, shipping countries, description, and reference the
-same for that key. Changing those fields returns **failed** with `PAYMENT_REPLAY_MISMATCH`.
-The timeout may change, but a retry keeps the original request's deadline.
-
-If the original request is still pending, the node checks that request without opening another
-prompt. Settlement remains tied to the original run. An ended run can therefore resolve to
-**canceled** or **expired**, and a late capture still follows refund recovery. To request another
-payment after a canceled, expired, or failed result, use a new key.
-
-## Test without charging
-
-Start the workflow from a local Board Test entry and set **Board Test Result** to `paid`, `canceled`,
-`expired`, or `failed`. The node emits a simulation result and follows that branch without contacting
-the payment API. Its Payment ID begins with `sim_`, and its Reason is `SIMULATED`.
-
-Clear **Board Test Result** before a real remote run. A nonempty simulation setting is rejected
-outside local Board Test. Simulation checks your branch behavior; it does not test Stripe,
-account readiness, hosted Checkout, refunds, or webhook delivery.
 
 <NodeCategoryOverview
 	category={"Payments"}
