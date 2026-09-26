@@ -41,6 +41,7 @@ import {
 import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data-studio/query-workbench";
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
+import { useInvalidateOntologyTable } from "@flow-like/flow-like-ui/components/ui/graph/use-object-edit-fields";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
@@ -51,6 +52,8 @@ import type {
 	CreateOverlayPayload,
 	EdgeLabelMapping,
 	GraphOverlay,
+	NodeLabelMapping,
+	UpdateOntologyObjectPayload,
 } from "@flow-like/flow-like-ui/state/backend-state/graph-state";
 import { useRequestFabBubble } from "@flow-like/flow-like-ui/state/fab-bubble";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
@@ -351,6 +354,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const invalidateTable = useInvalidateOntologyTable();
 	const router = useRouter();
 	const pathname = usePathname();
 	const requestedView = searchParams.get("view");
@@ -717,6 +721,32 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		[appId, backend.graphState],
 	);
 
+	const updateObject = useCallback(
+		async (
+			ontologyId: string,
+			objectType: NodeLabelMapping,
+			payload: UpdateOntologyObjectPayload,
+		) => {
+			if (!canWriteData) throw new Error(writeDeniedMessage);
+			const result = await backend.graphState.updateObject(
+				appId,
+				ontologyId,
+				payload,
+			);
+			if (result.outcome === "updated") {
+				await invalidateTable(appId, objectType.table);
+			}
+			return result;
+		},
+		[
+			appId,
+			backend.graphState,
+			canWriteData,
+			invalidateTable,
+			writeDeniedMessage,
+		],
+	);
+
 	const invokeOntologyAction = useCallback(
 		async (
 			ontologyId: string,
@@ -1013,6 +1043,29 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		setDesignerOpen(true);
 	}, [canWriteData, writeDeniedMessage]);
 
+	// Only imports with live bindings are usable as data sources; disabled ones
+	// stay visible for management in the sharing/model tabs. Both stay stable
+	// across renders so the object explorer does not re-sample on every one.
+	const usableImports = useMemo(
+		() =>
+			asArray(installedOntologies.data).filter(
+				(imported) => imported.bindings_enabled,
+			),
+		[installedOntologies.data],
+	);
+	const resolveSourceName = useCallback(
+		(targetAppId: string) =>
+			[
+				...asArray(appConnections.data?.incoming),
+				...asArray(appConnections.data?.outgoing),
+			].find(
+				(connection) =>
+					connection.target_app_id === targetAppId ||
+					connection.source_app_id === targetAppId,
+			)?.app_name ?? targetAppId,
+		[appConnections.data],
+	);
+
 	const isLoading =
 		(permissions.isLoading ||
 			tables.isLoading ||
@@ -1053,17 +1106,6 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		...asArray(appConnections.data?.outgoing),
 	];
 	const installedData = asArray(installedOntologies.data);
-	// Only imports with live bindings are usable as data sources; disabled ones
-	// stay visible for management in the sharing/model tabs.
-	const usableImports = installedData.filter(
-		(imported) => imported.bindings_enabled,
-	);
-	const resolveSourceName = (targetAppId: string) =>
-		connections.find(
-			(connection) =>
-				connection.target_app_id === targetAppId ||
-				connection.source_app_id === targetAppId,
-		)?.app_name ?? targetAppId;
 
 	const failedQueries: { name: string; onRetry: () => void }[] = [];
 	if (tables.error) {
@@ -1192,6 +1234,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							missing={[RolePermissions.ExecuteEvents]}
 						/>
 					)}
+					{!canWriteData && (
+						<PermissionNotice
+							tone="readOnly"
+							title={t("objectsReadOnly", "Objects are read-only")}
+							description={t(
+								"editingObjectsNeedsWriteAccess",
+								"Editing objects needs write access to this project's data.",
+							)}
+							missing={WRITE_DATA}
+						/>
+					)}
 					<div className="min-h-0 flex-1">
 						<ObjectExplorerPanel
 							appId={appId}
@@ -1202,6 +1255,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							onSample={sampleObjects}
 							onSampleRemote={sampleRemoteObjects}
 							onInvokeAction={invokeOntologyAction}
+							onUpdateObject={canWriteData ? updateObject : undefined}
 							resolveSourceName={resolveSourceName}
 						/>
 					</div>
@@ -1727,6 +1781,8 @@ const OverlayView: React.FC<{
 }> = ({ appId, overlayId, userScoped, onBack }) => {
 	const { t } = useTranslation("settings");
 	const [overlay, setOverlay] = useState<GraphOverlay | null>(null);
+	const permissions = useAppPermissions(appId);
+	const canWriteData = permissions.can(...WRITE_DATA);
 
 	return (
 		<div className="flex flex-col h-full min-h-0">
@@ -1754,7 +1810,8 @@ const OverlayView: React.FC<{
 					overlayId={overlayId}
 					userScoped={userScoped}
 					allowCypher
-					allowStyleEdit
+					allowStyleEdit={canWriteData}
+					allowPropertyEdit={canWriteData}
 					onOverlayLoaded={setOverlay}
 					renderError={(message) => (
 						<div className="flex h-full items-center justify-center">

@@ -6,6 +6,14 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+	type ObjectEditField,
+	StaleObjectError,
+	buildObjectUpdate,
+	buildRelationshipUpdate,
+	resolveObjectIdentity,
+	resolveRelationshipIdentity,
+} from "../../../lib/ontology-object-edit";
+import {
 	ONTOLOGY_QUERY_MAX_LIMIT,
 	OntologyQueryController,
 	type OntologyQueryLanguagePreference,
@@ -46,8 +54,15 @@ import {
 	collectSubtree,
 	enrichSubgraphWithStyles,
 	mergeSubgraphData,
+	patchSubgraphEdge,
+	patchSubgraphNode,
+	patchSubgraphRowCopies,
 	removeSubtree,
 } from "./subgraph-utils";
+import {
+	useInvalidateOntologyTable,
+	useObjectEditFields,
+} from "./use-object-edit-fields";
 
 export const GRAPH_MAX_NODE_LIMIT = 10_000;
 export const GRAPH_NODE_EXPANSION_LIMIT = 500;
@@ -58,6 +73,46 @@ const GRAPH_DEFAULT_LIMIT = 200;
 /** Only the exact per-label totals are used, and those ignore this bound entirely. */
 const GRAPH_ANALYTICS_EDGE_LIMIT = 2_000;
 const STYLE_PERSIST_DEBOUNCE_MS = 500;
+
+type EditFields = ReadonlyMap<string, ObjectEditField>;
+
+const NO_EDIT_FIELDS: EditFields = new Map();
+
+/** A table that failed to load has no fields, so its columns read as untyped. */
+function tableEditFields(
+	table: string,
+	byTable: ReadonlyMap<string, EditFields>,
+	failed: ReadonlySet<string>,
+): EditFields | undefined {
+	if (failed.has(table)) return byTable.get(table) ?? NO_EDIT_FIELDS;
+	return byTable.get(table);
+}
+
+/**
+ * Column types per label. A label still loading, or whose mappings disagree
+ * on the table, is left out and stays read-only.
+ */
+function editFieldsByLabel(
+	mappings: readonly { label: string; table: string }[],
+	byTable: ReadonlyMap<string, EditFields>,
+	failed: ReadonlySet<string>,
+): ReadonlyMap<string, EditFields> {
+	const tablesByLabel = new Map<string, Set<string>>();
+	for (const { label, table } of mappings) {
+		tablesByLabel.set(
+			label,
+			(tablesByLabel.get(label) ?? new Set()).add(table),
+		);
+	}
+	const fields = new Map<string, EditFields>();
+	for (const [label, tables] of tablesByLabel) {
+		const [table] = tables;
+		const loaded =
+			tables.size === 1 ? tableEditFields(table, byTable, failed) : undefined;
+		if (loaded) fields.set(label, loaded);
+	}
+	return fields;
+}
 
 function isConflictError(err: unknown): boolean {
 	const message = extractGraphErrorMessage(err).toLowerCase();
@@ -89,6 +144,11 @@ export interface OntologyExplorerProps {
 	allowCypher?: boolean;
 	/** Legend style edits, which are persisted back onto the shared overlay. */
 	allowStyleEdit?: boolean;
+	/**
+	 * Direct property edits on the owning app's backing tables. Off by default;
+	 * a2ui must never enable it.
+	 */
+	allowPropertyEdit?: boolean;
 	/** The node-limit selector in the toolbar. */
 	allowLimitChange?: boolean;
 	showToolbar?: boolean;
@@ -118,6 +178,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 	allowActions = true,
 	allowCypher = false,
 	allowStyleEdit = false,
+	allowPropertyEdit = false,
 	allowLimitChange = true,
 	showToolbar = true,
 	showLegend = true,
@@ -920,6 +981,148 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 		[appId, backend, backend.eventState, backend.graphState, overlayId, t],
 	);
 
+	const propertyEditing = allowPropertyEdit && overlay !== null;
+	const editTables = useMemo(
+		() =>
+			propertyEditing && overlay
+				? [
+						...overlay.nodes.map((mapping) => mapping.table),
+						...overlay.edges.map((mapping) => mapping.table),
+					]
+				: [],
+		[propertyEditing, overlay],
+	);
+	const { byTable: editFieldsByTable, failed: failedEditTables } =
+		useObjectEditFields(appId, editTables, userScoped, propertyEditing);
+	const nodeEditFields = useMemo(
+		() =>
+			editFieldsByLabel(
+				overlay?.nodes ?? [],
+				editFieldsByTable,
+				failedEditTables,
+			),
+		[overlay, editFieldsByTable, failedEditTables],
+	);
+	const edgeEditFields = useMemo(
+		() =>
+			editFieldsByLabel(
+				overlay?.edges ?? [],
+				editFieldsByTable,
+				failedEditTables,
+			),
+		[overlay, editFieldsByTable, failedEditTables],
+	);
+	const invalidateTable = useInvalidateOntologyTable();
+
+	const notEditableError = useCallback(
+		() =>
+			new Error(
+				t("objectNotEditableHere", "This object can't be edited here."),
+			),
+		[t],
+	);
+
+	const handleUpdateNodeProperties = useCallback(
+		async (
+			node: SubgraphNode,
+			updates: Record<string, unknown>,
+			baseline: Record<string, unknown>,
+		) => {
+			const current = overlayRef.current;
+			const identity = current
+				? resolveObjectIdentity(current, node.label, node.props)
+				: null;
+			if (!identity?.ok) throw notEditableError();
+			const result = await backend.graphState.updateObject(
+				appId,
+				overlayId,
+				buildObjectUpdate(identity, baseline, updates),
+				userScoped,
+			);
+			setData((prev) =>
+				patchSubgraphRowCopies(
+					patchSubgraphNode(
+						prev,
+						node.id,
+						result.row,
+						overlayRef.current,
+						Object.keys(updates),
+					),
+					overlayRef.current,
+					{
+						table: identity.mapping.table,
+						known: node.props,
+						fresh: result.row,
+					},
+					{ nodeId: node.id },
+				),
+			);
+			void invalidateTable(appId, identity.mapping.table);
+			if (result.outcome === "stale") throw new StaleObjectError(result.row);
+		},
+		[
+			appId,
+			backend.graphState,
+			invalidateTable,
+			notEditableError,
+			overlayId,
+			userScoped,
+		],
+	);
+
+	const handleUpdateEdgeProperties = useCallback(
+		async (
+			edge: SubgraphEdge,
+			updates: Record<string, unknown>,
+			baseline: Record<string, unknown>,
+		) => {
+			const current = overlayRef.current;
+			const nodes = dataRef.current?.nodes ?? [];
+			const relationship = current
+				? resolveRelationshipIdentity(
+						current,
+						edge,
+						nodes.find((node) => node.id === edge.source),
+						nodes.find((node) => node.id === edge.target),
+					)
+				: null;
+			if (!relationship?.ok) throw notEditableError();
+			const result = await backend.graphState.updateRelationship(
+				appId,
+				overlayId,
+				buildRelationshipUpdate(relationship, baseline, updates),
+				userScoped,
+			);
+			const { mapping } = relationship;
+			setData((prev) =>
+				patchSubgraphRowCopies(
+					patchSubgraphEdge(prev, edge.id, result.row),
+					overlayRef.current,
+					{
+						table: mapping.table,
+						known: {
+							...edge.props,
+							[mapping.src_column]: relationship.source,
+							[mapping.dst_column]: relationship.target,
+						},
+						fresh: result.row,
+					},
+					{ edgeId: edge.id },
+				),
+			);
+			void invalidateTable(appId, mapping.table);
+			if (result.outcome === "stale") throw new StaleObjectError(result.row);
+		},
+		[
+			appId,
+			backend.graphState,
+			invalidateTable,
+			notEditableError,
+			overlayId,
+			userScoped,
+		],
+	);
+
 	if (error && !overlay) {
 		if (renderError) return <>{renderError(error, retry)}</>;
 		return (
@@ -1009,6 +1212,14 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 					onRunAction={allowActions ? handleRunAction : undefined}
 					analytics={analytics}
 					enableClusterLayout
+					nodeEditFields={propertyEditing ? nodeEditFields : undefined}
+					edgeEditFields={propertyEditing ? edgeEditFields : undefined}
+					onUpdateNodeProperties={
+						propertyEditing ? handleUpdateNodeProperties : undefined
+					}
+					onUpdateEdgeProperties={
+						propertyEditing ? handleUpdateEdgeProperties : undefined
+					}
 				/>
 			</PropertyStorageScope>
 			<OntologyActionDialog

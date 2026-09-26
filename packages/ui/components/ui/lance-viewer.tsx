@@ -69,14 +69,8 @@ import {
 	formatAbsoluteDateTime,
 	formatCalendarDate,
 	formatRelativeTime,
-	fromDateInputValue,
-	fromDateTimeInputValue,
 	inferTemporalValue,
-	localTimeZoneLabel,
 	parseTemporalValue,
-	toDateInputValue,
-	toDateTimeInputValue,
-	toEpochNumber,
 } from "../../lib/date";
 import { geoArrowIndexKind } from "../../lib/geoarrow-index";
 import { resolveStorageFile } from "../../lib/storage-file";
@@ -129,6 +123,10 @@ import {
 } from "./table";
 import { canArrowFieldBeKey, isKeyFieldMetadata } from "./table-schema";
 import { TableSchemaDialog } from "./table-schema-dialog";
+import {
+	type TemporalCell,
+	TemporalValueEditor,
+} from "./temporal-value-editor";
 import { UserIdentityCard, UserInlineTag } from "./user-identity";
 
 export type LanceFieldKind =
@@ -1526,13 +1524,6 @@ const Cell: React.FC<{
 	);
 };
 
-interface TemporalCell {
-	/** The unit the stored number counts in, and the one an edit writes back. */
-	unit: LanceTemporalUnit;
-	/** The storage shape of the column, which an edit has to keep. */
-	wire: "number" | "string";
-}
-
 /**
  * Whether a cell holds an instant, and how it is stored. Declared temporal
  * columns say so in the schema; the rest are believed only when the column name
@@ -1563,113 +1554,6 @@ export const resolveTemporalCell = (
 	}
 
 	return null;
-};
-
-/**
- * Edits an instant as a wall-clock date and time instead of as the epoch integer
- * on disk, and writes it back in the column's own shape and unit.
- */
-const TemporalValueEditor: React.FC<{
-	value: string;
-	temporal: TemporalCell;
-	nullable?: boolean;
-	onChange: (value: string) => void;
-}> = ({ value, temporal, nullable, onChange }) => {
-	const { t } = useTranslation("common");
-	const timeZone = useMemo(() => localTimeZoneLabel(), []);
-	const dayPrecision = temporal.unit === "day";
-
-	const date = useMemo(() => {
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(value);
-		} catch {
-			parsed = value;
-		}
-		return parseTemporalValue(parsed, temporal.unit);
-	}, [value, temporal.unit]);
-
-	const emit = useCallback(
-		(next: Date | null) => {
-			if (!next) {
-				onChange("null");
-				return;
-			}
-			onChange(
-				JSON.stringify(
-					temporal.wire === "string"
-						? next.toISOString()
-						: toEpochNumber(next, temporal.unit),
-				),
-			);
-		},
-		[onChange, temporal.unit, temporal.wire],
-	);
-
-	return (
-		<div className="space-y-3">
-			<div className="flex flex-wrap items-center gap-2">
-				<Input
-					type={dayPrecision ? "date" : "datetime-local"}
-					step={dayPrecision ? undefined : 1}
-					className="w-auto"
-					value={
-						date
-							? dayPrecision
-								? toDateInputValue(date)
-								: toDateTimeInputValue(date)
-							: ""
-					}
-					onChange={(e) => {
-						const next = dayPrecision
-							? fromDateInputValue(e.target.value)
-							: fromDateTimeInputValue(e.target.value);
-						if (next || !e.target.value) emit(next);
-					}}
-				/>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => {
-						const now = new Date();
-						// A day column stores the calendar day the viewer is in, not the
-						// instant, which would round to tomorrow past midday in the east.
-						emit(
-							dayPrecision
-								? (fromDateInputValue(toDateTimeInputValue(now).slice(0, 10)) ??
-										now)
-								: now,
-						);
-					}}
-				>
-					<Clock className="h-3.5 w-3.5 mr-2" /> {t("now", "Now")}
-				</Button>
-				{nullable !== false && date && (
-					<Button variant="ghost" size="sm" onClick={() => emit(null)}>
-						<X className="h-3.5 w-3.5 mr-2" /> {t("clear", "Clear")}
-					</Button>
-				)}
-			</div>
-			<div className="rounded-md border bg-muted/40 px-3 py-2 space-y-1">
-				{date ? (
-					<>
-						<p className="text-sm">
-							{dayPrecision
-								? formatCalendarDate(date, "full")
-								: formatAbsoluteDateTime(date)}
-						</p>
-						<p className="text-xs text-muted-foreground">
-							{formatRelativeTime(date, "long")}
-							{!dayPrecision && timeZone ? ` · ${timeZone}` : ""}
-						</p>
-					</>
-				) : (
-					<p className="text-sm text-muted-foreground">NULL</p>
-				)}
-				<code className="block text-[11px] text-muted-foreground">{value}</code>
-			</div>
-		</div>
-	);
 };
 
 const CellViewDialog: React.FC<{

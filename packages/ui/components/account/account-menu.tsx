@@ -213,7 +213,7 @@ export function AccountMenu({
 							{t("settings", "Settings")}
 						</Link>
 					</DropdownMenuItem>
-					{signedIn && hub?.standalone?.enabled === true && (
+					{signedIn && (
 						<DropdownMenuItem asChild className={itemClass}>
 							<Link href="/settings/devices">
 								<Server />

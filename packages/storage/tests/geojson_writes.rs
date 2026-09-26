@@ -461,7 +461,7 @@ async fn workbench_columns_describe_st_astext_as_plain_text() -> Result<()> {
     };
     assert!(column("geometry").metadata.contains_key(EXTENSION_NAME));
     assert!(
-        column("wkt").metadata.get(EXTENSION_NAME).is_none(),
+        !column("wkt").metadata.contains_key(EXTENSION_NAME),
         "{:?}",
         column("wkt")
     );

@@ -1527,7 +1527,11 @@ pub fn is_write_contention(error: &flow_like_types::Error) -> bool {
     })
 }
 
-fn update_sql_literal(table: &str, field: &arrow_schema::Field, value: &Value) -> Result<String> {
+pub(crate) fn update_sql_literal(
+    table: &str,
+    field: &arrow_schema::Field,
+    value: &Value,
+) -> Result<String> {
     let column = field.name();
     if crate::geometry::is_geometry_field(field) {
         return geometry_sql_literal(column, value);
@@ -1594,10 +1598,7 @@ fn ensure_update_value_casts(
 fn binary_sql_literal(column: &str, bytes: &[Value]) -> Result<String> {
     bytes
         .iter()
-        .map(|byte| {
-            byte.as_u64()
-                .and_then(|byte| u8::try_from(byte).ok())
-        })
+        .map(|byte| byte.as_u64().and_then(|byte| u8::try_from(byte).ok()))
         .collect::<Option<Vec<u8>>>()
         .map(|bytes| hex_sql_literal(&bytes))
         .ok_or_else(|| {
@@ -3357,7 +3358,8 @@ mod tests {
     async fn typed_geometry_column_on_an_existing_table_takes_geojson_updates() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
-        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
         db.insert(vec![
             json!({"id": 1, "name": "inside"}),
             json!({"id": 2, "name": "outline"}),
@@ -3375,8 +3377,11 @@ mod tests {
         db.add_typed_column("location", "geometry", None).await?;
         let point = json!({"type": "Point", "coordinates": [2.0, 2.0]});
         let polygon = json!({"type": "Polygon", "coordinates": [[[3.0, 3.0], [6.0, 3.0], [6.0, 6.0], [3.0, 6.0], [3.0, 3.0]]]});
-        db.update("id = 1", HashMap::from([("location".to_string(), point.clone())]))
-            .await?;
+        db.update(
+            "id = 1",
+            HashMap::from([("location".to_string(), point.clone())]),
+        )
+        .await?;
         db.update(
             "id = 2",
             HashMap::from([("location".to_string(), polygon.clone())]),

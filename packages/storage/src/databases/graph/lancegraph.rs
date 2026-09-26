@@ -1,6 +1,12 @@
+mod editing;
 mod expansion;
 mod validation;
 
+pub use editing::{
+    ObjectPropertyUpdate, OverlayRowUpdateOutcome, OverlayRowUpdateRejected,
+    OverlayRowUpdateResult, RelationshipPropertyUpdate, overlay_rows_written,
+    update_overlay_object, update_overlay_relationship,
+};
 pub use validation::{MappingValidation, ValidationReport, validate_overlay_definition};
 
 use super::{
@@ -1895,6 +1901,17 @@ fn resolve_object_mapping_from_nodes<'a>(
     })
 }
 
+fn resolve_edge_mapping<'a>(
+    overlay: &'a GraphOverlayDef,
+    relationship_type: &str,
+) -> Option<&'a EdgeMappingDef> {
+    overlay.edges.iter().find(|edge| {
+        edge.id.as_deref() == Some(relationship_type)
+            || edge.api_name.as_deref() == Some(relationship_type)
+            || edge.label == relationship_type
+    })
+}
+
 fn required_object_columns(mapping: &NodeMappingDef, identity_column: &str) -> Vec<String> {
     let mut columns = vec![identity_column.to_string(), mapping.id_column.clone()];
     if let Some(display_column) = &mapping.display_column {
@@ -2299,11 +2316,7 @@ pub async fn sample_overlay(
                 node.property_columns.as_slice(),
                 required,
             )
-        } else if let Some(edge) = overlay.edges.iter().find(|edge| {
-            edge.id.as_deref() == Some(label)
-                || edge.api_name.as_deref() == Some(label)
-                || edge.label == label
-        }) {
+        } else if let Some(edge) = resolve_edge_mapping(overlay, label) {
             // `src_node_column`/`dst_node_column` live on the corresponding
             // node tables; only the edge endpoint columns belong here.
             let required = vec![edge.src_column.clone(), edge.dst_column.clone()];
@@ -3809,6 +3822,985 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    const ADA_SEEN_AT: i64 = 1_786_881_600_000;
+    const LIN_SEEN_AT: i64 = 1_786_968_000_000;
+
+    fn json_map(value: Value) -> flow_like_types::json::Map<String, Value> {
+        match value {
+            Value::Object(map) => map,
+            _ => flow_like_types::json::Map::new(),
+        }
+    }
+
+    fn object_edit(
+        object_type: &str,
+        id: Value,
+        updates: Value,
+        expected: Value,
+    ) -> ObjectPropertyUpdate {
+        ObjectPropertyUpdate {
+            object_type: object_type.to_string(),
+            id,
+            updates: json_map(updates),
+            expected: json_map(expected),
+        }
+    }
+
+    fn relationship_edit(
+        relationship_type: &str,
+        source: &str,
+        target: &str,
+        updates: Value,
+        expected: Value,
+    ) -> RelationshipPropertyUpdate {
+        RelationshipPropertyUpdate {
+            relationship_type: relationship_type.to_string(),
+            source: Value::String(source.to_string()),
+            target: Value::String(target.to_string()),
+            updates: json_map(updates),
+            expected: json_map(expected),
+        }
+    }
+
+    fn update_rejection(error: &flow_like_types::Error) -> Option<&OverlayRowUpdateRejected> {
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<OverlayRowUpdateRejected>())
+    }
+
+    fn input_rejection(error: &flow_like_types::Error) -> Option<String> {
+        error.chain().find_map(|cause| {
+            cause
+                .downcast_ref::<crate::databases::vector::schema::TableInputRejected>()
+                .map(ToString::to_string)
+        })
+    }
+
+    async fn sorted_rows(connection: &Connection, table: &str, key: &str) -> Result<Vec<Value>> {
+        let batches = connection
+            .open_table(table)
+            .execute()
+            .await?
+            .query()
+            .execute()
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut rows = Vec::new();
+        for batch in &batches {
+            rows.extend(record_batch_to_value(batch)?);
+        }
+        rows.sort_by_key(|row| value_to_id_string(row.get(key)));
+        Ok(rows)
+    }
+
+    async fn table_version(connection: &Connection, table: &str) -> Result<u64> {
+        Ok(connection
+            .open_table(table)
+            .execute()
+            .await?
+            .version()
+            .await?)
+    }
+
+    /// People with scalar, temporal, list and vector columns, a foreign-key
+    /// `OWNED_BY` edge stored on the people rows, and a `KNOWS` join table.
+    async fn editing_fixture() -> Result<(Connection, String, GraphOverlayDef)> {
+        use arrow::array::{
+            FixedSizeListArray, Float64Array, Int64Array, ListBuilder, RecordBatch, StringArray,
+            StringBuilder, TimestampMillisecondArray,
+        };
+        use arrow::datatypes::{DataType, Field, Float32Type, Schema, TimeUnit};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+
+        let mut tags = ListBuilder::new(StringBuilder::new());
+        tags.values().append_value("a");
+        tags.append(true);
+        tags.append(true);
+        let people_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("score", DataType::Float64, true),
+            Field::new(
+                "seen_at",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("rank", DataType::Int64, true),
+            Field::new("owner_id", DataType::Utf8, true),
+            Field::new(
+                "tags",
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                true,
+            ),
+            Field::new(
+                "embedding",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 2),
+                true,
+            ),
+        ]));
+        let people = RecordBatch::try_new(
+            people_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["p1", "p2"])),
+                Arc::new(StringArray::from(vec![Some("Ada"), Some("Lin")])),
+                Arc::new(Float64Array::from(vec![Some(1.5), Some(2.5)])),
+                Arc::new(
+                    TimestampMillisecondArray::from(vec![Some(ADA_SEEN_AT), Some(LIN_SEEN_AT)])
+                        .with_timezone("UTC"),
+                ),
+                Arc::new(Int64Array::from(vec![Some(7), Some(8)])),
+                Arc::new(StringArray::from(vec![Some("p2"), None])),
+                Arc::new(tags.finish()),
+                Arc::new(
+                    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                        vec![
+                            Some(vec![Some(0.1), Some(0.2)]),
+                            Some(vec![Some(0.3), Some(0.4)]),
+                        ],
+                        2,
+                    ),
+                ),
+            ],
+        )?;
+        let knows_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Utf8, false),
+            Field::new("target", DataType::Utf8, false),
+            Field::new("since", DataType::Int64, true),
+            Field::new("note", DataType::Utf8, true),
+        ]));
+        let knows = RecordBatch::try_new(
+            knows_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["p1", "p2"])),
+                Arc::new(StringArray::from(vec!["p2", "p1"])),
+                Arc::new(Int64Array::from(vec![Some(2020), Some(2021)])),
+                Arc::new(StringArray::from(vec![Some("met"), None])),
+            ],
+        )?;
+        connection
+            .create_table("people", vec![people])
+            .execute()
+            .await?;
+        connection
+            .create_table("knows", vec![knows])
+            .execute()
+            .await?;
+
+        let mut person = node_mapping("Person", "people", "id");
+        person.display_column = Some("name".to_string());
+        let overlay = overlay_with(
+            vec![person],
+            vec![
+                edge("OWNED_BY", "people", "id", "owner_id", "Person", "Person"),
+                edge("KNOWS", "knows", "source", "target", "Person", "Person"),
+            ],
+        );
+        Ok((connection, test_path, overlay))
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_changes_only_the_sent_columns() -> Result<()> {
+        use flow_like_types::json::json;
+
+        let (connection, test_path, overlay) = editing_fixture().await?;
+        let before = sorted_rows(&connection, "people", "id").await?;
+        let result = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("p1"),
+                json!({ "name": "Ada Lovelace" }),
+                json!({ "name": "Ada" }),
+            ),
+        )
+        .await;
+        let after = sorted_rows(&connection, "people", "id").await?;
+        let sampled = sample_overlay(&connection, &overlay, "person", 10).await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let result = result?;
+        assert_eq!(result.outcome, OverlayRowUpdateOutcome::Updated);
+        assert_eq!(result.row["name"], json!("Ada Lovelace"));
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0]["name"], json!("Ada Lovelace"));
+        for column in [
+            "id",
+            "score",
+            "seen_at",
+            "rank",
+            "owner_id",
+            "tags",
+            "embedding",
+        ] {
+            assert_eq!(
+                after[0][column], before[0][column],
+                "{column} must be untouched"
+            );
+        }
+        assert_eq!(after[1], before[1], "other rows must be untouched");
+
+        let returned = result
+            .row
+            .as_object()
+            .expect("the saved object is a JSON object")
+            .keys()
+            .collect::<HashSet<_>>();
+        let sampled_keys = sampled[0]
+            .as_object()
+            .expect("a sampled object is a JSON object")
+            .keys()
+            .collect::<HashSet<_>>();
+        assert_eq!(returned, sampled_keys);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_keys_on_the_effective_identity() -> Result<()> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use flow_like_types::json::json;
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let people = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("external_id", DataType::Utf8, false),
+                Field::new("name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["internal-1"])),
+                Arc::new(StringArray::from(vec!["public-1"])),
+                Arc::new(StringArray::from(vec![Some("Ada")])),
+            ],
+        )?;
+        let links = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("source", DataType::Utf8, false),
+                Field::new("target", DataType::Utf8, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["public-1"])),
+                Arc::new(StringArray::from(vec!["public-1"])),
+            ],
+        )?;
+        connection
+            .create_table("people", vec![people])
+            .execute()
+            .await?;
+        connection
+            .create_table("links", vec![links])
+            .execute()
+            .await?;
+        let mut knows = edge("KNOWS", "links", "source", "target", "Person", "Person");
+        knows.src_node_column = Some("external_id".to_string());
+        knows.dst_node_column = Some("external_id".to_string());
+        let mut person = node_mapping("Person", "people", "id");
+        person.display_column = Some("name".to_string());
+        let overlay = overlay_with(vec![person], vec![knows]);
+
+        let by_effective_id = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("public-1"),
+                json!({ "name": "Ada Lovelace" }),
+                json!({ "name": "Ada" }),
+            ),
+        )
+        .await;
+        let by_base_id = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("internal-1"),
+                json!({ "name": "Ada Byron" }),
+                json!({ "name": "Ada Lovelace" }),
+            ),
+        )
+        .await;
+        let locked_base = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("public-1"),
+                json!({ "id": "internal-2" }),
+                json!({ "id": "internal-1" }),
+            ),
+        )
+        .await;
+        let locked_effective = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("public-1"),
+                json!({ "external_id": "public-2" }),
+                json!({ "external_id": "public-1" }),
+            ),
+        )
+        .await;
+        let rows = sorted_rows(&connection, "people", "id").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let saved = by_effective_id?;
+        assert_eq!(saved.row["name"], json!("Ada Lovelace"));
+        assert_eq!(saved.row["external_id"], json!("public-1"));
+        let by_base_id = by_base_id.expect_err("the base id column is not this object's identity");
+        assert!(
+            matches!(
+                update_rejection(&by_base_id),
+                Some(OverlayRowUpdateRejected::NotFound(_))
+            ),
+            "{by_base_id:#}"
+        );
+        for (column, result) in [("id", locked_base), ("external_id", locked_effective)] {
+            let error = result.expect_err("identity columns are locked");
+            assert!(
+                input_rejection(&error)
+                    .is_some_and(|message| message.contains(&format!("'{column}'"))),
+                "{error:#}"
+            );
+        }
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], json!("Ada Lovelace"));
+        assert_eq!(rows[0]["id"], json!("internal-1"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_never_inserts_or_edits_ambiguous_rows() -> Result<()> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use flow_like_types::json::json;
+
+        let (connection, test_path, overlay) = editing_fixture().await?;
+        let duplicates = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["d1", "d1"])),
+                Arc::new(StringArray::from(vec![Some("First"), Some("Second")])),
+            ],
+        )?;
+        connection
+            .create_table("duplicates", vec![duplicates])
+            .execute()
+            .await?;
+        let duplicate_overlay = overlay_with(
+            vec![node_mapping("Duplicate", "duplicates", "id")],
+            Vec::new(),
+        );
+
+        let missing = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("p9"),
+                json!({ "name": "Ghost" }),
+                json!({ "name": null }),
+            ),
+        )
+        .await;
+        let ambiguous = update_overlay_object(
+            &connection,
+            &duplicate_overlay,
+            object_edit(
+                "duplicate",
+                json!("d1"),
+                json!({ "name": "Changed" }),
+                json!({ "name": "First" }),
+            ),
+        )
+        .await;
+        let people = sorted_rows(&connection, "people", "id").await?;
+        let duplicates = sorted_rows(&connection, "duplicates", "name").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let missing = missing.expect_err("an unknown id must not be inserted");
+        assert!(
+            matches!(
+                update_rejection(&missing),
+                Some(OverlayRowUpdateRejected::NotFound(_))
+            ),
+            "{missing:#}"
+        );
+        assert_eq!(people.len(), 2);
+        let ambiguous = ambiguous.expect_err("rows sharing an identity must not be edited");
+        assert!(
+            matches!(
+                update_rejection(&ambiguous),
+                Some(OverlayRowUpdateRejected::NotUnique(_))
+            ),
+            "{ambiguous:#}"
+        );
+        let names = duplicates
+            .iter()
+            .map(|row| row["name"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![json!("First"), json!("Second")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_rejects_columns_it_must_not_write() -> Result<()> {
+        use flow_like_types::json::json;
+
+        let (connection, test_path, overlay) = editing_fixture().await?;
+        let mut frozen = overlay.clone();
+        frozen.property_projection_mode = PropertyProjectionMode::Frozen;
+        let mut listed = overlay.clone();
+        listed.nodes[0].property_columns = vec![PropertyColumnDef {
+            name: "tags".to_string(),
+            data_type: "List(Utf8)".to_string(),
+            nullable: true,
+        }];
+        let version_before = table_version(&connection, "people").await?;
+
+        let cases = [
+            (
+                &overlay,
+                json!({ "id": "p7" }),
+                json!({ "id": "p1" }),
+                "'id'",
+            ),
+            (
+                &overlay,
+                json!({ "owner_id": "p1" }),
+                json!({ "owner_id": "p2" }),
+                "'owner_id'",
+            ),
+            (
+                &frozen,
+                json!({ "score": 3.5 }),
+                json!({ "score": 1.5 }),
+                "'score'",
+            ),
+            (
+                &overlay,
+                json!({ "missing": 1 }),
+                json!({ "missing": 1 }),
+                "'missing'",
+            ),
+            (
+                &listed,
+                json!({ "tags": ["b"] }),
+                json!({ "tags": ["a"] }),
+                "'tags'",
+            ),
+            (
+                &overlay,
+                json!({ "rank": "abc" }),
+                json!({ "rank": 7 }),
+                "'rank'",
+            ),
+            (
+                &overlay,
+                json!({ "name": "Ada Lovelace" }),
+                json!({}),
+                "'name'",
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (target, updates, expected, needle) in cases {
+            let outcome = update_overlay_object(
+                &connection,
+                target,
+                object_edit("person", json!("p1"), updates, expected),
+            )
+            .await;
+            match outcome {
+                Ok(result) => failures.push(format!("{needle}: accepted as {result:?}")),
+                Err(error) => {
+                    if !input_rejection(&error).is_some_and(|message| message.contains(needle)) {
+                        failures.push(format!("{needle}: {error:#}"));
+                    }
+                }
+            }
+        }
+        let empty = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit("person", json!("p1"), json!({}), json!({})),
+        )
+        .await;
+        let version_after = table_version(&connection, "people").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        assert!(failures.is_empty(), "{failures:#?}");
+        let empty = empty.expect_err("an edit without changes is rejected");
+        assert!(input_rejection(&empty).is_some(), "{empty:#}");
+        assert_eq!(version_after, version_before, "no rejected edit may write");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_compares_expected_values_by_column_type() -> Result<()> {
+        use flow_like_types::json::json;
+
+        let (connection, test_path, overlay) = editing_fixture().await?;
+        let saved = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("p1"),
+                json!({ "seen_at": LIN_SEEN_AT }),
+                json!({ "seen_at": "2026-08-16T12:00:00.000Z" }),
+            ),
+        )
+        .await;
+        let version_before_stale = table_version(&connection, "people").await?;
+        let stale = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "person",
+                json!("p1"),
+                json!({ "name": "Ada Lovelace" }),
+                json!({ "name": "Someone else" }),
+            ),
+        )
+        .await;
+        let version_after_stale = table_version(&connection, "people").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let saved = saved?;
+        assert_eq!(saved.outcome, OverlayRowUpdateOutcome::Updated);
+        assert_eq!(saved.row["seen_at"], json!(LIN_SEEN_AT));
+        let stale = stale?;
+        assert_eq!(stale.outcome, OverlayRowUpdateOutcome::Stale);
+        assert_eq!(stale.row["name"], json!("Ada"));
+        assert_eq!(
+            version_after_stale, version_before_stale,
+            "a stale edit must not write"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_types_identity_literals_per_column() -> Result<()> {
+        use arrow::array::{Int64Array, RecordBatch, StringArray, TimestampMillisecondArray};
+        use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+        use flow_like_types::json::json;
+        use lancedb::connect;
+        use lancedb::index::Index;
+        use lancedb::index::scalar::BTreeIndexBuilder;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let counters = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("label", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![42, 7])),
+                Arc::new(StringArray::from(vec![Some("answer"), Some("seven")])),
+            ],
+        )?;
+        let events = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new(
+                    "at",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                ),
+                Field::new("label", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(TimestampMillisecondArray::from(vec![ADA_SEEN_AT])),
+                Arc::new(StringArray::from(vec![Some("launch")])),
+            ],
+        )?;
+        connection
+            .create_table("counters", vec![counters])
+            .execute()
+            .await?;
+        connection
+            .create_table("events", vec![events])
+            .execute()
+            .await?;
+        connection
+            .open_table("counters")
+            .execute()
+            .await?
+            .create_index(&["id"], Index::BTree(BTreeIndexBuilder::default()))
+            .execute()
+            .await?;
+        let overlay = overlay_with(
+            vec![
+                node_mapping("Counter", "counters", "id"),
+                node_mapping("Event", "events", "at"),
+            ],
+            Vec::new(),
+        );
+
+        let by_number = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "counter",
+                json!(42),
+                json!({ "label": "forty-two" }),
+                json!({ "label": "answer" }),
+            ),
+        )
+        .await;
+        let by_text = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "counter",
+                json!("42"),
+                json!({ "label": "42" }),
+                json!({ "label": "forty-two" }),
+            ),
+        )
+        .await;
+        let by_garbage = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "counter",
+                json!("abc"),
+                json!({ "label": "never" }),
+                json!({ "label": "42" }),
+            ),
+        )
+        .await;
+        let by_instant = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "event",
+                json!(ADA_SEEN_AT),
+                json!({ "label": "liftoff" }),
+                json!({ "label": "launch" }),
+            ),
+        )
+        .await;
+        let counters = sorted_rows(&connection, "counters", "id").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let by_number = by_number?;
+        assert_eq!(
+            by_number.outcome,
+            OverlayRowUpdateOutcome::Updated,
+            "an indexed Int64 identity updates exactly one row"
+        );
+        assert_eq!(by_number.row["label"], json!("forty-two"));
+        assert_eq!(by_text?.row["label"], json!("42"));
+        let by_garbage = by_garbage.expect_err("a non-numeric id cannot match an Int64 identity");
+        assert!(
+            input_rejection(&by_garbage).is_some_and(|message| message.contains("'abc'")),
+            "{by_garbage:#}"
+        );
+        assert_eq!(by_instant?.row["label"], json!("liftoff"));
+        assert_eq!(counters.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_relationship_edits_join_rows_only() -> Result<()> {
+        use flow_like_types::json::json;
+
+        let (connection, test_path, overlay) = editing_fixture().await?;
+        let saved = update_overlay_relationship(
+            &connection,
+            &overlay,
+            relationship_edit(
+                "KNOWS",
+                "p1",
+                "p2",
+                json!({ "note": "colleagues", "since": 2019 }),
+                json!({ "note": "met", "since": 2020 }),
+            ),
+        )
+        .await;
+        let endpoint = update_overlay_relationship(
+            &connection,
+            &overlay,
+            relationship_edit(
+                "KNOWS",
+                "p1",
+                "p2",
+                json!({ "target": "p1" }),
+                json!({ "target": "p2" }),
+            ),
+        )
+        .await;
+        let foreign_key = update_overlay_relationship(
+            &connection,
+            &overlay,
+            relationship_edit(
+                "OWNED_BY",
+                "p1",
+                "p2",
+                json!({ "name": "Ada Lovelace" }),
+                json!({ "name": "Ada" }),
+            ),
+        )
+        .await;
+        let knows = sorted_rows(&connection, "knows", "source").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let saved = saved?;
+        assert_eq!(saved.outcome, OverlayRowUpdateOutcome::Updated);
+        let row = saved
+            .row
+            .as_object()
+            .expect("the saved relationship is a JSON object");
+        assert_eq!(row.get("note"), Some(&json!("colleagues")));
+        assert_eq!(row.get("since"), Some(&json!(2019)));
+        assert!(
+            !row.contains_key("source") && !row.contains_key("target"),
+            "{row:?}"
+        );
+        assert_eq!(knows[1]["since"], json!(2021));
+        assert_eq!(knows[1]["note"], Value::Null);
+        let endpoint = endpoint.expect_err("relationship endpoints are locked");
+        assert!(
+            input_rejection(&endpoint).is_some_and(|message| message.contains("'target'")),
+            "{endpoint:#}"
+        );
+        let foreign_key =
+            foreign_key.expect_err("a foreign-key relationship is edited on its object");
+        assert!(
+            input_rejection(&foreign_key).is_some_and(|message| message.contains("OWNED_BY")),
+            "{foreign_key:#}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_object_locks_the_identity_of_every_object_on_its_table() -> Result<()> {
+        use arrow::array::{Float64Array, RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use flow_like_types::json::json;
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let orders = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("order_id", DataType::Utf8, false),
+                Field::new("customer_id", DataType::Utf8, false),
+                Field::new("total", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["o1"])),
+                Arc::new(StringArray::from(vec!["c1"])),
+                Arc::new(Float64Array::from(vec![Some(10.0)])),
+            ],
+        )?;
+        connection
+            .create_table("orders", vec![orders])
+            .execute()
+            .await?;
+        let overlay = overlay_with(
+            vec![
+                node_mapping("Order", "orders", "order_id"),
+                node_mapping("Customer", "orders", "customer_id"),
+            ],
+            Vec::new(),
+        );
+        let version_before = table_version(&connection, "orders").await?;
+
+        let customer_via_order = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "order",
+                json!("o1"),
+                json!({ "customer_id": "c2" }),
+                json!({ "customer_id": "c1" }),
+            ),
+        )
+        .await;
+        let order_via_customer = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "customer",
+                json!("c1"),
+                json!({ "order_id": "o2" }),
+                json!({ "order_id": "o1" }),
+            ),
+        )
+        .await;
+        let version_after_rejections = table_version(&connection, "orders").await?;
+        let property = update_overlay_object(
+            &connection,
+            &overlay,
+            object_edit(
+                "order",
+                json!("o1"),
+                json!({ "total": 12.5 }),
+                json!({ "total": 10.0 }),
+            ),
+        )
+        .await;
+        let rows = sorted_rows(&connection, "orders", "order_id").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        for (column, result) in [
+            ("customer_id", customer_via_order),
+            ("order_id", order_via_customer),
+        ] {
+            let error = result.expect_err("another object type's identity is locked");
+            assert!(
+                input_rejection(&error)
+                    .is_some_and(|message| message.contains(&format!("'{column}' identifies"))),
+                "{error:#}"
+            );
+        }
+        assert_eq!(
+            version_after_rejections, version_before,
+            "no rejected edit may write"
+        );
+        assert_eq!(property?.outcome, OverlayRowUpdateOutcome::Updated);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["order_id"], json!("o1"));
+        assert_eq!(rows[0]["customer_id"], json!("c1"));
+        assert_eq!(rows[0]["total"], json!(12.5));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_overlay_relationship_locks_every_relationship_on_its_table() -> Result<()> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use flow_like_types::json::json;
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let enrollments = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("student_id", DataType::Utf8, false),
+                Field::new("course_id", DataType::Utf8, false),
+                Field::new("teacher_id", DataType::Utf8, false),
+                Field::new("grade", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["s1"])),
+                Arc::new(StringArray::from(vec!["c1"])),
+                Arc::new(StringArray::from(vec!["t1"])),
+                Arc::new(StringArray::from(vec![Some("B")])),
+            ],
+        )?;
+        connection
+            .create_table("enrollments", vec![enrollments])
+            .execute()
+            .await?;
+        let overlay = overlay_with(
+            vec![
+                node_mapping("Student", "students", "id"),
+                node_mapping("Course", "courses", "id"),
+                node_mapping("Teacher", "teachers", "id"),
+            ],
+            vec![
+                edge(
+                    "ENROLLED_IN",
+                    "enrollments",
+                    "student_id",
+                    "course_id",
+                    "Student",
+                    "Course",
+                ),
+                edge(
+                    "TAUGHT_BY",
+                    "enrollments",
+                    "course_id",
+                    "teacher_id",
+                    "Course",
+                    "Teacher",
+                ),
+            ],
+        );
+        let version_before = table_version(&connection, "enrollments").await?;
+
+        let teacher_via_enrollment = update_overlay_relationship(
+            &connection,
+            &overlay,
+            relationship_edit(
+                "ENROLLED_IN",
+                "s1",
+                "c1",
+                json!({ "teacher_id": "t9" }),
+                json!({ "teacher_id": "t1" }),
+            ),
+        )
+        .await;
+        let student_via_teaching = update_overlay_relationship(
+            &connection,
+            &overlay,
+            relationship_edit(
+                "TAUGHT_BY",
+                "c1",
+                "t1",
+                json!({ "student_id": "s9" }),
+                json!({ "student_id": "s1" }),
+            ),
+        )
+        .await;
+        let version_after_rejections = table_version(&connection, "enrollments").await?;
+        let property = update_overlay_relationship(
+            &connection,
+            &overlay,
+            relationship_edit(
+                "ENROLLED_IN",
+                "s1",
+                "c1",
+                json!({ "grade": "A" }),
+                json!({ "grade": "B" }),
+            ),
+        )
+        .await;
+        let rows = sorted_rows(&connection, "enrollments", "student_id").await?;
+        std::fs::remove_dir_all(&test_path).ok();
+
+        for (column, result) in [
+            ("teacher_id", teacher_via_enrollment),
+            ("student_id", student_via_teaching),
+        ] {
+            let error = result.expect_err("a sibling relationship's endpoints are locked");
+            assert!(
+                input_rejection(&error)
+                    .is_some_and(|message| message.contains(&format!("'{column}' links"))),
+                "{error:#}"
+            );
+        }
+        assert_eq!(
+            version_after_rejections, version_before,
+            "no rejected edit may write"
+        );
+        assert_eq!(property?.outcome, OverlayRowUpdateOutcome::Updated);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["student_id"], json!("s1"));
+        assert_eq!(rows[0]["teacher_id"], json!("t1"));
+        assert_eq!(rows[0]["grade"], json!("A"));
         Ok(())
     }
 

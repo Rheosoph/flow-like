@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 /// Cgroup v2 block I/O counts all descendant processes. Missing accounting is
 /// unavailable; an existing empty io.stat means no block-device I/O yet.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn parse_cgroup_io(value: &str) -> Option<(u64, u64)> {
     if value.len() > 64 * 1024 {
         return None;

@@ -364,14 +364,20 @@ pub(super) async fn hydrate(config: &PlacementConfig, store: Arc<dyn ObjectStore
         templates,
         widgets,
     } = prepare(config)?;
-    let root = ObjectPath::from("apps").child(config.project_id.as_str());
-    compress_to_file(store.clone(), root.child("manifest.app"), &app.to_proto()).await?;
+    let root = ObjectPath::from("apps").join(config.project_id.as_str());
+    compress_to_file(
+        store.clone(),
+        root.clone().join("manifest.app"),
+        &app.to_proto(),
+    )
+    .await?;
     for event in events {
         let path = root
-            .child("events")
-            .child("versions")
-            .child(event.id.as_str())
-            .child(format!(
+            .clone()
+            .join("events")
+            .join("versions")
+            .join(event.id.as_str())
+            .join(format!(
                 "{}.{}.{}",
                 event.event_version.0, event.event_version.1, event.event_version.2
             ));
@@ -384,20 +390,23 @@ pub(super) async fn hydrate(config: &PlacementConfig, store: Arc<dyn ObjectStore
             let archive = Board::versioned_template_dir(&root, &board.id);
             compress_to_file(
                 store.clone(),
-                root.child(format!("{}.template", board.id)),
+                root.clone().join(format!("{}.template", board.id)),
                 &board.to_proto(),
             )
             .await?;
             (
-                archive.child(format!("{major}_{minor}_{patch}.template")),
-                archive.child(format!("{major}_{minor}_{patch}")),
+                archive
+                    .clone()
+                    .join(format!("{major}_{minor}_{patch}.template")),
+                archive.join(format!("{major}_{minor}_{patch}")),
             )
         } else {
             (
                 Board::proto_path(&root, &board.id, Some(board.version)),
-                root.child("versions")
-                    .child(board.id.as_str())
-                    .child(format!("{major}_{minor}_{patch}")),
+                root.clone()
+                    .join("versions")
+                    .join(board.id.as_str())
+                    .join(format!("{major}_{minor}_{patch}")),
             )
         };
         compress_to_file(store.clone(), path, &board.to_proto()).await?;
@@ -406,14 +415,14 @@ pub(super) async fn hydrate(config: &PlacementConfig, store: Arc<dyn ObjectStore
             let proto: flow_like_types::proto::Page = page.into();
             compress_to_file(
                 store.clone(),
-                pages_root.child(format!("{id}.page")),
+                pages_root.clone().join(format!("{id}.page")),
                 &proto,
             )
             .await?;
             if entry.template {
                 compress_to_file(
                     store.clone(),
-                    Board::template_pages_dir(&root, &board.id).child(format!("{id}.page")),
+                    Board::template_pages_dir(&root, &board.id).join(format!("{id}.page")),
                     &proto,
                 )
                 .await?;
@@ -423,14 +432,15 @@ pub(super) async fn hydrate(config: &PlacementConfig, store: Arc<dyn ObjectStore
     for widget in widgets.into_values() {
         let (major, minor, patch) = widget.version.context("Missing approved widget version")?;
         let path = root
-            .child("widgets")
-            .child("versions")
-            .child(widget.id.as_str())
-            .child(format!("{major}-{minor}-{patch}.widget"));
+            .clone()
+            .join("widgets")
+            .join("versions")
+            .join(widget.id.as_str())
+            .join(format!("{major}-{minor}-{patch}.widget"));
         compress_to_file_json(store.clone(), path, &widget).await?;
         compress_to_file_json(
             store.clone(),
-            root.child(format!("{}.widget", widget.id)),
+            root.clone().join(format!("{}.widget", widget.id)),
             &widget,
         )
         .await?;

@@ -1436,6 +1436,34 @@ pub async fn graph_upsert_edges(
     Ok(serde_json::json!({ "upserted": upserted }))
 }
 
+#[tauri::command(async)]
+pub async fn graph_update_object(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    payload: lancegraph::ObjectPropertyUpdate,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let result = lancegraph::update_overlay_object(&conn, &overlay, payload).await?;
+    Ok(serde_json::to_value(result)?)
+}
+
+#[tauri::command(async)]
+pub async fn graph_update_relationship(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    payload: lancegraph::RelationshipPropertyUpdate,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let result = lancegraph::update_overlay_relationship(&conn, &overlay, payload).await?;
+    Ok(serde_json::to_value(result)?)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubgraphPayload {

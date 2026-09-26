@@ -22,6 +22,9 @@ import type {
 	SubgraphNode,
 	SubgraphPayload,
 	SubgraphResult,
+	UpdateOntologyObjectPayload,
+	UpdateOntologyRelationshipPayload,
+	UpdateOntologyRowResult,
 	UpdateOverlayPayload,
 	UpsertGraphElementsPayload,
 	UpsertGraphElementsResult,
@@ -791,6 +794,56 @@ export class GraphState implements IGraphState {
 		}
 
 		return invoke("graph_upsert_edges", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async updateObject(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyObjectPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<UpdateOntologyRowResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/objects${scopeQuery(userScoped)}`,
+				{ method: "PATCH", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_update_object", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async updateRelationship(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyRelationshipPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<UpdateOntologyRowResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/relationships${scopeQuery(userScoped)}`,
+				{ method: "PATCH", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_update_relationship", {
 			appId,
 			overlayId,
 			payload,

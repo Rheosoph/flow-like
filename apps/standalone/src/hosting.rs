@@ -202,6 +202,7 @@ impl axum::serve::Listener for ReadyListener {
 }
 
 impl PreparedHost {
+    #[cfg(test)]
     pub(crate) async fn bind(
         config: &PlacementConfig,
         events: Vec<PreparedInvocation>,
@@ -359,6 +360,7 @@ impl PreparedHost {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn serve(self) -> Result<()> {
         self.serve_with_ready(None).await
     }

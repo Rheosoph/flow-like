@@ -2,7 +2,8 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Server, ShieldOff } from "lucide-react";
+import { ArrowLeft, RefreshCw, Server, ShieldOff } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useHub } from "../../../hooks/use-hub";
@@ -67,6 +68,14 @@ export function DevicesPage({ projectId }: { projectId?: string } = {}) {
 		<div className="h-full min-h-0 overflow-auto">
 			<div className="container mx-auto flex max-w-6xl flex-col gap-6 px-2 pb-4">
 				<div className="space-y-1 pt-2">
+					{projectId && (
+						<Button asChild variant="link" className="h-auto gap-2 px-0 pb-2">
+							<Link href="/settings/devices">
+								<ArrowLeft className="size-4" aria-hidden />
+								{t("allDevices", "All devices")}
+							</Link>
+						</Button>
+					)}
 					<h1 className="text-3xl font-bold tracking-tight">
 						{projectId ? "Project devices" : t("devices", "Devices")}
 					</h1>
@@ -75,7 +84,7 @@ export function DevicesPage({ projectId }: { projectId?: string } = {}) {
 							? "Unlock a device to view this project's deployments, revisions and replica health."
 							: t(
 									"devicesDescription",
-									"Standalone devices registered to your account.",
+									"Manage devices you own or have access to, their deployments, health, and certificates.",
 								)}
 					</p>
 				</div>
@@ -85,13 +94,30 @@ export function DevicesPage({ projectId }: { projectId?: string } = {}) {
 					<p>
 						{t("devicesSignIn", "Sign in to view your registered devices.")}
 					</p>
-				) : !hub ? (
+				) : hub?.standalone?.enabled !== true ? (
 					<Card>
 						<CardContent className="space-y-3 pt-6">
 							<p>
+								{hub?.standalone?.enabled === false
+									? t(
+											"devicesDisabled",
+											"Standalone devices are not enabled on this hub.",
+										)
+									: t(
+											"devicesHubUnavailable",
+											"Device availability has not been confirmed by this hub.",
+										)}
+							</p>
+							{profile.data && (
+								<p className="break-all text-sm text-muted-foreground">
+									{t("devicesConnectedHub", "Connected hub")}:{" "}
+									{getApiOrigin(profile.data)}
+								</p>
+							)}
+							<p className="text-sm text-muted-foreground">
 								{t(
-									"devicesHubUnavailable",
-									"Device availability has not been confirmed by this hub.",
+									"devicesAvailabilityHelp",
+									"Check that you are connected to the intended hub and that its running server has device management enabled, then retry.",
 								)}
 							</p>
 							<Button variant="outline" onClick={() => void refreshHub()}>
@@ -99,13 +125,6 @@ export function DevicesPage({ projectId }: { projectId?: string } = {}) {
 							</Button>
 						</CardContent>
 					</Card>
-				) : hub.standalone?.enabled !== true ? (
-					<p>
-						{t(
-							"devicesDisabled",
-							"Standalone devices are not enabled on this hub.",
-						)}
-					</p>
 				) : profile.isError ? (
 					<div role="alert" className="space-y-3">
 						<p>

@@ -1,11 +1,18 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { ArrowDown, X } from "lucide-react";
+import { ArrowDown, ExternalLink, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import {
+	type EditableRelationship,
+	type ObjectEditField,
+	lockedRelationshipColumns,
+	resolveRelationshipIdentity,
+} from "../../../lib/ontology-object-edit";
 import type {
 	GraphOverlay,
 	SubgraphEdge,
+	SubgraphNode,
 } from "../../../state/backend-state/graph-state";
 import { Button } from "../button";
 import { ScrollArea } from "../scroll-area";
@@ -14,7 +21,9 @@ import {
 	CopyButton,
 	FieldFilter,
 	PropertyRow,
+	type UpdateElementProperties,
 	declaredTypes,
+	usePropertyRowEdits,
 } from "./graph-node-inspector";
 import { getGraphIcon } from "./icons";
 
@@ -25,7 +34,66 @@ export interface GraphEdgeInspectorProps {
 	targetCaption?: string;
 	sourceAccountId?: string | null;
 	targetAccountId?: string | null;
+	/** The loaded endpoints; they carry the typed ids a relationship edit keys on. */
+	sourceNode?: SubgraphNode;
+	targetNode?: SubgraphNode;
 	onClose: () => void;
+	/** Column types of the relationship's backing table; undefined while they load. */
+	editFields?: ReadonlyMap<string, ObjectEditField>;
+	/**
+	 * Saves edited property values of a join-table relationship. Omitted, the
+	 * inspector is read-only.
+	 */
+	onUpdateProperties?: UpdateElementProperties;
+	/** Selects a loaded node, used to reach the object a foreign key lives on. */
+	onOpenNode?: (nodeId: string) => void;
+}
+
+type ForeignKeyRelationship = Extract<
+	EditableRelationship,
+	{ reason: "foreignKey" }
+>;
+
+function ForeignKeyNotice({
+	relationship,
+	edge,
+	ownerNode,
+	ownerAccountId,
+	onOpenNode,
+}: {
+	relationship: ForeignKeyRelationship;
+	edge: SubgraphEdge;
+	ownerNode?: SubgraphNode;
+	ownerAccountId?: string | null;
+	onOpenNode?: (nodeId: string) => void;
+}) {
+	const { t } = useTranslation("common");
+	const name =
+		(!ownerAccountId && ownerNode?.caption) || relationship.ownerLabel;
+	const ownerId =
+		relationship.ownerSide === "source" ? edge.source : edge.target;
+	return (
+		<div className="min-w-0 space-y-2 rounded-lg border border-dashed border-border/70 px-3 py-2.5">
+			<p className="text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+				{t(
+					"relationshipStoredOnObject",
+					"These values are stored on {{object}}. Open it to edit them.",
+					{ object: name },
+				)}
+			</p>
+			{onOpenNode && ownerNode && (
+				<Button
+					variant="outline"
+					size="sm"
+					className="h-auto min-h-7 max-w-full justify-start gap-1.5 whitespace-normal px-2.5 py-1 text-left text-xs [overflow-wrap:anywhere]"
+					onClick={() => onOpenNode(ownerId)}
+				>
+					<ExternalLink className="h-3.5 w-3.5 shrink-0" />
+					{t("openObjectName", "Open {{name}}", { name })}
+				</Button>
+			)}
+		</div>
+	);
 }
 
 export function GraphEdgeInspector({
@@ -35,9 +103,33 @@ export function GraphEdgeInspector({
 	targetCaption,
 	sourceAccountId,
 	targetAccountId,
+	sourceNode,
+	targetNode,
 	onClose,
+	editFields,
+	onUpdateProperties,
+	onOpenNode,
 }: GraphEdgeInspectorProps) {
 	const { t } = useTranslation("common");
+	const relationship = useMemo<EditableRelationship | null>(() => {
+		if (!onUpdateProperties || !edge) return null;
+		if (!overlay) return { ok: false, reason: "unknownType" };
+		return resolveRelationshipIdentity(overlay, edge, sourceNode, targetNode);
+	}, [onUpdateProperties, edge, overlay, sourceNode, targetNode]);
+	const locked = useMemo(
+		() =>
+			overlay && relationship?.ok
+				? lockedRelationshipColumns(overlay, relationship.mapping)
+				: null,
+		[overlay, relationship],
+	);
+	const { editingKey, rowEdit, guardToggle } = usePropertyRowEdits({
+		elementId: edge?.id,
+		props: edge?.props,
+		fields: editFields,
+		locked,
+		onUpdate: onUpdateProperties,
+	});
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
 	const handleToggleField = useCallback((field: string) => {
 		setHiddenFields((prev) => {
@@ -61,11 +153,15 @@ export function GraphEdgeInspector({
 	const Icon = getGraphIcon(edge.style?.icon ?? "link");
 	const propEntries = edge.props
 		? Object.entries(edge.props).filter(
-				([, v]) => v !== null && v !== undefined,
+				([k, v]) => (v !== null && v !== undefined) || k === editingKey,
 			)
 		: [];
 	const allFields = propEntries.map(([k]) => k);
 	const visibleEntries = propEntries.filter(([k]) => !hiddenFields.has(k));
+	const foreignKey =
+		relationship && !relationship.ok && relationship.reason === "foreignKey"
+			? relationship
+			: null;
 
 	return (
 		<div className="flex h-full min-h-0 w-80 min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-l bg-background animate-in slide-in-from-right-5 duration-200">
@@ -91,7 +187,7 @@ export function GraphEdgeInspector({
 						<FieldFilter
 							allFields={allFields}
 							hiddenFields={hiddenFields}
-							onToggle={handleToggleField}
+							onToggle={guardToggle(handleToggleField)}
 						/>
 					)}
 					<Button
@@ -157,6 +253,22 @@ export function GraphEdgeInspector({
 						</div>
 					</div>
 
+					{foreignKey && (
+						<ForeignKeyNotice
+							relationship={foreignKey}
+							edge={edge}
+							ownerNode={
+								foreignKey.ownerSide === "source" ? sourceNode : targetNode
+							}
+							ownerAccountId={
+								foreignKey.ownerSide === "source"
+									? sourceAccountId
+									: targetAccountId
+							}
+							onOpenNode={onOpenNode}
+						/>
+					)}
+
 					{visibleEntries.length > 0 && (
 						<div>
 							<div className="flex items-center justify-between mb-2">
@@ -174,11 +286,12 @@ export function GraphEdgeInspector({
 							<div className="space-y-2">
 								{visibleEntries.map(([key, value]) => (
 									<PropertyRow
-										key={key}
+										key={`${edge.id}:${key}`}
 										value={value}
 										propKey={key}
 										metadata={edge.property_metadata?.[key]}
 										typeName={typeNames.get(key)}
+										edit={rowEdit(key, value)}
 									/>
 								))}
 							</div>

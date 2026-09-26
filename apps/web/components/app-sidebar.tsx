@@ -80,6 +80,7 @@ import {
 	Edit3Icon,
 	type LucideIcon,
 	Plus,
+	Server,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
@@ -142,6 +143,14 @@ function useNavData() {
 					title: t("myApps", "My Apps"),
 					url: "/library",
 					icon: AnimatedLibraryIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("devices", "Devices"),
+					url: "/settings/devices",
+					icon: Server,
 					isActive: false,
 					permission: false,
 					items: [],

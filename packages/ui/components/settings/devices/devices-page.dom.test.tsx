@@ -36,7 +36,7 @@ Object.assign(globalThis, {
 });
 let account = "owner-a";
 let authenticated = true;
-let enabled = true;
+let enabled: boolean | undefined = true;
 let rejectRevoke = true;
 const calls: [string, string][] = [];
 const statuses = new Map<string, DeviceStatus["status"]>();
@@ -307,9 +307,15 @@ test("gates inventory, confirms revocation, keeps errors actionable, and isolate
 	expect(container.textContent).toContain("Sign in");
 	expect(calls).toEqual([]);
 	authenticated = true;
+	enabled = undefined;
+	await render();
+	expect(container.textContent).toContain("has not been confirmed");
+	expect(container.textContent).toContain("https://api.example.com");
+	expect(calls).toEqual([]);
 	enabled = false;
 	await render();
 	expect(container.textContent).toContain("not enabled");
+	expect(container.textContent).toContain("Retry");
 	expect(calls).toEqual([]);
 	enabled = true;
 	await render();
@@ -627,6 +633,9 @@ test("project devices show only inspected project placements and refresh the obs
 	account = "project-owner";
 	await render("project-a");
 	expect(container.textContent).toContain("Project devices");
+	expect(
+		container.querySelector('a[href="/settings/devices"]')?.textContent,
+	).toBe("All devices");
 	expect(container.textContent).toContain(
 		"Unlock to check whether this project is deployed here.",
 	);

@@ -352,6 +352,7 @@ pub(crate) async fn inspection_state(
     initialize_state(config, authorizer, None, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn offline_state(
     root: &Path,
     authorizer: Option<Arc<dyn RequestAuthorizer>>,
@@ -441,6 +442,7 @@ async fn run_with_state(
     .await
 }
 
+#[cfg(test)]
 async fn run_with_state_ready<F: Future<Output = Result<()>>>(
     config: &PlacementConfig,
     state: Arc<FlowLikeState>,

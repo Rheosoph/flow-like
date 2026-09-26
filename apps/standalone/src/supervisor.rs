@@ -17,7 +17,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -1244,6 +1244,7 @@ mod tests {
     #[tokio::test]
     async fn multiple_stubborn_children_share_one_shutdown_deadline() -> Result<()> {
         use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::process::Command;
         let mut children = Vec::new();
         for _ in 0..8 {
             let mut child = Command::new("/bin/sh")

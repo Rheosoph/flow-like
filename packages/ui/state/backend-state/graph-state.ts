@@ -290,6 +290,34 @@ export interface UpsertGraphElementsResult {
 	upserted: number;
 }
 
+export interface UpdateOntologyObjectPayload {
+	/** Object type key: the mapping's id, else its api_name, else its label. */
+	object_type: string;
+	/** Value of the object's effective id column. */
+	id: string | number | boolean;
+	updates: Record<string, unknown>;
+	/** Baseline value of every key in `updates`; a mismatch returns `stale`. */
+	expected: Record<string, unknown>;
+}
+
+export interface UpdateOntologyRelationshipPayload {
+	/** Relationship type key: the mapping's id, else its api_name, else its label. */
+	relationship_type: string;
+	source: string | number | boolean;
+	target: string | number | boolean;
+	updates: Record<string, unknown>;
+	/** Baseline value of every key in `updates`; a mismatch returns `stale`. */
+	expected: Record<string, unknown>;
+}
+
+export type OntologyRowUpdateOutcome = "updated" | "stale";
+
+export interface UpdateOntologyRowResult {
+	outcome: OntologyRowUpdateOutcome;
+	/** The projected row after the update, or the current row when `stale`. */
+	row: Record<string, unknown>;
+}
+
 export interface NeighborsPayload {
 	label: string;
 	node_id: unknown;
@@ -544,4 +572,26 @@ export interface IGraphState {
 		payload: UpsertGraphElementsPayload,
 		userScoped?: boolean,
 	): Promise<UpsertGraphElementsResult>;
+	/**
+	 * Update property values of one existing local ontology object. Update-only:
+	 * nothing is inserted, and identity and relationship columns are locked
+	 * server-side. Never call this for remote imports.
+	 */
+	updateObject(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyObjectPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult>;
+	/**
+	 * Update property values of one existing join-table relationship.
+	 * Update-only: source and target columns are locked server-side, and
+	 * foreign-key relationships are rejected. Never call this for remote imports.
+	 */
+	updateRelationship(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyRelationshipPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult>;
 }

@@ -29,6 +29,7 @@ import {
 	Bot,
 	ExternalLink,
 	Package,
+	Server,
 	Users,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -367,6 +368,21 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const additionalItems = useMemo<SpotlightItem[]>(() => {
 		const items: SpotlightItem[] = [...openBoardItems];
 
+		items.push({
+			id: "nav-devices",
+			type: "navigation",
+			label: t("devices", "Devices"),
+			description: t(
+				"devicesOverviewDescription",
+				"Manage all your devices, deployments, and certificates",
+			),
+			icon: Server,
+			group: "navigation",
+			keywords: ["devices", "fleet", "servers", "deployments", "certificates"],
+			priority: 80,
+			action: () => router.push("/settings/devices"),
+		});
+
 		if (isCurrentPageShortcut) {
 			items.push({
 				id: "action-remove-shortcut",
@@ -692,6 +708,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		handleProfileChange,
 		appMetadata.data,
 		developerMode,
+		t,
 	]);
 
 	const handleQuickCreateProject = useCallback(

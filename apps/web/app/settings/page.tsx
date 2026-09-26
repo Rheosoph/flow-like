@@ -7,7 +7,6 @@ import {
 	CardTitle,
 	DeveloperModeCard,
 	useDeveloperMode,
-	useHub,
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import {
@@ -33,7 +32,6 @@ interface SettingsCard {
 	icon: LucideIcon;
 	external?: boolean;
 	devOnly?: boolean;
-	requiresDevices?: boolean;
 }
 
 interface SettingsSection {
@@ -81,11 +79,10 @@ function buildSettingsSections(
 					title: t("devices", "Devices"),
 					description: t(
 						"devicesSettingsDescription",
-						"View registered standalone devices and revoke account access",
+						"Manage your device fleet, deployments, health, and certificates",
 					),
 					href: "/settings/devices",
 					icon: Server,
-					requiresDevices: true,
 				},
 				{
 					title: t("sinksAmpTriggers", "Sinks & Triggers"),
@@ -183,22 +180,16 @@ function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 export default function SettingsPage() {
 	const { t } = useTranslation("common");
 	const { developerMode } = useDeveloperMode();
-	const { hub } = useHub();
-	const devicesEnabled = hub?.standalone?.enabled === true;
 
 	const sections = useMemo(
 		() =>
 			buildSettingsSections(t)
 				.map((section) => ({
 					...section,
-					cards: section.cards.filter(
-						(card) =>
-							(developerMode || !card.devOnly) &&
-							(!card.requiresDevices || devicesEnabled),
-					),
+					cards: section.cards.filter((card) => developerMode || !card.devOnly),
 				}))
 				.filter((section) => section.cards.length > 0),
-		[developerMode, devicesEnabled, t],
+		[developerMode, t],
 	);
 
 	return (

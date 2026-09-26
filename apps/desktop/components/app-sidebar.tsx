@@ -93,6 +93,7 @@ import {
 	Edit3Icon,
 	type LucideIcon,
 	Plus,
+	Server,
 	SidebarOpenIcon,
 	Trash2Icon,
 } from "lucide-react";
@@ -161,6 +162,14 @@ function useNavData() {
 					title: t("myApps", "My Apps"),
 					url: "/library",
 					icon: AnimatedLibraryIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("devices", "Devices"),
+					url: "/settings/devices",
+					icon: Server,
 					isActive: false,
 					permission: false,
 					items: [],

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
 import { type ReactNode, act } from "react";
+import type { ObjectEditField } from "../../../lib/ontology-object-edit";
 import {
 	type IBackendState,
 	useBackendStore,
@@ -32,6 +33,12 @@ async function setup() {
 		document: window.document,
 		Element: window.Element,
 		Event: window.Event,
+		CustomEvent: window.CustomEvent,
+		InputEvent: window.InputEvent,
+		KeyboardEvent: window.KeyboardEvent,
+		FocusEvent: window.FocusEvent,
+		PointerEvent: window.PointerEvent,
+		NodeFilter: window.NodeFilter,
 		HTMLElement: window.HTMLElement,
 		HTMLButtonElement: window.HTMLButtonElement,
 		HTMLInputElement: window.HTMLInputElement,
@@ -69,9 +76,37 @@ async function setup() {
 		useBackendStore.setState({ backend: previous });
 		await window.happyDOM.close();
 	};
+	const type = async (input: HTMLInputElement, value: string) => {
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				window.HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(input, value);
+			input.dispatchEvent(
+				new window.Event("input", { bubbles: true }) as never,
+			);
+		});
+	};
+	const press = async (target: Element, key: string) => {
+		await act(async () => {
+			target.dispatchEvent(
+				new window.KeyboardEvent("keydown", { key, bubbles: true }) as never,
+			);
+		});
+	};
+	const click = async (target: Element | null | undefined) => {
+		await act(async () => {
+			target?.dispatchEvent(
+				new window.MouseEvent("click", { bubbles: true }) as never,
+			);
+		});
+	};
 	return {
 		client,
-		container,
+		container: container as unknown as HTMLElement,
+		type,
+		press,
+		click,
 		render: (children: ReactNode) =>
 			act(async () => {
 				root.render(
@@ -358,4 +393,321 @@ test("canvas labels and React captions share cached identities and batch unresol
 	);
 	expect(batches).toEqual([[otherSub]]);
 	expect(JSON.stringify(nodes)).toBe(before);
+}, 30_000);
+
+type Updates = Record<string, unknown>;
+
+function editField(
+	name: string,
+	kind: "string" | "number",
+	integer = false,
+): ObjectEditField {
+	return { name, kind, integer, nullable: true, temporal: null };
+}
+
+const IDENTITY_LOCK =
+	"This column identifies the object, so it can't be edited here.";
+const RELATIONSHIP_LOCK =
+	"This column links objects together, so it can't be edited here.";
+
+const PERSON_OVERLAY = {
+	nodes: [
+		{
+			label: "Person",
+			table: "people",
+			id_column: "id",
+			display_column: "name",
+			property_columns: [],
+		},
+	],
+	edges: [],
+	object_views: [],
+	actions: [],
+} as unknown as GraphOverlay;
+
+const PERSON: SubgraphNode = {
+	id: "Person:1",
+	label: "Person",
+	caption: "Ada",
+	props: { id: 1, name: "Ada", role: "Engineer" },
+};
+
+const PERSON_FIELDS: ReadonlyMap<string, ObjectEditField> = new Map([
+	["id", editField("id", "number", true)],
+	["name", editField("name", "string")],
+	["role", editField("role", "string")],
+]);
+
+function affordances(container: Element) {
+	return {
+		pencils: container.querySelectorAll("svg.lucide-pencil").length,
+		locks: container.querySelectorAll("svg.lucide-lock").length,
+	};
+}
+
+function buttonLabelled(container: Element, label: string) {
+	return container.querySelector<HTMLButtonElement>(
+		`button[aria-label="${label}"]`,
+	);
+}
+
+test("inspectors stay read-only without an update callback or loaded column types", async () => {
+	const { container, render } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	await render(
+		<GraphNodeInspector
+			node={PERSON}
+			overlay={PERSON_OVERLAY}
+			onClose={() => {}}
+		/>,
+	);
+	const readOnly = container.innerHTML;
+	expect(affordances(container)).toEqual({ pencils: 0, locks: 0 });
+
+	await render(
+		<GraphNodeInspector
+			node={PERSON}
+			overlay={PERSON_OVERLAY}
+			editFields={PERSON_FIELDS}
+			onClose={() => {}}
+		/>,
+	);
+	expect(container.innerHTML).toBe(readOnly);
+
+	await render(
+		<GraphNodeInspector
+			node={PERSON}
+			overlay={PERSON_OVERLAY}
+			onUpdateProperties={async () => {}}
+			onClose={() => {}}
+		/>,
+	);
+	expect(affordances(container)).toEqual({ pencils: 0, locks: 0 });
+	expect(container.textContent).not.toContain("can't be edited here");
+}, 30_000);
+
+test("an editable object locks its identity and saves one property inline", async () => {
+	const { container, render, type, press, click } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	const { StaleObjectError } = await import(
+		"../../../lib/ontology-object-edit"
+	);
+	const calls: [Updates, Updates][] = [];
+	let outcome: "error" | "stale" | "ok" = "error";
+	await render(
+		<GraphNodeInspector
+			node={PERSON}
+			overlay={PERSON_OVERLAY}
+			editFields={PERSON_FIELDS}
+			onUpdateProperties={async (updates, baseline) => {
+				calls.push([updates, baseline]);
+				if (outcome === "error") throw new Error("Server said no");
+				if (outcome === "stale") {
+					throw new StaleObjectError({ id: 1, name: "Theirs" });
+				}
+			}}
+			onClose={() => {}}
+		/>,
+	);
+
+	expect(buttonLabelled(container, "Edit name")).not.toBeNull();
+	expect(buttonLabelled(container, "Edit id")).toBeNull();
+	expect(buttonLabelled(container, IDENTITY_LOCK)).not.toBeNull();
+	expect(affordances(container)).toEqual({ pencils: 2, locks: 1 });
+
+	await click(buttonLabelled(container, "Edit name"));
+	const input = container.querySelector("input") as HTMLInputElement;
+	expect(input.value).toBe("Ada");
+	expect(buttonLabelled(container, "Edit role")?.disabled).toBe(true);
+
+	await type(input, "x");
+	await press(input, "Enter");
+	expect(calls).toEqual([[{ name: "x" }, PERSON.props]]);
+	expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+		"Server said no",
+	);
+	expect(container.querySelector("input")?.value).toBe("x");
+
+	outcome = "stale";
+	await press(input, "Enter");
+	expect(container.textContent).toContain("Someone changed this value");
+	expect(container.textContent).toContain("Theirs");
+	expect(container.querySelector("input")?.value).toBe("x");
+
+	outcome = "ok";
+	await press(input, "Enter");
+	expect(calls).toHaveLength(3);
+	expect(container.querySelector("input")).toBeNull();
+	expect(buttonLabelled(container, "Edit role")?.disabled).toBe(false);
+}, 30_000);
+
+test("selecting another object drops the open editor", async () => {
+	const { container, render, click } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	const inspect = (node: SubgraphNode) =>
+		render(
+			<GraphNodeInspector
+				node={node}
+				overlay={PERSON_OVERLAY}
+				editFields={PERSON_FIELDS}
+				onUpdateProperties={async () => {}}
+				onClose={() => {}}
+			/>,
+		);
+	await inspect(PERSON);
+	await click(buttonLabelled(container, "Edit role"));
+	expect(container.querySelector("input")?.value).toBe("Engineer");
+
+	await inspect({
+		...PERSON,
+		id: "Person:2",
+		props: { id: 2, name: "Grace", role: "Admiral" },
+	});
+	expect(container.querySelector("input")).toBeNull();
+	expect(container.textContent).toContain("Admiral");
+	expect(buttonLabelled(container, "Edit name")?.disabled).toBe(false);
+}, 30_000);
+
+test("an object whose identity is not in view explains that it can't be edited", async () => {
+	const { container, render } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	await render(
+		<GraphNodeInspector
+			node={{ ...PERSON, props: { name: "Ada", role: "Engineer" } }}
+			overlay={PERSON_OVERLAY}
+			editFields={PERSON_FIELDS}
+			onUpdateProperties={async () => {}}
+			onClose={() => {}}
+		/>,
+	);
+	expect(container.textContent).toContain("This object can't be edited here.");
+	expect(affordances(container)).toEqual({ pencils: 0, locks: 0 });
+}, 30_000);
+
+test("a foreign-key relationship points to its owning object", async () => {
+	const { container, render, click } = await setup();
+	const { GraphEdgeInspector } = await import("./graph-edge-inspector");
+	const overlay = {
+		nodes: [
+			{ label: "Employee", table: "employees", id_column: "id" },
+			{ label: "Department", table: "departments", id_column: "id" },
+		],
+		edges: [
+			{
+				label: "WORKS_IN",
+				table: "employees",
+				src_column: "id",
+				dst_column: "department_id",
+				src_label: "Employee",
+				dst_label: "Department",
+				property_columns: [],
+			},
+		],
+		object_views: [],
+		actions: [],
+	} as unknown as GraphOverlay;
+	const opened: string[] = [];
+	await render(
+		<GraphEdgeInspector
+			edge={{
+				id: "works",
+				source: "Employee:1",
+				target: "Department:7",
+				label: "WORKS_IN",
+				props: { since: 2020 },
+			}}
+			overlay={overlay}
+			sourceNode={{
+				id: "Employee:1",
+				label: "Employee",
+				caption: "Ada",
+				props: { id: 1 },
+			}}
+			targetNode={{
+				id: "Department:7",
+				label: "Department",
+				caption: "Research",
+				props: { id: 7 },
+			}}
+			editFields={new Map([["since", editField("since", "number", true)]])}
+			onUpdateProperties={async () => {}}
+			onOpenNode={(nodeId) => opened.push(nodeId)}
+			onClose={() => {}}
+		/>,
+	);
+	expect(container.textContent).toContain(
+		"These values are stored on Ada. Open it to edit them.",
+	);
+	expect(affordances(container)).toEqual({ pencils: 0, locks: 0 });
+	await click(
+		[...container.querySelectorAll("button")].find(
+			(button) => button.textContent === "Open Ada",
+		),
+	);
+	expect(opened).toEqual(["Employee:1"]);
+}, 30_000);
+
+test("a join-table relationship edits its own properties but never its endpoints", async () => {
+	const { container, render, type, press, click } = await setup();
+	const { GraphEdgeInspector } = await import("./graph-edge-inspector");
+	const overlay = {
+		nodes: [
+			{ label: "Person", table: "people", id_column: "id" },
+			{ label: "Team", table: "teams", id_column: "id" },
+		],
+		edges: [
+			{
+				label: "MEMBER_OF",
+				table: "memberships",
+				src_column: "person_id",
+				dst_column: "team_id",
+				src_label: "Person",
+				dst_label: "Team",
+				property_columns: [],
+			},
+		],
+		object_views: [],
+		actions: [],
+	} as unknown as GraphOverlay;
+	const edge: SubgraphEdge = {
+		id: "membership",
+		source: "Person:1",
+		target: "Team:2",
+		label: "MEMBER_OF",
+		props: { person_id: 1, team_id: 2, role: "lead" },
+	};
+	const calls: [Updates, Updates][] = [];
+	await render(
+		<GraphEdgeInspector
+			edge={edge}
+			overlay={overlay}
+			sourceNode={{ id: "Person:1", label: "Person", props: { id: 1 } }}
+			targetNode={{ id: "Team:2", label: "Team", props: { id: 2 } }}
+			editFields={
+				new Map([
+					["person_id", editField("person_id", "number", true)],
+					["team_id", editField("team_id", "number", true)],
+					["role", editField("role", "string")],
+				])
+			}
+			onUpdateProperties={async (updates, baseline) => {
+				calls.push([updates, baseline]);
+			}}
+			onClose={() => {}}
+		/>,
+	);
+	expect(container.textContent).not.toContain("stored on");
+	expect(buttonLabelled(container, "Edit role")).not.toBeNull();
+	expect(buttonLabelled(container, "Edit person_id")).toBeNull();
+	expect(buttonLabelled(container, "Edit team_id")).toBeNull();
+	expect(
+		container.querySelectorAll(`button[aria-label="${RELATIONSHIP_LOCK}"]`),
+	).toHaveLength(2);
+
+	await click(buttonLabelled(container, "Edit role"));
+	const input = container.querySelector("input") as HTMLInputElement;
+	await type(input, "member");
+	await press(input, "Enter");
+	expect(calls).toEqual([[{ role: "member" }, edge.props]]);
+	expect(container.querySelector("input")).toBeNull();
 }, 30_000);

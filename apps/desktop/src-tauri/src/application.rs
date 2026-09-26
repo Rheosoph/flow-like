@@ -1202,6 +1202,8 @@ pub fn run() {
             functions::app::graph::graph_sample,
             functions::app::graph::graph_upsert_nodes,
             functions::app::graph::graph_upsert_edges,
+            functions::app::graph::graph_update_object,
+            functions::app::graph::graph_update_relationship,
             functions::app::graph::graph_paths,
             functions::app::graph::graph_analytics,
             functions::app::saved_queries::query_saved_list,
