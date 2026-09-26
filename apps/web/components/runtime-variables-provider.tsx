@@ -13,7 +13,7 @@ import {
 	getRuntimeVarsForApp,
 	hasAllRuntimeVars,
 	runtimeVarsDB,
-	setRuntimeVar,
+	setRuntimeVars,
 } from "../lib/runtime-vars-db";
 
 interface RuntimeVariablesProviderComponentProps {
@@ -49,16 +49,7 @@ export function RuntimeVariablesProviderComponent({
 				isSecret: boolean;
 			}>,
 		): Promise<void> => {
-			for (const v of values) {
-				await setRuntimeVar(
-					appId,
-					boardId,
-					v.variableId,
-					v.variableName,
-					v.value,
-					v.isSecret,
-				);
-			}
+			await setRuntimeVars(appId, boardId, values);
 		},
 		[],
 	);

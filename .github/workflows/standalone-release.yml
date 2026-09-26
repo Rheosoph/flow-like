@@ -29,7 +29,7 @@ env:
 
 jobs:
   prepare:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     outputs:
       epoch: ${{ steps.inputs.outputs.epoch }}
