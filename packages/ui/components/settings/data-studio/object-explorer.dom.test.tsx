@@ -320,8 +320,16 @@ function fieldInput(dialog: Element, name: string) {
 	return dialog.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`);
 }
 
+/** Names the focused element; a failing matcher handed a happy-dom node takes minutes to print it. */
 function focused(dialog: Element) {
-	return dialog.ownerDocument.activeElement;
+	const active = dialog.ownerDocument.activeElement;
+	if (!active) return "nothing";
+	const name =
+		active.getAttribute("aria-label") ??
+		(active.tagName === "BUTTON"
+			? active.textContent?.trim()
+			: active.getAttribute("role"));
+	return `${active.tagName.toLowerCase()} ${name ?? ""}`.trim();
 }
 
 const noop = async () => {
@@ -827,8 +835,7 @@ test("Edit moves focus to the first field that can change", async () => {
 	await env.activate(buttonNamed(dialog, "Edit"));
 
 	// Code identifies the object, so Score is the first field that can change.
-	expect(fieldInput(dialog, "score")).not.toBeNull();
-	expect(focused(dialog)).toBe(fieldInput(dialog, "score"));
+	expect(focused(dialog)).toBe("input score");
 }, 30_000);
 
 test("a successful save hands focus back to the Edit button", async () => {
@@ -843,9 +850,8 @@ test("a successful save hands focus back to the Edit button", async () => {
 	await env.activate(buttonNamed(dialog, "Save Changes"));
 
 	expect(updates.calls).toHaveLength(1);
-	expect(buttonNamed(dialog, "Save Changes")).toBeUndefined();
-	expect(buttonNamed(dialog, "Edit")).toBeDefined();
-	expect(focused(dialog)).toBe(buttonNamed(dialog, "Edit"));
+	expect(fieldInput(dialog, "name")?.value).toBeUndefined();
+	expect(focused(dialog)).toBe("button Edit");
 }, 30_000);
 
 test("discarding hands focus back to the Edit button", async () => {
@@ -858,9 +864,8 @@ test("discarding hands focus back to the Edit button", async () => {
 	await env.type(fieldInput(dialog, "name"), "C3");
 	await env.activate(buttonNamed(dialog, "Discard"));
 
-	expect(fieldInput(dialog, "name")).toBeNull();
-	expect(buttonNamed(dialog, "Edit")).toBeDefined();
-	expect(focused(dialog)).toBe(buttonNamed(dialog, "Edit"));
+	expect(fieldInput(dialog, "name")?.value).toBeUndefined();
+	expect(focused(dialog)).toBe("button Edit");
 	expect(updates.calls).toEqual([]);
 }, 30_000);
 
@@ -884,14 +889,13 @@ test("a save in flight ignores edits and leaves focus where the user moved it", 
 	expect(fieldInput(dialog, "name")?.value).toBe("C3");
 	expect(dialog.textContent).toMatch(/1 unsaved change(?!s)/);
 
-	const close = buttonNamed(dialog, "Close");
-	expect(close).toBeDefined();
-	await act(async () => close?.focus());
+	await act(async () => buttonNamed(dialog, "Close")?.focus());
+	expect(focused(dialog)).toBe("button Close");
 	await act(async () => finish?.());
 	await env.settle();
 
 	expect(calls[0].updates).toEqual({ name: "C3" });
 	expect(dialog.querySelector("h2")?.textContent).toBe("C3");
-	expect(buttonNamed(dialog, "Edit")).toBeDefined();
-	expect(focused(dialog)).toBe(close);
+	expect(buttonNamed(dialog, "Edit")?.textContent).toBe("Edit");
+	expect(focused(dialog)).toBe("button Close");
 }, 30_000);

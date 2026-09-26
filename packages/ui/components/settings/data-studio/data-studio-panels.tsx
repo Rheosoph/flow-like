@@ -1071,6 +1071,7 @@ interface ObjectFieldEdit {
 	dirty: boolean;
 	error?: PropertyDraftError | string | null;
 	disabled: boolean;
+	autoFocus: boolean;
 	relationshipLabel?: string;
 	onChange(draft: PropertyDraft): void;
 	onRevert(): void;
@@ -1158,6 +1159,7 @@ function ObjectFieldCard({
 						onChange={edit.onChange}
 						name={name}
 						disabled={edit.disabled}
+						autoFocus={edit.autoFocus}
 						error={edit.error}
 						compact
 					/>
@@ -1311,11 +1313,14 @@ function useObjectEditSession({
 		[baseline, drafts, editable],
 	);
 
+	// A save resets every draft once it lands, so none may change while it is sent.
 	const change = useCallback((key: string, draft: PropertyDraft) => {
+		if (inFlight.current) return;
 		setDrafts((current) => ({ ...current, [key]: draft }));
 	}, []);
 
 	const revert = useCallback((key: string) => {
+		if (inFlight.current) return;
 		setDrafts((current) => keepDrafts(current, (name) => name !== key));
 	}, []);
 
@@ -1562,6 +1567,45 @@ function objectSelectionKey(
 	].join("\u0000");
 }
 
+function firstEditableKey(
+	keys: readonly string[],
+	editabilities: ReadonlyMap<string, PropertyEditability>,
+): string | undefined {
+	return keys.find((key) => {
+		const editability = editabilities.get(key);
+		return editability !== undefined && isEditableProperty(editability);
+	});
+}
+
+/** The field an edit opens on, fixed for that edit so a later change never pulls focus. */
+function useEditEntryField(
+	editing: boolean,
+	firstEditable: string | undefined,
+): string | undefined {
+	const [entry, setEntry] = useState<{ key?: string } | null>(null);
+	if (editing && !entry) setEntry({ key: firstEditable });
+	if (!editing && entry) setEntry(null);
+	return editing ? (entry ?? { key: firstEditable }).key : undefined;
+}
+
+/**
+ * Puts focus back on the Edit button once an edit ends and took the focused
+ * control with it, unless the user has already moved focus somewhere else.
+ */
+function useFocusAfterObjectEdit(editing: boolean) {
+	const editButtonRef = useRef<HTMLButtonElement>(null);
+	const wasEditing = useRef(editing);
+	useEffect(() => {
+		const ended = wasEditing.current && !editing;
+		wasEditing.current = editing;
+		const button = editButtonRef.current;
+		if (!ended || !button) return;
+		const active = button.ownerDocument.activeElement;
+		if (!active?.isConnected || active.contains(button)) button.focus();
+	}, [editing]);
+	return editButtonRef;
+}
+
 function ObjectViewSheet({
 	ontology,
 	objectType,
@@ -1630,6 +1674,7 @@ function ObjectViewSheet({
 		[ontology, objectType],
 	);
 	const session = useObjectEditSession({ row, locked, editFields, onSave });
+	const editButtonRef = useFocusAfterObjectEdit(session.editing);
 	// Parent re-samples hand in new row objects for the same object; only a
 	// different object may drop an edit in progress.
 	const selection: unknown = identity?.ok
@@ -1669,25 +1714,6 @@ function ObjectViewSheet({
 		event.preventDefault();
 		session.save();
 	};
-	const fieldEdit = (key: string): ObjectFieldEdit | undefined => {
-		const editability = session.editing
-			? session.editabilities.get(key)
-			: undefined;
-		if (!editability) return undefined;
-		return {
-			editability,
-			draft: session.draftOf(key),
-			dirty: key in session.review.updates || session.review.invalid.has(key),
-			error: session.review.invalid.get(key) ?? null,
-			disabled: session.saving,
-			relationshipLabel:
-				locked.get(key) === "relationship"
-					? relationshipLabels.get(key)
-					: undefined,
-			onChange: (draft) => session.change(key, draft),
-			onRevert: () => session.revert(key),
-		};
-	};
 	const emptyType: NodeLabelMapping = {
 		label: "",
 		table: "",
@@ -1719,6 +1745,35 @@ function ObjectViewSheet({
 	const hasProminent = prominentEntries.length > 0;
 	const restCollapsed = hasProminent && !showAllProperties && !session.editing;
 	const totalFields = prominentEntries.length + restEntries.length;
+	const entryField = useEditEntryField(
+		session.editing,
+		session.editing
+			? firstEditableKey(
+					[...prominentKeys, ...restEntries.map(([key]) => key)],
+					session.editabilities,
+				)
+			: undefined,
+	);
+	const fieldEdit = (key: string): ObjectFieldEdit | undefined => {
+		const editability = session.editing
+			? session.editabilities.get(key)
+			: undefined;
+		if (!editability) return undefined;
+		return {
+			editability,
+			draft: session.draftOf(key),
+			dirty: key in session.review.updates || session.review.invalid.has(key),
+			error: session.review.invalid.get(key) ?? null,
+			disabled: session.saving,
+			autoFocus: key === entryField,
+			relationshipLabel:
+				locked.get(key) === "relationship"
+					? relationshipLabels.get(key)
+					: undefined,
+			onChange: (draft) => session.change(key, draft),
+			onRevert: () => session.revert(key),
+		};
+	};
 
 	const accentColor = objectType?.style?.color || "hsl(var(--primary))";
 	const TypeIcon = getGraphIcon(objectType?.style?.icon ?? "database");
@@ -1775,6 +1830,7 @@ function ObjectViewSheet({
 							) : (
 								canStartEdit && (
 									<Button
+										ref={editButtonRef}
 										type="button"
 										variant="outline"
 										size="sm"
