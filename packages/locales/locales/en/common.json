@@ -2698,6 +2698,7 @@
 	"thisPage": "This Page",
 	"thisPageChanged": "This Page changed",
 	"thisPageInspectsFilesOnThisDeviceOnlyItDoesNotCountOrDeleteCloudData": "This page inspects files on this device only. It does not count or delete cloud data.",
+	"thisPageIsStillLoadingTryThatAgainInAMoment": "This page is still loading — try that again in a moment.",
 	"thisProjectDoesnapostAppearToHaveAnyDatabaseTablesYet": "This project doesn't appear to have any database tables yet.",
 	"thisProjectNeedsACodeflowliketomlcodeManifestBeforeItCanBePublishedEditTheManifestFirst": "This project needs a <1>flow-like.toml</1> manifest before it can be published. Edit the manifest first.",
 	"thisRepositoryHasNoProcessorMetadataRequiredByAnMlxVlm": "This repository has no processor metadata required by an MLX VLM",

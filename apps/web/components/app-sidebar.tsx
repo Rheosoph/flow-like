@@ -69,6 +69,7 @@ import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { motion } from "framer-motion";
@@ -1039,6 +1040,7 @@ export function NavUser({
 					: undefined
 			}
 			onSignOut={async () => {
+				await clearPageSurfaceCache();
 				await auth?.signoutRedirect();
 			}}
 			onSignIn={async () => {

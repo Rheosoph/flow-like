@@ -76,6 +76,7 @@ import {
 	useClientHref,
 	useClientRouter,
 } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { isUsePathname } from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useTranslation } from "@flow-like/locales";
@@ -1207,6 +1208,7 @@ export function NavUser({
 					: undefined
 			}
 			onSignOut={async () => {
+				await clearPageSurfaceCache();
 				await auth?.signoutRedirect();
 			}}
 			onSignIn={async () => {

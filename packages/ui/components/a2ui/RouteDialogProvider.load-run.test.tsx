@@ -368,7 +368,7 @@ describe("route dialog page surface cache", () => {
 			},
 		}) as Surface;
 
-	test("a default dialog page replays its cached surface, refreshes it in place and stores it after success", async () => {
+	test("a default dialog page shows its cached surface behind the indicator until the load run ends, then stores the run's surface", async () => {
 		let releaseCache: (surface: Surface | null) => void = () => {};
 		readCachedSurface.mockImplementation(
 			() =>
@@ -385,12 +385,38 @@ describe("route dialog page surface cache", () => {
 		expect(renderedComponents()).toBe("cached headline root");
 
 		await act(async () => runs[0].onEvents(a2ui(freshMessage)));
-		expect(renderedComponents()).toBe("cached fresh headline root");
+		expect(renderedComponents()).toBe("cached headline root");
+		expect(loadIndicator()).not.toBeNull();
 		expect(writeCachedSurface).not.toHaveBeenCalled();
 
 		await act(async () => runs[0].resolve());
+		expect(renderedComponents()).toBe("fresh headline root");
+		expect(loadIndicator()).toBeNull();
 		expect(writeCachedSurface).toHaveBeenCalledTimes(1);
 		expect(writeCachedSurface.mock.calls[0][0]?.routeKey).toBe("/details");
+		expect(
+			Object.keys(writeCachedSurface.mock.calls[0][1].components).sort(),
+		).toEqual(["fresh", "headline", "root"]);
+	});
+
+	test("output from an action on the cached dialog surface shows at once", async () => {
+		let releaseCache: (surface: Surface | null) => void = () => {};
+		readCachedSurface.mockImplementation(
+			() =>
+				new Promise<Surface | null>((resolve) => {
+					releaseCache = resolve;
+				}),
+		);
+		await mountProvider("dialog-cache-action");
+		await openDetails();
+		await act(async () => releaseCache(cachedSurface()));
+
+		await act(async () => renderedOnA2UIMessage?.(freshMessage));
+		expect(renderedComponents()).toBe("cached fresh headline root");
+
+		await act(async () => runs[0].onEvents(a2ui({ type: "showScreen" })));
+		expect(renderedComponents()).toBe("fresh headline root");
+		expect(loadIndicator()).toBeNull();
 	});
 
 	test("a noCache dialog page shows the loading screen until its load run renders and never touches the cache", async () => {

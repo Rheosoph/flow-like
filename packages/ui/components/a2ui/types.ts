@@ -24,6 +24,8 @@ export interface Action {
 	context: Record<string, unknown>;
 	/** Opaque Page Event routing. Raw board and node ids are never authoritative. */
 	pageAction?: PageActionInvocation;
+	/** Replayed from the surface cache without its run-scoped `pageAction`; inert until rebound. */
+	pendingPageAction?: boolean;
 }
 
 export type EventHandlers = Record<string, Action[]>;
@@ -2077,7 +2079,12 @@ export interface WidgetActionContextField {
 }
 
 export type ActionBinding =
-	| { workflow: WorkflowBinding; pageAction?: PageActionInvocation }
+	| {
+			workflow: WorkflowBinding;
+			pageAction?: PageActionInvocation;
+			/** Replayed from the surface cache without its run-scoped `pageAction`. */
+			pendingPageAction?: boolean;
+	  }
 	| { command: CommandBinding };
 
 export interface WorkflowBinding {

@@ -321,7 +321,9 @@ describe("A2UIRenderer per-node updates", () => {
 				probe("item", { path: "$item.name" }),
 			],
 			{
-				dataModel: [{ path: "/items", value: [{ name: "n1" }, { name: "n2" }] }],
+				dataModel: [
+					{ path: "/items", value: [{ name: "n1" }, { name: "n2" }] },
+				],
 			},
 		);
 		await mount(surface);
@@ -362,5 +364,41 @@ describe("A2UIRenderer per-node updates", () => {
 				?.querySelector('[data-probe="a"]')
 				?.getAttribute("data-a2ui-element-ref"),
 		).toBe("s2/a");
+	});
+});
+
+describe("A2UIRenderer pending Page actions", () => {
+	const isPending = (id: string) =>
+		host
+			?.querySelector(`[data-probe="${id}"]`)
+			?.hasAttribute("data-a2ui-action-pending") ?? null;
+	const pendingAction = {
+		actions: [{ name: "workflow_event", context: {}, pendingPageAction: true }],
+	};
+
+	test("a control whose action awaits the load run is marked inert until it is rebound", async () => {
+		let surface = surfaceOf([
+			column("root", { explicitList: ["cached", "plain"] }),
+			probe("cached", "Save", pendingAction),
+			probe("plain", "Read only"),
+		]);
+		await mount(surface);
+		expect(isPending("cached")).toBe(true);
+		expect(isPending("plain")).toBe(false);
+
+		surface = withComponent(
+			surface,
+			probe("cached", "Save", {
+				actions: [
+					{
+						name: "workflow_event",
+						context: {},
+						pageAction: { actionId: "lda1_fresh" },
+					},
+				],
+			}),
+		);
+		await render(surface);
+		expect(isPending("cached")).toBe(false);
 	});
 });

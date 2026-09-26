@@ -14,6 +14,7 @@ import {
 	useSpotlightStore,
 } from "@flow-like/flow-like-ui";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -355,7 +356,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					"exit",
 				],
 				priority: 30,
-				action: () => auth.signoutRedirect(),
+				action: () =>
+					clearPageSurfaceCache().then(() => auth.signoutRedirect()),
 			});
 
 			items.push({

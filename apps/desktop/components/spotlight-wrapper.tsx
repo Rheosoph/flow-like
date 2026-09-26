@@ -1,6 +1,7 @@
 "use client";
 
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 
 import {
 	CrashReportDialog,
@@ -442,7 +443,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					"exit",
 				],
 				priority: 30,
-				action: () => auth.signoutRedirect(),
+				action: () =>
+					clearPageSurfaceCache().then(() => auth.signoutRedirect()),
 			});
 
 			items.push({

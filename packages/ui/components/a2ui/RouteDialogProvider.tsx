@@ -18,8 +18,6 @@ import {
 	pageSurfaceQueryKey,
 	pageSurfaceRevision,
 	pageSurfaceRouteKey,
-	readPageSurfaceCache,
-	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
 import { resolveEventBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
@@ -38,6 +36,7 @@ import {
 } from "../interfaces/page-load-run";
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { revealsPageLoad } from "../interfaces/progressive-page-reveal";
+import { usePageSurfaceCache } from "../interfaces/use-page-surface-cache";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { applyA2UIMessage } from "./apply-a2ui-message";
@@ -212,8 +211,6 @@ function RouteDialogRenderer({
 		loadRunRef.current = null;
 		if (run) cancelLoadRun(run);
 	}, []);
-	// Set as the load run reveals or ends, not at render, so a read landing in between still sees it.
-	const freshLoadOutputKeyRef = useRef<string | null>(null);
 	const pageExecutionBoardId = routeEvent?.board_id || page?.boardId;
 	const pageExecutionVersion = useMemo(
 		() =>
@@ -287,25 +284,6 @@ function RouteDialogRenderer({
 			completedLoadEventKey !== loadEventExecutionKey,
 	);
 
-	// The last rendered surface becomes the one the load run refreshes in place, unless that run
-	// has already put fresh output on screen.
-	useEffect(() => {
-		let cancelled = false;
-
-		if (!cacheEnabled || !surfaceIdentity || !page?.onLoadEventId) return;
-
-		void readPageSurfaceCache(surfaceIdentity).then((cached) => {
-			if (cancelled || !cached) return;
-			const loadKey = loadEventExecutionKeyRef.current;
-			if (loadKey !== null && freshLoadOutputKeyRef.current === loadKey) return;
-			setSurface(cached);
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [cacheEnabled, surfaceIdentity, page?.onLoadEventId]);
-
 	// Load the route content when dialog opens
 	useEffect(() => {
 		let cancelled = false;
@@ -369,22 +347,12 @@ function RouteDialogRenderer({
 		};
 	}, [appId, dialog.route, backend.pageState]);
 
-	const handleServerMessage = useCallback(
-		(message: A2UIServerMessage) => {
-			console.log("[RouteDialog] Server message", { type: message.type });
-			if (frontendStateStore.handleMessage(message)) return;
-			setSurface((prevSurface) =>
-				prevSurface ? applyA2UIMessage(prevSurface, message) : prevSurface,
-			);
-		},
-		[frontendStateStore],
-	);
-
 	// Use ref to access current surface without creating dependency cycles
 	const surfaceRef = useRef(surface);
 	useEffect(() => {
 		surfaceRef.current = surface;
 	}, [surface]);
+	const getLiveSurface = useCallback(() => surfaceRef.current, []);
 
 	const elementSource = useCallback((): ElementSource | null => {
 		const currentSurface = surfaceRef.current;
@@ -396,25 +364,41 @@ function RouteDialogRenderer({
 		};
 	}, []);
 
-	// Save the page surface once onLoad succeeded
-	useEffect(() => {
-		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
-		if (!cacheEnabled || !page?.onLoadEventId) return;
-		if (
-			!loadEventExecutionKey ||
-			successfulLoadEventKey !== loadEventExecutionKey
-		)
-			return;
-		void writePageSurfaceCache(surfaceIdentity, surface);
-	}, [
-		surfaceIdentity,
-		cacheEnabled,
-		page?.onLoadEventId,
-		surface,
-		isLoadEventRunning,
-		loadEventExecutionKey,
-		successfulLoadEventKey,
-	]);
+	const {
+		staleSurface,
+		applyToStale,
+		noteLoadOutput,
+		releaseStale,
+		persist: persistSurface,
+	} = usePageSurfaceCache({
+		identity: surfaceIdentity,
+		loadKey: loadEventExecutionKey,
+		enabled: cacheEnabled && Boolean(page?.onLoadEventId),
+		surfaceId: page?.id,
+		loadSucceeded: Boolean(
+			!isLoadEventRunning &&
+				loadEventExecutionKey &&
+				successfulLoadEventKey === loadEventExecutionKey,
+		),
+		getLiveSurface,
+	});
+
+	const applyServerMessage = useCallback(
+		(message: A2UIServerMessage, fromLoadRun: boolean) => {
+			console.log("[RouteDialog] Server message", { type: message.type });
+			if (frontendStateStore.handleMessage(message)) return;
+			setSurface((prevSurface) =>
+				prevSurface ? applyA2UIMessage(prevSurface, message) : prevSurface,
+			);
+			if (!fromLoadRun) applyToStale(message);
+		},
+		[frontendStateStore, applyToStale],
+	);
+
+	const handleServerMessage = useCallback(
+		(message: A2UIServerMessage) => applyServerMessage(message, false),
+		[applyServerMessage],
+	);
 
 	// Execute onLoad event for dialog page
 	useEffect(() => {
@@ -447,7 +431,6 @@ function RouteDialogRenderer({
 				loadEventExecutionKeyRef.current === executionKey &&
 				loadEventExecutedRef.current === executionKey;
 
-			freshLoadOutputKeyRef.current = null;
 			setCompletedLoadEventKey(null);
 			setSuccessfulLoadEventKey(null);
 			setRevealedLoadEventKey(null);
@@ -503,10 +486,10 @@ function RouteDialogRenderer({
 									continue;
 								const message = event.payload as A2UIServerMessage;
 								if (revealsPageLoad(message)) {
-									freshLoadOutputKeyRef.current = executionKey;
+									noteLoadOutput(executionKey, message);
 									setRevealedLoadEventKey(executionKey);
 								}
-								handleServerMessage(message);
+								applyServerMessage(message, true);
 							}
 						}
 					},
@@ -523,10 +506,11 @@ function RouteDialogRenderer({
 			} finally {
 				if (loadRunRef.current === run) loadRunRef.current = null;
 				if (!run.abandoned && loadEventExecutedRef.current === executionKey) {
-					freshLoadOutputKeyRef.current = executionKey;
+					releaseStale(executionKey);
 					setCompletedLoadEventKey(executionKey);
 					setSuccessfulLoadEventKey(succeeded ? executionKey : null);
 					setIsLoadEventRunning(false);
+					if (succeeded) persistSurface();
 				}
 			}
 		};
@@ -546,7 +530,10 @@ function RouteDialogRenderer({
 		isLoading,
 		backend,
 		executionService,
-		handleServerMessage,
+		applyServerMessage,
+		noteLoadOutput,
+		releaseStale,
+		persistSurface,
 		elementSource,
 		releaseLoadRun,
 	]);
@@ -572,8 +559,12 @@ function RouteDialogRenderer({
 		(isGovernedPage && !pageExecutionRevision
 			? "This Page could not load its execution authorization. Reload and try again."
 			: null);
+	const displayedSurface = staleSurface ?? surface;
 	const isAwaitingLoadOutput =
-		!showLoading && !renderError && isLoadEventRunning && !isScreenRevealed;
+		!showLoading &&
+		!renderError &&
+		isLoadEventRunning &&
+		(!isScreenRevealed || staleSurface !== null);
 
 	return (
 		<Dialog open={dialog.isOpen} onOpenChange={onOpenChange}>
@@ -604,9 +595,9 @@ function RouteDialogRenderer({
 						</div>
 					)}
 					{isAwaitingLoadOutput && <PageLoadIndicator />}
-					{!showLoading && !renderError && surface && (
+					{!showLoading && !renderError && displayedSurface && (
 						<A2UIRenderer
-							surface={surface}
+							surface={displayedSurface}
 							widgetRefs={page?.widgetRefs}
 							appId={appId}
 							boardId={pageExecutionBoardId}

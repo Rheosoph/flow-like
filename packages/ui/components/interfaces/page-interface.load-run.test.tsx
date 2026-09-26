@@ -209,7 +209,9 @@ mock.module("./page-loading-skeleton", () => ({
 }));
 
 const { PageInterface } = await import("./page-interface");
+const { STALE_SURFACE_SETTLE_MS } = await import("./use-page-surface-cache");
 const { getFrontendStateStore } = await import("../a2ui/frontend-state");
+const { notifyLivePageRun } = await import("../a2ui/live-page-registry");
 const { resetRunTiming } = await import("../../lib/run-timing");
 
 let root: Root | undefined;
@@ -535,7 +537,7 @@ describe("page onLoad renders the static layout first", () => {
 });
 
 describe("page surface cache", () => {
-	test("a default page renders its static layout without waiting for the cache read, then replays the cached surface and refreshes it in place", async () => {
+	test("a default page renders its static layout without waiting for the cache read, then shows the cached surface behind the indicator while the load run rebuilds from the static layout", async () => {
 		const releaseCache = holdCacheRead();
 		await mount("cache-replay", createPage());
 		expect(skeleton()).toBeNull();
@@ -547,8 +549,65 @@ describe("page surface cache", () => {
 		expect(loadIndicator()).not.toBeNull();
 
 		await deliver(runs[0], freshElement);
-		expect(renderedComponents()).toBe("cached fresh headline root");
+		expect(renderedComponents()).toBe("cached headline root");
+		expect(loadIndicator()).not.toBeNull();
+		expect(busyRegion()).not.toBeNull();
+
+		await finishRun(runs[0]);
+		expect(renderedComponents()).toBe("fresh headline root");
 		expect(loadIndicator()).toBeNull();
+	});
+
+	test("the cached surface yields once the load run's output settles", async () => {
+		const settleTimers: (() => void)[] = [];
+		const realSetTimeout = globalThis.setTimeout;
+		const timers = spyOn(globalThis, "setTimeout").mockImplementation(((
+			callback: () => void,
+			delay?: number,
+		) => {
+			if (delay !== STALE_SURFACE_SETTLE_MS)
+				return realSetTimeout(callback, delay);
+			settleTimers.push(callback);
+			return 0;
+		}) as unknown as typeof setTimeout);
+		try {
+			const releaseCache = holdCacheRead();
+			await mount("cache-settle", createPage());
+			await act(async () => releaseCache(cachedSurface()));
+			await deliver(runs[0], freshElement);
+			expect(renderedComponents()).toBe("cached headline root");
+
+			await act(async () => settleTimers.at(-1)?.());
+			expect(renderedComponents()).toBe("fresh headline root");
+			expect(loadIndicator()).toBeNull();
+			expect(pageLoadingFlag()).toBe("true");
+		} finally {
+			timers.mockRestore();
+		}
+	});
+
+	test("showScreen hands the page to the load run's output at once", async () => {
+		const releaseCache = holdCacheRead();
+		await mount("cache-show-screen", createPage());
+		await act(async () => releaseCache(cachedSurface()));
+		await deliver(runs[0], freshElement);
+		expect(renderedComponents()).toBe("cached headline root");
+
+		await deliver(runs[0], a2ui({ type: "showScreen" }));
+		expect(renderedComponents()).toBe("fresh headline root");
+		expect(loadIndicator()).toBeNull();
+	});
+
+	test("output from an action on the cached surface shows at once and survives the switch", async () => {
+		const releaseCache = holdCacheRead();
+		await mount("cache-action", createPage());
+		await act(async () => releaseCache(cachedSurface()));
+
+		await act(async () => renderedOnA2UIMessage?.(freshMessage));
+		expect(renderedComponents()).toBe("cached fresh headline root");
+
+		await finishRun(runs[0]);
+		expect(renderedComponents()).toBe("fresh headline root");
 	});
 
 	test("a cached surface that lands after the load run's output does not replace it", async () => {
@@ -586,6 +645,49 @@ describe("page surface cache", () => {
 		} finally {
 			silenceError.mockRestore();
 		}
+	});
+
+	test("a failed load run still replaces the cached surface", async () => {
+		const silenceError = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const releaseCache = holdCacheRead();
+			await mount("cache-failed-release", createPage());
+			await act(async () => releaseCache(cachedSurface()));
+			await act(async () => runs[0].reject(new Error("stream dropped")));
+			expect(renderedComponents()).toBe("headline root");
+			expect(loadIndicator()).toBeNull();
+		} finally {
+			silenceError.mockRestore();
+		}
+	});
+
+	test("only a successful action or interval run stores the page again", async () => {
+		await mount(
+			"cache-later-runs",
+			createPage({ onIntervalEventId: "interval-node", onIntervalSeconds: 5 }),
+		);
+		await finishRun(runs[0]);
+		expect(writeCachedSurface).toHaveBeenCalledTimes(1);
+
+		await act(async () => renderedOnA2UIMessage?.(freshMessage));
+		await act(async () =>
+			notifyLivePageRun("load-page", { status: "failed", endedAtMs: 1 }),
+		);
+		expect(writeCachedSurface).toHaveBeenCalledTimes(1);
+
+		await act(async () =>
+			notifyLivePageRun("load-page", { status: "ok", endedAtMs: 2 }),
+		);
+		expect(writeCachedSurface).toHaveBeenCalledTimes(2);
+		expect(
+			Object.keys(writeCachedSurface.mock.calls[1][1].components).sort(),
+		).toEqual(["fresh", "headline", "root"]);
+
+		await act(async () => {
+			for (const tick of intervals) tick();
+		});
+		await finishRun(runs[1]);
+		expect(writeCachedSurface).toHaveBeenCalledTimes(3);
 	});
 });
 
