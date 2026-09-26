@@ -8,6 +8,7 @@ import type {
 	SubgraphNode,
 } from "../state/backend-state/graph-state";
 import {
+	type ColumnLock,
 	type ObjectEditField,
 	StaleObjectError,
 	buildObjectUpdate,
@@ -18,6 +19,7 @@ import {
 	foreignKeyRowIdentity,
 	lockedObjectColumns,
 	lockedRelationshipColumns,
+	lockedTableColumns,
 	objectEditFields,
 	objectTypeKey,
 	parsePropertyDraft,
@@ -203,6 +205,98 @@ describe("lockedObjectColumns", () => {
 	});
 });
 
+const order = objectType("Order", "orders", "order_id");
+const customer = objectType("Customer", "orders", "customer_id");
+const sharedOrders = overlayOf([order, customer], []);
+
+describe("lockedTableColumns", () => {
+	test("objects sharing a table lock each other's identity", () => {
+		const expected: Record<string, ColumnLock> = {
+			order_id: "identity",
+			customer_id: "identity",
+		};
+		expect(
+			Object.fromEntries(lockedTableColumns(sharedOrders, "orders")),
+		).toEqual(expected);
+		expect(
+			Object.fromEntries(lockedObjectColumns(sharedOrders, order)),
+		).toEqual(expected);
+		expect(
+			Object.fromEntries(lockedObjectColumns(sharedOrders, customer)),
+		).toEqual(expected);
+		expect(
+			propertyEditability(
+				"customer_id",
+				"c1",
+				field("customer_id", "string"),
+				lockedObjectColumns(sharedOrders, order),
+			),
+		).toEqual({ locked: "identity" });
+		expect(
+			propertyEditability(
+				"total",
+				10,
+				field("total", "number"),
+				lockedObjectColumns(sharedOrders, order),
+			),
+		).toMatchObject({ editor: "number" });
+	});
+
+	test("a join table locks the endpoints of every relationship stored on it", () => {
+		const enrolledIn = relationship(
+			"ENROLLED_IN",
+			"enrollments",
+			["Student", "student_id"],
+			["Course", "course_id"],
+		);
+		const taughtBy = relationship(
+			"TAUGHT_BY",
+			"enrollments",
+			["Course", "course_id"],
+			["Teacher", "teacher_id"],
+		);
+		const school = overlayOf(
+			[
+				objectType("Student", "students"),
+				objectType("Course", "courses"),
+				objectType("Teacher", "teachers"),
+			],
+			[enrolledIn, taughtBy],
+		);
+		const expected: Record<string, ColumnLock> = {
+			student_id: "relationship",
+			course_id: "relationship",
+			teacher_id: "relationship",
+		};
+		expect(
+			Object.fromEntries(lockedTableColumns(school, "enrollments")),
+		).toEqual(expected);
+		expect(
+			Object.fromEntries(lockedRelationshipColumns(school, enrolledIn)),
+		).toEqual(expected);
+		expect(
+			Object.fromEntries(lockedRelationshipColumns(school, taughtBy)),
+		).toEqual(expected);
+	});
+
+	test("identity wins when a column also stores a relationship", () => {
+		const expected: Record<string, ColumnLock> = {
+			id: "identity",
+			dept_id: "relationship",
+			manager_id: "relationship",
+		};
+		expect(
+			Object.fromEntries(lockedTableColumns(overlay, "employees")),
+		).toEqual(expected);
+		expect(
+			Object.fromEntries(lockedRelationshipColumns(overlay, reportsTo)),
+		).toEqual(expected);
+		expect(
+			Object.fromEntries(lockedRelationshipColumns(overlay, worksIn)),
+		).toEqual(expected);
+	});
+});
+
 describe("foreignKeyRowIdentity", () => {
 	test("a relationship stored on its object's own table is a foreign key", () => {
 		expect(foreignKeyRowIdentity(overlay, "employees", "id", "dept_id")).toBe(
@@ -292,6 +386,38 @@ describe("resolveObjectIdentity", () => {
 		expect(
 			resolveObjectIdentity(conflicting, "Person", { email: "a", login: "b" }),
 		).toEqual({ ok: false, reason: "identityConflict" });
+	});
+
+	test("a sibling on the same table with conflicting overrides blocks the edit", () => {
+		const invoice = objectType("Invoice", "invoices", "invoice_id");
+		const conflicting = overlayOf(
+			[order, customer, invoice],
+			[
+				relationship(
+					"BILLED_TO",
+					"invoices",
+					["Invoice", "invoice_id"],
+					["Customer", "customer_ref"],
+					{ dst_node_column: "customer_id" },
+				),
+				relationship(
+					"SHIPPED_TO",
+					"shipments",
+					["Order", "order_id"],
+					["Customer", "customer_email"],
+					{ dst_node_column: "email" },
+				),
+			],
+		);
+		expect(
+			resolveObjectIdentity(sharedOrders, "Order", { order_id: "o1" }),
+		).toMatchObject({ ok: true, identityColumn: "order_id", id: "o1" });
+		expect(
+			resolveObjectIdentity(conflicting, "Order", { order_id: "o1" }),
+		).toEqual({ ok: false, reason: "identityConflict" });
+		expect(
+			resolveObjectIdentity(conflicting, "Invoice", { invoice_id: "i1" }),
+		).toMatchObject({ ok: true, identityColumn: "invoice_id", id: "i1" });
 	});
 });
 

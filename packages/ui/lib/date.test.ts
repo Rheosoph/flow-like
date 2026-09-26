@@ -10,6 +10,7 @@ import {
 	looksLikeTemporalName,
 	parseDateValue,
 	parseTemporalValue,
+	parseTimespan,
 	temporalUnitFromTypeName,
 	toDateInputValue,
 	toDateTimeInputValue,
@@ -263,6 +264,50 @@ describe("inferTemporalValue", () => {
 		expect(
 			inferTemporalValue("notes", "2026-08-14T10:30:00Z")?.getUTCFullYear(),
 		).toBe(2026);
+		for (const [wire, iso] of [
+			["2026-08-14", "2026-08-14T00:00:00.000Z"],
+			["2026-08-14T10:30Z", "2026-08-14T10:30:00.000Z"],
+			["2026-08-14T10:30:00.123+02:00", "2026-08-14T08:30:00.123Z"],
+			["2026-08-14 10:30:00", "2026-08-14T10:30:00.000Z"],
+			["2026-08-14 10:30:00 +00:00", "2026-08-14T10:30:00.000Z"],
+			[" 2026-08-14T10:30:00-0500 ", "2026-08-14T15:30:00.000Z"],
+		]) {
+			for (const name of ["physicalSiteId", "code", "name", "created_at"]) {
+				expect(inferTemporalValue(name, wire)?.toISOString(), wire).toBe(iso);
+			}
+		}
+	});
+
+	// JavaScriptCore — bun here, WebKit in the desktop app — reads nearly any
+	// text with a number in it as a date: every one of these parses.
+	test("does not read ids and labels as dates from a column that names none", () => {
+		for (const value of [
+			"HOE-87",
+			"S-1",
+			"A-12",
+			"order 5",
+			"Building 7",
+			"Room 101",
+			"12/05/2024",
+		]) {
+			for (const name of ["physicalSiteId", "code", "name"]) {
+				expect(inferTemporalValue(name, value), `${name}=${value}`).toBeNull();
+			}
+		}
+	});
+
+	test("reads other textual dates only under a name that promises one", () => {
+		const rfc2822 = "Mon, 01 Jan 2024 00:00:00 GMT";
+		expect(inferTemporalValue("created_at", rfc2822)?.toISOString()).toBe(
+			"2024-01-01T00:00:00.000Z",
+		);
+		expect(
+			inferTemporalValue("dateOfBirth", "Jan 5, 2024")?.getFullYear(),
+		).toBe(2024);
+		expect(inferTemporalValue("physicalSiteId", rfc2822)).toBeNull();
+		expect(inferTemporalValue("notes", "Jan 5, 2024")).toBeNull();
+		expect(inferTemporalValue("created_at", "not a date")).toBeNull();
+		expect(inferTemporalValue("created_at", "")).toBeNull();
 	});
 
 	test("treats a quoted integer as the integer case", () => {
@@ -391,5 +436,14 @@ describe("datetime-local round trip against an API instant", () => {
 			instant.getTime() - instant.getSeconds() * 1000,
 		);
 		expect(toDateTimeInputValue(written, "minute")).toBe(shown);
+	});
+});
+
+describe("parseTimespan", () => {
+	test("measures the same span whichever end comes first", () => {
+		const start = { secs_since_epoch: 0, nanos_since_epoch: 1_000_000 };
+		const end = { secs_since_epoch: 0, nanos_since_epoch: 3_500_000 };
+		expect(parseTimespan(start, end)).toBe("2.50ms");
+		expect(parseTimespan(end, start)).toBe("2.50ms");
 	});
 });

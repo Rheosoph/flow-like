@@ -711,3 +711,101 @@ test("a join-table relationship edits its own properties but never its endpoints
 	expect(calls).toEqual([[{ role: "member" }, edge.props]]);
 	expect(container.querySelector("input")).toBeNull();
 }, 30_000);
+
+test("a save that settles after switching objects leaves the newer editor open", async () => {
+	const { container, render, type, press, click } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	let settle: (() => void) | undefined;
+	const inspect = (node: SubgraphNode) =>
+		render(
+			<GraphNodeInspector
+				node={node}
+				overlay={PERSON_OVERLAY}
+				editFields={PERSON_FIELDS}
+				onUpdateProperties={() =>
+					new Promise<void>((resolve) => {
+						settle = resolve;
+					})
+				}
+				onClose={() => {}}
+			/>,
+		);
+	await inspect(PERSON);
+	await click(buttonLabelled(container, "Edit name"));
+	await type(container.querySelector("input") as HTMLInputElement, "x");
+	await press(container.querySelector("input") as HTMLInputElement, "Enter");
+	expect(settle).toBeDefined();
+	const firstSave = settle;
+
+	await inspect({
+		...PERSON,
+		id: "Person:2",
+		props: { id: 2, name: "Grace", role: "Admiral" },
+	});
+	await click(buttonLabelled(container, "Edit role"));
+	const input = container.querySelector("input") as HTMLInputElement;
+	await type(input, "Rear Admiral");
+	await act(async () => firstSave?.());
+
+	expect(container.querySelector("input")).toBe(input);
+	expect(input.value).toBe("Rear Admiral");
+	expect(buttonLabelled(container, "Edit name")?.disabled).toBe(true);
+}, 30_000);
+
+test("closing an inline editor returns focus to its pencil unless focus moved on", async () => {
+	const { container, render, type, press, click } = await setup();
+	const { GraphNodeInspector } = await import("./graph-node-inspector");
+	let settle: (() => void) | undefined;
+	let deferred = false;
+	await render(
+		<>
+			<input aria-label="elsewhere" />
+			<GraphNodeInspector
+				node={PERSON}
+				overlay={PERSON_OVERLAY}
+				editFields={PERSON_FIELDS}
+				onUpdateProperties={() =>
+					deferred
+						? new Promise<void>((resolve) => {
+								settle = resolve;
+							})
+						: Promise.resolve()
+				}
+				onClose={() => {}}
+			/>
+		</>,
+	);
+	const focused = () => container.ownerDocument.activeElement;
+
+	await click(buttonLabelled(container, "Edit name"));
+	const nameInput = container.querySelector(
+		'input[aria-label="name"]',
+	) as HTMLInputElement;
+	expect(focused()).toBe(nameInput);
+	await type(nameInput, "x");
+	await press(nameInput, "Enter");
+	expect(container.querySelector('input[aria-label="name"]')).toBeNull();
+	expect(focused()).toBe(buttonLabelled(container, "Edit name"));
+
+	await click(buttonLabelled(container, "Edit role"));
+	await press(
+		container.querySelector('input[aria-label="role"]') as Element,
+		"Escape",
+	);
+	expect(focused()).toBe(buttonLabelled(container, "Edit role"));
+
+	deferred = true;
+	await click(buttonLabelled(container, "Edit role"));
+	const roleInput = container.querySelector(
+		'input[aria-label="role"]',
+	) as HTMLInputElement;
+	await type(roleInput, "Lead");
+	await press(roleInput, "Enter");
+	const elsewhere = container.querySelector(
+		'input[aria-label="elsewhere"]',
+	) as HTMLInputElement;
+	await act(async () => elsewhere.focus());
+	await act(async () => settle?.());
+	expect(container.querySelector('input[aria-label="role"]')).toBeNull();
+	expect(focused()).toBe(elsewhere);
+}, 30_000);

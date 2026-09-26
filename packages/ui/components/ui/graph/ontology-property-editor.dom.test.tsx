@@ -176,10 +176,16 @@ test("an unchanged value closes without saving and integer drafts validate", asy
 	expect(saved).toEqual([]);
 	expect(done).toBe(1);
 	await type(input, "1.5");
-	expect(container.textContent).toContain("Enter a whole number");
+	const draftError = container.querySelector('[role="alert"]');
+	expect(draftError?.textContent).toBe("Enter a whole number");
+	expect(draftError?.id).toBeTruthy();
+	expect(input.getAttribute("aria-describedby")).toBe(draftError?.id ?? null);
+	expect(input.getAttribute("aria-invalid")).toBe("true");
 	await key(input, "Enter");
 	expect(saved).toEqual([]);
 	await type(input, "7");
+	expect(container.querySelector('[role="alert"]')).toBeNull();
+	expect(input.hasAttribute("aria-describedby")).toBe(false);
 	await key(input, "Enter");
 	expect(saved).toEqual([7]);
 	await type(input, "");
@@ -218,6 +224,57 @@ test("locked properties render a lock with the reason", async () => {
 		buttons[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 	});
 	expect(clicked).toBe(1);
+}, 30_000);
+
+test("a temporal property is labelled and stays locked while its save runs", async () => {
+	const { container, key, render } = await setup();
+	const { InlinePropertyEditor } = await import("./ontology-property-editor");
+	const saved: unknown[] = [];
+	let settle: (() => void) | undefined;
+	let done = 0;
+	await render(
+		<InlinePropertyEditor
+			name="seen"
+			value={1_700_000_000_000}
+			editability={{
+				editor: "temporal",
+				field: {
+					...textField,
+					name: "seen",
+					kind: "date",
+					temporal: { unit: "millisecond", wire: "number" },
+				},
+			}}
+			onSave={(value) => {
+				saved.push(value);
+				return new Promise<void>((resolve) => {
+					settle = resolve;
+				});
+			}}
+			onDone={() => {
+				done += 1;
+			}}
+		/>,
+	);
+	const input = container.querySelector("input") as HTMLInputElement;
+	const button = (label: string) =>
+		[...container.querySelectorAll("button")].find((candidate) =>
+			candidate.textContent?.includes(label),
+		);
+	expect(input.getAttribute("aria-label")).toBe("seen");
+	await act(async () => {
+		button("Now")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+	});
+	await key(input, "Enter");
+	expect(saved).toHaveLength(1);
+	expect(input.disabled).toBe(true);
+	expect(button("Now")?.disabled).toBe(true);
+	expect(button("Clear")?.disabled).toBe(true);
+
+	await key(input, "Escape");
+	expect(done).toBe(0);
+	await act(async () => settle?.());
+	expect(done).toBe(1);
 }, 30_000);
 
 test("schema fields load only when enabled", async () => {

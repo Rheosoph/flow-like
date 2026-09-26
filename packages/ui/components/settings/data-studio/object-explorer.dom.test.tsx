@@ -233,6 +233,14 @@ async function setup() {
 		});
 		await settle();
 	};
+	// A pointer click focuses the button it lands on; happy-dom's click() does not.
+	const activate = async (element: Element | null | undefined) => {
+		if (!element) throw new Error("nothing to activate");
+		await act(async () => {
+			(element as HTMLElement).focus();
+		});
+		await click(element);
+	};
 	const type = async (input: Element | null, value: string) => {
 		if (!input) throw new Error("no input to type into");
 		await act(async () => {
@@ -260,6 +268,7 @@ async function setup() {
 		graphUpdates,
 		settle,
 		click,
+		activate,
 		type,
 		press,
 		render: async (children: ReactNode) => {
@@ -309,6 +318,10 @@ function fieldCard(dialog: Element, title: string) {
 
 function fieldInput(dialog: Element, name: string) {
 	return dialog.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`);
+}
+
+function focused(dialog: Element) {
+	return dialog.ownerDocument.activeElement;
 }
 
 const noop = async () => {
@@ -778,4 +791,107 @@ test("only a hub 404 with a code or the storage message reads as a deleted objec
 	expect(failure()?.textContent).toContain("This object no longer exists");
 	expect(buttonNamed(failure() as Element, "Refresh")).toBeDefined();
 	expect(updates.calls).toHaveLength(3);
+}, 30_000);
+
+type UpdateObject = (
+	ontologyId: string,
+	objectType: NodeLabelMapping,
+	payload: UpdateOntologyObjectPayload,
+) => Promise<UpdateOntologyRowResult>;
+
+async function openEditableSheet(
+	env: Awaited<ReturnType<typeof setup>>,
+	onUpdateObject: UpdateObject,
+) {
+	const { ObjectExplorerPanel } = await import("./data-studio-panels");
+	await env.render(
+		<ObjectExplorerPanel
+			appId="app-1"
+			ontologies={[EDIT_OVERLAY]}
+			onCreateOntology={() => {}}
+			onSample={async () => [{ ...EDIT_ROW }]}
+			onInvokeAction={noop}
+			onUpdateObject={onUpdateObject}
+		/>,
+	);
+	await env.click(openButton(env.container));
+	return sheet(env.body);
+}
+
+test("Edit moves focus to the first field that can change", async () => {
+	const env = await setup();
+	const updates = updateRecorder(() => {
+		throw new Error("not saved in this test");
+	});
+	const dialog = await openEditableSheet(env, updates.onUpdateObject);
+	await env.activate(buttonNamed(dialog, "Edit"));
+
+	// Code identifies the object, so Score is the first field that can change.
+	expect(fieldInput(dialog, "score")).not.toBeNull();
+	expect(focused(dialog)).toBe(fieldInput(dialog, "score"));
+}, 30_000);
+
+test("a successful save hands focus back to the Edit button", async () => {
+	const env = await setup();
+	const updates = updateRecorder((payload) => ({
+		outcome: "updated",
+		row: { ...EDIT_ROW, ...payload.updates },
+	}));
+	const dialog = await openEditableSheet(env, updates.onUpdateObject);
+	await env.activate(buttonNamed(dialog, "Edit"));
+	await env.type(fieldInput(dialog, "name"), "C3");
+	await env.activate(buttonNamed(dialog, "Save Changes"));
+
+	expect(updates.calls).toHaveLength(1);
+	expect(buttonNamed(dialog, "Save Changes")).toBeUndefined();
+	expect(buttonNamed(dialog, "Edit")).toBeDefined();
+	expect(focused(dialog)).toBe(buttonNamed(dialog, "Edit"));
+}, 30_000);
+
+test("discarding hands focus back to the Edit button", async () => {
+	const env = await setup();
+	const updates = updateRecorder(() => {
+		throw new Error("not saved in this test");
+	});
+	const dialog = await openEditableSheet(env, updates.onUpdateObject);
+	await env.activate(buttonNamed(dialog, "Edit"));
+	await env.type(fieldInput(dialog, "name"), "C3");
+	await env.activate(buttonNamed(dialog, "Discard"));
+
+	expect(fieldInput(dialog, "name")).toBeNull();
+	expect(buttonNamed(dialog, "Edit")).toBeDefined();
+	expect(focused(dialog)).toBe(buttonNamed(dialog, "Edit"));
+	expect(updates.calls).toEqual([]);
+}, 30_000);
+
+test("a save in flight ignores edits and leaves focus where the user moved it", async () => {
+	const env = await setup();
+	let finish: (() => void) | undefined;
+	const calls: UpdateOntologyObjectPayload[] = [];
+	const dialog = await openEditableSheet(env, async (_id, _type, payload) => {
+		calls.push(payload);
+		await new Promise<void>((resolve) => {
+			finish = resolve;
+		});
+		return { outcome: "updated", row: { ...EDIT_ROW, ...payload.updates } };
+	});
+	await env.activate(buttonNamed(dialog, "Edit"));
+	await env.type(fieldInput(dialog, "name"), "C3");
+	await env.activate(buttonNamed(dialog, "Save Changes"));
+	expect(calls).toHaveLength(1);
+
+	await env.type(fieldInput(dialog, "name"), "C4");
+	expect(fieldInput(dialog, "name")?.value).toBe("C3");
+	expect(dialog.textContent).toMatch(/1 unsaved change(?!s)/);
+
+	const close = buttonNamed(dialog, "Close");
+	expect(close).toBeDefined();
+	await act(async () => close?.focus());
+	await act(async () => finish?.());
+	await env.settle();
+
+	expect(calls[0].updates).toEqual({ name: "C3" });
+	expect(dialog.querySelector("h2")?.textContent).toBe("C3");
+	expect(buttonNamed(dialog, "Edit")).toBeDefined();
+	expect(focused(dialog)).toBe(close);
 }, 30_000);

@@ -57,21 +57,51 @@ function identityOverrides(edge: EdgeLabelMapping, label: string): string[] {
 
 export type ColumnLock = "identity" | "relationship";
 
-export function lockedObjectColumns(
+/**
+ * Columns that identify an object or store a relationship on `table`, for
+ * every mapping stored there and not only the edited one; identity wins when a
+ * column is both. Mirrors the server's `table_locked_columns`.
+ */
+export function lockedTableColumns(
 	overlay: GraphOverlay,
-	mapping: NodeLabelMapping,
+	table: string,
 ): ReadonlyMap<string, ColumnLock> {
 	const locks = new Map<string, ColumnLock>();
-	const identity = effectiveIdentityColumn(overlay, mapping.label);
-	if (identity) locks.set(identity, "identity");
-	locks.set(mapping.id_column, "identity");
+	for (const node of overlay.nodes) {
+		if (node.table !== table) continue;
+		const identity = effectiveIdentityColumn(overlay, node.label);
+		if (identity) locks.set(identity, "identity");
+		locks.set(node.id_column, "identity");
+	}
 	for (const edge of overlay.edges) {
-		if (edge.table !== mapping.table) continue;
+		if (edge.table !== table) continue;
 		for (const column of [edge.src_column, edge.dst_column]) {
 			if (!locks.has(column)) locks.set(column, "relationship");
 		}
 	}
 	return locks;
+}
+
+export function lockedObjectColumns(
+	overlay: GraphOverlay,
+	mapping: NodeLabelMapping,
+): ReadonlyMap<string, ColumnLock> {
+	return lockedTableColumns(overlay, mapping.table);
+}
+
+/**
+ * Some object on `table` has edge overrides that disagree on its identity; the
+ * server refuses every edit on that table rather than lock the wrong column.
+ */
+function tableHasIdentityConflict(
+	overlay: GraphOverlay,
+	table: string,
+): boolean {
+	return overlay.nodes.some(
+		(node) =>
+			node.table === table &&
+			effectiveIdentityColumn(overlay, node.label) === null,
+	);
 }
 
 /**
@@ -121,17 +151,7 @@ export function lockedRelationshipColumns(
 	overlay: GraphOverlay,
 	mapping: EdgeLabelMapping,
 ): ReadonlyMap<string, ColumnLock> {
-	const locks = new Map<string, ColumnLock>([
-		[mapping.src_column, "relationship"],
-		[mapping.dst_column, "relationship"],
-	]);
-	for (const node of overlay.nodes) {
-		if (node.table !== mapping.table) continue;
-		for (const [column, lock] of lockedObjectColumns(overlay, node)) {
-			if (!locks.has(column)) locks.set(column, lock);
-		}
-	}
-	return locks;
+	return lockedTableColumns(overlay, mapping.table);
 }
 
 function isUnsafeInteger(value: unknown): boolean {
@@ -167,6 +187,14 @@ export type EditableIdentity =
 				| "identityUnsafe";
 	  };
 
+function isCrossOntologyLabel(overlay: GraphOverlay, label: string): boolean {
+	return overlay.edges.some(
+		(edge) =>
+			edge.dst_label === label &&
+			Boolean(edge.dst_ontology || edge.dst_binding_id),
+	);
+}
+
 export function resolveObjectIdentity(
 	overlay: GraphOverlay,
 	label: string,
@@ -174,18 +202,20 @@ export function resolveObjectIdentity(
 ): EditableIdentity {
 	const mapping = overlay.nodes.find((node) => node.label === label);
 	if (!mapping) {
-		const crossOntology = overlay.edges.some(
-			(edge) =>
-				edge.dst_label === label &&
-				Boolean(edge.dst_ontology || edge.dst_binding_id),
-		);
 		return {
 			ok: false,
-			reason: crossOntology ? "crossOntology" : "unknownType",
+			reason: isCrossOntologyLabel(overlay, label)
+				? "crossOntology"
+				: "unknownType",
 		};
 	}
 	const identityColumn = effectiveIdentityColumn(overlay, label);
-	if (identityColumn === null) return { ok: false, reason: "identityConflict" };
+	if (
+		identityColumn === null ||
+		tableHasIdentityConflict(overlay, mapping.table)
+	) {
+		return { ok: false, reason: "identityConflict" };
+	}
 	const id = row[identityColumn];
 	if (!isIdentityValue(id)) return { ok: false, reason: "identityMissing" };
 	if (isUnsafeInteger(id)) return { ok: false, reason: "identityUnsafe" };
