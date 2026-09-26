@@ -7,8 +7,6 @@ use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::{InternalRun, LogMeta, UserExecutionContext};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::flow_like_storage::Path;
-use flow_like::hub::Hub;
 use flow_like::state::RunData;
 use flow_like::{flow::execution::RunPayload, state::FlowLikeState};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
@@ -181,6 +179,17 @@ impl EventBusEvent {
         .await?;
         let profile = TauriSettingsState::current_profile(app_handle).await?;
 
+        crate::functions::automation_approval::ensure_automation_approved(
+            app_handle,
+            &self.app_id,
+            &template.board,
+            Some(&self.event_id),
+            // Background triggers require a remembered grant and cannot spend a manual Run Once.
+            false,
+            &profile.hub_profile,
+        )
+        .await?;
+
         let app_handle_clone = app_handle.clone();
         let buffered_sender = if let Some(callback) = &self.callback {
             callback.clone()
@@ -216,7 +225,14 @@ impl EventBusEvent {
         };
 
         let mut credentials = None;
-        if !self.offline {
+        let request_authorizer = crate::execution_credentials::request_authorizer(
+            &profile.hub_profile.hub,
+            &self.app_id,
+            self.token.as_deref(),
+            None,
+            None,
+        );
+        if !matches!(app.visibility, flow_like::app::AppVisibility::Offline) {
             let token = self.token.as_ref().ok_or_else(|| {
                 flow_like_types::anyhow!("No token registered, cannot run online event")
             })?;
@@ -227,10 +243,36 @@ impl EventBusEvent {
                 ));
             }
 
-            let hub = Hub::new(&hub_url, flow_like_state.http_client.clone()).await?;
-            let shared_credentials = hub.shared_credentials(token, &self.app_id).await?;
-            credentials = Some(shared_credentials);
+            match crate::execution_credentials::prepare(
+                &hub_url,
+                &self.app_id,
+                Some(token),
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(shared_credentials) => credentials = Some(shared_credentials),
+                Err(error)
+                    if crate::execution_credentials::falls_back_to_device_storage(&error) =>
+                {
+                    tracing::warn!(
+                        app_id = %self.app_id,
+                        event_id = %self.event_id,
+                        %error,
+                        "Hub credentials unavailable; running the event against device storage"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
+
+        let mut renewable_state = (*execution_state).clone();
+        renewable_state.request_authorizer = Some(request_authorizer);
+        if let Some(credentials) = &credentials {
+            crate::execution_credentials::install_registry(&mut renewable_state, credentials)?;
+        }
+        let execution_state = Arc::new(renewable_state);
 
         let event_name = loaded_event.name.clone();
         let event_type = loaded_event.event_type.clone();
@@ -285,6 +327,7 @@ impl EventBusEvent {
             .await;
 
         let cancellation_token = CancellationToken::new();
+        internal_run.set_cancellation_token(cancellation_token.clone());
         let board_name = internal_run.board.name.clone();
         let run_data = RunData::with_metadata(
             Some(self.app_id.clone()),
@@ -324,47 +367,29 @@ impl EventBusEvent {
             }
         };
 
-        let app_id = self.app_id.clone();
-
         if let Err(err) = buffered_sender.flush().await {
             println!("Error flushing buffered sender: {}", err);
         }
 
-        let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
-            let (db_fn, write_options) = {
-                let guard = execution_state.config.read().await;
-                (
-                    guard.callbacks.build_logs_database.clone(),
-                    guard.callbacks.lance_write_options.clone(),
-                )
-            };
-            async {
-                let db_fn = db_fn
-                    .as_ref()
-                    .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-                let base_path = Path::from("runs").join(app_id).join(board_id);
-                let db = execution_state
-                    .with_lance_session(db_fn(base_path.clone()))
-                    .execute()
-                    .await
-                    .map_err(|e| {
-                        flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-                    })?;
-                meta.flush(db, write_options.as_ref()).await.map_err(|e| {
-                    flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
-                })?;
-                Ok(())
-            }
-            .await
-        } else {
-            Ok(())
-        };
+        if let Some(meta) = &meta {
+            crate::run_reports::enqueue(
+                app_handle,
+                crate::run_reports::FinishedRun {
+                    meta,
+                    status: &internal_run.get_status().await,
+                    visibility: &app.visibility,
+                    hub: &profile.hub_profile.hub,
+                    secure: profile.hub_profile.secure,
+                    token: self.token.as_deref(),
+                },
+            )
+            .await;
+        }
 
-        // Always release the finished run from the registry, even if flushing
-        // its logs failed. Otherwise the run stays flagged "in use" and its
-        // logs can never be deleted from storage management until restart.
+        // Release the finished run from the registry; otherwise it stays
+        // flagged "in use" and its logs can never be deleted from storage
+        // management until restart.
         let _res = flow_like_state.remove_and_cancel_run(&run_id);
-        flush_result?;
 
         Ok(meta)
     }

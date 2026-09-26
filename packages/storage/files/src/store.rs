@@ -209,6 +209,10 @@ fn signed_url_cache_key(method: &str, url: &Url, lifetime: Duration) -> String {
     )
 }
 
+/// A routed store can retain its native provider's signing implementation.
+pub trait SignableObjectStore: ObjectStore + Signer {}
+impl<T: ObjectStore + Signer> SignableObjectStore for T {}
+
 #[derive(Clone, Debug)]
 pub enum FlowLikeStore {
     Local(Arc<LocalObjectStore>),
@@ -217,6 +221,7 @@ pub enum FlowLikeStore {
     Google(Arc<object_store::gcp::GoogleCloudStorage>),
     Memory(Arc<object_store::memory::InMemory>),
     Other(Arc<dyn ObjectStore>),
+    Signed(Arc<dyn SignableObjectStore>),
 }
 
 impl Cacheable for FlowLikeStore {
@@ -249,6 +254,7 @@ impl FlowLikeStore {
             FlowLikeStore::Google(store) => store.clone() as Arc<dyn ObjectStore>,
             FlowLikeStore::Memory(store) => store.clone() as Arc<dyn ObjectStore>,
             FlowLikeStore::Other(store) => store.clone() as Arc<dyn ObjectStore>,
+            FlowLikeStore::Signed(store) => store.clone() as Arc<dyn ObjectStore>,
         }
     }
 
@@ -302,6 +308,7 @@ impl FlowLikeStore {
             FlowLikeStore::AWS(store) => store.signed_url(method, path, expires_after).await?,
             FlowLikeStore::Google(store) => store.signed_url(method, path, expires_after).await?,
             FlowLikeStore::Azure(store) => store.signed_url(method, path, expires_after).await?,
+            FlowLikeStore::Signed(store) => store.signed_url(method, path, expires_after).await?,
             FlowLikeStore::Memory(store) => {
                 let mime = mime_guess::from_path(path.to_string()).first_or_octet_stream();
                 let data = store.get(path).await?;

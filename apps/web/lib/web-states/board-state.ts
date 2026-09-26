@@ -1,3 +1,4 @@
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowIrCommitDisposition,
@@ -22,10 +23,12 @@ import {
 	type ILog,
 	type ILogLevel,
 	type ILogMetadata,
+	type ILogQuery,
 	type INode,
 	type IOAuthProvider,
 	type IRealtimeAccess,
 	type IRunContext,
+	type IRunLogSummary,
 	type IRunPayload,
 	type IScopedFlowScriptResponse,
 	type IVersionType,
@@ -38,7 +41,10 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
-import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import {
+	apiResponseError,
+	isMissingResourceError,
+} from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	BOARD_FORMAT_HEADER,
 	type BoardFormatCapabilities,
@@ -54,6 +60,7 @@ import {
 	isChannelHandle,
 } from "@flow-like/flow-like-ui/lib/channel";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IChannelHandle } from "@flow-like/flow-like-ui/lib/schema/channel";
 import type {
 	ChatImage,
@@ -359,6 +366,17 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/${boardId}${params}`,
 			this.backend.auth,
 		);
+	}
+
+	async getBoardSummariesSnapshot(appId: string): Promise<IBoardSummary[]> {
+		return apiGet<IBoardSummary[]>(
+			`apps/${appId}/board/summaries`,
+			this.backend.auth,
+		);
+	}
+
+	async getBoardSnapshot(appId: string, boardId: string): Promise<IBoard> {
+		return apiGet<IBoard>(`apps/${appId}/board/${boardId}`, this.backend.auth);
 	}
 
 	private async presignMediaComments(
@@ -757,6 +775,7 @@ export class WebBoardState implements IBoardState {
 							}
 
 							// Handle toast events globally
+							dispatchPaymentRequest(event);
 							if (event.event_type === "toast") {
 								handleToastEvent(event);
 							}
@@ -839,6 +858,22 @@ export class WebBoardState implements IBoardState {
 		}
 	}
 
+	async getRunPayload(
+		appId: string,
+		boardId: string,
+		runId: string,
+	): Promise<object | undefined> {
+		try {
+			return await apiGet<object | undefined>(
+				`apps/${appId}/board/${boardId}/runs/${runId}/payload`,
+				this.backend.auth,
+			);
+		} catch (error) {
+			if (isMissingResourceError(error)) return undefined;
+			throw error;
+		}
+	}
+
 	async queryRun(
 		logMeta: ILogMetadata,
 		query: string,
@@ -859,6 +894,39 @@ export class WebBoardState implements IBoardState {
 		} catch {
 			return [];
 		}
+	}
+
+	async queryRunLogs(
+		logMeta: ILogMetadata,
+		query: ILogQuery,
+		offset: number,
+		limit: number,
+	): Promise<ILog[]> {
+		const logs = await apiPost<ILog[]>(
+			`apps/${logMeta.app_id}/board/${logMeta.board_id}/logs/query`,
+			{ run_id: logMeta.run_id, query, offset, limit },
+			this.backend.auth,
+		);
+		return asArray(logs);
+	}
+
+	async countRunLogs(logMeta: ILogMetadata, query: ILogQuery): Promise<number> {
+		const response = await apiPost<{ count?: number }>(
+			`apps/${logMeta.app_id}/board/${logMeta.board_id}/logs/count`,
+			{ run_id: logMeta.run_id, query },
+			this.backend.auth,
+		);
+		return typeof response?.count === "number" ? response.count : 0;
+	}
+
+	async getRunLogSummary(
+		logMeta: ILogMetadata,
+	): Promise<IRunLogSummary | null> {
+		const summary = await apiGet<IRunLogSummary | null>(
+			`apps/${logMeta.app_id}/board/${logMeta.board_id}/logs/summary?run_id=${encodeURIComponent(logMeta.run_id)}`,
+			this.backend.auth,
+		);
+		return isRecord(summary) ? (summary as IRunLogSummary) : null;
 	}
 
 	async undoBoard(

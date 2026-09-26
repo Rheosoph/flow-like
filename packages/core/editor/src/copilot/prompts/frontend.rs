@@ -135,16 +135,17 @@ and font family is always `var(--font-sans|--font-serif|--font-mono)`. This is w
 dark correct AND stops you drifting back to stock values partway down the tree.
 
 ## STYLING CHANNELS (what actually renders)
-- `style.className`: STANDARD Tailwind utilities and theme tokens only (bg-background, bg-card,
+- `style.className`: Tailwind v4, compiled at runtime against this theme: standard utilities,
+  variants (`md:`, `dark:`, `@container`/`@md:`), `text-5xl`..`text-9xl` and arbitrary values
+  (`w-[437px]`, `grid-cols-[1fr_2fr]`) all render. Prefer theme tokens (bg-background, bg-card,
   bg-muted, bg-primary, bg-secondary, bg-accent, bg-destructive, text-foreground,
   text-muted-foreground, text-primary-foreground, text-destructive, border-border,
-  border-primary, ring-ring, font-sans/font-serif/font-mono). There is no runtime Tailwind engine:
-  arbitrary values like `w-[437px]` or `bg-[#ff00aa]` silently render nothing, and `text-5xl`/
-  `text-6xl` are not compiled - display sizes go through typed `fontSize`. Never use hardcoded
-  palette classes (bg-white, text-black, bg-gray-*) - they break dark mode. `shadow-sm/md/lg` are
-  transparent in this theme; real elevation is `shadow-floating`, the typed `shadow` field, or
-  customCss.
-- Typed `style` fields: always render (inline CSS). Use them for every off-scale value - gradients
+  border-primary, ring-ring, font-sans/font-serif/font-mono). Palette classes (bg-white,
+  text-black, bg-gray-*) and literal colours in brackets (`bg-[#ff00aa]`) break dark mode.
+  `shadow-sm/md/lg` are transparent in this theme; real elevation is `shadow-floating`, the typed
+  `shadow` field, or customCss. Unstyled by className: `iframe` `srcdoc` HTML, micro-widget
+  internals, native home-screen widgets.
+- Typed `style` fields: always render (inline CSS). Use them for structured values - gradients
   (`linear`/`radial`/`conic`, with a free-form `direction` string), exact sizes, `fontFamily`,
   fluid `fontSize` via `clamp()`, `letterSpacing`, `textTransform`, transform, filter, animation,
   `border.radius`, `responsiveOverrides`. Typed `shadow` is ONE box-shadow; layered depth needs
@@ -168,14 +169,14 @@ dark correct AND stops you drifting back to stock values partway down the tree.
 ## RESPONSIVE (MANDATORY)
 Mobile-first: base styles are the phone layout, then sm: md: lg: xl: 2xl: variants
 (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, `flex-col md:flex-row`, `hidden md:block`,
-`p-4 md:p-6 lg:p-8`) or the guaranteed typed route
+`p-4 md:p-6 lg:p-8`) or the typed route
 `"responsiveOverrides": {"md": {"gridCols": 2}}`. Every surface stays usable at 360px wide.
 
 ## PRE-EMIT GATE (every honest answer must be "no"; fix, then call emit_ui)
 1. Equal cards in a row at one elevation, icon above title?
 2. A coloured edge or divider that encodes nothing?
-3. Any hardcoded palette class, literal hex, or arbitrary Tailwind value?
-4. Any `shadow-sm/md/lg` expected to render, or `text-5xl`/`text-6xl`?
+3. Any hardcoded palette class or literal hex/rgb/oklch colour, bracket values included?
+4. Any `shadow-sm/md/lg` expected to render elevation?
 5. Eyebrow + big title + subtitle + buttons, all centered?
 6. Any number or figure I invented?
 7. Emoji as an icon or section marker?

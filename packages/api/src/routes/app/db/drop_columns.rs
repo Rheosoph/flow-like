@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 use utoipa::ToSchema;
 
@@ -30,6 +31,7 @@ pub struct DropColumnsPayload {
     request_body = DropColumnsPayload,
     responses(
         (status = 200, description = "Columns dropped", body = ()),
+        (status = 400, description = "The table key column cannot be removed"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -48,6 +50,7 @@ pub async fn drop_columns(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<DropColumnsPayload>,
 ) -> Result<Json<()>, ApiError> {
     ensure_any_permission!(
@@ -58,12 +61,15 @@ pub async fn drop_columns(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    super::validate_writable_selector(&selector)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector).await?;
 
     let column_refs: Vec<&str> = payload.columns.iter().map(|s| s.as_str()).collect();
-    db.drop_columns(&column_refs).await?;
+    db.drop_columns(&column_refs)
+        .await
+        .map_err(super::table_key_error)?;
 
     Ok(Json(()))
 }

@@ -170,7 +170,10 @@ function drainFrontier(seedUrls: string[], budget: int, agent: string): (spent: 
     let visited = set::make()
     let spent = 0
     let stored = 0
-    while (array::length({ array: frontier }) > 0 && spent < budget) {
+    // A return cannot leave a loop, so a host that exhausts its retries abandons the frontier
+    // through this flag and the loop condition.
+    let abandoned = false
+    while (array::length({ array: frontier }) > 0 && spent < budget && !abandoned) {
         const { element: head } = array::get({ arrayIn: frontier, index: 0 })
         frontier = array::removeIndex({ arrayIn: frontier, index: 0 })
         spent = spent + 1
@@ -202,7 +205,7 @@ function drainFrontier(seedUrls: string[], budget: int, agent: string): (spent: 
                         warn({ message: `attempt ${attempt} failed for ${host}`, toast: false })
                         if (attempt == 3) {
                             error({ message: `frontier abandoned at ${host} after ${spent} pages`, toast: true })
-                            return spent, stored
+                            abandoned = true
                         }
                     }
                 }
@@ -212,16 +215,16 @@ function drainFrontier(seedUrls: string[], budget: int, agent: string): (spent: 
             }
             if (landed) {
                 stored = stored + persistPage(store, head, body, status)
+                const linkSet = web::extractLinks({ startingPage: head, sameDomain: true, offsetMs: 200, depth: 1 }).links
+                const discovered = set::toArray({ setIn: linkSet })
+                @parallel
+                for (const link of discovered) {
+                    const seenBefore = set::has({ setIn: visited, value: link })
+                    noteCandidate(link, seenBefore)
+                }
+                frontier = array::batchPush({ arrayIn: frontier, items: discovered })
+                frontier = array::unique({ arrayIn: frontier }).arrayOut
             }
-            const linkSet = web::extractLinks({ startingPage: head, sameDomain: true, offsetMs: 200, depth: 1 }).links
-            const discovered = set::toArray({ setIn: linkSet })
-            @parallel
-            for (const link of discovered) {
-                const seenBefore = set::has({ setIn: visited, value: link })
-                noteCandidate(link, seenBefore)
-            }
-            frontier = array::batchPush({ arrayIn: frontier, items: discovered })
-            frontier = array::unique({ arrayIn: frontier }).arrayOut
         }
     }
     return spent, stored
@@ -453,11 +456,12 @@ module dataset {
     function commit(store: Struct, row: Struct): (written: int) {
         const failure = db::upsert({ database: store, idRow: "fingerprint", value: row })
         const rejected = !types::isEmpty({ value: failure, trim: true })
+        let written = 1
         if (rejected) {
             error({ message: `dataset write rejected: ${failure}`, toast: true })
-            return 0
+            written = 0
         }
-        return 1
+        return written
     }
 
     function query(datasetId: string, hostFilter: string): (answer: Struct) {
@@ -505,13 +509,16 @@ module marketplace {
     }
 
     function priceTier(rows: int): (tier: string, monthlyUsd: float) {
+        let tier = "starter"
+        let monthlyUsd = 29.0
         if (rows > 1000000) {
-            return "enterprise", 999.0
+            tier = "enterprise"
+            monthlyUsd = 999.0
+        } else if (rows > 50000) {
+            tier = "growth"
+            monthlyUsd = 199.0
         }
-        if (rows > 50000) {
-            return "growth", 199.0
-        }
-        return "starter", 29.0
+        return tier, monthlyUsd
     }
 
     function offer(slug: string, summary: string, tier: string, monthlyUsd: float): (published: bool) {

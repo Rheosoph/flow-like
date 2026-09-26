@@ -31,12 +31,21 @@ let root: Root;
 let container: HTMLDivElement;
 let client: QueryClient;
 
-function Search({ query = "", open = true, appId = "target" }) {
-	latest = useProjectUserSearch(appId, query, open);
+/** `null` searches without a target project. */
+function Search({
+	query,
+	open,
+	appId,
+}: { query: string; open: boolean; appId: string | null }) {
+	latest = useProjectUserSearch(appId ?? undefined, query, open);
 	return <output>{latest.results.map(({ user }) => user.id).join(",")}</output>;
 }
 
-async function render(query = "", open = true, appId = "target") {
+async function render(
+	query = "",
+	open = true,
+	appId: string | null = "target",
+) {
 	await act(async () =>
 		root.render(
 			<QueryClientProvider client={client}>
@@ -204,6 +213,20 @@ describe("project invitation search", () => {
 		fixture.getProjectContacts.mockReturnValue(new Promise(() => {}));
 		await render();
 		expect(container.textContent).toBe("");
+	});
+
+	it("searches only the directory when there is no target project", async () => {
+		fixture.searchUsers.mockResolvedValue([user("anyone", "Alice Adams")]);
+		await render("", true, null);
+		await flush();
+		expect(container.textContent).toBe("");
+		expect(latest.isLoadingContacts).toBe(false);
+		await render("Ali", true, null);
+		await flush(250);
+		await flush();
+		expect(fixture.searchUsers).toHaveBeenCalledWith("Ali", undefined);
+		expect(container.textContent).toBe("anyone");
+		expect(fixture.getProjectContacts).not.toHaveBeenCalled();
 	});
 
 	it("isolates cached users by account and target project", async () => {

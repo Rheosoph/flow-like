@@ -7,7 +7,10 @@ use serde_json::{Value, json};
 use std::{
     io::Write,
     pin::Pin,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -59,10 +62,26 @@ enum Outcome {
     Cancelled,
 }
 
+/// Request extension an inner layer marks when it ends a response early, so a
+/// clean end of stream after the headers still counts as an error.
+#[derive(Clone, Default)]
+pub(crate) struct ResponseFault(Arc<AtomicBool>);
+
+impl ResponseFault {
+    pub(crate) fn mark(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_marked(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// Owns the span while the handler runs and while its response body is polled.
 /// Dropping either future or body records cancellation exactly once.
 pub(crate) struct RequestLifetime {
     span: Option<Span>,
+    fault: ResponseFault,
     started: Instant,
     response_ready: Option<Duration>,
     first_byte: Option<Duration>,
@@ -89,6 +108,7 @@ impl RequestLifetime {
 
         Self {
             span: Some(span),
+            fault: ResponseFault::default(),
             started,
             response_ready: None,
             first_byte: None,
@@ -98,6 +118,10 @@ impl RequestLifetime {
             metrics: metrics_config(),
             trace_id,
         }
+    }
+
+    pub(crate) fn fault(&self) -> ResponseFault {
+        self.fault.clone()
     }
 
     pub(crate) fn response_ready(&mut self, status: StatusCode) {
@@ -124,7 +148,8 @@ impl RequestLifetime {
         let Some(span) = self.span.take() else { return };
         let duration = self.started.elapsed();
         let error = matches!(outcome, Outcome::Error)
-            || self.status.is_some_and(|status| status.is_server_error());
+            || self.status.is_some_and(|status| status.is_server_error())
+            || self.fault.is_marked();
         let cancelled = matches!(outcome, Outcome::Cancelled);
         span.record("http.duration_ms", milliseconds(duration));
         span.record("http.cancelled", cancelled);

@@ -1,0 +1,19 @@
+[package]
+name = "aws-audit-worker"
+version = "0.1.0"
+edition = "2024"
+description = "Flow-Like audit worker Lambda: one seal, sign, archive and prune pass per scheduled invocation"
+
+[dependencies]
+# The Lambda API's features, so both build `State` from the same environment.
+flow-like-api = { workspace = true, features = ["aws", "cognito", "ses", "smtp", "sendgrid", "lambda", "sqs", "secrets-aws", "dynamodb", "s3", "channel-aws", "audit-kms-aws"] }
+flow-like-aws-data = { workspace = true }
+flow-like-secrets = { workspace = true, features = ["aws"] }
+flow-like-storage.workspace = true
+flow-like-catalog = { workspace = true, features = ["server-local-metadata"] }
+lambda_runtime = { version = "1.0.2", features = ["anyhow"] }
+mimalloc.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

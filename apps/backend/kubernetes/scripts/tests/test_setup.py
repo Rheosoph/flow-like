@@ -15,6 +15,28 @@ setup = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(setup)
 
 class SetupTest(unittest.TestCase):
+    def test_hosted_frontends_reuse_the_web_origin_for_separate_and_shared_hosts(self):
+        web = "https://app.example.test"
+        for api in ["https://api.example.test", web]:
+            with self.subTest(api=api), patch.dict(os.environ, {"PUBLIC_WEB_URL": web, "PUBLIC_API_URL": api}, clear=True):
+                _, values = setup.generate("flow-like", "flow-like")
+            self.assertEqual(values["api"]["frontendBaseUrl"], web)
+            self.assertIn(web, values["api"]["corsAllowedOrigins"])
+
+    def test_stripe_credentials_are_private_api_secret_values(self):
+        environment = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
+        with patch.dict(os.environ, environment, clear=True):
+            objects, values = setup.generate("flow-like", "flow-like")
+        api_name = values["api"]["existingSecret"]
+        api_secret = next(item for item in objects["items"] if item["metadata"]["name"] == api_name)
+        for key, value in environment.items():
+            self.assertEqual(api_secret["stringData"][key], value)
+            self.assertNotIn(value, json.dumps(values))
+            self.assertFalse(any(key in item["stringData"] for item in objects["items"] if item != api_secret))
+        with patch.dict(os.environ, {}, clear=True):
+            objects, _ = setup.generate("flow-like", "flow-like")
+        self.assertFalse(any(key in item["stringData"] for item in objects["items"] for key in setup.STRIPE_SETTINGS))
+
     def test_hub_file_and_json_are_private_objects_not_image_build_inputs(self):
         marker = {"name": "runtime-only", "domain": "configured.example.test"}
         with tempfile.TemporaryDirectory() as directory:
@@ -33,6 +55,15 @@ class SetupTest(unittest.TestCase):
             objects, values = setup.generate("flow-like", "flow-like")
         self.assertEqual(values["api"]["runtimeConfig"], {"secretRef": "hub-reference"})
         self.assertFalse(any("flow-like.config.json" in x["stringData"] for x in objects["items"]))
+
+    def test_worker_gets_no_runtime_config_or_api_role(self):
+        with patch.dict(os.environ, {}, clear=True):
+            objects, values = setup.generate("flow-like", "flow-like")
+        names = [x["metadata"]["name"] for x in objects["items"]]
+        self.assertIn("flow-like-hub-config", names)
+        self.assertFalse(any(name.endswith("-audit-config") for name in names))
+        self.assertNotIn("runtimeConfig", values["audit"])
+        self.assertNotIn("apiDatabaseRole", values["audit"])
 
     def test_invalid_or_conflicting_runtime_sources_fail_without_content(self):
         for environment in ({"FLOW_LIKE_CONFIG_JSON": "sensitive-invalid-marker"}, {"FLOW_LIKE_CONFIG_FILE": "/not-present-sensitive-marker"}, {"FLOW_LIKE_CONFIG_JSON": "{}", "FLOW_LIKE_CONFIG_SECRET_REF": "sensitive-marker"}):
@@ -108,10 +139,12 @@ if sys.argv[1:3]==['image','inspect']:
             self.assertEqual(values["executorPool"]["image"], values["executor"]["image"])
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertFalse(any("--build-arg" in call for call in calls))
-            env.update({"COMPONENTS": "api", "FLOW_LIKE_BUILD_CONFIG": "flow-like.kubernetes.config.json"})
+            env.update({"COMPONENTS": "api audit-worker", "FLOW_LIKE_BUILD_CONFIG": "flow-like.kubernetes.config.json"})
             subprocess.run(script, env=env, check=True, capture_output=True)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertTrue(any("FLOW_LIKE_CONFIG=flow-like.kubernetes.config.json" in call for call in calls))
+            configured = [call for call in calls if "FLOW_LIKE_CONFIG=flow-like.kubernetes.config.json" in call]
+            self.assertEqual(len(configured), 2)
+            self.assertTrue(any(arg.endswith("audit-worker/Dockerfile") for arg in configured[1]))
             env.update({"PUSH": "false", "COMPONENTS": "executor"})
             subprocess.run(script, env=env, check=True, capture_output=True)
             values = json.loads(output.read_text())
@@ -132,6 +165,7 @@ if sys.argv[1:3]==['image','inspect']:
             values = json.loads(output.read_text())
             expected = {
                 ("api", "image"): "flow-like-kubernetes-api",
+                ("audit", "image"): "flow-like-audit-worker",
                 ("web", "image"): "flow-like-kubernetes-web",
                 ("executor", "image"): "flow-like-kubernetes-executor",
                 ("executorPool", "image"): "flow-like-kubernetes-executor",

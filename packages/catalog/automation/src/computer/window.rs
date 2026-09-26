@@ -41,6 +41,7 @@ impl NodeLogic for ListWindowsNode {
             "Lists all visible windows on the desktop",
             "Automation/Computer/Window",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "listWindows");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -72,8 +73,10 @@ impl NodeLogic for ListWindowsNode {
             "windows",
             "Windows",
             "List of window information",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<WindowInfo>()
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.add_output_pin("count", "Count", "Number of windows", VariableType::Integer);
 
@@ -82,35 +85,12 @@ impl NodeLogic for ListWindowsNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use xcap::Window;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
 
-        let windows =
-            Window::all().map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
-
-        let window_infos: Vec<WindowInfo> = windows
-            .iter()
-            .filter_map(|w| {
-                let title = w.title().ok()?;
-                if title.is_empty() {
-                    return None;
-                }
-                Some(WindowInfo {
-                    id: w.id().map(|id| id.to_string()).unwrap_or_default(),
-                    title,
-                    app_name: w.app_name().ok(),
-                    x: w.x().unwrap_or(0),
-                    y: w.y().unwrap_or(0),
-                    width: w.width().unwrap_or(0),
-                    height: w.height().unwrap_or(0),
-                    is_focused: w.is_focused().unwrap_or(false),
-                    is_minimized: w.is_minimized().unwrap_or(false),
-                })
-            })
-            .collect();
+        let window_infos = super::native::windows_async().await?;
 
         let count = window_infos.len() as i64;
 
@@ -151,6 +131,7 @@ impl NodeLogic for GetActiveWindowNode {
             "Gets information about the currently focused window",
             "Automation/Computer/Window",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "getActiveWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -200,37 +181,25 @@ impl NodeLogic for GetActiveWindowNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use xcap::Window;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_none").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
 
-        let windows =
-            Window::all().map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
-
-        let active = windows.iter().find(|w| w.is_focused().unwrap_or(false));
+        let active = super::native::select_window_async("", "", "", true).await?;
 
         match active {
             Some(w) => {
-                let info = WindowInfo {
-                    id: w.id().map(|id| id.to_string()).unwrap_or_default(),
-                    title: w.title().unwrap_or_default(),
-                    app_name: w.app_name().ok(),
-                    x: w.x().unwrap_or(0),
-                    y: w.y().unwrap_or(0),
-                    width: w.width().unwrap_or(0),
-                    height: w.height().unwrap_or(0),
-                    is_focused: true,
-                    is_minimized: w.is_minimized().unwrap_or(false),
-                };
+                let info = super::native::window_info(&w);
 
                 context.set_pin_value("window", json!(info.clone())).await?;
                 context.set_pin_value("title", json!(info.title)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             None => {
+                context.set_pin_value("window", json!(null)).await?;
+                context.set_pin_value("title", json!("")).await?;
                 context.activate_exec_pin("exec_none").await?;
             }
         }
@@ -264,6 +233,7 @@ impl NodeLogic for FindWindowByTitleNode {
             "Finds a window by its title (partial match supported)",
             "Automation/Computer/Window",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "findWindowByTitle");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -326,27 +296,15 @@ impl NodeLogic for FindWindowByTitleNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use xcap::Window;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let search_title: String = context.evaluate_pin("title").await?;
         let exact_match: bool = context.evaluate_pin("exact_match").await.unwrap_or(false);
 
-        let windows =
-            Window::all().map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
-
-        let search_lower = search_title.to_lowercase();
-        let found = windows.iter().find(|w| {
-            let title = w.title().unwrap_or_default();
-            if exact_match {
-                title == search_title
-            } else {
-                title.to_lowercase().contains(&search_lower)
-            }
-        });
+        let found = super::native::select_window_async("", &search_title, "", exact_match).await?;
 
         match found {
             Some(w) => {
@@ -366,6 +324,7 @@ impl NodeLogic for FindWindowByTitleNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             None => {
+                context.set_pin_value("window", json!(null)).await?;
                 context.activate_exec_pin("exec_not_found").await?;
             }
         }
@@ -400,6 +359,7 @@ impl NodeLogic for LaunchAppNode {
             "Launches an application by path or name",
             "Automation/Computer/Window",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "launchApp");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -441,6 +401,15 @@ impl NodeLogic for LaunchAppNode {
         .set_default_value(Some(json!("")));
 
         node.add_input_pin(
+            "arguments",
+            "Argument List",
+            "Arguments passed directly without shell evaluation",
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_default_value(Some(json!([])));
+
+        node.add_input_pin(
             "wait_ms",
             "Wait (ms)",
             "Time to wait after launching (ms)",
@@ -469,53 +438,33 @@ impl NodeLogic for LaunchAppNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use std::process::Command;
-        use tokio::time::{Duration, sleep};
+        use std::time::Duration;
 
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_error").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let path: String = context.evaluate_pin("path").await?;
         let args: String = context.evaluate_pin("args").await.unwrap_or_default();
         let wait_ms: i64 = context.evaluate_pin("wait_ms").await.unwrap_or(1000);
 
-        let mut cmd = if cfg!(target_os = "macos") {
-            let mut c = Command::new("open");
-            c.arg("-a").arg(&path);
-            if !args.is_empty() {
-                c.arg("--args");
-                for arg in args.split_whitespace() {
-                    c.arg(arg);
-                }
-            }
-            c
-        } else if cfg!(target_os = "windows") {
-            let mut c = Command::new("cmd");
-            c.args(["/C", "start", "", &path]);
-            if !args.is_empty() {
-                for arg in args.split_whitespace() {
-                    c.arg(arg);
-                }
-            }
-            c
+        let arguments: Vec<String> = context.evaluate_pin("arguments").await.unwrap_or_default();
+        let arguments = if arguments.is_empty() {
+            parse_arguments(&args)?
         } else {
-            let mut c = Command::new(&path);
-            if !args.is_empty() {
-                for arg in args.split_whitespace() {
-                    c.arg(arg);
-                }
-            }
-            c
+            arguments
         };
-
-        match cmd.spawn() {
-            Ok(child) => {
-                let pid = child.id() as i64;
+        match launch_application_async(path, arguments, context.get_cancellation_token()).await {
+            Ok(pid) => {
                 context.set_pin_value("pid", json!(pid)).await?;
 
                 if wait_ms > 0 {
-                    sleep(Duration::from_millis(wait_ms.max(0) as u64)).await;
+                    crate::rpa::branch::delay(
+                        context,
+                        Duration::from_millis(wait_ms.clamp(0, 60_000) as u64),
+                    )
+                    .await?;
                 }
 
                 context.activate_exec_pin("exec_out").await?;
@@ -560,6 +509,7 @@ impl NodeLogic for CaptureWindowNode {
             "Captures a screenshot of a specific window",
             "Automation/Computer/Window",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "captureWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -629,6 +579,7 @@ impl NodeLogic for CaptureWindowNode {
         context.deactivate_exec_pin("exec_error").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let window_id: String = context.evaluate_pin("window_id").await?;
 
         let windows =
@@ -705,6 +656,7 @@ impl NodeLogic for FocusWindowNode {
             "Brings a window to the front and gives it focus",
             "Automation/Computer/Window",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "focusWindow");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -731,6 +683,21 @@ impl NodeLogic for FocusWindowNode {
         .set_schema::<AutomationSession>();
 
         node.add_input_pin(
+            "window_id",
+            "Window ID",
+            "Native window ID; fails if that window no longer exists",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "process_name",
+            "Application",
+            "Exact application name to disambiguate the window",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
             "window_title",
             "Window Title",
             "Title or app name to search for (partial match on both title and app name)",
@@ -751,7 +718,7 @@ impl NodeLogic for FocusWindowNode {
             "Try to launch the application if no window is found",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(true)));
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
@@ -775,212 +742,50 @@ impl NodeLogic for FocusWindowNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use xcap::Window;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
-
-        let _session: AutomationSession = context.evaluate_pin("session").await?;
-        let search_title: String = context.evaluate_pin("window_title").await?;
-        let exact_match: bool = context.evaluate_pin("exact_match").await.unwrap_or(false);
-        let launch_if_not_found: bool = context
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let title: String = context.evaluate_pin("window_title").await?;
+        let id: String = context.evaluate_pin("window_id").await.unwrap_or_default();
+        let process: String = context
+            .evaluate_pin("process_name")
+            .await
+            .unwrap_or_default();
+        let exact: bool = context.evaluate_pin("exact_match").await.unwrap_or(false);
+        let launch: bool = context
             .evaluate_pin("launch_if_not_found")
             .await
-            .unwrap_or(true);
-
-        tracing::info!(
-            "[FocusWindow] Searching for window: '{}' (exact_match: {})",
-            search_title,
-            exact_match
-        );
-
-        let windows =
-            Window::all().map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
-
-        // Debug: list all windows
-        tracing::debug!("[FocusWindow] Found {} windows:", windows.len());
-        for w in &windows {
-            let title = w.title().unwrap_or_default();
-            let app = w.app_name().unwrap_or_default();
-            tracing::debug!("[FocusWindow]   - App: '{}', Title: '{}'", app, title);
-        }
-
-        let search_lower = search_title.to_lowercase();
-
-        // Search by both app name AND window title
-        let found = windows.iter().find(|w| {
-            let title = w.title().unwrap_or_default();
-            let app_name = w.app_name().unwrap_or_default();
-
-            if exact_match {
-                title == search_title || app_name == search_title
-            } else {
-                let title_lower = title.to_lowercase();
-                let app_lower = app_name.to_lowercase();
-
-                // Check if search matches title or app name
-                title_lower.contains(&search_lower) || app_lower.contains(&search_lower)
-            }
-        });
-
-        // If not found, try fuzzy matching (words in any order)
-        let found = found.or_else(|| {
-            if exact_match {
-                return None;
-            }
-
-            let search_words: Vec<&str> = search_lower.split_whitespace().collect();
-            windows.iter().find(|w| {
-                let title = w.title().unwrap_or_default().to_lowercase();
-                let app_name = w.app_name().unwrap_or_default().to_lowercase();
-                let combined = format!("{} {}", app_name, title);
-
-                // All search words must be present somewhere
-                search_words.iter().all(|word| combined.contains(word))
-            })
-        });
-
-        match found {
-            Some(w) => {
-                let app_name = w.app_name().unwrap_or_default();
-                let window_title = w.title().unwrap_or_default();
-
-                tracing::info!(
-                    "[FocusWindow] Found window: App='{}', Title='{}'",
-                    app_name,
-                    window_title
-                );
-
-                #[cfg(target_os = "macos")]
-                {
-                    let script = format!(
-                        r#"tell application "{}" to activate
-tell application "System Events"
-    tell process "{}"
-        set frontmost to true
-    end tell
-end tell"#,
-                        app_name, app_name
-                    );
-                    let output = std::process::Command::new("osascript")
-                        .arg("-e")
-                        .arg(&script)
-                        .output()
-                        .map_err(|e| flow_like_types::anyhow!("Failed to focus window: {}", e))?;
-
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        tracing::warn!("[FocusWindow] osascript stderr: {}", stderr);
-                    }
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    let script = format!(
-                        r#"$wshell = New-Object -ComObject wscript.shell; $wshell.AppActivate("{}")"#,
-                        window_title
-                    );
-                    std::process::Command::new("powershell")
-                        .args(["-Command", &script])
-                        .output()
-                        .map_err(|e| flow_like_types::anyhow!("Failed to focus window: {}", e))?;
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    let _ = std::process::Command::new("wmctrl")
-                        .args(["-a", &window_title])
-                        .output()
-                        .or_else(|_| {
-                            std::process::Command::new("xdotool")
-                                .args(["search", "--name", &window_title, "windowactivate"])
-                                .output()
-                        })
-                        .map_err(|e| flow_like_types::anyhow!("Failed to focus window: {}", e))?;
-                }
-
-                let info = WindowInfo {
-                    id: w.id().map(|id| id.to_string()).unwrap_or_default(),
-                    title: window_title,
-                    app_name: Some(app_name),
-                    x: w.x().unwrap_or(0),
-                    y: w.y().unwrap_or(0),
-                    width: w.width().unwrap_or(0),
-                    height: w.height().unwrap_or(0),
-                    is_focused: true,
-                    is_minimized: w.is_minimized().unwrap_or(false),
-                };
-                context.set_pin_value("window", json!(info)).await?;
-                context.activate_exec_pin("exec_out").await?;
-            }
-            None => {
-                tracing::warn!("[FocusWindow] No window found for '{}'", search_title);
-
-                // Try to launch the app if enabled
-                if launch_if_not_found {
-                    tracing::info!("[FocusWindow] Attempting to launch app: '{}'", search_title);
-
-                    let launch_result = Self::try_launch_app(&search_title);
-
-                    if launch_result.is_ok() {
-                        // Wait for app to start
-                        tracing::info!("[FocusWindow] Waiting for app to launch...");
-                        flow_like_types::tokio::time::sleep(std::time::Duration::from_secs(2))
-                            .await;
-
-                        // Try to find the window again
-                        let windows = Window::all().unwrap_or_default();
-                        let search_lower = search_title.to_lowercase();
-
-                        let found_after_launch = windows.iter().find(|w| {
-                            let title = w.title().unwrap_or_default().to_lowercase();
-                            let app_name = w.app_name().unwrap_or_default().to_lowercase();
-                            title.contains(&search_lower) || app_name.contains(&search_lower)
-                        });
-
-                        if let Some(w) = found_after_launch {
-                            let app_name = w.app_name().unwrap_or_default();
-                            let window_title = w.title().unwrap_or_default();
-
-                            tracing::info!(
-                                "[FocusWindow] App launched, found window: '{}'",
-                                window_title
-                            );
-
-                            // Focus it
-                            #[cfg(target_os = "macos")]
-                            {
-                                let script =
-                                    format!(r#"tell application "{}" to activate"#, app_name);
-                                let _ = std::process::Command::new("osascript")
-                                    .arg("-e")
-                                    .arg(&script)
-                                    .output();
-                            }
-
-                            let info = WindowInfo {
-                                id: w.id().map(|id| id.to_string()).unwrap_or_default(),
-                                title: window_title,
-                                app_name: Some(app_name),
-                                x: w.x().unwrap_or(0),
-                                y: w.y().unwrap_or(0),
-                                width: w.width().unwrap_or(0),
-                                height: w.height().unwrap_or(0),
-                                is_focused: true,
-                                is_minimized: w.is_minimized().unwrap_or(false),
-                            };
-                            context.set_pin_value("window", json!(info)).await?;
-                            context.activate_exec_pin("exec_out").await?;
-                            return Ok(());
-                        }
-                    }
-                }
-
-                context.set_pin_value("window", json!(null)).await?;
-                context.activate_exec_pin("exec_not_found").await?;
+            .unwrap_or(false);
+        let mut found = super::native::select_window_async(&id, &title, &process, exact).await?;
+        if found.is_none() && launch {
+            let application = if process.is_empty() { &title } else { &process };
+            launch_application_async(
+                application.to_owned(),
+                vec![],
+                context.get_cancellation_token(),
+            )
+            .await?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while found.is_none() && std::time::Instant::now() < deadline {
+                crate::rpa::branch::delay(context, std::time::Duration::from_millis(100)).await?;
+                session.ensure_active(context).await?;
+                found = super::native::select_window_async("", &title, &process, exact).await?;
             }
         }
-
+        if let Some(window) = found {
+            context.check_cancelled()?;
+            let info = super::native::focus_window(
+                &window.id()?.to_string(),
+                context.get_cancellation_token(),
+            )
+            .await?;
+            context.set_pin_value("window", json!(info)).await?;
+            context.activate_exec_pin("exec_out").await?;
+        } else {
+            context.set_pin_value("window", json!(null)).await?;
+            context.activate_exec_pin("exec_not_found").await?;
+        }
         Ok(())
     }
 
@@ -993,76 +798,327 @@ end tell"#,
 }
 
 #[cfg(feature = "execute")]
-impl FocusWindowNode {
-    fn try_launch_app(app_name: &str) -> Result<(), std::io::Error> {
-        let app_lower = app_name.to_lowercase();
-
-        #[cfg(target_os = "macos")]
-        {
-            // Common app name mappings for macOS
-            let app_bundle = if app_lower.contains("edge") {
-                "Microsoft Edge"
-            } else if app_lower.contains("chrome") {
-                "Google Chrome"
-            } else if app_lower.contains("firefox") {
-                "Firefox"
-            } else if app_lower.contains("safari") {
-                "Safari"
-            } else if app_lower.contains("code") || app_lower.contains("vscode") {
-                "Visual Studio Code"
-            } else if app_lower.contains("terminal") {
-                "Terminal"
-            } else if app_lower.contains("finder") {
-                "Finder"
-            } else {
-                app_name
-            };
-
-            tracing::info!("[FocusWindow] Launching macOS app: '{}'", app_bundle);
-
-            std::process::Command::new("open")
-                .args(["-a", app_bundle])
-                .spawn()?;
+async fn launch_application_async(
+    path: String,
+    arguments: Vec<String>,
+    cancellation: Option<flow_like_types::tokio_util::sync::CancellationToken>,
+) -> flow_like_types::Result<i64> {
+    tokio::task::spawn_blocking(move || {
+        if cancellation.as_ref().is_some_and(|t| t.is_cancelled()) {
+            return Err(flow_like_types::anyhow!("Automation cancelled"));
         }
+        launch_application(&path, &arguments)
+    })
+    .await?
+}
 
-        #[cfg(target_os = "windows")]
-        {
-            // Common app mappings for Windows
-            let exe = if app_lower.contains("edge") {
-                "msedge"
-            } else if app_lower.contains("chrome") {
-                "chrome"
-            } else if app_lower.contains("firefox") {
-                "firefox"
-            } else if app_lower.contains("notepad") {
-                "notepad"
-            } else if app_lower.contains("explorer") {
-                "explorer"
-            } else {
-                app_name
-            };
-
-            tracing::info!("[FocusWindow] Launching Windows app: '{}'", exe);
-
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", exe])
-                .spawn()?;
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // Try common Linux app launchers
-            let result = std::process::Command::new("xdg-open")
-                .arg(format!("{}.desktop", app_lower))
-                .spawn()
-                .or_else(|_| std::process::Command::new(&app_lower).spawn());
-
-            if let Err(e) = result {
-                tracing::warn!("[FocusWindow] Failed to launch on Linux: {}", e);
-                return Err(e);
+/// Parses legacy arguments without executing a shell. New flows should use Argument List.
+fn parse_arguments(text: &str) -> flow_like_types::Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut started = false;
+    for c in text.chars() {
+        if Some(c) == quote {
+            quote = None;
+        } else if quote.is_none() && (c == '\'' || c == '"') {
+            quote = Some(c);
+            started = true;
+        } else if quote.is_none() && c.is_whitespace() {
+            if started {
+                args.push(std::mem::take(&mut current));
+                started = false;
             }
+        } else {
+            current.push(c);
+            started = true;
         }
+    }
+    if quote.is_some() {
+        return Err(flow_like_types::anyhow!(
+            "Unclosed quote in arguments; use Argument List for literal quotes"
+        ));
+    }
+    if started {
+        args.push(current);
+    }
+    Ok(args)
+}
 
+#[cfg(feature = "execute")]
+fn launch_application(path: &str, arguments: &[String]) -> flow_like_types::Result<i64> {
+    if path.trim().is_empty() {
+        return Err(flow_like_types::anyhow!("Application path is required"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = std::process::Command::new("open");
+        command.arg("-a").arg(path);
+        if !arguments.is_empty() {
+            command.arg("--args").args(arguments);
+        }
+        let result = command.output()?;
+        if !result.status.success() {
+            return Err(flow_like_types::anyhow!(
+                "Application launch failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            ));
+        }
+        Ok(-1)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(target_os = "linux")]
+        if path.ends_with(".desktop") {
+            let result = std::process::Command::new("gtk-launch")
+                .arg(path)
+                .args(arguments)
+                .output()?;
+            if !result.status.success() {
+                return Err(flow_like_types::anyhow!(
+                    "Desktop application launch failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                ));
+            }
+            return Ok(-1);
+        }
+        let child = std::process::Command::new(path).args(arguments).spawn()?;
+        let pid = child.id() as i64;
+        std::thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        Ok(pid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_arguments;
+    #[test]
+    fn arguments_preserve_quoted_spaces_and_metacharacters() {
+        assert_eq!(
+            parse_arguments("--file \"a b.txt\" '$HOME' \"\"").unwrap(),
+            vec!["--file", "a b.txt", "$HOME", ""]
+        );
+        assert!(parse_arguments("'unfinished").is_err());
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerWindowOperationNode;
+impl ComputerWindowOperationNode {
+    pub fn new() -> Self {
+        Self
+    }
+}
+#[async_trait]
+impl NodeLogic for ComputerWindowOperationNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_window_operation",
+            "Manage Window",
+            "Restores, minimizes, maximizes, moves, resizes, or closes a window by native ID",
+            "Automation/Computer/Window",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "manageWindow");
+        node.add_icon("/flow/icons/computer.svg");
+        node.set_only_offline(true);
+        node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
+        node.add_input_pin("session", "Session", "Active session", VariableType::Struct)
+            .set_schema::<AutomationSession>();
+        node.add_input_pin(
+            "window_id",
+            "Window ID",
+            "ID returned by List Windows",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "operation",
+            "Operation",
+            "Native window operation",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("restore")))
+        .set_options(
+            flow_like::flow::pin::PinOptions::new()
+                .set_valid_values(
+                    ["restore", "minimize", "maximize", "move_resize", "close"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                )
+                .build(),
+        );
+        for (name, label, default) in [
+            ("x", "X", 0),
+            ("y", "Y", 0),
+            ("width", "Width", 800),
+            ("height", "Height", 600),
+        ] {
+            node.add_input_pin(
+                name,
+                label,
+                "Desktop coordinates for move_resize",
+                VariableType::Integer,
+            )
+            .set_default_value(Some(json!(default)));
+        }
+        node.add_output_pin(
+            "exec_out",
+            "▶",
+            "Operation accepted",
+            VariableType::Execution,
+        );
+        node.add_output_pin("session_out", "Session", "Session", VariableType::Struct)
+            .set_schema::<AutomationSession>();
+        node
+    }
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let id: String = context.evaluate_pin("window_id").await?;
+        let operation: String = context.evaluate_pin("operation").await?;
+        let x: i32 = context.evaluate_pin("x").await?;
+        let y: i32 = context.evaluate_pin("y").await?;
+        let width: i32 = context.evaluate_pin("width").await?;
+        let height: i32 = context.evaluate_pin("height").await?;
+        if id.is_empty() {
+            return Err(flow_like_types::anyhow!("Window ID is required"));
+        }
+        if operation == "move_resize" && (width <= 0 || height <= 0) {
+            return Err(flow_like_types::anyhow!("Window size must be positive"));
+        }
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || {
+            if cancellation
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+            {
+                return Err(flow_like_types::anyhow!("Automation cancelled"));
+            }
+            super::native::operate_window(&id, &operation, Some((x, y, width, height)))
+        })
+        .await??;
+        context.set_pin_value("session_out", json!(session)).await?;
+        context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Native window operations require execute"
+        ))
+    }
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct ComputerWaitForWindowNode;
+impl ComputerWaitForWindowNode {
+    pub fn new() -> Self {
+        Self
+    }
+}
+#[async_trait]
+impl NodeLogic for ComputerWaitForWindowNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "computer_wait_for_window",
+            "Wait for Window",
+            "Waits for a uniquely matching window or a timeout",
+            "Automation/Computer/Window",
+        );
+        node.set_version(1);
+        node.set_flowscript_name("computer", "waitForWindow");
+        node.add_icon("/flow/icons/computer.svg");
+        node.set_only_offline(true);
+        node.add_input_pin("exec_in", "▶", "Trigger", VariableType::Execution);
+        node.add_input_pin("session", "Session", "Active session", VariableType::Struct)
+            .set_schema::<AutomationSession>();
+        node.add_input_pin(
+            "window_title",
+            "Title",
+            "Window title substring",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "process_name",
+            "Application",
+            "Exact application name",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "focused",
+            "Require Focus",
+            "Wait until the matched window is focused",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+        node.add_input_pin(
+            "timeout_ms",
+            "Timeout",
+            "Maximum wait in milliseconds",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(10000)));
+        node.add_output_pin("exec_out", "▶", "Window found", VariableType::Execution);
+        node.add_output_pin(
+            "exec_timeout",
+            "Timeout",
+            "Window not found in time",
+            VariableType::Execution,
+        );
+        node.add_output_pin("window", "Window", "Matched window", VariableType::Struct)
+            .set_schema::<WindowInfo>();
+        node
+    }
+    #[cfg(feature = "execute")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("exec_timeout").await?;
+        let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
+        let title: String = context.evaluate_pin("window_title").await?;
+        let process: String = context.evaluate_pin("process_name").await?;
+        let focused: bool = context.evaluate_pin("focused").await?;
+        let timeout: i64 = context.evaluate_pin("timeout_ms").await?;
+        if timeout < 0 {
+            return Err(flow_like_types::anyhow!("Timeout cannot be negative"));
+        }
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(timeout.min(3_600_000) as u64);
+        loop {
+            context.check_cancelled()?;
+            session.ensure_active(context).await?;
+            if let Some(window) =
+                super::native::select_window_async("", &title, &process, false).await?
+            {
+                if !focused || window.is_focused().unwrap_or(false) {
+                    context
+                        .set_pin_value("window", json!(super::native::window_info(&window)))
+                        .await?;
+                    context.activate_exec_pin("exec_out").await?;
+                    return Ok(());
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                context.set_pin_value("window", json!(null)).await?;
+                context.activate_exec_pin("exec_timeout").await?;
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Native window operations require execute"
+        ))
     }
 }

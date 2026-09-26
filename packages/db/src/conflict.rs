@@ -8,6 +8,9 @@ pub enum DbConflict {
     Serialization,
     /// PostgreSQL detected a lock cycle and aborted one participant (`40P01`).
     Deadlock,
+    /// A statement gave up waiting for a row lock under `lock_timeout` (`55P03`).
+    /// Nothing was written, so the transaction re-runs from scratch.
+    LockTimeout,
     /// Aurora DSQL's cached catalog is stale after concurrent DDL (`OC001`).
     SchemaChanged,
     /// The connection died or could not be obtained (SQLSTATE class `08`,
@@ -25,6 +28,7 @@ impl DbConflict {
         match self {
             Self::Serialization => "serialization",
             Self::Deadlock => "deadlock",
+            Self::LockTimeout => "lock_timeout",
             Self::SchemaChanged => "schema_changed",
             Self::ConnectionLost => "connection_lost",
             Self::AmbiguousCommit => "ambiguous_commit",
@@ -85,6 +89,7 @@ pub fn classify_sqlstate(code: &str, message: &str) -> Option<DbConflict> {
         "40001" if message.contains("OC001") => Some(DbConflict::SchemaChanged),
         "40001" => Some(DbConflict::Serialization),
         "40P01" => Some(DbConflict::Deadlock),
+        "55P03" => Some(DbConflict::LockTimeout),
         "40003" => Some(DbConflict::AmbiguousCommit),
         "57P01" | "57P02" | "57P03" | "53300" | "53400" => Some(DbConflict::ConnectionLost),
         "08000" | "08001" | "08003" | "08004" | "08006" | "08007" => {
@@ -166,6 +171,10 @@ mod tests {
         assert_eq!(
             classify_sqlstate("40003", "result is ambiguous"),
             Some(DbConflict::AmbiguousCommit)
+        );
+        assert_eq!(
+            classify_sqlstate("55P03", "canceling statement due to lock timeout"),
+            Some(DbConflict::LockTimeout)
         );
     }
 

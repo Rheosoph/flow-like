@@ -152,6 +152,7 @@ const BINARY_OPS: &[(&str, &str)] = &[
     ("string_concat", "+"),
     // Boolean logic.
     ("bool_equal", "=="),
+    ("bool_unequal", "!="),
     ("bool_and", "&&"),
     ("bool_or", "||"),
     ("bool_xor", "^"),
@@ -256,6 +257,118 @@ mod util {
     }
 }
 
+/// The board with every `reroute` spliced out, each wire through one becoming the direct edge it
+/// bends. Reroutes are layout only — users and auto-layout drop them on data AND execution wires —
+/// so the text never shows them. An execution reroute used to render as a bare `reroute()`
+/// statement that reconcile then rejected for its missing `route_in`. Reconcile traces through the
+/// live reroutes (`data_source_for_pin_id`, `exec_edge_exists_through_reroutes`), so an untouched
+/// wire stays a no-op.
+pub(crate) fn without_reroutes(board: &Board) -> std::borrow::Cow<'_, Board> {
+    let mut reroute_ids: BTreeSet<String> = board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .filter(|node| node.name == REROUTE_NODE)
+        .map(|node| node.id.clone())
+        .collect();
+    if reroute_ids.is_empty() {
+        return std::borrow::Cow::Borrowed(board);
+    }
+    let mut board = board.clone();
+    while let Some(reroute_id) = reroute_ids.pop_first() {
+        let Some(reroute) = board.nodes.remove(&reroute_id).or_else(|| {
+            board
+                .layers
+                .values()
+                .find_map(|layer| layer.nodes.get(&reroute_id).cloned())
+        }) else {
+            continue;
+        };
+        for layer in board.layers.values_mut() {
+            layer.nodes.remove(&reroute_id);
+        }
+        let own: HashSet<&str> = reroute.pins.keys().map(String::as_str).collect();
+        let own_inputs: HashSet<&str> = reroute
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Input)
+            .map(|pin| pin.id.as_str())
+            .collect();
+        let own_outputs: HashSet<&str> = reroute
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Output)
+            .map(|pin| pin.id.as_str())
+            .collect();
+        let mut upstream: BTreeSet<String> = reroute
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Input)
+            .flat_map(|pin| pin.depends_on.iter().cloned())
+            .collect();
+        let mut downstream: BTreeSet<String> = reroute
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Output)
+            .flat_map(|pin| pin.connected_to.iter().cloned())
+            .collect();
+        for pin in board_pins(&board) {
+            if pin
+                .connected_to
+                .iter()
+                .any(|id| own_inputs.contains(id.as_str()))
+            {
+                upstream.insert(pin.id.clone());
+            }
+            if pin
+                .depends_on
+                .iter()
+                .any(|id| own_outputs.contains(id.as_str()))
+            {
+                downstream.insert(pin.id.clone());
+            }
+        }
+        upstream.retain(|id| !own.contains(id.as_str()));
+        downstream.retain(|id| !own.contains(id.as_str()));
+        for pin in board_pins_mut(&mut board) {
+            let before = pin.connected_to.len();
+            pin.connected_to.retain(|id| !own.contains(id.as_str()));
+            if pin.connected_to.len() != before {
+                pin.connected_to.extend(downstream.iter().cloned());
+            }
+            let before = pin.depends_on.len();
+            pin.depends_on.retain(|id| !own.contains(id.as_str()));
+            if pin.depends_on.len() != before {
+                pin.depends_on.extend(upstream.iter().cloned());
+            }
+        }
+    }
+    std::borrow::Cow::Owned(board)
+}
+
+fn board_pins(board: &Board) -> impl Iterator<Item = &Pin> {
+    board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .flat_map(|node| node.pins.values())
+        .chain(board.layers.values().flat_map(|layer| layer.pins.values()))
+}
+
+fn board_pins_mut(board: &mut Board) -> impl Iterator<Item = &mut Pin> {
+    let Board { nodes, layers, .. } = board;
+    nodes
+        .values_mut()
+        .flat_map(|node| node.pins.values_mut())
+        .chain(layers.values_mut().flat_map(|layer| {
+            layer
+                .nodes
+                .values_mut()
+                .flat_map(|node| node.pins.values_mut())
+                .chain(layer.pins.values_mut())
+        }))
+}
+
 /// Lower a whole board into the FlowScript AST.
 ///
 /// Every catalog call is first rendered fully qualified (`ns::alias`); the `use` lines are then
@@ -263,6 +376,7 @@ mod util {
 /// Names lower mints must not collide with the namespace roots and members the text opens, so
 /// when a minted name does, the board is lowered once more with those names reserved.
 pub fn lower_board(board: &Board) -> BoardAst {
+    let board = &*without_reroutes(board);
     let reserved = declared_names(board);
     let mut lowering = Lowering::new(board, reserved.clone());
     let ast = lowering.run();
@@ -294,7 +408,9 @@ pub struct ScopedBoardAst {
 /// kept in full, which also keeps variable reconciliation full-fidelity on a scoped apply. The
 /// derived `use` lines are recomputed over the filtered sections only.
 pub fn lower_board_scoped(board: &Board, node_ids: &[String]) -> ScopedBoardAst {
+    // Expanded before splicing: a selected reroute still names the section it sits in.
     let selection = expand_selection(board, node_ids);
+    let board = &*without_reroutes(board);
     let reserved = declared_names(board);
     let mut lowering = Lowering::new(board, reserved.clone());
     let scoped = filter_ast_to_selection(lowering.run(), &selection);
@@ -360,6 +476,7 @@ pub fn lower_board_file(
         }
     }
 
+    let board = &*without_reroutes(board);
     let reserved = declared_names(board);
     let mut lowering = Lowering::new(board, reserved.clone());
     let scoped = filter_ast_to_file(lowering.run(), file)?;
@@ -818,25 +935,120 @@ fn collect_ref_names(expr: &Expr, out: &mut HashSet<String>) {
 fn variable_names(board: &Board) -> HashMap<&str, String> {
     fn allocate<'a>(
         variables: impl Iterator<Item = &'a Variable>,
+        used: &mut HashSet<String>,
         names: &mut HashMap<&'a str, String>,
     ) {
-        let mut used: HashSet<String> = KEYWORDS.iter().map(|k| k.to_lowercase()).collect();
         let mut sorted: Vec<&Variable> = variables.collect();
         sorted.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         for variable in sorted {
-            let name = unique_name(&util::declared_name(&variable.name), &mut used);
+            let name = unique_name(&util::declared_name(&variable.name), used);
             names.insert(variable.id.as_str(), name);
         }
     }
+    let lowercase = |names: HashSet<String>| -> HashSet<String> {
+        names.into_iter().map(|name| name.to_lowercase()).collect()
+    };
+    let keywords: HashSet<String> = KEYWORDS.iter().map(|k| k.to_lowercase()).collect();
+    // A parameter in scope shadows a variable of the same name: `history = …` inside a chat event
+    // would assign the `history` PARAMETER and never reach the variable. Parameters keep their pin
+    // names, so the variable takes the suffix — only where the clash is visible, so unrelated
+    // variables keep their names.
+    let event_params = lowercase(event_parameter_names(board));
+    let own_params = |layer: &Layer| match layer.r#type {
+        LayerType::Function => lowercase(
+            function_params(layer)
+                .into_iter()
+                .map(|pin| util::declared_name(&pin.name))
+                .collect(),
+        ),
+        _ => event_params.clone(),
+    };
 
     let mut names = HashMap::new();
-    allocate(board.variables.values(), &mut names);
     let mut layers: Vec<&Layer> = board.layers.values().collect();
     layers.sort_by(|a, b| a.id.cmp(&b.id));
-    for layer in layers {
-        allocate(layer.variables.values(), &mut names);
+    let mut local_names: HashMap<&str, HashSet<String>> = HashMap::new();
+    for layer in &layers {
+        let mut used = keywords.clone();
+        used.extend(own_params(layer));
+        allocate(layer.variables.values(), &mut used, &mut names);
+        local_names.insert(
+            layer.id.as_str(),
+            layer
+                .variables
+                .keys()
+                .filter_map(|id| names.get(id.as_str()))
+                .map(|name| name.to_lowercase())
+                .collect(),
+        );
+    }
+
+    // A global read or written inside a function must not share a name with that function's
+    // parameters or locals (as allocated above): the text could only ever name those there.
+    let references = global_references_by_layer(board);
+    let mut used = keywords;
+    used.extend(event_params.iter().cloned());
+    let mut globals: Vec<&Variable> = board.variables.values().collect();
+    globals.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    for variable in globals {
+        let mut forbidden = used.clone();
+        for layer in &layers {
+            if references
+                .get(layer.id.as_str())
+                .is_some_and(|ids| ids.contains(variable.id.as_str()))
+            {
+                forbidden.extend(local_names[layer.id.as_str()].iter().cloned());
+                forbidden.extend(own_params(layer));
+            }
+        }
+        let name = unique_name(&util::declared_name(&variable.name), &mut forbidden);
+        used.insert(name.to_lowercase());
+        names.insert(variable.id.as_str(), name);
     }
     names
+}
+
+/// For every layer, the board variables read or written by a node inside it (at any depth).
+fn global_references_by_layer(board: &Board) -> HashMap<&str, HashSet<&str>> {
+    let mut references: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for indexed in canonical_board_nodes(board) {
+        let node = indexed.node;
+        if !matches!(node.name.as_str(), VARIABLE_GET | VARIABLE_SET) {
+            continue;
+        }
+        let Some((variable_id, _)) =
+            node_var_ref(node).and_then(|id| board.variables.get_key_value(id.as_str()))
+        else {
+            continue;
+        };
+        let mut current = indexed.layer;
+        let mut seen = HashSet::new();
+        while let Some(layer_id) = current {
+            if !seen.insert(layer_id) {
+                break;
+            }
+            let Some((layer_key, layer)) = board.layers.get_key_value(layer_id) else {
+                break;
+            };
+            references
+                .entry(layer_key.as_str())
+                .or_default()
+                .insert(variable_id.as_str());
+            current = layer.parent_id.as_deref();
+        }
+    }
+    references
+}
+
+fn node_var_ref(node: &Node) -> Option<String> {
+    let pin = node
+        .pins
+        .values()
+        .find(|pin| pin.pin_type == PinType::Input && pin.name == "var_ref")?;
+    match util::decode_default(pin.default_value.as_ref()?)? {
+        Literal::String(id) => Some(id),
+        _ => None,
+    }
 }
 
 /// Names that are never minted for a binding: FlowScript keywords plus every user-declared name
@@ -844,32 +1056,68 @@ fn variable_names(board: &Board) -> HashMap<&str, String> {
 fn declared_names(board: &Board) -> HashSet<String> {
     let mut names: HashSet<String> = KEYWORDS.iter().map(|k| k.to_string()).collect();
     names.extend(variable_names(board).into_values());
-    for layer in board.layers.values() {
-        if matches!(layer.r#type, LayerType::Function) {
-            names.insert(util::declared_name(&layer.name));
-            names.extend(
-                layer
-                    .pins
-                    .values()
-                    .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
-                    .map(|pin| util::declared_name(&pin.name)),
-            );
-        }
-    }
-    for indexed in canonical_board_nodes(board) {
-        if is_trigger_entry(indexed.node) {
-            names.extend(
-                indexed
-                    .node
-                    .pins
-                    .values()
-                    .filter(|pin| pin.pin_type == PinType::Output && !is_exec(pin))
-                    .map(|pin| util::declared_name(&pin.name)),
-            );
-        }
-    }
+    names.extend(
+        board
+            .layers
+            .values()
+            .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            .map(|layer| util::declared_name(&layer.name)),
+    );
+    names.extend(parameter_names(board));
     names.extend(module_root_names(board));
     names
+}
+
+/// A Function layer's parameter pins in order, one per parameter. The call node mirrors a layer's
+/// inputs by NAME and hands every same-named pin the same value, so same-named inputs sharing one
+/// contract ARE one parameter; declaring it twice rejected the whole document ("duplicate
+/// FlowScript function parameter") and left the board uneditable. Same-named inputs with
+/// different contracts stay separate, so that conflict is still reported.
+pub(crate) fn function_params(layer: &Layer) -> Vec<&Pin> {
+    let mut pins: Vec<&Pin> = layer
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+        .collect();
+    pins.sort_by_key(|pin| (pin.index, pin.id.as_str()));
+    let mut distinct: Vec<&Pin> = Vec::new();
+    for pin in pins {
+        let repeat = distinct.iter().any(|kept| {
+            kept.name == pin.name
+                && kept.data_type == pin.data_type
+                && kept.value_type == pin.value_type
+                && kept.schema == pin.schema
+        });
+        if !repeat {
+            distinct.push(pin);
+        }
+    }
+    distinct
+}
+
+/// Every parameter the text declares: Function layer inputs and trigger-entry payload outputs.
+fn parameter_names(board: &Board) -> HashSet<String> {
+    let mut names: HashSet<String> = board
+        .layers
+        .values()
+        .filter(|layer| matches!(layer.r#type, LayerType::Function))
+        .flat_map(|layer| layer.pins.values())
+        .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+        .map(|pin| util::declared_name(&pin.name))
+        .collect();
+    names.extend(event_parameter_names(board));
+    names
+}
+
+/// The payload parameters of every trigger entry (event headers).
+fn event_parameter_names(board: &Board) -> HashSet<String> {
+    canonical_board_nodes(board)
+        .into_iter()
+        .filter(|indexed| is_trigger_entry(indexed.node))
+        .flat_map(|indexed| indexed.node.pins.values())
+        .filter(|pin| pin.pin_type == PinType::Output && !is_exec(pin))
+        .map(|pin| util::declared_name(&pin.name))
+        .collect()
 }
 
 /// The nearest `LayerType::Module` ancestor of `start_layer`, the layer itself included. `None`
@@ -1851,6 +2099,7 @@ impl<'a> Lowering<'a> {
         "record"
     }
 
+    /// The accumulator member this `structSet` continues, if any (see [`Self::next_struct_set`]).
     fn previous_struct_set(&self, node: &'a Node) -> Option<&'a Node> {
         let input = node
             .pins
@@ -1858,25 +2107,44 @@ impl<'a> Lowering<'a> {
             .find(|p| p.pin_type == PinType::Input && !is_exec(p) && p.name == STRUCT_SET_IN_PIN)?;
         let source_pin_id = input.depends_on.iter().next()?;
         let source_node = *self.pin_owner.get(source_pin_id.as_str())?;
-        (source_node.name == STRUCT_SET).then_some(source_node)
+        (source_node.name == STRUCT_SET
+            && self
+                .next_struct_set(source_node)
+                .is_some_and(|next| next.id == node.id))
+        .then_some(source_node)
     }
 
+    /// The `structSet` that continues this one's accumulator. Reading the accumulator name always
+    /// means its LATEST member in text order, so a member whose output anything else reads ends
+    /// the chain: `return row` after `row.topic_id = …` would silently re-point a read of the
+    /// earlier state at the later one. The continuation starts a fresh accumulator instead.
     fn next_struct_set(&self, node: &'a Node) -> Option<&'a Node> {
         let output = self.struct_set_output_pin(node)?;
+        // A layer boundary pin reading this state (a Function's `return`, a frame bridge) is a
+        // reader like any other.
+        let read_by_boundary = output
+            .connected_to
+            .iter()
+            .any(|id| !self.pins.contains_key(id.as_str()))
+            || self
+                .function_boundary_pins
+                .values()
+                .chain(self.boundary_pins.values())
+                .any(|pin| pin.depends_on.contains(&output.id));
+        if read_by_boundary {
+            return None;
+        }
         let mut next = None;
         for target_pin in self.downstream_pins(output) {
-            let Some(target_node) = self.pin_owner.get(target_pin.id.as_str()).copied() else {
-                continue;
-            };
-            if target_node.name == STRUCT_SET
-                && target_pin.pin_type == PinType::Input
-                && target_pin.name == STRUCT_SET_IN_PIN
+            let target_node = self.pin_owner.get(target_pin.id.as_str()).copied()?;
+            if target_node.name != STRUCT_SET
+                || target_pin.pin_type != PinType::Input
+                || target_pin.name != STRUCT_SET_IN_PIN
+                || next.is_some()
             {
-                if next.is_some() {
-                    return None;
-                }
-                next = Some(target_node);
+                return None;
             }
+            next = Some(target_node);
         }
         next
     }
@@ -1922,17 +2190,20 @@ impl<'a> Lowering<'a> {
             &mut self.current_module,
             self.module_of_function.get(layer.id.as_str()).cloned(),
         );
-        let mut params = Vec::new();
-        let mut returns = Vec::new();
-        let mut boundary: Vec<&Pin> = layer.pins.values().filter(|p| !is_exec(p)).collect();
-        boundary.sort_by_key(|p| p.index);
-        for pin in boundary {
-            let param = Param::new(util::declared_name(&pin.name), self.type_ref_for_pin(pin));
-            match pin.pin_type {
-                PinType::Input => params.push(param),
-                PinType::Output => returns.push(param),
-            }
-        }
+        let params = function_params(layer)
+            .into_iter()
+            .map(|pin| Param::new(util::declared_name(&pin.name), self.type_ref_for_pin(pin)))
+            .collect();
+        let mut outputs: Vec<&Pin> = layer
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            .collect();
+        outputs.sort_by_key(|p| (p.index, p.id.as_str()));
+        let returns = outputs
+            .into_iter()
+            .map(|pin| Param::new(util::declared_name(&pin.name), self.type_ref_for_pin(pin)))
+            .collect();
 
         let mut body = self.lower_scope_body(nodes);
 
@@ -2007,7 +2278,7 @@ impl<'a> Lowering<'a> {
             .values()
             .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
             .collect();
-        return_pins.sort_by_key(|p| p.index);
+        return_pins.sort_by_key(|p| (p.index, p.id.as_str()));
         if return_pins.is_empty() {
             return (None, HashSet::new());
         }
@@ -2019,16 +2290,20 @@ impl<'a> Lowering<'a> {
             let (Some(source_pin_id), None) = (sources.next(), sources.next()) else {
                 return (None, HashSet::new());
             };
-            let Some(owner) = self.pin_owner.get(source_pin_id.as_str()).copied() else {
-                return (None, HashSet::new());
-            };
-            if owner.name != VARIABLE_GET {
+            // A source without a node owner is a boundary pin: `return <param>` (spliced out of
+            // the reroute that carries it on the board) or a collapsed frame's bridge.
+            let Some(owner) = self
+                .pin_owner
+                .get(source_pin_id.as_str())
+                .copied()
+                .filter(|owner| owner.name == VARIABLE_GET)
+            else {
                 match self.resolve_source(source_pin_id) {
                     Some(expr) => values.push(expr),
                     None => return (None, HashSet::new()),
                 }
                 continue;
-            }
+            };
             let Some(variable_id) = self.pin_literal_string(owner, "var_ref") else {
                 return (None, HashSet::new());
             };
@@ -3112,11 +3387,11 @@ impl<'a> Lowering<'a> {
             return None;
         }
         let receiver_name = node.flowscript_receiver()?;
-        let class = node.flowscript_receiver_class()?;
         let pin = data_inputs
             .iter()
             .copied()
             .find(|pin| pin.name == receiver_name)?;
+        let class = self.pin_class(pin)?;
         let (_, expr) = written.iter().find(|(written, _)| written.id == pin.id)?;
         if !receiver_is_pin_typed(expr) {
             return None;
@@ -3143,7 +3418,7 @@ impl<'a> Lowering<'a> {
             return self.source_pin_class(&upstream);
         }
         if let Some(pin) = self.function_boundary_pins.get(output_pin_id) {
-            return pin_class(pin);
+            return self.pin_class(pin);
         }
         let pin = *self.pins.get(output_pin_id)?;
         let owner = *self.pin_owner.get(output_pin_id)?;
@@ -3158,10 +3433,35 @@ impl<'a> Lowering<'a> {
             return receiver_class_of(
                 &format!("{:?}", variable.data_type),
                 &format!("{:?}", variable.value_type),
-                variable.schema.as_deref(),
+                variable
+                    .schema
+                    .as_deref()
+                    .map(|schema| self.resolved_schema(schema)),
             );
         }
-        pin_class(pin)
+        self.pin_class(pin)
+    }
+
+    /// A pin's method class. Cleaned boards store a repeated schema as a key into `Board::refs`,
+    /// and a key has no title: without resolving it every titled struct classed as `struct`
+    /// here while reconcile (`struct_class`) saw the title, so the method form was emitted for
+    /// nodes reconcile then dispatched elsewhere.
+    fn pin_class(&self, pin: &Pin) -> Option<String> {
+        receiver_class_of(
+            &format!("{:?}", pin.data_type),
+            &format!("{:?}", pin.value_type),
+            pin.schema
+                .as_deref()
+                .map(|schema| self.resolved_schema(schema)),
+        )
+    }
+
+    fn resolved_schema<'s>(&'s self, schema: &'s str) -> &'s str {
+        self.board
+            .refs
+            .get(schema)
+            .map(String::as_str)
+            .unwrap_or(schema)
     }
 
     /// Synthesize a `tools:`/`fnRefs:` argument from a node's `fn_refs`, surfacing the referenced
@@ -3901,14 +4201,6 @@ fn is_object_literal(expr: &Expr) -> bool {
 
 /// The method class of a pin's value (`string`, `array`, a schema title, …), `None` for
 /// `Generic`/`Execution` pins.
-fn pin_class(pin: &Pin) -> Option<String> {
-    receiver_class_of(
-        &format!("{:?}", pin.data_type),
-        &format!("{:?}", pin.value_type),
-        pin.schema.as_deref(),
-    )
-}
-
 /// If the named argument holds a bare reference (a resolved function/node name), return it.
 fn ref_name_of_arg(args: &[Arg], pin: &str) -> Option<String> {
     args.iter()

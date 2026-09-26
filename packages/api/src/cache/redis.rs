@@ -113,8 +113,9 @@ fn info_field(info: &str, field: &str) -> Option<i64> {
 /// entry does not count as present — `get_or_set` would then burn its retries in
 /// milliseconds and surface a spurious conflict.
 ///
-/// KEYS[1] = entry key, ARGV[1] = payload, ARGV[2] = now in epoch ms,
-/// ARGV[3] = TTL in seconds or "" for no expiry. Returns 1 when this call wrote.
+/// KEYS[1] = entry key, KEYS[2] = per-app index set, ARGV[1] = payload,
+/// ARGV[2] = now in epoch ms, ARGV[3] = TTL in seconds or "" for no expiry.
+/// Returns 1 when this call wrote; the index is updated in the same step.
 const TRY_INSERT_SCRIPT: &str = r#"
 local cur = redis.call('GET', KEYS[1])
 if cur then
@@ -131,6 +132,7 @@ if ARGV[3] ~= '' then
 else
   redis.call('SET', KEYS[1], ARGV[1])
 end
+redis.call('SADD', KEYS[2], KEYS[1])
 return 1
 "#;
 
@@ -238,6 +240,7 @@ impl CacheStore for RedisCacheStore {
         let mut conn = self.conn.lock().await;
         let wrote: i64 = redis::Script::new(TRY_INSERT_SCRIPT)
             .key(&redis_key)
+            .key(&index_key)
             .arg(&payload)
             .arg(now_ms)
             .arg(ttl_arg)
@@ -245,16 +248,7 @@ impl CacheStore for RedisCacheStore {
             .await
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
 
-        if wrote == 0 {
-            return Ok(None);
-        }
-
-        let _: i64 = conn
-            .sadd(&index_key, &redis_key)
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
-
-        Ok(Some(record))
+        Ok((wrote != 0).then_some(record))
     }
 
     async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError> {
@@ -262,12 +256,10 @@ impl CacheStore for RedisCacheStore {
         let index_key = Self::app_index_key(&key.app_id);
 
         let mut conn = self.conn.lock().await;
-        let removed: i64 = conn
+        let (removed, _): (i64, i64) = redis::pipe()
             .del(&redis_key)
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
-        let _: i64 = conn
             .srem(&index_key, &redis_key)
+            .query_async(&mut *conn)
             .await
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
 

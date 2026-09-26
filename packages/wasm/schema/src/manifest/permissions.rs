@@ -1,5 +1,6 @@
 use crate::limits::{WasmCapabilities, WasmLimits};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 /// Memory tier presets for packages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -129,10 +130,28 @@ pub struct FileSystemPermissions {
     pub cache_dir: bool,
 }
 
+/// Database permissions still require wired, typed handles for each resource.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct DatabasePermissions {
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default)]
+    pub write: bool,
+}
+
 /// Package permissions declaration.
+///
+/// Authors set what nodes cannot state: the resource tiers, the outbound host
+/// allowlist, and the OAuth scopes with their reasons. The capability flags are
+/// what the store lists, and the registry derives them from the compiled node
+/// definitions (`with_node_capabilities`), because each node declares the
+/// permissions the sandbox enforces.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PackagePermissions {
+    #[serde(default)]
+    pub database: DatabasePermissions,
     #[serde(default)]
     pub memory: MemoryTier,
     #[serde(default)]
@@ -202,6 +221,12 @@ impl PackagePermissions {
         if self.a2ui {
             capabilities |= WasmCapabilities::A2UI;
         }
+        if self.database.read {
+            capabilities |= WasmCapabilities::DATABASE_READ;
+        }
+        if self.database.write {
+            capabilities |= WasmCapabilities::DATABASE_WRITE;
+        }
         if self.models {
             capabilities |= WasmCapabilities::MODELS;
         }
@@ -219,6 +244,22 @@ impl PackagePermissions {
 
     pub fn to_security_config<T: PackageSecurityConfig>(&self) -> T {
         T::from_package_permissions(self)
+    }
+
+    /// Capability flags an authored manifest still sets although no node backs
+    /// them, phrased for package authors. Capabilities the nodes declare and
+    /// the manifest omits are the normal case, not a difference.
+    pub fn unbacked_capability_flags(authored: &Self, derived: &Self) -> Vec<String> {
+        let authored_tags: BTreeSet<String> = authored.capability_tags().into_iter().collect();
+        let derived_tags: BTreeSet<String> = derived.capability_tags().into_iter().collect();
+        authored_tags
+            .difference(&derived_tags)
+            .map(|tag| {
+                format!(
+                    "flow-like.toml declares `{tag}`, but no node uses it; capabilities come from the nodes, so remove the flag"
+                )
+            })
+            .collect()
     }
 
     pub fn summary(&self) -> Vec<String> {
@@ -257,6 +298,12 @@ impl PackagePermissions {
         if self.a2ui {
             permissions.push("A2UI: Enabled".to_string());
         }
+        if self.database.read {
+            permissions.push("Database: Read connected tables and sessions".to_string());
+        }
+        if self.database.write {
+            permissions.push("Database: Write connected tables".to_string());
+        }
         if self.models {
             permissions.push("Models/LLM: Enabled".to_string());
         }
@@ -280,6 +327,8 @@ impl PackagePermissions {
         push(self.network.dns_enabled, "net.dns");
         push(!self.oauth_scopes.is_empty(), "oauth");
         push(self.models, "models");
+        push(self.database.read, "database.read");
+        push(self.database.write, "database.write");
         push(self.filesystem.user_storage, "storage.user");
         push(self.filesystem.node_storage, "storage.node");
         push(self.filesystem.upload_dir, "storage.uploads");
@@ -292,8 +341,215 @@ impl PackagePermissions {
     }
 }
 
+#[cfg(feature = "nodes")]
+impl PackagePermissions {
+    /// This manifest's resource tiers, host allowlist and OAuth scopes with the
+    /// capability flags replaced by the permissions the given nodes declare.
+    pub fn with_capabilities_from<'a>(
+        &self,
+        permissions: impl IntoIterator<Item = &'a flow_like::flow::node::NodePermission>,
+    ) -> Self {
+        use flow_like::flow::node::NodePermission;
+
+        let mut derived = Self {
+            memory: self.memory,
+            timeout: self.timeout,
+            network: NetworkPermissions {
+                allowed_hosts: self.network.allowed_hosts.clone(),
+                ..Default::default()
+            },
+            oauth_scopes: self.oauth_scopes.clone(),
+            ..Default::default()
+        };
+        for permission in permissions {
+            match permission {
+                NodePermission::NetworkHttp => derived.network.http_enabled = true,
+                NodePermission::NetworkWebsocket => derived.network.websocket_enabled = true,
+                NodePermission::NetworkTcp => derived.network.tcp_enabled = true,
+                NodePermission::NetworkUdp => derived.network.udp_enabled = true,
+                NodePermission::NetworkDns => derived.network.dns_enabled = true,
+                // The sandbox gates the node, user, upload and cache
+                // directories on one storage capability, so list them all.
+                NodePermission::StorageRead | NodePermission::StorageWrite => {
+                    derived.filesystem = FileSystemPermissions {
+                        node_storage: true,
+                        user_storage: true,
+                        upload_dir: true,
+                        cache_dir: true,
+                    }
+                }
+                NodePermission::DatabaseRead => derived.database.read = true,
+                NodePermission::DatabaseWrite => derived.database.write = true,
+                NodePermission::Variables => derived.variables = true,
+                NodePermission::Cache => derived.cache = true,
+                NodePermission::Streaming => derived.streaming = true,
+                NodePermission::Models => derived.models = true,
+                NodePermission::A2ui => derived.a2ui = true,
+                // OAuth is listed through the authored scopes; nodes cannot
+                // state providers, scopes or reasons.
+                NodePermission::OAuth | NodePermission::Functions => {}
+            }
+        }
+        derived
+    }
+
+    /// `with_capabilities_from` over stored node entries. Scopes a node entry
+    /// requires are added to the authored ones for the same provider.
+    pub fn with_node_capabilities(&self, nodes: &[super::node::PackageNodeEntry]) -> Self {
+        let mut derived =
+            self.with_capabilities_from(nodes.iter().flat_map(|node| node.permissions.iter()));
+
+        for node in nodes {
+            let label = node.friendly_name.as_deref().unwrap_or(&node.name);
+            for (provider, scopes) in node.required_oauth_scopes.iter().flatten() {
+                let position = derived
+                    .oauth_scopes
+                    .iter()
+                    .position(|requirement| &requirement.provider == provider);
+                let requirement = match position {
+                    Some(position) => &mut derived.oauth_scopes[position],
+                    None => {
+                        derived.oauth_scopes.push(OAuthScopeRequirement {
+                            provider: provider.clone(),
+                            scopes: Vec::new(),
+                            reason: format!("Required by {label}"),
+                            required: true,
+                        });
+                        derived.oauth_scopes.last_mut().expect("just pushed")
+                    }
+                };
+                for scope in scopes {
+                    if !requirement.scopes.contains(scope) {
+                        requirement.scopes.push(scope.clone());
+                    }
+                }
+            }
+        }
+        derived
+    }
+}
+
+#[cfg(all(test, feature = "nodes"))]
+mod node_capability_tests {
+    use super::*;
+    use flow_like::flow::node::NodePermission;
+    use std::collections::HashMap;
+
+    fn node(name: &str, permissions: &[NodePermission]) -> super::super::node::PackageNodeEntry {
+        super::super::node::PackageNodeEntry {
+            id: name.to_string(),
+            name: name.to_string(),
+            permissions: permissions.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn capabilities_come_from_nodes_and_tiers_from_the_manifest() {
+        let authored: PackagePermissions = serde_json::from_str(
+            r#"{"memory":"heavy","network":{"allowed_hosts":["packages.typst.org"]},"filesystem":{"user_storage":true}}"#,
+        )
+        .unwrap();
+
+        let derived = authored.with_node_capabilities(&[
+            node(
+                "compile",
+                &[NodePermission::NetworkHttp, NodePermission::StorageRead],
+            ),
+            node("render", &[NodePermission::Models]),
+        ]);
+
+        assert_eq!(derived.memory, MemoryTier::Heavy);
+        assert_eq!(derived.network.allowed_hosts, ["packages.typst.org"]);
+        assert_eq!(
+            derived.capability_tags(),
+            [
+                "net.http",
+                "models",
+                "storage.user",
+                "storage.node",
+                "storage.uploads",
+                "storage.cache"
+            ]
+        );
+        // Capabilities only the nodes declare are the normal case.
+        assert!(PackagePermissions::unbacked_capability_flags(&authored, &derived).is_empty());
+    }
+
+    #[test]
+    fn authored_flags_without_a_node_behind_them_are_dropped() {
+        let authored: PackagePermissions =
+            serde_json::from_str(r#"{"streaming":true,"network":{"http_enabled":true}}"#).unwrap();
+
+        let derived = authored.with_node_capabilities(&[node("plain", &[])]);
+
+        assert!(derived.capability_tags().is_empty());
+        let unbacked = PackagePermissions::unbacked_capability_flags(&authored, &derived);
+        assert_eq!(unbacked.len(), 2);
+        assert!(unbacked[0].starts_with("flow-like.toml declares `net.http`, but no node uses it"));
+        assert!(unbacked[1].starts_with("flow-like.toml declares `streaming`, but no node uses it"));
+    }
+
+    #[test]
+    fn oauth_scopes_stay_authored_and_absorb_node_requirements() {
+        let authored: PackagePermissions = serde_json::from_str(
+            r#"{"oauth_scopes":[{"provider":"google","scopes":["calendar.read"],"reason":"Reads your calendar","required":true}]}"#,
+        )
+        .unwrap();
+        let mut mail = node("Mail", &[NodePermission::OAuth]);
+        mail.required_oauth_scopes = Some(HashMap::from([
+            (
+                "google".to_string(),
+                vec!["mail.send".to_string(), "calendar.read".to_string()],
+            ),
+            ("github".to_string(), vec!["repo".to_string()]),
+        ]));
+
+        // Compiled WASM nodes carry no OAuth data today, so the authored
+        // scopes must survive on their own.
+        let compiled = authored.with_node_capabilities(&[node("Plain", &[NodePermission::OAuth])]);
+        assert_eq!(compiled.capability_tags(), ["oauth"]);
+        assert_eq!(compiled.oauth_scopes[0].reason, "Reads your calendar");
+        assert!(PackagePermissions::unbacked_capability_flags(&authored, &compiled).is_empty());
+
+        let derived = authored.with_node_capabilities(&[mail]);
+        assert_eq!(derived.oauth_scopes.len(), 2);
+        assert_eq!(derived.oauth_scopes[0].provider, "google");
+        assert_eq!(derived.oauth_scopes[0].scopes, ["calendar.read", "mail.send"]);
+        assert_eq!(derived.oauth_scopes[0].reason, "Reads your calendar");
+        assert_eq!(derived.oauth_scopes[1].provider, "github");
+        assert_eq!(derived.oauth_scopes[1].reason, "Required by Mail");
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn database_permissions_are_explicit_and_independent() {
+        let read: super::PackagePermissions =
+            serde_json::from_str(r#"{"database":{"read":true}}"#).unwrap();
+        assert!(
+            read.to_capabilities()
+                .has(crate::limits::WasmCapabilities::DATABASE_READ)
+        );
+        assert_eq!(read.capability_tags(), ["database.read"]);
+        assert!(
+            read.summary()
+                .iter()
+                .any(|entry| entry == "Database: Read connected tables and sessions")
+        );
+        assert!(
+            !read
+                .to_capabilities()
+                .has(crate::limits::WasmCapabilities::DATABASE_WRITE)
+        );
+        let models: super::PackagePermissions = serde_json::from_str(r#"{"models":true}"#).unwrap();
+        assert!(!models.to_capabilities().intersects(
+            crate::limits::WasmCapabilities::DATABASE_READ
+                | crate::limits::WasmCapabilities::DATABASE_WRITE
+        ));
+    }
+
     use super::*;
 
     #[test]

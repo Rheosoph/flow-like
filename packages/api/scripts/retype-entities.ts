@@ -8,7 +8,7 @@
  * attributes) and fails when a mapped field is missing, so schema drift between the
  * Prisma schema, the typemap and the entity crate is caught at generation time.
  *
- *   bun scripts/retype-entities.ts [--entities src/entity] [--map scripts/entity-typemap.tsv]
+ *   bun scripts/retype-entities.ts [--entities entity/src/generated] [--map scripts/entity-typemap.tsv]
  */
 import {
 	existsSync,
@@ -150,7 +150,7 @@ export function removeStaleEntities(entitiesDir: string): string[] {
 }
 
 function parseArgs(argv: string[]): { entities: string; map: string } {
-	const options = { entities: "src/entity", map: "scripts/entity-typemap.tsv" };
+	const options = { entities: "entity/src/generated", map: "scripts/entity-typemap.tsv" };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--entities") options.entities = argv[++i];

@@ -1838,6 +1838,7 @@ pub async fn execute_agent_streaming(
 
         let mut response_contents: Vec<AssistantContent> = Vec::new();
         let mut final_usage: Option<RigUsage> = None;
+        let mut finish_reason: Option<String> = None;
         let mut streamed_reasoning = String::new();
         let mut response_obj = Response::new();
         response_obj.model = Some(model_display_name.clone());
@@ -1920,11 +1921,16 @@ pub async fn execute_agent_streaming(
                 }
                 StreamedAssistantContent::Final(final_resp) => {
                     final_usage = final_resp.usage;
+                    finish_reason = final_resp.finish_reason;
                 }
             }
         }
 
-        let finish_chunk = ResponseChunk::finish(&model_display_name, final_usage.as_ref());
+        let finish_chunk = ResponseChunk::finish(
+            &model_display_name,
+            final_usage.as_ref(),
+            finish_reason.as_deref(),
+        );
         response_obj.push_chunk(finish_chunk.clone());
         stream_state.emit_chunk(context, &finish_chunk).await?;
 

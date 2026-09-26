@@ -6,6 +6,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -46,7 +47,7 @@ export default function CertificatesPage() {
 		queryFn: () => learnApi.myCertificates(profile!, auth),
 	});
 
-	const certificates = certificatesQuery.data ?? [];
+	const certificates = asArray(certificatesQuery.data);
 
 	return (
 		<div className="flex-1 overflow-auto">

@@ -15,8 +15,13 @@ pub use config::CommonConfig;
 pub use flow_like_types_contracts::dispatch::DispatchPayload as Dispatch;
 
 pub const MAX_INPUT: usize = 8 * 1024 * 1024;
-pub const MAX_EVENT: usize = 1024 * 1024;
+/// One NDJSON run event. Widget queries carry inline arguments; a 32 MiB
+/// map-source response is ~42.7 MiB of base64.
+pub const MAX_EVENT: usize = 48 * 1024 * 1024;
 pub const MAX_OUTPUT: usize = 64 * 1024 * 1024;
+/// A viewer or slot stream that cannot accept one event within this window is
+/// closed; the run continues.
+pub const EVENT_STALL_TIMEOUT: Duration = Duration::from_secs(5);
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -91,7 +96,7 @@ impl EventSink {
         let mut sender = self.0.lock().await;
         if let Some(channel) = sender.as_ref()
             && !matches!(
-                tokio::time::timeout(Duration::from_secs(1), channel.send(event)).await,
+                tokio::time::timeout(EVENT_STALL_TIMEOUT, channel.send(event)).await,
                 Ok(Ok(()))
             )
         {

@@ -1,7 +1,7 @@
 "use client";
 
 import { i18n as i18next } from "@flow-like/locales";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
 	type ReactNode,
 	createContext,
@@ -15,6 +15,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { setAppQueryParam } from "../../lib/app-route-url";
+import { useClientRouter } from "../../lib/client-navigation";
 import { getCurrentPageContext } from "../../lib/page-context";
 import { classifyPageContractError } from "../../lib/page-contract-drift";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
@@ -39,7 +40,10 @@ import {
 } from "../../state/backend-state/prerun-cache";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
-import { collectRunElements } from "./collect-run-elements";
+import {
+	type RunElementDemand,
+	collectRunElements,
+} from "./collect-run-elements";
 import type { ElementSource } from "./element-materializer";
 import { handleElementsRequestMessage } from "./elements-request-handler";
 import { resolveEventActions } from "./event-handlers";
@@ -52,7 +56,10 @@ import {
 	resolveWidgetInstanceEventRoute,
 	useWidgetInstance,
 } from "./layout/A2UIWidgetInstance";
-import { notifyLivePageRun } from "./live-page-registry";
+import {
+	type LivePageRunRecord,
+	notifyLivePageRun,
+} from "./live-page-registry";
 import {
 	type A2UINavigationMessageInterceptor,
 	createNavigateToMessage,
@@ -85,10 +92,19 @@ export {
 
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
+export interface ExecuteActionOptions {
+	/**
+	 * Where the event came from. A micro widget iframe payload is data: the
+	 * targets of the actions it starts are read from the page-authored
+	 * `action.context` only, never from the merged event context.
+	 */
+	origin?: "micro_widget";
+}
 type ExecuteActionFn = (
 	action: Action | undefined,
 	triggeringComponentId?: string,
 	additionalContext?: Record<string, unknown>,
+	options?: ExecuteActionOptions,
 ) => Promise<void>;
 
 const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -97,6 +113,95 @@ const UNSAFE_STATE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 function isSafeStateKey(key: unknown): key is string {
 	return (
 		typeof key === "string" && key.length > 0 && !UNSAFE_STATE_KEYS.has(key)
+	);
+}
+
+const MAX_FAILURE_DESCRIPTION_LENGTH = 300;
+
+/**
+ * The reason a run failed to start, for a toast. The desktop backend rejects
+ * `invoke` with plain strings or serialized `{ error }` objects rather than
+ * `Error`s, so reading only `Error.message` would hide the real reason.
+ */
+function failureDescription(error: unknown, fallback: string): string {
+	const text = rejectionText(error)?.trim();
+	if (!text) return fallback;
+	return text.length > MAX_FAILURE_DESCRIPTION_LENGTH
+		? `${text.slice(0, MAX_FAILURE_DESCRIPTION_LENGTH - 1).trimEnd()}…`
+		: text;
+}
+
+function rejectionText(error: unknown): string | undefined {
+	if (typeof error === "string") return error;
+	if (typeof error !== "object" || error === null) return undefined;
+	const {
+		serverMessage,
+		message,
+		error: detail,
+	} = error as {
+		serverMessage?: unknown;
+		message?: unknown;
+		error?: unknown;
+	};
+	// An ApiResponseError's message carries an internal `[CODE; ref id]`
+	// prefix; its serverMessage is the user-safe text.
+	if (typeof serverMessage === "string" && serverMessage.trim())
+		return serverMessage;
+	if (error instanceof Error) return error.message;
+	if (typeof message === "string" && message.trim()) return message;
+	return typeof detail === "string" ? detail : undefined;
+}
+
+/** A Page action refused because the Page's contract moved under it. */
+function showPageChangedToast() {
+	toast.info(i18next.t("thisPageChanged", "This Page changed"), {
+		description: i18next.t(
+			"refreshingThisPageTryThatAgainInAMoment",
+			"Refreshing it now — try that again in a moment.",
+		),
+	});
+}
+
+/**
+ * No metadata AND no run_initiated means nothing executed (e.g. the execution service resolved
+ * undefined after a declined consent) — that must never read as a successful run. A run that
+ * dispatched but logged Error/Fatal is reported as failed, not ok.
+ */
+function settledRunRecord(
+	runMeta: ILogMetadata | undefined,
+	capturedRunId: string | undefined,
+	origin: Pick<
+		LivePageRunRecord,
+		"componentId" | "nodeId" | "appId" | "boardId"
+	>,
+): LivePageRunRecord {
+	const runStarted = runMeta !== undefined || capturedRunId !== undefined;
+	return {
+		status: !runStarted
+			? "not_executed"
+			: (runMeta?.log_level ?? 0) >= 3
+				? "failed"
+				: "ok",
+		runId: runMeta?.run_id ?? capturedRunId,
+		...origin,
+		logMeta: runMeta,
+		...(runStarted
+			? {}
+			: {
+					errorMessage:
+						"The workflow run did not start (execution was declined or unavailable).",
+				}),
+		endedAtMs: Date.now(),
+	};
+}
+
+/** A control replayed from the surface cache runs once the load run has rebound its action. */
+function notifyPendingPageAction() {
+	toast.info(
+		i18next.t(
+			"thisPageIsStillLoadingTryThatAgainInAMoment",
+			"This page is still loading — try that again in a moment.",
+		),
 	);
 }
 
@@ -112,7 +217,14 @@ interface ActionContextValue {
 	boardVersion?: BoardVersion;
 	eventId?: string;
 	isGovernedPage: boolean;
-	components?: Record<string, SurfaceComponent>;
+	/** Page elements a governed Page's board reads, from its bootstrap. */
+	elementDemand?: RunElementDemand;
+	/**
+	 * The surface's current components, read when an action fires. A getter
+	 * rather than the record itself so surface updates leave this value — and
+	 * every interactive node that consumes it — untouched.
+	 */
+	getComponents: () => Record<string, SurfaceComponent> | undefined;
 	globalState: Record<string, unknown>;
 	pageState: Record<string, unknown>;
 	setGlobalState: (key: string, value: unknown) => void;
@@ -147,6 +259,7 @@ interface ActionProviderProps {
 	boardVersion?: BoardVersion;
 	eventId?: string;
 	governedPage?: boolean;
+	elementDemand?: RunElementDemand;
 	components?: Record<string, SurfaceComponent>;
 	children: ReactNode;
 	isPreviewMode?: boolean;
@@ -170,6 +283,7 @@ export function ActionProvider({
 	boardVersion,
 	eventId,
 	governedPage = false,
+	elementDemand,
 	components,
 	children,
 	isPreviewMode = false,
@@ -204,6 +318,9 @@ export function ActionProvider({
 		() => JSON.stringify(elementValueScopeIds(components, surfaceId)),
 		[components, surfaceId],
 	);
+	const componentsRef = useRef(components);
+	componentsRef.current = components;
+	const getComponents = useCallback(() => componentsRef.current, []);
 
 	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
 		if (!isSafeStateKey(elementId)) return false;
@@ -395,36 +512,65 @@ export function ActionProvider({
 		[onA2UIMessage, frontendState],
 	);
 
+	// Memoized so a surface update (which re-renders this provider) does not
+	// re-render every consumer; the value only changes with its inputs.
+	const value = useMemo<ActionContextValue>(
+		() => ({
+			onAction: wrappedOnAction,
+			onA2UIMessage: handleA2UIMessage,
+			surfaceId,
+			appId,
+			boardId,
+			boardVersion,
+			eventId,
+			isGovernedPage: governedPage,
+			elementDemand,
+			getComponents,
+			globalState,
+			pageState,
+			setGlobalState,
+			setPageState,
+			clearPageState,
+			isPreviewMode,
+			openDialog,
+			closeDialog,
+			onNavigationMessage,
+			getElementValues,
+			setElementValue,
+			resolveTemporaryUploadTarget,
+			triggeringComponents,
+			markComponentTriggering,
+		}),
+		[
+			wrappedOnAction,
+			handleA2UIMessage,
+			surfaceId,
+			appId,
+			boardId,
+			boardVersion,
+			eventId,
+			governedPage,
+			elementDemand,
+			getComponents,
+			globalState,
+			pageState,
+			setGlobalState,
+			setPageState,
+			clearPageState,
+			isPreviewMode,
+			openDialog,
+			closeDialog,
+			onNavigationMessage,
+			getElementValues,
+			setElementValue,
+			resolveTemporaryUploadTarget,
+			triggeringComponents,
+			markComponentTriggering,
+		],
+	);
+
 	return (
-		<ActionContext.Provider
-			value={{
-				onAction: wrappedOnAction,
-				onA2UIMessage: handleA2UIMessage,
-				surfaceId,
-				appId,
-				boardId,
-				boardVersion,
-				eventId,
-				isGovernedPage: governedPage,
-				components,
-				globalState,
-				pageState,
-				setGlobalState,
-				setPageState,
-				clearPageState,
-				isPreviewMode,
-				openDialog,
-				closeDialog,
-				onNavigationMessage,
-				getElementValues,
-				setElementValue,
-				resolveTemporaryUploadTarget,
-				triggeringComponents,
-				markComponentTriggering,
-			}}
-		>
-			{children}
-		</ActionContext.Provider>
+		<ActionContext.Provider value={value}>{children}</ActionContext.Provider>
 	);
 }
 
@@ -486,7 +632,7 @@ export function useAgentActionAccess() {
 	const context = useContext(ActionContext);
 	return {
 		surfaceId: context?.surfaceId,
-		components: context?.components,
+		getComponents: context?.getComponents,
 		getElementValues: context?.getElementValues,
 		setElementValue: context?.setElementValue,
 	};
@@ -499,12 +645,13 @@ export function useAgentActionAccess() {
 export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 	const context = useContext(ActionContext);
 	const getElementValues = context?.getElementValues;
-	const components = context?.components;
+	const getComponents = context?.getComponents;
 	const surfaceId = context?.surfaceId;
 	const widgetInstanceId = widgetScope?.instanceId;
 	const widgetComponents = widgetScope?.components;
 
 	const collectInputValues = useCallback((): Record<string, unknown> => {
+		const components = getComponents?.();
 		if (!getElementValues || !components || !surfaceId) return {};
 		const storedValues = getElementValues();
 		if (!widgetInstanceId) {
@@ -527,7 +674,7 @@ export function useEventRelevantValues(widgetScope?: WidgetElementScope) {
 		);
 	}, [
 		getElementValues,
-		components,
+		getComponents,
 		surfaceId,
 		widgetInstanceId,
 		widgetComponents,
@@ -567,8 +714,9 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 	const appId = context?.appId;
 	const boardId = context?.boardId;
 	const boardVersion = context?.boardVersion;
+	const elementDemand = context?.elementDemand;
 	const surfaceId = context?.surfaceId;
-	const components = context?.components;
+	const getComponents = context?.getComponents;
 	const getElementValues = context?.getElementValues;
 	const widgetInstanceId = widgetScope?.instanceId;
 	const widgetComponents = widgetScope?.components;
@@ -580,8 +728,9 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 				appId,
 				boardId,
 				boardVersion,
+				demand: elementDemand,
 				surfaceId: surfaceId ?? "",
-				components,
+				components: getComponents?.(),
 				storedValues: getElementValues?.() ?? {},
 				widgetScope: widgetInstanceId
 					? { instanceId: widgetInstanceId, components: widgetComponents }
@@ -591,8 +740,9 @@ export function useCollectEventElements(widgetScope?: WidgetElementScope) {
 			appId,
 			boardId,
 			boardVersion,
+			elementDemand,
 			surfaceId,
-			components,
+			getComponents,
 			getElementValues,
 			backend,
 			widgetInstanceId,
@@ -691,7 +841,7 @@ export function useComponentEventTrigger(componentId: string | undefined) {
 }
 
 export function useExecuteAction() {
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
@@ -706,7 +856,8 @@ export function useExecuteAction() {
 		boardVersion,
 		eventId,
 		isGovernedPage: governedPage,
-		components,
+		elementDemand,
+		getComponents,
 		globalState,
 		pageState,
 		isPreviewMode,
@@ -723,7 +874,7 @@ export function useExecuteAction() {
 			? null
 			: {
 					surfaceId,
-					components,
+					components: getComponents?.(),
 					storedValues: getElementValues?.() ?? {},
 					widgetScope: widgetInstance?.instanceId
 						? {
@@ -935,12 +1086,16 @@ export function useExecuteAction() {
 			action: Action | undefined,
 			triggeringComponentId?: string,
 			additionalContext: Record<string, unknown> = {},
+			options: ExecuteActionOptions = {},
 		) => {
 			// Only execute actions in preview mode
 			if (!isPreviewMode || !action) return;
 
 			const { name } = action;
 			const context = { ...(action.context ?? {}), ...additionalContext };
+			// A micro widget payload is data. The route, URL, app, event and feedback record of the actions it starts stay page-authored.
+			const targetContext: Record<string, unknown> =
+				options.origin === "micro_widget" ? (action.context ?? {}) : context;
 
 			console.log("[ActionHandler] executeAction", {
 				name,
@@ -957,8 +1112,8 @@ export function useExecuteAction() {
 			try {
 				switch (name) {
 					case "navigate_page": {
-						const route = context.route as string | undefined;
-						const queryParamsRaw = context.queryParams as
+						const route = targetContext.route as string | undefined;
+						const queryParamsRaw = targetContext.queryParams as
 							| string
 							| Record<string, string>
 							| undefined;
@@ -1024,14 +1179,14 @@ export function useExecuteAction() {
 						break;
 					}
 					case "external_link": {
-						const url = context.url as string | undefined;
+						const url = targetContext.url as string | undefined;
 						if (url) {
 							window.open(url, "_blank", "noopener,noreferrer");
 						}
 						break;
 					}
 					case "navigate_app_config": {
-						const contextAppId = context.appId as string | undefined;
+						const contextAppId = targetContext.appId as string | undefined;
 						const targetAppId = contextAppId || appId;
 						if (!targetAppId) {
 							console.warn("[A2UI] navigate_app_config missing appId");
@@ -1044,8 +1199,8 @@ export function useExecuteAction() {
 						break;
 					}
 					case "navigate_app_overview": {
-						const contextAppId = context.appId as string | undefined;
-						const contextEventId = context.eventId as string | undefined;
+						const contextAppId = targetContext.appId as string | undefined;
+						const contextEventId = targetContext.eventId as string | undefined;
 						const targetAppId = contextAppId || appId;
 						const targetEventId = contextEventId || eventId;
 						if (!targetAppId) {
@@ -1060,8 +1215,8 @@ export function useExecuteAction() {
 						break;
 					}
 					case "submit_feedback": {
-						const contextAppId = context.appId as string | undefined;
-						const contextEventId = context.eventId as string | undefined;
+						const contextAppId = targetContext.appId as string | undefined;
+						const contextEventId = targetContext.eventId as string | undefined;
 						const targetAppId = contextAppId || appId;
 						const targetEventId = contextEventId || eventId;
 
@@ -1078,16 +1233,17 @@ export function useExecuteAction() {
 						const rating = Number.isFinite(rawRating)
 							? Math.max(0, Math.min(5, Math.round(rawRating)))
 							: 5;
+						// The record written, the element read and the page state disclosed are authored; rating and comment are event data.
 						const feedbackId =
-							typeof context.feedbackId === "string" &&
-							context.feedbackId.trim()
-								? context.feedbackId.trim()
+							typeof targetContext.feedbackId === "string" &&
+							targetContext.feedbackId.trim()
+								? targetContext.feedbackId.trim()
 								: (triggeringComponentId ?? "feedback");
 						const namespacedFeedbackId = `${surfaceId}:${feedbackId}`;
 
 						let comment =
 							typeof context.comment === "string" ? context.comment : "";
-						const commentComponentId = context.commentComponentId as
+						const commentComponentId = targetContext.commentComponentId as
 							| string
 							| undefined;
 						const storedElementValues = getElementValues?.() ?? {};
@@ -1101,21 +1257,21 @@ export function useExecuteAction() {
 							}
 						}
 
-						const includeState = context.includeState !== false;
+						const includeState = targetContext.includeState !== false;
 						const pageContext = getCurrentPageContext(pathname, {
 							mode:
-								typeof context.pageContextMode === "string"
-									? context.pageContextMode
+								typeof targetContext.pageContextMode === "string"
+									? targetContext.pageContextMode
 									: "path",
 							queryParamAllowlist:
-								typeof context.pageContextQueryParamAllowlist === "string"
-									? context.pageContextQueryParamAllowlist
+								typeof targetContext.pageContextQueryParamAllowlist === "string"
+									? targetContext.pageContextQueryParamAllowlist
 									: undefined,
 							queryParamDenylist:
-								typeof context.pageContextQueryParamDenylist === "string"
-									? context.pageContextQueryParamDenylist
+								typeof targetContext.pageContextQueryParamDenylist === "string"
+									? targetContext.pageContextQueryParamDenylist
 									: undefined,
-							includeHash: context.includePageHash === true,
+							includeHash: targetContext.includePageHash === true,
 						});
 						const localState = {
 							...(includeState
@@ -1140,22 +1296,30 @@ export function useExecuteAction() {
 						);
 
 						const successMessage =
-							typeof context.successMessage === "string"
-								? context.successMessage
+							typeof targetContext.successMessage === "string"
+								? targetContext.successMessage
 								: i18next.t("thanksForTheFeedback", "Thanks for the feedback.");
 						toast.success(successMessage);
 						break;
 					}
 					case "workflow_event": {
-						const nodeId = context.nodeId as string | undefined;
-						const actionBoardId = context.boardId as string | undefined;
-						const contextAppId = context.appId as string | undefined;
+						// Routing is page-authored. Event payloads (widget events, graph clicks) are data and must never select the node, board or app.
+						const authoredContext: Record<string, unknown> =
+							action.context ?? {};
+						const nodeId = authoredContext.nodeId as string | undefined;
+						const actionBoardId = authoredContext.boardId as string | undefined;
+						const contextAppId = authoredContext.appId as string | undefined;
 						const pageAction = action.pageAction;
 						const pageTrigger = pageAction
 							? pageTriggerFromAction(pageAction)
 							: undefined;
 						const rawBoardActionAllowed =
 							mayDispatchRawPageBoardAction(governedPage);
+
+						if (!pageAction && action.pendingPageAction) {
+							notifyPendingPageAction();
+							break;
+						}
 
 						if (!pageAction && !rawBoardActionAllowed) {
 							console.warn(
@@ -1201,6 +1365,7 @@ export function useExecuteAction() {
 							(pageAction || effectiveBoardId)
 						) {
 							try {
+								const components = getComponents?.();
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
 										? {
@@ -1216,23 +1381,27 @@ export function useExecuteAction() {
 									hasWidgetScope: Boolean(widgetScope),
 								});
 
+								// Diagnostics only: a board read that has to reach the server must not delay the run.
 								if (!pageAction && effectiveBoardId) {
-									try {
-										const currentBoard = await backend.boardState.getBoard(
+									void backend.boardState
+										.getBoard(
 											effectiveAppId,
 											effectiveBoardId,
 											inheritedBoardVersion,
-										);
-										console.log("[A2UI] workflow_event board diagnostics", {
-											pageCount: currentBoard.page_ids.length,
-											nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
-											layerCount: Object.keys(currentBoard.layers ?? {}).length,
+										)
+										.then((currentBoard) => {
+											console.log("[A2UI] workflow_event board diagnostics", {
+												pageCount: currentBoard.page_ids.length,
+												nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
+												layerCount: Object.keys(currentBoard.layers ?? {})
+													.length,
+											});
+										})
+										.catch(() => {
+											console.warn(
+												"[A2UI] Failed to fetch current board for workflow_event diagnostics",
+											);
 										});
-									} catch {
-										console.warn(
-											"[A2UI] Failed to fetch current board for workflow_event diagnostics",
-										);
-									}
 								}
 
 								// Always fetch the current element demand in preview mode.
@@ -1241,11 +1410,11 @@ export function useExecuteAction() {
 								const mergedElements = await collectRunElements({
 									backend,
 									appId: effectiveAppId,
-									// Governed Page runs do not need Board read permission. Until the
-									// Event prerun response exposes its selector set, materialize the
-									// current surface without calling the Board demand endpoint.
+									// Governed Page runs do not need Board read permission: they use
+									// the demand their bootstrap returned instead of the Board endpoint.
 									boardId: pageAction ? undefined : effectiveBoardId,
 									boardVersion: inheritedBoardVersion,
+									demand: pageAction ? elementDemand : undefined,
 									surfaceId: surfaceId ?? "",
 									components,
 									storedValues,
@@ -1275,6 +1444,9 @@ export function useExecuteAction() {
 										_elements_mode: "demand",
 										_input_values: inputValues,
 										_widget_instance_id: widgetScope?.instanceId ?? "",
+										...(widgetScope && typeof context.actionId === "string"
+											? { _action_id: context.actionId }
+											: {}),
 										_action_context: context,
 										_triggering_component_id: triggeringComponentId ?? "",
 										...(await buildWorkflowFrontendContext(
@@ -1330,32 +1502,15 @@ export function useExecuteAction() {
 										handleA2UIEvents,
 									);
 								}
-								// No metadata AND no run_initiated means nothing executed (e.g. the
-								// execution service resolved undefined after a declined consent) —
-								// that must never read as a successful run. A run that dispatched but
-								// logged Error/Fatal is reported as failed, not ok.
-								const runStarted =
-									runMeta !== undefined || capturedRunId !== undefined;
-								notifyLivePageRun(surfaceId, {
-									status: !runStarted
-										? "not_executed"
-										: (runMeta?.log_level ?? 0) >= 3
-											? "failed"
-											: "ok",
-									runId: runMeta?.run_id ?? capturedRunId,
-									componentId: triggeringComponentId ?? undefined,
-									nodeId: invocationId,
-									appId: effectiveAppId,
-									boardId: effectiveBoardId,
-									logMeta: runMeta,
-									...(runStarted
-										? {}
-										: {
-												errorMessage:
-													"The workflow run did not start (execution was declined or unavailable).",
-											}),
-									endedAtMs: Date.now(),
-								});
+								notifyLivePageRun(
+									surfaceId,
+									settledRunRecord(runMeta, capturedRunId, {
+										componentId: triggeringComponentId ?? undefined,
+										nodeId: invocationId,
+										appId: effectiveAppId,
+										boardId: effectiveBoardId,
+									}),
+								);
 							} catch (error) {
 								console.error("Failed to execute workflow event");
 								// A Page whose Board moved under it fails for a reason the
@@ -1365,41 +1520,34 @@ export function useExecuteAction() {
 								const contractFailure = pageAction
 									? classifyPageContractError(error)
 									: null;
+								// The live-page bridge gets the same bounded reason as the
+								// toast; `String(error)` would turn a Tauri `{ error }`
+								// rejection into "[object Object]".
+								const description = failureDescription(
+									error,
+									i18next.t(
+										"theWorkflowCouldNotBeStarted",
+										"The workflow could not be started.",
+									),
+								);
 								notifyLivePageRun(surfaceId, {
 									status: "error",
 									componentId: triggeringComponentId ?? undefined,
 									nodeId: invocationId,
 									appId: effectiveAppId,
 									boardId: effectiveBoardId,
-									errorMessage:
-										error instanceof Error ? error.message : String(error),
+									errorMessage: description,
 									endedAtMs: Date.now(),
 								});
 								if (contractFailure) {
-									toast.info(
-										i18next.t("thisPageChanged", "This Page changed"),
-										{
-											description: i18next.t(
-												"refreshingThisPageTryThatAgainInAMoment",
-												"Refreshing it now — try that again in a moment.",
-											),
-										},
-									);
+									showPageChangedToast();
 								} else {
 									toast.error(
 										i18next.t(
 											"workflowExecutionFailed",
 											"Workflow execution failed",
 										),
-										{
-											description:
-												error instanceof Error
-													? error.message
-													: i18next.t(
-															"theWorkflowCouldNotBeStarted",
-															"The workflow could not be started.",
-														),
-										},
+										{ description },
 									);
 								}
 							}
@@ -1419,6 +1567,7 @@ export function useExecuteAction() {
 							hasAppContext: Boolean(appId),
 							hasBoardContext: Boolean(boardId),
 						});
+						// A micro widget host sets `actionId` after spreading the payload, so a payload key never picks the binding. The binding supplies node and Page action; app, board and event come from the provider.
 						const actionId = context.actionId as string | undefined;
 						if (!actionId) {
 							console.warn("[A2UI] widget_event missing actionId");
@@ -1438,31 +1587,21 @@ export function useExecuteAction() {
 										routedAction,
 										widgetInstance?.componentId ?? triggeringComponentId,
 										context,
+										options,
 									);
 								}
 							}
 							break;
 						}
 
-						if (route.kind === "diagnostic") {
-							const available = Object.keys(
-								widgetInstance?.actionBindings ?? {},
-							);
-							console.warn("[A2UI] widget_event has no matching binding", {
-								availableBindingCount: available.length,
-							});
-							toast.warning(
-								i18next.t(
-									"widgetActionActionidIsNotBoundToAWorkflowval",
-									"Widget action '{{actionId}}' is not bound to a workflow{{val}}",
-									{
-										actionId,
-										val: available.length
-											? ` (bound: ${available.join(", ")})`
-											: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed.",
-									},
+						// Leaving a widget action unbound is a valid authoring choice, so it is a no-op.
+						if (route.kind === "unbound") {
+							console.debug("[A2UI] widget_event has no binding", {
+								actionId,
+								boundActionIds: Object.keys(
+									widgetInstance?.actionBindings ?? {},
 								),
-							);
+							});
 							break;
 						}
 
@@ -1491,6 +1630,11 @@ export function useExecuteAction() {
 							: undefined;
 						const rawBoardActionAllowed =
 							mayDispatchRawPageBoardAction(governedPage);
+
+						if (!pageAction && binding.pendingPageAction) {
+							notifyPendingPageAction();
+							break;
+						}
 
 						if (!pageAction && !rawBoardActionAllowed) {
 							console.warn(
@@ -1527,6 +1671,7 @@ export function useExecuteAction() {
 
 						if (effectiveAppId && (pageAction || effectiveBoardId)) {
 							try {
+								const components = getComponents?.();
 								const widgetScope: WidgetElementScope | undefined =
 									widgetInstance?.instanceId
 										? {
@@ -1548,6 +1693,7 @@ export function useExecuteAction() {
 									appId: effectiveAppId,
 									boardId: pageAction ? undefined : effectiveBoardId,
 									boardVersion: inheritedBoardVersion,
+									demand: pageAction ? elementDemand : undefined,
 									surfaceId: surfaceId ?? "",
 									components,
 									storedValues,
@@ -1589,13 +1735,18 @@ export function useExecuteAction() {
 									? basePayload
 									: withBoardVersion(basePayload, inheritedBoardVersion);
 
+								let capturedRunId: string | undefined;
+								const captureRunId = (id: string) => {
+									capturedRunId = id;
+								};
+								let runMeta: ILogMetadata | undefined;
 								if (pageAction) {
 									if (!eventId) {
 										throw new Error(
 											"Governed widget action is missing its Event id.",
 										);
 									}
-									await (
+									runMeta = await (
 										executionService?.executeEvent ??
 										backend.eventState.executeEvent.bind(backend.eventState)
 									)(
@@ -1603,7 +1754,7 @@ export function useExecuteAction() {
 										eventId,
 										payload,
 										false,
-										undefined,
+										captureRunId,
 										handleA2UIEvents,
 										undefined,
 										pageTrigger,
@@ -1612,7 +1763,7 @@ export function useExecuteAction() {
 									if (!effectiveBoardId) {
 										throw new Error("Widget action is missing its Board id.");
 									}
-									await (
+									runMeta = await (
 										executionService?.executeBoard ??
 										backend.boardState.executeBoard
 									)(
@@ -1620,28 +1771,51 @@ export function useExecuteAction() {
 										effectiveBoardId,
 										payload,
 										false,
-										undefined,
+										captureRunId,
 										handleA2UIEvents,
 									);
 								}
+								notifyLivePageRun(
+									surfaceId,
+									settledRunRecord(runMeta, capturedRunId, {
+										componentId: triggeringComponentId ?? undefined,
+										nodeId: invocationId,
+										appId: effectiveAppId,
+										boardId: effectiveBoardId,
+									}),
+								);
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event");
-								toast.error(
+								const description = failureDescription(
+									error,
 									i18next.t(
-										"widgetActionActionidFailed",
-										"Widget action '{{actionId}}' failed",
-										{ actionId },
+										"theWidgetWorkflowCouldNotBeStarted",
+										"The widget workflow could not be started.",
 									),
-									{
-										description:
-											error instanceof Error
-												? error.message
-												: i18next.t(
-														"theWidgetWorkflowCouldNotBeStarted",
-														"The widget workflow could not be started.",
-													),
-									},
 								);
+								notifyLivePageRun(surfaceId, {
+									status: "error",
+									componentId: triggeringComponentId ?? undefined,
+									nodeId: invocationId,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									errorMessage: description,
+									endedAtMs: Date.now(),
+								});
+								// Same as workflow_event: the transports already asked the
+								// Page to refetch, so a contract failure is not the widget's.
+								if (pageAction && classifyPageContractError(error)) {
+									showPageChangedToast();
+								} else {
+									toast.error(
+										i18next.t(
+											"widgetActionActionidFailed",
+											"Widget action '{{actionId}}' failed",
+											{ actionId },
+										),
+										{ description },
+									);
+								}
 							}
 						} else {
 							console.warn(
@@ -1702,7 +1876,8 @@ export function useExecuteAction() {
 			boardVersion,
 			eventId,
 			governedPage,
-			components,
+			elementDemand,
+			getComponents,
 			globalState,
 			pageState,
 			handleA2UIEvents,

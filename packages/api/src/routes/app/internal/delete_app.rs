@@ -51,14 +51,6 @@ pub async fn delete_app(
     let deleted =
         deletion::delete_now(&state, DeletionRoot::App, &app_id, Some(&sub_id), ()).await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "app.delete",
-        "App",
-        app_id,
-        "Application deleted"
-    );
+    audit_branch!(state, user, app_id, "app.delete", "App", app_id);
     Ok(deleted)
 }

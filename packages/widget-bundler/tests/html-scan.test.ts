@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, type WidgetContract } from "../src/contract-types";
+import {
+	BASE_CONTRACT_VERSION,
+	type WidgetContract,
+} from "../src/contract-types";
 import { findTag, insertAtHeadStart } from "../src/html";
 import {
 	contractScriptContent,
@@ -18,7 +21,7 @@ const resolveAsset = (rel: string) =>
 	ASSETS[rel] !== undefined ? ENCODER.encode(ASSETS[rel]) : null;
 
 const CONTRACT: WidgetContract = {
-	contractVersion: CONTRACT_VERSION,
+	contractVersion: BASE_CONTRACT_VERSION,
 	id: "pinned",
 	inputs: {},
 	events: {},

@@ -17,6 +17,7 @@ pub enum MaintenanceJob {
     StateCleanup,
     RegressionSuites,
     DeletionQueue,
+    Payments,
 }
 
 impl MaintenanceJob {
@@ -28,6 +29,7 @@ impl MaintenanceJob {
             Self::StateCleanup => "state_cleanup",
             Self::RegressionSuites => "regression_suites",
             Self::DeletionQueue => "deletion_queue",
+            Self::Payments => "payments",
         }
     }
 }
@@ -41,6 +43,7 @@ pub enum MaintenanceRunRequest {
     StateCleanup,
     RegressionSuites,
     DeletionQueue,
+    Payments,
 }
 
 impl MaintenanceRunRequest {
@@ -52,6 +55,7 @@ impl MaintenanceRunRequest {
             Self::StateCleanup => MaintenanceJob::StateCleanup,
             Self::RegressionSuites => MaintenanceJob::RegressionSuites,
             Self::DeletionQueue => MaintenanceJob::DeletionQueue,
+            Self::Payments => MaintenanceJob::Payments,
         }
     }
 }
@@ -65,6 +69,7 @@ impl From<MaintenanceJob> for MaintenanceRunRequest {
             MaintenanceJob::StateCleanup => Self::StateCleanup,
             MaintenanceJob::RegressionSuites => Self::RegressionSuites,
             MaintenanceJob::DeletionQueue => Self::DeletionQueue,
+            MaintenanceJob::Payments => Self::Payments,
         }
     }
 }
@@ -122,6 +127,14 @@ pub struct DeletionQueueMaintenanceResult {
     pub failed: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentsMaintenanceResult {
+    pub inbox_completed: u32,
+    pub effects_completed: u32,
+    pub deferred: u32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "job", content = "result", rename_all = "snake_case")]
 pub enum MaintenanceRunResponse {
@@ -131,6 +144,7 @@ pub enum MaintenanceRunResponse {
     StateCleanup(StateCleanupMaintenanceResult),
     RegressionSuites(RegressionSuitesMaintenanceResult),
     DeletionQueue(DeletionQueueMaintenanceResult),
+    Payments(PaymentsMaintenanceResult),
 }
 
 #[cfg(test)]
@@ -156,6 +170,24 @@ mod tests {
         assert!(
             serde_json::from_value::<MaintenanceRunRequest>(json!({ "job": "delete_everything" }))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn payments_round_trip_across_the_runner_boundary() {
+        let request: MaintenanceRunRequest =
+            serde_json::from_value(json!({"job":"payments"})).unwrap();
+        assert_eq!(request.job().as_str(), "payments");
+        let response = MaintenanceRunResponse::Payments(PaymentsMaintenanceResult {
+            inbox_completed: 2,
+            effects_completed: 3,
+            deferred: 1,
+        });
+        let wire = json!({"job":"payments","result":{"inboxCompleted":2,"effectsCompleted":3,"deferred":1}});
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<MaintenanceRunResponse>(wire).unwrap(),
+            response
         );
     }
 

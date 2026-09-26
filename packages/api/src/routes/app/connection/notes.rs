@@ -165,8 +165,7 @@ pub async fn create_note(
         app_id,
         "process_note.create",
         "AppProcessNote",
-        note_id,
-        "Process note created"
+        note_id
     );
 
     Ok(Json(note.into()))
@@ -230,8 +229,7 @@ pub async fn update_note(
         app_id,
         "process_note.update",
         "AppProcessNote",
-        note_id,
-        "Process note updated"
+        note_id
     );
 
     Ok(Json(note.into()))
@@ -287,8 +285,7 @@ pub async fn delete_note(
         app_id,
         "process_note.delete",
         "AppProcessNote",
-        note_id,
-        "Process note deleted"
+        note_id
     );
 
     Ok(Json(()))

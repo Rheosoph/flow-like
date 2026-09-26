@@ -1,4 +1,3 @@
-import { ChevronDown } from "lucide-react";
 import type { RefObject } from "react";
 import {
 	Select,
@@ -6,7 +5,6 @@ import {
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
 } from "../../../../components/ui/select";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
@@ -14,6 +12,7 @@ import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 
 export function FnVariable({
 	pin,
@@ -29,7 +28,7 @@ export function FnVariable({
 	const boardData = boardRef?.current;
 
 	return (
-		<div className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden">
+		<PinEditorRow>
 			<Select
 				disabled={!boardData}
 				defaultValue={parseUint8ArrayToJson(value)}
@@ -39,19 +38,14 @@ export function FnVariable({
 					// const nodes = flow.getNodes();
 				}}
 			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<small className="text-start text-[10px] m-0! truncate">
-						{!boardData && "Board unavailable"}
-						{boardData &&
-							(boardData.nodes?.[parseUint8ArrayToJson(value)]?.friendly_name ??
-								"No Function Selected")}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
-				</SelectTrigger>
+				<PinSelectTrigger
+					label={
+						boardData
+							? (boardData.nodes?.[parseUint8ArrayToJson(value)]
+									?.friendly_name ?? "No Function Selected")
+							: "Board unavailable"
+					}
+				/>
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
@@ -67,6 +61,6 @@ export function FnVariable({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }

@@ -144,15 +144,8 @@ pub async fn delete_role(
     if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
         tracing::warn!(error = %e, "Failed to invalidate permission cache after role deletion");
     }
+    crate::package_license::refresh_app(&state, &app_id).await;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "role.delete",
-        "Role",
-        role_id,
-        "Role deleted"
-    );
+    audit_branch!(state, user, app_id, "role.delete", "Role", role_id);
     Ok(Json(()))
 }

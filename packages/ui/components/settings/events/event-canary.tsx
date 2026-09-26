@@ -23,6 +23,7 @@ import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { formatDuration } from "../../../lib/date";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import type { IBoardSummary } from "../../../lib/schema/flow/board-summary";
 import {
 	type BoardVersion,
@@ -235,7 +236,8 @@ export function EventCanary({
 	);
 	const boardsMap = useMemo(() => {
 		const map = new Map<string, string>();
-		for (const summary of boards.data ?? []) map.set(summary.id, summary.name);
+		for (const summary of asArray(boards.data))
+			map.set(summary.id, summary.name);
 		return map;
 	}, [boards.data]);
 	const pages = useInvoke(
@@ -246,7 +248,7 @@ export function EventCanary({
 	);
 	const pagesMap = useMemo(() => {
 		const map = new Map<string, PageListItem>();
-		for (const page of pages.data ?? []) map.set(page.pageId, page);
+		for (const page of asArray(pages.data)) map.set(page.pageId, page);
 		return map;
 	}, [pages.data]);
 
@@ -854,7 +856,7 @@ export function EventCanary({
 										</tr>
 									</thead>
 									<tbody>
-										{stats.data.variants.map((row) => (
+										{asArray(stats.data.variants).map((row) => (
 											<tr
 												key={row.variant_name ?? "__primary__"}
 												className="border-b last:border-b-0"
@@ -1186,14 +1188,15 @@ function InboundSetupCard({
 	// the stable target, live variants, and any leftover rows still on record.
 	const rows = useMemo(() => {
 		const byVariant = new Map<string, IEventSetupInfo>();
-		for (const row of setupRows ?? []) byVariant.set(row.variant, row);
+		const setupList = asArray(setupRows);
+		for (const row of setupList) byVariant.set(row.variant, row);
 		const names = [
 			STABLE_SETUP_NAME,
 			...variants
 				.filter((variant) => liveWeight(variant) !== null)
 				.map((variant) => variant.name),
 		];
-		for (const row of setupRows ?? []) {
+		for (const row of setupList) {
 			if (!names.includes(row.variant)) names.push(row.variant);
 		}
 		return names.map((name) => ({ name, info: byVariant.get(name) }));
@@ -1358,7 +1361,7 @@ function PromoteDialog({
 
 	const rates = useMemo(() => {
 		const entries = stats?.variants;
-		if (!entries) return null;
+		if (!Array.isArray(entries)) return null;
 		const variantRow = entries.find((row) => row.variant_name === variant.name);
 		const primaryRow = entries.find((row) => row.variant_name === null);
 		if (!variantRow || variantRow.requests === 0) {
@@ -1604,7 +1607,8 @@ function VariantEditorDialog({
 	);
 	const boardName = useMemo(
 		() =>
-			boards.data?.find((summary) => summary.id === boardId)?.name ?? boardId,
+			asArray(boards.data).find((summary) => summary.id === boardId)?.name ??
+			boardId,
 		[boards.data, boardId],
 	);
 
@@ -1612,7 +1616,7 @@ function VariantEditorDialog({
 	const handleSelectPage = useCallback(
 		(value: string) => {
 			setPageId(value);
-			const page = pages.data?.find((entry) => entry.pageId === value);
+			const page = asArray(pages.data).find((entry) => entry.pageId === value);
 			setBoardId(page?.boardId ?? "");
 			setVersion(undefined);
 		},
@@ -1762,7 +1766,7 @@ function VariantEditorDialog({
 									/>
 								</SelectTrigger>
 								<SelectContent>
-									{pages.data?.map((page: PageListItem) => (
+									{asArray(pages.data).map((page: PageListItem) => (
 										<SelectItem key={page.pageId} value={page.pageId}>
 											{page.name}
 										</SelectItem>
@@ -1796,7 +1800,7 @@ function VariantEditorDialog({
 									/>
 								</SelectTrigger>
 								<SelectContent>
-									{boards.data?.map((summary: IBoardSummary) => (
+									{asArray(boards.data).map((summary: IBoardSummary) => (
 										<SelectItem key={summary.id} value={summary.id}>
 											{summary.name}
 										</SelectItem>
@@ -1823,7 +1827,7 @@ function VariantEditorDialog({
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value="latest">{t("latest", "Latest")}</SelectItem>
-								{versions.data?.map((entry) => (
+								{asArray(versions.data).map((entry) => (
 									<SelectItem key={entry.join(".")} value={entry.join(".")}>
 										v{entry.join(".")}
 									</SelectItem>

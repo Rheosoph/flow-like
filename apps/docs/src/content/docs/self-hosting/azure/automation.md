@@ -97,7 +97,8 @@ requests to `POST /api/v1/maintenance/run` for these selections:
 | `cache_cleanup` | Sweep expired cache entries |
 | `run_sweep` | Reconcile stale non-terminal SQL runs |
 | `state_cleanup` | Delete expired execution state and old staged payloads |
-| `all` | Default; run all four as independent requests |
+| `payments` | Recover pending payments, refunds, webhooks and effects |
+| `all` | Default; run all five as independent requests |
 
 Set `API_BASE_URL` (or fallback `API_URL`) to an absolute HTTPS URL without
 credentials, query, or fragment. Inject `MAINTENANCE_TOKEN` from Key Vault with
@@ -115,13 +116,20 @@ The API's `RUN_SWEEPER_BATCH_SIZE` defaults to 500 and is capped at 900. Set
 `EXECUTOR_TIMEOUT_SECS`; reconciliation updates SQL run rows, leaving separately
 configured execution state backends unchanged.
 
+When payment servicing is enabled, schedule a separate `MAINTENANCE_JOB=payments`
+execution at least once per minute. A daily `all` job does not provide timely
+payment recovery when the API has no continuous CPU. See
+[Payments rollout and recovery](/dev/platform-administration/#payments-rollout-and-recovery)
+for configuration and alert requirements. Provider sandbox validation remains a
+rollout prerequisite.
+
 The idempotency key is `<job>:<CONTAINER_APP_JOB_EXECUTION_NAME>`, stable across
 replica retries. Outside Container Apps it uses the UTC minute sampled when the
 run started. The API uses this key for correlation; transactional alert updates
 and conditional cleanup/sweeps make repeated requests safe.
 
 Each request has a five-second connect timeout and a 120-second overall
-timeout. A replica timeout of 1800 seconds leaves room for all four requests.
+timeout. A replica timeout of 1800 seconds leaves room for all five requests.
 Exit `0` requires a matching successful response from every selected job.
 Transport errors, non-2xx responses, invalid response bodies, and mismatched job
 responses fail the execution. In `all` mode later jobs still run before exit

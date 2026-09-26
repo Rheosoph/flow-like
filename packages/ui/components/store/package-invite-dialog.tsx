@@ -1,99 +1,109 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Loader2, Send } from "lucide-react";
+import { User } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useProjectUserSearch } from "../../hooks/use-project-user-search";
 import { PackagePermissionBits } from "../../lib/permission/wasm-package-permission";
 import type { InviteUserRequest } from "../../lib/schema/wasm";
 import {
-	Button,
 	Dialog,
 	DialogContent,
 	DialogDescription,
-	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	Input,
-	Label,
+} from "../ui/dialog";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
+import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "../ui";
+} from "../ui/select";
+import { Separator } from "../ui/separator";
+import { UserInviteSearchResults } from "../ui/user-invite-search-results";
 
 interface PackageInviteDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onInvite: (request: InviteUserRequest) => void;
-	isSubmitting: boolean;
+	/** Resolves `true` once the invitation exists; the dialog then closes. */
+	onInvite: (request: InviteUserRequest) => Promise<boolean>;
+	memberIds: ReadonlySet<string>;
 }
 
 export function PackageInviteDialog({
 	open,
 	onOpenChange,
 	onInvite,
-	isSubmitting,
+	memberIds,
 }: PackageInviteDialogProps) {
 	const { t } = useTranslation("store");
-	const [userId, setUserId] = useState("");
+	const [query, setQuery] = useState("");
 	const [permissionLevel, setPermissionLevel] = useState<"maintainer" | "user">(
 		"user",
 	);
-
-	const reset = useCallback(() => {
-		setUserId("");
-		setPermissionLevel("user");
-	}, []);
+	const userSearch = useProjectUserSearch(undefined, query, open);
 
 	const handleOpenChange = useCallback(
 		(next: boolean) => {
-			if (!next) reset();
+			if (!next) {
+				setQuery("");
+				setPermissionLevel("user");
+			}
 			onOpenChange(next);
 		},
-		[onOpenChange, reset],
+		[onOpenChange],
 	);
 
-	const handleSubmit = useCallback(() => {
-		const trimmed = userId.trim();
-		if (!trimmed) return;
-
-		const permission =
-			permissionLevel === "maintainer"
-				? PackagePermissionBits.Maintainer
-				: PackagePermissionBits.User;
-
-		onInvite({ inviteeId: trimmed, permission });
-	}, [userId, permissionLevel, onInvite]);
-
-	const canSubmit = userId.trim().length > 0 && !isSubmitting;
+	const handleInvite = useCallback(
+		async (inviteeId: string) => {
+			const permission =
+				permissionLevel === "maintainer"
+					? PackagePermissionBits.Maintainer
+					: PackagePermissionBits.User;
+			if (await onInvite({ inviteeId, permission })) handleOpenChange(false);
+		},
+		[permissionLevel, onInvite, handleOpenChange],
+	);
 
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
-			<DialogContent className="sm:max-w-md">
+			<DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-md">
 				<DialogHeader>
 					<DialogTitle>{t("inviteUser", "Invite User")}</DialogTitle>
 					<DialogDescription>
 						{t(
-							"addAUserToThisPackageByTheirUserId",
-							"Add a user to this package by their user ID.",
+							"searchForPeopleAndInviteThemToThisPackage",
+							"Search for people and invite them to this package.",
 						)}
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="grid gap-4 py-4">
-					<div className="grid gap-2">
-						<Label htmlFor="invite-user-id">{t("userId", "User ID")}</Label>
-						<Input
-							id="invite-user-id"
-							placeholder={t("enterUserId", "Enter user ID")}
-							value={userId}
-							onChange={(e) => setUserId(e.target.value)}
-							disabled={isSubmitting}
-						/>
+				<div className="space-y-4 py-4">
+					<div className="space-y-2">
+						<Label htmlFor="package-invite-query">
+							{t("settings:nameHandleOrEmail", "Name, handle or email")}
+						</Label>
+						<div className="relative">
+							<Input
+								id="package-invite-query"
+								placeholder={t(
+									"settings:searchByNameHandleEmailOrUserId",
+									"Search by name, handle, email or user ID...",
+								)}
+								value={query}
+								onChange={(e) => setQuery(e.target.value)}
+								className="pl-10"
+								maxLength={200}
+								autoComplete="off"
+							/>
+							<User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+						</div>
 					</div>
 
-					<div className="grid gap-2">
+					<div className="space-y-2">
 						<Label htmlFor="invite-permission">
 							{t("permissionLevel", "Permission Level")}
 						</Label>
@@ -102,7 +112,6 @@ export function PackageInviteDialog({
 							onValueChange={(v) =>
 								setPermissionLevel(v as "maintainer" | "user")
 							}
-							disabled={isSubmitting}
 						>
 							<SelectTrigger id="invite-permission">
 								<SelectValue />
@@ -115,25 +124,17 @@ export function PackageInviteDialog({
 							</SelectContent>
 						</Select>
 					</div>
-				</div>
 
-				<DialogFooter>
-					<Button
-						variant="outline"
-						onClick={() => handleOpenChange(false)}
-						disabled={isSubmitting}
-					>
-						{t("cancel", "Cancel")}
-					</Button>
-					<Button onClick={handleSubmit} disabled={!canSubmit}>
-						{isSubmitting ? (
-							<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-						) : (
-							<Send className="mr-2 h-4 w-4" />
-						)}
-						{t("invite", "Invite")}
-					</Button>
-				</DialogFooter>
+					<div className="space-y-3">
+						<Separator />
+						<UserInviteSearchResults
+							search={userSearch}
+							query={query}
+							excludeIds={memberIds}
+							onInvite={(user) => handleInvite(user.id)}
+						/>
+					</div>
+				</div>
 			</DialogContent>
 		</Dialog>
 	);

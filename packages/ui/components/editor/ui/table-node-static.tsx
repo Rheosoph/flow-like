@@ -1,38 +1,29 @@
 "use client";
 import type * as React from "react";
 
-import type {
-	SlateElementProps,
-	TTableCellElement,
-	TTableElement,
-	TTableRowElement,
-} from "platejs";
+import type { TTableCellElement, TTableElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
 import { BaseTablePlugin } from "@platejs/table";
-import { SlateElement } from "platejs";
+import { SlateElement } from "platejs/static";
 
 import { cn } from "../../../lib/utils";
 import { TableViewer } from "./table-viewer";
 
+const childrenOf = (node: unknown): readonly unknown[] => {
+	const children = (node as { children?: unknown } | null)?.children;
+	return Array.isArray(children) ? children : [];
+};
+
+/** Stored documents come from models too, so malformed nodes must not throw. */
+function textOf(node: unknown): string {
+	const text = (node as { text?: unknown } | null)?.text;
+	if (typeof text === "string") return text;
+	return childrenOf(node).map(textOf).join("");
+}
+
 function extractTableDataStatic(element: TTableElement): string[][] {
-	const rows: string[][] = [];
-	for (const row of element.children as TTableRowElement[]) {
-		const cells: string[] = [];
-		for (const cell of row.children as TTableCellElement[]) {
-			const text = cell.children
-				?.map((child: any) => {
-					if (child.text) return child.text;
-					if (child.children) {
-						return child.children.map((c: any) => c.text || "").join("");
-					}
-					return "";
-				})
-				.join("");
-			cells.push(text || "");
-		}
-		rows.push(cells);
-	}
-	return rows;
+	return childrenOf(element).map((row) => childrenOf(row).map(textOf));
 }
 
 export function TableElementStatic({

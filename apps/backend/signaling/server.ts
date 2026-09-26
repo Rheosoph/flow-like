@@ -1,17 +1,29 @@
 #!/usr/bin/env bun
 import { randomUUID } from "crypto";
-import { serve } from "bun";
+import { type ServerWebSocket, serve } from "bun";
 import {
 	REALTIME_PROTOCOL,
 	createRealtimeAuthenticator,
 	parseRealtimeAuthConfig,
 } from "./auth";
+import { createDeviceAuthenticator } from "./device-auth";
+import {
+	DEVICE_SIGNALING_PROTOCOL,
+	DEVICE_TOPIC_PREFIX,
+	type DeviceAdmission,
+	type DeviceFanout,
+	MAX_DEVICE_FRAME_BYTES,
+	deviceInbox,
+	parseDeviceFanout,
+	relayDeviceFrame,
+} from "./device-frames";
 import { ConnectionRateLimiter } from "./limits";
 import {
 	type SignalRedisClient,
 	attachRedisLifecycleLogging,
 	closeSignalRedisClient,
 	createSignalRedisClient,
+	fanoutIsHealthy,
 	parseFanoutConfig,
 } from "./redis";
 
@@ -20,10 +32,12 @@ const PORT = Number(process.env.PORT || 4444);
 const FANOUT = parseFanoutConfig();
 const REDIS_CONFIG = FANOUT.mode === "redis" ? FANOUT.redis : null;
 const CHANNEL = process.env.SIGNAL_CHANNEL || "signal:publish";
+const DEVICE_CHANNEL = `${CHANNEL}:device-management:v1`;
 const PRESENCE_PREFIX = "topic:presence:";
 const NODE_ID = process.env.NODE_ID || randomUUID();
 const AUTH_CONFIG = parseRealtimeAuthConfig();
 const authorizeUpgrade = await createRealtimeAuthenticator(AUTH_CONFIG);
+const authorizeDeviceUpgrade = await createDeviceAuthenticator(AUTH_CONFIG);
 
 const MAX_MSG_BYTES = 64 * 1024;
 const MAX_TOPICS_AUTHENTICATED = 1;
@@ -118,11 +132,23 @@ function onSubMessage(raw: string, ch: string) {
 		lastHbAck = Date.now();
 		return;
 	}
+	if (ch === DEVICE_CHANNEL) {
+		try {
+			const relayed = parseDeviceFanout(raw);
+			if (relayed.origin !== NODE_ID && fanoutIsReady())
+				server.publish(relayed.topic, JSON.stringify(relayed.frame));
+		} catch {
+			// Opaque frames and their credentials never enter diagnostics.
+		}
+		return;
+	}
 	try {
 		const message = JSON.parse(raw);
 		if (
 			message?.type === "publish" &&
 			message.topic &&
+			typeof message.topic === "string" &&
+			!message.topic.startsWith(DEVICE_TOPIC_PREFIX) &&
 			message._origin !== NODE_ID
 		) {
 			server.publish(message.topic, JSON.stringify(message));
@@ -147,7 +173,10 @@ async function connectSub(attempt = 0): Promise<void> {
 	// attempt; a candidate that settles after it is discarded, never assigned.
 	const attemptSettled = (async () => {
 		await candidate.connect();
-		await candidate.subscribe([CHANNEL, HB_CHANNEL], onSubMessage);
+		await candidate.subscribe(
+			[CHANNEL, HB_CHANNEL, DEVICE_CHANNEL],
+			onSubMessage,
+		);
 	})();
 	try {
 		await withDeadline(
@@ -228,12 +257,13 @@ async function initializeFanout() {
 }
 
 function fanoutIsReady(): boolean {
-	if (!REDIS_CONFIG) return true;
-	return (
-		pub?.isReady === true &&
-		sync?.isReady === true &&
-		subClient?.isReady === true
-	);
+	return fanoutIsHealthy({
+		mode: FANOUT.mode,
+		publisherReady: pub?.isReady === true,
+		presenceReady: sync?.isReady === true,
+		subscriberReady: subClient?.isReady === true,
+		heartbeatAckMs: lastHbAck,
+	});
 }
 
 // -------------------- Presence helpers ----------
@@ -278,6 +308,8 @@ function inc(topic: string, delta: 1 | -1) {
 
 // -------------------- WebSocket server ----------
 type WSData = {
+	management: DeviceAdmission | null;
+	managementInFlight: number;
 	subscribed: Set<string>;
 	allowedTopic: string | null;
 	subject: string | null;
@@ -286,13 +318,16 @@ type WSData = {
 	expiryTimer: ReturnType<typeof setTimeout> | null;
 	rateLimiter: ConnectionRateLimiter;
 };
+const managementSockets = new Set<ServerWebSocket<WSData>>();
+const MAX_MANAGEMENT_CONNECTIONS = 2_000;
 
 function closeForPolicy(ws: { close(code?: number, reason?: string): void }) {
 	ws.close(1008, "Policy violation");
 }
 
 function topicIsAuthorized(data: WSData, topic: unknown): topic is string {
-	if (typeof topic !== "string") return false;
+	if (typeof topic !== "string" || topic.startsWith(DEVICE_TOPIC_PREFIX))
+		return false;
 	if (data.allowedTopic !== null) return topic === data.allowedTopic;
 	return data.insecureLocalDev && LOCAL_TOPIC_PATTERN.test(topic);
 }
@@ -310,6 +345,7 @@ function noStoreResponse(body: string, status: number, extraHeaders = {}) {
 
 const server = serve<WSData>({
 	port: PORT,
+	hostname: process.env.SIGNAL_HOST || undefined,
 	development: false,
 	reusePort: true,
 
@@ -333,6 +369,7 @@ const server = serve<WSData>({
 			);
 		}
 		if (
+			pathname === "/ws/devices" ||
 			pathname === "/" ||
 			pathname === "/ws" ||
 			pathname === "/ws/" ||
@@ -343,12 +380,33 @@ const server = serve<WSData>({
 					"Retry-After": "5",
 				});
 			}
+			const deviceRoute = pathname === "/ws/devices";
+			let management: DeviceAdmission | null = null;
 			let authorization;
 			try {
-				authorization = await authorizeUpgrade(
-					req.headers.get("origin"),
-					req.headers.get("sec-websocket-protocol"),
-				);
+				if (deviceRoute) {
+					if (
+						new URL(req.url).search ||
+						managementSockets.size >= MAX_MANAGEMENT_CONNECTIONS
+					)
+						return noStoreResponse("Service Unavailable", 503, {
+							"Retry-After": "5",
+						});
+					management = await authorizeDeviceUpgrade(
+						req.headers.get("origin"),
+						req.headers.get("sec-websocket-protocol"),
+					);
+					authorization = {
+						allowedTopic: null,
+						subject: `device-signaling:${management.deviceId}:${management.role}:${management.subject}`,
+						insecureLocalDev: false,
+						expiresAtMs: management.expiresAtMs,
+					};
+				} else
+					authorization = await authorizeUpgrade(
+						req.headers.get("origin"),
+						req.headers.get("sec-websocket-protocol"),
+					);
 			} catch {
 				return noStoreResponse("Unauthorized", 401);
 			}
@@ -366,6 +424,8 @@ const server = serve<WSData>({
 
 			const ok = s.upgrade(req, {
 				data: {
+					management,
+					managementInFlight: 0,
 					subscribed: new Set<string>(),
 					allowedTopic: authorization.allowedTopic,
 					subject,
@@ -376,7 +436,11 @@ const server = serve<WSData>({
 				},
 				headers: authorization.insecureLocalDev
 					? undefined
-					: { "Sec-WebSocket-Protocol": REALTIME_PROTOCOL },
+					: {
+							"Sec-WebSocket-Protocol": deviceRoute
+								? DEVICE_SIGNALING_PROTOCOL
+								: REALTIME_PROTOCOL,
+						},
 			});
 			if (ok) return undefined;
 			if (subject !== null) releaseSubjectConnection(subject);
@@ -402,6 +466,27 @@ const server = serve<WSData>({
 				ws.data.expiryTimer = setTimeout(() => {
 					closeForPolicy(ws);
 				}, remaining);
+			}
+			if (ws.data.management) {
+				if (
+					!fanoutIsReady() ||
+					managementSockets.size >= MAX_MANAGEMENT_CONNECTIONS
+				) {
+					ws.close(1013, "Signaling temporarily unavailable");
+					return;
+				}
+				managementSockets.add(ws);
+				const topic = deviceInbox(ws.data.management);
+				ws.subscribe(topic);
+				ws.data.subscribed.add(topic);
+				ws.send(
+					JSON.stringify({
+						type: "ready",
+						participant_id: ws.data.management.participantId,
+						role: ws.data.management.role,
+						expires_at: ws.data.management.expiresAtMs / 1000,
+					}),
+				);
 			}
 		},
 
@@ -430,8 +515,78 @@ const server = serve<WSData>({
 				closeForPolicy(ws);
 				return;
 			}
-			if (!ws.data.rateLimiter.consume(msg.type === "publish")) {
+			if (
+				!ws.data.rateLimiter.consume(
+					msg.type === "publish" || msg.type === "frame",
+				)
+			) {
 				ws.close(1013, "Rate limit exceeded");
+				return;
+			}
+			if (ws.data.management) {
+				if (!fanoutIsReady()) {
+					ws.close(1013, "Signaling temporarily unavailable");
+					return;
+				}
+				if (msg.type === "ping" && Object.keys(msg).length === 1) {
+					ws.send(JSON.stringify({ type: "pong" }));
+					return;
+				}
+				if (
+					(typeof data === "string"
+						? Buffer.byteLength(data)
+						: data.byteLength) > MAX_DEVICE_FRAME_BYTES
+				) {
+					ws.close(1009, "Management frame too large");
+					return;
+				}
+				if (ws.data.managementInFlight >= 16) {
+					ws.close(1013, "Too many pending frames");
+					return;
+				}
+				let routed;
+				try {
+					routed = relayDeviceFrame(ws.data.management, msg);
+				} catch {
+					closeForPolicy(ws);
+					return;
+				}
+				ws.data.managementInFlight++;
+				try {
+					// No delivery acknowledgement or server replay. Endpoints correlate
+					// encrypted requests and establish fresh sessions after reconnect.
+					if (pub) {
+						const envelope: DeviceFanout = {
+							type: "device-frame",
+							device_id: ws.data.management.deviceId,
+							device_auth_epoch: ws.data.management.deviceAuthEpoch,
+							expires_at_ms: Math.min(
+								ws.data.management.expiresAtMs,
+								Date.now() + 10_000,
+							),
+							_origin: NODE_ID,
+							frame: routed.frame,
+						};
+						await withDeadline(
+							pub.publish(DEVICE_CHANNEL, JSON.stringify(envelope)),
+							3_000,
+							"Device signaling fanout",
+						);
+					}
+					if (Date.now() >= ws.data.management.expiresAtMs) {
+						closeForPolicy(ws);
+						return;
+					}
+					if (!fanoutIsReady()) {
+						ws.close(1013, "Signaling temporarily unavailable");
+						return;
+					}
+					ws.publish(routed.topic, JSON.stringify(routed.frame));
+				} catch {
+					ws.close(1013, "Signaling temporarily unavailable");
+				} finally {
+					ws.data.managementInFlight--;
+				}
 				return;
 			}
 
@@ -523,16 +678,24 @@ const server = serve<WSData>({
 		},
 
 		close(ws) {
+			managementSockets.delete(ws);
 			if (ws.data.expiryTimer !== null) clearTimeout(ws.data.expiryTimer);
 			if (ws.data.subject !== null) releaseSubjectConnection(ws.data.subject);
 			// remove from all topics
 			for (const t of ws.data.subscribed) {
-				inc(t, -1);
+				if (!ws.data.management) inc(t, -1);
 			}
 			ws.data.subscribed.clear();
 		},
 	},
 });
+
+// Fail over transport without touching the independent agent/workload lifecycle.
+const managementReadinessTimer = setInterval(() => {
+	if (!fanoutIsReady())
+		for (const socket of managementSockets)
+			socket.close(1013, "Signaling temporarily unavailable");
+}, 1_000);
 
 // The process is live (and /health green) as soon as it listens; fan-out
 // readiness is reported separately once Redis is up.
@@ -552,6 +715,7 @@ initializeFanout()
 
 // Graceful shutdown
 async function shutdown() {
+	clearInterval(managementReadinessTimer);
 	console.log("[Shutdown] Closing server…");
 	server.stop?.();
 	// drop presence for all topics owned by this node

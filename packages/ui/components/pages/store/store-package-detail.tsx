@@ -1,21 +1,23 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
-import { useInvoke } from "../../../hooks/use-invoke";
+import { useCallback } from "react";
 import type { IProfile } from "../../../lib/schema/profile/profile";
-import type { RegistryEntry } from "../../../lib/schema/wasm";
-import { PackageStatus } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
+import { MarketplaceCheckoutDialog } from "../../payments/checkout-dialog";
 import { PackageDetailView } from "../../store/package-detail-view";
+import {
+	type RegistryPackageAuth,
+	useRegistryPackage,
+} from "../../store/package-workspace/use-registry-package";
 import { usePackageStoreData } from "../../store/use-package-store-data";
 import type { CompileStatus } from "../../ui/package-status-badge";
 
-// biome-ignore lint/suspicious/noExplicitAny: Required for generic fetcher signature compatibility
 export type GenericFetcher = <T>(
 	profile: IProfile,
 	path: string,
 	options?: RequestInit,
+	// biome-ignore lint/suspicious/noExplicitAny: Required for generic fetcher signature compatibility
 	auth?: any,
 ) => Promise<T>;
 
@@ -24,11 +26,12 @@ export interface StorePackageDetailProps {
 	onBack: () => void;
 	onInstallSuccess?: () => void;
 	onUninstallSuccess?: () => void;
+	/** @deprecated Deleting moved to the package workspace; the store detail never calls it. */
 	onDeleteSuccess?: () => void;
 	onInstallError?: (error: unknown) => void;
 	onUninstallError?: (error: unknown) => void;
 	fetcher: GenericFetcher;
-	auth?: unknown;
+	auth?: RegistryPackageAuth;
 	compileStatus?: CompileStatus;
 }
 
@@ -37,7 +40,6 @@ export function StorePackageDetail({
 	onBack,
 	onInstallSuccess,
 	onUninstallSuccess,
-	onDeleteSuccess,
 	onInstallError,
 	onUninstallError,
 	fetcher,
@@ -46,77 +48,14 @@ export function StorePackageDetail({
 }: StorePackageDetailProps) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
+	const registry = useRegistryPackage(packageId, fetcher, auth);
+	const resolvedPkg = registry.entry;
 
-	const profile = useInvoke(
-		backend.userState.getSettingsProfile,
-		backend.userState,
-		[],
-	);
-
-	const packageData = useQuery({
-		queryKey: ["registry-package", packageId],
-		queryFn: async () => {
-			if (!profile.data) return null;
-			return fetcher<RegistryEntry>(
-				profile.data.hub_profile,
-				`registry/package/${packageId}`,
-				{ method: "GET" },
-				auth,
-			);
-		},
-		enabled: !!profile.data && !!packageId,
-		retry: false,
-	});
-
-	const localPackageData = useQuery({
-		queryKey: ["local-package-fallback", packageId],
-		queryFn: () => backend.registryState.getPackage(packageId),
-		enabled: !!packageId && !packageData.isLoading && !packageData.data,
-	});
-
-	const resolvedPkg = useMemo(() => {
-		if (packageData.data) return packageData.data;
-		if (!localPackageData.data) return undefined;
-		const local = localPackageData.data;
-		return {
-			id: local.id,
-			manifest: local.manifest,
-			nodes: [],
-			versions: [
-				{
-					version: local.version,
-					wasmHash: "",
-					wasmSize: 0,
-					publishedAt: local.installedAt,
-					yanked: false,
-				},
-			],
-			status: PackageStatus.Active,
-			downloadCount: 0,
-			createdAt: local.installedAt,
-			updatedAt: local.installedAt,
-			source: local.source,
-			verified: false,
-			price: 0,
-			visibility: "local",
-		} as RegistryEntry;
-	}, [packageData.data, localPackageData.data]);
-
-	// A deep link can mount this before the settings profile resolves; both remote queries are
-	// disabled until then, so without this the view would claim the package does not exist.
-	const resolvedLoading =
-		profile.isLoading ||
-		packageData.isLoading ||
-		(!packageData.data && !packageData.isError && packageData.isFetching) ||
-		(!packageData.data && localPackageData.isLoading);
-
-	const loadError = packageData.error ?? profile.error ?? null;
-
-	const handleRetry = useCallback(() => {
-		void profile.refetch();
-		void packageData.refetch();
-		void localPackageData.refetch();
-	}, [profile, packageData, localPackageData]);
+	const signIn = useCallback(() => {
+		void auth?.signinRedirect?.({
+			url_state: window.location.pathname + window.location.search,
+		});
+	}, [auth]);
 
 	const installedVersion = useQuery({
 		queryKey: ["installed-package", packageId],
@@ -160,9 +99,13 @@ export function StorePackageDetail({
 	const {
 		isPurchasing,
 		isRequesting,
+		awaitingCheckout,
+		checkoutOpen,
+		setCheckoutOpen,
 		priceLabel,
 		hasAccess,
 		onBuy,
+		onRequestAccess,
 		onGetOrBuy,
 	} = usePackageStoreData(
 		packageId || undefined,
@@ -183,30 +126,46 @@ export function StorePackageDetail({
 	);
 
 	return (
-		<PackageDetailView
-			pkg={resolvedPkg}
-			isLoading={resolvedLoading}
-			loadError={loadError}
-			onRetry={handleRetry}
-			installedVersion={installedVersion.data}
-			onBack={onBack}
-			onInstall={handleInstall}
-			onUninstall={handleUninstall}
-			isInstalling={installMutation.isPending}
-			isUninstalling={uninstallMutation.isPending}
-			compileStatus={compileStatus}
-			price={resolvedPkg?.price}
-			visibility={resolvedPkg?.visibility}
-			priceLabel={priceLabel}
-			hasAccess={hasAccess}
-			isPurchasing={isPurchasing}
-			isRequesting={isRequesting}
-			onBuy={onBuy}
-			onGetOrBuy={onGetOrBuy}
-			onDeleteSuccess={onDeleteSuccess}
-			currentUserPermission={resolvedPkg?.currentUserPermission}
-			fetcher={fetcher}
-			auth={auth}
-		/>
+		<>
+			{registry.source === "registry" && resolvedPkg && (
+				<MarketplaceCheckoutDialog
+					key={`checkout:${packageId}`}
+					itemKind="PACKAGE"
+					itemId={packageId}
+					itemName={resolvedPkg.manifest.name || packageId}
+					amount={resolvedPkg.price ?? 0}
+					open={checkoutOpen}
+					onOpenChange={setCheckoutOpen}
+					onPurchased={handleAccessChanged}
+				/>
+			)}
+			<PackageDetailView
+				pkg={resolvedPkg}
+				isLoading={registry.isLoading}
+				loadError={registry.error}
+				onRetry={registry.retry}
+				onSignIn={registry.authState === "expired" ? signIn : undefined}
+				installedVersion={installedVersion.data}
+				onBack={onBack}
+				onInstall={handleInstall}
+				onUninstall={handleUninstall}
+				isInstalling={installMutation.isPending}
+				isUninstalling={uninstallMutation.isPending}
+				compileStatus={compileStatus}
+				price={resolvedPkg?.price}
+				visibility={resolvedPkg?.visibility}
+				priceLabel={priceLabel}
+				hasAccess={hasAccess}
+				isPurchasing={isPurchasing}
+				isRequesting={isRequesting}
+				awaitingCheckout={awaitingCheckout}
+				onBuy={onBuy}
+				onRequestAccess={onRequestAccess}
+				onGetOrBuy={onGetOrBuy}
+				currentUserPermission={resolvedPkg?.currentUserPermission}
+				fetcher={fetcher}
+				auth={auth}
+			/>
+		</>
 	);
 }

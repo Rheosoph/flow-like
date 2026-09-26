@@ -155,6 +155,11 @@ export function pinOffsetY(pin: IPin, isReroute = false): number {
 	return PIN_MARGIN_TOP + (pin.index - 1) * PIN_ROW_HEIGHT;
 }
 
+/** Keep zoom conversion noise from changing routing choices between runs. */
+export function stableHandleOffset(value: number): number {
+	return Math.round(value * 64) / 64;
+}
+
 /** Guards against reading a node that react-flow has not finished mounting. */
 export function isPlausibleSize(
 	width: number | null | undefined,

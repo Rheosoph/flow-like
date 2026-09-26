@@ -26,11 +26,13 @@ export type IQualityRule =
 	| "missing-input"
 	| "no-return"
 	| "cycle"
-	| "hardcoded-secret";
+	| "hardcoded-secret"
+	| "payment-readiness";
 
 /** Panel order. Severity sorts above this. */
 export const QUALITY_RULES: readonly IQualityRule[] = [
 	"hardcoded-secret",
+	"payment-readiness",
 	"cycle",
 	"no-return",
 	"missing-input",
@@ -58,6 +60,7 @@ export interface IQualityTarget {
 }
 
 export type IQualityDetail =
+	| { kind: "payment-readiness"; simulation: boolean }
 	| { kind: "unreachable" }
 	| { kind: "unused-result" }
 	| { kind: "uncalled-function" }
@@ -922,6 +925,33 @@ function checkComplexity(graph: Graph, out: Findings) {
 	}
 }
 
+function checkPaymentReadiness(graph: Graph, out: Findings) {
+	for (const node of graph.nodes.values()) {
+		if (node.name !== "request_payment") continue;
+		const pin = Object.values(node.pins).find(
+			(pin) => pin.name === "simulation",
+		);
+		let simulation = false;
+		if (pin?.default_value && pin.depends_on.length === 0) {
+			try {
+				const value = parseUint8ArrayToJson(pin.default_value);
+				simulation = typeof value === "string" && value.length > 0;
+			} catch {
+				// An invalid pin value is checked when the node executes.
+			}
+		}
+		out.push(
+			"payment-readiness",
+			simulation ? "info" : "warning",
+			nodeTarget(node),
+			{
+				kind: "payment-readiness",
+				simulation,
+			},
+		);
+	}
+}
+
 function checkInsecureNodes(graph: Graph, out: Findings) {
 	for (const node of graph.nodes.values()) {
 		if (node.name === "reroute") continue;
@@ -1104,6 +1134,7 @@ export function analyzeBoardQuality(board: IBoard): IBoardQualityReport {
 	checkFunctions(graph, out);
 	checkMissingInputs(graph, reachability, out);
 	checkInsecureNodes(graph, out);
+	checkPaymentReadiness(graph, out);
 	checkDeadCode(graph, reachability, calls, out);
 	checkComplexity(graph, out);
 
@@ -1139,6 +1170,8 @@ export function qualityRuleLabel(
 	t: QualityTranslate,
 ): string {
 	switch (rule) {
+		case "payment-readiness":
+			return t("qualityRulePaymentReadiness", "Payment readiness");
 		case "dead-code":
 			return t("qualityRuleDeadCode", "Dead code");
 		case "complexity":
@@ -1163,6 +1196,16 @@ export function describeQualityFinding(
 ): string {
 	const detail = finding.detail;
 	switch (detail.kind) {
+		case "payment-readiness":
+			return detail.simulation
+				? t(
+						"qualityPaymentSimulation",
+						"Payment simulation runs only in local Board Test. Clear Board Test Result before requesting real payments.",
+					)
+				: t(
+						"qualityPaymentReadiness",
+						"Real payments require a signed-in payer in an attended remote stream and an app owner who enabled payments and completed onboarding. Board analysis cannot verify account readiness.",
+					);
 		case "unreachable":
 			return t(
 				"qualityUnreachable",

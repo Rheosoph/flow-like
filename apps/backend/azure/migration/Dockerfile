@@ -72,6 +72,10 @@ COPY packages/api/prisma/pre-push.ts ./prisma/pre-push.ts
 COPY packages/api/prisma/pre-push ./prisma/pre-push
 
 COPY apps/backend/azure/migration/prisma.config.ts apps/backend/azure/migration/migrate.ts ./
+# The API/audit-worker privilege boundary migrate.ts applies after the push,
+# imported as ./audit_database_roles; it must sit next to node_modules for pg
+# to resolve, exactly as in the compose db-init image.
+COPY apps/backend/shared/audit_database_roles.ts ./audit_database_roles.ts
 
 ENV NODE_ENV=production \
     CHECKPOINT_DISABLE=1 \
@@ -79,11 +83,14 @@ ENV NODE_ENV=production \
 
 # Fail the build, not the job: executing the schema engine directly surfaces a
 # missing engine download or libssl here, `prisma --version` records the
-# resolved versions in the build log, and `validate` proves the rewritten
-# multi-file schema parses for the postgresql provider.
+# resolved versions in the build log, `validate` proves the rewritten
+# multi-file schema parses for the postgresql provider, and importing
+# migrate.ts (its main() runs only as the entrypoint) proves every module it
+# needs, the boundary helper and pg included, resolves inside the image.
 RUN node_modules/@prisma/engines/schema-engine-* --version \
     && bunx --bun prisma --version \
-    && bunx --bun prisma validate --schema=prisma/schema
+    && bunx --bun prisma validate --schema=prisma/schema \
+    && bun -e 'await import("/app/migrate.ts")'
 
 # Set only now: the build steps above ran as root and must not seed this home
 # with root-owned bun/bunx cache entries the runtime user cannot replace.

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
     time::SystemTime,
 };
@@ -41,6 +41,7 @@ use crate::{
 };
 
 const DEFAULT_OUTPUT_PIN_ALIASES: &[&str] = &["result", "value", "output", "out"];
+const REROUTE_NODE_TYPE: &str = "reroute";
 const GENERIC_EVENT_NODE_TYPE: &str = "events_generic";
 const GENERIC_EVENT_PAYLOAD_PIN: &str = "payload";
 
@@ -88,6 +89,18 @@ pub fn destructive_flowscript_command_summaries(commands: &[BoardCommand]) -> Ve
         .collect()
 }
 
+/// How the deletion gate's message starts. It is a confirmation prompt, not a failure: the editor
+/// asks and re-applies with `allow_deletions`, and failure capture skips it.
+pub const DESTRUCTIVE_BLOCK_PREFIX: &str = "FlowScript edit would delete ";
+
+/// Whether an apply result is exactly the deletion gate (see [`DESTRUCTIVE_BLOCK_PREFIX`]).
+pub fn is_destructive_block(command_count: usize, diagnostics: &[String]) -> bool {
+    command_count == 0
+        && diagnostics
+            .first()
+            .is_some_and(|diagnostic| diagnostic.starts_with(DESTRUCTIVE_BLOCK_PREFIX))
+}
+
 pub fn blocked_destructive_flowscript_message(summaries: &[String]) -> String {
     let preview = summaries
         .iter()
@@ -103,7 +116,7 @@ pub fn blocked_destructive_flowscript_message(summaries: &[String]) -> String {
         .unwrap_or_default();
 
     format!(
-        "FlowScript edit would delete or relocate {} existing board item(s): {preview}{more}. Deletions are blocked by default so incomplete model edits cannot remove existing work, and moves out of a module to the board root are held to the same rule so a dropped `module {{ }}` wrapper cannot silently dissolve a namespace. Re-submit the full current FlowScript with every kept `//@n:<id>` and `//@l:<id>` anchor and every `module` wrapper preserved, or set `allow_deletions` only for an explicit delete/move request.",
+        "{DESTRUCTIVE_BLOCK_PREFIX}or relocate {} existing board item(s): {preview}{more}. Deletions are blocked by default so incomplete model edits cannot remove existing work, and moves out of a module to the board root are held to the same rule so a dropped `module {{ }}` wrapper cannot silently dissolve a namespace. Re-submit the full current FlowScript with every kept `//@n:<id>` and `//@l:<id>` anchor and every `module` wrapper preserved, or set `allow_deletions` only for an explicit delete/move request.",
         summaries.len()
     )
 }
@@ -195,6 +208,7 @@ pub async fn apply_flowscript_to_board_file(
         "string_format",
         "string_render_template",
         "a2ui_push_csv_to_chart",
+        "onnx_laya",
         "df_sql_query",
         "df_sql_query_cached",
         "df_execute_sql",
@@ -569,6 +583,7 @@ pub async fn apply_board_commands_to_board(
     let mut planner = FlowScriptApplyPlanner::new(board, catalog_nodes, current_layer);
     let setup_commands = planner.build_setup_commands(board, &board_commands)?;
     let mut applied_commands = Vec::new();
+    let wired_reroutes = wired_reroute_ids(board);
 
     // `execute_commands` appends the node state `on_update` derived during this phase, so the
     // flattened batch stays replayable on a machine that has never run it.
@@ -608,12 +623,65 @@ pub async fn apply_board_commands_to_board(
         rollback_applied(board, &applied_commands, state.clone(), error).await?;
     }
 
+    if let Err(error) =
+        remove_dead_reroutes(board, &wired_reroutes, &mut applied_commands, state.clone()).await
+    {
+        rollback_applied(board, &applied_commands, state.clone(), error).await?;
+    }
+
     Ok(ApplyFlowScriptResult {
         commands: applied_commands,
         board_commands,
         corrections: Vec::new(),
         diagnostics: Vec::new(),
     })
+}
+
+/// A reroute only bends the wire it sits on; FlowScript never shows it. Wired both ways, it is
+/// part of a live edge.
+fn reroute_is_wired(node: &Node) -> bool {
+    let pins = || node.pins.values();
+    pins().any(|pin| pin.pin_type == PinType::Input && !pin.depends_on.is_empty())
+        && pins().any(|pin| pin.pin_type == PinType::Output && !pin.connected_to.is_empty())
+}
+
+fn wired_reroute_ids(board: &Board) -> HashSet<String> {
+    board
+        .nodes
+        .values()
+        .filter(|node| node.name == REROUTE_NODE_TYPE && reroute_is_wired(node))
+        .map(|node| node.id.clone())
+        .collect()
+}
+
+/// Remove the reroutes this apply cut loose. Rewiring an input or an execution output replaces
+/// its edge, so the reroutes that bent the old edge are left dangling on the canvas — bends of a
+/// wire that no longer exists. Only reroutes wired before the apply qualify: one the user placed
+/// unconnected stays. Removal cascades along a chain of bends.
+async fn remove_dead_reroutes(
+    board: &mut Board,
+    wired_before: &HashSet<String>,
+    applied_commands: &mut Vec<GenericCommand>,
+    state: Arc<FlowLikeState>,
+) -> flow_like_types::Result<()> {
+    loop {
+        let mut dead: Vec<Node> = board
+            .nodes
+            .values()
+            .filter(|node| wired_before.contains(&node.id) && !reroute_is_wired(node))
+            .cloned()
+            .collect();
+        if dead.is_empty() {
+            return Ok(());
+        }
+        dead.sort_by(|left, right| left.id.cmp(&right.id));
+        let commands = dead
+            .into_iter()
+            .map(|node| GenericCommand::RemoveNode(RemoveNodeCommand::new(node)))
+            .collect();
+        let mut executed = board.execute_commands(commands, state.clone()).await?;
+        applied_commands.append(&mut executed);
+    }
 }
 
 async fn rollback_applied(
@@ -1405,11 +1473,22 @@ impl FlowScriptApplyPlanner {
                         // A requested tool is part of the executable contract. Silently dropping
                         // an unresolved name leaves a visually plausible agent with fewer tools
                         // than authored, so fail the atomic FlowScript apply instead.
-                        let target_id = self.resolve_node_id(board, reference).map_err(|error| {
-                            flow_like_types::anyhow!(
-                                "Could not resolve requested function reference `{reference}`: {error}"
-                            )
-                        })?;
+                        let target_id = match self.resolve_node_id(board, reference) {
+                            // An exact alias can name an ordinary node that merely shares the
+                            // function's name; runtime would silently drop that reference.
+                            Ok(target_id) if !self.is_referenceable_target(board, &target_id) => {
+                                self.resolve_function_reference(board, reference)
+                                    .unwrap_or(target_id)
+                            }
+                            Ok(target_id) => target_id,
+                            Err(error) => self
+                                .resolve_function_reference(board, reference)
+                                .map_err(|narrowed| {
+                                    flow_like_types::anyhow!(
+                                        "Could not resolve requested function reference `{reference}`: {error}{narrowed}"
+                                    )
+                                })?,
+                        };
                         // Functions are authored as layers; reference the layer's referenceable
                         // entry node so runtime function-reference resolution finds a concrete node.
                         let entry_id = if board.layers.contains_key(&target_id)
@@ -1511,6 +1590,67 @@ impl FlowScriptApplyPlanner {
     /// `None` when `id` is not a layer or the layer has no referenceable entry. FlowScript uses
     /// the canonical flat board representation (`board.nodes[*].layer`); `layer.nodes` is retained
     /// only for legacy boards, so inspect and de-duplicate both stores.
+    /// A function reference whose name alone is ambiguous or unknown, resolved among what a
+    /// function reference can target at all: nodes that can be referenced by functions, and
+    /// Function layers with a referenceable entry. A friendly name shared with an ordinary node
+    /// or a Collapsed/Module layer no longer blocks it. `Err` carries the suffix explaining why
+    /// nothing unique was found.
+    fn resolve_function_reference(&self, board: &Board, reference: &str) -> Result<String, String> {
+        let wanted = to_camel_case(reference);
+        let named = |id: &str, name: &str| {
+            id == reference || name == reference || to_camel_case(name) == wanted
+        };
+        let mut layers: BTreeSet<String> = BTreeSet::new();
+        let mut entries_of_layers: HashSet<String> = HashSet::new();
+        for layer in board.layers.values().chain(self.staged_layers.values()) {
+            if matches!(layer.r#type, LayerType::Function)
+                && named(&layer.id, &layer.name)
+                && let Ok(Some(entry)) = self.referenceable_entry_in_layer(board, &layer.id)
+            {
+                layers.insert(layer.id.clone());
+                entries_of_layers.insert(entry);
+            }
+        }
+        let nodes: BTreeSet<String> = board
+            .nodes
+            .values()
+            .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+            .chain(self.staged_nodes.values())
+            .filter(|node| {
+                named(&node.id, &node.friendly_name)
+                    && node
+                        .fn_refs
+                        .as_ref()
+                        .is_some_and(|refs| refs.can_be_referenced_by_fns)
+                    && !entries_of_layers.contains(&node.id)
+            })
+            .map(|node| node.id.clone())
+            .collect();
+        let candidates: Vec<String> = layers.into_iter().chain(nodes).collect();
+        match candidates.as_slice() {
+            [single] => Ok(single.clone()),
+            [] => Err(
+                "; no function, event or handler that can be referenced has that name".to_string(),
+            ),
+            many => Err(format!(
+                "; {} referenceable entries share that name ({}); rename one so the reference is unique",
+                many.len(),
+                many.join(", ")
+            )),
+        }
+    }
+
+    /// A layer (its entry is resolved later) or a node a function reference can target.
+    fn is_referenceable_target(&self, board: &Board, id: &str) -> bool {
+        board.layers.contains_key(id)
+            || self.staged_layers.contains_key(id)
+            || self.resolve_node(board, id).is_ok_and(|node| {
+                node.fn_refs
+                    .as_ref()
+                    .is_some_and(|refs| refs.can_be_referenced_by_fns)
+            })
+    }
+
     fn referenceable_entry_in_layer(
         &self,
         board: &Board,
@@ -1866,9 +2006,14 @@ fn append_additional_node_pins(
     let Some(defs) = defs else {
         return Ok(());
     };
+    let (repeated_inputs, defs): (Vec<_>, Vec<_>) =
+        defs.iter().partition(|def| def.pin_type == "Input");
+    for def in repeated_inputs {
+        extend_repeatable_input(node, &def.name)?;
+    }
     if !defs.is_empty() && node.name != GENERIC_EVENT_NODE_TYPE {
         return Err(flow_like_types::anyhow!(
-            "Additional catalog-node pins are only supported on events_generic"
+            "Additional catalog-node output pins are only supported on events_generic"
         ));
     }
 
@@ -1933,6 +2078,36 @@ fn append_additional_node_pins(
         }
     }
 
+    Ok(())
+}
+
+/// Add one more occurrence of a repeatable input — a family of two or more same-named inputs
+/// (`construct_array.element`, `string_concat.string`) — exactly as the canvas "+" does: a
+/// disconnected clone of the family's last pin, inserted right after it.
+fn extend_repeatable_input(node: &mut Node, name: &str) -> flow_like_types::Result<()> {
+    let mut family = node
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Input && pin.name == name)
+        .collect::<Vec<_>>();
+    family.sort_by_key(|pin| (pin.index, pin.id.clone()));
+    let [_, .., last] = family.as_slice() else {
+        return Err(flow_like_types::anyhow!(
+            "`{}` has no repeatable input `{name}` to add another occurrence of",
+            node.friendly_name
+        ));
+    };
+    let mut pin = (*last).clone();
+    pin.id = create_id();
+    pin.index = last.index + 1;
+    pin.depends_on.clear();
+    pin.connected_to.clear();
+    for other in node.pins.values_mut() {
+        if other.pin_type == PinType::Input && other.index >= pin.index {
+            other.index += 1;
+        }
+    }
+    node.pins.insert(pin.id.clone(), pin);
     Ok(())
 }
 

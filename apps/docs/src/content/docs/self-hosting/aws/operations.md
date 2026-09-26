@@ -6,7 +6,8 @@ sidebar:
 ---
 
 The AWS API accepts requests in Lambda, dispatches asynchronous runs through
-SQS, and receives execution callbacks. A separate file tracker consumes S3
+SQS, and receives execution callbacks. The same API can instead run as a
+long-running [ECS service](/self-hosting/aws/ecs-api/). A separate file tracker consumes S3
 notifications from SQS and updates storage totals. Apply the
 [database schema and runtime grants](/self-hosting/aws/database/) before enabling
 the API or file tracker.

@@ -3,10 +3,7 @@
 use super::attachments::write_chat_image_temp_files;
 use super::backend_types::FlowPilotAgentBackendKind;
 use super::cli_resolution::CliResolution;
-use flow_like::{
-    copilot::ChatImage,
-    flow::copilot::tool_spec::{MAX_DELEGATED_RUN_DISPATCH_SECS, RESEARCH_AGENT_TOOL},
-};
+use flow_like::{copilot::ChatImage, flow::copilot::tool_spec::MAX_DELEGATED_RUN_DISPATCH_SECS};
 use std::path::PathBuf;
 
 pub(super) struct ExternalAgentInvocation {
@@ -34,6 +31,8 @@ pub(super) fn explicit_reasoning_effort(reasoning_effort: Option<&str>) -> Optio
 }
 
 impl ExternalAgentInvocation {
+    /// `global_orchestrator` grants the CLI's own web search and fetch. Specialists hold private
+    /// app data without a public-web mandate, so they never receive them.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         backend: FlowPilotAgentBackendKind,
@@ -43,6 +42,7 @@ impl ExternalAgentInvocation {
         mcp_url: &str,
         prompt: String,
         tool_names: Vec<String>,
+        global_orchestrator: bool,
         images: &[ChatImage],
         resume_session: Option<&str>,
         append_system_prompt: Option<&str>,
@@ -58,6 +58,7 @@ impl ExternalAgentInvocation {
                 mcp_url,
                 prompt,
                 tool_names,
+                global_orchestrator,
                 images,
             ),
             FlowPilotAgentBackendKind::ClaudeCode => Self::claude(
@@ -68,6 +69,7 @@ impl ExternalAgentInvocation {
                 mcp_url,
                 prompt,
                 tool_names,
+                global_orchestrator,
                 images,
                 resume_session,
                 append_system_prompt,
@@ -78,6 +80,7 @@ impl ExternalAgentInvocation {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn codex(
         backend: FlowPilotAgentBackendKind,
         cli: CliResolution,
@@ -86,8 +89,14 @@ impl ExternalAgentInvocation {
         mcp_url: &str,
         prompt: String,
         tool_names: Vec<String>,
+        global_orchestrator: bool,
         images: &[ChatImage],
     ) -> Result<Self, String> {
+        let web_search = if global_orchestrator && !tool_names.is_empty() {
+            "live"
+        } else {
+            "disabled"
+        };
         // Mirrors @openai/codex-sdk's stdio protocol: spawn
         // `codex exec --experimental-json`, pass config overrides as repeated
         // --config entries, and stream JSONL events from stdout.
@@ -96,8 +105,7 @@ impl ExternalAgentInvocation {
             "--experimental-json".to_string(),
             // Keep authentication in CODEX_HOME, but do not inherit user-configured MCP servers,
             // browser tools, or web-search settings. FlowPilot must expose exactly its scoped MCP
-            // surface: the global orchestrator gets the reviewed public-web tools, while Data
-            // Studio and every other specialist get none.
+            // surface plus, for the global orchestrator only, native web search.
             "--ignore-user-config".to_string(),
             "--sandbox".to_string(),
             "read-only".to_string(),
@@ -110,11 +118,9 @@ impl ExternalAgentInvocation {
             "--config".to_string(),
             "approval_policy=\"never\"".to_string(),
             "--config".to_string(),
-            // Keep this explicit even with --ignore-user-config: it prevents Codex defaults or
-            // future profile layers from enabling native Responses web search independently of the
-            // scoped MCP surface. Global research must use FlowPilot's reviewed tools, while nested
-            // specialists must remain unable to reach the public web at all.
-            "web_search=\"disabled\"".to_string(),
+            // Explicit either way, even with --ignore-user-config, so Codex defaults or future
+            // profile layers cannot decide which surface reaches the public web.
+            format!("web_search={web_search:?}"),
         ];
         if tool_names.is_empty() {
             // Ontology query planning is a pure text transformation. Remove Codex's native data
@@ -219,6 +225,7 @@ impl ExternalAgentInvocation {
         mcp_url: &str,
         prompt: String,
         tool_names: Vec<String>,
+        global_orchestrator: bool,
         images: &[ChatImage],
         resume_session: Option<&str>,
         append_system_prompt: Option<&str>,
@@ -227,11 +234,10 @@ impl ExternalAgentInvocation {
             "flowpilot-claude-mcp-{}.json",
             uuid::Uuid::new_v4()
         ));
-        // The global surface is large and includes the sealed research fallback. Let Claude's
-        // native MCP ToolSearch keep those schemas deferred. Small role-scoped specialists retain
-        // eager loading because their exact lifecycle tools are all immediately relevant.
-        let defer_tool_schemas = tool_names.iter().any(|name| name == RESEARCH_AGENT_TOOL);
-        let server_config = if defer_tool_schemas {
+        // The global surface is large. Let Claude's native MCP ToolSearch keep those schemas
+        // deferred. Small role-scoped specialists retain eager loading because their exact
+        // lifecycle tools are all immediately relevant.
+        let server_config = if global_orchestrator {
             serde_json::json!({
                 "type": "http",
                 "url": mcp_url,
@@ -267,32 +273,40 @@ impl ExternalAgentInvocation {
             "--mcp-config".to_string(),
             mcp_config_path.display().to_string(),
         ];
-        const DISALLOWED_BUILTIN_TOOLS: &str =
-            "Task,Bash,Glob,Grep,Read,Edit,Write,NotebookEdit,WebFetch,WebSearch";
+        const DISALLOWED_BUILTIN_TOOLS: &str = "Task,Bash,Glob,Grep,Read,Edit,Write,NotebookEdit";
+        const WEB_BUILTIN_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+        let native_web = global_orchestrator && !tool_names.is_empty();
         if tool_names.is_empty() {
             // Claude documents an empty --tools value as the way to remove every built-in tool.
             // The ontology query planner has no MCP tools either, so this produces a genuinely
             // tool-free completion instead of leaving file, shell, or web tools in its context.
             args.extend(["--tools".to_string(), String::new()]);
         } else {
-            let allowed_mcp_tools = tool_names
+            let mut allowed_tools = tool_names
                 .iter()
                 .map(|name| format!("mcp__flowpilot__{name}"))
-                .collect::<Vec<_>>()
-                .join(",");
+                .collect::<Vec<_>>();
+            if native_web {
+                allowed_tools.extend(WEB_BUILTIN_TOOLS.map(str::to_string));
+            }
             // Do NOT pass `--tools` here: it controls which tools are visible in
             // context and only understands built-in tool names, so listing MCP
             // tools there hides the whole toolset and the agent degrades to
             // text-only answers. Allow the FlowPilot MCP tools, auto-deny
             // everything else via `dontAsk`, and strip the built-in file/shell
             // tools from context entirely so headless runs cannot stall on them.
-            args.extend(["--allowedTools".to_string(), allowed_mcp_tools]);
+            args.extend(["--allowedTools".to_string(), allowed_tools.join(",")]);
         }
+        let disallowed_tools = if native_web {
+            DISALLOWED_BUILTIN_TOOLS.to_string()
+        } else {
+            format!("{DISALLOWED_BUILTIN_TOOLS},{}", WEB_BUILTIN_TOOLS.join(","))
+        };
         // Keep the built-ins out even when the reviewed MCP allowlist is empty. `dontAsk` makes
         // any unexpected capability fail closed instead of stalling a headless request.
         args.extend([
             "--disallowedTools".to_string(),
-            DISALLOWED_BUILTIN_TOOLS.to_string(),
+            disallowed_tools,
             "--permission-mode".to_string(),
             "dontAsk".to_string(),
         ]);
@@ -363,7 +377,7 @@ impl ExternalAgentInvocation {
                 "0".to_string(),
             ),
         ];
-        if !defer_tool_schemas {
+        if !global_orchestrator {
             // Preserve the existing eager path for small role-scoped specialist surfaces.
             envs.push(("ENABLE_TOOL_SEARCH".to_string(), "auto".to_string()));
         }
@@ -384,7 +398,7 @@ impl ExternalAgentInvocation {
             envs,
             // The global surface relies on Claude's supported-model default ToolSearch behavior.
             // Do not let an ambient desktop/shell override force eager loading or disable it.
-            env_removals: if defer_tool_schemas {
+            env_removals: if global_orchestrator {
                 vec!["ENABLE_TOOL_SEARCH".to_string()]
             } else {
                 Default::default()

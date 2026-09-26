@@ -1,7 +1,7 @@
 import type { ILayer } from "../schema/flow/board";
 import type { INode } from "../schema/flow/node";
 
-export type LayoutStyle = "compact" | "expanded" | "balanced";
+export type LayoutStyle = "compact" | "expanded" | "balanced" | "routed";
 
 export type LNodeKind = "exec" | "pure" | "reroute" | "entity";
 
@@ -26,6 +26,9 @@ export interface AutoLayoutInput {
 	currentLayer: string | undefined;
 	/** Real sizes measured by react-flow. Preferred over the CSS formula. */
 	nodeSizes?: ReadonlyMap<string, readonly [number, number]>;
+	/** Measured handle centres relative to the node, including collapsed pin rows. */
+	pinOffsets?: ReadonlyMap<string, { x: number; y: number }>;
+	edgePathType?: "default" | "straight" | "step" | "smoothstep";
 	comments?: readonly LayoutComment[];
 	/** Restricts layout to these node ids (layout-of-selection). */
 	only?: ReadonlySet<string>;
@@ -37,6 +40,7 @@ export interface AutoLayoutInput {
 }
 
 export interface LayoutBox {
+	id?: string;
 	x: number;
 	y: number;
 	width: number;
@@ -102,6 +106,8 @@ export interface StyleConfig {
 	hGap: number;
 	/** Edge-to-edge vertical gap between nodes in a column. */
 	vGap: number;
+	/** Extra room between parallel execution paths, when routing data wires. */
+	branchGap?: number;
 	/** Gap between the exec spine and the pure-node band below it. */
 	pureVGap: number;
 	/** Gap between weakly connected components. */
@@ -121,10 +127,22 @@ export interface LayoutResult {
 	commentPositions: Map<string, [number, number]>;
 	reversedEdges: ReadonlyArray<{ from: string; to: string }>;
 	diagnostics: LayoutDiagnostics;
+	routing?: {
+		routes: import("./route").DataRoute[];
+		chains: import("./normalize-reroutes").AutoRerouteChain[];
+	};
 }
 
 export function getStyleConfig(style: LayoutStyle): StyleConfig {
 	switch (style) {
+		case "routed":
+			return {
+				hGap: 80,
+				vGap: 40,
+				branchGap: 72,
+				pureVGap: 24,
+				componentGap: 120,
+			};
 		case "compact":
 			return { hGap: 80, vGap: 40, pureVGap: 24, componentGap: 120 };
 		case "expanded":

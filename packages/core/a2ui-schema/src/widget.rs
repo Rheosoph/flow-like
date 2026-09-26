@@ -401,13 +401,13 @@ pub enum ActionBinding {
     /// Trigger a workflow event (events_simple node ID)
     WorkflowEvent {
         event_id: String,
-        #[serde(default)]
+        #[serde(default, serialize_with = "crate::serde_helpers::serialize_sorted_map")]
         context_mapping: std::collections::HashMap<String, super::BoundValue>,
     },
     /// Navigate to a page
     PageNavigation {
         page_id: String,
-        #[serde(default)]
+        #[serde(default, serialize_with = "crate::serde_helpers::serialize_sorted_map")]
         context_mapping: std::collections::HashMap<String, super::BoundValue>,
     },
     /// Open an external URL
@@ -419,7 +419,7 @@ pub enum ActionBinding {
     /// Emit a custom action for handling
     CustomAction {
         action_name: String,
-        #[serde(default)]
+        #[serde(default, serialize_with = "crate::serde_helpers::serialize_sorted_map")]
         context_mapping: std::collections::HashMap<String, super::BoundValue>,
     },
 }
@@ -473,12 +473,14 @@ pub struct Page {
     pub on_interval_seconds: Option<u32>,
     /// Widget definitions referenced by widget instances on this page
     /// Key is the instance ID, value is the widget definition
-    #[serde(default)]
+    #[serde(default, serialize_with = "crate::serde_helpers::serialize_sorted_map")]
     pub widget_refs: HashMap<String, Widget>,
-    /// When true, the frontend caches the last rendered state and shows it
-    /// instantly while the onLoad event runs in the background.
+    /// Pages with an onLoad event replay their last rendered output while the event refreshes
+    /// it. When true, that output is neither replayed nor stored, and the page shows a loading
+    /// screen until the onLoad event renders fresh output. The retired opt-in `cache` flag of
+    /// older stored pages is ignored on read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub cache: bool,
+    pub no_cache: bool,
 }
 
 impl Page {
@@ -503,7 +505,7 @@ impl Page {
             on_interval_event_id: None,
             on_interval_seconds: None,
             widget_refs: HashMap::new(),
-            cache: false,
+            no_cache: false,
         }
     }
 
@@ -575,14 +577,15 @@ pub struct WidgetInstance {
     pub instance_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<super::Position>,
+    #[serde(serialize_with = "crate::serde_helpers::serialize_sorted_map")]
     pub customization_values: std::collections::HashMap<String, Vec<u8>>,
     /// Values for exposed props (key is the exposed prop id)
-    #[serde(default)]
+    #[serde(default, serialize_with = "crate::serde_helpers::serialize_sorted_map")]
     pub exposed_prop_values: std::collections::HashMap<String, Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_override: Option<super::Style>,
     /// Action bindings - map action_id to binding configuration
-    #[serde(default)]
+    #[serde(default, serialize_with = "crate::serde_helpers::serialize_sorted_map")]
     pub action_bindings: std::collections::HashMap<String, ActionBinding>,
     /// Widget reference for cross-app widgets (optional - if not same app)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -719,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn page_json_omits_absent_optionals_and_default_cache() {
+    fn page_json_omits_absent_optionals_and_default_no_cache() {
         let page = Page::new("page-1", "Home", "/");
         let encoded = serde_json::to_value(&page).expect("serialize page");
         let object = encoded.as_object().expect("page object");
@@ -727,12 +730,37 @@ mod tests {
         assert_eq!(object.get("id"), Some(&serde_json::json!("page-1")));
         assert!(object.get("title").is_none());
         assert!(object.get("canvasSettings").is_none());
+        assert!(object.get("noCache").is_none());
         assert!(object.get("cache").is_none());
 
         let decoded: Page = serde_json::from_value(encoded).expect("deserialize page");
         assert_eq!(decoded.id, page.id);
         assert!(decoded.title.is_none());
-        assert!(!decoded.cache);
+        assert!(!decoded.no_cache);
+    }
+
+    #[test]
+    fn page_no_cache_round_trips_as_camel_case() {
+        let mut page = Page::new("page-1", "Home", "/");
+        page.no_cache = true;
+        let encoded = serde_json::to_value(&page).expect("serialize page");
+
+        assert_eq!(encoded.get("noCache"), Some(&serde_json::json!(true)));
+        assert!(encoded.get("no_cache").is_none());
+        let decoded: Page = serde_json::from_value(encoded).expect("deserialize page");
+        assert!(decoded.no_cache);
+    }
+
+    #[test]
+    fn stored_pages_with_the_retired_cache_flag_still_deserialize() {
+        let mut stored = serde_json::to_value(Page::new("page-1", "Home", "/")).unwrap();
+        stored["cache"] = serde_json::json!(true);
+
+        let decoded: Page = serde_json::from_value(stored).expect("legacy page");
+        assert_eq!(decoded.id, "page-1");
+        assert!(!decoded.no_cache);
+        let reencoded = serde_json::to_value(&decoded).expect("serialize page");
+        assert!(reencoded.get("cache").is_none());
     }
 
     #[test]
@@ -792,6 +820,64 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(layout).expect("layout should serialize"),
                 Value::String(expected.to_string()),
+            );
+        }
+    }
+
+    #[test]
+    fn page_json_bytes_survive_map_rebuilds() {
+        let context_mapping = |index: usize| {
+            (0..8)
+                .map(|key| {
+                    (
+                        format!("field-{key}"),
+                        crate::BoundValue::path(format!("/data/{index}/{key}")),
+                    )
+                })
+                .collect()
+        };
+        let binding = |index: usize| match index % 3 {
+            0 => ActionBinding::WorkflowEvent {
+                event_id: format!("event-{index}"),
+                context_mapping: context_mapping(index),
+            },
+            1 => ActionBinding::PageNavigation {
+                page_id: format!("page-{index}"),
+                context_mapping: context_mapping(index),
+            },
+            _ => ActionBinding::CustomAction {
+                action_name: format!("custom-{index}"),
+                context_mapping: context_mapping(index),
+            },
+        };
+
+        let mut instance = WidgetInstance::new("widget-0", "instance-0");
+        let mut page = Page::new("page-1", "Home", "/");
+        for index in 0..8 {
+            instance
+                .customization_values
+                .insert(format!("custom-{index}"), vec![index as u8]);
+            instance
+                .exposed_prop_values
+                .insert(format!("prop-{index}"), vec![index as u8]);
+            instance
+                .action_bindings
+                .insert(format!("action-{index}"), binding(index));
+            page.widget_refs.insert(
+                format!("instance-{index}"),
+                Widget::new(format!("widget-{index}"), "Widget", "root"),
+            );
+        }
+        page = page.with_content(PageContent::Widget(instance));
+
+        let expected = serde_json::to_vec(&page).expect("serialize page");
+        for _ in 0..20 {
+            page = serde_json::from_value(serde_json::to_value(&page).expect("encode page"))
+                .expect("decode page");
+            assert_eq!(
+                serde_json::to_vec(&page).expect("serialize page"),
+                expected,
+                "rebuilding a Page's maps must not change its JSON bytes"
             );
         }
     }

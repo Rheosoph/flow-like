@@ -136,11 +136,21 @@ The second form is useful when removing an Event because it prevents orphaned na
 
 ## Runtime Resolution
 
-The app-use surface reads the current route from the `route` query parameter:
+Web and Desktop read the current route from the path after `/use`, with the App ID
+in the `id` query parameter:
 
 ```text
-/use?id=<appId>&route=/reports
+/use/reports?id=<appId>
 ```
+
+Use `/use/?id=<appId>` to explicitly select the `/` route. A direct Event link
+remains `/use?id=<appId>&eventId=<eventId>` when no route is specified.
+
+Both clients also accept legacy links such as
+`/use?id=<appId>&route=/reports` and replaces the current browser history entry
+with the path form. Shared URL builders can still supply the query form; each
+client converts it when navigating. Desktop maps deep links to its bundled
+`use.html`, and its development server rewrites them to the `/use` page.
 
 Resolution follows this behavior:
 
@@ -150,14 +160,15 @@ Resolution follows this behavior:
 4. Load the mapped Event.
 5. Render its Page or built-in interface when it has one.
 
-A direct `eventId` can be used when no effective route mapping is active, but user-facing navigation should prefer stable route paths.
+A direct `eventId` selects an Event when no route is supplied. An explicit
+route takes precedence; user-facing navigation should prefer stable route paths.
 
 ## Query Parameters
 
 Query parameters are navigation context, not route identity. For example:
 
 ```text
-/use?id=<appId>&route=/reports&period=30d&team=sales
+/use/reports?id=<appId>&period=30d&team=sales
 ```
 
 The stored mapping is still:

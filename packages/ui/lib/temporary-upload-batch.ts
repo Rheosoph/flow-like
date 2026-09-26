@@ -181,7 +181,8 @@ export async function uploadTemporaryFilesInBatches(
 					const targets = new Map<string, ITemporaryPresignedUpload>();
 					paths.forEach((path, position) => {
 						const slot = presigned[position];
-						if (slot?.uploadUrl) targets.set(path, slot);
+						if (slot?.uploadUrl && typeof slot.downloadUrl === "string")
+							targets.set(path, slot);
 					});
 					return targets;
 				},

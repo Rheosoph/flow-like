@@ -575,8 +575,9 @@ async fn build_unified_copilot(
             // Package nodes are a per-app pin, so an unscoped request legitimately resolves to the
             // builtin catalog. A lookup failure must not, however, silently downgrade a scoped one.
             let wasm_nodes = match catalog_app_id {
-                Some(app_id) => crate::routes::app::wasm_catalog::app_wasm_nodes(state, app_id)
+                Some(app_id) => crate::routes::app::wasm_catalog::app_wasm_nodes_cached(state, app_id)
                     .await
+                    .map(|wasm| wasm.nodes.clone())
                     .unwrap_or_else(|error| {
                         tracing::warn!(
                             app_id = %app_id,
@@ -818,7 +819,16 @@ pub(crate) async fn run_copilot(
     // They run the shared platform loop instead, with their tools round-tripped to the browser over
     // this response's own SSE stream.
     if let Some(specialist) = platform_specialist_for_scope(payload.scope) {
-        return specialist_chat(state, sub, specialist, payload, token, usage).await;
+        return specialist_chat(
+            state,
+            sub,
+            specialist,
+            payload,
+            token,
+            usage,
+            prepared_profile,
+        )
+        .await;
     }
 
     let context = if payload.run_context.is_some() || payload.action_context.is_some() {
@@ -1071,6 +1081,7 @@ fn specialist_host_context(app_id: Option<&str>, overlay_id: Option<&str>) -> St
     lines.join("\n")
 }
 
+#[cfg(test)]
 fn ensure_requested_profile<T>(
     profile_id: Option<&str>,
     profile: Option<T>,
@@ -1098,6 +1109,7 @@ async fn specialist_chat(
     payload: CopilotChatRequest,
     token: Option<String>,
     usage: super::global_chat::AssistantUsage,
+    profile: Arc<Profile>,
 ) -> Result<axum::response::Response, ApiError> {
     if !payload.stream {
         return Err(ApiError::bad_request(
@@ -1113,19 +1125,7 @@ async fn specialist_chat(
     }
 
     let flow_like_state = master_flow_like_state(&state).await?;
-    let profile = match ensure_requested_profile(
-        payload.profile_id.as_deref(),
-        super::global_chat::load_user_profile_access(&state, &sub, payload.profile_id.as_deref())
-            .await?,
-    )? {
-        Some((profile, access)) => {
-            if let Some(rejection) = access.rejection(payload.model_id.as_deref()) {
-                return Err(rejection);
-            }
-            Some(profile)
-        }
-        None => None,
-    };
+    let profile = Some(profile);
 
     let run_id = super::global_chat::next_run_id();
     let channel = super::global_chat::build_chat_channel(&state, &run_id, &sub).await?;

@@ -11,15 +11,16 @@
 //! best-effort and can never fail the pass. Every value the engine reads is an
 //! aggregate over already-anonymous rows, so an alert can never carry identity.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, FixedOffset, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle};
 use sea_orm::sea_query::{Expr, IntoColumnRef, NullOrdering, SimpleExpr};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait,
-    FromQueryResult, IntoActiveModel, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    Set, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbBackend, DbErr,
+    EntityTrait, FromQueryResult, IntoActiveModel, Order, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, Statement,
 };
 
 use crate::db::DbDialect;
@@ -193,9 +194,10 @@ pub fn spawn_telemetry_alert_evaluator(
 ///
 /// Exposed for tests, for the spawned task, and for the service-authenticated
 /// maintenance endpoint used by serverless deployments. A process mutex avoids
-/// redundant local passes, while each rule is evaluated inside a retried
-/// transaction that locks its row. On blocking engines the lock serializes the
-/// rule across API replicas; on optimistic ones both replicas evaluate and the
+/// redundant local passes. Each rule's metrics are read on the pool, then its
+/// transition is decided inside a short retried transaction that locks its row,
+/// so the lock is never held across the telemetry scans. On blocking engines
+/// the lock serializes the rule across API replicas; on optimistic ones the
 /// loser re-runs, sees `lastEvaluatedAt` advanced by the winner and skips, so a
 /// transition is never produced twice. A rule that fails to evaluate is logged
 /// and skipped so one bad rule cannot stop the pass, and a transition is only
@@ -225,12 +227,19 @@ pub async fn evaluate_once(
     let dialect = state.db_dialect;
     let mut result = AlertEvaluationResult::default();
     for listed_rule in rules {
-        let outcome = state
-            .transaction(|txn| {
-                let listed_rule = listed_rule.clone();
-                Box::pin(async move { evaluate_listed_rule(txn, dialect, listed_rule).await })
-            })
-            .await;
+        let outcome = match measure_rule(&state.db, dialect, &listed_rule).await {
+            Ok(measurement) => {
+                state
+                    .transaction(|txn| {
+                        let listed_rule = listed_rule.clone();
+                        Box::pin(async move {
+                            evaluate_listed_rule(txn, listed_rule, measurement).await
+                        })
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
 
         let (rule, evaluation) = match outcome {
             Ok(RuleOutcome::Evaluated { rule, evaluation }) => (rule, evaluation),
@@ -263,8 +272,8 @@ pub async fn evaluate_once(
 
 /// What one transaction attempt did with a listed rule.
 enum RuleOutcome {
-    /// The rule vanished, was disabled, or another replica evaluated it since
-    /// the pass listed it.
+    /// The rule vanished, was disabled or edited, or another replica evaluated
+    /// it since the pass listed it.
     Skipped,
     Evaluated {
         rule: telemetry_alert_rule::Model,
@@ -274,8 +283,8 @@ enum RuleOutcome {
 
 async fn evaluate_listed_rule(
     txn: &DatabaseTransaction,
-    dialect: DbDialect,
     listed_rule: telemetry_alert_rule::Model,
+    measurement: RuleMeasurement,
 ) -> Result<RuleOutcome, DbErr> {
     let Some(rule) = telemetry_alert_rule::Entity::find_by_id(&listed_rule.id)
         .lock_exclusive()
@@ -287,12 +296,16 @@ async fn evaluate_listed_rule(
 
     // A rule can be disabled after the initial bounded list but before its
     // row lock is acquired, and a replica that lost the commit race re-reads
-    // the winner's evaluation stamp here.
-    if !rule.enabled || rule.last_evaluated_at > listed_rule.last_evaluated_at {
+    // the winner's evaluation stamp here. The measurement was taken for the
+    // listed definition, so an edit since then waits for the next pass.
+    if !rule.enabled
+        || rule.last_evaluated_at > listed_rule.last_evaluated_at
+        || rule.updated_at != listed_rule.updated_at
+    {
         return Ok(RuleOutcome::Skipped);
     }
 
-    let evaluation = evaluate_rule(txn, dialect, &rule).await?;
+    let evaluation = record_measurement(txn, &rule, measurement).await?;
     Ok(RuleOutcome::Evaluated { rule, evaluation })
 }
 
@@ -304,11 +317,22 @@ struct RuleEvaluation {
     event: Option<telemetry_alert_event::Model>,
 }
 
-async fn evaluate_rule<C: ConnectionTrait>(
+/// What the telemetry tables say about a rule, read before its row is locked.
+#[derive(Clone, Copy, Debug)]
+struct RuleMeasurement {
+    now: DateTime<FixedOffset>,
+    window_minutes: i32,
+    value: Option<f64>,
+    baseline: BaselineStats,
+    sensitivity: f64,
+    fires: bool,
+}
+
+async fn measure_rule<C: ConnectionTrait>(
     db: &C,
     dialect: DbDialect,
     rule: &telemetry_alert_rule::Model,
-) -> Result<RuleEvaluation, DbErr> {
+) -> Result<RuleMeasurement, DbErr> {
     let now = Utc::now().fixed_offset();
     let window_minutes = rule
         .window_minutes
@@ -335,6 +359,32 @@ async fn evaluate_rule<C: ConnectionTrait>(
             .map(|threshold| comparator_fires(&rule.comparator, value, threshold))
             .unwrap_or(false),
     };
+
+    Ok(RuleMeasurement {
+        now,
+        window_minutes,
+        value,
+        baseline,
+        sensitivity,
+        fires,
+    })
+}
+
+/// Decide the transition for a locked rule from its measurement, append the
+/// inbox row when there is one and stamp the rule.
+async fn record_measurement(
+    db: &DatabaseTransaction,
+    rule: &telemetry_alert_rule::Model,
+    measurement: RuleMeasurement,
+) -> Result<RuleEvaluation, DbErr> {
+    let RuleMeasurement {
+        now,
+        window_minutes,
+        value,
+        baseline,
+        sensitivity,
+        fires,
+    } = measurement;
 
     let latest = telemetry_alert_event::Entity::find()
         .filter(telemetry_alert_event::Column::RuleId.eq(&rule.id))
@@ -405,7 +455,9 @@ async fn evaluate_rule<C: ConnectionTrait>(
 /// The `min_samples` windows of the same length that precede the current one.
 ///
 /// Windows without data contribute no sample, which keeps a sparse history from
-/// producing a baseline the rule could fire against.
+/// producing a baseline the rule could fire against. On the Postgres wire every
+/// window comes out of one grouped statement per table; elsewhere each window
+/// is its own `metric_value`.
 async fn baseline_samples<C: ConnectionTrait>(
     db: &C,
     dialect: DbDialect,
@@ -415,14 +467,238 @@ async fn baseline_samples<C: ConnectionTrait>(
     window: ChronoDuration,
     min_samples: usize,
 ) -> Result<Vec<f64>, DbErr> {
-    let mut samples = Vec::with_capacity(min_samples);
-    for step in 1..=min_samples {
-        let to = now - window * step as i32;
-        if let Some(value) = metric_value(db, dialect, metric, source, to - window, to).await? {
-            samples.push(value);
+    let backend = db.get_database_backend();
+    let grouped = backend == DbBackend::Postgres
+        && (metric != "latency_p95" || percentiles_in_sql(backend, dialect));
+    if !grouped {
+        let mut samples = Vec::with_capacity(min_samples);
+        for step in 1..=min_samples {
+            let to = now - window * step as i32;
+            if let Some(value) = metric_value(db, dialect, metric, source, to - window, to).await? {
+                samples.push(value);
+            }
         }
+        return Ok(samples);
     }
-    Ok(samples)
+
+    let scope = BaselineScope {
+        source,
+        now,
+        window,
+        min_samples,
+    };
+    let steps = 1..=min_samples as i64;
+    Ok(match metric {
+        "event_count" => {
+            let events = window_pairs(db, &scope, EVENT_TABLE, None).await?;
+            steps.map(|step| pair_at(&events, step).0 as f64).collect()
+        }
+        "error_rate" => {
+            let events = window_pairs(db, &scope, EVENT_TABLE, None).await?;
+            let errors = window_pairs(db, &scope, ERROR_EVENT_TABLE, None).await?;
+            steps
+                .filter_map(|step| rate(pair_at(&errors, step).0, pair_at(&events, step).0))
+                .collect()
+        }
+        "crash_free_rate" => {
+            let sessions = window_pairs(db, &scope, SESSION_TABLE, Some(CRASHED_STATUS)).await?;
+            steps
+                .filter_map(|step| {
+                    let (total, crashed) = pair_at(&sessions, step);
+                    rate(total - crashed, total)
+                })
+                .collect()
+        }
+        "span_error_rate" => {
+            let spans = window_pairs(db, &scope, SPAN_TABLE, Some(ERROR_STATUS)).await?;
+            steps
+                .filter_map(|step| matched_rate(&spans, step))
+                .collect()
+        }
+        "llm_error_rate" => {
+            let calls = window_pairs(db, &scope, LLM_CALL_TABLE, Some(ERROR_STATUS)).await?;
+            steps
+                .filter_map(|step| matched_rate(&calls, step))
+                .collect()
+        }
+        "latency_p95" => {
+            let p95 = window_p95(db, &scope).await?;
+            steps.filter_map(|step| p95.get(&step).copied()).collect()
+        }
+        _ => Vec::new(),
+    })
+}
+
+/// The baseline windows of one rule. Step `s` covers
+/// `[now - window * (s + 1), now - window * s)`, the range `baseline_samples`
+/// hands `metric_value` for that step.
+struct BaselineScope<'a> {
+    source: Option<&'a str>,
+    now: DateTime<FixedOffset>,
+    window: ChronoDuration,
+    min_samples: usize,
+}
+
+/// A raw telemetry table and the timestamp column its metric windows on.
+#[derive(Clone, Copy)]
+struct BaselineTable {
+    table: &'static str,
+    time_column: &'static str,
+}
+
+const EVENT_TABLE: BaselineTable = BaselineTable {
+    table: "TelemetryEvent",
+    time_column: "createdAt",
+};
+const ERROR_EVENT_TABLE: BaselineTable = BaselineTable {
+    table: "TelemetryErrorEvent",
+    time_column: "createdAt",
+};
+const SESSION_TABLE: BaselineTable = BaselineTable {
+    table: "TelemetrySession",
+    time_column: "startedAt",
+};
+const SPAN_TABLE: BaselineTable = BaselineTable {
+    table: "TelemetrySpan",
+    time_column: "startedAt",
+};
+const LLM_CALL_TABLE: BaselineTable = BaselineTable {
+    table: "TelemetryLlmCall",
+    time_column: "createdAt",
+};
+
+/// The pieces every grouped baseline statement shares. `step` is `CEIL - 1`
+/// rather than `FLOOR` so a row sitting exactly on a boundary lands in the
+/// window whose inclusive lower bound it is.
+struct WindowQuery {
+    step: String,
+    from_where: String,
+    values: Vec<sea_orm::Value>,
+}
+
+fn window_query(scope: &BaselineScope<'_>, table: BaselineTable) -> WindowQuery {
+    let BaselineTable { table, time_column } = table;
+    let mut values: Vec<sea_orm::Value> = vec![
+        scope.now.into(),
+        (scope.window.num_seconds() as f64).into(),
+        (scope.now - scope.window * (scope.min_samples as i32 + 1)).into(),
+        (scope.now - scope.window).into(),
+    ];
+    let mut from_where =
+        format!(r#"FROM "{table}" WHERE "{time_column}" >= $3 AND "{time_column}" < $4"#);
+    if let Some(source) = scope.source {
+        values.push(source.to_string().into());
+        from_where.push_str(&format!(r#" AND "source" = ${}"#, values.len()));
+    }
+
+    WindowQuery {
+        step: format!(
+            r#"CAST(CEIL(EXTRACT(EPOCH FROM ($1 - "{time_column}"))::float8 / $2::float8) AS BIGINT) - 1"#
+        ),
+        from_where,
+        values,
+    }
+}
+
+#[derive(Debug, FromQueryResult)]
+struct WindowPairRow {
+    step: i64,
+    total: i64,
+    matched: i64,
+}
+
+#[derive(Debug, FromQueryResult)]
+struct WindowP95Row {
+    step: i64,
+    p95: Option<f64>,
+    cnt: i64,
+}
+
+/// `(total, matched)` per baseline step that holds rows, `matched` counting the
+/// rows whose status is `matched_status`.
+async fn window_pairs<C: ConnectionTrait>(
+    db: &C,
+    scope: &BaselineScope<'_>,
+    table: BaselineTable,
+    matched_status: Option<&str>,
+) -> Result<HashMap<i64, (i64, i64)>, DbErr> {
+    let WindowQuery {
+        step,
+        from_where,
+        mut values,
+    } = window_query(scope, table);
+    let matched = match matched_status {
+        Some(status) => {
+            values.push(status.to_string().into());
+            format!(
+                r#"COUNT(CASE WHEN "status" = ${} THEN 1 END)"#,
+                values.len()
+            )
+        }
+        None => "0".to_string(),
+    };
+
+    let sql = format!(
+        r#"SELECT {step} AS "step",
+                  CAST(COUNT(*) AS BIGINT) AS total,
+                  CAST({matched} AS BIGINT) AS matched
+           {from_where}
+           GROUP BY 1"#
+    );
+    let rows = WindowPairRow::find_by_statement(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        values,
+    ))
+    .all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.step, (row.total, row.matched)))
+        .collect())
+}
+
+/// p95 span duration per baseline step that holds spans.
+async fn window_p95<C: ConnectionTrait>(
+    db: &C,
+    scope: &BaselineScope<'_>,
+) -> Result<HashMap<i64, f64>, DbErr> {
+    let WindowQuery {
+        step,
+        from_where,
+        values,
+    } = window_query(scope, SPAN_TABLE);
+
+    let sql = format!(
+        r#"SELECT {step} AS "step",
+                  percentile_cont(0.95::float8) WITHIN GROUP (ORDER BY "durationMs"::float8) AS p95,
+                  CAST(COUNT(*) AS BIGINT) AS cnt
+           {from_where}
+           GROUP BY 1"#
+    );
+    let rows = WindowP95Row::find_by_statement(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        values,
+    ))
+    .all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.cnt > 0)
+        .filter_map(|row| row.p95.map(|p95| (row.step, p95)))
+        .collect())
+}
+
+fn pair_at(pairs: &HashMap<i64, (i64, i64)>, step: i64) -> (i64, i64) {
+    pairs.get(&step).copied().unwrap_or_default()
+}
+
+fn matched_rate(pairs: &HashMap<i64, (i64, i64)>, step: i64) -> Option<f64> {
+    let (total, matched) = pair_at(pairs, step);
+    rate(matched, total)
 }
 
 /// The value of `metric` over `[from, to)`, or `None` when the window holds no

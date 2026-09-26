@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
 	useCallback,
 	useEffect,
@@ -17,6 +17,7 @@ import {
 	readAppQuery,
 	setAppQueryParam,
 } from "../../lib/app-route-url";
+import { useClientRouter } from "../../lib/client-navigation";
 import { nativeWidgetPageQuery } from "../../lib/native-widget-page";
 import {
 	type PageSurfaceIdentity,
@@ -24,9 +25,12 @@ import {
 	pageSurfaceQueryKey,
 	pageSurfaceRevision,
 	pageSurfaceRouteKey,
-	readPageSurfaceCache,
-	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
+import {
+	type IRunTrace,
+	startRunTrace,
+	timeRunStep,
+} from "../../lib/run-timing";
 import { resolveEventBoardVersion } from "../../lib/schema/flow/board-version";
 import type { PageSpecialEvent } from "../../lib/schema/flow/page-trigger";
 import { cn } from "../../lib/utils";
@@ -43,7 +47,10 @@ import {
 	useRouteDialog,
 } from "../a2ui/RouteDialogProvider";
 import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
-import { collectRunElements } from "../a2ui/collect-run-elements";
+import {
+	type RunElementDemand,
+	collectRunElements,
+} from "../a2ui/collect-run-elements";
 import type { ElementSource } from "../a2ui/element-materializer";
 import { handleElementsRequestMessage } from "../a2ui/elements-request-handler";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
@@ -61,8 +68,16 @@ import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { NativeWidgetPageCaptureBridge } from "./native-widget-page-capture";
 import { pageExecutionIdentity } from "./page-execution-identity";
+import { PageLoadIndicator, PageLoadStatus } from "./page-load-indicator";
+import {
+	type ILoadRun,
+	adoptLoadRunId,
+	cancelLoadRun,
+	createLoadRun,
+} from "./page-load-run";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
-import { shouldRevealProgressively } from "./progressive-page-reveal";
+import { revealsPageLoad } from "./progressive-page-reveal";
+import { usePageSurfaceCache } from "./use-page-surface-cache";
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
@@ -76,6 +91,8 @@ export interface PageInterfaceProps extends IUseInterfaceProps {
 	pageRevision?: string;
 	/** Exact Page execution authority revision returned by bootstrap. */
 	pageExecutionRevision?: string;
+	/** Page elements the Event's board reads, returned by bootstrap. */
+	pageElementDemand?: RunElementDemand;
 	/** Page-owned query state. Embedded pages pass this instead of inheriting the chat URL. */
 	queryParams?: Record<string, string>;
 	/** Consume page-owned route and query changes inside an embedded runtime. */
@@ -136,6 +153,7 @@ function PageInterfaceInner({
 	page,
 	pageRevision,
 	pageExecutionRevision,
+	pageElementDemand,
 	queryParams: providedQueryParams,
 	onNavigationMessage,
 	active = true,
@@ -144,7 +162,7 @@ function PageInterfaceInner({
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const frontendStateStore = getFrontendStateStore(appId);
-	const router = useRouter();
+	const router = useClientRouter();
 	const hostSearch = useSearchParams().toString();
 	const runtimeQueryContext = useMemo(() => {
 		if (providedQueryParams)
@@ -160,15 +178,17 @@ function PageInterfaceInner({
 	}, [hostSearch, providedQueryParams]);
 	const runtimeQueryContextRef = useRef(runtimeQueryContext);
 	runtimeQueryContextRef.current = runtimeQueryContext;
+	// Read at run time: a refetched bootstrap must not re-create the lifecycle callbacks.
+	const pageElementDemandRef = useRef(pageElementDemand);
+	pageElementDemandRef.current = pageElementDemand;
 	const auth = useAuth();
 	const currentUserKey = auth?.user?.profile?.sub ?? "anonymous";
 	const { openDialog, closeDialog } = useRouteDialog();
 	const pageContainerId = useId();
 	const [isLoadEventRunning, setIsLoadEventRunning] = useState(false);
-	const [isScreenRevealed, setIsScreenRevealed] = useState(false);
-	const [loadEventPhase, setLoadEventPhase] = useState<
-		"idle" | "preparing" | "running"
-	>("idle");
+	const [revealedLoadEventKey, setRevealedLoadEventKey] = useState<
+		string | null
+	>(null);
 	const [completedLoadEventKey, setCompletedLoadEventKey] = useState<
 		string | null
 	>(null);
@@ -176,14 +196,30 @@ function PageInterfaceInner({
 		string | null
 	>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
-	const [cachedSurfaceResult, setCachedSurfaceResult] = useState<{
-		readonly identityKey: string;
-		readonly surface: Surface | null;
-	} | null>(null);
+	const loadRunRef = useRef<ILoadRun | null>(null);
+	const loadRunTraceRef = useRef<IRunTrace | null>(null);
+	const isMountedRef = useRef(false);
+	const isDisposedRef = useRef(false);
+	const markLoadRevealed = useCallback(() => {
+		const trace = loadRunTraceRef.current;
+		if (!trace) return;
+		loadRunTraceRef.current = null;
+		trace.mark("revealed");
+		trace.finish();
+	}, []);
+	const releaseLoadRun = useCallback((reason: "superseded" | "unmounted") => {
+		const run = loadRunRef.current;
+		loadRunRef.current = null;
+		if (run) cancelLoadRun(run);
+		const trace = loadRunTraceRef.current;
+		loadRunTraceRef.current = null;
+		trace?.mark(reason);
+		trace?.finish();
+	}, []);
 
 	const pageRoute = route || (config?.route as string);
 	const isGovernedPage = Boolean(event.default_page_id);
-	const cacheEnabled = page.cache === true;
+	const cacheEnabled = !page.noCache;
 
 	// A cached surface may only be replayed for the same parameters and the same account that
 	// produced it: the onLoad workflow receives both, and its output is built from them.
@@ -214,17 +250,6 @@ function PageInterfaceInner({
 	const surfaceIdentityKey = surfaceIdentity
 		? pageSurfaceCacheKey(surfaceIdentity)
 		: null;
-	const shouldReadCachedSurface = Boolean(
-		cacheEnabled && surfaceIdentityKey && page.onLoadEventId,
-	);
-	const isCacheLoading = Boolean(
-		shouldReadCachedSurface &&
-			cachedSurfaceResult?.identityKey !== surfaceIdentityKey,
-	);
-	const cachedSurface =
-		cacheEnabled && cachedSurfaceResult?.identityKey === surfaceIdentityKey
-			? cachedSurfaceResult.surface
-			: null;
 	const pageExecutionBoardId = event.board_id || page.boardId;
 	const pageExecutionTargetIdentity = pageExecutionIdentity(
 		pageExecutionBoardId,
@@ -252,35 +277,23 @@ function PageInterfaceInner({
 	]);
 	const loadEventExecutionKeyRef = useRef(loadEventExecutionKey);
 	loadEventExecutionKeyRef.current = loadEventExecutionKey;
+	const isScreenRevealed = Boolean(
+		loadEventExecutionKey && revealedLoadEventKey === loadEventExecutionKey,
+	);
+	// A noCache page shows no layout that its onLoad run would replace.
+	const isAwaitingFreshOutput = Boolean(
+		page.noCache &&
+			loadEventExecutionKey &&
+			!isScreenRevealed &&
+			completedLoadEventKey !== loadEventExecutionKey,
+	);
 
-	// Only pages that explicitly opt in keep a last rendered surface. Pages without the opt-in
-	// always render their fresh page payload while the onLoad workflow updates it.
-	useEffect(() => {
-		let cancelled = false;
-
-		if (
-			!cacheEnabled ||
-			!surfaceIdentity ||
-			!surfaceIdentityKey ||
-			!page.onLoadEventId
-		) {
-			return;
-		}
-
-		void readPageSurfaceCache(surfaceIdentity).then((surface) => {
-			if (cancelled) return;
-			setCachedSurfaceResult({ identityKey: surfaceIdentityKey, surface });
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [cacheEnabled, surfaceIdentity, surfaceIdentityKey, page.onLoadEventId]);
-
-	const initialSurface = useMemo(() => {
-		if (cachedSurface) return cachedSurface;
-		return buildSurfaceFromPage(page, page.id);
-	}, [page, cachedSurface]);
+	// Runs always build on the static layout: onLoad is written against it, not against its own
+	// output from an earlier visit.
+	const initialSurface = useMemo(
+		() => buildSurfaceFromPage(page, page.id),
+		[page],
+	);
 
 	const { surface, handleServerMessage } = useManagedSurface(
 		initialSurface,
@@ -290,6 +303,7 @@ function PageInterfaceInner({
 	// Use ref to access current surface without creating dependency cycles
 	const surfaceRef = useRef(surface);
 	surfaceRef.current = surface;
+	const getLiveSurface = useCallback(() => surfaceRef.current, []);
 
 	const elementSource = useCallback((): ElementSource | null => {
 		const currentSurface = surfaceRef.current;
@@ -301,30 +315,27 @@ function PageInterfaceInner({
 		};
 	}, []);
 
-	// For opted-in pages, write only once the run that produced the surface has finished, so a
-	// half-built surface is never what the next visit replays.
-	useEffect(() => {
-		if (!surfaceIdentity || !surface || isLoadEventRunning) return;
-		if (!cacheEnabled || !page.onLoadEventId) return;
-		if (
-			!loadEventExecutionKey ||
-			completedLoadEventKey !== loadEventExecutionKey
-		)
-			return;
-		void writePageSurfaceCache(surfaceIdentity, surface);
-	}, [
-		surfaceIdentity,
-		cacheEnabled,
-		page.onLoadEventId,
-		surface,
-		isLoadEventRunning,
-		loadEventExecutionKey,
-		completedLoadEventKey,
-	]);
+	const {
+		staleSurface,
+		applyToStale,
+		noteLoadOutput,
+		releaseStale,
+		persist: persistSurface,
+	} = usePageSurfaceCache({
+		identity: surfaceIdentity,
+		loadKey: loadEventExecutionKey,
+		enabled: cacheEnabled && Boolean(page.onLoadEventId),
+		surfaceId: page.id,
+		loadSucceeded: Boolean(
+			!isLoadEventRunning &&
+				loadEventExecutionKey &&
+				successfulLoadEventKey === loadEventExecutionKey,
+		),
+		getLiveSurface,
+	});
 
-	// Comprehensive A2UI message handler for page events
-	const handleA2UIMessage = useCallback(
-		(message: A2UIServerMessage) => {
+	const dispatchA2UIMessage = useCallback(
+		(message: A2UIServerMessage, fromLoadRun: boolean) => {
 			console.log("[PageInterface] A2UI message", { type: message.type });
 			if (frontendStateStore.handleMessage(message)) return;
 
@@ -340,15 +351,7 @@ function PageInterfaceInner({
 				return;
 			}
 
-			// Reveal the current screen while the workflow continues running.
-			if (message.type === "showScreen") {
-				setIsScreenRevealed(true);
-				return;
-			}
-
-			if (shouldRevealProgressively(message)) {
-				setIsScreenRevealed(true);
-			}
+			if (message.type === "showScreen") return;
 
 			// Handle navigation
 			if (message.type === "navigateTo") {
@@ -443,6 +446,7 @@ function PageInterfaceInner({
 
 			// Handle element updates
 			handleServerMessage(message);
+			if (!fromLoadRun) applyToStale(message);
 		},
 		[
 			appId,
@@ -451,9 +455,15 @@ function PageInterfaceInner({
 			openDialog,
 			closeDialog,
 			handleServerMessage,
+			applyToStale,
 			onNavigationMessage,
 			elementSource,
 		],
+	);
+
+	const handleA2UIMessage = useCallback(
+		(message: A2UIServerMessage) => dispatchA2UIMessage(message, false),
+		[dispatchA2UIMessage],
 	);
 
 	const pageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -473,22 +483,29 @@ function PageInterfaceInner({
 				);
 				return false;
 			}
+			if (specialEvent !== "load")
+				loadRunTraceRef.current?.mark(`${specialEvent}_dispatch`);
 
 			try {
-				await frontendStateStore.ensureLoaded(page.id);
+				await timeRunStep("page.ensure_state", () =>
+					frontendStateStore.ensureLoaded(page.id),
+				);
 				if (isCurrent && !isCurrent()) return false;
 				const currentSurface = surfaceRef.current;
 				const surfaceElements = currentSurface
-					? await collectRunElements({
-							backend,
-							appId,
-							// The Event endpoint resolves the configured board. Omitting it here
-							// avoids requiring Page users to read that board.
-							boardId: undefined,
-							surfaceId: currentSurface.id,
-							components: currentSurface.components,
-							storedValues: {},
-						})
+					? await timeRunStep("page.collect_elements", () =>
+							collectRunElements({
+								backend,
+								appId,
+								// The Event endpoint resolves the configured board. Omitting it here
+								// avoids requiring Page users to read that board.
+								boardId: undefined,
+								demand: pageElementDemandRef.current,
+								surfaceId: currentSurface.id,
+								components: currentSurface.components,
+								storedValues: {},
+							}),
+						)
 					: {};
 				if (isCurrent && !isCurrent()) return false;
 				const frontendState = frontendStateStore.getSnapshot();
@@ -519,9 +536,18 @@ function PageInterfaceInner({
 					(events) => {
 						if (isCurrent && !isCurrent()) return;
 						for (const evt of events) {
-							if (evt.event_type === "a2ui") {
-								handleA2UIMessage(evt.payload as A2UIServerMessage);
+							if (evt.event_type !== "a2ui") continue;
+							const message = evt.payload as A2UIServerMessage;
+							const loadKey =
+								specialEvent === "load"
+									? loadEventExecutionKeyRef.current
+									: null;
+							if (loadKey && revealsPageLoad(message)) {
+								noteLoadOutput(loadKey, message);
+								setRevealedLoadEventKey(loadKey);
+								markLoadRevealed();
 							}
+							dispatchA2UIMessage(message, specialEvent === "load");
 						}
 					},
 					undefined,
@@ -533,6 +559,8 @@ function PageInterfaceInner({
 				);
 				return true;
 			} catch {
+				// A cancelled stream ends in an error once its page no longer owns the run.
+				if (isCurrent && !isCurrent()) return false;
 				console.error(`[PageInterface] Failed to execute ${eventName} event`);
 				return false;
 			}
@@ -546,7 +574,9 @@ function PageInterfaceInner({
 			pageRoute,
 			backend,
 			executionService,
-			handleA2UIMessage,
+			dispatchA2UIMessage,
+			noteLoadOutput,
+			markLoadRevealed,
 		],
 	);
 
@@ -554,10 +584,10 @@ function PageInterfaceInner({
 	useEffect(() => {
 		const executeOnLoadEvent = async () => {
 			if (!page.onLoadEventId || !loadEventExecutionKey) {
+				releaseLoadRun("superseded");
 				loadEventExecutedRef.current = null;
 				setCompletedLoadEventKey(null);
 				setSuccessfulLoadEventKey(null);
-				setLoadEventPhase("idle");
 				setIsLoadEventRunning(false);
 				return;
 			}
@@ -566,12 +596,21 @@ function PageInterfaceInner({
 			// can render data for all three.
 			const executionKey = loadEventExecutionKey;
 			if (loadEventExecutedRef.current === executionKey) return;
+			releaseLoadRun("superseded");
 			loadEventExecutedRef.current = executionKey;
+			const run = createLoadRun(backend.eventState);
+			loadRunRef.current = run;
+			const trace = startRunTrace("page onLoad");
+			loadRunTraceRef.current = trace;
+			const isCurrentRun = () =>
+				!run.abandoned &&
+				!isDisposedRef.current &&
+				loadEventExecutionKeyRef.current === executionKey &&
+				loadEventExecutedRef.current === executionKey;
 
 			setCompletedLoadEventKey(null);
 			setSuccessfulLoadEventKey(null);
-			setIsScreenRevealed(false);
-			setLoadEventPhase("preparing");
+			setRevealedLoadEventKey(null);
 			setIsLoadEventRunning(true);
 			let succeeded = false;
 			try {
@@ -579,48 +618,81 @@ function PageInterfaceInner({
 					"load",
 					"onLoad",
 					undefined,
-					() => {
-						if (
-							loadEventExecutionKeyRef.current === executionKey &&
-							loadEventExecutedRef.current === executionKey
-						)
-							setLoadEventPhase("running");
+					(runId) => {
+						if (adoptLoadRunId(run, runId)) trace.mark("run_initiated", runId);
 					},
-					() =>
-						loadEventExecutionKeyRef.current === executionKey &&
-						loadEventExecutedRef.current === executionKey,
+					isCurrentRun,
 				);
 			} finally {
+				if (loadRunRef.current === run) loadRunRef.current = null;
 				// A superseded run must not mark the current page as hydrated or stop its loader.
-				if (loadEventExecutedRef.current === executionKey) {
+				if (!run.abandoned && loadEventExecutedRef.current === executionKey) {
+					releaseStale(executionKey);
 					setCompletedLoadEventKey(executionKey);
 					setSuccessfulLoadEventKey(succeeded ? executionKey : null);
-					setLoadEventPhase("idle");
 					setIsLoadEventRunning(false);
+					if (succeeded) persistSurface();
 				}
+				if (loadRunTraceRef.current === trace) loadRunTraceRef.current = null;
+				trace.finish();
 			}
 		};
 
 		executeOnLoadEvent();
-	}, [page, loadEventExecutionKey, executePageEvent]);
+	}, [
+		page,
+		loadEventExecutionKey,
+		executePageEvent,
+		releaseLoadRun,
+		releaseStale,
+		persistSurface,
+		backend,
+	]);
 
-	// Execute onUnload event when page unmounts or user navigates away
+	// StrictMode and Fast Refresh replay mount effects; only a page still unmounted after that
+	// replay is really gone, and only then is its load run orphaned.
 	useEffect(() => {
-		if (!page.onUnloadEventId) return;
-
-		const handleBeforeUnload = () => {
-			// Fire and forget - can't await in beforeunload
-			executePageEvent("unload", "onUnload");
+		isMountedRef.current = true;
+		isDisposedRef.current = false;
+		return () => {
+			isMountedRef.current = false;
+			setTimeout(() => {
+				if (isMountedRef.current) return;
+				isDisposedRef.current = true;
+				if (loadRunRef.current) loadEventExecutedRef.current = null;
+				releaseLoadRun("unmounted");
+			}, 0);
 		};
+	}, [releaseLoadRun]);
 
+	// onUnload belongs to a page that is leaving: a confirmed unmount, a switch to another page or
+	// the window closing. A re-render that only renews executePageEvent is none of those.
+	const unloadIdentity = `${event.id}:${page.id}`;
+	const unloadIdentityRef = useRef(unloadIdentity);
+	unloadIdentityRef.current = unloadIdentity;
+	// Updated after commit, so a cleanup still sees the dispatch of the page that is leaving.
+	const dispatchUnloadRef = useRef<(() => void) | null>(null);
+	useEffect(() => {
+		dispatchUnloadRef.current = page.onUnloadEventId
+			? () => void executePageEvent("unload", "onUnload")
+			: null;
+	}, [page.onUnloadEventId, executePageEvent]);
+	useEffect(() => {
+		const handleBeforeUnload = () => dispatchUnloadRef.current?.();
 		window.addEventListener("beforeunload", handleBeforeUnload);
-
 		return () => {
 			window.removeEventListener("beforeunload", handleBeforeUnload);
-			// Also fire on component unmount (navigation within SPA)
-			executePageEvent("unload", "onUnload");
+			const dispatchUnload = dispatchUnloadRef.current;
+			setTimeout(() => {
+				if (
+					isMountedRef.current &&
+					unloadIdentityRef.current === unloadIdentity
+				)
+					return;
+				dispatchUnload?.();
+			}, 0);
 		};
-	}, [page.onUnloadEventId, executePageEvent]);
+	}, [unloadIdentity]);
 
 	// Execute onInterval event at configured time intervals
 	const lastIntervalTickRef = useRef(0);
@@ -639,8 +711,14 @@ function PageInterfaceInner({
 		const intervalMs = page.onIntervalSeconds * 1000;
 		const tick = () => {
 			lastIntervalTickRef.current = Date.now();
-			executePageEvent("interval", "onInterval", {
-				_interval_seconds: page.onIntervalSeconds,
+			void executePageEvent(
+				"interval",
+				"onInterval",
+				{ _interval_seconds: page.onIntervalSeconds },
+				undefined,
+				() => !isDisposedRef.current,
+			).then((succeeded) => {
+				if (succeeded) persistSurface();
 			});
 		};
 
@@ -655,20 +733,20 @@ function PageInterfaceInner({
 		page.onIntervalEventId,
 		page.onIntervalSeconds,
 		executePageEvent,
+		persistSurface,
 		active,
 	]);
+
+	const activeSurface = staleSurface ?? surface;
 
 	// Strip canvasSettings from the surface for A2UIRenderer. This component
 	// already handles CSS injection and canvas styling at the outer level.
 	// Passing it again would cause double CSS scoping and inline-style conflicts.
-	const surfaceForRenderer = useMemo(() => {
-		if (!surface) return null;
-		if (!surface.canvasSettings) return surface;
-		return { ...surface, canvasSettings: undefined };
-	}, [surface]);
-
-	const activeSurface = surface;
-	const activeSurfaceForRenderer = surfaceForRenderer;
+	const activeSurfaceForRenderer = useMemo(() => {
+		if (!activeSurface) return null;
+		if (!activeSurface.canvasSettings) return activeSurface;
+		return { ...activeSurface, canvasSettings: undefined };
+	}, [activeSurface]);
 
 	const runtimeCanvasSettings =
 		activeSurface?.canvasSettings ?? page.canvasSettings;
@@ -677,22 +755,6 @@ function PageInterfaceInner({
 		appId,
 		runtimeCanvasSettings?.backgroundImage,
 	);
-
-	// The IndexedDB read is short and its result decides between real content and a skeleton,
-	// so it is worth waiting for rather than flashing a placeholder it would have replaced.
-	const shouldHoldForCachedState = isCacheLoading;
-	const canRenderFromCache = Boolean(cachedSurface);
-	const shouldShowLoading =
-		shouldHoldForCachedState ||
-		(isLoadEventRunning && !canRenderFromCache && !isScreenRevealed);
-	const loadingTitle = isLoadEventRunning
-		? loadEventPhase === "running"
-			? "Running workflow"
-			: "Preparing workflow"
-		: "Loading page";
-	if (shouldShowLoading) {
-		return <PageLoadingSkeleton title={loadingTitle} />;
-	}
 
 	if (isGovernedPage && !pageExecutionRevision) {
 		return (
@@ -705,10 +767,25 @@ function PageInterfaceInner({
 		);
 	}
 
+	if (isAwaitingFreshOutput) {
+		return (
+			<PageLoadingSkeleton title={t("runningWorkflow", "Running workflow")} />
+		);
+	}
+
 	if (!activeSurface || !activeSurfaceForRenderer) {
 		return (
-			<div className="flex items-center justify-center h-full text-muted-foreground">
-				<p>{t("noContentToDisplay", "No content to display")}</p>
+			<div className="h-full w-full">
+				<PageLoadStatus loading={isLoadEventRunning} />
+				{isLoadEventRunning ? (
+					<div aria-busy="true" className="h-full w-full bg-background">
+						<PageLoadIndicator />
+					</div>
+				) : (
+					<div className="flex items-center justify-center h-full text-muted-foreground">
+						<p>{t("noContentToDisplay", "No content to display")}</p>
+					</div>
+				)}
 			</div>
 		);
 	}
@@ -730,6 +807,10 @@ function PageInterfaceInner({
 	};
 
 	const customCss = runtimeCanvasSettings?.customCss;
+	// The static layout or the last visit's surface renders at once; the bar stays until the load
+	// run's own output is what the page shows.
+	const isAwaitingLoadOutput =
+		isLoadEventRunning && (!isScreenRevealed || staleSurface !== null);
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">
@@ -737,8 +818,11 @@ function PageInterfaceInner({
 				css={customCss}
 				scopeSelector={`[data-page-id="${pageContainerId}"]`}
 			/>
+			<PageLoadStatus loading={isAwaitingLoadOutput} />
+			{isAwaitingLoadOutput && <PageLoadIndicator />}
 			<div
 				ref={pageContainerRef}
+				aria-busy={isAwaitingLoadOutput || undefined}
 				data-page-id={pageContainerId}
 				data-flowpilot-page-event-id={event.id}
 				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
@@ -755,6 +839,7 @@ function PageInterfaceInner({
 						boardVersion={pageExecutionVersion}
 						eventId={event.id}
 						governedPage={isGovernedPage}
+						elementDemand={pageElementDemand}
 						onA2UIMessage={handleA2UIMessage}
 						onNavigationMessage={onNavigationMessage}
 						isPreviewMode={true}

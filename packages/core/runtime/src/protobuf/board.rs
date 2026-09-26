@@ -250,6 +250,7 @@ impl FromProto<flow_like_types::proto::Board> for Board {
             logic_nodes: HashMap::new(),
             app_state: None,
             pin_index: None,
+            page_metadata_source: Default::default(),
         }
     }
 }

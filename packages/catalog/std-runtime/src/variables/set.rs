@@ -169,7 +169,7 @@ impl NodeLogic for SetVariable {
                         )
                         .unwrap_or(false);
                     }
-                    schemas_are_compatible(mut_value.schema.as_deref(), pin.schema.as_deref())
+                    schemas_are_compatible(pin.schema.as_deref(), mut_value.schema.as_deref())
                 })
             });
 

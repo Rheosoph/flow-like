@@ -155,11 +155,12 @@ describe("direct authoritative board inspection", () => {
 		const result = await inspectFlowPilotBoard(backend, target);
 		if (result.status !== "ok") throw new Error("Expected inspection");
 		expect(result.flowscript.text).toBe(source);
+		// The fixture pins deliberately omit required IPin fields, so their facts carry the gaps.
 		expect(
 			result.node_facts.filter(
 				(node) => node.node_type === "a2ui_get_element_value",
 			),
-		).toEqual([
+		).toEqual<unknown>([
 			{
 				id: "shared-getter",
 				node_type: "a2ui_get_element_value",

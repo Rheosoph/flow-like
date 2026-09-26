@@ -1,0 +1,24 @@
+---
+title: "Extract Appearance Node"
+description: "Extract Appearance Flow-Like node: Crops every detection from the frame and runs a re-identification model on the crops in batches."
+sidebar:
+  label: "Extract Appearance"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Extract Appearance, Extract Appearance node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tracking, onnx, tracking_extract_appearance, AI, ML, Tracking, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Tracking"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Extract Appearance Node\",\"name\":\"Extract Appearance\",\"description\":\"Extract Appearance Flow-Like node: Crops every detection from the frame and runs a re-identification model on the crops in batches.\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/tracking/tracking-extract-appearance/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Tracking\",\"keywords\":\"Extract Appearance, Extract Appearance node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tracking, onnx, tracking_extract_appearance, AI, ML, Tracking, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Extract Appearance\",\"description\":\"Crops every detection from the frame and runs a re-identification model on the crops in batches. The built-in models are Intel OpenVINO person re-identification models (Apache-2.0): the chosen one is downloaded into Cache Dir on first use, checked against its SHA-256 and read from there afterwards. With Model set to custom, connect your own session from Load ONNX and set Normalization to match its export: imagenet for torchreid/OSNet exports, raw for FastReID onnx_export.py exports, which normalize inside the model. Each detection becomes an observation with an L2-normalized appearance embedding, keeping its box, camera, session, tracker id, track id and state (track-only fields such as hits and velocity are not carried). Lost tracks from Track Detections (Include Lost) carry a predicted box, so they are passed through with their existing embedding instead of being cropped. Feed the result into Track Detections for appearance-aware tracking or into Associate Entities to recognize the same object across cameras. Boxes that are not finite or smaller than Min Box Size are left out.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/tracking/tracking-extract-appearance"]} />

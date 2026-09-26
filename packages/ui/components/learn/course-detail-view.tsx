@@ -15,6 +15,7 @@ import type {
 	LessonSummary,
 	ModuleWithLessons,
 } from "../../lib/learn/types";
+import { asArray } from "../../lib/response-shape";
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -44,7 +45,7 @@ interface CourseDetailViewProps {
 export function CourseDetailView({
 	courseId,
 	course,
-	modules,
+	modules: rawModules,
 	completedLessonIds,
 	isEnrolled,
 	workspaceAppId,
@@ -57,6 +58,13 @@ export function CourseDetailView({
 	onOpenWorkspace,
 }: CourseDetailViewProps) {
 	const { t } = useTranslation();
+	const modules = useMemo(
+		() =>
+			asArray(rawModules).map((m) =>
+				Array.isArray(m.lessons) ? m : { ...m, lessons: [] },
+			),
+		[rawModules],
+	);
 
 	const lessonCounts = useMemo(
 		() =>

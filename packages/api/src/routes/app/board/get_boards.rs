@@ -8,6 +8,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like::flow::board::Board;
+use futures::{StreamExt, stream};
 
 #[utoipa::path(
     get,
@@ -30,12 +31,28 @@ pub async fn get_boards(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let sub = permission.sub()?;
 
-    let mut boards = vec![];
-
     let app = state.master_app(&sub, &app_id, &state).await?;
-    for board_id in app.boards.iter() {
-        let board = match app.open_board(board_id.clone(), Some(false), None).await {
-            Ok(board) => board,
+
+    // `buffered` keeps the app's board order while unchanged boards resolve as conditional GETs.
+    const BOARD_LOAD_CONCURRENCY: usize = 4;
+    let loaded: Vec<_> = stream::iter(app.boards.clone())
+        .map(|board_id| {
+            let state = state.clone();
+            let app_id = app_id.clone();
+            async move {
+                state
+                    .master_board_shared(&app_id, &board_id, &state, None)
+                    .await
+            }
+        })
+        .buffered(BOARD_LOAD_CONCURRENCY)
+        .collect()
+        .await;
+
+    let mut boards = Vec::with_capacity(loaded.len());
+    for cached in loaded {
+        let cached = match cached {
+            Ok(cached) => cached,
             Err(error) => {
                 if let Some(error) = ApiError::from_board_format_error(&error) {
                     return Err(error);
@@ -43,7 +60,7 @@ pub async fn get_boards(
                 continue;
             }
         };
-        let mut board = board.lock().await.clone();
+        let mut board = (*cached.board).clone();
         filter_board_secrets(&mut board);
         boards.push(board);
     }

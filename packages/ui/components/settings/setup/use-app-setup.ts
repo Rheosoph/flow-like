@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../../hooks";
+import { asArray } from "../../../lib/response-shape";
 import {
 	isRuntimeConfigured,
 	isRuntimeVariableConfigured,
@@ -156,9 +157,10 @@ export function deriveSetup(
 	const storedById = new Map<string, StoredRuntimeVariable>();
 	for (const row of stored) storedById.set(row.variableId, row);
 
+	const boardList = asArray(boards);
 	const requirements: DeviceRequirement[] = [];
-	for (const board of boards ?? []) {
-		for (const variable of Object.values(board.variables)) {
+	for (const board of boardList) {
+		for (const variable of Object.values(board.variables ?? {})) {
 			if (!isRuntimeConfigured(variable)) continue;
 			const row = storedById.get(variable.id);
 			const seeded = seedRuntimeVariable(variable, row?.value);
@@ -181,9 +183,9 @@ export function deriveSetup(
 		requirements.filter((r) => r.stored).map((r) => r.variable.id),
 	);
 
-	const sharedGroups: SharedGroup[] = (boards ?? [])
+	const sharedGroups: SharedGroup[] = boardList
 		.map((board) => {
-			const all = Object.values(board.variables);
+			const all = Object.values(board.variables ?? {});
 			return {
 				boardId: board.board_id,
 				boardName: board.board_name,
@@ -205,10 +207,11 @@ export function deriveSetup(
 	// offered for removal, because a forgotten row is a secret that stays on the
 	// device forever.
 	const known = new Set<string>();
-	for (const board of boards ?? []) {
-		for (const id of Object.keys(board.variables)) known.add(id);
+	for (const board of boardList) {
+		for (const id of Object.keys(board.variables ?? {})) known.add(id);
 	}
-	const orphans = boards
+	// A read that returned no list must not mark every stored value an orphan.
+	const orphans = Array.isArray(boards)
 		? stored.filter((row) => !known.has(row.variableId))
 		: [];
 

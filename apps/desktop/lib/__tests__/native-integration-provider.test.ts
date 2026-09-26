@@ -579,3 +579,36 @@ test("an accepted Event is acknowledged before its typed response completes", as
 		},
 	});
 });
+
+test("focus and interval refreshes reuse a recent snapshot and one scope-bound event catalog", async () => {
+	mocks.loadSnapshot.mockResolvedValue(notificationSnapshot());
+	const intervals = vi.spyOn(window, "setInterval");
+	let now = 1_000_000;
+	vi.spyOn(Date, "now").mockImplementation(() => now);
+	const trigger = async (fire: () => void) => {
+		await act(async () => fire());
+		await flushQueries();
+	};
+	await render();
+	const tick = intervals.mock.calls
+		.filter(([, delay]) => delay === 60_000)
+		.at(-1)?.[0] as () => void;
+	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
+	now += 30_000;
+	await trigger(() => window.dispatchEvent(new Event("focus")));
+	await trigger(tick);
+	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
+	now += 61_000;
+	await trigger(tick);
+	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
+	await trigger(() => window.dispatchEvent(new Event("focus")));
+	expect(mocks.loadSnapshot).toHaveBeenCalledTimes(2);
+	await trigger(() => window.dispatchEvent(new Event("recent-apps-changed")));
+	expect(mocks.loadSnapshot).toHaveBeenCalledTimes(3);
+	now += 10 * 60_000;
+	await trigger(tick);
+	expect(mocks.loadSnapshot).toHaveBeenCalledTimes(4);
+	const catalogs = mocks.loadSnapshot.mock.calls.map((args) => args[6]);
+	expect(catalogs[0]).toBeInstanceOf(Map);
+	expect(new Set(catalogs).size).toBe(1);
+});

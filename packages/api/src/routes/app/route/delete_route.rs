@@ -49,15 +49,7 @@ pub async fn delete_route(
     active.is_default = Set(false);
     active.update(&state.db).await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "route.delete",
-        "Route",
-        route_id,
-        "Deleted an event route mapping"
-    );
+    audit_branch!(state, user, app_id, "route.delete", "Route", route_id);
 
     Ok(StatusCode::NO_CONTENT)
 }

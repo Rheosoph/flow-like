@@ -1,4 +1,5 @@
 import { APP_QUERY_PARAM, appQueryContext } from "../../lib/app-route-url";
+import { readUseRoutePath } from "../../lib/use-route-url";
 import { getFrontendStateStore } from "./frontend-state";
 
 /**
@@ -18,9 +19,11 @@ export function buildFrontendContextPayload(
 	if (typeof window !== "undefined") {
 		const searchParams = new URLSearchParams(window.location.search);
 		queryContext = appQueryContext(window.location.search);
-		route = searchParams.has(APP_QUERY_PARAM)
-			? (searchParams.get("route") ?? "/")
-			: window.location.pathname;
+		route =
+			readUseRoutePath(window.location.pathname) ??
+			(searchParams.has(APP_QUERY_PARAM)
+				? (searchParams.get("route") ?? "/")
+				: window.location.pathname);
 	}
 
 	return {

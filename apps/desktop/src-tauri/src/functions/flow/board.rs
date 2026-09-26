@@ -14,17 +14,22 @@ use flow_like::{
             ensure_module_layer, validate_module_apply_params,
         },
         board::{
-            Board, VersionType,
+            Board, BoardCell, BoardWriter, VersionType,
             commands::GenericCommand,
             sync::{BoardSyncRequest, BoardSyncResponse, BoardSyncSnapshot},
+        },
+        compiled::{
+            PrerunManifest,
+            prerun::{PrerunOAuthRequirement, PrerunVariable},
         },
         node::Node,
     },
     flow_like_storage::object_store::ObjectStore,
 };
+use flow_like_types::sync::DashMap;
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -41,8 +46,7 @@ pub async fn save_board(handler: AppHandle, board_id: String) -> Result<(), Taur
     let file_path = handler.dialog().file().blocking_save_file();
     if let Some(file_path) = file_path {
         let board_state = TauriFlowLikeState::construct(&handler).await?;
-        let board = board_state.get_board(&board_id, None)?;
-        let board = board.lock().await.clone();
+        let board = board_state.get_board(&board_id, None)?.snapshot();
         let board_string = serde_json::to_string(&board)
             .map_err(|e| TauriFunctionError::from(anyhow::Error::new(e)))?;
         let file_path = file_path
@@ -64,8 +68,11 @@ pub async fn create_board_version(
     let board_state = TauriFlowLikeState::construct(&handler).await?;
     let board = board_state.get_board(&board_id, None);
     if let Ok(board) = board {
-        let mut board = board.lock().await;
-        let version = board.create_version(version_type, None).await?;
+        let version = board
+            .write()
+            .await
+            .create_version(version_type, None)
+            .await?;
         return Ok(version);
     }
 
@@ -74,7 +81,7 @@ pub async fn create_board_version(
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), None).await?;
         let version = board
-            .lock()
+            .write()
             .await
             .create_version(version_type, None)
             .await?;
@@ -93,8 +100,7 @@ pub async fn get_board_versions(
     let board_state = TauriFlowLikeState::construct(&handler).await?;
     let board = board_state.get_board(&board_id, None);
     if let Ok(board) = board {
-        let board = board.lock().await;
-        let versions = board.get_versions(None).await?;
+        let versions = board.snapshot().get_versions(None).await?;
         return Ok(versions);
     }
 
@@ -102,7 +108,7 @@ pub async fn get_board_versions(
 
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), None).await?;
-        let versions = board.lock().await.get_versions(None).await?;
+        let versions = board.snapshot().get_versions(None).await?;
         return Ok(versions);
     }
 
@@ -115,19 +121,18 @@ pub async fn get_board(
     app_id: String,
     board_id: String,
     version: Option<(u32, u32, u32)>,
-) -> Result<Board, TauriFunctionError> {
+) -> Result<Arc<Board>, TauriFunctionError> {
     let board_state = TauriFlowLikeState::construct(&handler).await?;
     let board = board_state.get_board(&board_id, version);
     if let Ok(board) = board {
-        let board = board.lock().await.clone();
-        return Ok(board);
+        return Ok(board.snapshot());
     }
 
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), version).await?;
-        return Ok(board.lock().await.clone());
+        return Ok(board.snapshot());
     }
 
     Err(TauriFunctionError::new("Board not found"))
@@ -243,11 +248,10 @@ pub async fn sync_board(
         }
     };
 
-    let board = board.lock().await;
     local_board_sync_diff(
         &handler,
         local_snapshot_key(&board_id, version),
-        &board,
+        &board.snapshot(),
         &request,
     )
 }
@@ -267,14 +271,12 @@ pub async fn get_flowscript(
 
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     if let Ok(board) = flow_like_state.get_board(&board_id, version) {
-        let board = board.lock().await;
-        return Ok(board_to_flowscript(&board, &render_options));
+        return Ok(board_to_flowscript(&board.snapshot(), &render_options));
     }
 
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), version).await?;
-        let board = board.lock().await;
-        return Ok(board_to_flowscript(&board, &render_options));
+        return Ok(board_to_flowscript(&board.snapshot(), &render_options));
     }
 
     Err(TauriFunctionError::new("Board not found"))
@@ -317,8 +319,7 @@ pub async fn get_flowscript_scoped(
                 .map_err(|_| TauriFunctionError::new("Board not found"))?
         }
     };
-    let board = board.lock().await;
-    let scoped = board_to_flowscript_scoped(&board, &node_ids, &render_options);
+    let scoped = board_to_flowscript_scoped(&board.snapshot(), &node_ids, &render_options);
     Ok(ScopedFlowScriptResponse {
         flowscript: scoped.text,
         scope_anchors: scoped.scope_anchors,
@@ -356,7 +357,7 @@ pub async fn get_flowscript_file(
                 .map_err(|_| TauriFunctionError::new("Board not found"))?
         }
     };
-    let board = board.lock().await;
+    let board = board.snapshot();
     let file = if file == "main" {
         FlowScriptFile::Main
     } else {
@@ -520,7 +521,7 @@ pub async fn check_flowscript_reconcile(
     }
     // Run the exact Apply compiler (including dynamic-pin enrichment) on an in-memory clone. The
     // authoritative board, its undo history, and its persistence store are never touched.
-    let mut scratch = board.lock().await.clone();
+    let mut scratch = board.snapshot().as_ref().clone();
 
     if let Some(module_id) = module_id {
         ensure_module_layer(&scratch, module_id)
@@ -591,8 +592,7 @@ pub async fn close_board(handler: AppHandle, board_id: String) -> Result<(), Tau
     let board = { board_state.remove_board(&board_id)? };
 
     if let Some(board) = board {
-        let board = board.lock().await;
-        board.save(Some(store.clone())).await?;
+        board.write().await.save(Some(store.clone())).await?;
         return Ok(());
     }
 
@@ -620,11 +620,13 @@ pub async fn get_open_boards(
     let board_state = flow_like_state.board_registry.clone();
     let mut boards = Vec::with_capacity(board_state.len());
     for entry in board_state.iter() {
-        let value = entry.value();
         let board_id = entry.key().clone();
-        let board = value.lock().await;
         if let Some(app_id) = board_app_lookup.get(&board_id) {
-            boards.push((app_id.clone(), board_id, board.name.clone()));
+            boards.push((
+                app_id.clone(),
+                board_id,
+                entry.value().snapshot().name.clone(),
+            ));
         }
     }
 
@@ -666,21 +668,20 @@ async fn replay_local_history(
         )));
     }
     let board = flow_like_state.get_board(&board_id, None)?;
-    let mut board = board.lock().await;
+    let mut board = board.write().await;
     crate::functions::ai::copilot::ensure_board_mutation_not_reserved_by_flowpilot(
         &app_id, &board_id,
     )
     .map_err(|error| TauriFunctionError::new(&error))?;
-    let original_board = board.clone();
     let replayed = match direction {
         HistoryDirection::Undo => board.undo(commands, flow_like_state).await,
         HistoryDirection::Redo => board.redo(commands, flow_like_state).await,
     };
     if let Err(error) = replayed {
-        *board = original_board;
+        board.discard();
         return Err(error.into());
     }
-    save_board_with_rollback(&mut board, store, original_board).await?;
+    save_board_with_rollback(&mut board, store).await?;
 
     let sync = match sync {
         Some(request) => match local_board_sync_diff(
@@ -803,27 +804,26 @@ async fn execute_local_commands(
 
     let board = flow_like_state.get_board(&board_id, None)?;
 
-    let mut board = board.lock().await;
+    let mut board = board.write().await;
     crate::functions::ai::copilot::ensure_board_mutation_not_reserved_by_flowpilot(
         &app_id, &board_id,
     )
     .map_err(|error| TauriFunctionError::new(&error))?;
     // Saving validates derived pin contracts too. Keep offline boards recoverable when
-    // an edit is rejected after node updates have already changed the cached board.
-    let original_board = board.clone();
+    // an edit is rejected after node updates have already changed the draft.
     let commands = match board.execute_commands(commands, flow_like_state).await {
         Ok(commands) => commands,
         Err(error) => {
-            *board = original_board;
+            board.discard();
             return Err(error.into());
         }
     };
     if requires_remote_delivery && let Err(error) = validate_remote_command_batch_size(&commands) {
-        *board = original_board;
+        board.discard();
         return Err(TauriFunctionError::new(&error));
     }
 
-    save_board_with_rollback(&mut board, store, original_board).await?;
+    save_board_with_rollback(&mut board, store).await?;
     // The write is committed. Build the revision's snapshot now — incrementally, from the one the
     // webview last saw — so the sync that follows is a lookup whether it rides on this response
     // or arrives as a separate `sync_board` call. Never fail the committed write over it.
@@ -908,7 +908,7 @@ pub async fn apply_flowscript(
     }
 
     let requires_remote_delivery = !matches!(app.visibility, AppVisibility::Offline);
-    let mut board = board.lock().await;
+    let mut board = board.write().await;
     if let Some(module_id) = module_id {
         ensure_module_layer(&board, module_id).map_err(|error| TauriFunctionError::new(&error))?;
     }
@@ -918,7 +918,6 @@ pub async fn apply_flowscript(
     .map_err(|error| TauriFunctionError::new(&error))?;
     // Both offline and shared boards must recover from failed validation or persistence.
     // Shared boards also need to fit into one remote command transaction.
-    let original_board = board.clone();
     let apply_result = match module_id {
         Some(module_id) => {
             apply_flowscript_to_board_file(
@@ -949,7 +948,7 @@ pub async fn apply_flowscript(
     let result = match apply_result {
         Ok(result) => result,
         Err(error) => {
-            *board = original_board;
+            board.discard();
             return Err(error.into());
         }
     };
@@ -957,26 +956,25 @@ pub async fn apply_flowscript(
     if requires_remote_delivery
         && let Err(error) = validate_remote_command_batch_size(&result.commands)
     {
-        *board = original_board;
+        board.discard();
         return Err(TauriFunctionError::new(&error));
     }
 
     if !result.commands.is_empty() {
-        save_board_with_rollback(&mut board, store, original_board).await?;
+        save_board_with_rollback(&mut board, store).await?;
     }
 
     Ok(result)
 }
 
 async fn save_board_with_rollback(
-    board: &mut Board,
+    board: &mut BoardWriter<'_>,
     store: Arc<dyn ObjectStore>,
-    original_board: Board,
 ) -> Result<(), TauriFunctionError> {
     let Err(save_error) = board.save(Some(store.clone())).await else {
         return Ok(());
     };
-    *board = original_board;
+    board.discard();
     if let Err(restore_error) = board.save(Some(store)).await {
         return Err(TauriFunctionError::new(&format!(
             "Board persistence failed ({save_error}); restoring the pre-mutation board also failed ({restore_error})"
@@ -1065,31 +1063,60 @@ mod tests {
             .nodes
             .insert("original".into(), Node::new("test", "Original", "", ""));
         board.save(Some(store.clone())).await.unwrap();
-        let original = board.clone();
-        let mut invalid = Node::new("geometry_test", "Invalid Geometry", "", "");
-        invalid
-            .add_input_pin("geometry", "Geometry", "", VariableType::Geometry)
-            .set_default_value(Some(serde_json::json!("stale string literal")));
-        board.nodes.insert("invalid".into(), invalid);
+        let cell = BoardCell::new(board);
 
-        assert!(
-            save_board_with_rollback(&mut board, store.clone(), original)
-                .await
-                .is_err()
-        );
+        {
+            let mut board = cell.write().await;
+            let mut invalid = Node::new("geometry_test", "Invalid Geometry", "", "");
+            invalid
+                .add_input_pin("geometry", "Geometry", "", VariableType::Geometry)
+                .set_default_value(Some(serde_json::json!("stale string literal")));
+            board.nodes.insert("invalid".into(), invalid);
+            assert!(
+                save_board_with_rollback(&mut board, store.clone())
+                    .await
+                    .is_err()
+            );
+        }
+        let board = cell.snapshot();
         assert_eq!(board.nodes.len(), 1);
         assert!(board.nodes.contains_key("original"));
         board.validate_geometry_contracts().unwrap();
 
-        let original = board.clone();
-        board.nodes.get_mut("original").unwrap().friendly_name = "Next edit".into();
-        save_board_with_rollback(&mut board, store.clone(), original)
-            .await
-            .unwrap();
+        {
+            let mut board = cell.write().await;
+            board.nodes.get_mut("original").unwrap().friendly_name = "Next edit".into();
+            save_board_with_rollback(&mut board, store.clone())
+                .await
+                .unwrap();
+        }
+        let board = cell.snapshot();
         assert_eq!(board.nodes["original"].friendly_name, "Next edit");
         Board::load_proto(store, &Path::from("boards"), &board.id, None)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn widget_instantiation_is_found_inside_function_layers() {
+        use flow_like::{
+            flow::board::{Layer, LayerType},
+            flow_like_storage::Path,
+        };
+
+        let mut board = Board::new_detached(Some("widgets".into()), Path::from("boards"));
+        board
+            .nodes
+            .insert("log".into(), Node::new("log_info", "Log", "", ""));
+        assert!(!instantiates_widgets(&board));
+
+        let mut layer = Layer::new("function".into(), "Function".into(), LayerType::Function);
+        layer.nodes.insert(
+            "widget".into(),
+            Node::new(INSTANTIATE_WIDGET_NODE, "Widget", "", ""),
+        );
+        board.layers.insert("function".into(), layer);
+        assert!(instantiates_widgets(&board));
     }
 
     fn command_with_payload(id: usize, bytes: usize) -> GenericCommand {
@@ -1145,7 +1172,7 @@ async fn open_board_for_read(
     app_id: String,
     board_id: String,
     version: Option<(u32, u32, u32)>,
-) -> Result<Arc<flow_like_types::sync::Mutex<Board>>, TauriFunctionError> {
+) -> Result<Arc<BoardCell>, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(handler).await?;
     match flow_like_state.get_board(&board_id, version) {
         Ok(board) => Ok(board),
@@ -1169,8 +1196,9 @@ pub async fn get_execution_elements(
     wildcard: bool,
     version: Option<(u32, u32, u32)>,
 ) -> Result<std::collections::HashMap<String, flow_like_types::Value>, TauriFunctionError> {
-    let board = open_board_for_read(&handler, app_id, board_id, version).await?;
-    let board = board.lock().await;
+    let board = open_board_for_read(&handler, app_id, board_id, version)
+        .await?
+        .snapshot();
 
     let elements = board
         .get_execution_elements(&page_id, wildcard, None)
@@ -1195,12 +1223,79 @@ pub async fn element_demand(
     board_id: String,
     version: Option<(u32, u32, u32)>,
 ) -> Result<ElementDemandResponse, TauriFunctionError> {
+    let cache_key = local_snapshot_key(&board_id, version);
     let board = open_board_for_read(&handler, app_id, board_id, version).await?;
-    let board = board.lock().await;
-    let manifest = flow_like::flow::compiled::PrerunManifest::from_board(&board);
+    let (board, revision) = board.snapshot_with_revision();
+    let manifest = revision_prerun_manifest(cache_key, &board, revision);
     Ok(ElementDemandResponse {
-        selectors: manifest.element_selectors,
+        selectors: manifest.element_selectors.clone(),
         dynamic: manifest.element_reads_dynamic,
-        signature: manifest.signature,
+        signature: manifest.signature.clone(),
     })
+}
+
+/// The last prerun manifest per open board, valid while its revision is still the published one.
+static PRERUN_MANIFESTS: LazyLock<DashMap<String, (u64, Arc<PrerunManifest>)>> =
+    LazyLock::new(DashMap::new);
+
+fn revision_prerun_manifest(
+    cache_key: String,
+    board: &Board,
+    revision: u64,
+) -> Arc<PrerunManifest> {
+    if let Some(cached) = PRERUN_MANIFESTS.get(&cache_key)
+        && cached.0 == revision
+    {
+        return cached.1.clone();
+    }
+    let manifest = Arc::new(PrerunManifest::from_board(board));
+    PRERUN_MANIFESTS.insert(cache_key, (revision, manifest.clone()));
+    manifest
+}
+
+/// What the webview checks before it dispatches a local run: prerun inputs, consent, OAuth
+/// tokens, packages. Field shapes match the hub's prerun response.
+#[derive(serde::Serialize)]
+pub struct BoardRunRequirements {
+    pub runtime_variables: Vec<PrerunVariable>,
+    pub oauth_requirements: Vec<PrerunOAuthRequirement>,
+    pub requires_local_execution: bool,
+    pub execution_mode: String,
+    pub wasm_package_ids: Vec<String>,
+    pub wasm_package_permissions: HashMap<String, Vec<String>>,
+    pub instantiates_widgets: bool,
+}
+
+/// The pre-run facts of a board without shipping the board: derived from the published revision
+/// and reused until the next edit, so dispatching an event never serialises the whole board.
+#[tauri::command(async)]
+pub async fn get_board_run_requirements(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+) -> Result<BoardRunRequirements, TauriFunctionError> {
+    let cache_key = local_snapshot_key(&board_id, version);
+    let board = open_board_for_read(&handler, app_id, board_id, version).await?;
+    let (board, revision) = board.snapshot_with_revision();
+    let manifest = revision_prerun_manifest(cache_key, &board, revision);
+    Ok(BoardRunRequirements {
+        runtime_variables: manifest.runtime_variables.clone(),
+        oauth_requirements: manifest.oauth_requirements.clone(),
+        requires_local_execution: manifest.requires_local_execution,
+        execution_mode: manifest.execution_mode.clone(),
+        wasm_package_ids: manifest.wasm_package_ids.clone(),
+        wasm_package_permissions: manifest.wasm_package_permissions.iter().cloned().collect(),
+        instantiates_widgets: instantiates_widgets(&board),
+    })
+}
+
+const INSTANTIATE_WIDGET_NODE: &str = "a2ui_instantiate_widget";
+
+fn instantiates_widgets(board: &Board) -> bool {
+    board
+        .nodes
+        .values()
+        .chain(board.layers.values().flat_map(|layer| layer.nodes.values()))
+        .any(|node| node.name == INSTANTIATE_WIDGET_NODE)
 }

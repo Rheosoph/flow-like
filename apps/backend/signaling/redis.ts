@@ -17,6 +17,26 @@ export type RedisAuthMode = "local" | "azure-entra";
 // Redis so sibling replicas can deliver to their own sockets.
 export type FanoutMode = "local" | "redis";
 
+export function fanoutIsHealthy(
+	snapshot: {
+		mode: FanoutMode;
+		publisherReady: boolean;
+		presenceReady: boolean;
+		subscriberReady: boolean;
+		heartbeatAckMs: number;
+	},
+	now = Date.now(),
+): boolean {
+	if (snapshot.mode === "local") return true;
+	return (
+		snapshot.publisherReady &&
+		snapshot.presenceReady &&
+		snapshot.subscriberReady &&
+		snapshot.heartbeatAckMs > 0 &&
+		now - snapshot.heartbeatAckMs <= 30_000
+	);
+}
+
 export type SignalFanoutConfig =
 	| { mode: "local" }
 	| { mode: "redis"; redis: SignalRedisConfig };
@@ -309,7 +329,7 @@ export function createSignalRedisClient(
 				defaults: {
 					credentialsProvider,
 					socket: secureSocket,
-					disableOfflineQueue: isAzure,
+					disableOfflineQueue: isAzure || role === "publisher",
 					commandsQueueMaxLength: 1_000,
 					pingInterval: 30_000,
 				},
@@ -327,7 +347,7 @@ export function createSignalRedisClient(
 			url: config.url,
 			credentialsProvider,
 			socket: secureSocket,
-			disableOfflineQueue: isAzure,
+			disableOfflineQueue: isAzure || role === "publisher",
 			commandsQueueMaxLength: 1_000,
 			pingInterval: 30_000,
 		}),

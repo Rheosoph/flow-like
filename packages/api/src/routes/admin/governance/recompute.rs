@@ -78,7 +78,7 @@ pub async fn recompute_scores(
                     continue;
                 }
             };
-            let board = board.lock().await;
+            let board = board.snapshot();
             if let Err(err) = persist_board_score(&state.db, &app_id, &board).await {
                 tracing::warn!("failed to persist score for {app_id}/{board_id}: {err:?}");
                 failures += 1;
@@ -87,6 +87,8 @@ pub async fn recompute_scores(
             boards_processed += 1;
         }
     }
+
+    state.invalidate_cache(super::list_patterns::PATTERNS_CACHE_KEY);
 
     Ok(Json(RecomputeScoresResponse {
         apps_processed,

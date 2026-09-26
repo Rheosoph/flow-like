@@ -109,6 +109,12 @@ export function useSurfaceManager() {
 					next.set(message.surfaceId, applyA2UIMessage(existing, message));
 					break;
 				}
+				case "pruneDetached": {
+					for (const [surfaceId, surface] of next) {
+						next.set(surfaceId, applyA2UIMessage(surface, message));
+					}
+					break;
+				}
 			}
 
 			return next;

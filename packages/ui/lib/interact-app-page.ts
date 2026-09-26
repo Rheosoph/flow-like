@@ -59,6 +59,8 @@ const MAX_OPTION_ENTRIES = 25;
 const MAX_OPTION_VALUE_CHARS = 160;
 const MAX_EVENT_ENTRIES = 30;
 const SETTLE_TIMEOUT_MS = 20_000;
+/** A page registers at mount, before its onLoad run ends, so the wait for it to settle is longer. */
+const LOAD_SETTLE_TIMEOUT_MS = 35_000;
 
 export interface LiveAppPageSemanticElement {
 	component_id: string;
@@ -402,13 +404,17 @@ function compactRun(record: LivePageRunRecord) {
 	};
 }
 
-async function waitForSettled(handle: LivePageHandle): Promise<void> {
-	const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+async function waitForSettled(
+	handle: LivePageHandle,
+	timeoutMs = SETTLE_TIMEOUT_MS,
+): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
 	while (handle.isLoading() && Date.now() < deadline) {
 		await new Promise((resolve) => setTimeout(resolve, 150));
 	}
 	// One extra beat so streamed a2ui updates land in the surface before serialization.
 	await new Promise((resolve) => setTimeout(resolve, 400));
+	return !handle.isLoading();
 }
 
 function isSelectedPageStillLive(
@@ -458,7 +464,14 @@ export async function interactWithAppPage(
 
 	// The page's onLoad workflow may still be running right after mount; acting mid-load races
 	// component creation and lets late onLoad upserts overwrite freshly set values.
-	await waitForSettled(handle);
+	if (!(await waitForSettled(handle, LOAD_SETTLE_TIMEOUT_MS))) {
+		return {
+			status: "error",
+			code: "page_loading",
+			retryable: true,
+			message: `Page '${handle.pageId}' is still running its onLoad workflow after ${LOAD_SETTLE_TIMEOUT_MS / 1000} s, so no action was applied: its late updates could overwrite them. Retry once the page has loaded.`,
+		};
+	}
 
 	const deadlineAtMs = request.deadlineAtMs ?? Date.now() + 570_000;
 	const appliedActions: Record<string, unknown>[] = [];

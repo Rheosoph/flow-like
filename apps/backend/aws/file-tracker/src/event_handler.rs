@@ -101,7 +101,7 @@ async fn process_s3_event(
             .ok_or("Object sequencer is missing")?,
     )?;
 
-    let mut observation = Observation {
+    let observation = Observation {
         bucket: bucket.to_owned(),
         key,
         app_id,
@@ -109,22 +109,33 @@ async fn process_s3_event(
         sequencer,
         legacy_size: 0,
     };
-    if legacy.is_some() && !observation.already_accounted(db).await? {
-        observation.legacy_size = read_legacy_size(
-            dynamo,
-            legacy,
-            bucket,
-            &observation.app_id,
-            &observation.key,
-        )
-        .await?;
-    }
     let bucket = bucket.to_owned();
     let key = observation.key.clone();
+    let read_legacy = {
+        let dynamo = dynamo.clone();
+        let legacy = legacy.cloned();
+        let bucket = bucket.clone();
+        let app_id = observation.app_id.clone();
+        let key = key.clone();
+        move || {
+            let dynamo = dynamo.clone();
+            let legacy = legacy.clone();
+            let bucket = bucket.clone();
+            let app_id = app_id.clone();
+            let key = key.clone();
+            async move {
+                read_legacy_size(&dynamo, legacy.as_ref(), &bucket, &app_id, &key)
+                    .await
+                    .map_err(|error| {
+                        sea_orm::DbErr::Custom(format!("legacy object size read failed: {error}"))
+                    })
+            }
+        }
+    };
     // HEAD runs outside SQL transactions. Accounting checks its object snapshot
     // before committing and samples again if another event changed that snapshot.
     let s3 = s3.clone();
-    accounting::apply_current(db, dialect, observation, move || {
+    accounting::apply_with_baseline(db, dialect, observation, read_legacy, move || {
         let s3 = s3.clone();
         let bucket = bucket.clone();
         let key = key.clone();

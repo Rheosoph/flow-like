@@ -264,15 +264,9 @@ pub async fn restore_tray_icon(app_handle: &AppHandle) {
 }
 
 async fn stop_recording_from_tray(app: &AppHandle) {
-    // Deactivate capture immediately so the tray click isn't recorded
-    if let Some(rec_state) = app.try_state::<crate::state::TauriRecordingState>() {
-        let capture = rec_state.capture.read().await;
-        if let Some(c) = capture.as_ref() {
-            c.set_active(false);
-        }
+    if let Err(error) = crate::functions::recording::stop_recording(app.clone()).await {
+        tracing::warn!("Could not stop recording: {:?}", error);
     }
-    crate::utils::emit_to_ui(app, "recording:stop-from-tray", ());
-    restore_tray_icon(app).await;
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.unminimize();

@@ -18,6 +18,7 @@ import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { apiErrorMessage } from "../../../lib/api-error";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import {
 	ConformityRecommendations,
@@ -382,8 +383,9 @@ export function AppAiActWizard({
 	}, []);
 
 	const preview = livePreview ?? questionnaire.data?.classification ?? null;
-	const recommendations =
-		liveRecommendations ?? questionnaire.data?.recommendations ?? [];
+	const recommendations = asArray(
+		liveRecommendations ?? questionnaire.data?.recommendations,
+	);
 	const responsibleName = questionnaire.data?.responsibleName ?? null;
 	const responsibleEmail = questionnaire.data?.responsibleEmail ?? null;
 	const showHighRisk =
@@ -391,7 +393,7 @@ export function AppAiActWizard({
 		preview?.riskCategory === "UNDETERMINED";
 
 	const visibleScreens = useMemo(() => {
-		const screens = questionnaire.data?.schema?.screens ?? [];
+		const screens = asArray(questionnaire.data?.schema?.screens);
 		return screens.filter((s) => !s.highRiskOnly || showHighRisk);
 	}, [questionnaire.data?.schema?.screens, showHighRisk]);
 
@@ -399,7 +401,7 @@ export function AppAiActWizard({
 	const missingRequired = useMemo(() => {
 		const missing: string[] = [];
 		for (const screen of visibleScreens) {
-			for (const q of screen.questions) {
+			for (const q of asArray(screen.questions)) {
 				if (!q.required) continue;
 				const v = answers[q.key];
 				const empty =
@@ -474,6 +476,7 @@ export function AppAiActWizard({
 	}
 
 	const riskMeta = preview ? RISK_META[preview.riskCategory] : null;
+	const obligations = asArray(preview?.transparencyObligations);
 	const canSubmit =
 		!!preview && !preview.blocked && missingRequired.length === 0;
 
@@ -530,13 +533,13 @@ export function AppAiActWizard({
 						<p className="text-sm text-muted-foreground mt-2">
 							{riskMeta.description}
 						</p>
-						{preview && preview.transparencyObligations.length > 0 && (
+						{obligations.length > 0 && (
 							<div className="mt-3">
 								<p className="text-xs font-medium mb-1">
 									{t("transparencyObligations", "Transparency obligations")}
 								</p>
 								<ul className="space-y-1">
-									{preview.transparencyObligations.map((o) => (
+									{obligations.map((o) => (
 										<li
 											key={o}
 											className="flex items-center gap-2 text-xs text-muted-foreground"
@@ -596,7 +599,7 @@ export function AppAiActWizard({
 							)}
 						</CardHeader>
 						<CardContent className="space-y-5">
-							{screen.questions.map((q, idx) => (
+							{asArray(screen.questions).map((q, idx) => (
 								<div key={q.key}>
 									{idx > 0 && <Separator className="mb-5" />}
 									<QuestionField

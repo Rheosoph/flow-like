@@ -39,6 +39,8 @@ export default function Page() {
 		queryKey: ["app-publication-requests", id],
 		queryFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
+			// A local-only app has never been submitted, and the hub does not know it.
+			if (id && (await backend.isLocalOnly?.(id))) return [];
 			return backend.apiState.get<RawAppPublicationRequestItem[]>(
 				profile.data.hub_profile,
 				`apps/${id}/publication`,

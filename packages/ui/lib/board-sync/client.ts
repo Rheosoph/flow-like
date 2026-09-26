@@ -11,6 +11,7 @@
  * applies overlapped), the late response is discarded and the caller re-syncs. That is what makes
  * out-of-order arrivals harmless — they cost one extra round trip, never a rollback.
  */
+import { isRecord } from "../response-shape";
 import type { IBoard } from "../schema/flow/board";
 import type { INode } from "../schema/flow/node";
 import {
@@ -217,6 +218,13 @@ export class BoardSyncClient {
 				? this.requestFor(held, appId)
 				: { hydrate: this.catalogs.has(appId), patch: true };
 			const response = await transport(request);
+			// The server always ships `meta` to a client holding nothing; without it this would
+			// assemble — and hold — a board with no identity.
+			if (!isRecord(response) || (!held && !isRecord(response.meta))) {
+				throw new Error(
+					`Board sync returned no board: expected a sync response${held ? "" : " with board metadata"}.`,
+				);
+			}
 			// The held revision moved while this response was in flight (an ingest landed). The
 			// response answers a base we no longer hold; ask again from the new one.
 			if (this.held.get(key) !== held) {

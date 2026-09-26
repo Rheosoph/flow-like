@@ -62,6 +62,7 @@ model TelemetryErrorEvent {
   @@index([issueId, createdAt])
   @@index([createdAt])
   @@index([anonId, createdAt])
+  @@index([issueId, anonId])
 }
 
 model TelemetryRelease {
@@ -107,6 +108,7 @@ model TelemetrySession {
   @@index([startedAt])
   @@index([release, startedAt])
   @@index([anonId, startedAt])
+  @@index([createdAt])
 }
 
 model TelemetrySpan {

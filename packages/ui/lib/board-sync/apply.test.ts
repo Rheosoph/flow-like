@@ -7,6 +7,7 @@ import {
 	applyBoardSync,
 	catalogByName,
 	nodeSegment,
+	toNode,
 } from "./apply";
 import { BoardSyncClient } from "./client";
 import type {
@@ -131,6 +132,20 @@ describe("nodeSegment", () => {
 });
 
 describe("applyBoardSync", () => {
+	test("preserves per-instance auto reroute markers through catalog hydration", () => {
+		const catalog = catalogByName([{ ...catalogNode, auto_reroute: true }]);
+		for (const h of [false, true]) {
+			for (const marker of [undefined, null, false, true]) {
+				const { node, hydratable } = toNode(
+					wireNode("a", null, { h, auto_reroute: marker }),
+					catalog,
+				);
+				expect(hydratable).toBe(true);
+				expect(node.auto_reroute).toBe(marker ?? null);
+			}
+		}
+	});
+
 	test("keeps board format requirements through full sync and partial updates", () => {
 		const legacy = applyBoardSync(undefined, fullResponse(), undefined).board;
 		expect(legacy.format_version).toBe(1);
@@ -620,3 +635,30 @@ const _assign: IBoard = applyBoardSync(
 	undefined,
 ).board;
 void _assign;
+
+describe("hostile ids", () => {
+	test("an id of __proto__ becomes an own entry instead of the map's prototype", () => {
+		const response = fullResponse();
+		const hostile = JSON.parse('{"__proto__": null}') as Record<
+			string,
+			ISyncNode
+		>;
+		hostile.__proto__ = wireNode("__proto__", null);
+		response.segments = {
+			[ROOT_SEGMENT]: { hash: "s-root", nodes: hostile },
+			l1: { hash: "s-l1", nodes: { b: wireNode("b", "l1") } },
+		};
+		response.layers = JSON.parse(
+			`{"__proto__": ${JSON.stringify(layerDef("__proto__"))}}`,
+		);
+		const { board } = applyBoardSync(undefined, response, undefined);
+
+		expect(Object.getPrototypeOf(board.nodes)).toBe(Object.prototype);
+		expect(Object.keys(board.nodes).sort()).toEqual(["__proto__", "b"]);
+		expect(Object.getPrototypeOf(board.layers)).toBe(Object.prototype);
+		expect(Object.keys(board.layers)).toEqual(["__proto__"]);
+		expect(Object.keys(board.nodes.__proto__?.pins ?? {})).toEqual([
+			"__proto__-p",
+		]);
+	});
+});

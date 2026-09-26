@@ -330,7 +330,7 @@ export function ReleaseHealthSection({
 	const bucket = trendBucketForHours(health.data?.hours ?? hours);
 	const hasData =
 		(health.data?.totalSessions ?? 0) > 0 ||
-		(health.data?.releases.length ?? 0) > 0;
+		(health.data?.releases?.length ?? 0) > 0;
 
 	return (
 		<section className="space-y-4">

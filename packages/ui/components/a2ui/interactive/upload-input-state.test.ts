@@ -4,6 +4,11 @@ import {
 	mergeSuccessfulUploadBatch,
 } from "./upload-input-state";
 
+interface UploadResult {
+	name: string;
+	url?: string;
+}
+
 describe("upload input state", () => {
 	test("never uploads more files than the remaining capacity", () => {
 		expect(limitUploadBatch(["a", "b"], 0, true, 1)).toEqual(["a"]);
@@ -11,8 +16,8 @@ describe("upload input state", () => {
 	});
 
 	test("preserves prior batches and commits only successful uploads", () => {
-		const current = [{ name: "a", url: "signed://a" }];
-		const results = [
+		const current: UploadResult[] = [{ name: "a", url: "signed://a" }];
+		const results: UploadResult[] = [
 			{ name: "b", url: "signed://b" },
 			{ name: "c", url: undefined },
 		];
@@ -25,8 +30,8 @@ describe("upload input state", () => {
 	});
 
 	test("keeps the previous single value when replacement fails", () => {
-		const current = [{ name: "a", url: "signed://a" }];
-		const failed = [{ name: "b", url: undefined }];
+		const current: UploadResult[] = [{ name: "a", url: "signed://a" }];
+		const failed: UploadResult[] = [{ name: "b", url: undefined }];
 
 		expect(
 			mergeSuccessfulUploadBatch(current, failed, false, 1, (file) =>

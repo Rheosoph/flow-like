@@ -356,9 +356,9 @@ impl Command for CopyPasteCommand {
             new_node.long_running = blueprint_node.long_running;
             new_node.only_offline = blueprint_node.only_offline;
 
-            // Preserve user-customized friendly_name and description for start nodes (events)
-            let is_start_node = blueprint_node.start.unwrap_or(false);
-            if !is_start_node {
+            // Clipboards written before descriptions were serialized carry "" for them.
+            let owns_text = blueprint_node.owns_descriptive_text();
+            if !owns_text || new_node.description.is_empty() {
                 new_node.description = blueprint_node.description.clone();
             }
             new_node.coordinates = Some((
@@ -390,7 +390,9 @@ impl Command for CopyPasteCommand {
                     let new_pin_id = create_id();
                     translated_connection.insert(old_pin_id, new_pin_id.clone());
                     pin.id = new_pin_id.clone();
-                    pin.description = blueprint_pin.description.clone();
+                    if !owns_text || pin.description.is_empty() {
+                        pin.description = blueprint_pin.description.clone();
+                    }
 
                     // Translate function_layer_id when pasting CallFunction nodes
                     if pin.name == "function_layer_id"
@@ -423,8 +425,7 @@ impl Command for CopyPasteCommand {
                 })
                 .collect();
 
-            // Preserve user-customized friendly_name for start nodes (events)
-            if !is_start_node {
+            if !owns_text {
                 new_node.friendly_name = blueprint_node.friendly_name.clone();
             }
             intermediate_nodes.push(new_node);
@@ -523,9 +524,8 @@ impl Command for CopyPasteCommand {
             board.layers.remove(&layer.id);
         }
 
-        for ref_key in &self.added_refs {
-            board.refs.remove(ref_key);
-        }
+        // Refs stay: the cleanup after undo prunes what nothing uses, while a key another node
+        // picked up since the paste must survive.
         self.added_refs.clear();
 
         for var_key in &self.added_variables {
@@ -609,6 +609,47 @@ mod tests {
         command
             .validate_original_refs()
             .expect("ordinary board refs must remain copyable");
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn auto_reroute_survives_paste_update_and_undo() {
+        use super::super::update_node::UpdateNodeCommand;
+
+        let mut board = Board::new_detached(Some("board".into()), Path::default());
+        let mut source = Node::new("reroute", "Reroute", "", "Control");
+        source.auto_reroute = Some(true);
+        let original_id = source.id.clone();
+        let mut paste =
+            CopyPasteCommand::new(vec![source], Vec::new(), Vec::new(), (20.0, 20.0, 0.0));
+        paste
+            .execute(&mut board, state())
+            .await
+            .expect("paste reroute");
+        let pasted_id = paste.new_nodes[0].id.clone();
+        assert_ne!(pasted_id, original_id);
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, Some(true));
+
+        let mut changed = board.nodes[&pasted_id].clone();
+        changed.auto_reroute = None;
+        let mut update = UpdateNodeCommand::new(changed);
+        update
+            .execute(&mut board, state())
+            .await
+            .expect("keep reroute manually");
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, None);
+        update
+            .undo(&mut board, state())
+            .await
+            .expect("undo node update");
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, Some(true));
+
+        paste.undo(&mut board, state()).await.expect("undo paste");
+        assert!(!board.nodes.contains_key(&pasted_id));
+        paste
+            .execute(&mut board, state())
+            .await
+            .expect("redo paste");
+        assert_eq!(board.nodes[&pasted_id].auto_reroute, Some(true));
     }
 
     #[flow_like_types::tokio::test]

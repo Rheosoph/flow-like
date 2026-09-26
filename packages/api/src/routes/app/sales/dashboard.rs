@@ -7,9 +7,12 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use super::{
-    discounts::{DiscountResponse, ListDiscountsQuery},
-    overview::{SalesOverview, SalesStats, StatsQuery},
-    purchases::PurchasesResponse,
+    discounts::{DiscountResponse, discounts_for_app},
+    overview::{
+        SalesOverview, SalesStats, StatsQuery, count_members, sales_overview, sales_stats,
+        verify_sales_access,
+    },
+    purchases::{PurchasesQuery, PurchasesResponse, purchases_page},
 };
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -68,49 +71,37 @@ pub async fn dashboard(
     Path(app_id): Path<String>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Json<SalesDashboardResponse>, ApiError> {
-    // Delegate to existing handlers, reusing the same extractors
-    let overview = super::overview::get_sales_overview(
-        State(state.clone()),
-        Extension(user.clone()),
-        Path(app_id.clone()),
-    )
-    .await?
-    .0;
+    // One access check, app row and member count for all four sections.
+    let app = verify_sales_access(&state, &user, &app_id).await?;
+    let total_members = count_members(&state, &app_id).await?;
 
-    let stats = super::overview::get_sales_stats(
-        State(state.clone()),
-        Extension(user.clone()),
-        Path(app_id.clone()),
-        Query(StatsQuery {
+    let overview = sales_overview(&state, &app_id, app.price, total_members).await?;
+
+    let stats = sales_stats(
+        &state,
+        &app_id,
+        app.price,
+        total_members,
+        StatsQuery {
             start_date: query.start_date,
             end_date: query.end_date,
             period: query.period,
-        }),
+        },
     )
-    .await?
-    .0;
+    .await?;
 
-    let recent_purchases = super::purchases::list_purchases(
-        State(state.clone()),
-        Extension(user.clone()),
-        Path(app_id.clone()),
-        Query(super::purchases::PurchasesQuery {
+    let recent_purchases = purchases_page(
+        &state,
+        &app_id,
+        PurchasesQuery {
             status: None,
             offset: query.purchases_offset,
             limit: query.purchases_limit,
-        }),
+        },
     )
-    .await?
-    .0;
+    .await?;
 
-    let discounts = super::discounts::list_discounts(
-        State(state.clone()),
-        Extension(user.clone()),
-        Path(app_id.clone()),
-        Query(ListDiscountsQuery { active_only: false }),
-    )
-    .await?
-    .0;
+    let discounts = discounts_for_app(&state, &app_id, false).await?;
 
     Ok(Json(SalesDashboardResponse {
         overview,

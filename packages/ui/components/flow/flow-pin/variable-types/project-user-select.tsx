@@ -1,5 +1,4 @@
 import { useTranslation } from "@flow-like/locales";
-import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBackend } from "../../../..";
 import {
@@ -8,7 +7,6 @@ import {
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
 } from "../../../../components/ui/select";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -23,6 +21,7 @@ import type {
 	IMember,
 	IUserLookup,
 } from "../../../../state/backend-state/types";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 
 const TEAM_PAGE_SIZE = 100;
 const MAX_TEAM_MEMBERS = 10000;
@@ -157,29 +156,20 @@ export function ProjectUserSelect({
 	}, []);
 
 	return (
-		<div
-			className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden"
-			onMouseDown={(e) => e.stopPropagation()}
-			onPointerDown={(e) => e.stopPropagation()}
-		>
+		<PinEditorRow>
 			<Select
 				open={open}
 				onOpenChange={handleOpenChange}
 				value={selectedSub || undefined}
 				onValueChange={(sub) => setValue(convertJsonToUint8Array(sub))}
 			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<small className="text-start text-[10px] m-0! truncate">
-						{selectedSub
+				<PinSelectTrigger
+					label={
+						selectedSub
 							? getUserDisplayName(usersBySub[selectedSub], selectedSub)
-							: "Select user"}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
-				</SelectTrigger>
+							: "Select user"
+					}
+				/>
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
@@ -214,6 +204,6 @@ export function ProjectUserSelect({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }

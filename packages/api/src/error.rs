@@ -225,6 +225,10 @@ impl ApiError {
         )
     }
 
+    pub fn coded(status: StatusCode, code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::new(status, code, Some(message.into()), ReportPolicy::Ignore)
+    }
+
     /// A named resource is held by another writer for a bounded time. Distinct from
     /// [`Self::conflict`] on purpose: 409 says "your write lost a race, resubmit", 423 says
     /// "nothing was attempted, wait and retry the same request".
@@ -353,6 +357,16 @@ impl ApiError {
             StatusCode::GATEWAY_TIMEOUT,
             "GATEWAY_TIMEOUT",
             Some(msg),
+            ReportPolicy::Ignore,
+        )
+    }
+
+    /// A 504 for a request that ran out of its route deadline; the caller logs it.
+    pub(crate) fn request_deadline_exceeded(msg: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "GATEWAY_TIMEOUT",
+            Some(msg.into()),
             ReportPolicy::Ignore,
         )
     }

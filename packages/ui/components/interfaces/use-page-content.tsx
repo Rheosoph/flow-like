@@ -2,11 +2,12 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { isEqual } from "lodash-es";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
 	type JSX,
 	type ReactNode,
 	useCallback,
+	useContext,
 	useEffect,
 	useMemo,
 	useRef,
@@ -15,24 +16,30 @@ import {
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useNetworkStatus } from "../../hooks/use-network-status";
+import { isTransportFailure } from "../../lib/api-error";
+import { getApiOrigin } from "../../lib/api-url";
 import {
 	boardReadinessKey,
 	trackBoardReadiness,
 } from "../../lib/board-readiness";
+import { escapeCssAttributeValue } from "../../lib/chat-appearance";
+import {
+	ClientNavigationContext,
+	useClientRouter,
+} from "../../lib/client-navigation";
 import {
 	isPageContractDriftFor,
 	subscribeToPageContractDrift,
 } from "../../lib/page-contract-drift";
+import { isUnconfirmedRestore } from "../../lib/query-persister";
+import { recordRecentApp } from "../../lib/recent-apps";
 import {
 	deriveRouteMappings,
 	isUsableRuntimeEvent,
 	resolveRouteMapping,
 } from "../../lib/runtime-route";
-import { getApiOrigin } from "../../lib/api-url";
-import { recordRecentApp } from "../../lib/recent-apps";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
-import { escapeCssAttributeValue } from "../../lib/chat-appearance";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
@@ -83,6 +90,29 @@ const PAGE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
  * clicking a dead button would refetch on every press.
  */
 const BOOTSTRAP_REVALIDATE_MIN_MS = 3_000;
+
+/**
+ * How long an online cold start holds a restored bootstrap back while the server
+ * confirms it. Long enough for a slow round trip; short enough that a request
+ * which never settles cannot keep a cached Page off screen.
+ */
+export const RESTORED_BOOTSTRAP_GRACE_MS = 5_000;
+
+const TRANSIENT_READ_STATUS = new Set([401, 408, 425, 429]);
+
+/**
+ * Whether a read failed without the server ruling on the caller's access or the
+ * target: the request never arrived, timed out, met an overloaded or broken
+ * backend, or carried an access token that lapsed while the app sat in the
+ * background (401, cured by the session renewal it triggers). A refusal
+ * (403/404/410, …) is a verdict and keeps its error handling.
+ */
+export function isTransientReadFailure(error: unknown): boolean {
+	if (isTransportFailure(error)) return true;
+	const status = (error as { status?: unknown } | null)?.status;
+	if (typeof status !== "number") return false;
+	return status >= 500 || TRANSIENT_READ_STATUS.has(status);
+}
 
 const unsupportedPageBootstrap = async (): Promise<IPageBootstrap> => {
 	throw new Error("Page bootstrap is not supported by this backend");
@@ -306,7 +336,8 @@ export function UsePageContent({
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const searchParams = useSearchParams();
-	const router = useRouter();
+	const router = useClientRouter();
+	const clientNavigation = useContext(ClientNavigationContext);
 	const auth = useAuth();
 	const isOnline = useNetworkStatus();
 	const hasAccessToken = Boolean(auth.user?.access_token);
@@ -359,21 +390,97 @@ export function UsePageContent({
 		key: string;
 		data: IPageBootstrap;
 	} | null>(null);
-	if (bootstrap.isFetchedAfterMount && !bootstrap.isError && bootstrap.data) {
+	const [restoredBootstrapGraceKey, setRestoredBootstrapGraceKey] = useState<
+		string | null
+	>(null);
+	// A cold start resolves the first fetch from the persisted cache, which flips
+	// `isFetchedAfterMount` a round trip before the server answers. Mounting that
+	// copy and then the server's answer remounts the Page and runs `onLoad` twice,
+	// so an online first validation waits for the network; `isFetching` covers the
+	// moment the confirmation is recorded but its data not yet applied. Offline,
+	// or once the grace period is spent, the restored copy is the best answer.
+	// A query keeps a failed refetch's `error` status until a fetch succeeds, and a
+	// new observer inherits it, so only a failure this mount fetched ends the wait.
+	const bootstrapErrorSeen = bootstrap.isError && bootstrap.isFetchedAfterMount;
+	const awaitingNetworkBootstrap = Boolean(
+		bootstrapEnabled &&
+			isOnline &&
+			bootstrap.data &&
+			!bootstrapErrorSeen &&
+			lastValidatedBootstrapRef.current?.key !== bootstrapTargetKey &&
+			(bootstrap.isFetching || isUnconfirmedRestore(bootstrap.data)) &&
+			restoredBootstrapGraceKey !== bootstrapTargetKey,
+	);
+	const bootstrapAccepted =
+		bootstrap.isFetchedAfterMount &&
+		!bootstrap.isError &&
+		!awaitingNetworkBootstrap;
+	if (bootstrapAccepted && bootstrap.data) {
 		lastValidatedBootstrapRef.current = {
 			key: bootstrapTargetKey,
 			data: bootstrap.data,
 		};
 	}
-	const validatedBootstrap =
-		bootstrap.isFetchedAfterMount && !bootstrap.isError
-			? bootstrap.data
-			: lastValidatedBootstrapRef.current?.key === bootstrapTargetKey
-				? lastValidatedBootstrapRef.current.data
+	const bootstrapFailureTransient =
+		bootstrap.isError &&
+		!awaitingNetworkBootstrap &&
+		isTransientReadFailure(bootstrap.error);
+	// A failure that never reached a verdict falls back to whatever copy of this
+	// target the query holds rather than turning a cached Page into an error.
+	const validatedBootstrap = bootstrapAccepted
+		? bootstrap.data
+		: lastValidatedBootstrapRef.current?.key === bootstrapTargetKey
+			? lastValidatedBootstrapRef.current.data
+			: bootstrapFailureTransient
+				? bootstrap.data
 				: undefined;
-	const bootstrapPending = Boolean(
-		bootstrapEnabled && !bootstrap.isFetchedAfterMount && !bootstrap.isError,
+	const bootstrapFailed = Boolean(
+		bootstrap.isError && !(bootstrapFailureTransient && validatedBootstrap),
 	);
+	const bootstrapPending = Boolean(
+		bootstrapEnabled &&
+			((!bootstrap.isFetchedAfterMount && !bootstrap.isError) ||
+				awaitingNetworkBootstrap),
+	);
+	useEffect(() => {
+		if (!awaitingNetworkBootstrap) return;
+		const timer = setTimeout(
+			() => setRestoredBootstrapGraceKey(bootstrapTargetKey),
+			RESTORED_BOOTSTRAP_GRACE_MS,
+		);
+		return () => clearTimeout(timer);
+	}, [awaitingNetworkBootstrap, bootstrapTargetKey]);
+
+	// A transient failure with no copy to fall back on climbs the page-read retry ladder; only a
+	// reconnect or a manual retry would ask again otherwise, which on a resumed mobile app —
+	// the radio still waking up — strands a reachable Page behind the error card.
+	const [bootstrapRetry, setBootstrapRetry] = useState({ key: "", attempt: 0 });
+	const bootstrapRetryAttempt =
+		bootstrapRetry.key === bootstrapTargetKey ? bootstrapRetry.attempt : 0;
+	const bootstrapRetryPending = Boolean(
+		bootstrapEnabled &&
+			bootstrapFailed &&
+			bootstrapFailureTransient &&
+			isOnline &&
+			bootstrapRetryAttempt < PAGE_RETRY_DELAYS_MS.length,
+	);
+	useEffect(() => {
+		if (!bootstrapRetryPending || bootstrap.isFetching) return;
+		const timer = setTimeout(() => {
+			setBootstrapRetry({
+				key: bootstrapTargetKey,
+				attempt: bootstrapRetryAttempt + 1,
+			});
+			void bootstrap.refetch();
+		}, PAGE_RETRY_DELAYS_MS[bootstrapRetryAttempt]);
+		return () => clearTimeout(timer);
+	}, [
+		bootstrapRetryPending,
+		bootstrap.isFetching,
+		bootstrap.refetch,
+		bootstrapTargetKey,
+		bootstrapRetryAttempt,
+	]);
 
 	const headerRef = useRef<IToolBarActions>(
 		null,
@@ -400,12 +507,13 @@ export function UsePageContent({
 	);
 	// The web query cache is persisted. While online, do not expose a restored catalog until this
 	// mount has checked it; the bootstrap-selected Event remains available during that validation.
+	const eventCatalog = Array.isArray(events.data) ? events.data : undefined;
 	const confirmedEventCatalog =
 		supportsPageBootstrap && isOnline
 			? events.isFetchedAfterMount && !events.isError
-				? events.data
+				? eventCatalog
 				: undefined
-			: events.data;
+			: eventCatalog;
 
 	// Signed-in users open locally installed apps too, so the local profiles
 	// stay authoritative for access even when a hub lookup is available.
@@ -475,9 +583,18 @@ export function UsePageContent({
 				localProfileCheckPending,
 				remoteAppCheckPending: authenticatedRemoteCheckPending,
 				remoteAppLoaded: Boolean(remoteApp.data || validatedBootstrap),
-				remoteAppFailed: !validatedBootstrap && remoteApp.isError,
+				// A timeout, a socket that never answered or a lapsed token proves nothing
+				// about access; ejecting on it trades the retry card for a store the user
+				// cannot reach.
+				remoteAppFailed:
+					!validatedBootstrap &&
+					remoteApp.isError &&
+					!isTransientReadFailure(remoteApp.error),
 				eventsLoaded: Boolean(confirmedEventCatalog || validatedBootstrap),
-				eventsFailed: !validatedBootstrap && events.isError,
+				eventsFailed:
+					!validatedBootstrap &&
+					events.isError &&
+					!isTransientReadFailure(events.error),
 				eventsFetching: bootstrapPending || events.isFetching,
 				offline: !isOnline,
 			}),
@@ -491,10 +608,12 @@ export function UsePageContent({
 			authenticatedRemoteCheckPending,
 			remoteApp.data,
 			remoteApp.isError,
+			remoteApp.error,
 			validatedBootstrap,
 			bootstrapPending,
 			confirmedEventCatalog,
 			events.isError,
+			events.error,
 			events.isFetching,
 			isOnline,
 		],
@@ -618,7 +737,9 @@ export function UsePageContent({
 			setResolvedPageKey("");
 		}
 
-		if (events.isFetching && !catalogEvents) {
+		// The bootstrap is a catalog source too. A route resolved before it answers maps to
+		// nothing, and the reroute below would retarget the URL to the Event it then returns.
+		if (!catalogEvents && (events.isFetching || bootstrapPending)) {
 			if (isNavigation || needsFreshResolution) {
 				setRouteLoading(true);
 			}
@@ -688,6 +809,7 @@ export function UsePageContent({
 		routePath,
 		catalogEvents,
 		events.isFetching,
+		bootstrapPending,
 		availableRoutes,
 		backend.eventState,
 		resolvedRouteKey,
@@ -695,6 +817,14 @@ export function UsePageContent({
 	]);
 
 	const isRoutePending = Boolean(appId && resolvedRouteKey !== routeKey);
+	// The effect above commits a mapping one render after the catalog it maps, so for that
+	// render the committed mapping still describes the previous catalog.
+	const liveRouteEventId = useMemo(
+		() =>
+			resolveRouteMapping(availableRoutes, routePath).mapping?.eventId ?? null,
+		[availableRoutes, routePath],
+	);
+	const routeMappingLags = liveRouteEventId !== (routeMapping?.eventId ?? null);
 
 	useEffect(() => {
 		if (redirectCheckPending || !shouldRedirectToStore) return;
@@ -703,8 +833,13 @@ export function UsePageContent({
 
 	const effectiveRouteEvent = useMemo(() => {
 		if (preferEventId && eventId) return null;
-		return canUseEvent(routeEvent) ? routeEvent : null;
-	}, [canUseEvent, eventId, preferEventId, routeEvent]);
+		// The committed Event lags the catalog by a render. Its current copy, such as the
+		// bootstrap's redacted or variant one, is the one that keys the Page.
+		const event =
+			catalogEvents?.find((candidate) => candidate.id === routeEvent?.id) ??
+			routeEvent;
+		return canUseEvent(event) ? event : null;
+	}, [canUseEvent, catalogEvents, eventId, preferEventId, routeEvent]);
 
 	const effectiveRouteMapping = useMemo(() => {
 		return effectiveRouteEvent ? routeMapping : null;
@@ -814,12 +949,19 @@ export function UsePageContent({
 	}, [effectiveRouteEvent, activeEvent]);
 
 	// Page targets suppress the application header, its only metadata consumer. Wait until the
-	// Event catalog resolves before deciding, so a custom page never starts this unrelated read.
+	// route resolves against the Event catalog before deciding, so a custom page never starts
+	// this unrelated read.
 	const metadata = useInvoke(
 		backend.appState.getAppMeta,
 		backend.appState,
 		[appId ?? ""],
-		Boolean(appId && catalogEvents && !pageEvent),
+		Boolean(
+			appId &&
+				catalogEvents &&
+				!pageEvent &&
+				!isRoutePending &&
+				!routeMappingLags,
+		),
 		[],
 	);
 	const pageEventId = pageEvent?.id ?? null;
@@ -836,7 +978,7 @@ export function UsePageContent({
 			: "";
 	const bootstrapPageData = useMemo(() => {
 		if (!validatedBootstrap?.page || !pageEventId || !pageId) return null;
-		if (validatedBootstrap.event.id !== pageEventId) return null;
+		if (validatedBootstrap.event?.id !== pageEventId) return null;
 		if (validatedBootstrap.page.id !== pageId) return null;
 		return validatedBootstrap.page;
 	}, [validatedBootstrap, pageEventId, pageId]);
@@ -849,14 +991,28 @@ export function UsePageContent({
 	const pageExecutionRevision = bootstrapPageData
 		? (validatedBootstrap?.executionRevision ?? undefined)
 		: undefined;
+	const pageElementDemand = bootstrapPageData
+		? (validatedBootstrap?.elementDemand ?? undefined)
+		: undefined;
 	const pageExecutionAuthorityUnavailable = Boolean(
 		pageEvent &&
 			!bootstrapPending &&
 			(!supportsPageBootstrap ||
-				bootstrap.isError ||
+				bootstrapFailed ||
 				!bootstrapPageData ||
 				!pageExecutionRevision),
 	);
+	const pageExecutionAuthorityMessage = bootstrapFailed
+		? t(
+				"thisPageCouldNotLoadItsExecutionAuthorizationError",
+				"This Page could not load its execution authorization: {{error}}",
+				{ error: errorText(bootstrap.error) },
+			)
+		: t(
+				"thisPageCouldNotLoadItsExecutionAuthorizationReloadAndTryAgain",
+				"This Page could not load its execution authorization. Reload and try again.",
+			);
+	const bootstrapRetrying = bootstrap.isFetching || bootstrapRetryPending;
 
 	useEffect(() => {
 		if (!pageEventId || !pageId) return;
@@ -896,7 +1052,7 @@ export function UsePageContent({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef is a stable ref
 	const switchEvent = useCallback(
-		(newEventId: string, replace = false) => {
+		(newEventId: string, replace = false, preserveRoute = false) => {
 			if (!appId || !newEventId || eventId === newEventId) return;
 			headerRef.current?.pushToolbarElements([]);
 			headerRef.current?.pushNavElements([]);
@@ -904,9 +1060,26 @@ export function UsePageContent({
 				onNavigate?.({ eventId: newEventId });
 				return;
 			}
+			if (clientNavigation && !preserveRoute) {
+				const params = new URLSearchParams(window.location.search);
+				params.delete("route");
+				params.set("eventId", newEventId);
+				const href = `/use?${params.toString()}`;
+				if (replace) router.replace(href);
+				else router.push(href);
+				return;
+			}
 			setQueryParams("eventId", newEventId, { replace });
 		},
-		[appId, eventId, embedded, onNavigate, setQueryParams],
+		[
+			appId,
+			eventId,
+			embedded,
+			onNavigate,
+			clientNavigation,
+			router,
+			setQueryParams,
+		],
 	);
 
 	// --- Config ---
@@ -1127,6 +1300,32 @@ export function UsePageContent({
 		if (!catalogEvents) retryCatalog();
 	}, [hasAccessToken, pageKey, pageError, catalogEvents, retryCatalog]);
 
+	// The bootstrap query is keyed by subject, not token, so the renewal that cures a 401 from a
+	// token that lapsed in the background would leave the failure standing. The next bootstrap
+	// failure to settle after any token change asks once more.
+	const accessToken = auth.user?.access_token;
+	const bootstrapTokenRef = useRef(accessToken);
+	const sessionRenewedRef = useRef(false);
+	useEffect(() => {
+		if (bootstrapTokenRef.current !== accessToken) {
+			bootstrapTokenRef.current = accessToken;
+			sessionRenewedRef.current = Boolean(accessToken);
+		}
+		if (!sessionRenewedRef.current || bootstrap.isFetching) return;
+		sessionRenewedRef.current = false;
+		if (!bootstrapEnabled || !bootstrap.isError) return;
+		// The host pushes the renewed session into the backend from an ancestor's effect, which
+		// runs after this one; asking within this flush would resend the lapsed token.
+		const timer = setTimeout(() => void bootstrap.refetch(), 0);
+		return () => clearTimeout(timer);
+	}, [
+		accessToken,
+		bootstrapEnabled,
+		bootstrap.isFetching,
+		bootstrap.isError,
+		bootstrap.refetch,
+	]);
+
 	// --- Route/event sync effects ---
 
 	useEffect(() => {
@@ -1143,9 +1342,17 @@ export function UsePageContent({
 	useEffect(() => {
 		if (!appId) return;
 		if (effectiveRouteMapping) return;
-		if (routeLoading || isRoutePending || isDirectEventPending) return;
+		if (
+			routeLoading ||
+			isRoutePending ||
+			routeMappingLags ||
+			isDirectEventPending
+		)
+			return;
 
-		const queriesPending = bootstrapPending || events.isFetching;
+		// A bootstrap waiting for auth is still coming, so an empty catalog proves nothing yet.
+		const queriesPending =
+			authCheckPending || bootstrapPending || events.isFetching;
 
 		if (sortedEvents.length === 0) {
 			if (!catalogEvents || queriesPending) return;
@@ -1170,14 +1377,14 @@ export function UsePageContent({
 
 		if (!resolvedCurrentEvent) {
 			if (rerouteEvent) {
-				switchEvent(rerouteEvent.id, true);
+				switchEvent(rerouteEvent.id, true, true);
 				return;
 			}
 			return;
 		}
 
 		if (eventId && !canUseEvent(resolvedCurrentEvent)) {
-			switchEvent(rerouteEvent?.id ?? "", true);
+			switchEvent(rerouteEvent?.id ?? "", true, true);
 			return;
 		}
 
@@ -1190,11 +1397,13 @@ export function UsePageContent({
 		switchEvent,
 		canUseEvent,
 		catalogEvents,
+		authCheckPending,
 		events.isFetching,
 		bootstrapPending,
 		effectiveRouteMapping,
 		routeLoading,
 		isRoutePending,
+		routeMappingLags,
 		isDirectEventPending,
 		goToStore,
 	]);
@@ -1214,9 +1423,9 @@ export function UsePageContent({
 			const params = new URLSearchParams(window.location.search);
 			params.set("route", path);
 			params.delete("eventId");
-			router.push(`?${params.toString()}`);
+			router.push(`${clientNavigation ? "/use" : ""}?${params.toString()}`);
 		},
-		[appId, embedded, onNavigate, router],
+		[appId, embedded, onNavigate, clientNavigation, router],
 	);
 
 	const handleEmbeddedNavigation = useCallback(
@@ -1285,9 +1494,9 @@ export function UsePageContent({
 			if (pageExecutionAuthorityUnavailable) {
 				return (
 					<InterfaceLoadError
-						message="This Page could not load its execution authorization. Reload and try again."
+						message={pageExecutionAuthorityMessage}
 						offline={!isOnline}
-						retrying={bootstrapPending}
+						retrying={bootstrapRetrying}
 						onRetry={retryCatalog}
 					/>
 				);
@@ -1304,6 +1513,7 @@ export function UsePageContent({
 							page={resolvedPageData}
 							pageRevision={pageContentRevision}
 							pageExecutionRevision={pageExecutionRevision}
+							pageElementDemand={pageElementDemand}
 							queryParams={embedded ? (queryParamsProp ?? {}) : undefined}
 							active={active}
 							onNavigationMessage={
@@ -1417,6 +1627,8 @@ export function UsePageContent({
 		pageContentRevision,
 		pageExecutionRevision,
 		pageExecutionAuthorityUnavailable,
+		pageExecutionAuthorityMessage,
+		bootstrapRetrying,
 		pageLoading,
 		pageError,
 		pageRetryPending,

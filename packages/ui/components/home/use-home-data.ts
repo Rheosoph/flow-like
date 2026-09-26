@@ -7,10 +7,8 @@ import { useBackend } from "../../state/backend-state";
 import type { ExecuteSqlResult } from "../../state/backend-state/query-state";
 import {
 	type HomeDataConfig,
-	type HomeDataSourceContext,
 	buildHomeDataQuery,
-	homeDataColumns,
-	homeOntologyColumns,
+	loadHomeDataSourceContext,
 } from "./home-data-query";
 
 export function useHomeData(config: HomeDataConfig, enabled = true) {
@@ -58,33 +56,16 @@ export function useHomeData(config: HomeDataConfig, enabled = true) {
 		const timer = setTimeout(() => {
 			void (async () => {
 				try {
-					const context: HomeDataSourceContext = { viewerId };
 					const personal = stable.scope === "personal";
-					if (stable.sourceKind === "ontology") {
-						context.overlay = await backend.graphState.getOverlay(
-							stable.appId,
-							stable.ontologyId,
-							personal,
-						);
-						context.columns = homeOntologyColumns(
-							context.overlay,
-							stable.objectType,
-						);
-					} else if (stable.sourceKind === "query") {
-						context.savedQuery = await backend.queryState.getSavedQuery(
-							stable.appId,
-							stable.queryId,
-							personal,
-						);
-					} else {
-						context.columns = homeDataColumns(
-							await backend.dbState.getSchema(
-								stable.appId,
-								stable.table,
-								personal,
-							),
-						);
-					}
+					const context = await loadHomeDataSourceContext(
+						{
+							dbState: backend.dbState,
+							graphState: backend.graphState,
+							queryState: backend.queryState,
+						},
+						stable,
+						{ viewerId },
+					);
 					const query = buildHomeDataQuery(stable, context);
 					if (cancelled) return;
 					const data = await backend.queryState.executeSql(

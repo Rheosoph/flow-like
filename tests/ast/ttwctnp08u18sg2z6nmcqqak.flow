@@ -230,7 +230,6 @@ eventsGeneric indexPath(path: string, payload: Struct) {
             const database15 = open({ name: parse({ string: content6 }).reference_db, userScoped: true, batchSize: 1000 })
             database15.purge()
             files.delete({ filter: `'reference_db' = ${parse({ string: content6 }).reference_db}` })
-            reroute()
             const pages2 = extractDocumentAi({ file: userDir({ nodeScope: false }).child(path), model: smallModel, extractImages: true, imagesPerMessage: 1, pagesPerBatch: 4, temperature: 0.1, maxTokens: 0 })
             const summary2 = summarizeDocument({ pages: pages2, model: smallModel, detailLevel: "Medium", includeToc: true, strategy: "Refine", densification: "None", maxContextTokens: 8000, chunkOverlap: 10, trackEntities: false, parallelRequests: 4, densitySteps: 3 })
             const pathOut = userDir({ nodeScope: false }).child(path).setExtension("flow_summary")
@@ -239,30 +238,30 @@ eventsGeneric indexPath(path: string, payload: Struct) {
             const pathOut7 = userDir({ nodeScope: false }).child(path).setExtension("flow_md")
             pathOut7.writeString(markdown2)
             const vector3 = embedDocument({ queryString: summary2.summary, model: embeddingModel })
-            let record2 = set({ structIn: {}, field: "vector", value: vector3 }).structOut
-            record2.content = summary2.summary
+            let row2 = set({ structIn: {}, field: "vector", value: vector3 }).structOut
+            row2.content = summary2.summary
             const date3 = now()
-            let row = set({ structIn: record2, field: "indexed", value: date3 }).structOut
-            row.path = userDir({ nodeScope: false }).child(path).rawPath()
-            row.file_name = userDir({ nodeScope: false }).child(path).filename(true)
+            row2.indexed = date3
+            row2.path = userDir({ nodeScope: false }).child(path).rawPath()
+            row2.file_name = userDir({ nodeScope: false }).child(path).filename(true)
             const cuid = random::cuid()
-            row.reference_db = cuid
-            files.insertOne(row)
+            row2.reference_db = cuid
+            files.insertOne(row2)
             const content2 = userDir({ nodeScope: false }).child(path).readToBytes()
             const hash3 = blake3({ input: content2 })
-            let row2 = set({ structIn: {}, field: "hash", value: hash3 }).structOut
-            row2.reference_db = cuid
+            let row = set({ structIn: {}, field: "hash", value: hash3 }).structOut
+            row.reference_db = cuid
             const pathOut3 = userDir({ nodeScope: false }).child(path).setExtension("flow_index")
-            pathOut3.writeString(stringify({ value: row2, pretty: false }))
+            pathOut3.writeString(stringify({ value: row, pretty: false }))
             const database5 = open({ name: cuid, userScoped: true, batchSize: 1000 })
             for (const item3 of pages2) {
-                let record4 = set({ structIn: {}, field: "page", value: item3.page_number }).structOut
+                let row3 = set({ structIn: {}, field: "page", value: item3.page_number }).structOut
                 const chunks = chunkText({ text: item3.content, model: embeddingModel, capacity: 8000, overlap: 20, markdown: true })
                 for (const [index, item4] of chunks) {
-                    let record3 = set({ structIn: record4, field: "content", value: item4 }).structOut
-                    record3.chunk_id = index
+                    row3.content = item4
+                    row3.chunk_id = index
                     const vector4 = embedDocument({ queryString: item4, model: embeddingModel })
-                    let row3 = set({ structIn: record3, field: "vector", value: vector4 }).structOut
+                    row3.vector = vector4
                     database5.insertOne(row3)
                 }
             }
@@ -270,7 +269,6 @@ eventsGeneric indexPath(path: string, payload: Struct) {
             database5.optimize(false)
         }
     } else { // exec_out_missing
-        reroute()
     }
 }
 
@@ -471,9 +469,9 @@ eventsGeneric readFile(path: string, summary: bool, payload: Struct) {
 eventsGeneric listFilesInPath(path: string, payload: Struct) {
     const paths = fromRawPath({ basePath: userDir({ nodeScope: false }), rawPath: path }).listPaths(false)
     const folders = fromRawPath({ basePath: userDir({ nodeScope: false }), rawPath: path }).listFolders(false)
-    let record5 = set({ structIn: {}, field: "files", value: paths }).structOut
-    record5.folders = folders
-    return record5
+    let record2 = set({ structIn: {}, field: "files", value: paths }).structOut
+    record2.folders = folders
+    return record2
 }
 
 eventsGeneric searchInFiles(query: string, filter: string, payload: Struct) {

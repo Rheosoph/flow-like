@@ -16,6 +16,7 @@ COPY packages/api/prisma/pre-push ./prisma/pre-push
 COPY packages/api/scripts/make-prisma-mirror.sh /usr/local/bin/make-prisma-mirror.sh
 COPY apps/backend/docker-compose/db-init/prisma.config.ts ./prisma.config.ts
 COPY apps/backend/docker-compose/db-init/run-migration.ts ./run-migration.ts
+COPY apps/backend/shared/audit_database_roles.ts ./audit_database_roles.ts
 RUN chmod +x /usr/local/bin/make-prisma-mirror.sh \
     && PATH=/usr/bin:/bin /usr/local/bin/make-prisma-mirror.sh --target postgresql \
     && DATABASE_URL=postgresql://build:build@localhost/build bun node_modules/prisma/build/index.js validate --schema=prisma-postgres-mirror/schema

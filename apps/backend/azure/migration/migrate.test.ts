@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import type { Client } from "pg";
 import {
+	API_ROLE_SETTING,
+	AUDIT_ROLE_SETTING,
+	type AuditRoleDependencies,
 	ConfigError,
 	type Environment,
+	applyAuditRoles,
 	composeDatabaseUrl,
 	composePrePushDatabaseUrl,
 	parseConfig,
@@ -122,5 +127,172 @@ describe("composePrePushDatabaseUrl", () => {
 		expect(url.searchParams.get("sslmode")).toBe("verify-full");
 		expect(url.searchParams.has("sslaccept")).toBe(false);
 		expect(url.searchParams.has("sslcert")).toBe(false);
+	});
+});
+
+describe("applyAuditRoles", () => {
+	const DATABASE_URL = composePrePushDatabaseUrl(
+		parseConfig(validSettings()),
+		"token",
+	);
+	const API_ROLE = "flowlike-dev-api-identity";
+	const AUDIT_ROLE = "flowlike-dev-audit-worker-identity";
+
+	interface Session {
+		readonly connected: string[];
+		readonly provisioned: NodeJS.ProcessEnv[];
+		ended: boolean;
+	}
+
+	// A catalog that holds `roles`; `provision` stands in for the shared helper.
+	function fakeDependencies(
+		roles: readonly string[],
+		provision: AuditRoleDependencies["provision"] = async () => undefined,
+	): { session: Session; deps: AuditRoleDependencies } {
+		const session: Session = { connected: [], provisioned: [], ended: false };
+		const client = {
+			async query(_text: string, values: readonly unknown[] = []) {
+				return {
+					rows: roles.includes(String(values[0])) ? [{ exists: 1 }] : [],
+				};
+			},
+			async end() {
+				session.ended = true;
+			},
+		} as unknown as Client;
+		const deps: AuditRoleDependencies = {
+			connect: async (url) => {
+				session.connected.push(url);
+				return client;
+			},
+			provision: async (target, env) => {
+				session.provisioned.push(env ?? {});
+				await provision(target, env);
+			},
+		};
+		return { session, deps };
+	}
+
+	async function run(env: Environment, deps: AuditRoleDependencies) {
+		const logs = spyOn(console, "log").mockImplementation(() => undefined);
+		const errors = spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			const code = await applyAuditRoles(env, DATABASE_URL, deps);
+			return {
+				code,
+				logs: logs.mock.calls.map((call) => String(call[0])),
+				errors: errors.mock.calls.map((call) => String(call[0])),
+			};
+		} finally {
+			logs.mockRestore();
+			errors.mockRestore();
+		}
+	}
+
+	test("without AUDIT_DATABASE_ROLE the step is skipped before any connection", async () => {
+		const { session, deps } = fakeDependencies([API_ROLE, AUDIT_ROLE]);
+		const result = await run(
+			{ ...validSettings(), [API_ROLE_SETTING]: API_ROLE },
+			deps,
+		);
+		expect(result.code).toBe(0);
+		expect(result.logs).toEqual([
+			"[azure-migration] audit role provisioning skipped: AUDIT_DATABASE_ROLE is not set",
+		]);
+		expect(result.errors).toEqual([]);
+		expect(session.connected).toEqual([]);
+		expect(session.provisioned).toEqual([]);
+	});
+
+	test("a worker role missing from pg_roles is skipped with one line and the connection is closed", async () => {
+		const { session, deps } = fakeDependencies([API_ROLE]);
+		const result = await run(
+			{
+				...validSettings(),
+				[API_ROLE_SETTING]: API_ROLE,
+				[AUDIT_ROLE_SETTING]: AUDIT_ROLE,
+			},
+			deps,
+		);
+		expect(result.code).toBe(0);
+		expect(result.logs).toEqual([
+			`[azure-migration] audit role provisioning skipped: role "${AUDIT_ROLE}" does not exist in pg_roles`,
+		]);
+		expect(result.errors).toEqual([]);
+		expect(session.connected).toEqual([DATABASE_URL]);
+		expect(session.provisioned).toEqual([]);
+		expect(session.ended).toBe(true);
+	});
+
+	test("with both roles the helper runs in grant-only mode on the push connection", async () => {
+		const { session, deps } = fakeDependencies([API_ROLE, AUDIT_ROLE]);
+		const result = await run(
+			{
+				...validSettings(),
+				[API_ROLE_SETTING]: API_ROLE,
+				[AUDIT_ROLE_SETTING]: AUDIT_ROLE,
+			},
+			deps,
+		);
+		expect(result.code).toBe(0);
+		expect(session.connected).toEqual([DATABASE_URL]);
+		expect(session.provisioned).toHaveLength(1);
+		expect(session.provisioned[0]).toMatchObject({
+			AUDIT_DB_GRANTS_ONLY: "true",
+			API_DATABASE_ROLE: API_ROLE,
+			AUDIT_DATABASE_ROLE: AUDIT_ROLE,
+		});
+		expect(session.provisioned[0]?.DATABASE_URL).toBeUndefined();
+		expect(result.logs).toEqual([
+			`[azure-migration] audit privilege boundary applied: api="${API_ROLE}" worker="${AUDIT_ROLE}"`,
+		]);
+		expect(session.ended).toBe(true);
+	});
+
+	test("a provisioning failure is the job's failure", async () => {
+		const { session, deps } = fakeDependencies(
+			[API_ROLE, AUDIT_ROLE],
+			async () => {
+				throw new Error(
+					"Inherited audit write privileges defeat API and worker separation",
+				);
+			},
+		);
+		const result = await run(
+			{
+				...validSettings(),
+				[API_ROLE_SETTING]: API_ROLE,
+				[AUDIT_ROLE_SETTING]: AUDIT_ROLE,
+			},
+			deps,
+		);
+		expect(result.code).toBe(1);
+		expect(result.errors).toEqual([
+			"[azure-migration] audit role provisioning failed: Inherited audit write privileges defeat API and worker separation",
+		]);
+		expect(session.ended).toBe(true);
+	});
+
+	test("a connection failure is the job's failure and never prints the URL", async () => {
+		const { deps } = fakeDependencies([API_ROLE, AUDIT_ROLE]);
+		const failing: AuditRoleDependencies = {
+			...deps,
+			connect: async () => {
+				throw new Error(
+					'password authentication failed for user "flowlike-dev-migration-identity"',
+				);
+			},
+		};
+		const result = await run(
+			{ ...validSettings(), [AUDIT_ROLE_SETTING]: AUDIT_ROLE },
+			failing,
+		);
+		expect(result.code).toBe(1);
+		expect(result.errors).toEqual([
+			'[azure-migration] audit role provisioning failed: password authentication failed for user "flowlike-dev-migration-identity"',
+		]);
+		expect(
+			[...result.logs, ...result.errors].some((line) => line.includes("token")),
+		).toBe(false);
 	});
 });

@@ -49,8 +49,13 @@ pub fn write_cache_file(name: &str, data: &[u8]) -> Result<()> {
     if !path.exists() {
         std::fs::create_dir_all(path.parent().unwrap())?;
     }
-    let mut file = File::create(path)?;
+    // Written aside and renamed into place: a crash mid-write must not leave a
+    // truncated entry that fails every offline read after it.
+    let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    let mut file = File::create(&temp_path)?;
     file.write_all(data)?;
+    file.sync_all()?;
+    std::fs::rename(&temp_path, &path)?;
     Ok(())
 }
 

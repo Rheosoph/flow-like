@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
+import { Window } from "happy-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { UserIdentity } from "../../hooks/use-user-lookup";
 
@@ -7,12 +8,29 @@ const SUB = "42c52474-5081-70d7-2b23-4bd8c38d8fb0";
 let identity: UserIdentity;
 
 // The tag's whole job is to render whatever the lookup settled on, so the lookup
-// itself is stubbed and each of its three outcomes is rendered for real.
+// itself is stubbed and each of its three outcomes is rendered for real. bun keeps a module
+// mock for every later file in the process, so the real module is put back in afterAll.
+const actualUserLookup = { ...(await import("../../hooks/use-user-lookup")) };
 mock.module("../../hooks/use-user-lookup", () => ({
+	...actualUserLookup,
 	useUserIdentity: () => identity,
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../hooks/use-user-lookup", () => actualUserLookup);
+});
+
+// Radix picks its layout effect when first imported, so the component loads under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
+await import("./user-identity");
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
 
 function pending(): UserIdentity {
 	return {

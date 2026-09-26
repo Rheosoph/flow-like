@@ -233,6 +233,27 @@ export function nodeToEndpoint(node: NodeLabelMapping): RelationshipEndpoint {
 	};
 }
 
+function holdsForeignKeyTo(
+	holder: RelationshipEndpoint,
+	referenced: RelationshipEndpoint,
+): boolean {
+	return holder.columns.some((column) => {
+		if (column.name === holder.id_column) return false;
+		const stem = foreignKeyStem(column.name);
+		return stem !== undefined && endpointMatchesStem(referenced, stem);
+	});
+}
+
+/** The table carrying the foreign key between two objects; the source's when unclear. */
+export function preferredJoinTable(
+	source: RelationshipEndpoint,
+	target: RelationshipEndpoint | undefined,
+): string {
+	if (!target || target.table === source.table) return source.table;
+	if (holdsForeignKeyTo(source, target)) return source.table;
+	return holdsForeignKeyTo(target, source) ? target.table : source.table;
+}
+
 function suggestForeignKeyColumn(
 	columns: PropertyColumn[],
 	target: RelationshipEndpoint | undefined,
@@ -254,10 +275,17 @@ function suggestForeignKeyColumn(
 	);
 }
 
+export interface RelationshipPrefill {
+	sourceId: string;
+	targetId?: string;
+	dstColumn?: string;
+}
+
 export interface AddRelationshipFormProps {
 	endpoints: RelationshipEndpoint[];
 	takenLabels: Set<string>;
-	prefill?: { sourceId: string; dstColumn: string } | null;
+	/** Read on mount only — remount the form (via `key`) to apply a new one. */
+	prefill?: RelationshipPrefill | null;
 	onAdd: (edge: WizardEdge) => void;
 	onCancel: () => void;
 }
@@ -276,7 +304,8 @@ export function AddRelationshipForm({
 	const initialSourceId = prefilledSource?.id ?? endpoints[0]?.id ?? "";
 	const [sourceId, setSourceId] = useState(initialSourceId);
 	const [targetId, setTargetId] = useState(
-		endpoints.find((endpoint) => endpoint.id !== initialSourceId)?.id ??
+		endpoints.find((endpoint) => endpoint.id === prefill?.targetId)?.id ??
+			endpoints.find((endpoint) => endpoint.id !== initialSourceId)?.id ??
 			initialSourceId,
 	);
 	const [table, setTable] = useState(
@@ -309,10 +338,17 @@ export function AddRelationshipForm({
 		[endpoints, table],
 	);
 
+	// A prefilled column lives on the source's table, so the join stays there
+	// until the user picks an object on another table.
+	const prefillTable = prefill?.dstColumn ? prefilledSource?.table : undefined;
 	useEffect(() => {
 		if (!source) return;
-		setTable(source.table);
-	}, [source]);
+		setTable(
+			source.table === prefillTable
+				? prefillTable
+				: preferredJoinTable(source, target),
+		);
+	}, [prefillTable, source, target]);
 
 	useEffect(() => {
 		const columns =
@@ -323,6 +359,10 @@ export function AddRelationshipForm({
 				? source.id_column
 				: suggestForeignKeyColumn(columns, source, "");
 		setSrcColumn(nextSrc);
+		if (target && table === target.table && table !== source?.table) {
+			setDstColumn(target.id_column);
+			return;
+		}
 		setDstColumn((current) =>
 			current && columns.some((column) => column.name === current)
 				? current

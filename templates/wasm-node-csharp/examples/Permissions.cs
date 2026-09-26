@@ -12,7 +12,7 @@ using FlowLike.Wasm.Sdk;
 public static class HttpRequestExample
 {
     // ========================================================================
-    // Node definition — note nd.AddPermission("http")
+    // Node definition — note nd.AddPermission("network:http")
     // ========================================================================
 
     public static NodeDefinition GetDefinition()
@@ -23,7 +23,7 @@ public static class HttpRequestExample
             description: "Fetches data from a public API using HTTP",
             category: "Examples/HTTP");
 
-        nd.AddPermission("http");
+        nd.AddPermission("network:http");
 
         nd.AddPin(PinDefinition.InputExec("exec"));
         nd.AddPin(PinDefinition.InputPin("url", PinType.String,

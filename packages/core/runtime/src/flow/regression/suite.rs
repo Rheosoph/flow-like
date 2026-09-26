@@ -811,6 +811,7 @@ mod tests {
             logic_nodes: HashMap::new(),
             app_state: None,
             pin_index: None,
+            page_metadata_source: Default::default(),
         }
     }
 

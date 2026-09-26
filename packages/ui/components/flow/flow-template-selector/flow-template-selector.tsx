@@ -19,6 +19,7 @@ import {
 	hashToGradient,
 	useThemeInfo,
 } from "../../../hooks/use-theme-gradient";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -65,7 +66,7 @@ export function FlowTemplateSelector({
 			{ templateId: string; metadata?: any }[]
 		>();
 
-		for (const template of templates.data) {
+		for (const template of asArray(templates.data)) {
 			const [appId, templateId, metadata] = template;
 			const existing = templatesByApp.get(appId) || [];
 			existing.push({ templateId, metadata });
@@ -74,7 +75,7 @@ export function FlowTemplateSelector({
 
 		const result: AppWithTemplates[] = [];
 
-		for (const appData of apps.data) {
+		for (const appData of asArray(apps.data)) {
 			const [app, appMeta] = appData;
 			const appTemplates = templatesByApp.get(app.id);
 			if (appTemplates && appTemplates.length > 0) {
@@ -571,12 +572,8 @@ function InlineTemplatePreview({
 		true,
 	);
 
-	const nodeCount = templateBoard.data
-		? Object.keys(templateBoard.data.nodes).length
-		: 0;
-	const commentCount = templateBoard.data
-		? Object.keys(templateBoard.data.comments).length
-		: 0;
+	const nodeCount = Object.keys(templateBoard.data?.nodes ?? {}).length;
+	const commentCount = Object.keys(templateBoard.data?.comments ?? {}).length;
 
 	return (
 		<div className="flex flex-col h-full">
@@ -611,7 +608,7 @@ function InlineTemplatePreview({
 					</div>
 				) : templateBoard.data ? (
 					<FlowPreview
-						nodes={Object.values(templateBoard.data.nodes)}
+						nodes={Object.values(templateBoard.data.nodes ?? {})}
 						comments={templateBoard.data.comments}
 						layers={templateBoard.data.layers}
 						variables={templateBoard.data.variables}
@@ -799,12 +796,8 @@ function BrowserPreviewPane({
 		true,
 	);
 
-	const nodeCount = templateBoard.data
-		? Object.keys(templateBoard.data.nodes).length
-		: 0;
-	const commentCount = templateBoard.data
-		? Object.keys(templateBoard.data.comments).length
-		: 0;
+	const nodeCount = Object.keys(templateBoard.data?.nodes ?? {}).length;
+	const commentCount = Object.keys(templateBoard.data?.comments ?? {}).length;
 
 	return (
 		<div className="flex flex-col h-full">
@@ -830,7 +823,7 @@ function BrowserPreviewPane({
 					</div>
 				) : templateBoard.data ? (
 					<FlowPreview
-						nodes={Object.values(templateBoard.data.nodes)}
+						nodes={Object.values(templateBoard.data.nodes ?? {})}
 						comments={templateBoard.data.comments}
 						layers={templateBoard.data.layers}
 						variables={templateBoard.data.variables}

@@ -1,12 +1,14 @@
 use crate::{
     entity::{
-        app_group, publication_log, publication_request,
-        sea_orm_active_enums::PublicationRequestStatus, user,
+        ai_act_assessment, app_group, publication_log, publication_request,
+        sea_orm_active_enums::{
+            AiActAssessmentStatus, AppGroupMemberStatus, PublicationRequestStatus,
+        },
+        user,
     },
     error::ApiError,
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    publication::gate::group_member_assessments,
     routes::{
         app::{
             connection::{app_meta_lookup, graph::presign_media, graph::presign_media_under},
@@ -17,7 +19,7 @@ use crate::{
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
@@ -73,6 +75,42 @@ pub struct ListSuitePublicationRequestsResponse {
     pub page: u64,
     pub limit: u64,
     pub has_more: bool,
+}
+
+/// Status of the highest assessment version of each app; apps that never
+/// started an assessment are absent.
+async fn latest_assessment_statuses(
+    state: &AppState,
+    app_ids: Vec<String>,
+) -> Result<HashMap<String, AiActAssessmentStatus>, ApiError> {
+    if app_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows: Vec<(String, i32, AiActAssessmentStatus)> = ai_act_assessment::Entity::find()
+        .select_only()
+        .column(ai_act_assessment::Column::AppId)
+        .column(ai_act_assessment::Column::Version)
+        .column(ai_act_assessment::Column::Status)
+        .filter(ai_act_assessment::Column::AppId.is_in(app_ids))
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+
+    let mut latest: HashMap<String, (i32, AiActAssessmentStatus)> = HashMap::new();
+    for (app_id, version, status) in rows {
+        match latest.get(&app_id) {
+            Some((existing, _)) if *existing >= version => {}
+            _ => {
+                latest.insert(app_id, (version, status));
+            }
+        }
+    }
+
+    Ok(latest
+        .into_iter()
+        .map(|(app_id, (_, status))| (app_id, status))
+        .collect())
 }
 
 #[derive(Clone, Deserialize, Debug, IntoParams)]
@@ -178,21 +216,31 @@ pub async fn get_group_requests(
             .map(|a| (a.id.clone(), a))
             .collect();
 
-    // AI Act standing per suite (the gate a reviewer is checking).
+    // AI Act standing per suite (the gate a reviewer is checking): the latest
+    // assessment status of every ACTIVE member, from one query for the page.
     let mut readiness: HashMap<String, HashMap<String, Option<String>>> = HashMap::new();
     if state.platform_config.features.ai_act {
-        for group_id in &group_ids {
-            let per_app = group_member_assessments(&state, group_id)
-                .await?
-                .into_iter()
-                .map(|m| {
-                    (
-                        m.app_id,
-                        m.status.map(|s| format!("{:?}", s).to_uppercase()),
-                    )
-                })
-                .collect();
-            readiness.insert(group_id.clone(), per_app);
+        let active_members: Vec<&crate::entity::app_group_member::Model> = members
+            .iter()
+            .filter(|m| m.status == AppGroupMemberStatus::Active)
+            .collect();
+        let active_app_ids: Vec<String> = active_members
+            .iter()
+            .map(|m| m.app_id.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let latest = latest_assessment_statuses(&state, active_app_ids).await?;
+        for member in active_members {
+            readiness
+                .entry(member.group_id.clone())
+                .or_default()
+                .insert(
+                    member.app_id.clone(),
+                    latest
+                        .get(&member.app_id)
+                        .map(|status| format!("{:?}", status).to_uppercase()),
+                );
         }
     }
 

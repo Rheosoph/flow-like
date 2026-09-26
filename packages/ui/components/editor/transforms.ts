@@ -23,6 +23,7 @@ import {
 	type Path,
 	PathApi,
 	type TElement,
+	type TRange,
 } from "platejs";
 
 const ACTION_THREE_COLUMNS = "action_three_columns";
@@ -79,7 +80,11 @@ const insertInlineMap: Record<
 
 export const insertBlock = (editor: PlateEditor, type: string) => {
 	editor.tf.withoutNormalizing(() => {
-		const block = editor.api.block();
+		const outerQuote =
+			type === editor.getType(KEYS.blockquote)
+				? editor.api.above<TElement>({ match: { type }, mode: "highest" })
+				: undefined;
+		const block = outerQuote ?? editor.api.block();
 
 		if (!block) return;
 		if (type in insertBlockMap) {
@@ -131,15 +136,33 @@ const setBlockMap: Record<
 	[KEYS.codeBlock]: (editor) => toggleCodeBlock(editor),
 };
 
+const liftOutOfBlockquotes = (editor: PlateEditor, at: Path | TRange) => {
+	editor.tf.unwrapNodes({
+		at,
+		match: { type: editor.getType(KEYS.blockquote) },
+		mode: "all",
+		split: true,
+	});
+};
+
+/**
+ * Plate 49 quotes were flat blocks, so turning one into another type replaced
+ * it. Plate 53 quotes are containers: the block leaves the quote instead, and
+ * a block already inside a quote is not quoted again.
+ */
 export const setBlockType = (
 	editor: PlateEditor,
 	type: string,
 	{ at }: { at?: Path } = {},
 ) => {
 	editor.tf.withoutNormalizing(() => {
+		const blockquoteType = editor.getType(KEYS.blockquote);
+		const quoting = type === blockquoteType;
+
 		const setEntry = (entry: NodeEntry<TElement>) => {
 			const [node, path] = entry;
 
+			if (quoting && editor.api.above({ at: path, match: { type } })) return;
 			if (node[KEYS.listType]) {
 				editor.tf.unsetNodes([KEYS.listType, "indent"], { at: path });
 			}
@@ -151,19 +174,67 @@ export const setBlockType = (
 			}
 		};
 
-		if (at) {
-			const entry = editor.api.node<TElement>(at);
+		if (at && editor.api.node(at)) {
+			const pathRef = editor.api.pathRef(at);
+			if (!quoting) liftOutOfBlockquotes(editor, at);
+			const path = pathRef.unref();
+			const entry = path && editor.api.node<TElement>(path);
+			if (entry) setEntry(entry);
 
-			if (entry) {
-				setEntry(entry);
-
-				return;
-			}
+			return;
 		}
 
-		const entries = editor.api.blocks({ mode: "lowest" });
+		if (!quoting && editor.selection) {
+			liftOutOfBlockquotes(editor, editor.selection);
+		}
 
-		entries.forEach((entry) => setEntry(entry));
+		for (const entry of editor.api.blocks<TElement>({ mode: "lowest" })) {
+			setEntry(entry);
+		}
+	});
+};
+
+const TEXT_BLOCK_TYPES = new Set<string>([KEYS.p, ...KEYS.heading]);
+
+/**
+ * Block menu "Turn into". On a Plate 49 flat quote `toggleBlock` changed the
+ * quote's type; a Plate 53 container quote is unwrapped instead, its text
+ * blocks taking the type the flat quote would have.
+ */
+export const toggleBlockAt = (
+	editor: PlateEditor,
+	type: string,
+	path: Path,
+) => {
+	const node = editor.api.node<TElement>(path)?.[0];
+	if (!node) return;
+
+	editor.tf.withoutNormalizing(() => {
+		if (node[KEYS.listType]) {
+			editor.tf.unsetNodes([KEYS.listType, "indent"], { at: path });
+		}
+
+		const blockquoteType = editor.getType(KEYS.blockquote);
+		const isContainerQuote =
+			node.type === blockquoteType &&
+			node.children.some((child) => editor.api.isBlock(child));
+
+		if (!isContainerQuote) {
+			editor.tf.toggleBlock(type, { at: path });
+			return;
+		}
+
+		const target = type === blockquoteType ? editor.getType(KEYS.p) : type;
+		const children = node.children as TElement[];
+
+		editor.tf.unwrapNodes({ at: path });
+		children.forEach((child, index) => {
+			if (!TEXT_BLOCK_TYPES.has(child.type) || child.type === target) return;
+			editor.tf.setNodes(
+				{ type: target },
+				{ at: [...PathApi.parent(path), path[path.length - 1] + index] },
+			);
+		});
 	});
 };
 
@@ -171,11 +242,11 @@ export const getBlockType = (block: TElement) => {
 	if (block[KEYS.listType]) {
 		if (block[KEYS.listType] === KEYS.ol) {
 			return KEYS.ol;
-		} else if (block[KEYS.listType] === KEYS.listTodo) {
-			return KEYS.listTodo;
-		} else {
-			return KEYS.ul;
 		}
+		if (block[KEYS.listType] === KEYS.listTodo) {
+			return KEYS.listTodo;
+		}
+		return KEYS.ul;
 	}
 
 	return block.type;

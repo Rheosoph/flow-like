@@ -56,6 +56,10 @@ pub struct ExecutorPageExecutionClaims {
 pub struct ExecutorClaims {
     /// Subject (user ID)
     pub sub: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payer_sub: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hosted_frontend: bool,
     /// Run ID for this execution
     pub run_id: String,
     /// Application ID

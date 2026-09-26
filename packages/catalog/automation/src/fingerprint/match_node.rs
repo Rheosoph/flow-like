@@ -1,4 +1,6 @@
-use crate::types::fingerprints::{ElementFingerprint, MatchStrategy};
+use crate::types::fingerprints::ElementFingerprint;
+#[cfg(feature = "execute")]
+use crate::types::fingerprints::MatchStrategy;
 use crate::types::handles::AutomationSession;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -27,6 +29,7 @@ impl NodeLogic for MatchFingerprintNode {
             "Attempts to find an element matching the fingerprint",
             "Automation/Fingerprint",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.fingerprint", "match");
         node.add_icon("/flow/icons/fingerprint.svg");
 
@@ -117,13 +120,19 @@ impl NodeLogic for MatchFingerprintNode {
             VariableType::Float,
         );
 
+        node.add_output_pin(
+            "matched_selector",
+            "Matched Selector",
+            "Typed selector that matched",
+            VariableType::Struct,
+        )
+        .set_schema::<crate::types::selectors::Selector>();
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use std::time::{Duration, Instant};
-        use thirtyfour::By;
 
         context.deactivate_exec_pin("exec_found").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
@@ -142,7 +151,7 @@ impl NodeLogic for MatchFingerprintNode {
         };
 
         let start = Instant::now();
-        let timeout = Duration::from_millis(timeout_ms as u64);
+        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
 
         let selectors_to_try: Vec<_> = fingerprint
             .selectors
@@ -165,16 +174,17 @@ impl NodeLogic for MatchFingerprintNode {
 
         while start.elapsed() < timeout {
             for selector in &selectors_to_try {
-                let by = match selector.kind {
-                    crate::types::selectors::SelectorKind::Css => By::Css(&selector.value),
-                    crate::types::selectors::SelectorKind::Xpath => By::XPath(&selector.value),
-                    crate::types::selectors::SelectorKind::TestId => {
-                        By::Css(format!("[data-testid='{}']", selector.value))
-                    }
-                    _ => continue,
-                };
-
-                if driver.find(by).await.is_ok() {
+                context.check_cancelled()?;
+                if crate::browser::selector::find(&driver, selector)
+                    .await
+                    .is_ok()
+                {
+                    crate::browser::selector::optional_output(
+                        context,
+                        "matched_selector",
+                        json!(selector),
+                    )
+                    .await?;
                     context.set_pin_value("found", json!(true)).await?;
                     context
                         .set_pin_value("selector_used", json!(selector.value.clone()))
@@ -190,6 +200,7 @@ impl NodeLogic for MatchFingerprintNode {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
+        crate::browser::selector::optional_output(context, "matched_selector", json!(null)).await?;
         context.set_pin_value("found", json!(false)).await?;
         context.set_pin_value("selector_used", json!("")).await?;
         context.set_pin_value("confidence", json!(0.0)).await?;

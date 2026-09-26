@@ -288,8 +288,8 @@ async fn attest_intake_e2e_runtime_inner(
         );
         let board = app
             .open_board(event.board_id.clone(), None, event.board_version)
-            .await?;
-        let board = board.lock().await;
+            .await?
+            .snapshot();
         validate_board(&board)?;
         let page = match event.board_version {
             Some(version) => board.load_versioned_page(&page_id, version, None).await?,

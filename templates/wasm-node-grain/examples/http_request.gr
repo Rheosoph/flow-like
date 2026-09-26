@@ -21,7 +21,7 @@ let buildDefinition = () => {
   def.description = "Makes an HTTP GET request and returns the response"
   def.category = "Custom/WASM"
 
-  let def = Types.addPermission(def, "http")
+  let def = Types.addPermission(def, "network:http")
   let def = Types.addPermission(def, "streaming")
 
   let def = Types.addPin(

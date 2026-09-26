@@ -8,11 +8,18 @@ default-members = [
     "packages/types/contracts",
 ]
 members = [
+    "apps/standalone",
+    "packages/device-crypto",
+    "packages/device-protocol",
+    "packages/offline-writes",
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
     "apps/backend/local/runtime",
+    "apps/backend/audit-worker",
     "apps/schema-gen",
     "apps/backend/aws/api",
+    "apps/backend/aws/api-ecs",
+    "apps/backend/aws/audit-worker",
     "apps/backend/aws/executor",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
@@ -184,6 +191,9 @@ flow-like-wasm-schema = { path = "packages/wasm/schema", default-features = fals
 flow-like-secrets = { path = "packages/secrets" }
 flow-like-aws-data = { path = "packages/aws-data" }
 flow-like-db = { path = "packages/db" }
+flow-like-device-protocol = { path = "packages/device-protocol" }
+flow-like-offline-writes = { path = "packages/offline-writes" }
+flow-like-device-crypto = { path = "packages/device-crypto" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }
 flow-like-scheduler-tick = { path = "packages/scheduler-tick" }
@@ -220,6 +230,7 @@ aws-config = "1.11.0"
 aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }
 aws-sdk-cloudwatch = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-dynamodb = { version = "1.80.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-kms = { version = "1.117.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-lambda = { version = "1.120", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-s3 = { version = "1.93.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a", "http-1x"] }
 aws-sdk-sesv2 = { version = "1.85.0", default-features = false, features = ["default-https-client", "rt-tokio", "sigv4a"] }
@@ -262,7 +273,9 @@ rumqttc = "0.25.1"
 copilot-sdk = { git = "https://github.com/pjperez/copilot-sdk-rust.git", branch = "fix/protocol-v3-support" }
 async-trait = "0.1.89"
 sqlparser = "0.59.0"
-jsonschema = "0.33.0"
+# No `resolve-http`/`resolve-file`: schemas are user data and must never make the
+# server fetch a `$ref` from the network or the filesystem.
+jsonschema = { version = "0.33.0", default-features = false }
 rmcp = { version = "=1.7.0", features = ["auth", "client", "client-side-sse", "macros", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
@@ -381,3 +394,8 @@ strip = "symbols"
 inherits = "dist"
 codegen-units = 1
 strip = "none"
+
+# Long-running container APIs (ECS). Lambda's code generation, including its
+# unwind semantics: one panicking handler must not end every in-flight request.
+[profile.server]
+inherits = "lambda"

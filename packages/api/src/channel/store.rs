@@ -8,7 +8,7 @@ use flow_like_types::async_trait;
 use flow_like_types::channel::{ChannelPoll, ChannelStore, MAX_TTL, now_unix};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::OnConflict,
 };
 
 use crate::entity::{
@@ -257,10 +257,7 @@ pub async fn insert_cancel(
     app_id: Option<&str>,
     expires_at: i64,
 ) -> Result<(), DbErr> {
-    if is_cancelled(db, channel_id, sub).await? {
-        return Ok(());
-    }
-    let inserted = new_row(
+    let inserted = Channel::insert(new_row(
         cancel_row_id(channel_id),
         channel_id,
         sub,
@@ -268,15 +265,25 @@ pub async fn insert_cancel(
         ChannelMessageKind::Cancel,
         expires_at,
         None,
+    ))
+    .on_conflict(
+        OnConflict::column(channel::Column::Id)
+            .do_nothing()
+            .to_owned(),
     )
-    .insert(db)
+    .exec_without_returning(db)
     .await;
     match inserted {
-        Ok(_) => Ok(()),
-        Err(error) if is_cancelled(db, channel_id, sub).await? => {
-            tracing::debug!(%error, channel_id, "cancel tombstone raced another cancel");
+        Ok(rows) if rows > 0 => Ok(()),
+        outcome if is_cancelled(db, channel_id, sub).await? => {
+            if let Err(error) = outcome {
+                tracing::debug!(%error, channel_id, "cancel tombstone raced another cancel");
+            }
             Ok(())
         }
+        Ok(_) => Err(DbErr::Custom(format!(
+            "cancel tombstone for channel {channel_id} is held by another subject"
+        ))),
         Err(error) => Err(error),
     }
 }

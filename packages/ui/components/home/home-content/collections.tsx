@@ -12,12 +12,14 @@ import {
 	CATEGORY_ICONS,
 	categoryColor,
 } from "../../../lib/category-meta";
+import { asArray } from "../../../lib/response-shape";
 import type { IApp, IAppCategory } from "../../../lib/schema/app/app";
 import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
 import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/hub/bit-search-query";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { appPairs } from "../../library/library-types";
 import { PackageCard } from "../../store/package-card";
 import { AppCard, SpotlightCard } from "../../ui/app-card";
 import { AppTypeMark } from "../../ui/app-type-mark";
@@ -107,9 +109,9 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 		staleTime: 60_000,
 	});
 	const rows = useMemo(() => {
-		let apps = [
-			...((remote || source === "manual" ? results.data : library.data) ?? []),
-		];
+		let apps = appPairs(
+			remote || source === "manual" ? results.data : library.data,
+		);
 		if (usesProfile) {
 			const visible = new Set(
 				(profile.data?.apps ?? []).map((app) => app.app_id),
@@ -145,7 +147,9 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 				);
 			if (tag)
 				apps = apps.filter(([, meta]) =>
-					meta?.tags.some((value) => value.toLowerCase() === tag.toLowerCase()),
+					asArray(meta?.tags).some(
+						(value) => value.toLowerCase() === tag.toLowerCase(),
+					),
 				);
 			if (query)
 				apps = apps.filter(([app, meta]) =>
@@ -266,7 +270,7 @@ export function HomeAppCollection({ widget }: HomeContentProps) {
 					? `/use?id=${encodeURIComponent(app.id)}`
 					: `/store?id=${encodeURIComponent(app.id)}`;
 				const title = metadata?.name ?? app.id;
-				const updated = new Date(app.updated_at.secs_since_epoch * 1000);
+				const updated = new Date(app.updated_at?.secs_since_epoch * 1000);
 				if (rendering === "editorial")
 					return (
 						<SpotlightCard
@@ -407,7 +411,8 @@ export function HomePackages({ widget }: HomeContentProps) {
 				retry={() => void results.refetch()}
 			/>
 		);
-	if (!results.data?.packages.length)
+	const packages = asArray(results.data?.packages);
+	if (!packages.length)
 		return (
 			<HomeEmpty
 				action={
@@ -431,7 +436,7 @@ export function HomePackages({ widget }: HomeContentProps) {
 			data-home-package-rendering={rendering}
 			className="grid min-w-0 auto-rows-max content-start grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-4"
 		>
-			{results.data.packages.map((pkg) => (
+			{packages.map((pkg) => (
 				<PackageCard key={pkg.id} pkg={pkg} variant={rendering} />
 			))}
 		</div>

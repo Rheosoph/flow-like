@@ -41,6 +41,7 @@ import {
 	listableModels,
 	searchAllBitsOfType,
 } from "../../../lib/bit/model-listing";
+import { asArray } from "../../../lib/response-shape";
 import type { IBit } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
@@ -255,15 +256,15 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 
 	const customBitIds = useMemo(
-		() => new Set((customBits.data ?? []).map((bit) => bit.id)),
+		() => new Set(asArray(customBits.data).map((bit) => bit.id)),
 		[customBits.data],
 	);
 
 	const allBits = useMemo(() => {
 		const merged = new Map<string, IBit>();
-		for (const bit of listableModels(foundBits.data ?? []))
+		for (const bit of listableModels(asArray(foundBits.data)))
 			merged.set(bit.id, bit);
-		for (const bit of customBits.data ?? []) merged.set(bit.id, bit);
+		for (const bit of asArray(customBits.data)) merged.set(bit.id, bit);
 		return Array.from(merged.values());
 	}, [foundBits.data, customBits.data]);
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
@@ -281,7 +282,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		// Best effort: a model whose dependencies cannot be resolved must not
 		// take down the whole catalog page with an unhandled rejection.
 		const dependencies = await Promise.allSettled(
-			foundBits.data
+			asArray(foundBits.data)
 				.filter((bit) => bit.type === IBitTypes.ImageEmbedding)
 				.map((bit) =>
 					Bit.fromObject(bit).setBackend(backend).fetchDependencies(),

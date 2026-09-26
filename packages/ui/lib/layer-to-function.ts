@@ -117,9 +117,10 @@ function sortedBoundaryPins(layer: ILayer, pinType: IPinType): IPin[] {
 }
 
 /**
- * Give every boundary pin a unique name per direction. `control_call_function`
- * mirrors the signature by name, so colliding names would collapse two
- * parameters into one call pin.
+ * Give every boundary pin a name that is unique across both directions.
+ * `control_call_function` mirrors the signature by name, so colliding names
+ * would collapse two parameters into one call pin, and at runtime an output
+ * sharing an input's name is written to the input pin instead.
  */
 function uniqueBoundaryNames(pins: IPin[], reserved: Set<string>) {
 	const renamed: IPin[] = [];
@@ -214,7 +215,7 @@ export function planLayerToFunction({
 	);
 	const { pins: outputs, renames: outputRenames } = uniqueBoundaryNames(
 		sortedBoundaryPins(layer, IPinType.Output),
-		new Set<string>(),
+		reserved,
 	);
 
 	const signature = [

@@ -22,7 +22,7 @@ ALLOWED=(
     packages/api/tests/dsql_live.rs
     packages/api/src/routes/admin/resources/database.rs
     packages/api/src/cache/postgres.rs
-    apps/backend/aws/api/src/main.rs
+    apps/backend/aws/shared/api_bootstrap.rs
     apps/backend/aws/file-tracker/src/main.rs
 )
 

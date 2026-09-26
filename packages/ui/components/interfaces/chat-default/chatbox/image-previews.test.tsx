@@ -29,8 +29,8 @@ async function setup() {
 	};
 	URL.revokeObjectURL = (url: string) => void revoked.push(url);
 	const { createRoot } = await import("react-dom/client");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	return { container, root: createRoot(container), created, revoked };
 }
 

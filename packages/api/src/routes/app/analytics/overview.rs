@@ -15,6 +15,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use chrono::{Duration, NaiveDate, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::sea_query::{Expr, SelectStatement};
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
@@ -23,7 +24,12 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::update_aggregations::ensure_aggregations_current;
+use super::update_aggregations::{
+    AVG_MICROSECONDS_SQL, COUNT_FAILED_EXECUTIONS_SQL, COUNT_ROWS_SQL, EmbeddingTotals,
+    ExecutionTotals, FeedbackTotals, LlmTotals, by_day, collect_by_day,
+    ensure_aggregations_current, select_embedding_totals, select_execution_totals,
+    select_feedback_totals, select_llm_totals,
+};
 use crate::utils::stats_period::StatsPeriod;
 use crate::utils::time::{utc_day_end, utc_midnight};
 
@@ -462,10 +468,7 @@ pub async fn get_analytics_stats(
                 avg_rating: d.avg_feedback_rating,
                 llm_cost: d.total_llm_cost,
                 embedding_cost: d.total_embedding_cost,
-                compute_cost: compute_cost_from_avg_latency(
-                    d.avg_latency_ms,
-                    d.total_executions,
-                ),
+                compute_cost: compute_cost_from_avg_latency(d.avg_latency_ms, d.total_executions),
                 avg_latency: d.avg_latency_ms,
                 p95_latency: d.p95_latency_ms,
                 positive_feedback: d.positive_feedback,
@@ -770,23 +773,13 @@ fn weighted_average_by_count(values: impl Iterator<Item = (f64, i64)>) -> Option
     }
 }
 
-fn latency_stats_from_microseconds(
-    latencies_us: impl Iterator<Item = i64>,
-) -> (Option<f64>, Option<f64>) {
-    let mut latencies_us: Vec<i64> = latencies_us.collect();
-    if latencies_us.is_empty() {
-        return (None, None);
-    }
-
-    let avg_latency_ms =
-        latencies_us.iter().sum::<i64>() as f64 / latencies_us.len() as f64 / 1000.0;
-
-    latencies_us.sort();
-    let idx = ((latencies_us.len() as f64) * 0.95).ceil() as usize;
-    let idx = idx.min(latencies_us.len()) - 1;
-    let p95_latency_ms = latencies_us[idx] as f64 / 1000.0;
-
-    (Some(avg_latency_ms), Some(p95_latency_ms))
+#[derive(Default, FromQueryResult)]
+struct ExecutionOverviewTotals {
+    total: i64,
+    failed: i64,
+    avg_us: Option<f64>,
+    period: i64,
+    previous: i64,
 }
 
 fn compute_change_percent(current: i64, previous: i64) -> Option<f64> {
@@ -806,78 +799,96 @@ async fn compute_overview_from_raw(
     sixty_days_ago: NaiveDate,
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<AnalyticsOverview, ApiError> {
-    use crate::entity::sea_orm_active_enums::ExecutionStatus;
+    use sea_orm::sea_query::ExprTrait;
+
+    let current_start = utc_midnight(thirty_days_ago);
+    let prev_start = utc_midnight(sixty_days_ago);
 
     let executions = filter_execution_query_by_event(
         execution_usage_tracking::Entity::find()
             .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
         event_filter,
     )
-    .all(&state.db)
-    .await?;
+    .select_only()
+    .expr_as(Expr::cust(COUNT_ROWS_SQL), "total")
+    .expr_as(Expr::cust(COUNT_FAILED_EXECUTIONS_SQL), "failed")
+    .expr_as(Expr::cust(AVG_MICROSECONDS_SQL), "avg_us")
+    .expr_as(
+        Expr::expr(Expr::case(
+            execution_usage_tracking::Column::CreatedAt.gte(current_start),
+            Expr::col(execution_usage_tracking::Column::Id),
+        ))
+        .count(),
+        "period",
+    )
+    .expr_as(
+        Expr::expr(Expr::case(
+            execution_usage_tracking::Column::CreatedAt
+                .gte(prev_start)
+                .and(execution_usage_tracking::Column::CreatedAt.lt(current_start)),
+            Expr::col(execution_usage_tracking::Column::Id),
+        ))
+        .count(),
+        "previous",
+    )
+    .into_model::<ExecutionOverviewTotals>()
+    .one(&state.db)
+    .await?
+    .unwrap_or_default();
 
-    let total_executions = executions.len() as i64;
-    let failed_executions = executions
-        .iter()
-        .filter(|e| matches!(e.status, ExecutionStatus::Error | ExecutionStatus::Fatal))
-        .count() as i64;
+    let total_executions = executions.total;
+    let failed_executions = executions.failed;
     let successful_executions = total_executions - failed_executions;
 
     let unique_users = count_unique_users(state, app_id, None, None, event_filter).await?;
 
-    let feedbacks = filter_feedback_query_by_event(
+    let feedbacks = select_feedback_totals(filter_feedback_query_by_event(
         feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
         event_filter,
-    )
-    .all(&state.db)
-    .await?;
+    ))
+    .into_model::<FeedbackTotals>()
+    .one(&state.db)
+    .await?
+    .unwrap_or_default();
 
-    let total_feedback = feedbacks.len() as i64;
-    let positive_feedback = feedbacks.iter().filter(|f| f.rating > 0).count() as i64;
-    let negative_feedback = feedbacks.iter().filter(|f| f.rating < 0).count() as i64;
-    let avg_feedback_rating = if feedbacks.is_empty() {
-        None
+    let total_feedback = feedbacks.total;
+    let positive_feedback = feedbacks.positive;
+    let negative_feedback = feedbacks.negative;
+    let avg_feedback_rating = feedbacks.avg_rating;
+
+    let total_llm_cost = if event_filter.is_some() {
+        0
     } else {
-        Some(feedbacks.iter().map(|f| f.rating as f64).sum::<f64>() / feedbacks.len() as f64)
+        select_llm_totals(
+            llm_usage_tracking::Entity::find().filter(llm_usage_tracking::Column::AppId.eq(app_id)),
+        )
+        .into_model::<LlmTotals>()
+        .one(&state.db)
+        .await?
+        .unwrap_or_default()
+        .cost
+    };
+    let avg_latency_ms = executions.avg_us.map(|us| us / 1000.0);
+
+    let total_embedding_cost = if event_filter.is_some() {
+        0
+    } else {
+        select_embedding_totals(
+            embedding_usage_tracking::Entity::find()
+                .filter(embedding_usage_tracking::Column::AppId.eq(app_id)),
+        )
+        .into_model::<EmbeddingTotals>()
+        .one(&state.db)
+        .await?
+        .unwrap_or_default()
+        .cost
     };
 
-    let llm_records = if event_filter.is_some() {
-        Vec::new()
-    } else {
-        llm_usage_tracking::Entity::find()
-            .filter(llm_usage_tracking::Column::AppId.eq(app_id))
-            .all(&state.db)
-            .await?
-    };
-    let total_llm_cost: i64 = llm_records.iter().map(|r| r.price).sum();
-    let (avg_latency_ms, _) =
-        latency_stats_from_microseconds(executions.iter().map(|e| e.microseconds));
-
-    let embedding_records = if event_filter.is_some() {
-        Vec::new()
-    } else {
-        embedding_usage_tracking::Entity::find()
-            .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
-            .all(&state.db)
-            .await?
-    };
-    let total_embedding_cost: i64 = embedding_records.iter().map(|r| r.price).sum();
-
-    let current_start = utc_midnight(thirty_days_ago);
-    let period_execs: Vec<_> = executions
-        .iter()
-        .filter(|e| e.created_at >= current_start)
-        .collect();
-    let period_executions = period_execs.len() as i64;
+    let period_executions = executions.period;
     let period_unique_users =
         count_unique_users(state, app_id, Some(thirty_days_ago), None, event_filter).await?;
 
-    let prev_start = utc_midnight(sixty_days_ago);
-    let prev_execs: Vec<_> = executions
-        .iter()
-        .filter(|e| e.created_at >= prev_start && e.created_at < current_start)
-        .collect();
-    let prev_executions = prev_execs.len() as i64;
+    let prev_executions = executions.previous;
     let prev_users = count_unique_users(
         state,
         app_id,
@@ -915,143 +926,104 @@ async fn compute_daily_stats_from_raw(
     end_date: NaiveDate,
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<Vec<DailyAnalyticsStat>, ApiError> {
-    use crate::entity::sea_orm_active_enums::ExecutionStatus;
-    use std::collections::HashMap;
-
+    let backend = state.db.get_database_backend();
     let start_dt = utc_midnight(start_date);
     let end_dt = utc_day_end(end_date);
+    let skip_usage = event_filter.is_some();
 
-    let executions = filter_execution_query_by_event(
-        execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
-        event_filter,
+    let executions = by_day::<_, ExecutionTotals>(
+        select_execution_totals(
+            filter_execution_query_by_event(
+                execution_usage_tracking::Entity::find()
+                    .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
+                event_filter,
+            )
+            .filter(execution_usage_tracking::Column::CreatedAt.gte(start_dt))
+            .filter(execution_usage_tracking::Column::CreatedAt.lte(end_dt)),
+        ),
+        backend,
     )
-    .filter(execution_usage_tracking::Column::CreatedAt.gte(start_dt))
-    .filter(execution_usage_tracking::Column::CreatedAt.lte(end_dt))
-    .all(&state.db)
-    .await?;
+    .all(&state.db);
 
-    let feedbacks = filter_feedback_query_by_event(
-        feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
-        event_filter,
+    let feedbacks = by_day::<_, FeedbackTotals>(
+        select_feedback_totals(
+            filter_feedback_query_by_event(
+                feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
+                event_filter,
+            )
+            .filter(feedback::Column::CreatedAt.gte(start_dt))
+            .filter(feedback::Column::CreatedAt.lte(end_dt)),
+        ),
+        backend,
     )
-    .filter(feedback::Column::CreatedAt.gte(start_dt))
-    .filter(feedback::Column::CreatedAt.lte(end_dt))
-    .all(&state.db)
-    .await?;
+    .all(&state.db);
 
-    let llm_records = if event_filter.is_some() {
-        Vec::new()
-    } else {
-        llm_usage_tracking::Entity::find()
-            .filter(llm_usage_tracking::Column::AppId.eq(app_id))
-            .filter(llm_usage_tracking::Column::CreatedAt.gte(start_dt))
-            .filter(llm_usage_tracking::Column::CreatedAt.lte(end_dt))
-            .all(&state.db)
-            .await?
+    let llm_records = async {
+        if skip_usage {
+            return Ok(Vec::new());
+        }
+        by_day::<_, LlmTotals>(
+            select_llm_totals(
+                llm_usage_tracking::Entity::find()
+                    .filter(llm_usage_tracking::Column::AppId.eq(app_id))
+                    .filter(llm_usage_tracking::Column::CreatedAt.gte(start_dt))
+                    .filter(llm_usage_tracking::Column::CreatedAt.lte(end_dt)),
+            ),
+            backend,
+        )
+        .all(&state.db)
+        .await
     };
 
-    let embedding_records = if event_filter.is_some() {
-        Vec::new()
-    } else {
-        embedding_usage_tracking::Entity::find()
-            .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
-            .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_dt))
-            .filter(embedding_usage_tracking::Column::CreatedAt.lte(end_dt))
-            .all(&state.db)
-            .await?
+    let embedding_records = async {
+        if skip_usage {
+            return Ok(Vec::new());
+        }
+        by_day::<_, EmbeddingTotals>(
+            select_embedding_totals(
+                embedding_usage_tracking::Entity::find()
+                    .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
+                    .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_dt))
+                    .filter(embedding_usage_tracking::Column::CreatedAt.lte(end_dt)),
+            ),
+            backend,
+        )
+        .all(&state.db)
+        .await
     };
 
-    let mut exec_by_day: HashMap<NaiveDate, Vec<&execution_usage_tracking::Model>> = HashMap::new();
-    for e in &executions {
-        exec_by_day
-            .entry(e.created_at.date_naive())
-            .or_default()
-            .push(e);
-    }
+    let (executions, feedbacks, llm_records, embedding_records) =
+        try_join!(executions, feedbacks, llm_records, embedding_records)?;
 
-    let mut feedback_by_day: HashMap<NaiveDate, Vec<&feedback::Model>> = HashMap::new();
-    for f in &feedbacks {
-        feedback_by_day
-            .entry(f.created_at.date_naive())
-            .or_default()
-            .push(f);
-    }
-
-    let mut llm_by_day: HashMap<NaiveDate, Vec<&llm_usage_tracking::Model>> = HashMap::new();
-    for l in &llm_records {
-        llm_by_day
-            .entry(l.created_at.date_naive())
-            .or_default()
-            .push(l);
-    }
-
-    let mut embedding_by_day: HashMap<NaiveDate, Vec<&embedding_usage_tracking::Model>> =
-        HashMap::new();
-    for e in &embedding_records {
-        embedding_by_day
-            .entry(e.created_at.date_naive())
-            .or_default()
-            .push(e);
-    }
+    let mut exec_by_day = collect_by_day(executions);
+    let mut feedback_by_day = collect_by_day(feedbacks);
+    let mut llm_by_day = collect_by_day(llm_records);
+    let mut embedding_by_day = collect_by_day(embedding_records);
 
     let mut stats = Vec::new();
     let mut current = start_date;
     while current <= end_date {
-        let day_execs = exec_by_day
-            .get(&current)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let day_feedback = feedback_by_day
-            .get(&current)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let day_llm = llm_by_day
-            .get(&current)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        let day_embeddings = embedding_by_day
-            .get(&current)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-
-        let user_ids: std::collections::HashSet<_> = day_execs
-            .iter()
-            .filter_map(|e| e.user_id.as_ref())
-            .collect();
-
-        let failed_executions = day_execs
-            .iter()
-            .filter(|e| matches!(e.status, ExecutionStatus::Error | ExecutionStatus::Fatal))
-            .count() as i64;
-        let successful_executions = day_execs.len() as i64 - failed_executions;
-        let (avg_latency, p95_latency) =
-            latency_stats_from_microseconds(day_execs.iter().map(|e| e.microseconds));
-
-        let avg_rating = if day_feedback.is_empty() {
-            None
-        } else {
-            Some(
-                day_feedback.iter().map(|f| f.rating as f64).sum::<f64>()
-                    / day_feedback.len() as f64,
-            )
-        };
+        let day_execs = exec_by_day.remove(&current).unwrap_or_default();
+        let day_feedback = feedback_by_day.remove(&current).unwrap_or_default();
+        let day_llm = llm_by_day.remove(&current).unwrap_or_default();
+        let day_embeddings = embedding_by_day.remove(&current).unwrap_or_default();
+        let avg_latency = day_execs.avg_latency_ms();
 
         stats.push(DailyAnalyticsStat {
             date: current.format("%Y-%m-%d").to_string(),
-            executions: day_execs.len() as i64,
-            successful_executions,
-            failed_executions,
-            unique_users: user_ids.len() as i64,
-            feedback_count: day_feedback.len() as i64,
-            avg_rating,
-            llm_cost: day_llm.iter().map(|l| l.price).sum(),
-            embedding_cost: day_embeddings.iter().map(|e| e.price).sum(),
-            compute_cost: compute_cost_from_avg_latency(avg_latency, day_execs.len() as i64),
+            executions: day_execs.total,
+            successful_executions: day_execs.total - day_execs.failed,
+            failed_executions: day_execs.failed,
+            unique_users: day_execs.unique_users,
+            feedback_count: day_feedback.total,
+            avg_rating: day_feedback.avg_rating,
+            llm_cost: day_llm.cost,
+            embedding_cost: day_embeddings.cost,
+            compute_cost: compute_cost_from_avg_latency(avg_latency, day_execs.total),
             avg_latency,
-            p95_latency,
-            positive_feedback: day_feedback.iter().filter(|f| f.rating > 0).count() as i64,
-            negative_feedback: day_feedback.iter().filter(|f| f.rating < 0).count() as i64,
+            p95_latency: day_execs.p95_latency_ms(),
+            positive_feedback: day_feedback.positive,
+            negative_feedback: day_feedback.negative,
         });
 
         current += Duration::days(1);
@@ -1082,88 +1054,82 @@ async fn compute_today_live(
     app_id: &str,
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<Option<TodayLiveData>, ApiError> {
-    use crate::entity::sea_orm_active_enums::ExecutionStatus;
-    use std::collections::HashSet;
-
     let today = Utc::now().date_naive();
     let start_of_day = utc_midnight(today);
+    let skip_usage = event_filter.is_some();
 
-    let executions = filter_execution_query_by_event(
-        execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
-        event_filter,
+    let executions = select_execution_totals(
+        filter_execution_query_by_event(
+            execution_usage_tracking::Entity::find()
+                .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
+            event_filter,
+        )
+        .filter(execution_usage_tracking::Column::CreatedAt.gte(start_of_day)),
     )
-    .filter(execution_usage_tracking::Column::CreatedAt.gte(start_of_day))
-    .all(&state.db)
-    .await?;
+    .into_model::<ExecutionTotals>()
+    .one(&state.db);
 
-    let feedbacks = filter_feedback_query_by_event(
-        feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
-        event_filter,
+    let feedbacks = select_feedback_totals(
+        filter_feedback_query_by_event(
+            feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
+            event_filter,
+        )
+        .filter(feedback::Column::CreatedAt.gte(start_of_day)),
     )
-    .filter(feedback::Column::CreatedAt.gte(start_of_day))
-    .all(&state.db)
-    .await?;
+    .into_model::<FeedbackTotals>()
+    .one(&state.db);
 
-    let llm_records = if event_filter.is_some() {
-        Vec::new()
-    } else {
-        llm_usage_tracking::Entity::find()
-            .filter(llm_usage_tracking::Column::AppId.eq(app_id))
-            .filter(llm_usage_tracking::Column::CreatedAt.gte(start_of_day))
-            .all(&state.db)
-            .await?
+    let llm = async {
+        if skip_usage {
+            return Ok(None);
+        }
+        select_llm_totals(
+            llm_usage_tracking::Entity::find()
+                .filter(llm_usage_tracking::Column::AppId.eq(app_id))
+                .filter(llm_usage_tracking::Column::CreatedAt.gte(start_of_day)),
+        )
+        .into_model::<LlmTotals>()
+        .one(&state.db)
+        .await
     };
 
-    let embedding_records = if event_filter.is_some() {
-        Vec::new()
-    } else {
-        embedding_usage_tracking::Entity::find()
-            .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
-            .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_of_day))
-            .all(&state.db)
-            .await?
+    let embeddings = async {
+        if skip_usage {
+            return Ok(None);
+        }
+        select_embedding_totals(
+            embedding_usage_tracking::Entity::find()
+                .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
+                .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_of_day)),
+        )
+        .into_model::<EmbeddingTotals>()
+        .one(&state.db)
+        .await
     };
 
-    if executions.is_empty()
-        && feedbacks.is_empty()
-        && llm_records.is_empty()
-        && embedding_records.is_empty()
-    {
+    let (executions, feedbacks, llm, embeddings) =
+        try_join!(executions, feedbacks, llm, embeddings)?;
+    let executions = executions.unwrap_or_default();
+    let feedbacks = feedbacks.unwrap_or_default();
+    let llm = llm.unwrap_or_default();
+    let embeddings = embeddings.unwrap_or_default();
+
+    if executions.total == 0 && feedbacks.total == 0 && llm.calls == 0 && embeddings.calls == 0 {
         return Ok(None);
     }
 
-    let total = executions.len() as i64;
-    let failed = executions
-        .iter()
-        .filter(|e| matches!(e.status, ExecutionStatus::Error | ExecutionStatus::Fatal))
-        .count() as i64;
-    let user_ids: HashSet<_> = executions
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .collect();
-
-    let (avg_latency, p95_latency) =
-        latency_stats_from_microseconds(executions.iter().map(|e| e.microseconds));
-
-    let avg_rating = if feedbacks.is_empty() {
-        None
-    } else {
-        Some(feedbacks.iter().map(|f| f.rating as f64).sum::<f64>() / feedbacks.len() as f64)
-    };
-
     Ok(Some(TodayLiveData {
-        executions: total,
-        failed_executions: failed,
-        unique_users: user_ids.len() as i64,
-        feedback_count: feedbacks.len() as i64,
-        positive_feedback: feedbacks.iter().filter(|f| f.rating > 0).count() as i64,
-        negative_feedback: feedbacks.iter().filter(|f| f.rating < 0).count() as i64,
-        avg_rating,
-        llm_cost: llm_records.iter().map(|r| r.price).sum(),
-        embedding_cost: embedding_records.iter().map(|r| r.price).sum(),
-        avg_latency,
-        p95_latency,
+        executions: executions.total,
+        failed_executions: executions.failed,
+        unique_users: executions.unique_users,
+        feedback_count: feedbacks.total,
+        positive_feedback: feedbacks.positive,
+        negative_feedback: feedbacks.negative,
+        avg_rating: feedbacks.avg_rating,
+        llm_cost: llm.cost,
+        embedding_cost: embeddings.cost,
+        avg_latency: executions.avg_latency_ms(),
+        p95_latency: executions.p95_latency_ms(),
     }))
 }
 

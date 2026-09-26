@@ -59,7 +59,7 @@ pub fn draw_bboxes(
         let box_color = COLORS[(bbox.class_idx as usize) % COLORS.len()];
         let (x1, y1, w, h) = bbox.x1y1wh();
         let label = format!("class {} ({:.2})", bbox.class_idx, bbox.score);
-        println!("{}", &label);
+        tracing::trace!(%label, "Drawing bounding box");
         draw_text_mut(
             &mut img,
             box_color,

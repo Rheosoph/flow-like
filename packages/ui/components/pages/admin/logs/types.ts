@@ -1,3 +1,8 @@
+import type {
+	IAuditChainReport,
+	IAuditEpochReport,
+} from "../../../audit/types";
+
 export interface IErrorReportRecord {
 	id: string;
 	user_id?: string | null;
@@ -52,31 +57,48 @@ export interface IListErrorsResponse {
 	limit: number;
 }
 
-export interface IChainSummary {
-	chain_id?: string | null;
-	label: string;
-	entries: number;
-	last_sequence?: number | null;
-	last_entry_at?: string | null;
-	last_entry_hash?: string | null;
-	signed: boolean;
-	kid?: string | null;
-	valid?: boolean | null;
-	fully_authenticated?: boolean | null;
-	first_broken_at?: number | null;
-	unverifiable_signatures?: number | null;
+export interface IRecentAuditChain {
+	chain_id: string;
+	latest_seal_seq?: number | null;
+	latest_sealed_at_ms?: number | null;
+	pending: number;
 }
 
+export interface ILatestAuditArchive {
+	/** `YYYY-MM`. */
+	period: string;
+	created_at_ms: number;
+	record_count: number;
+}
+
+/** `GET /admin/logs/chain-status`. */
 export interface IChainStatusResponse {
-	signing_configured: boolean;
-	current_kid: string;
-	total_entries: number;
-	signed_entries: number;
-	unsigned_entries: number;
-	branch_chain_count: number;
-	last_24h_entries: number;
-	root_chain: IChainSummary;
-	recent_branches: IChainSummary[];
+	/** Key id of the serving process's signer, else the configured `AUDIT_KID`. */
+	signing_kid?: string | null;
+	verifying_kids: string[];
+	epochs: IAuditEpochReport;
+	latest_epoch_at_ms?: number | null;
+	pending_records: number;
+	/** Timestamp of the oldest record not yet sealed. */
+	oldest_pending_ms?: number | null;
+	quarantined_records: number;
+	unanchored_seals: number;
+	/** `sealedAt` of the oldest seal still waiting for its signed epoch; held chains excluded. */
+	oldest_unanchored_ms?: number | null;
+	/** Chains whose seal failed its hash or MAC check: never signed, they need an operator. */
+	held_chains: number;
+	total_records: number;
+	total_seals: number;
+	chains: number;
+	latest_archive?: ILatestAuditArchive | null;
+	/** Rows of the retired `AuditEntry` table still waiting for the one-time export. */
+	legacy_entries: number;
+	platform: IAuditChainReport;
+	recent_chains: IRecentAuditChain[];
+	/** `retention.pending_alert_seconds`. */
+	pending_alert_seconds?: number | null;
+	/** `retention.epoch_interval_seconds`: seals wait up to this long for their epoch. */
+	epoch_interval_seconds?: number | null;
 }
 
 export function statusCodeTone(code: number) {

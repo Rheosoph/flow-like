@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import {
 	useBackend,
 	useBackendReady,
@@ -10,7 +12,6 @@ import { useSpotlightStore } from "@flow-like/flow-like-ui/state/spotlight-state
 import { useTranslation } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { TauriBackend } from "./tauri-provider";
 
@@ -37,7 +38,7 @@ const TrayProvider: React.FC = () => {
 	const backend = useBackend();
 	const backendReady = useBackendReady();
 	const isOnline = useNetworkStatus();
-	const router = useRouter();
+	const router = useClientRouter();
 
 	const syncStatus = useMemo<TraySyncStatus>(
 		() => ({

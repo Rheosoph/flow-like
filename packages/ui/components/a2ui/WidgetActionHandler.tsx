@@ -99,6 +99,23 @@ function resolveBoundValue(
 	return context[fieldName];
 }
 
+/**
+ * Read an instance binding by own key. A plain property read would return
+ * inherited members such as `constructor` or `toString` as bindings.
+ */
+export function readWidgetActionBinding(
+	actionBindings: Record<string, ActionBinding> | undefined,
+	actionId: string,
+): ActionBinding | null {
+	if (
+		!actionBindings ||
+		!Object.prototype.hasOwnProperty.call(actionBindings, actionId)
+	) {
+		return null;
+	}
+	return actionBindings[actionId] ?? null;
+}
+
 export function WidgetActionProvider({
 	instance,
 	widgetActions,
@@ -141,7 +158,7 @@ export function WidgetActionProvider({
 
 	const getBinding = useCallback(
 		(actionId: string): ActionBinding | null => {
-			return instance.actionBindings[actionId] ?? null;
+			return readWidgetActionBinding(instance.actionBindings, actionId);
 		},
 		[instance.actionBindings],
 	);
@@ -202,7 +219,12 @@ export function WidgetActionProvider({
 					};
 
 					for (const field of action.contextSchema) {
-						const mapping = inputMappings?.[field.name];
+						// Own keys only, as for bindings: an inherited name such as `constructor` is no mapping.
+						const mapping =
+							inputMappings &&
+							Object.prototype.hasOwnProperty.call(inputMappings, field.name)
+								? inputMappings[field.name]
+								: undefined;
 						if (mapping) {
 							payload[field.name] = resolveBoundValue(
 								mapping,

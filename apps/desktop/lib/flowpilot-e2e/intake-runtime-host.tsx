@@ -96,6 +96,7 @@ export async function mountIntakeRuntimePage(
 			page,
 			pageRevision: bootstrap.revision ?? undefined,
 			pageExecutionRevision: bootstrap.executionRevision ?? undefined,
+			pageElementDemand: bootstrap.elementDemand ?? undefined,
 			route: bootstrap.canonicalRoute ?? "/intake",
 			queryParams: {},
 			active: true,

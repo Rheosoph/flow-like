@@ -20,5 +20,8 @@
 		"@types/bun": "latest",
 		"typescript": "^5.9.3"
 	},
-	"trustedDependencies": ["@prisma/engines", "prisma"]
+	"trustedDependencies": ["@prisma/engines", "prisma"],
+	"overrides": {
+		"fast-uri": "3.1.8"
+	}
 }

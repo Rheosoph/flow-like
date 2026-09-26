@@ -256,7 +256,17 @@ impl TemplateCache {
                 .await
                 .map_err(|e| anyhow!("Failed to load board {board_id}: {e}"))?
         };
-        let board = Board::from_loaded_proto(loaded, storage_root.clone(), state.clone()).await?;
+        let board = if expected_etag.is_some() {
+            Board::from_loaded_proto(loaded, storage_root.clone(), state.clone()).await?
+        } else {
+            Board::from_loaded_proto_for_version(
+                loaded,
+                storage_root.clone(),
+                state.clone(),
+                version,
+            )
+            .await?
+        };
 
         let compiled_board = super::compile::compile_board_with_catalog(&board, registry.as_ref())
             .map_err(|e| anyhow!("Failed to compile board {board_id}: {e}"))?;

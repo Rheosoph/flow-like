@@ -473,21 +473,20 @@ impl WasmComponentInstance {
             }
         };
 
-        let (result_json,) = func
-            .call_async(&mut self.store, (input_json,))
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("all fuel consumed") {
-                    return WasmError::OutOfFuel {
-                        limit: self.fuel_limit,
-                    };
-                }
-                if msg.contains("epoch deadline") || msg.contains("interrupt") {
-                    return WasmError::Timeout { duration_ms: 0 };
-                }
-                WasmError::execution("run", format!("Call failed: {}", e))
-            })?;
+        let call = func.call_async(&mut self.store, (input_json,)).await;
+        self.store.data().drain_guest_output();
+        let (result_json,) = call.map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("all fuel consumed") {
+                return WasmError::OutOfFuel {
+                    limit: self.fuel_limit,
+                };
+            }
+            if msg.contains("epoch deadline") || msg.contains("interrupt") {
+                return WasmError::Timeout { duration_ms: 0 };
+            }
+            WasmError::execution("run", format!("Call failed: {}", e))
+        })?;
 
         serde_json::from_str(&result_json)
             .map_err(|e| WasmError::execution("run", format!("Invalid JSON result: {}", e)))

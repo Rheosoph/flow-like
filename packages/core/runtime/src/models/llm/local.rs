@@ -17,7 +17,7 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::Child,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -25,9 +25,43 @@ use super::{DEFAULT_MAX_CONTEXT_SIZE, ExecutionSettings};
 
 pub struct LocalModel {
     bit: Bit,
-    handle: Arc<Mutex<Option<Child>>>,
+    _server: LlamaServerProcess,
     llm_model: Arc<LlamaCppModel>,
     pub port: u16,
+}
+
+/// Owns the llama-server child; dropping it kills and reaps the process, including when startup
+/// fails or is cancelled before a `LocalModel` exists.
+#[derive(Default)]
+struct LlamaServerProcess {
+    child: Option<Child>,
+}
+
+impl LlamaServerProcess {
+    fn attach(&mut self, child: Child) -> &mut Child {
+        self.stop();
+        self.child.insert(child)
+    }
+
+    fn stop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let pid = child.id();
+        if let Err(error) = child.kill() {
+            tracing::warn!(pid, %error, "Failed to kill local model server");
+        }
+        match child.wait() {
+            Ok(status) => tracing::debug!(pid, %status, "Local model server stopped"),
+            Err(error) => tracing::warn!(pid, %error, "Failed to reap local model server"),
+        }
+    }
+}
+
+impl Drop for LlamaServerProcess {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -214,7 +248,7 @@ impl LocalModel {
     }
 
     async fn spawn_server(
-        child_handle: &Arc<Mutex<Option<Child>>>,
+        server: &mut LlamaServerProcess,
         gguf_path: &Path,
         context_length: u32,
         port: u16,
@@ -233,9 +267,9 @@ impl LocalModel {
             template_override,
         );
 
-        println!("Starting LLM Server with args: {:?}", args);
+        tracing::debug!(?args, "Starting LLM Server");
 
-        let mut child = sidecar
+        let child = sidecar
             .args(&args)
             .stderr(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -243,11 +277,10 @@ impl LocalModel {
             .map_err(|error| {
                 flow_like_types::anyhow!("Failed to spawn local model sidecar: {}", error)
             })?;
+        let child = server.attach(child);
 
         let stdout = child.stdout.take().expect("Failed to capture stdout");
         let stderr = child.stderr.take().expect("Failed to capture stderr");
-
-        *child_handle.lock().unwrap() = Some(child);
 
         let stdout_reader = BufReader::new(stdout);
         let stderr_reader = BufReader::new(stderr);
@@ -257,7 +290,7 @@ impl LocalModel {
 
         tokio::spawn(async move {
             stdout_lines.by_ref().flatten().for_each(|line| {
-                println!("[LLM] stdout: {}", line);
+                tracing::debug!(%line, "[LLM] stdout");
             });
         });
 
@@ -268,25 +301,6 @@ impl LocalModel {
         });
 
         Ok(())
-    }
-
-    fn stop_server(child_handle: &Arc<Mutex<Option<Child>>>) {
-        if let Ok(mut guard) = child_handle.lock()
-            && let Some(mut child) = guard.take()
-        {
-            if let Err(error) = child.kill() {
-                eprintln!(
-                    "Failed to kill local model process during restart: {}",
-                    error
-                );
-            }
-            if let Err(error) = child.wait() {
-                eprintln!(
-                    "Failed to wait for local model process during restart: {}",
-                    error
-                );
-            }
-        }
     }
 
     pub async fn new(
@@ -307,7 +321,7 @@ impl LocalModel {
         let pack = bit.pack(app_state.clone()).await?;
         ensure_local_weights(&pack, &app_state, bit.id.as_str(), "local model").await?;
         let provider = bit
-            .try_to_provider()
+            .try_to_served_provider()
             .ok_or_else(|| flow_like_types::anyhow!("Failed to get provider from bit"))?;
         let template_override = resolve_template_override(&provider);
 
@@ -321,7 +335,7 @@ impl LocalModel {
             .and_then(|bit| bit.to_path(&bit_store))
             .map(|path| path.to_string_lossy().into_owned());
 
-        let child_handle = Arc::new(Mutex::new(None));
+        let mut server = LlamaServerProcess::default();
         let port = pick_unused_port().unwrap();
 
         let context_length = Self::resolve_context_length(
@@ -329,10 +343,10 @@ impl LocalModel {
             execution_settings.max_context_size,
         );
 
-        println!("Execution settings: {:?}", execution_settings);
+        tracing::debug!(?execution_settings, "Execution settings");
 
         Self::spawn_server(
-            &child_handle,
+            &mut server,
             &gguf_path,
             context_length,
             port,
@@ -350,10 +364,10 @@ impl LocalModel {
         if should_probe_tool_template
             && !Self::server_supports_tool_use(port).await.unwrap_or(false)
         {
-            println!(
+            tracing::warn!(
                 "Local model template does not advertise tool support. Restarting llama-server with chatml fallback."
             );
-            Self::stop_server(&child_handle);
+            server.stop();
 
             let fallback_template = LlamaServerTemplateOverride {
                 chat_template: Some("chatml".to_string()),
@@ -361,7 +375,7 @@ impl LocalModel {
             };
 
             Self::spawn_server(
-                &child_handle,
+                &mut server,
                 &gguf_path,
                 context_length,
                 port,
@@ -377,28 +391,10 @@ impl LocalModel {
 
         Ok(LocalModel {
             bit: bit.clone(),
-            handle: child_handle,
+            _server: server,
             llm_model: Arc::new(llm_model),
             port,
         })
-    }
-}
-
-impl Drop for LocalModel {
-    fn drop(&mut self) {
-        println!("DROPPING LOCAL MODEL");
-        if let Ok(mut guard) = self.handle.lock() {
-            if let Some(child) = guard.as_mut() {
-                match child.kill() {
-                    Ok(_) => println!("Child process was killed successfully."),
-                    Err(e) => eprintln!("Failed to kill child process: {}", e),
-                }
-            } else {
-                println!("No child process to kill.");
-            }
-        } else {
-            println!("Failed to lock local model handle for dropping.");
-        }
     }
 }
 
@@ -410,6 +406,83 @@ mod tests {
         args.windows(2)
             .find(|window| window[0] == key)
             .map(|window| window[1].as_str())
+    }
+
+    #[cfg(unix)]
+    fn sleeping_child() -> Child {
+        std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep")
+    }
+
+    /// True while the pid is still in the process table, including as an unreaped zombie.
+    #[cfg(unix)]
+    fn process_listed(pid: u32) -> bool {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("run ps");
+        !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    }
+
+    /// The child sleeps for 60s, so a stop that waited instead of killing fails this bound.
+    #[cfg(unix)]
+    fn assert_killed_promptly(started: std::time::Instant) {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "server was waited out instead of killed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_the_server_kills_and_reaps_the_process() {
+        let mut server = LlamaServerProcess::default();
+        let pid = server.attach(sleeping_child()).id();
+        assert!(process_listed(pid));
+
+        let started = std::time::Instant::now();
+        drop(server);
+
+        assert_killed_promptly(started);
+        assert!(!process_listed(pid));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abandoning_a_start_stops_the_spawned_server() {
+        let (pid_sender, pid_receiver) = std::sync::mpsc::channel();
+        let start = async move {
+            let mut server = LlamaServerProcess::default();
+            pid_sender
+                .send(server.attach(sleeping_child()).id())
+                .unwrap();
+            std::future::pending::<()>().await;
+        };
+
+        let started = std::time::Instant::now();
+        let _ = tokio::time::timeout(Duration::from_millis(50), start).await;
+
+        assert_killed_promptly(started);
+        assert!(!process_listed(pid_receiver.recv().unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restarting_reaps_the_previous_server() {
+        let mut server = LlamaServerProcess::default();
+        let first = server.attach(sleeping_child()).id();
+
+        let started = std::time::Instant::now();
+        server.stop();
+        assert!(!process_listed(first));
+
+        let second = server.attach(sleeping_child()).id();
+        let third = server.attach(sleeping_child()).id();
+        assert_killed_promptly(started);
+        assert!(!process_listed(second));
+        assert!(process_listed(third));
     }
 
     #[test]

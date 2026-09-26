@@ -31,6 +31,7 @@ import {
 	type UserLessonProgress,
 	translateId,
 } from "@flow-like/flow-like-ui/lib/learn/types";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import "@xyflow/react/dist/style.css";
@@ -101,8 +102,8 @@ function LessonContentPage() {
 
 	const courseLessons = useMemo(
 		() =>
-			(structureQuery.data?.modules ?? []).flatMap((m) =>
-				m.lessons.map((l) => ({
+			asArray(structureQuery.data?.modules).flatMap((m) =>
+				asArray(m.lessons).map((l) => ({
 					id: l.id,
 					title: l.title,
 					moduleId: m.id,
@@ -127,7 +128,7 @@ function LessonContentPage() {
 	);
 
 	const enrollment = useMemo(
-		() => (enrollmentQuery.data ?? []).find((e) => e.course_id === courseId),
+		() => asArray(enrollmentQuery.data).find((e) => e.course_id === courseId),
 		[enrollmentQuery.data, courseId],
 	);
 	const linkedAppIds = (enrollment?.linked_app_ids ?? {}) as Record<
@@ -146,8 +147,10 @@ function LessonContentPage() {
 		onSuccess: (progress) => {
 			queryClient.setQueryData<UserLessonProgress[]>(
 				["learn", "progress", "me", courseId, profileId],
-				(rows = []) => [
-					...rows.filter((row) => row.lesson_id !== progress.lesson_id),
+				(rows) => [
+					...asArray(rows).filter(
+						(row) => row.lesson_id !== progress.lesson_id,
+					),
 					progress,
 				],
 			);
@@ -357,25 +360,25 @@ function LessonContentPage() {
 	const lesson = lessonQuery.data?.lesson;
 	const lessonComplete = useMemo(
 		() =>
-			(progressQuery.data ?? []).some(
+			asArray(progressQuery.data).some(
 				(p) => p.lesson_id === lessonId && p.status === "COMPLETED",
 			),
 		[progressQuery.data, lessonId],
 	);
 	const challenges = useMemo(
-		() => lessonQuery.data?.challenges ?? [],
+		() => asArray(lessonQuery.data?.challenges),
 		[lessonQuery.data],
 	);
 	const attemptsByChallenge = useMemo(() => {
 		const byChallenge = new Map<string, ReadonlyArray<ChallengeAttempt>>();
-		for (const attempt of lessonQuery.data?.attempts ?? []) {
+		for (const attempt of asArray(lessonQuery.data?.attempts)) {
 			const current = byChallenge.get(attempt.challenge_id) ?? [];
 			byChallenge.set(attempt.challenge_id, [...current, attempt]);
 		}
 		return byChallenge;
 	}, [lessonQuery.data?.attempts]);
-	const appRefs = lessonQuery.data?.app_refs ?? [];
-	const assets = lessonQuery.data?.assets ?? [];
+	const appRefs = asArray(lessonQuery.data?.app_refs);
+	const assets = asArray(lessonQuery.data?.assets);
 
 	const boardDefaultTarget = useMemo<PaneTarget | null>(() => {
 		const boardChallenge = challenges.find(

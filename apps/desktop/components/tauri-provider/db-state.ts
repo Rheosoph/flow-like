@@ -1,4 +1,3 @@
-import { indexTypeToString } from "@flow-like/flow-like-ui/state/backend-state/db-state";
 import type {
 	IAddColumnPayload,
 	ICreateTableResult,
@@ -10,6 +9,17 @@ import type {
 	IQueryTablePayload,
 	ITableSummary,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import {
+	type IDatabaseAction,
+	type IDatabaseActionResult,
+	type IDatabaseDiff,
+	type IDatabaseHistory,
+	type IDatabaseSelector,
+	databaseQueryParams,
+} from "@flow-like/flow-like-ui/state/backend-state/db-state";
+import { indexTypeToString } from "@flow-like/flow-like-ui/state/backend-state/db-state";
+import { i18n } from "@flow-like/locales";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -18,17 +28,46 @@ function parseTableName(name: string): string {
 	return encodeURIComponent(name);
 }
 
-function scopeQuery(userScoped?: boolean): string {
-	return userScoped ? "scope=user" : "";
+function appendScope(
+	url: string,
+	userScoped?: boolean,
+	selector?: IDatabaseSelector,
+): string {
+	const params = databaseQueryParams(userScoped, selector).toString();
+	if (!params) return url;
+	return `${url}${url.includes("?") ? "&" : "?"}${params}`;
 }
 
-function appendScope(url: string, userScoped?: boolean): string {
-	if (!userScoped) return url;
-	return url.includes("?") ? `${url}&scope=user` : `${url}?scope=user`;
+type TableTarget = "local" | "device" | "hub";
+
+function managedStructureError(): Error {
+	return new Error(i18n.t("settings:offlineAccess.dataStudioStructureBlocked"));
 }
 
 export class DatabaseState implements IDatabaseState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	/** Rust decides an online app's route on every call; nothing is cached here. */
+	private async tableTarget(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<TableTarget> {
+		if (await this.backend.isOffline(appId)) return "local";
+		return (
+			(await this.backend.offlineWritesState?.getTableRoute(
+				appId,
+				tableName,
+				userScoped,
+			)) ?? "hub"
+		);
+	}
+
+	private deviceAuth(target: TableTarget): { token?: string } {
+		return target === "device"
+			? { token: this.backend.auth?.user?.access_token }
+			: {};
+	}
 
 	async createTable(
 		appId: string,
@@ -37,9 +76,10 @@ export class DatabaseState implements IDatabaseState {
 		ifNotExists = true,
 		userScoped?: boolean,
 	): Promise<ICreateTableResult> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -70,15 +110,18 @@ export class DatabaseState implements IDatabaseState {
 		indexType: IIndexType,
 		optimize?: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/index`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -99,6 +142,7 @@ export class DatabaseState implements IDatabaseState {
 			indexType: indexTypeToString(indexType),
 			optimize,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -107,15 +151,17 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		items: any[],
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "PUT",
@@ -132,6 +178,8 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			items,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -140,15 +188,17 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		query: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "DELETE",
@@ -165,6 +215,8 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			query,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -174,20 +226,24 @@ export class DatabaseState implements IDatabaseState {
 		offset?: number,
 		limit?: number,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(
-					`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
-					userScoped,
+		if (target === "hub") {
+			return asArray(
+				await fetcher<unknown[]>(
+					this.backend.profile!,
+					appendScope(
+						`apps/${appId}/db/${parseTableName(tableName)}?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+						userScoped,
+						selector,
+					),
+					{
+						method: "GET",
+					},
+					this.backend.auth,
 				),
-				{
-					method: "GET",
-				},
-				this.backend.auth,
 			);
 		}
 
@@ -197,6 +253,8 @@ export class DatabaseState implements IDatabaseState {
 			offset,
 			limit,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -207,21 +265,25 @@ export class DatabaseState implements IDatabaseState {
 		offset?: number,
 		limit?: number,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(
-					`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
-					userScoped,
+		if (target === "hub") {
+			return asArray(
+				await fetcher<unknown[]>(
+					this.backend.profile!,
+					appendScope(
+						`apps/${appId}/db/${parseTableName(tableName)}/query?offset=${offset ?? 0}&limit=${limit ?? 25}`,
+						userScoped,
+						selector,
+					),
+					{
+						method: "POST",
+						body: JSON.stringify(query),
+					},
+					this.backend.auth,
 				),
-				{
-					method: "POST",
-					body: JSON.stringify(query),
-				},
-				this.backend.auth,
 			);
 		}
 
@@ -232,6 +294,8 @@ export class DatabaseState implements IDatabaseState {
 			offset,
 			limit,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -239,15 +303,17 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/schema`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "GET",
@@ -260,6 +326,8 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -267,12 +335,14 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<any> {
 		if (await this.backend.isLocalOnly(appId)) {
 			return invoke<any>("db_schema", {
 				appId,
 				tableName,
 				userScoped: userScoped ?? false,
+				...(selector ? { selector } : {}),
 			});
 		}
 		if (
@@ -289,6 +359,7 @@ export class DatabaseState implements IDatabaseState {
 			appendScope(
 				`apps/${appId}/db/${parseTableName(tableName)}/schema`,
 				userScoped,
+				selector,
 			),
 			{ method: "GET" },
 			this.backend.auth,
@@ -299,20 +370,24 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<IIndexConfig[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				appendScope(
-					`apps/${appId}/db/${parseTableName(tableName)}/indices`,
-					userScoped,
+			return asArray(
+				await fetcher<IIndexConfig[]>(
+					this.backend.profile!,
+					appendScope(
+						`apps/${appId}/db/${parseTableName(tableName)}/indices`,
+						userScoped,
+						selector,
+					),
+					{
+						method: "GET",
+					},
+					this.backend.auth,
 				),
-				{
-					method: "GET",
-				},
-				this.backend.auth,
 			);
 		}
 
@@ -320,6 +395,7 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -328,15 +404,18 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		indexName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/index/${encodeURIComponent(indexName)}`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "DELETE",
@@ -351,6 +430,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			indexName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -358,13 +438,15 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				`apps/${appId}/db`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
+			return asArray(
+				await fetcher<string[]>(
+					this.backend.profile!,
+					`apps/${appId}/db`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -384,25 +466,34 @@ export class DatabaseState implements IDatabaseState {
 				"Hosted database inventory requires an authenticated hub session",
 			);
 		}
-		return fetcher<string[]>(
+		const tables = await fetcher<string[]>(
 			this.backend.profile,
 			`apps/${appId}/db`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// An unreadable inventory must never read as "this app has no tables".
+		if (!Array.isArray(tables)) {
+			throw new Error(
+				`Hosted database inventory for app ${appId} returned ${typeof tables} instead of a table list`,
+			);
+		}
+		return tables;
 	}
 
 	async listTablesUser(appId: string): Promise<string[]> {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				`apps/${appId}/db/user`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
+			return asArray(
+				await fetcher<string[]>(
+					this.backend.profile!,
+					`apps/${appId}/db/user`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -416,13 +507,15 @@ export class DatabaseState implements IDatabaseState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return await fetcher(
-				this.backend.profile!,
-				`apps/${appId}/db${userScoped ? "/user" : ""}?detail=summary`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
+			return asArray(
+				await fetcher<ITableSummary[]>(
+					this.backend.profile!,
+					`apps/${appId}/db${userScoped ? "/user" : ""}?detail=summary`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -436,15 +529,17 @@ export class DatabaseState implements IDatabaseState {
 		appId: string,
 		tableName: string,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<number> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/count`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "GET",
@@ -457,6 +552,8 @@ export class DatabaseState implements IDatabaseState {
 			appId,
 			tableName,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -465,15 +562,18 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		keepVersions?: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/optimize`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -488,6 +588,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			keepVersions: keepVersions ?? true,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -497,15 +598,17 @@ export class DatabaseState implements IDatabaseState {
 		filter: string,
 		updates: Record<string, any>,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/update`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "PUT",
@@ -521,6 +624,8 @@ export class DatabaseState implements IDatabaseState {
 			filter,
 			updates,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+			...this.deviceAuth(target),
 		});
 	}
 
@@ -529,15 +634,18 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		columns: string[],
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "DELETE",
@@ -552,6 +660,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			columns,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -560,15 +669,18 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		column: IAddColumnPayload,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "POST",
@@ -583,6 +695,7 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			column,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -592,15 +705,18 @@ export class DatabaseState implements IDatabaseState {
 		column: string,
 		nullable: boolean,
 		userScoped?: boolean,
+		selector?: IDatabaseSelector,
 	): Promise<void> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
 					`apps/${appId}/db/${parseTableName(tableName)}/columns`,
 					userScoped,
+					selector,
 				),
 				{
 					method: "PUT",
@@ -616,6 +732,42 @@ export class DatabaseState implements IDatabaseState {
 			column,
 			nullable,
 			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+		});
+	}
+
+	async setPrimaryKey(
+		appId: string,
+		tableName: string,
+		column: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<void> {
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
+
+		if (target === "hub") {
+			return await fetcher(
+				this.backend.profile!,
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/primary-key`,
+					userScoped,
+					selector,
+				),
+				{
+					method: "PUT",
+					body: JSON.stringify({ column }),
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke("db_set_primary_key", {
+			appId,
+			tableName,
+			column,
+			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
 		});
 	}
 
@@ -624,9 +776,10 @@ export class DatabaseState implements IDatabaseState {
 		tableName: string,
 		userScoped?: boolean,
 	): Promise<IDropTableResult> {
-		const isOffline = await this.backend.isOffline(appId);
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
 
-		if (!isOffline) {
+		if (target === "hub") {
 			return await fetcher(
 				this.backend.profile!,
 				appendScope(
@@ -645,5 +798,115 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			userScoped: userScoped ?? false,
 		});
+	}
+	async databaseHistory(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseHistory> {
+		if (await this.backend.isOffline(appId)) {
+			return invoke("db_history", {
+				appId,
+				tableName,
+				userScoped: userScoped ?? false,
+				selector,
+			});
+		}
+		const history = await fetcher<IDatabaseHistory>(
+			this.backend.profile!,
+			appendScope(
+				`apps/${appId}/db/${parseTableName(tableName)}/references`,
+				userScoped,
+				selector,
+			),
+			{ method: "GET" },
+			this.backend.auth,
+		);
+		if (!isRecord(history)) {
+			throw new Error(
+				`Database history for table ${tableName} returned ${typeof history} instead of an object`,
+			);
+		}
+		return {
+			...history,
+			versions: asArray(history.versions),
+			branches: asArray(history.branches),
+			tags: asArray(history.tags),
+		};
+	}
+
+	async databaseAction(
+		appId: string,
+		tableName: string,
+		action: IDatabaseAction,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseActionResult> {
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
+		if (target === "local") {
+			return invoke("db_reference_action", {
+				appId,
+				tableName,
+				action,
+				userScoped: userScoped ?? false,
+				selector,
+			});
+		}
+		return fetcher(
+			this.backend.profile!,
+			appendScope(
+				`apps/${appId}/db/${parseTableName(tableName)}/references`,
+				userScoped,
+				selector,
+			),
+			{ method: "POST", body: JSON.stringify(action) },
+			this.backend.auth,
+		);
+	}
+	async databaseCompare(
+		appId: string,
+		tableName: string,
+		otherSelector: IDatabaseSelector,
+		key: string,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<IDatabaseDiff> {
+		if (await this.backend.isOffline(appId)) {
+			return invoke("db_compare", {
+				appId,
+				tableName,
+				other: otherSelector,
+				key,
+				limit,
+				userScoped: userScoped ?? false,
+				selector,
+			});
+		}
+		const diff = await fetcher<IDatabaseDiff>(
+			this.backend.profile!,
+			appendScope(
+				`apps/${appId}/db/${parseTableName(tableName)}/compare`,
+				userScoped,
+				selector,
+			),
+			{
+				method: "POST",
+				body: JSON.stringify({ other: otherSelector, key, limit }),
+			},
+			this.backend.auth,
+		);
+		if (!isRecord(diff) || !isRecord(diff.source) || !isRecord(diff.target)) {
+			throw new Error(
+				`Database compare for table ${tableName} returned an unexpected response instead of a diff`,
+			);
+		}
+		return {
+			...diff,
+			schema_changes: asArray(diff.schema_changes),
+			rows: asArray(diff.rows),
+		};
 	}
 }

@@ -7,7 +7,7 @@
 local sdk = require("sdk")
 
 -- ============================================================================
--- Node definition — note addPermission("http")
+-- Node definition — note addPermission("network:http")
 -- ============================================================================
 
 function get_node()
@@ -16,7 +16,7 @@ function get_node()
     def.friendly_name = "HTTP GET Request (Lua)"
     def.description   = "Sends a GET request to a URL and reports the result"
     def.category      = "Network/HTTP"
-    sdk.addPermission(def, "http")
+    sdk.addPermission(def, "network:http")
 
     sdk.addPin(def, sdk.inputExec())
     sdk.addPin(def, sdk.withDefault(

@@ -1,7 +1,9 @@
 """Opt-in destructive authorization checks in unique temporary test prefixes.
 
 Run against a disposable or backed-up store after bootstrap. Uses only the API
-and restricted issuer identities. Every created object is removed in finally.
+and restricted issuer identities, plus the root identity for the audit bucket
+retention check, because only a principal allowed to delete versions proves the
+lock. Every created object is removed in finally.
 This checks a single node's prefix boundaries; it does not qualify expiry,
 failover, backups, multipart-copy, or the complete Flow-Like application.
 """
@@ -31,6 +33,30 @@ def denied(call, description):
             return
         raise AssertionError(f"{description}: expected HTTP 403, got {error.code}") from None
     raise AssertionError(f"{description}: request unexpectedly succeeded")
+
+
+def check_audit_retention(endpoint, region, bucket, root):
+    """Deleting an object version under retention must fail even for the root identity."""
+    client = s3_client(endpoint, region, *root)
+    key = "conformance/" + uuid.uuid4().hex
+    until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+    version = client.put_object(Bucket=bucket, Key=key, Body=b"retention", ChecksumAlgorithm="SHA256",
+                                ObjectLockMode="GOVERNANCE", ObjectLockRetainUntilDate=until)["VersionId"]
+    try:
+        try:
+            client.delete_object(Bucket=bucket, Key=key, VersionId=version)
+        except ClientError as error:
+            if error.response["ResponseMetadata"]["HTTPStatusCode"] not in (400, 403):
+                raise
+        try:
+            client.head_object(Bucket=bucket, Key=key, VersionId=version)
+        except ClientError:
+            raise AssertionError("audit bucket: deleting an object version under retention succeeded") from None
+    finally:
+        try:
+            client.delete_object(Bucket=bucket, Key=key, VersionId=version, BypassGovernanceRetention=True)
+        except ClientError:
+            print(f"Audit retention probe {key} stays until its one-day retention ends.", file=sys.stderr)
 
 
 def main():
@@ -105,7 +131,10 @@ def main():
         url = scoped.generate_presigned_url("put_object", Params={"Bucket": bucket, "Key": keys[4]}, ExpiresIn=60)
         with urllib.request.urlopen(urllib.request.Request(url, data=b"presigned", method="PUT"), timeout=30):
             pass
-        print("Single-node STS prefix, copy-source, token, admin and presigned URL checks passed.")
+        audit_bucket = setting("AUDIT_BUCKET")
+        if audit_bucket:
+            check_audit_retention(endpoint, region, audit_bucket, (secret("RUSTFS_ROOT_USER"), secret("RUSTFS_ROOT_PASSWORD")))
+        print("Single-node STS prefix, copy-source, token, admin, presigned URL and audit retention checks passed.")
     finally:
         # Also clean unexpected writes if a denial regression was found.
         for cleanup_bucket in (bucket, setting("META_BUCKET"), setting("LOG_BUCKET")):

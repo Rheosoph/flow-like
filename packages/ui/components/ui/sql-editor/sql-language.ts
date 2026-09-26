@@ -70,7 +70,7 @@ const SQL_KEYWORDS = [
 	"COALESCE",
 ];
 
-/** Names registered by geodatafusion 0.4.0, plus the explicit WGS 84 importer. */
+/** Names registered by geodatafusion 0.4.0, plus the explicit WGS 84 importers and GeoJSON export. */
 export const GEOMETRY_SQL_FUNCTIONS: ReadonlyArray<{
 	name: string;
 	detail: string;
@@ -79,6 +79,10 @@ export const GEOMETRY_SQL_FUNCTIONS: ReadonlyArray<{
 		name: "flow_geomfromtext",
 		detail:
 			"Import 2D WKT as WGS 84 geometry. Validates longitude, latitude; does not transform coordinates.",
+	},
+	{
+		name: "ST_GeomFromGeoJSON",
+		detail: "Import GeoJSON text (a geometry or a Feature) as WGS 84 geometry.",
 	},
 	{
 		name: "ST_GeomFromText",
@@ -93,6 +97,10 @@ export const GEOMETRY_SQL_FUNCTIONS: ReadonlyArray<{
 	{
 		name: "ST_AsText",
 		detail: "Geometry to WKT text; foreign GeoJSON members are not preserved.",
+	},
+	{
+		name: "ST_AsGeoJSON",
+		detail: "Geometry to GeoJSON text.",
 	},
 	{
 		name: "ST_AsBinary",

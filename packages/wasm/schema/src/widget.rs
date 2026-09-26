@@ -9,8 +9,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Current widget contract version
-pub const CONTRACT_VERSION: u32 = 1;
+use crate::widget_policy::{
+    WidgetCsp, WidgetCspPurpose, flatten_csp_purposes, validate_csp_purposes,
+};
+
+/// Current widget contract version; contracts declaring `csp` must use it
+pub const CONTRACT_VERSION: u32 = 2;
+
+/// Version of contracts without `csp`, readable by hosts that predate `csp`
+pub const BASE_CONTRACT_VERSION: u32 = 1;
 
 /// Host <-> widget postMessage protocol version
 pub const WIDGET_PROTOCOL: &str = "flw/1";
@@ -88,6 +95,9 @@ pub struct ContractQuery {
     pub result_schema: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// A mutation may change widget state and must be acknowledged by a live instance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mutation: bool,
 }
 
 /// Sizing hints for the host iframe
@@ -122,6 +132,23 @@ impl Default for WidgetSizing {
     }
 }
 
+/// Browser features explicitly requested by a widget contract.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
+pub struct WidgetCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microphone: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<bool>,
+}
+
 /// Typed contract of a package widget (`contract.json`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -138,18 +165,47 @@ pub struct WidgetContract {
     pub queries: BTreeMap<String, ContractQuery>,
     #[serde(default)]
     pub sizing: WidgetSizing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<WidgetCapabilities>,
+    /// CSP extensions as purpose groups; present only with `contractVersion` 2
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csp: Option<Vec<WidgetCspPurpose>>,
 }
 
 impl WidgetContract {
     pub fn new(id: &str) -> Self {
         Self {
-            contract_version: CONTRACT_VERSION,
+            contract_version: BASE_CONTRACT_VERSION,
             id: id.to_string(),
             inputs: BTreeMap::new(),
             events: BTreeMap::new(),
             queries: BTreeMap::new(),
             sizing: WidgetSizing::default(),
+            capabilities: None,
+            csp: None,
         }
+    }
+
+    /// Sets `csp` in canonical form (absent without purposes) and the
+    /// contract version it requires. Group order is kept.
+    pub fn with_csp(mut self, mut purposes: Vec<WidgetCspPurpose>) -> Self {
+        purposes.iter_mut().for_each(WidgetCspPurpose::canonicalize);
+        if purposes.is_empty() {
+            self.csp = None;
+            self.contract_version = BASE_CONTRACT_VERSION;
+        } else {
+            self.csp = Some(purposes);
+            self.contract_version = CONTRACT_VERSION;
+        }
+        self
+    }
+
+    /// Per-directive union of every purpose's sources, sorted and deduplicated.
+    pub fn declared_csp(&self) -> WidgetCsp {
+        self.csp
+            .as_deref()
+            .map(flatten_csp_purposes)
+            .unwrap_or_default()
     }
 
     pub fn from_json(content: &str) -> Result<Self, serde_json::Error> {
@@ -164,11 +220,24 @@ impl WidgetContract {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
-        if self.contract_version == 0 || self.contract_version > CONTRACT_VERSION {
-            errors.push(format!(
-                "Unsupported contract version {} for widget '{}' (supported: 1..={})",
-                self.contract_version, self.id, CONTRACT_VERSION
-            ));
+        match (self.contract_version, &self.csp) {
+            (CONTRACT_VERSION, Some(_)) | (BASE_CONTRACT_VERSION, None) => {}
+            (BASE_CONTRACT_VERSION, Some(_)) => errors.push(format!(
+                "Widget '{}' declares csp and must use contractVersion {}",
+                self.id, CONTRACT_VERSION
+            )),
+            (CONTRACT_VERSION, None) => errors.push(format!(
+                "Widget '{}' uses contractVersion {} without csp; contracts without csp must use contractVersion {}",
+                self.id, CONTRACT_VERSION, BASE_CONTRACT_VERSION
+            )),
+            (version, _) => errors.push(format!(
+                "Unsupported contractVersion {} for widget '{}' (supported: {}, or {} with csp)",
+                version, self.id, BASE_CONTRACT_VERSION, CONTRACT_VERSION
+            )),
+        }
+
+        if let Some(purposes) = &self.csp {
+            errors.extend(validate_csp_purposes(&self.id, purposes, &self.inputs));
         }
 
         if !is_valid_widget_id(&self.id) {
@@ -238,7 +307,8 @@ impl WidgetContract {
     }
 }
 
-fn is_valid_widget_id(id: &str) -> bool {
+/// Contract widget ids: non-empty lowercase kebab-case (`[a-z0-9-]`).
+pub fn is_valid_widget_id(id: &str) -> bool {
     !id.is_empty()
         && !id.starts_with('-')
         && !id.ends_with('-')
@@ -281,6 +351,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn widget_capabilities_roundtrip_and_reject_unknown_fields() {
+        let value = serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"workers":true,"media":true,"microphone":true,"wasm":true,"downloads":true}});
+        let contract: WidgetContract = serde_json::from_value(value).unwrap();
+        let serialized = serde_json::to_value(contract).unwrap();
+        assert_eq!(serialized["capabilities"]["downloads"], true);
+        assert!(serde_json::from_value::<WidgetContract>(serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"sameOrigin":true}})).is_err());
+        assert!(serde_json::from_value::<WidgetContract>(serde_json::json!({"contractVersion":1,"id":"globe","capabilities":{"resources":true}})).is_err());
+    }
+
     fn sample_contract() -> WidgetContract {
         let mut contract = WidgetContract::new("sales-chart");
         contract.inputs.insert(
@@ -322,6 +402,7 @@ mod tests {
                 args_schema: None,
                 result_schema: Some(json!({"type": "string"})),
                 description: None,
+                mutation: false,
             },
         );
         contract
@@ -340,6 +421,31 @@ mod tests {
         assert_eq!(parsed.id, "sales-chart");
         assert_eq!(parsed.inputs.len(), 2);
         assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn mutation_flag_defaults_false_and_only_serializes_when_true() {
+        let read: ContractQuery = serde_json::from_value(json!({
+            "argsSchema": null,
+            "resultSchema": { "type": "string" }
+        }))
+        .unwrap();
+        assert!(!read.mutation);
+        assert!(
+            serde_json::to_value(&read)
+                .unwrap()
+                .get("mutation")
+                .is_none()
+        );
+
+        let mutation: ContractQuery = serde_json::from_value(json!({
+            "argsSchema": { "type": "object" },
+            "resultSchema": { "type": "object" },
+            "mutation": true
+        }))
+        .unwrap();
+        assert!(mutation.mutation);
+        assert_eq!(serde_json::to_value(mutation).unwrap()["mutation"], true);
     }
 
     #[test]
@@ -384,5 +490,166 @@ mod tests {
         );
         let errors = contract.validate().unwrap_err();
         assert!(errors.iter().any(|e| e.contains("does not match")));
+    }
+
+    fn map_csp() -> Vec<WidgetCspPurpose> {
+        vec![WidgetCspPurpose {
+            reason: "Loads vector tiles and live positions".into(),
+            connect_src: vec![
+                "https://api.maptiler.com".into(),
+                "wss://live.example.com".into(),
+            ],
+            img_src: vec!["https://a.tile.openstreetmap.org".into()],
+            ..WidgetCspPurpose::default()
+        }]
+    }
+
+    #[test]
+    fn contract_version_is_two_exactly_when_csp_is_present() {
+        let plain = WidgetContract::new("live-map");
+        assert_eq!(plain.contract_version, BASE_CONTRACT_VERSION);
+        assert!(plain.validate().is_ok());
+
+        let with_csp = WidgetContract::new("live-map").with_csp(map_csp());
+        assert_eq!(with_csp.contract_version, CONTRACT_VERSION);
+        assert!(with_csp.validate().is_ok());
+
+        let mut csp_on_v1 = with_csp.clone();
+        csp_on_v1.contract_version = BASE_CONTRACT_VERSION;
+        assert!(
+            csp_on_v1
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("must use contractVersion 2"))
+        );
+
+        let mut v2_without_csp = plain.clone();
+        v2_without_csp.contract_version = CONTRACT_VERSION;
+        assert!(
+            v2_without_csp
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("without csp"))
+        );
+
+        for version in [0, 3, 99] {
+            let mut unsupported = with_csp.clone();
+            unsupported.contract_version = version;
+            assert!(
+                unsupported
+                    .validate()
+                    .unwrap_err()
+                    .iter()
+                    .any(|e| e.contains("Unsupported contractVersion"))
+            );
+        }
+    }
+
+    #[test]
+    fn with_csp_omits_empty_declarations_and_validate_rejects_them() {
+        let emptied = WidgetContract::new("live-map")
+            .with_csp(map_csp())
+            .with_csp(Vec::new());
+        assert!(emptied.csp.is_none());
+        assert_eq!(emptied.contract_version, BASE_CONTRACT_VERSION);
+        let json = serde_json::to_value(&emptied).unwrap();
+        assert!(json.get("csp").is_none());
+        assert!(emptied.declared_csp().is_empty());
+
+        let mut explicit_empty = WidgetContract::new("live-map");
+        explicit_empty.contract_version = CONTRACT_VERSION;
+        explicit_empty.csp = Some(Vec::new());
+        assert!(
+            explicit_empty
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("empty csp"))
+        );
+    }
+
+    #[test]
+    fn csp_parses_from_contract_json_and_is_validated() {
+        let contract = WidgetContract::from_json(
+            r#"{"contractVersion":2,"id":"live-map","csp":[{"reason":"Loads map styles and tiles","connectSrc":["https://api.maptiler.com"],"styleSrc":["https://fonts.googleapis.com"]}]}"#,
+        )
+        .unwrap();
+        assert!(contract.validate().is_ok());
+        let serialized = serde_json::to_value(&contract).unwrap();
+        assert_eq!(
+            serialized["csp"],
+            json!([{"reason":"Loads map styles and tiles","connectSrc":["https://api.maptiler.com"],"styleSrc":["https://fonts.googleapis.com"]}])
+        );
+        assert_eq!(
+            contract.declared_csp(),
+            WidgetCsp {
+                connect_src: vec!["https://api.maptiler.com".into()],
+                style_src: vec!["https://fonts.googleapis.com".into()],
+                ..WidgetCsp::default()
+            }
+        );
+
+        for rejected in [
+            r#"{"contractVersion":2,"id":"live-map","csp":{"connectSrc":["https://api.maptiler.com"]}}"#,
+            r#"{"contractVersion":2,"id":"live-map","csp":[{"reason":"Loads map tiles","scriptSrc":["https://cdn.example.org"]}]}"#,
+            r#"{"contractVersion":2,"id":"live-map","csp":[{"connectSrc":["https://api.maptiler.com"]}]}"#,
+        ] {
+            assert!(WidgetContract::from_json(rejected).is_err(), "{rejected}");
+        }
+
+        let invalid = WidgetContract::from_json(
+            r#"{"contractVersion":2,"id":"live-map","csp":[{"reason":"Loads map tiles","connectSrc":["https://b.example.org","http://a.example.org"]}]}"#,
+        )
+        .unwrap();
+        let errors = invalid.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("http://a.example.org")));
+        assert!(errors.iter().any(|e| e.contains("sorted ascending")));
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.starts_with("Widget 'live-map': csp purpose 0: "))
+        );
+    }
+
+    #[test]
+    fn csp_serializes_after_capabilities_in_group_and_field_order() {
+        let mut contract = WidgetContract::new("live-map").with_csp(vec![
+            WidgetCspPurpose {
+                reason: "Loads map styles and fonts".into(),
+                style_src: vec!["https://fonts.googleapis.com".into()],
+                connect_src: vec!["https://api.maptiler.com".into()],
+                font_src: vec!["https://fonts.gstatic.com".into()],
+                ..WidgetCspPurpose::default()
+            },
+            WidgetCspPurpose {
+                reason: "Loads tiles given at runtime".into(),
+                inputs: vec![crate::widget_policy::WidgetNetworkInput {
+                    path: "tileUrl".into(),
+                    directives: vec![crate::widget_policy::CspDirective::ImgSrc],
+                    template: None,
+                }],
+                ..WidgetCspPurpose::default()
+            },
+        ]);
+        contract.capabilities = Some(WidgetCapabilities {
+            workers: Some(true),
+            ..WidgetCapabilities::default()
+        });
+        let text = serde_json::to_string(&contract).unwrap();
+        let capabilities = text.find("\"capabilities\"").unwrap();
+        let csp = text.find("\"csp\"").unwrap();
+        assert!(capabilities < csp);
+        assert!(text.ends_with(
+            r#""csp":[{"reason":"Loads map styles and fonts","connectSrc":["https://api.maptiler.com"],"fontSrc":["https://fonts.gstatic.com"],"styleSrc":["https://fonts.googleapis.com"]},{"reason":"Loads tiles given at runtime","inputs":[{"path":"tileUrl","directives":["imgSrc"]}]}]}"#
+        ));
+        assert!(
+            contract
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("root \"tileUrl\" is not a contract input"))
+        );
     }
 }

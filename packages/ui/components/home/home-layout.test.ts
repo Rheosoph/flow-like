@@ -3,6 +3,7 @@ import {
 	homeWidgetSpan,
 	moveHomeWidget,
 	normalizeHomeLayout,
+	normalizeHomeWidgetClassName,
 	resolveHomeLayout,
 	responsiveHomeColumns,
 } from "./home-layout";
@@ -21,6 +22,34 @@ const layout = (id: string): IHomeLayout => ({
 	],
 });
 describe("profile home layouts", () => {
+	it("preserves widget Tailwind classes on reload without inventing an empty key", () => {
+		const page = layout("styled");
+		page.widgets[0].appearance.className = "rounded-3xl bg-primary/10";
+		expect(
+			normalizeHomeLayout(JSON.parse(JSON.stringify(page)))?.widgets[0]
+				.appearance,
+		).toEqual({
+			variant: "card",
+			accent: "neutral",
+			className: "rounded-3xl bg-primary/10",
+		});
+		for (const className of [undefined, "", "  \n ", 42, null]) {
+			const appearance = normalizeHomeLayout({
+				...layout("plain"),
+				widgets: [
+					{
+						...layout("plain").widgets[0],
+						appearance: { variant: "card", accent: "neutral", className },
+					},
+				],
+			})?.widgets[0].appearance;
+			expect(appearance).toBeDefined();
+			expect(Object.hasOwn(appearance ?? {}, "className")).toBe(false);
+		}
+		expect(normalizeHomeWidgetClassName("  p-4\n\tbg-card  ")).toBe(
+			"p-4 bg-card",
+		);
+	});
 	it("preserves responsive row, content-only, and fixed height choices on reload", () => {
 		for (const heightMode of ["auto", "content", "fixed"] as const) {
 			const page = layout(heightMode);

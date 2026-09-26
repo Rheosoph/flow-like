@@ -1,4 +1,6 @@
-use super::relay::{HostedProvider, PrepareUpstreamBody, deduplicate_tools, relay_request};
+use super::relay::{
+    HostedProvider, PrepareUpstreamBody, deduplicate_tools, relay_instance_request, relay_request,
+};
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 use axum::{Extension, Json, extract::State, http::HeaderMap, response::Response as AxumResponse};
 use flow_like::flow_like_model_provider::provider::ModelApiSurface;
@@ -106,6 +108,22 @@ pub async fn invoke_llm(
         headers,
         payload,
         ModelApiSurface::ChatCompletions,
+        prepare_upstream_body as PrepareUpstreamBody,
+    )
+    .await
+}
+
+pub async fn invoke_instance_llm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<AxumResponse, ApiError> {
+    relay_instance_request(
+        state,
+        headers,
+        payload,
+        ModelApiSurface::ChatCompletions,
+        "/instances/chat/completions",
         prepare_upstream_body as PrepareUpstreamBody,
     )
     .await

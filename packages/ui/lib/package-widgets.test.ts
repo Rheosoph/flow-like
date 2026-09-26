@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { WidgetContract } from "@flow-like/widget-sdk";
 import {
 	MicroWidgetPreviewLru,
 	formatWidgetContractSummary,
@@ -8,7 +9,7 @@ import {
 	summarizeWidgetContract,
 } from "./package-widgets";
 
-const CONTRACT = {
+const CONTRACT: WidgetContract = {
 	contractVersion: 1,
 	id: "sales-chart",
 	inputs: {

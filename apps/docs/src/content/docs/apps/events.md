@@ -84,12 +84,58 @@ Event types are constrained by where their sink can run:
 | Daemon, Deeplink, Discord, Telegram, Email | Local |
 | REST, MCP | Remote |
 | Location Region | iOS or macOS sensor; Local or Remote workflow |
-| Quick Action, Chat UI, Generic Form, Page target | Invoked through their App interface |
+| Quick Action, Chat UI, Generic Form, Page target | App interface; Remote for hosted frontends |
 
 Choose **Local** or **Remote** in the Event editor where both are supported.
 REST and MCP Events can additionally be **Public** or **Internal**. An
 Internal endpoint is callable by connected Apps through the App-connection
 proxy and does not expose a public endpoint.
+
+### Publish a hosted chat, form or page
+
+An App's chats, forms and pages can open from one link in the existing Flow-Like
+web application, including its static export: `/a/<app-id>/<route>`. The route
+selects the interface, the same way it does inside the App, so `/a/<app-id>/`
+opens the App's default route and `/a/<app-id>/orders` opens the Event whose
+route is `/orders`. Workflow execution runs on the Flow-Like server.
+
+Each route is published separately. Hosting starts disabled, and turning it on
+requires visitors to sign in by default.
+
+1. Give the Event a **Route Path** under **Identity**. Chat UI, Generic Form,
+   Quick Action and Page-target Events have one; the App's default Event
+   answers `/`.
+2. Select **Hosting** and turn on **Enable static hosting**.
+3. To accept anonymous visitors, separately turn on **Allow anonymous access**
+   and confirm the warning: anyone with the link can execute workflows, and the
+   App owner pays for their usage. Leave this off to require sign-in.
+4. Set execution to **Remote**, exposure to **Public**, and activate the Event.
+   The Hosting section lists each requirement that is still missing, with a
+   button to fix it. If the Flow fixes the execution location, change it in the
+   Flow first.
+5. Save the Event, then copy **Link to this route**.
+
+The editor includes the API host in the link. With separate API and web hosts,
+the API redirects visitors to the same path on the existing web application.
+With a shared host, the path opens directly in the web application.
+
+Navigation between pages keeps visitors on the same App link and changes only
+the route. A navigation target works when its Event is published too and uses
+the same sign-in setting as the current page; otherwise visitors see that the
+page has not been published on this link.
+
+When sign-in is required, a visitor follows the installation's Flow-Like login
+flow and returns to the same frontend. The workflow receives the authenticated
+user's identity. **Public** exposure allows the hosted route to exist;
+**Allow anonymous access** separately controls anonymous use.
+Disabling hosting, removing the route, deactivating the Event or changing it to
+Local or Internal removes hosted access for that route. Disabling hosting also clears the anonymous choice in
+the editor, so enabling it again starts with sign-in required. Save the Event
+to apply these changes.
+
+Self-hosted installations use their existing web deployment and login callback.
+See [Host chat, form and page frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
+for static route and API redirect configuration.
 
 ### Location Regions
 

@@ -34,6 +34,10 @@ export interface INode {
 	alias?: null | string;
 	/** Data input pin that receives the value in method form; `""` = static only. */
 	receiver?: null | string;
+	/** Editor-only: unconnected data pins are hidden behind the node latch. */
+	pins_collapsed?: boolean | null;
+	/** The editor generated this reroute and may replace it during automatic layout. */
+	auto_reroute?: boolean | null;
 	[property: string]: any;
 }
 

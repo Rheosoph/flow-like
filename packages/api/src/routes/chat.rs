@@ -8,6 +8,7 @@ use crate::state::AppState;
 pub mod completions;
 pub(crate) mod hosted_worker;
 mod relay;
+pub(crate) use relay::current_instance_model_tier;
 pub mod responses;
 pub mod usage;
 

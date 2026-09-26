@@ -4,26 +4,54 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { IPlanStep } from "./chat-db";
 
-// `mock.module` is process-global in bun, so a sibling test file's partial `next-themes` stub can
-// break this file's import graph depending on run order. Declare the full surface we might touch.
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll. Radix picks its layout effect when first imported,
+// so the real modules load under a document.
+const globalDescriptors = [
+	"document",
+	"HTMLElement",
+	"Node",
+	"navigator",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"getComputedStyle",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	nextThemes: { ...(await import("next-themes")) },
+	reasoningViewer: { ...(await import("./reasoning-viewer")) },
+	lib: { ...(await import("../../../lib")) },
+	date: { ...(await import("../../../lib/date")) },
+	collapsible: { ...(await import("../../ui/collapsible")) },
+};
+
 mock.module("next-themes", () => ({
+	...actual.nextThemes,
 	useTheme: () => ({ resolvedTheme: "dark" }),
-	ThemeProvider: ({ children }: { children?: React.ReactNode }) => children,
 }));
-mock.module("./reasoning-viewer", () => ({ ReasoningViewer: () => null }));
-// The `lib` barrel imports back into components, so pulling it in from a direct unit import of
-// plan-steps re-enters this module and its module-level consts hit the temporal dead zone. Stub the
-// two helpers the component actually uses instead of dragging the barrel in.
+mock.module("./reasoning-viewer", () => ({
+	...actual.reasoningViewer,
+	ReasoningViewer: () => null,
+}));
+// Stub the two helpers the component actually uses so these tests stay independent of the
+// `lib` barrel's formatting.
 mock.module("../../../lib", () => ({
+	...actual.lib,
 	cn: (...classes: unknown[]) => classes.filter(Boolean).join(" "),
 }));
 mock.module("../../../lib/date", () => ({
+	...actual.date,
 	formatDuration: (ms: number) => `${Math.round(ms / 1000)}s`,
 }));
 // Radix's Collapsible reads computed styles that happy-dom cannot produce. Swap it for a shell that
 // exposes the open state as an attribute, so these tests assert this component's decisions rather
 // than an animation library's internals.
 mock.module("../../ui/collapsible", () => ({
+	...actual.collapsible,
 	Collapsible: ({
 		open,
 		children,
@@ -39,7 +67,18 @@ mock.module("../../ui/collapsible", () => ({
 	),
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("next-themes", () => actual.nextThemes);
+	mock.module("./reasoning-viewer", () => actual.reasoningViewer);
+	mock.module("../../../lib", () => actual.lib);
+	mock.module("../../../lib/date", () => actual.date);
+	mock.module("../../ui/collapsible", () => actual.collapsible);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 async function renderSteps(steps: IPlanStep[]) {
 	const window = new Window();
@@ -58,8 +97,8 @@ async function renderSteps(steps: IPlanStep[]) {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 	const { InlineStepGroup } = await import("./plan-steps");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	const root = createRoot(container);
 	await act(async () => {
 		root.render(<InlineStepGroup steps={steps} />);

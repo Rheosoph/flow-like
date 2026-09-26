@@ -8,6 +8,8 @@ import {
 
 const action = (name: string): Action => ({ name, context: {} });
 
+const INHERITED_ACTION_IDS = ["constructor", "toString", "__proto__"];
+
 const workflowBinding: ActionBinding = {
 	workflow: { flowId: "flow-id", inputMappings: {} },
 };
@@ -92,10 +94,41 @@ describe("resolveWidgetInstanceEventRoute", () => {
 		).toEqual({ kind: "actions", actions: [action("legacy")] });
 	});
 
-	test("preserves the no-binding diagnostic route", () => {
+	test("resolves an unbound action to the unbound route", () => {
 		expect(resolveWidgetInstanceEventRoute(widgetInstance(), "submit")).toEqual(
-			{ kind: "diagnostic" },
+			{ kind: "unbound" },
 		);
+	});
+
+	test("inherited binding names resolve to no binding", () => {
+		for (const actionId of INHERITED_ACTION_IDS) {
+			expect(
+				resolveWidgetInstanceEventRoute(widgetInstance(), actionId),
+			).toEqual({ kind: "unbound" });
+			expect(
+				resolveWidgetInstanceEventRoute(
+					widgetInstance({ actions: [action("legacy")] }),
+					actionId,
+				),
+			).toEqual({ kind: "actions", actions: [action("legacy")] });
+		}
+	});
+
+	test("still resolves own bindings named like prototype members", () => {
+		// JSON.parse keeps `__proto__` as an own key, as a persisted page would.
+		const binding = JSON.stringify(workflowBinding);
+		const actionBindings = JSON.parse(
+			`{"constructor":${binding},"__proto__":${binding}}`,
+		) as Record<string, ActionBinding>;
+
+		for (const actionId of ["constructor", "__proto__"]) {
+			expect(
+				resolveWidgetInstanceEventRoute(
+					widgetInstance({ actionBindings }),
+					actionId,
+				),
+			).toEqual({ kind: "binding", binding: workflowBinding });
+		}
 	});
 });
 

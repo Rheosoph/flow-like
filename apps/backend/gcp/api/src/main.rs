@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Validate the environment before telemetry exporters open sockets.
     config::reject_forbidden_environment()?;
     metrics_endpoint::init_telemetry();
+    flow_like_api::audit::worker::bucket::ensure_api_only()?;
 
     let config = config::Config::from_env()?;
     let postgres_config = postgres::IamPostgresConfig::from_env()?;
@@ -83,10 +84,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RunSweeperConfig::from_env(),
     );
     let _regression_suites = spawn_regression_suites_worker(state.clone());
+    let _payments_worker = flow_like_api::payments::worker::spawn(state.clone());
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),
     );
+    let _package_license_sweeper = flow_like_api::package_license::spawn_sweeper(state.clone());
+    let _device_certificate_sweeper =
+        flow_like_api::spawn_device_certificate_sweeper(state.clone());
     let _channel_sweeper = spawn_channel_sweeper(
         Arc::new(state.db.clone()),
         state.db_dialect,

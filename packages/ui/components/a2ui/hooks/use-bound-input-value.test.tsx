@@ -29,14 +29,23 @@ const resolveBoundValue = (value: BoundValue) => {
 	return undefined;
 };
 
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualDataContext = { ...(await import("../DataContext")) };
+
 mock.module("../DataContext", () => ({
+	...actualDataContext,
 	useData: () => ({ resolve: resolveBoundValue, setByPath }),
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../DataContext", () => actualDataContext);
+});
 
 let browserWindow: Window;
 let root: Root | null;
+let restoreGlobals: () => void = () => {};
 
 interface HarnessProps {
 	bound: BoundValue | undefined;
@@ -72,7 +81,7 @@ async function render(props: HarnessProps) {
 beforeEach(async () => {
 	harnessModule = await import("./use-bound-input-value");
 	browserWindow = new Window({ url: "https://app.flow-like.test" });
-	Object.assign(globalThis, {
+	const globals = {
 		IS_REACT_ACT_ENVIRONMENT: true,
 		document: browserWindow.document,
 		Element: browserWindow.Element,
@@ -81,7 +90,17 @@ beforeEach(async () => {
 		Node: browserWindow.Node,
 		navigator: browserWindow.navigator,
 		window: browserWindow,
-	});
+	};
+	const descriptors = Object.keys(globals).map(
+		(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+	);
+	Object.assign(globalThis, globals);
+	restoreGlobals = () => {
+		for (const [key, descriptor] of descriptors) {
+			if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+			else Reflect.deleteProperty(globalThis, key);
+		}
+	};
 	for (const key of Object.keys(pathData)) delete pathData[key];
 	observed.external = [];
 	setByPath.mockClear();
@@ -95,6 +114,7 @@ afterEach(async () => {
 	const mounted = root;
 	root = null;
 	await act(async () => mounted?.unmount());
+	restoreGlobals();
 });
 
 describe("useBoundInputValue", () => {

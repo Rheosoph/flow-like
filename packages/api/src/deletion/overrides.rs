@@ -71,8 +71,54 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep("FlowScriptApplyFailure", "appId"),
                 sweep("AppRollingContribution", "appId"),
                 sweep("AppRollingUsage", "appId"),
+                sweep("AuditExportTarget", "appId"),
             ],
             keep: vec![
+                keep(
+                    "AppPurchase",
+                    "appId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "AppPaymentSettings",
+                    "appId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentRequest",
+                    "appId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentOrder",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "LegacyCheckout",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentAttempt",
+                    "appId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentLedgerEntry",
+                    "appId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "AccessGrant",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentEntitlement",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
                 keep(
                     "ProjectCapacity",
                     "appId",
@@ -95,6 +141,8 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "storage event deduplication outlives the app",
                 ),
                 keep("AuditEntry", "chainId", "audit trail outlives the app"),
+                keep("AuditRecord", "chainId", "audit trail outlives the app"),
+                keep("AuditSeal", "chainId", "audit trail outlives the app"),
                 keep("Channel", "appId", "expires through the channel sweeper"),
                 keep(
                     "ExecutionRunCallerApp",
@@ -112,6 +160,101 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 ("WasmPackageInvitation", "inviteeId"),
             ],
             keep: vec![
+                keep(
+                    "AppPurchase",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "WasmPackagePurchase",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentAccountBinding",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "ConnectedAccount",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "AppPaymentSettings",
+                    "ownerUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentsBlock",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentRequest",
+                    "payerUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentRequest",
+                    "payeeUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentOrder",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentOrder",
+                    "payeeUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "LegacyCheckout",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentAttempt",
+                    "payerUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentAttempt",
+                    "payeeUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentRefund",
+                    "requestedBy",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentLedgerEntry",
+                    "payerUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentLedgerEntry",
+                    "payeeUserId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "AccessGrant",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentEntitlement",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "LegalConsent",
+                    "userId",
+                    "payment history and servicing survive deletion",
+                ),
                 keep(
                     "AccountCapacity",
                     "payerId",
@@ -170,6 +313,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 keep("UsageAlert", "userId", "billing history"),
                 keep("UsageLimitAuditLog", "userId", "billing history"),
                 keep("AuditEntry", "chainId", "audit trail"),
+                keep("AuditRecord", "chainId", "audit trail"),
             ],
             ..RootOverrides::default()
         },
@@ -177,11 +321,47 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             before_drain: vec![ExternalStep::WasmPackageArtifacts],
             keep: vec![
                 keep(
+                    "WasmPackagePurchase",
+                    "packageId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentOrder",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "LegacyCheckout",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentAttempt",
+                    "packageId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentLedgerEntry",
+                    "packageId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "AccessGrant",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
+                    "PaymentEntitlement",
+                    "itemId",
+                    "payment history and servicing survive deletion",
+                ),
+                keep(
                     "AppPackage",
                     "packageId",
                     "installs are flagged stale, not removed",
                 ),
                 keep("AuditEntry", "chainId", "audit trail"),
+                keep("AuditRecord", "chainId", "audit trail"),
             ],
             ..RootOverrides::default()
         },

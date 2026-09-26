@@ -569,8 +569,11 @@ fn event_count_expr() -> SimpleExpr {
 
 /// `COALESCE(<column>, 'unknown')` — used identically in the projection, the
 /// `GROUP BY` and the long-tail `NOT EXISTS`, so all three agree on the key.
+/// The fallback is written inline: as a bound value the projection and the
+/// `GROUP BY` would carry different placeholders, which PostgreSQL does not
+/// treat as the same expression (SQLSTATE 42803).
 fn coalesced_key(column: impl sea_orm::sea_query::IntoColumnRef) -> SimpleExpr {
-    Func::coalesce([Expr::col(column), Expr::val(UNKNOWN_VALUE.to_string())]).into()
+    Func::coalesce([Expr::col(column), Expr::Constant(UNKNOWN_VALUE.into())]).into()
 }
 
 fn dimension_column(dimension: &str) -> Option<telemetry_event::Column> {
@@ -649,8 +652,7 @@ async fn install_pairs<C: ConnectionTrait>(
         .distinct()
         .limit(INSTALL_ROW_CAP)
         .into_model::<InstallRow>()
-        .all(db)
-        .await?;
+        .all(db);
 
     let sessions = telemetry_session::Entity::find()
         .select_only()
@@ -662,8 +664,7 @@ async fn install_pairs<C: ConnectionTrait>(
         .distinct()
         .limit(INSTALL_ROW_CAP)
         .into_model::<InstallRow>()
-        .all(db)
-        .await?;
+        .all(db);
 
     let errors = telemetry_error_event::Entity::find()
         .select_only()
@@ -675,9 +676,9 @@ async fn install_pairs<C: ConnectionTrait>(
         .distinct()
         .limit(INSTALL_ROW_CAP)
         .into_model::<InstallRow>()
-        .all(db)
-        .await?;
+        .all(db);
 
+    let (events, sessions, errors) = tokio::try_join!(events, sessions, errors)?;
     for row in events.into_iter().chain(sessions).chain(errors) {
         pairs.insert((row.anon_id, row.source));
     }

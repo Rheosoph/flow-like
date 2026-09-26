@@ -163,6 +163,7 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
             auth_header: None,
             remote_app_id: Some(remote_app_id),
             remote_event_id: Some(event_id),
+            oauth_provider_id: None,
             custom_headers,
         });
 

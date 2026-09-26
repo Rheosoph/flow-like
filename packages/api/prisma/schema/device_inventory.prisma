@@ -1,0 +1,10 @@
+model DeviceInventoryObservation {
+  userId String
+  deviceId String
+  keyId String
+  scopeKey String
+  revision BigInt
+  payload String
+  updatedAt BigInt
+  @@id([userId, deviceId, keyId, scopeKey])
+}

@@ -26,6 +26,7 @@ impl NodeLogic for ClickAtPositionNode {
             "Performs a click at a specific screen position",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "clickAtPosition");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -81,33 +82,37 @@ impl NodeLogic for ClickAtPositionNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use rustautogui::MouseClick;
+        use enigo::{Button, Coordinate, Direction, Mouse};
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
         let click_type: String = context.evaluate_pin("click_type").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let gui = autogui.lock().await;
+        let mut input = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+            input.move_mouse(i32::try_from(x)?, i32::try_from(y)?, Coordinate::Abs)?;
+            match click_type.to_lowercase().as_str() {
+                "right" => input.button(Button::Right, Direction::Click)?,
+                "double" => {
+                    input.button(Button::Left, Direction::Click)?;
+                    crate::computer::mouse::interruptible_sleep(80, cancellation.as_ref())?;
+                    crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+                    input.button(Button::Left, Direction::Click)?;
+                }
+                "left" => input.button(Button::Left, Direction::Click)?,
+                _ => return Err(flow_like_types::anyhow!("Unknown click type")),
+            }
 
-        gui.move_mouse_to_pos(x as u32, y as u32, 0.0)
-            .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
-
-        match click_type.as_str() {
-            "Right" => gui
-                .click(MouseClick::RIGHT)
-                .map_err(|e| flow_like_types::anyhow!("Failed to right click: {}", e))?,
-            "Double" => gui
-                .double_click()
-                .map_err(|e| flow_like_types::anyhow!("Failed to double click: {}", e))?,
-            _ => gui
-                .click(MouseClick::LEFT)
-                .map_err(|e| flow_like_types::anyhow!("Failed to click: {}", e))?,
-        }
-
+            Ok(())
+        })
+        .await??;
+        session.apply_delay(context).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -140,6 +145,7 @@ impl NodeLogic for TypeTextNode {
             "Types text using keyboard simulation",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "typeText");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -186,15 +192,37 @@ impl NodeLogic for TypeTextNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let text: String = context.evaluate_pin("text").await?;
-        let _interval_ms: i64 = context.evaluate_pin("interval_ms").await?;
+        let interval_ms: i64 = context.evaluate_pin("interval_ms").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let gui = autogui.lock().await;
+        use enigo::Keyboard;
+        if !(0..=60_000).contains(&interval_ms) {
+            return Err(flow_like_types::anyhow!(
+                "Keystroke interval must be between 0 and 60000 ms"
+            ));
+        }
+        let mut input = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+            if interval_ms == 0 {
+                input.text(&text)?;
+            } else {
+                for character in text.chars() {
+                    crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+                    input.text(&character.to_string())?;
+                    crate::computer::mouse::interruptible_sleep(
+                        interval_ms as u64,
+                        cancellation.as_ref(),
+                    )?;
+                }
+            }
 
-        gui.keyboard_input(&text)
-            .map_err(|e| flow_like_types::anyhow!("Failed to type text: {}", e))?;
-
+            Ok(())
+        })
+        .await??;
+        session.apply_delay(context).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -227,6 +255,7 @@ impl NodeLogic for DragAndDropNode {
             "Performs a drag and drop operation",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "dragDrop");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -292,23 +321,51 @@ impl NodeLogic for DragAndDropNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let from_x: i64 = context.evaluate_pin("from_x").await?;
         let from_y: i64 = context.evaluate_pin("from_y").await?;
         let to_x: i64 = context.evaluate_pin("to_x").await?;
         let to_y: i64 = context.evaluate_pin("to_y").await?;
         let duration: f64 = context.evaluate_pin("duration_sec").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let gui = autogui.lock().await;
+        use enigo::{Button, Coordinate, Direction, Mouse};
+        if !duration.is_finite() || !(0.0..=60.0).contains(&duration) {
+            return Err(flow_like_types::anyhow!(
+                "Drag duration must be between 0 and 60 seconds"
+            ));
+        }
+        let (from_x, from_y, to_x, to_y) = (
+            i32::try_from(from_x)?,
+            i32::try_from(from_y)?,
+            i32::try_from(to_x)?,
+            i32::try_from(to_y)?,
+        );
+        let mut input = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+            input.move_mouse(from_x, from_y, Coordinate::Abs)?;
+            input.button(Button::Left, Direction::Press)?;
+            let steps = (duration * 60.0).ceil().max(1.0) as u32;
+            for step in 1..=steps {
+                crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+                let t = step as f64 / steps as f64;
+                input.move_mouse(
+                    (from_x as f64 + (to_x as f64 - from_x as f64) * t).round() as i32,
+                    (from_y as f64 + (to_y as f64 - from_y as f64) * t).round() as i32,
+                    Coordinate::Abs,
+                )?;
+                crate::computer::mouse::interruptible_sleep(
+                    (duration * 1000.0 / steps as f64).round() as u64,
+                    cancellation.as_ref(),
+                )?;
+            }
+            input.button(Button::Left, Direction::Release)?;
 
-        gui.move_mouse_to_pos(from_x as u32, from_y as u32, 0.0)
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to move mouse to start position: {}", e)
-            })?;
-
-        gui.drag_mouse_to(Some(to_x as u32), Some(to_y as u32), duration as f32)
-            .map_err(|e| flow_like_types::anyhow!("Failed to drag: {}", e))?;
-
+            Ok(())
+        })
+        .await??;
+        session.apply_delay(context).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -341,6 +398,7 @@ impl NodeLogic for ScrollNode {
             "Performs a scroll action at the current mouse position",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "scroll");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -384,20 +442,25 @@ impl NodeLogic for ScrollNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let clicks: i64 = context.evaluate_pin("clicks").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let gui = autogui.lock().await;
-
-        let intensity = clicks.unsigned_abs() as u32;
-        if clicks > 0 {
-            gui.scroll_up(intensity)
-                .map_err(|e| flow_like_types::anyhow!("Failed to scroll up: {}", e))?;
-        } else if clicks < 0 {
-            gui.scroll_down(intensity)
-                .map_err(|e| flow_like_types::anyhow!("Failed to scroll down: {}", e))?;
+        use enigo::{Axis, Mouse};
+        if clicks.unsigned_abs() > 1000 {
+            return Err(flow_like_types::anyhow!(
+                "Scroll clicks must be between -1000 and 1000"
+            ));
         }
+        let mut input = session.create_enigo(context).await?;
+        let cancellation = context.get_cancellation_token();
+        tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+            crate::computer::mouse::check_cancellation(cancellation.as_ref())?;
+            input.scroll(-(clicks as i32), Axis::Vertical)?;
 
+            Ok(())
+        })
+        .await??;
+        session.apply_delay(context).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

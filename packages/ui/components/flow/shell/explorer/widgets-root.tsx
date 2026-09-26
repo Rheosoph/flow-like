@@ -6,9 +6,10 @@ import {
 	RefreshCwIcon,
 	SquareDashedBottomCodeIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../../hooks";
+import { asArray } from "../../../../lib/response-shape";
 import { useBackend, useBackendReady } from "../../../../state/backend-state";
 import { Button } from "../../../ui/button";
 import {
@@ -71,17 +72,15 @@ export function WidgetsRoot({
 		[appId, backend.widgetState, t, widgets],
 	);
 
-	const rows = widgets.data ?? [];
+	// Entries are `[appId, widgetId, metadata]` tuples.
+	const rows = useMemo(() => asArray(widgets.data), [widgets.data]);
 
 	// Reported from an effect, not from the row: naming a tab is a write into the host's
 	// state, and doing it while rendering is a render-phase update on another component.
 	useEffect(() => {
 		if (!onWidgetName) return;
-		for (const [widgetId, fallbackName, metadata] of rows) {
-			onWidgetName(
-				widgetId,
-				metadata?.name?.trim() || fallbackName || widgetId,
-			);
+		for (const [, widgetId, metadata] of rows) {
+			onWidgetName(widgetId, metadata?.name?.trim() || widgetId);
 		}
 	}, [onWidgetName, rows]);
 
@@ -107,8 +106,8 @@ export function WidgetsRoot({
 			{!widgets.isLoading && rows.length === 0 && (
 				<EmptyRow label={t("noWidgetsYet", "No widgets yet")} />
 			)}
-			{rows.map(([widgetId, fallbackName, metadata]) => {
-				const name = metadata?.name?.trim() || fallbackName || widgetId;
+			{rows.map(([, widgetId, metadata]) => {
+				const name = metadata?.name?.trim() || widgetId;
 				if (renaming === widgetId) {
 					return (
 						<NameField

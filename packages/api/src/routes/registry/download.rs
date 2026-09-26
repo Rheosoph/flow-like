@@ -6,6 +6,7 @@ use crate::entity::sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibili
 use crate::entity::wasm_package;
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
+use crate::permission::role_permission::RolePermissions;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::{Extension, Json};
@@ -19,10 +20,13 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 /// - Public + paid: requires a completed purchase (wasm_package_user record)
 /// - PublicRequestAccess: requires a wasm_package_user record (granted via join approval or purchase)
 /// - Private: requires a wasm_package_user record
+/// - With `app_id`: members of that project may download the pinned version
+///   while an admin or the owner licenses it (or within the lapse grace period)
 #[utoipa::path(
     post,
     path = "/registry/download",
     tag = "registry",
+    description = "Get a download link for a package. Members of a project can download the version the project uses while the project's licence for it is valid.",
     request_body = DownloadRequest,
     responses(
         (status = 200, description = "Download URL and package info", body = DownloadResponse),
@@ -62,6 +66,7 @@ pub async fn download(
     }
 
     let is_free_public = package.visibility == WasmPackageVisibility::Public && package.price <= 0;
+    let mut requested_version = request.version.clone();
 
     if !is_free_public {
         let sub = sub
@@ -69,7 +74,15 @@ pub async fn download(
             .ok_or_else(|| ApiError::unauthorized("Authentication required for downloads"))?;
 
         let access = crate::check_wasm_access!(state, &sub, &request.package_id);
-        if access.is_none() {
+        let project_version = match (&access, request.app_id.as_deref()) {
+            (None, Some(app_id)) => {
+                project_licensed_version(&state, &user, app_id, &request).await?
+            }
+            _ => None,
+        };
+        if project_version.is_some() {
+            requested_version = project_version;
+        } else if access.is_none() {
             return match package.visibility {
                 WasmPackageVisibility::Public if package.price > 0 => Err(
                     ApiError::purchase_required("Purchase required to download this package"),
@@ -82,22 +95,23 @@ pub async fn download(
         }
     }
 
-    let (download_url, manifest, version) = registry
-        .get_wasm_url_as_viewer(
-            &request.package_id,
-            request.version.as_deref(),
-            sub.as_deref(),
-        )
+    let can_manage = super::viewer_can_manage(&state, sub.as_deref(), &request.package_id).await?;
+    let package_id = package.id.clone();
+
+    let (download_url, manifest, version, has_widget_bundle) = registry
+        .get_wasm_url_as_viewer(package, requested_version.as_deref(), can_manage)
         .await?;
 
-    let package_id = package.id.clone();
-    let _ = registry.increment_downloads(&state, &package_id).await;
-
-    // Fetch metadata (icon, thumbnail, localized name) for the package
-    let mut metadata = meta::Entity::find()
-        .filter(meta::Column::WasmPackageId.eq(&package_id))
-        .all(&state.db)
-        .await
+    // The counter write overlaps the metadata read (icon, thumbnail, localized
+    // name) but stays inside the request: on Lambda a detached task is frozen
+    // with the invocation, mid-transaction.
+    let (_, metas) = flow_like_types::tokio::join!(
+        registry.increment_downloads(&state, &package_id),
+        meta::Entity::find()
+            .filter(meta::Column::WasmPackageId.eq(&package_id))
+            .all(&state.db),
+    );
+    let mut metadata = metas
         .ok()
         .and_then(|metas| MetaSummary::pick_best(&metas, "en").map(MetaSummary::from_model));
 
@@ -133,7 +147,7 @@ pub async fn download(
 
     // Presign the widget bundle when the version ships widgets
     let widget_bundle_download_url = match registry
-        .sign_widget_bundle_url(&request.package_id, &version)
+        .sign_widget_bundle_url(&request.package_id, &version, has_widget_bundle)
         .await
     {
         Ok(url) => url,
@@ -159,4 +173,27 @@ pub async fn download(
         cwasm_checksum,
         widget_bundle_download_url,
     }))
+}
+
+/// The pinned version a member of `app_id` may download through the project's
+/// licence, or `None` when they are not a member or the pin expired.
+async fn project_licensed_version(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    request: &DownloadRequest,
+) -> Result<Option<String>, ApiError> {
+    let Ok(permission) = user.app_permission(app_id, state).await else {
+        return Ok(None);
+    };
+    if !permission.has_permission(RolePermissions::ReadBoards) {
+        return Ok(None);
+    }
+    crate::package_license::project_download_version(
+        &state.db,
+        app_id,
+        &request.package_id,
+        request.version.as_deref(),
+    )
+    .await
 }

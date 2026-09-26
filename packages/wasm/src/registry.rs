@@ -256,6 +256,12 @@ pub struct SearchFilters {
     /// Sort direction
     #[serde(default)]
     pub sort_desc: bool,
+    /// Only the caller's packages held with this access; implies owned-only
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<PackageAccessFilter>,
+    /// Restrict results to these package ids (at most 100)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
 }
 
 impl Default for SearchFilters {
@@ -272,12 +278,34 @@ impl Default for SearchFilters {
             limit: default_limit(),
             sort_by: SortField::default(),
             sort_desc: false,
+            access: None,
+            ids: None,
         }
     }
 }
 
 fn default_limit() -> usize {
     50
+}
+
+/// Which of the caller's own packages a search returns, by permission bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PackageAccessFilter {
+    /// Owner or Maintainer
+    Maintainer,
+    /// User or Buyer
+    Library,
+}
+
+impl PackageAccessFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Maintainer => "maintainer",
+            Self::Library => "library",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -336,6 +364,9 @@ pub struct DownloadRequest {
     /// Client platform key (e.g. "ios-pulley64-wt45") to receive precompiled artifacts
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_platform: Option<String>,
+    /// Project whose licence covers the download (members fetch its pinned version)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
 }
 
 /// Resolved metadata summary for a single language (icon, thumbnail, etc.)

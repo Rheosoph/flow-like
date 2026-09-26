@@ -14,10 +14,12 @@ use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::{Path, files::store::FlowLikeStore, object_store::ObjectStore};
 use flow_like_types::{
     JsonSchema, Value,
+    authorization::{AuthorizationAttribution, ResourceAudience},
     json::{Deserialize, Serialize},
+    reqwest,
 };
 
-use crate::remote_util::{api_base_url, control_plane_http_client};
+use crate::remote_util::{api_base_url, control_plane_http_client, live_control_plane_http_client};
 
 /// Entries live under this prefix inside the app's storage, alongside `storage/`.
 const LOCAL_CACHE_DIR: &str = "cache";
@@ -112,15 +114,8 @@ pub struct CacheHit {
 
 /// Where a run's cache operations are served from.
 enum CacheTransport {
-    Remote {
-        base_url: String,
-        app_id: String,
-        token: String,
-    },
-    Local {
-        store: FlowLikeStore,
-        root: Path,
-    },
+    Remote { base_url: String, app_id: String },
+    Local { store: FlowLikeStore, root: Path },
 }
 
 /// On-disk shape for offline entries. Namespace and key are stored alongside the value
@@ -147,23 +142,33 @@ fn resolve_transport(context: &ExecutionContext) -> flow_like_types::Result<Cach
         .as_ref()
         .ok_or_else(|| flow_like_types::anyhow!("Cache nodes require an execution context"))?;
 
-    let token = context
-        .token
-        .as_deref()
-        .map(str::trim)
-        .filter(|token| !token.is_empty());
+    let authorizer = context.request_authorizer();
+    let live_user =
+        authorizer.is_some_and(|provider| provider.attribution() == AuthorizationAttribution::User);
+    let legacy_token = authorizer.is_none()
+        && context
+            .token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty());
     let base_url = api_base_url(&context.profile.hub, context.profile.secure);
 
     // `model_usage_app_id` is cleared for offline apps, whose ids exist only on this
-    // machine and would be rejected by the API. Missing credentials mean the same thing
-    // in practice: there is no backend to reach.
+    // machine and would be rejected by the API. Instance grants use the device's
+    // existing cloud-backed store; they cannot call the user cache API.
     let is_offline = execution_cache.model_usage_app_id.is_none();
 
-    if let (false, Some(token), Some(base_url)) = (is_offline, token, base_url) {
+    if !is_offline && live_user && base_url.is_none() {
+        return Err(flow_like_types::anyhow!(
+            "Online cache requires a configured hub"
+        ));
+    }
+    if !is_offline
+        && (live_user || legacy_token)
+        && let Some(base_url) = base_url
+    {
         return Ok(CacheTransport::Remote {
             base_url,
             app_id: execution_cache.app_id.clone(),
-            token: token.to_string(),
         });
     }
 
@@ -183,6 +188,30 @@ fn resolve_transport(context: &ExecutionContext) -> flow_like_types::Result<Cach
             .join(execution_cache.app_id.clone())
             .join(LOCAL_CACHE_DIR),
     })
+}
+
+fn cache_http_client(context: &ExecutionContext) -> reqwest::Client {
+    if context.request_authorizer().is_some() {
+        live_control_plane_http_client()
+    } else {
+        control_plane_http_client()
+    }
+}
+
+async fn send_cache_request(
+    context: &ExecutionContext,
+    client: &reqwest::Client,
+    mut request: reqwest::RequestBuilder,
+) -> flow_like_types::Result<reqwest::Response> {
+    if context.request_authorizer().is_none()
+        && let Some(token) = context.token.as_deref()
+    {
+        request = request.bearer_auth(token.trim());
+    }
+    let request = context
+        .authorize_request(request.build()?, ResourceAudience::ProjectApi)
+        .await?;
+    Ok(client.execute(request).await?)
 }
 
 fn local_scope_dir(root: &Path, scope: CacheScope, sub: &str) -> flow_like_types::Result<Path> {
@@ -232,21 +261,16 @@ pub async fn cache_get(
     let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
-        CacheTransport::Remote {
-            base_url,
-            app_id,
-            token,
-        } => {
-            let response = control_plane_http_client()
+        CacheTransport::Remote { base_url, app_id } => {
+            let client = cache_http_client(context);
+            let request = client
                 .get(format!("{base_url}/apps/{app_id}/cache"))
                 .query(&[
                     ("key", key.as_str()),
                     ("scope", cache.scope.as_str()),
                     ("namespace", namespace),
-                ])
-                .bearer_auth(&token)
-                .send()
-                .await?;
+                ]);
+            let response = send_cache_request(context, &client, request).await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -376,21 +400,16 @@ pub async fn cache_has(
     let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
-        CacheTransport::Remote {
-            base_url,
-            app_id,
-            token,
-        } => {
-            let response = control_plane_http_client()
+        CacheTransport::Remote { base_url, app_id } => {
+            let client = cache_http_client(context);
+            let request = client
                 .get(format!("{base_url}/apps/{app_id}/cache/exists"))
                 .query(&[
                     ("key", key.as_str()),
                     ("scope", cache.scope.as_str()),
                     ("namespace", namespace),
-                ])
-                .bearer_auth(&token)
-                .send()
-                .await?;
+                ]);
+            let response = send_cache_request(context, &client, request).await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -436,24 +455,19 @@ pub async fn cache_get_or_set(
     let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
-        CacheTransport::Remote {
-            base_url,
-            app_id,
-            token,
-        } => {
-            let response = control_plane_http_client()
-                .put(format!("{base_url}/apps/{app_id}/cache"))
-                .bearer_auth(&token)
-                .json(&flow_like_types::json::json!({
+        CacheTransport::Remote { base_url, app_id } => {
+            let client = cache_http_client(context);
+            let request = client.put(format!("{base_url}/apps/{app_id}/cache")).json(
+                &flow_like_types::json::json!({
                     "key": key,
                     "namespace": namespace,
                     "value": value,
                     "scope": cache.scope.as_str(),
                     "ttlSeconds": ttl_seconds,
                     "ifAbsent": true,
-                }))
-                .send()
-                .await?;
+                }),
+            );
+            let response = send_cache_request(context, &client, request).await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -504,23 +518,18 @@ pub async fn cache_set(
     let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
-        CacheTransport::Remote {
-            base_url,
-            app_id,
-            token,
-        } => {
-            let response = control_plane_http_client()
-                .put(format!("{base_url}/apps/{app_id}/cache"))
-                .bearer_auth(&token)
-                .json(&flow_like_types::json::json!({
+        CacheTransport::Remote { base_url, app_id } => {
+            let client = cache_http_client(context);
+            let request = client.put(format!("{base_url}/apps/{app_id}/cache")).json(
+                &flow_like_types::json::json!({
                     "key": key,
                     "namespace": namespace,
                     "value": value,
                     "scope": cache.scope.as_str(),
                     "ttlSeconds": ttl_seconds,
-                }))
-                .send()
-                .await?;
+                }),
+            );
+            let response = send_cache_request(context, &client, request).await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -557,21 +566,16 @@ pub async fn cache_delete(
     let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
-        CacheTransport::Remote {
-            base_url,
-            app_id,
-            token,
-        } => {
-            let response = control_plane_http_client()
+        CacheTransport::Remote { base_url, app_id } => {
+            let client = cache_http_client(context);
+            let request = client
                 .delete(format!("{base_url}/apps/{app_id}/cache"))
                 .query(&[
                     ("key", key.as_str()),
                     ("scope", cache.scope.as_str()),
                     ("namespace", namespace),
-                ])
-                .bearer_auth(&token)
-                .send()
-                .await?;
+                ]);
+            let response = send_cache_request(context, &client, request).await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -617,17 +621,12 @@ pub async fn cache_invalidate_namespace(
     }
 
     match resolve_transport(context)? {
-        CacheTransport::Remote {
-            base_url,
-            app_id,
-            token,
-        } => {
-            let response = control_plane_http_client()
+        CacheTransport::Remote { base_url, app_id } => {
+            let client = cache_http_client(context);
+            let request = client
                 .delete(format!("{base_url}/apps/{app_id}/cache/namespace"))
-                .query(&[("namespace", namespace), ("scope", cache.scope.as_str())])
-                .bearer_auth(&token)
-                .send()
-                .await?;
+                .query(&[("namespace", namespace), ("scope", cache.scope.as_str())]);
+            let response = send_cache_request(context, &client, request).await?;
 
             if !response.status().is_success() {
                 let status = response.status();
@@ -702,6 +701,303 @@ fn local_sub(context: &ExecutionContext) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "execute")]
+    mod live {
+        use super::*;
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::{
+                    LogLevel, context::ExecutionContextCache, internal_node::InternalNode,
+                },
+                node::{Node, NodeLogic},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_types::{
+            authorization::{
+                AuthorizationError, AuthorizationFuture, AuthorizationRequest,
+                RequestAuthorization, RequestAuthorizer,
+            },
+            sync::{Mutex, RwLock},
+            tokio::{
+                self,
+                io::{AsyncReadExt, AsyncWriteExt},
+                net::TcpListener,
+            },
+        };
+        use std::{
+            sync::{
+                Arc, Weak,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::{Duration, SystemTime},
+        };
+
+        struct RotatingAuthorization {
+            generation: AtomicUsize,
+            attribution: AuthorizationAttribution,
+        }
+        impl RequestAuthorizer for RotatingAuthorization {
+            fn attribution(&self) -> AuthorizationAttribution {
+                self.attribution
+            }
+            fn authorize<'a>(
+                &'a self,
+                request: AuthorizationRequest<'a>,
+            ) -> AuthorizationFuture<'a> {
+                Box::pin(async move {
+                    assert_eq!(request.audience, ResourceAudience::ProjectApi);
+                    let url = reqwest::Url::parse(request.url).unwrap();
+                    assert!(url.path().starts_with("/api/v1/apps/project/cache"));
+                    let generation = self.generation.load(Ordering::SeqCst);
+                    match generation {
+                        2 => return Err(AuthorizationError::Expired),
+                        3 => return Err(AuthorizationError::Denied),
+                        _ => {}
+                    }
+                    RequestAuthorization::new(
+                        format!("Bearer current-{generation}"),
+                        None,
+                        SystemTime::now() + Duration::from_secs(60),
+                    )
+                })
+            }
+        }
+
+        async fn context(
+            hub: &str,
+            authority: Option<Arc<dyn RequestAuthorizer>>,
+            offline: bool,
+        ) -> ExecutionContext {
+            struct Noop;
+            #[flow_like_types::async_trait]
+            impl NodeLogic for Noop {
+                fn get_node(&self) -> Node {
+                    Node::new("cache_test", "Cache test", "Cache test", "Tests")
+                }
+                async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+                    Ok(())
+                }
+            }
+            let memory = FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ));
+            let mut state = FlowLikeState::new(
+                FlowLikeConfig::with_default_store(memory),
+                HTTPClient::new_without_refetch(),
+            );
+            state.request_authorizer = authority;
+            let state = Arc::new(state);
+            let node = Arc::new(InternalNode::new(
+                Noop.get_node(),
+                Default::default(),
+                Arc::new(Noop),
+                Default::default(),
+            ));
+            let mut context = ExecutionContext::new(
+                Arc::new(Default::default()),
+                &Weak::new(),
+                &state,
+                &node,
+                &Arc::new(Mutex::new(Default::default())),
+                &Arc::new(RwLock::new(Default::default())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(Profile {
+                    hub: hub.into(),
+                    secure: false,
+                    ..Profile::default()
+                }),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                Some("obsolete-startup-token".into()),
+                Arc::new(Default::default()),
+                None,
+            )
+            .await;
+            context.execution_cache = Some(ExecutionContextCache {
+                stores: state.config.read().await.stores.clone(),
+                app_id: "project".into(),
+                model_usage_app_id: (!offline).then(|| "project".into()),
+                board_dir: Path::from("apps/project"),
+                board_id: "board".into(),
+                node_id: "node".into(),
+                sub: "alice".into(),
+                shadow: false,
+            });
+            context
+        }
+
+        #[tokio::test]
+        async fn retained_cache_context_rotates_all_remote_operations_and_rejects_expired_authority()
+         {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let mut captured = Vec::new();
+                for _ in 0..6 {
+                    let (mut socket, _) =
+                        tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                            .await
+                            .unwrap()
+                            .unwrap();
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    let headers = loop {
+                        let count =
+                            tokio::time::timeout(Duration::from_secs(10), socket.read(&mut buffer))
+                                .await
+                                .unwrap()
+                                .unwrap();
+                        assert!(count > 0);
+                        bytes.extend_from_slice(&buffer[..count]);
+                        assert!(bytes.len() < 64 * 1024);
+                        if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = String::from_utf8(bytes[..end + 2].to_vec()).unwrap();
+                            let length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    line.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|length| length.trim().parse::<usize>().unwrap())
+                                })
+                                .unwrap_or(0);
+                            if bytes.len() >= end + 4 + length {
+                                break headers;
+                            }
+                        }
+                    };
+                    let body = if headers
+                        .starts_with("DELETE /api/v1/apps/project/cache/namespace?")
+                    {
+                        r#"{"deleted":2}"#
+                    } else {
+                        r#"{"found":true,"value":{"hit":1},"expiresAt":null,"stored":true,"deleted":true}"#
+                    };
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    captured.push(headers);
+                }
+                captured
+            });
+            let authority = Arc::new(RotatingAuthorization {
+                generation: AtomicUsize::new(0),
+                attribution: AuthorizationAttribution::User,
+            });
+            let mut context = context(&hub, Some(authority.clone()), false).await;
+            let cache = FlowCache {
+                scope: CacheScope::User,
+                namespace: "orders / €".into(),
+            };
+            let key = "a b/?=€";
+            assert_eq!(
+                cache_get(&context, &cache, key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                flow_like_types::json::json!({"hit":1})
+            );
+            authority.generation.store(1, Ordering::SeqCst);
+            // The live provider remains sufficient even after the startup snapshot is removed.
+            context.token = None;
+            assert!(cache_has(&context, &cache, key).await.unwrap());
+            assert!(
+                cache_set(&context, &cache, key, Value::Null, None)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                cache_get_or_set(&context, &cache, key, Value::Null, None)
+                    .await
+                    .unwrap()
+                    .1
+            );
+            assert!(cache_delete(&context, &cache, key).await.unwrap());
+            assert_eq!(
+                cache_invalidate_namespace(&context, &cache).await.unwrap(),
+                2
+            );
+            // Reintroducing an old snapshot never allows a denied live source to fall back.
+            context.token = Some("obsolete-startup-token".into());
+            for (generation, expected) in [
+                (2, AuthorizationError::Expired),
+                (3, AuthorizationError::Denied),
+            ] {
+                authority.generation.store(generation, Ordering::SeqCst);
+                let error = cache_get(&context, &cache, key).await.unwrap_err();
+                assert_eq!(error.downcast_ref::<AuthorizationError>(), Some(&expected));
+            }
+            let captured = server.await.unwrap();
+            for (index, headers) in captured.iter().enumerate() {
+                let generation = usize::from(index != 0);
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains(&format!("authorization: bearer current-{generation}\r\n"))
+                );
+                assert!(!headers.contains("obsolete-startup-token"));
+                let path = headers.split_whitespace().nth(1).unwrap();
+                let url = reqwest::Url::parse(&format!("{hub}{path}")).unwrap();
+                if url.query().is_some() {
+                    assert!(
+                        url.query_pairs()
+                            .any(|(name, value)| name == "namespace" && value == "orders / €")
+                    );
+                    if !url.path().ends_with("/namespace") {
+                        assert!(
+                            url.query_pairs()
+                                .any(|(name, value)| name == "key" && value == key)
+                        );
+                    }
+                    assert!(path.contains('%'));
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn offline_and_instance_cache_keep_their_store_transport() {
+            for (attribution, offline) in [
+                (AuthorizationAttribution::User, true),
+                (AuthorizationAttribution::InstanceGrant, false),
+            ] {
+                let authority = Arc::new(RotatingAuthorization {
+                    generation: AtomicUsize::new(3),
+                    attribution,
+                });
+                let context = context("https://unreachable.test", Some(authority), offline).await;
+                assert!(matches!(
+                    resolve_transport(&context).unwrap(),
+                    CacheTransport::Local { .. }
+                ));
+                let cache = FlowCache {
+                    scope: CacheScope::User,
+                    namespace: "local".into(),
+                };
+                cache_set(&context, &cache, "key", Value::Bool(true), None)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    cache_get(&context, &cache, "key")
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .value,
+                    Value::Bool(true)
+                );
+            }
+            let legacy = context("https://api.test", None, false).await;
+            assert!(matches!(
+                resolve_transport(&legacy).unwrap(),
+                CacheTransport::Remote { .. }
+            ));
+        }
+    }
 
     #[test]
     fn keys_are_trimmed_and_empty_keys_are_rejected() {

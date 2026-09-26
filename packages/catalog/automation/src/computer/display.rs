@@ -21,6 +21,23 @@ pub struct DisplayInfo {
     pub scale_factor: f32,
 }
 
+#[cfg(feature = "execute")]
+impl DisplayInfo {
+    fn from_monitor(monitor: &xcap::Monitor) -> flow_like_types::Result<Self> {
+        let (x, y, width, height) = crate::types::screen_match::monitor_input_bounds(monitor)?;
+        Ok(Self {
+            id: monitor.id()?,
+            name: monitor.name()?,
+            x,
+            y,
+            width,
+            height,
+            is_primary: monitor.is_primary()?,
+            scale_factor: crate::types::screen_match::monitor_scale_factor(monitor)?,
+        })
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct ComputerListDisplaysNode {}
@@ -40,6 +57,7 @@ impl NodeLogic for ComputerListDisplaysNode {
             "Enumerates all connected monitors/displays",
             "Automation/Computer/Display",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "listDisplays");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -94,7 +112,7 @@ impl NodeLogic for ComputerListDisplaysNode {
         node.add_output_pin(
             "primary_index",
             "Primary Index",
-            "Index of the primary display",
+            "Index of the primary display, or -1 if none is designated",
             VariableType::Integer,
         );
 
@@ -108,13 +126,14 @@ impl NodeLogic for ComputerListDisplaysNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
 
         let (displays, primary_index) = {
             let monitors = Monitor::all()
                 .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
 
             let mut displays = Vec::new();
-            let mut primary_index: i64 = 0;
+            let mut primary_index: i64 = -1;
 
             for (i, monitor) in monitors.iter().enumerate() {
                 let is_primary = monitor.is_primary().unwrap_or(false);
@@ -122,16 +141,7 @@ impl NodeLogic for ComputerListDisplaysNode {
                     primary_index = i as i64;
                 }
 
-                displays.push(DisplayInfo {
-                    id: monitor.id().unwrap_or(0),
-                    name: monitor.name().unwrap_or_default(),
-                    x: monitor.x().unwrap_or(0),
-                    y: monitor.y().unwrap_or(0),
-                    width: monitor.width().unwrap_or(0),
-                    height: monitor.height().unwrap_or(0),
-                    is_primary,
-                    scale_factor: monitor.scale_factor().unwrap_or(1.0),
-                });
+                displays.push(DisplayInfo::from_monitor(monitor)?);
             }
             (displays, primary_index)
         };
@@ -176,6 +186,7 @@ impl NodeLogic for ComputerGetDisplayNode {
             "Gets information about a specific display by index",
             "Automation/Computer/Display",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "getDisplay");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -230,13 +241,13 @@ impl NodeLogic for ComputerGetDisplayNode {
         node.add_output_pin(
             "width",
             "Width",
-            "Display width in pixels",
+            "Display width in desktop input coordinates",
             VariableType::Integer,
         );
         node.add_output_pin(
             "height",
             "Height",
-            "Display height in pixels",
+            "Display height in desktop input coordinates",
             VariableType::Integer,
         );
 
@@ -250,6 +261,7 @@ impl NodeLogic for ComputerGetDisplayNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let index: i64 = context.evaluate_pin("index").await?;
 
         let display = {
@@ -260,16 +272,7 @@ impl NodeLogic for ComputerGetDisplayNode {
                 .get(index as usize)
                 .ok_or_else(|| flow_like_types::anyhow!("Display index {} not found", index))?;
 
-            DisplayInfo {
-                id: monitor.id().unwrap_or(0),
-                name: monitor.name().unwrap_or_default(),
-                x: monitor.x().unwrap_or(0),
-                y: monitor.y().unwrap_or(0),
-                width: monitor.width().unwrap_or(0),
-                height: monitor.height().unwrap_or(0),
-                is_primary: monitor.is_primary().unwrap_or(false),
-                scale_factor: monitor.scale_factor().unwrap_or(1.0),
-            }
+            DisplayInfo::from_monitor(monitor)?
         };
 
         context.set_pin_value("session_out", json!(session)).await?;
@@ -312,6 +315,7 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
             "Gets information about the primary display",
             "Automation/Computer/Display",
         );
+        node.set_version(1);
         node.set_flowscript_name("computer", "getPrimaryDisplay");
         node.add_icon("/flow/icons/computer.svg");
 
@@ -358,13 +362,13 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
         node.add_output_pin(
             "width",
             "Width",
-            "Display width in pixels",
+            "Display width in desktop input coordinates",
             VariableType::Integer,
         );
         node.add_output_pin(
             "height",
             "Height",
-            "Display height in pixels",
+            "Display height in desktop input coordinates",
             VariableType::Integer,
         );
 
@@ -378,6 +382,7 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
 
         let display = {
             let monitors = Monitor::all()
@@ -389,16 +394,7 @@ impl NodeLogic for ComputerGetPrimaryDisplayNode {
                 .or_else(|| monitors.first())
                 .ok_or_else(|| flow_like_types::anyhow!("No displays found"))?;
 
-            DisplayInfo {
-                id: monitor.id().unwrap_or(0),
-                name: monitor.name().unwrap_or_default(),
-                x: monitor.x().unwrap_or(0),
-                y: monitor.y().unwrap_or(0),
-                width: monitor.width().unwrap_or(0),
-                height: monitor.height().unwrap_or(0),
-                is_primary: monitor.is_primary().unwrap_or(false),
-                scale_factor: monitor.scale_factor().unwrap_or(1.0),
-            }
+            DisplayInfo::from_monitor(monitor)?
         };
 
         context.set_pin_value("session_out", json!(session)).await?;

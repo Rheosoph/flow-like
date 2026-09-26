@@ -10,7 +10,7 @@ use flow_like::flow::{
     node::{Node, NodeWasm},
 };
 use flow_like_wasm_schema::manifest::PackageNodeEntry;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 use std::sync::Arc;
 
 /// An app's WASM node catalog together with a token that changes whenever the catalog does.
@@ -20,7 +20,7 @@ pub struct AppWasmNodes {
     pub fingerprint: String,
 }
 
-/// [`app_wasm_nodes`] behind a per-app cache keyed by the app's package pins.
+/// The app's WASM node catalog behind a per-app cache keyed by the app's package pins.
 ///
 /// The board sync endpoint needs this on every poll and the mutation path on every write; without
 /// a cache each call pays a second database round trip that pulls every pinned package's node
@@ -68,12 +68,13 @@ pub async fn app_wasm_nodes_cached(
     Ok(entry)
 }
 
-/// The app's pinned, non-stale packages. This is the cheap half of a catalog resolve; the
-/// expensive half is [`wasm_nodes_for_packages`], which the cache is there to skip.
+/// The app's pinned packages whose licence has not expired. This is the cheap half of a
+/// catalog resolve; the expensive half is [`wasm_nodes_for_packages`], which the cache is
+/// there to skip. An expiring pin leaves the set, so the pin epoch moves with it.
 async fn app_packages(state: &AppState, app_id: &str) -> Result<Vec<app_package::Model>, ApiError> {
     Ok(app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
-        .filter(app_package::Column::Stale.eq(false))
+        .filter(crate::package_license::usable_pins(chrono::Utc::now()))
         .all(&state.db)
         .await?)
 }
@@ -94,11 +95,6 @@ fn packages_epoch(packages: &[app_package::Model]) -> String {
         hasher.update(b"\0");
     }
     hasher.finalize().to_hex().to_string()
-}
-
-pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
-    let packages = app_packages(state, app_id).await?;
-    wasm_nodes_for_packages(state, &packages).await
 }
 
 async fn wasm_nodes_for_packages(
@@ -139,10 +135,17 @@ pub async fn wasm_nodes_for_pins(
     let mut nodes_by_pin: HashMap<(String, String), serde_json::Value> =
         wasm_package_version::Entity::find()
             .filter(pinned)
+            .select_only()
+            .columns([
+                wasm_package_version::Column::PackageId,
+                wasm_package_version::Column::Version,
+                wasm_package_version::Column::Nodes,
+            ])
+            .into_tuple::<(String, String, serde_json::Value)>()
             .all(db)
             .await?
             .into_iter()
-            .map(|record| ((record.package_id, record.version), record.nodes))
+            .map(|(package_id, version, nodes)| ((package_id, version), nodes))
             .collect();
 
     let mut wasm_nodes: Vec<Node> = Vec::with_capacity(pins.len() * 5);
@@ -212,6 +215,8 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         namespace: None,
         alias: None,
         receiver: None,
+        pins_collapsed: None,
+        auto_reroute: None,
     };
     node.ensure_flowscript_names();
     node

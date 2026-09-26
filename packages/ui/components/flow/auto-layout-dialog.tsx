@@ -16,7 +16,7 @@ import {
 export type { LayoutStyle };
 
 interface LayoutOption {
-	id: LayoutStyle;
+	id: Extract<LayoutStyle, "compact" | "routed">;
 	label: string;
 	description: string;
 }
@@ -28,25 +28,23 @@ const LAYOUT_OPTIONS: LayoutOption[] = [
 		description: "Tight spacing. Pure nodes packed close to their consumers.",
 	},
 	{
-		id: "balanced",
-		label: "Balanced",
-		description: "Even spacing between execution chains and data dependencies.",
-	},
-	{
-		id: "expanded",
-		label: "Expanded",
+		id: "routed",
+		label: "Routed",
 		description:
-			"Extra room between event groups and branches for readability.",
+			"Compact spacing with reroutes to avoid nodes and reduce crossings.",
 	},
 ];
 
 // ─── Animated SVG Previews ──────────────────────────────────────────────
 
 function AnimatedCompact() {
-	const { t } = useTranslation("flow");
 	return (
-		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
-			<style>{`@keyframes fadeSlide { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } } .cp-node { animation: fadeSlide 0.5s ease-out both; } .cp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: cpDash 1s ease-out 0.4s forwards; } @keyframes cpDash { to { stroke-dashoffset: 0; } }`}</style>
+		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden="true">
+			<style>
+				{
+					"@keyframes fadeSlide { 0% { opacity: 0; transform: translateX(-8px); } 100% { opacity: 1; transform: translateX(0); } } .cp-node { animation: fadeSlide 0.5s ease-out both; } .cp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: cpDash 1s ease-out 0.4s forwards; } @keyframes cpDash { to { stroke-dashoffset: 0; } }"
+				}
+			</style>
 			<rect
 				className="cp-node"
 				style={{ animationDelay: "0s" }}
@@ -273,424 +271,74 @@ function AnimatedCompact() {
 	);
 }
 
-function AnimatedBalanced() {
-	const { t } = useTranslation("flow");
+function AnimatedRouted() {
 	return (
-		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
-			<style>{`@keyframes balSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } } .bal-node { animation: balSlide 0.5s ease-out both; } .bal-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: balDash 1s ease-out 0.4s forwards; } @keyframes balDash { to { stroke-dashoffset: 0; } }`}</style>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0s" }}
-				x="3"
-				y="15"
-				width="20"
-				height="13"
-				rx="3"
-				fill="hsl(30 80% 55%)"
-				opacity="0.6"
-				stroke="hsl(30 80% 55%)"
-				strokeWidth="0.8"
+		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden="true">
+			<style>
+				{
+					"@keyframes routedAppear { from { opacity: 0; } to { opacity: 1; } } @keyframes routedDraw { to { stroke-dashoffset: 0; } } .routed-node { animation: routedAppear 0.5s ease-out both; } .routed-wire { stroke-dasharray: 1; stroke-dashoffset: 1; animation: routedDraw 0.8s ease-out 0.3s forwards; } .routed-dot { animation: routedAppear 0.3s ease-out 0.65s both; } @media (prefers-reduced-motion: reduce) { .routed-node, .routed-wire, .routed-dot { animation: none; stroke-dashoffset: 0; } }"
+				}
+			</style>
+			<g className="routed-node" strokeWidth="0.8">
+				<rect
+					x="3"
+					y="19"
+					width="25"
+					height="29"
+					rx="3"
+					fill="hsl(30 80% 55% / 0.35)"
+					stroke="hsl(30 80% 55%)"
+				/>
+				<rect
+					x="48"
+					y="19"
+					width="25"
+					height="29"
+					rx="3"
+					fill="currentColor"
+					fillOpacity="0.15"
+					stroke="currentColor"
+					strokeOpacity="0.5"
+				/>
+				<rect
+					x="93"
+					y="19"
+					width="24"
+					height="29"
+					rx="3"
+					fill="currentColor"
+					fillOpacity="0.15"
+					stroke="currentColor"
+					strokeOpacity="0.5"
+				/>
+				<path
+					d="M28 27 H48 M73 27 H93"
+					fill="none"
+					stroke="currentColor"
+					strokeOpacity="0.6"
+				/>
+			</g>
+			<path
+				className="routed-wire"
+				d="M28 38 C34 38 32 61 39 61 H82 C89 61 87 38 93 38"
+				pathLength="1"
+				fill="none"
+				stroke="hsl(275 85% 62%)"
+				strokeWidth="1.2"
 			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.1s" }}
-				x="32"
-				y="15"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.2s" }}
-				x="61"
-				y="6"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.2s" }}
-				x="61"
-				y="25"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.3s" }}
-				x="90"
-				y="15"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.12s" }}
-				x="16"
-				y="1"
-				width="16"
-				height="10"
-				rx="2"
-				fill="currentColor"
-				opacity="0.12"
-				stroke="currentColor"
-				strokeWidth="0.6"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.22s" }}
-				x="45"
-				y="1"
-				width="16"
-				height="10"
-				rx="2"
-				fill="currentColor"
-				opacity="0.12"
-				stroke="currentColor"
-				strokeWidth="0.6"
-			/>
-			<line
-				className="bal-edge"
-				x1="23"
-				y1="21"
-				x2="32"
-				y2="21"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="52"
-				y1="21"
-				x2="61"
-				y2="12"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="52"
-				y1="21"
-				x2="61"
-				y2="31"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="81"
-				y1="12"
-				x2="90"
-				y2="21"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="81"
-				y1="31"
-				x2="90"
-				y2="21"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="32"
-				y1="6"
-				x2="42"
-				y2="15"
-				stroke="currentColor"
-				strokeWidth="0.5"
-				opacity="0.3"
-				strokeDasharray="2 1.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="61"
-				y1="6"
-				x2="61"
-				y2="6"
-				stroke="currentColor"
-				strokeWidth="0.5"
-				opacity="0.3"
-				strokeDasharray="2 1.5"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0s" }}
-				x="3"
-				y="55"
-				width="20"
-				height="13"
-				rx="3"
-				fill="hsl(30 80% 55%)"
-				opacity="0.6"
-				stroke="hsl(30 80% 55%)"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.1s" }}
-				x="32"
-				y="55"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="bal-node"
-				style={{ animationDelay: "0.2s" }}
-				x="61"
-				y="55"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<line
-				className="bal-edge"
-				x1="23"
-				y1="61"
-				x2="32"
-				y2="61"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="bal-edge"
-				x1="52"
-				y1="61"
-				x2="61"
-				y2="61"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
+			<g className="routed-dot" fill="hsl(275 85% 62%)">
+				<circle cx="28" cy="38" r="1.7" />
+				<circle cx="39" cy="61" r="2.5" />
+				<circle cx="82" cy="61" r="2.5" />
+				<circle cx="93" cy="38" r="1.7" />
+			</g>
 		</svg>
 	);
 }
 
-function AnimatedExpanded() {
-	const { t } = useTranslation("flow");
-	return (
-		<svg viewBox="0 0 120 80" className="w-full h-full" aria-hidden>
-			<style>{`@keyframes expSlide { 0% { opacity: 0; transform: translateX(-6px); } 100% { opacity: 1; transform: translateX(0); } } .exp-node { animation: expSlide 0.6s ease-out both; } .exp-edge { stroke-dasharray: 40; stroke-dashoffset: 40; animation: expDash 1s ease-out 0.4s forwards; } @keyframes expDash { to { stroke-dashoffset: 0; } }`}</style>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0s" }}
-				x="2"
-				y="10"
-				width="20"
-				height="13"
-				rx="3"
-				fill="hsl(30 80% 55%)"
-				opacity="0.6"
-				stroke="hsl(30 80% 55%)"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.12s" }}
-				x="36"
-				y="10"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.24s" }}
-				x="70"
-				y="3"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.24s" }}
-				x="70"
-				y="20"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.36s" }}
-				x="100"
-				y="10"
-				width="17"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<line
-				className="exp-edge"
-				x1="22"
-				y1="16"
-				x2="36"
-				y2="16"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="56"
-				y1="16"
-				x2="70"
-				y2="9"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="56"
-				y1="16"
-				x2="70"
-				y2="26"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="90"
-				y1="9"
-				x2="100"
-				y2="16"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="90"
-				y1="26"
-				x2="100"
-				y2="16"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0s" }}
-				x="2"
-				y="58"
-				width="20"
-				height="13"
-				rx="3"
-				fill="hsl(30 80% 55%)"
-				opacity="0.6"
-				stroke="hsl(30 80% 55%)"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.12s" }}
-				x="36"
-				y="58"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<rect
-				className="exp-node"
-				style={{ animationDelay: "0.24s" }}
-				x="70"
-				y="58"
-				width="20"
-				height="13"
-				rx="3"
-				fill="currentColor"
-				opacity="0.2"
-				stroke="currentColor"
-				strokeWidth="0.8"
-			/>
-			<line
-				className="exp-edge"
-				x1="22"
-				y1="64"
-				x2="36"
-				y2="64"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-			<line
-				className="exp-edge"
-				x1="56"
-				y1="64"
-				x2="70"
-				y2="64"
-				stroke="currentColor"
-				strokeWidth="0.8"
-				opacity="0.5"
-			/>
-		</svg>
-	);
-}
-
-const PREVIEW_MAP: Record<LayoutStyle, () => React.JSX.Element> = {
+const PREVIEW_MAP: Record<LayoutOption["id"], () => React.JSX.Element> = {
 	compact: AnimatedCompact,
-	balanced: AnimatedBalanced,
-	expanded: AnimatedExpanded,
+	routed: AnimatedRouted,
 };
 
 export interface AutoLayoutDialogProps {
@@ -731,20 +379,22 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 						<div className="mb-2 aspect-3/2 w-full overflow-hidden rounded-lg bg-muted/50 text-muted-foreground p-1">
 							<Preview />
 						</div>
-						<span className="text-sm font-medium">{opt.label}</span>
+						<span className="text-sm font-medium">
+							{t(`${opt.id}Layout`, opt.label)}
+						</span>
 						<span className="mt-0.5 text-xs text-muted-foreground leading-snug">
-							{opt.description}
+							{t(`${opt.id}LayoutDescription`, opt.description)}
 						</span>
 					</button>
 				);
 			}),
-		[onSelect, onOpenChange],
+		[onSelect, onOpenChange, t],
 	);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
-				className="sm:max-w-2xl"
+				className="sm:max-w-lg"
 				onDoubleClick={(e) => e.stopPropagation()}
 			>
 				<DialogHeader>
@@ -762,7 +412,7 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 								)}
 					</DialogDescription>
 				</DialogHeader>
-				<div className="grid grid-cols-3 gap-3 mt-1">{cards}</div>
+				<div className="grid grid-cols-2 gap-3 mt-1">{cards}</div>
 				<p className="text-xs text-muted-foreground">
 					{scoped
 						? t(

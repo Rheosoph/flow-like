@@ -14,8 +14,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use chrono::{Duration, NaiveDate, Utc};
-use sea_orm::sea_query::Expr;
-use sea_orm::sea_query::ExprTrait;
+use sea_orm::sea_query::{Alias, Expr, ExprTrait, Func, SimpleExpr};
 use sea_orm::{
     ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
@@ -120,112 +119,141 @@ pub async fn get_sales_overview(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<SalesOverview>, ApiError> {
-    let sub = user.sub()?;
-
     // Verify user has access (must be owner/admin of the app)
-    verify_sales_access(&state, &sub, &app_id).await?;
+    let app = verify_sales_access(&state, &user, &app_id).await?;
+    let total_members = count_members(&state, &app_id).await?;
 
-    let app = app::Entity::find_by_id(&app_id)
+    Ok(Json(
+        sales_overview(&state, &app_id, app.price, total_members).await?,
+    ))
+}
+
+#[derive(Default, FromQueryResult)]
+struct PurchaseTotals {
+    total_purchases: i64,
+    completed_purchases: i64,
+    total_revenue: i64,
+    total_discounts: i64,
+    unique_buyers: i64,
+    total_refunds: i64,
+    refund_amount: i64,
+    period_purchases: i64,
+    period_revenue: i64,
+    prev_period_purchases: i64,
+    prev_period_revenue: i64,
+}
+
+/// `CASE WHEN <condition> THEN <column> END`, the aggregate input that limits a
+/// `COUNT`/`SUM` to the matching purchases.
+fn purchase_case(condition: SimpleExpr, column: app_purchase::Column) -> SimpleExpr {
+    Expr::expr(Expr::case(condition, Expr::col(column)))
+}
+
+fn count_purchases(condition: SimpleExpr) -> SimpleExpr {
+    purchase_case(condition, app_purchase::Column::Id).count()
+}
+
+/// SUM over BIGINT comes back as NUMERIC/DECIMAL, hence the cast.
+fn sum_purchases(condition: SimpleExpr, column: app_purchase::Column) -> SimpleExpr {
+    Expr::expr(Func::coalesce([
+        purchase_case(condition, column).sum(),
+        Expr::val(0i64),
+    ]))
+    .cast_as(Alias::new("BIGINT"))
+}
+
+pub(super) async fn count_members(state: &AppState, app_id: &str) -> Result<i64, ApiError> {
+    Ok(membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app_id))
+        .count(&state.db)
+        .await? as i64)
+}
+
+/// Lifetime totals plus the last-30-days vs previous-30-days comparison, from a
+/// single aggregate over the app's purchases.
+pub(super) async fn sales_overview(
+    state: &AppState,
+    app_id: &str,
+    current_price: i64,
+    total_members: i64,
+) -> Result<SalesOverview, ApiError> {
+    let now = Utc::now().date_naive();
+    let period_start = utc_midnight(now - Duration::days(30));
+    let prev_period_start = utc_midnight(now - Duration::days(60));
+
+    let completed = || app_purchase::Column::Status.eq(PurchaseStatus::Completed);
+    let refunded = || {
+        app_purchase::Column::Status
+            .is_in([PurchaseStatus::Refunded, PurchaseStatus::PartiallyRefunded])
+    };
+    let in_period = || completed().and(app_purchase::Column::CompletedAt.gte(period_start));
+    let in_prev_period = || {
+        completed()
+            .and(app_purchase::Column::CompletedAt.gte(prev_period_start))
+            .and(app_purchase::Column::CompletedAt.lt(period_start))
+    };
+
+    let totals = app_purchase::Entity::find()
+        .filter(app_purchase::Column::AppId.eq(app_id))
+        .select_only()
+        .expr_as(
+            Expr::col(app_purchase::Column::Id).count(),
+            "total_purchases",
+        )
+        .expr_as(count_purchases(completed()), "completed_purchases")
+        .expr_as(
+            sum_purchases(completed(), app_purchase::Column::PricePaid),
+            "total_revenue",
+        )
+        .expr_as(
+            sum_purchases(completed(), app_purchase::Column::DiscountAmount),
+            "total_discounts",
+        )
+        .expr_as(
+            purchase_case(completed(), app_purchase::Column::UserId).count_distinct(),
+            "unique_buyers",
+        )
+        .expr_as(count_purchases(refunded()), "total_refunds")
+        .expr_as(
+            sum_purchases(refunded(), app_purchase::Column::PricePaid),
+            "refund_amount",
+        )
+        .expr_as(count_purchases(in_period()), "period_purchases")
+        .expr_as(
+            sum_purchases(in_period(), app_purchase::Column::PricePaid),
+            "period_revenue",
+        )
+        .expr_as(count_purchases(in_prev_period()), "prev_period_purchases")
+        .expr_as(
+            sum_purchases(in_prev_period(), app_purchase::Column::PricePaid),
+            "prev_period_revenue",
+        )
+        .into_model::<PurchaseTotals>()
         .one(&state.db)
         .await?
-        .ok_or(ApiError::NOT_FOUND)?;
+        .unwrap_or_default();
 
-    // Get total stats from purchases
-    let purchases: Vec<app_purchase::Model> = app_purchase::Entity::find()
-        .filter(app_purchase::Column::AppId.eq(&app_id))
-        .all(&state.db)
-        .await?;
-
-    let total_purchases = purchases.len() as i64;
-    let completed_purchases: Vec<_> = purchases
-        .iter()
-        .filter(|p| p.status == crate::entity::sea_orm_active_enums::PurchaseStatus::Completed)
-        .collect();
-
-    let total_revenue: i64 = completed_purchases.iter().map(|p| p.price_paid).sum();
-    let total_discounts: i64 = completed_purchases.iter().map(|p| p.discount_amount).sum();
-
-    let refunded_purchases: Vec<_> = purchases
-        .iter()
-        .filter(|p| {
-            matches!(
-                p.status,
-                crate::entity::sea_orm_active_enums::PurchaseStatus::Refunded
-                    | crate::entity::sea_orm_active_enums::PurchaseStatus::PartiallyRefunded
-            )
-        })
-        .collect();
-
-    let total_refunds = refunded_purchases.len() as i64;
-    let refund_amount: i64 = refunded_purchases.iter().map(|p| p.price_paid).sum();
-
+    let total_purchases = totals.total_purchases;
+    let total_revenue = totals.total_revenue;
+    let total_discounts = totals.total_discounts;
+    let total_refunds = totals.total_refunds;
+    let refund_amount = totals.refund_amount;
     let net_revenue = total_revenue - refund_amount;
+    let unique_buyers = totals.unique_buyers;
 
-    // Unique buyers
-    let unique_buyer_ids: std::collections::HashSet<_> =
-        completed_purchases.iter().map(|p| &p.user_id).collect();
-    let unique_buyers = unique_buyer_ids.len() as i64;
-
-    let avg_order_value = if completed_purchases.is_empty() {
+    let avg_order_value = if totals.completed_purchases == 0 {
         0
     } else {
-        total_revenue / completed_purchases.len() as i64
+        total_revenue / totals.completed_purchases
     };
 
-    // Team members count
-    let total_members = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(&app_id))
-        .count(&state.db)
-        .await? as i64;
+    let period_revenue = totals.period_revenue;
+    let period_purchase_count = totals.period_purchases;
+    let revenue_change_percent = change_percent(period_revenue, totals.prev_period_revenue);
+    let purchases_change_percent =
+        change_percent(period_purchase_count, totals.prev_period_purchases);
 
-    // Period stats (last 30 days vs previous 30 days)
-    let now = Utc::now().date_naive();
-    let thirty_days_ago = now - Duration::days(30);
-    let sixty_days_ago = now - Duration::days(60);
-
-    let period_purchases: Vec<_> = completed_purchases
-        .iter()
-        .filter(|p| {
-            p.completed_at
-                .map(|d| d.date_naive() >= thirty_days_ago)
-                .unwrap_or(false)
-        })
-        .collect();
-    let period_revenue: i64 = period_purchases.iter().map(|p| p.price_paid).sum();
-    let period_purchase_count = period_purchases.len() as i64;
-
-    let prev_period_purchases: Vec<_> = completed_purchases
-        .iter()
-        .filter(|p| {
-            p.completed_at
-                .map(|d| d.date_naive() >= sixty_days_ago && d.date_naive() < thirty_days_ago)
-                .unwrap_or(false)
-        })
-        .collect();
-    let prev_period_revenue: i64 = prev_period_purchases.iter().map(|p| p.price_paid).sum();
-    let prev_period_purchase_count = prev_period_purchases.len() as i64;
-
-    let revenue_change_percent = if prev_period_revenue > 0 {
-        Some(((period_revenue - prev_period_revenue) as f64 / prev_period_revenue as f64) * 100.0)
-    } else if period_revenue > 0 {
-        Some(100.0)
-    } else {
-        None
-    };
-
-    let purchases_change_percent = if prev_period_purchase_count > 0 {
-        Some(
-            ((period_purchase_count - prev_period_purchase_count) as f64
-                / prev_period_purchase_count as f64)
-                * 100.0,
-        )
-    } else if period_purchase_count > 0 {
-        Some(100.0)
-    } else {
-        None
-    };
-
-    Ok(Json(SalesOverview {
+    Ok(SalesOverview {
         total_revenue,
         total_purchases,
         total_refunds,
@@ -233,14 +261,14 @@ pub async fn get_sales_overview(
         net_revenue,
         unique_buyers,
         avg_order_value,
-        current_price: app.price,
+        current_price,
         total_discounts,
         total_members,
         period_revenue,
         period_purchases: period_purchase_count,
         revenue_change_percent,
         purchases_change_percent,
-    }))
+    })
 }
 
 /// GET /apps/{app_id}/sales/stats - Get detailed sales statistics with daily breakdown
@@ -274,10 +302,23 @@ pub async fn get_sales_stats(
     Path(app_id): Path<String>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<SalesStats>, ApiError> {
-    let sub = user.sub()?;
+    let app = verify_sales_access(&state, &user, &app_id).await?;
+    let total_members = count_members(&state, &app_id).await?;
 
-    verify_sales_access(&state, &sub, &app_id).await?;
+    Ok(Json(
+        sales_stats(&state, &app_id, app.price, total_members, query).await?,
+    ))
+}
 
+/// Day rows for the requested range folded into `query.period` buckets, plus
+/// their summary. Callers must verify access first: the backfill writes.
+pub(super) async fn sales_stats(
+    state: &AppState,
+    app_id: &str,
+    current_price: i64,
+    total_members: i64,
+    query: StatsQuery,
+) -> Result<SalesStats, ApiError> {
     let period = StatsPeriod::parse(&query.period);
 
     // Parse date range
@@ -295,10 +336,10 @@ pub async fn get_sales_stats(
 
     // Fill any day still missing from the pre-aggregated table, through
     // yesterday. Runs after verify_sales_access - this writes.
-    ensure_sales_aggregations_current(&state, &app_id).await?;
+    ensure_sales_aggregations_current(state, app_id).await?;
 
     let daily_aggregates = app_sales_daily::Entity::find()
-        .filter(app_sales_daily::Column::AppId.eq(&app_id))
+        .filter(app_sales_daily::Column::AppId.eq(app_id))
         .filter(app_sales_daily::Column::Date.gte(start_date))
         .filter(app_sales_daily::Column::Date.lte(end_date))
         .order_by_asc(app_sales_daily::Column::Date)
@@ -309,7 +350,7 @@ pub async fn get_sales_stats(
     let mut daily_stats: Vec<DailyStat> = if computed_from_raw {
         // No aggregates for this window (app never sold, or the window predates
         // the backfill cap) - compute the whole range from raw purchases.
-        compute_daily_stats_from_purchases(&state, &app_id, start_date, end_date).await?
+        compute_daily_stats_from_purchases(state, app_id, start_date, end_date).await?
     } else {
         daily_aggregates
             .into_iter()
@@ -330,12 +371,11 @@ pub async fn get_sales_stats(
     // Aggregates only ever cover complete days; today is always live.
     let today = Utc::now().date_naive();
     if !computed_from_raw && start_date <= today && end_date >= today {
-        daily_stats
-            .extend(compute_daily_stats_from_purchases(&state, &app_id, today, today).await?);
+        daily_stats.extend(compute_daily_stats_from_purchases(state, app_id, today, today).await?);
     }
 
     let daily_stats =
-        fold_daily_stats(&state, &app_id, daily_stats, start_date, end_date, period).await?;
+        fold_daily_stats(state, app_id, daily_stats, start_date, end_date, period).await?;
 
     // Calculate summary
     let total_revenue: i64 = daily_stats.iter().map(|d| d.revenue).sum();
@@ -345,23 +385,13 @@ pub async fn get_sales_stats(
     let total_discounts: i64 = daily_stats.iter().map(|d| d.discounts).sum();
     let unique_buyers: i64 = daily_stats.iter().map(|d| d.unique_buyers).sum();
 
-    let app = app::Entity::find_by_id(&app_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let total_members = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(&app_id))
-        .count(&state.db)
-        .await? as i64;
-
     let avg_order_value = if total_purchases > 0 {
         total_revenue / total_purchases
     } else {
         0
     };
 
-    Ok(Json(SalesStats {
+    Ok(SalesStats {
         daily_stats,
         summary: SalesOverview {
             total_revenue,
@@ -371,7 +401,7 @@ pub async fn get_sales_stats(
             net_revenue: total_revenue - refund_amount,
             unique_buyers,
             avg_order_value,
-            current_price: app.price,
+            current_price,
             total_discounts,
             total_members,
             period_revenue: total_revenue,
@@ -379,7 +409,7 @@ pub async fn get_sales_stats(
             revenue_change_percent: None,
             purchases_change_percent: None,
         },
-    }))
+    })
 }
 
 #[derive(FromQueryResult)]
@@ -590,29 +620,54 @@ async fn compute_daily_stats_from_purchases(
     Ok(stats)
 }
 
-/// Verify the user has owner/admin access to view sales for this app
-pub(crate) async fn verify_sales_access(
+/// Percentage change from the previous period; `None` when both are empty.
+pub(super) fn change_percent(current: i64, previous: i64) -> Option<f64> {
+    if previous > 0 {
+        Some(((current - previous) as f64 / previous as f64) * 100.0)
+    } else if current > 0 {
+        Some(100.0)
+    } else {
+        None
+    }
+}
+
+/// Verify the user holds the app's designated owner role and return the app
+/// row the check loaded. Flow payments can be collected at any visibility, so
+/// this is the gate for revenue that does not come from a store listing.
+pub(crate) async fn verify_revenue_access(
     state: &AppState,
-    user_id: &str,
+    user: &AppUser,
     app_id: &str,
-) -> Result<(), ApiError> {
-    use crate::entity::role;
+) -> Result<app::Model, ApiError> {
+    // Revenue is user-only: `app_permission` alone would also admit API keys
+    // and connected apps.
+    user.sub()?;
 
-    // Check if user has a membership with owner role
-    let membership = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(app_id))
-        .filter(membership::Column::UserId.eq(user_id))
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::FORBIDDEN)?;
+    // Prices, discounts and purchase lists must not outlive a demotion, so the
+    // membership role is read fresh instead of from the permission cache.
+    let role = user.app_permission_fresh(app_id, state).await?.role;
 
-    // Get the app to check owner role
     let app = app::Entity::find_by_id(app_id)
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    // Verify app is public/public_restricted (sales only make sense for these)
+    if app.owner_role_id.as_deref() == Some(role.id.as_str()) {
+        return Ok(app);
+    }
+
+    Err(ApiError::FORBIDDEN)
+}
+
+/// [`verify_revenue_access`] for store sales, which only exist for apps listed
+/// in the store.
+pub(crate) async fn verify_sales_access(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+) -> Result<app::Model, ApiError> {
+    let app = verify_revenue_access(state, user, app_id).await?;
+
     if !matches!(
         app.visibility,
         Visibility::Public | Visibility::PublicRequestAccess
@@ -622,27 +677,7 @@ pub(crate) async fn verify_sales_access(
         ));
     }
 
-    // Check if user has owner role
-    if let Some(owner_role_id) = &app.owner_role_id
-        && &membership.role_id == owner_role_id
-    {
-        return Ok(());
-    }
-
-    // Check if role has sales permission (for future extensibility)
-    let role = role::Entity::find_by_id(&membership.role_id)
-        .one(&state.db)
-        .await?;
-
-    if let Some(role) = role {
-        // For now, only "owner" role name gets access
-        // This can be extended with a proper permission system
-        if role.name.to_lowercase() == "owner" {
-            return Ok(());
-        }
-    }
-
-    Err(ApiError::FORBIDDEN)
+    Ok(app)
 }
 
 #[cfg(test)]

@@ -68,3 +68,9 @@ export {
 	PackageAccessTab,
 	type PackageAccessTabProps,
 } from "./package-access-tab";
+export { PackagesHubLayout } from "./packages-hub-layout";
+export * from "./package-library";
+export * from "./explore";
+export * from "./package-workspace";
+export * from "./packages-hub";
+export * from "./registry-mine-packages";

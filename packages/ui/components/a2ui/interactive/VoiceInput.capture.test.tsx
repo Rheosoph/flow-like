@@ -25,7 +25,38 @@ const resolveBoundValue = (value: BoundValue) => {
 
 const triggerEvent = mock(async () => {});
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"Blob",
+	"document",
+	"DOMException",
+	"Element",
+	"Event",
+	"File",
+	"HTMLElement",
+	"MouseEvent",
+	"Node",
+	"navigator",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+	"MediaRecorder",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+// Radix picks its layout effect when first imported, so the real modules load under a document.
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	backendState: { ...(await import("../../../state/backend-state")) },
+	actionHandler: { ...(await import("../ActionHandler")) },
+	dataContext: { ...(await import("../DataContext")) },
+	voice: { ...(await import("../../voice")) },
+};
+
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({
 		helperState: {
 			fileToUrl: mock(async () => "temporary://voice"),
@@ -34,6 +65,7 @@ mock.module("../../../state/backend-state", () => ({
 }));
 
 mock.module("../ActionHandler", () => ({
+	...actual.actionHandler,
 	useActionContext: () => ({}),
 	useComponentEventTrigger: () => triggerEvent,
 	useIsComponentTriggering: () => false,
@@ -41,6 +73,7 @@ mock.module("../ActionHandler", () => ({
 }));
 
 mock.module("../DataContext", () => ({
+	...actual.dataContext,
 	useData: () => ({
 		resolve: resolveBoundValue,
 		setByPath: mock(() => {}),
@@ -48,6 +81,7 @@ mock.module("../DataContext", () => ({
 }));
 
 mock.module("../../voice", () => ({
+	...actual.voice,
 	AudioPlayback: () => null,
 	VOICE_DEFAULT_COLOR: "#7c3aed",
 	VOICE_DEFAULT_RECORDING_COLOR: "#ef4444",
@@ -57,7 +91,17 @@ mock.module("../../voice", () => ({
 	useVoiceRecorder,
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+	mock.restore();
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("../ActionHandler", () => actual.actionHandler);
+	mock.module("../DataContext", () => actual.dataContext);
+	mock.module("../../voice", () => actual.voice);
+});
 
 class FakeMediaRecorder {
 	static isTypeSupported = mock(() => true);
@@ -125,6 +169,7 @@ const voiceComponent = (
 	invoke: "manual" | "hold" = "manual",
 	disabled = false,
 ): VoiceInputComponent => ({
+	id: "voice-input",
 	type: "voiceInput",
 	value: { path: "$.voice" },
 	mode: { literalString: mode },

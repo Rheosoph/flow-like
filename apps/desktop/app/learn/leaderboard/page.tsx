@@ -9,6 +9,7 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { LeaderboardOptIn } from "@flow-like/flow-like-ui/lib/learn/types";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -177,7 +178,7 @@ export default function LeaderboardPage() {
 
 				{/* Leaderboard front and center */}
 				<LeaderboardTable
-					entries={leaderboardQuery.data ?? []}
+					entries={asArray(leaderboardQuery.data)}
 					currentUserId={sub}
 				/>
 			</div>

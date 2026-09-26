@@ -3,7 +3,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -54,18 +54,13 @@ pub async fn update_price(
 ) -> Result<Json<PriceResponse>, ApiError> {
     let sub = user.sub()?;
 
-    verify_sales_access(&state, &sub, &app_id).await?;
+    let existing = verify_sales_access(&state, &user, &app_id).await?;
 
     if body.price < 0 {
         return Err(ApiError::bad_request(
             "Price cannot be negative".to_string(),
         ));
     }
-
-    let existing = app::Entity::find_by_id(&app_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
 
     let mut active: app::ActiveModel = existing.into();
     active.price = Set(body.price);

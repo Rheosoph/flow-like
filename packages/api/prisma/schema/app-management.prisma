@@ -21,6 +21,9 @@ model InviteLink {
 model JoinQueue {
   id String @id
 
+  approvedAt BigInt?
+  approvedBy String?
+
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 

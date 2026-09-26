@@ -3,17 +3,9 @@
 import { useTranslation } from "@flow-like/locales";
 import { Braces, Copy } from "lucide-react";
 import { toast } from "sonner";
-import {
-	formatAbsoluteDateTime,
-	formatRelativeTime,
-	parseTemporalValue,
-} from "../../../../lib/date";
-import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import type { QueryColumn } from "../../../../state/backend-state/query-state";
-import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 import { Button } from "../../../ui/button";
-import { GeometryDetails } from "../../../ui/geometry-cell";
 import { ScrollArea } from "../../../ui/scroll-area";
 import {
 	Sheet,
@@ -22,61 +14,26 @@ import {
 	SheetHeader,
 	SheetTitle,
 } from "../../../ui/sheet";
-import { StorageFileCell } from "../../../ui/storage-file-cell";
-import { UserIdentityCard } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
 	cellToString,
 	classifyColumn,
 	isNullish,
 } from "./column-types";
-
-/** A row detail has room for the exact instant, with the relative reading under it. */
-function TemporalValue({ value }: Readonly<{ value: unknown }>) {
-	const parsed = parseTemporalValue(value);
-	if (!parsed) return <>{cellToString(value)}</>;
-
-	return (
-		<>
-			{formatAbsoluteDateTime(parsed)}
-			<span className="ml-1.5 text-xs text-muted-foreground">
-				{formatRelativeTime(parsed, "long")}
-			</span>
-		</>
-	);
-}
-
-/** Everything the temporal path does not claim, read for what it holds. */
-function RowValue({
-	kind,
-	name,
-	value,
-	appId,
-}: Readonly<{
-	kind: ColumnKind;
-	name: string;
-	value: unknown;
-	appId?: string;
-}>) {
-	const userId = kind === "user" ? accountIdFromValue(value) : null;
-	if (userId) return <UserIdentityCard userId={userId} className="mt-1" />;
-
-	const file = appId ? resolveStorageFile(name, value, appId) : null;
-	if (file && appId)
-		return <StorageFileCell appId={appId} file={file} className="-ml-2 mt-1" />;
-
-	return <>{cellToString(value)}</>;
-}
+import { ResultDetailValue } from "./result-value";
 
 export function RowInspectorSheet({
 	row,
 	columns,
 	appId,
+	kindOf = classifyColumn,
 	onOpenChange,
 }: Readonly<{
 	row: Record<string, unknown> | null;
 	columns: QueryColumn[];
 	appId?: string;
+	/** The kind the table showed the column as, so the drawer reads its cells alike. */
+	kindOf?: (column: QueryColumn) => ColumnKind;
 	onOpenChange: (open: boolean) => void;
 }>) {
 	const { t } = useTranslation("settings");
@@ -112,7 +69,7 @@ export function RowInspectorSheet({
 						{row &&
 							columns.map((column) => {
 								const value = row[column.name];
-								const kind = classifyColumn(column);
+								const kind = kindOf(column);
 								return (
 									<div
 										key={column.name}
@@ -134,19 +91,13 @@ export function RowInspectorSheet({
 											>
 												{isNullish(value) ? (
 													"NULL"
-												) : kind === "geometry" ? (
-													<GeometryDetails
-														value={value}
-														metadata={column.metadata}
-													/>
-												) : kind === "temporal" ? (
-													<TemporalValue value={value} />
 												) : (
-													<RowValue
+													<ResultDetailValue
 														kind={kind}
 														name={column.name}
 														value={value}
 														appId={appId}
+														metadata={column.metadata}
 													/>
 												)}
 											</dd>

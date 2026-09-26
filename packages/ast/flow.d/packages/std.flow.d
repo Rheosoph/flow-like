@@ -3312,7 +3312,7 @@ declare namespace notify {
      * @param description (optional) — Notification description (optional)
      * @param icon — FlowPath to a notification icon image (optional)
      * @param link (optional) — Relative path for the notification link (e.g. /dashboard or /store?item=abc)
-     * @returns success — Whether the notification was sent successfully
+     * @returns success — Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.
      * @impure has side effects / drives control flow
      */
     function projectUser({ flowUserSub?: string, title?: string, description?: string, icon: Struct, link?: string }): bool;
@@ -3325,10 +3325,33 @@ declare namespace notify {
      * @param icon — FlowPath to a notification icon image (optional)
      * @param link (optional) — Relative path for the notification link (e.g. /dashboard or /store?item=abc)
      * @param showDesktop (optional) — Show desktop notification if available
-     * @returns success — Whether the notification was sent successfully
+     * @returns success — Whether a new notification was stored or emitted locally without a reported push error. Does not confirm device delivery.
      * @impure has side effects / drives control flow
      */
     function user({ title?: string, description?: string, icon: Struct, link?: string, showDesktop?: bool }): bool;
+}
+
+declare namespace payments {
+    // === Payments ===
+
+    /**
+     * Ask the signed-in user to pay the app owner and wait for the verified result
+     * @node request_payment @alias requestPayment
+     * @param currency (optional) — Supported three-letter currency
+     * @param productName (optional) — Plain-text product name
+     * @param description (optional) — Plain-text description
+     * @param productTaxCode (optional) — Required Stripe tax code for the product or service, selected from Stripe's tax code list
+     * @param shippingCountries (optional) — For shipped goods, comma-separated delivery country codes such as DE,FR. Leave empty when no delivery address is needed.
+     * @param reference (optional) — Optional application reference
+     * @param simulation (optional) — Local Board Test only: paid, canceled, expired or failed. Empty requests a real payment.
+     * @param amountMinor (optional) — Total including applicable tax in integer minor units, for example 119 for EUR 1.19
+     * @param ttlSeconds (optional) — Requested timeout in seconds, limited by the remaining run quota
+     * @param idempotencyKey (optional) — Reuse a stable key for the same payment across workflow retries. Completed payments immediately select their previous result. Leave empty for a new payment.
+     * @returns paymentId — Server payment request identifier, or a sim_ identifier in Board Test
+     * @returns reason — Machine-readable outcome reason
+     * @impure has side effects / drives control flow
+     */
+    function request({ currency?: string, productName?: string, description?: string, productTaxCode?: string, shippingCountries?: string, reference?: string, simulation?: string, amountMinor?: int, ttlSeconds?: int, idempotencyKey?: string }): { paymentId: string, reason: string };
 }
 
 declare namespace random {
@@ -4600,7 +4623,7 @@ declare namespace ui {
     function widgetGetElement({ elementRef: Struct, elementId: string }): { element: Struct, exists: bool };
 
     /**
-     * Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.
+     * Calls a typed query or mutation on a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract operation.
      * @node a2ui_widget_query @alias a2uiWidgetQuery
      * @param elementRef — Package widget reference from Instantiate Widget, or a visual-builder widget from Get Element
      * @param query — Contract query to run on the widget instance
@@ -4621,9 +4644,9 @@ declare namespace ui {
     function widgetSetText({ elementRef: Struct, elementId: string, text?: string }): Struct;
 
     /**
-     * Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.
+     * Sends a typed input patch to a package widget instance. Select a Page widget, or connect Element Ref from Instantiate Widget or Element from Get Element, to generate one optional pin per contract input. Only set pins are included in the patch.
      * @node a2ui_widget_update_inputs @alias a2uiWidgetUpdateInputs
-     * @param elementRef — Element reference of a package widget instance (from Instantiate Widget)
+     * @param elementRef — Select a Page widget, or connect its reference from Instantiate Widget or Get Element
      * @impure has side effects / drives control flow
      */
     function widgetUpdateInputs({ elementRef: Struct }): void;

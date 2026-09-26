@@ -30,6 +30,7 @@ import {
 import { addAppToProfile } from "../../lib/add-app-to-profile";
 import { apiErrorMessage } from "../../lib/api-error";
 import { formatRelativeTime } from "../../lib/date";
+import { asArray } from "../../lib/response-shape";
 import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -64,9 +65,9 @@ export function NotificationsPageScreen() {
 		authQueryDeps,
 		0,
 	);
-	const invitations: IInvite[] = invitationsQuery.data
-		? invitationsQuery.data.pages.flat()
-		: [];
+	const invitations: IInvite[] = asArray(invitationsQuery.data?.pages).flatMap(
+		(page) => asArray(page),
+	);
 
 	const notificationsQuery = useInfiniteInvoke(
 		backend.userState.listNotifications,
@@ -79,9 +80,9 @@ export function NotificationsPageScreen() {
 		authQueryDeps,
 		0,
 	);
-	const notifications: INotification[] = notificationsQuery.data
-		? notificationsQuery.data.pages.flat()
-		: [];
+	const notifications: INotification[] = asArray(
+		notificationsQuery.data?.pages,
+	).flatMap((page) => asArray(page));
 
 	const isInvitationsBootLoading =
 		Boolean(auth?.isAuthenticated) &&

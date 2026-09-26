@@ -9,6 +9,7 @@ import {
 	WaypointsIcon,
 } from "lucide-react";
 import type { CSSProperties } from "react";
+import { asArray } from "./response-shape";
 import { IAppType } from "./schema/app/app";
 import type { IBoardListing } from "./schema/flow/board-summary";
 import type { IEvent } from "./schema/flow/event";
@@ -135,9 +136,9 @@ export function detectAppType(
 	pageCount: number,
 	tableCount = 0,
 ): IAppType | null {
-	const activeEvents = (events ?? []).filter((event) => event.active);
+	const activeEvents = asArray(events).filter((event) => event.active);
 	const eventTypes = new Set(activeEvents.map((event) => event.event_type));
-	const hasLogic = (boards ?? []).some((board) => board.nodeCount > 0);
+	const hasLogic = asArray(boards).some((board) => board.nodeCount > 0);
 
 	if (!hasLogic && pageCount === 0 && tableCount === 0) return null;
 

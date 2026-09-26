@@ -1,16 +1,45 @@
 const PLATE_JSON_PREFIX = "plate_json::";
 
 interface PlateNode {
+	readonly type?: string;
 	readonly text?: string;
 	readonly value?: string;
 	readonly children?: ReadonlyArray<PlateNode>;
 	readonly [key: string]: unknown;
 }
 
+const INLINE_TYPES = new Set([
+	"a",
+	"date",
+	"emoji_input",
+	"focus_node",
+	"footnoteReference",
+	"inline_equation",
+	"inline_spoiler",
+	"mention",
+	"mention_input",
+	"slash_input",
+	"user_mention",
+]);
+
+/**
+ * Quotes, callouts, columns and table cells hold whole blocks — since Plate 53
+ * a quote's text sits in paragraphs — and those read as separate lines.
+ */
+function holdsBlocks(children: ReadonlyArray<PlateNode>): boolean {
+	return (
+		children.every((child) => typeof child.text !== "string") &&
+		children.some((child) => !INLINE_TYPES.has(child.type ?? ""))
+	);
+}
+
 function nodeText(node: PlateNode): string {
 	if (typeof node.text === "string") return node.text;
 	if (Array.isArray(node.children)) {
-		return node.children.map(nodeText).join("");
+		const texts = node.children.map(nodeText);
+		return holdsBlocks(node.children)
+			? texts.filter((text) => text.length > 0).join("\n")
+			: texts.join("");
 	}
 	return typeof node.value === "string" ? node.value : "";
 }

@@ -7,6 +7,7 @@ use axum::{
 };
 use error::InternalError;
 use flow_like_types::Value;
+use middleware::deadline::deadline_middleware;
 use middleware::error_reporting::error_reporting_middleware;
 use middleware::jwt::jwt_middleware;
 use state::{AppState, State};
@@ -27,29 +28,36 @@ mod routes;
 
 pub mod alerting;
 pub mod audit;
+mod bit_pricing;
 pub mod cache;
 pub mod capacity;
 pub mod channel;
-pub mod compute_cost;
 pub mod compute_attempts;
+pub mod compute_cost;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
 pub mod db;
 pub mod deletion;
+pub(crate) mod devices;
+pub use devices::certificates::spawn_sweeper as spawn_device_certificate_sweeper;
 pub mod error;
+pub(crate) mod instances;
 pub mod mail;
 pub mod model_tier;
 pub mod notification_images;
+pub mod package_license;
+pub mod payments;
 pub mod permission;
 pub mod publication;
+pub mod push_notifications;
 pub mod quota;
-pub mod quota_payloads;
-pub mod quota_warnings;
 #[cfg(test)]
 mod quota_integration_tests;
-pub mod push_notifications;
+pub mod quota_payloads;
+pub mod quota_warnings;
 pub mod realtime_ice;
+pub(crate) mod rolling_usage;
 mod runtime_config;
 pub mod state;
 pub mod storage_accounting;
@@ -57,10 +65,10 @@ pub mod storage_config;
 pub mod storage_identity;
 #[cfg(feature = "storage-queue")]
 mod storage_queue;
+pub mod stripe_connect;
 pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
-pub(crate) mod rolling_usage;
 pub mod user_management;
 pub mod utils;
 
@@ -161,19 +169,6 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
             }));
     }
 
-    if state.platform_config.audit.enabled && !audit::sign::is_signing_configured() {
-        if state.platform_config.audit.require_signing {
-            panic!(
-                "AUDIT SIGNING REQUIRED but not configured. \
-                 Set BACKEND_KEY (base64 P-256 PEM) and BACKEND_KID env vars."
-            );
-        }
-        tracing::error!(
-            "AUDIT SIGNING NOT CONFIGURED: Set BACKEND_KEY (base64 P-256 PEM) and BACKEND_KID. \
-             Audit entries will be UNSIGNED until keys are provided."
-        );
-    }
-
     let router = Router::new()
         .route("/", get(hub_info))
         .nest("/health", routes::health::routes())
@@ -184,6 +179,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/bit", routes::bit::routes())
         .nest("/store", routes::store::routes())
         .nest("/auth", routes::auth::routes())
+        .nest("/devices", routes::devices::routes())
+        .nest("/instances", routes::instances::routes())
         .nest("/oauth", routes::oauth::routes())
         .nest("/chat", routes::chat::routes())
         // Root-level: Rig's Responses client posts to `{base_url}/responses`,
@@ -210,12 +207,17 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/telemetry", routes::telemetry::routes())
         .nest("/flowscript", routes::flowscript::routes())
         .route("/webhook/stripe", post(routes::webhook::stripe_webhook))
+        .merge(payments::router())
         .with_state(state.clone())
         .route("/version", get(|| async { "0.0.0" }))
         .layer(from_fn_with_state(
             state.clone(),
             error_reporting_middleware,
         ))
+        // Inside audit so a deadline 504 still gets its outcome record, inside
+        // CORS so it carries the CORS headers, inside compression so a cut body
+        // still ends with a valid encoder trailer.
+        .layer(from_fn(deadline_middleware))
         .layer(from_fn_with_state(
             state.clone(),
             middleware::audit::audit_middleware,
@@ -224,7 +226,6 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .layer(cors.clone())
         .layer(
             ServiceBuilder::new()
-                // .layer(TimeoutLayer::new(Duration::from_secs(15 * 60)))
                 .layer(RequestDecompressionLayer::new())
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
@@ -246,17 +247,31 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
             DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
         ));
 
+    // Router::layer keeps the deadline innermost: past decompression (whose body
+    // type from_fn cannot accept inside a ServiceBuilder) and inside compression.
     let inbound_rest = routes::inbound::rest_routes()
         .with_state(state.clone())
+        .layer(from_fn(deadline_middleware))
         .layer(inbound_layers.clone());
     let inbound_mcp = routes::inbound::mcp_routes()
         .with_state(state.clone())
+        .layer(from_fn(deadline_middleware))
+        .layer(inbound_layers.clone());
+    let frontend = routes::frontend::routes()
+        .with_state(state.clone())
+        .layer(from_fn(deadline_middleware))
+        .layer(inbound_layers.clone());
+    let frontend_links = routes::frontend::link_routes()
+        .with_state(state.clone())
+        .layer(from_fn(deadline_middleware))
         .layer(inbound_layers);
 
     Router::new()
         .merge(openapi_routes(cors))
         .nest("/r", inbound_rest)
         .nest("/m", inbound_mcp)
+        .nest("/frontend", frontend)
+        .merge(frontend_links)
         .nest("/api/v1", router)
         // One outer boundary observes API, inbound REST/MCP, OpenAPI and fallbacks.
         .layer(from_fn(telemetry::trace_context_middleware))
@@ -266,6 +281,7 @@ fn openapi_routes(cors: CorsLayer) -> Router {
     Router::from(
         SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
     )
+    .layer(from_fn(deadline_middleware))
     .layer(cors)
 }
 
@@ -296,6 +312,21 @@ fn public_hub_value(mut hub_value: Value) -> Value {
     // the authenticated board realtime endpoint.
     if let Some(hub) = hub_value.as_object_mut() {
         hub.remove("realtime");
+        if let Some(payments) = hub.get_mut("payments").and_then(Value::as_object_mut) {
+            payments.retain(|key, _| {
+                matches!(
+                    key.as_str(),
+                    "onboarding_enabled"
+                        | "marketplace_enabled"
+                        | "node_payments_enabled"
+                        | "servicing_enabled"
+                        | "livemode"
+                        | "currencies"
+                        | "marketplace_min_amount"
+                        | "max_payment_amount"
+                )
+            });
+        }
     }
 
     hub_value
@@ -331,5 +362,16 @@ mod hub_info_tests {
         assert!(provider.get("client_secret_env").is_none());
         assert!(provider.get("client_secret").is_none());
         assert_eq!(provider["client_id"], "public-client-id");
+    }
+
+    #[test]
+    fn public_hub_exposes_payment_availability_without_seller_or_platform_identity() {
+        let public = public_hub_value(
+            json!({"payments":{"marketplace_enabled":true,"livemode":false,"seller_allowlist":["private-user"],"platform_account_id":"acct_private","legal_texts":[],"live_approved":true}}),
+        );
+        assert_eq!(
+            public["payments"],
+            json!({"marketplace_enabled":true,"livemode":false})
+        );
     }
 }

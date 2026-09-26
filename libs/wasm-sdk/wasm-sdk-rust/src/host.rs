@@ -267,7 +267,7 @@ const DB_OP_DELETE: u32 = 6;
 const DB_OP_LIST: u32 = 7;
 const DB_OP_COUNT: u32 = 8;
 
-fn db_call(op: u32, conn_json: &str, payload_json: &str) -> Option<String> {
+pub(crate) fn db_call(op: u32, conn_json: &str, payload_json: &str) -> Option<String> {
     db::query(op, conn_json, payload_json)
 }
 

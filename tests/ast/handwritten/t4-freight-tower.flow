@@ -84,11 +84,9 @@ function geocodeStop(address: string, resolution: int): (cell: string, label: st
     const lookup = geo::searchLocation({ query: address, limit: 1, countryCodes: "de,at,ch,nl" })
     lookup {
         execSuccess: {
-            // `firstResult` is a `SearchResult`; the H3 and reverse-geocode pins take a
-            // `GeoCoordinate`, so project the two fields rather than passing the whole hit.
-            const point = { latitude: lookup.firstResult.lat, longitude: lookup.firstResult.lon }
-            cell = h3::latlngToCell({ coordinate: point, resolution: resolution })
-            const named = geo::reverseGeocode({ coordinate: point, zoom: 16 })
+            const point = lookup.geometryOut
+            cell = h3::latlngToCell({ geometry: point, resolution: resolution })
+            const named = geo::reverseGeocode({ geometry: point, zoom: 16 })
             named {
                 execSuccess: {
                     label = named.displayName
@@ -123,11 +121,11 @@ function laneScore(bid: Struct, detourMeters: float, dwellSeconds: float): (scor
     return score, label
 }
 
-function corridorMatrix(stops: Struct[]): (slowestSeconds: float, nearestName: string, hops: int) {
+function corridorMatrix(stops: geometry<Point>[]): (slowestSeconds: float, nearestName: string, hops: int) {
     let slowestSeconds = 0.0
     let nearestName = "unknown"
     let hops = 0
-    const matrix = geo::osrmTable({ coordinates: stops, profile: "Car", includeDurations: true, includeDistances: true })
+    const matrix = geo::osrmTable({ geometries: stops, profile: "Car", includeDurations: true, includeDistances: true })
     matrix {
         execSuccess: {
             const flatDurations = array::flatten({ arrayIn: matrix.durations, depth: 2 })
@@ -135,7 +133,7 @@ function corridorMatrix(stops: Struct[]): (slowestSeconds: float, nearestName: s
             const flatDistances = array::flatten({ arrayIn: matrix.distances, depth: 2 })
             const longestLeg = float::maxOf({ floats: flatDistances }).result
             const { element: firstStop } = array::get({ arrayIn: stops, index: 0 })
-            const snapped = geo::osrmNearest({ coordinate: firstStop, number: 3 })
+            const snapped = geo::osrmNearest({ geometry: firstStop, number: 3 })
             snapped {
                 execSuccess: {
                     hops = array::length({ array: snapped.waypoints })
@@ -362,26 +360,30 @@ detached {
 function ingestTender(raw: TenderPayload): (tenderId: string) {
     const { tenderId, stops, totalWeight } = tender::normalize(raw)
     let geocoded = array::make()
+    let stopPoints = array::make()
     for (const stop of stops) {
         const { cell, label } = geocodeStop(stop.address, planningResolution)
         const { district, areaKm2 } = stopFootprint(cell, 2)
         const described = { stop_id: stop.stop_id, h3_cell: cell, district_cell: district, resolved_address: label, weight_kg: stop.weight_kg }
         info({ message: `${stop.stop_id} resolved to ${label} in district ${district} (${areaKm2} km2)`, toast: false })
         geocoded = array::push({ arrayIn: geocoded, value: described })
+        stopPoints = array::push({ arrayIn: stopPoints, value: geometry::makePoint({ longitude: stop.longitude, latitude: stop.latitude }) })
     }
     const { accepted, reason } = tender::validate(tenderId, geocoded, totalWeight)
+    let outcome = "rejected"
     if (accepted) {
-        const { slowestSeconds, nearestName, hops } = corridorMatrix(geocoded)
+        const { slowestSeconds, nearestName, hops } = corridorMatrix(stopPoints)
         const dwellLabel = fmt::duration({ seconds: slowestSeconds, style: "Short", maxParts: 2 })
         info({ message: `slowest corridor leg ${dwellLabel} from ${nearestName} over ${hops} waypoint(s)`, toast: false })
         const stored = tender::persist(tenderId, geocoded)
         openTenderIds = set::insert({ setIn: openTenderIds, value: tenderId }).setOut
         const weightLabel = fmt::number({ value: totalWeight, decimals: 1, suffix: " kg" })
         info({ message: `tender ${tenderId}: ${stored} stop(s) stored, ${weightLabel}`, toast: false })
-        return tenderId
+        outcome = tenderId
+    } else {
+        warn({ message: reason, toast: true })
     }
-    warn({ message: reason, toast: true })
-    return "rejected"
+    return outcome
 }
 
 eventsGeneric tenderIntake(payload: Struct, tenderRef: string) {
@@ -421,8 +423,8 @@ eventsSimple tenderApiSink() {
 
 function trackFrame(topic: string, frame: Struct): (shipmentId: string) {
     let shipmentId = frame.shipment_id
-    const framePoint = { latitude: frame.latitude, longitude: frame.longitude }
-    const cell = h3::latlngToCell({ coordinate: framePoint, resolution: planningResolution })
+    const framePoint = geometry::makePoint({ longitude: frame.longitude, latitude: frame.latitude })
+    const cell = h3::latlngToCell({ geometry: framePoint, resolution: planningResolution })
     set::insertRef({ varRef: "coveredCells", value: cell })
     const { value: carrier, found: assigned } = map::get({ mapIn: carrierByShipment, key: shipmentId })
     if (assigned) {
@@ -554,10 +556,11 @@ eventsSimple nightlySettlement() {
 function reassignCarrier(actionContext: Struct, banner: Struct): (placed: bool) {
     let shipmentId = actionContext.shipment_id
     const { value: carrier, found: known } = map::get({ mapIn: carrierByShipment, key: shipmentId })
+    let placed = false
     if (known) {
-        const pickupPoint = { latitude: actionContext.pickup_lat, longitude: actionContext.pickup_lon }
-        const dropPoint = { latitude: actionContext.drop_lat, longitude: actionContext.drop_lon }
-        const detour = geo::planRoute({ start: pickupPoint, end: dropPoint, profile: "Car", alternatives: true })
+        const pickupPoint = geometry::makePoint({ longitude: actionContext.pickup_lon, latitude: actionContext.pickup_lat })
+        const dropPoint = geometry::makePoint({ longitude: actionContext.drop_lon, latitude: actionContext.drop_lat })
+        const detour = geo::planRoute({ startGeometry: pickupPoint, endGeometry: dropPoint, profile: "Car", alternatives: true })
         detour {
             execSuccess: {
                 const { score, label: costLabel } = laneScore(carrier, detour.distance, detour.duration)
@@ -572,11 +575,12 @@ function reassignCarrier(actionContext: Struct, banner: Struct): (placed: bool) 
                 ui::setElementText({ elementRef: banner, text: `no route between the ${shipmentId} stops` })
             }
         }
-        return true
+        placed = true
+    } else {
+        ui::setElementText({ elementRef: banner, text: `${shipmentId} has no winning bid yet` })
+        ui::setPageState({ key: "dispatch.error", value: shipmentId })
     }
-    ui::setElementText({ elementRef: banner, text: `${shipmentId} has no winning bid yet` })
-    ui::setPageState({ key: "dispatch.error", value: shipmentId })
-    return false
+    return placed
 }
 
 function resweepDock(laneQuery: string, banner: Struct): (planHash: string) {

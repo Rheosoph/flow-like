@@ -31,8 +31,10 @@ REPOSITORIES = {
     "compiler": "flow-like-docker-compose-compiler",
     "signaling": "flow-like-docker-compose-signaling",
     "object-store-init": "flow-like-docker-compose-object-store-init",
+    "audit-worker": "flow-like-audit-worker",
 }
 IMAGE_PATHS = {
+    "audit-worker": [("audit", "image")],
     "api": [("api", "image")],
     "web": [("web", "image")],
     "executor": [("executor", "image"), ("executorPool", "image")],
@@ -44,7 +46,7 @@ IMAGE_PATHS = {
     "signaling": [("signaling", "image")],
     "object-store-init": [("rustfs", "bootstrap", "image")],
 }
-NODE_SELECTOR_PATHS = [("api",), ("web",), ("compiler",), ("signaling",), ("executionManager",), ("executionManager", "sandbox"), ("monitoring", "prometheus"), ("monitoring", "grafana")]
+NODE_SELECTOR_PATHS = [("audit",), ("api",), ("web",), ("compiler",), ("signaling",), ("executionManager",), ("executionManager", "sandbox"), ("monitoring", "prometheus"), ("monitoring", "grafana")]
 
 
 def split_registry(registry):

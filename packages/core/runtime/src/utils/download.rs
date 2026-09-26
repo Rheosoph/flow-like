@@ -12,7 +12,6 @@ use flow_like_types::tokio::time::Instant;
 use flow_like_types::{anyhow, bail, reqwest};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::cmp::min;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -143,6 +142,17 @@ fn validate_announced_size(expected: Option<u64>, announced: u64) -> flow_like_t
     }
 
     Ok(())
+}
+
+fn checked_download_size(
+    downloaded: u64,
+    chunk: usize,
+    expected: u64,
+) -> flow_like_types::Result<u64> {
+    downloaded
+        .checked_add(chunk as u64)
+        .filter(|total| *total <= expected)
+        .ok_or_else(|| anyhow!("Artifact transfer exceeds its declared size"))
 }
 
 /// Whether the artifact can be checked against a known content hash.
@@ -563,6 +573,9 @@ async fn fetch_artifact(
             )
         })?;
 
+        // Enforce the response bound before writing, including resumed transfers
+        // and chunked responses whose Content-Length cannot be trusted.
+        let next_size = checked_download_size(downloaded, chunk.len(), remote_size)?;
         // Written before hashed, so the digest describes the bytes that reached
         // the disk rather than the ones that arrived from the network.
         file.write_all(&chunk)
@@ -572,7 +585,7 @@ async fn fetch_artifact(
 
         in_buffer += chunk.len();
         since_yield += chunk.len();
-        downloaded = min(downloaded + (chunk.len() as u64), remote_size);
+        downloaded = next_size;
 
         // if buffer is bigger than 20 mb flush
         if in_buffer > 20_000_000 && file.flush().await.is_ok() {
@@ -625,6 +638,14 @@ async fn fetch_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_or_overflowing_chunks_are_rejected_before_they_can_be_written() {
+        assert_eq!(checked_download_size(7, 3, 10).unwrap(), 10);
+        assert!(checked_download_size(7, 4, 10).is_err());
+        assert!(checked_download_size(0, 11, 10).is_err());
+        assert!(checked_download_size(u64::MAX, 1, u64::MAX).is_err());
+    }
 
     #[test]
     fn announced_size_must_match_the_declared_artifact_size() {

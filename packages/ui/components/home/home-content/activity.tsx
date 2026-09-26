@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { Fragment, useMemo } from "react";
 import { toast } from "sonner";
+import { asArray } from "../../../lib/response-shape";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { NotificationIcon } from "../../notifications/notification-icon";
@@ -72,7 +73,7 @@ export function HomeNotifications({ widget, editing }: HomeContentProps) {
 				retry={() => void notifications.refetch()}
 			/>
 		);
-	const rows = (notifications.data ?? []).slice(0, limit);
+	const rows = asArray(notifications.data).slice(0, limit);
 	if (!rows.length)
 		return (
 			<HomeEmpty icon={<CheckCircle2 className="size-7 text-emerald-500/70" />}>
@@ -468,19 +469,19 @@ export function HomeAiUsage({ editing }: HomeContentProps) {
 				{[
 					{
 						label: "AI requests",
-						value: usage.total_llm_invocations.toLocaleString(),
+						value: (usage.total_llm_invocations ?? 0).toLocaleString(),
 					},
 					{
 						label: "Embedding requests",
-						value: usage.total_embedding_invocations.toLocaleString(),
+						value: (usage.total_embedding_invocations ?? 0).toLocaleString(),
 					},
 					{
 						label: "Recorded AI cost",
-						value: homeUsageDollars(usage.total_llm_price),
+						value: homeUsageDollars(usage.total_llm_price ?? 0),
 					},
 					{
 						label: "Recorded embedding cost",
-						value: homeUsageDollars(usage.total_embedding_price),
+						value: homeUsageDollars(usage.total_embedding_price ?? 0),
 					},
 				].map((stat) => (
 					<div key={stat.label} className="min-w-0">
@@ -657,7 +658,7 @@ export function HomeRecentRuns({ widget, editing }: HomeContentProps) {
 	const activity = attention ? (flagged.data ?? null) : null;
 	const rows = attention
 		? (activity?.attention.slice(0, limit) ?? [])
-		: (history.data?.items ?? []);
+		: asArray(history.data?.items);
 	return (
 		<div className="flex min-w-0 flex-col gap-3">
 			<div className="min-w-0 divide-y divide-border/50">
@@ -766,8 +767,8 @@ export function HomeSchedules({ widget }: HomeContentProps) {
 	// account.
 	const visible = useMemo(() => {
 		const inLibrary = new Set((library.data ?? []).map(([app]) => app.id));
-		const rows = (schedules.data?.schedules ?? [])
-			.filter((schedule) => inLibrary.has(schedule.app_id))
+		const rows = asArray(schedules.data?.schedules)
+			.filter((schedule) => inLibrary.has(schedule?.app_id))
 			.filter((schedule) => !chosen.length || chosen.includes(schedule.app_id))
 			.flatMap((schedule) => {
 				try {

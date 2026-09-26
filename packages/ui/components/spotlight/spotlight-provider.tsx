@@ -144,7 +144,7 @@ export function SpotlightProvider({
 				icon: Search,
 				group: "navigation",
 				keywords: ["explore", "apps", "store", "marketplace", "discover"],
-				action: () => navigate("/store/explore/apps"),
+				action: () => navigate("/store/explore"),
 				priority: 85,
 			},
 			{
@@ -269,6 +269,7 @@ export function SpotlightProvider({
 		}
 
 		for (const project of projects) {
+			const { flows, storage, events, explore, settings } = project.links;
 			items.push({
 				id: `project-${project.id}`,
 				type: "project",
@@ -279,11 +280,10 @@ export function SpotlightProvider({
 				group: "projects",
 				priority: 150,
 				keywords: [project.name.toLowerCase(), "project", "app"],
-				action: () =>
-					navigate(project.links.settings || project.links.flows || "/library"),
+				action: () => navigate(settings || flows || "/library"),
 				subItems: [
 					developerMode &&
-						project.links.flows && {
+						flows && {
 							id: `project-${project.id}-flows`,
 							type: "project" as const,
 							label: "Flows",
@@ -293,9 +293,9 @@ export function SpotlightProvider({
 							group: "projects",
 							priority: 149,
 							keywords: ["flows", "workflow", "board"],
-							action: () => navigate(project.links.flows!),
+							action: () => navigate(flows),
 						},
-					project.links.storage && {
+					storage && {
 						id: `project-${project.id}-storage`,
 						type: "project" as const,
 						label: "Storage",
@@ -305,10 +305,10 @@ export function SpotlightProvider({
 						group: "projects",
 						priority: 148,
 						keywords: ["storage", "files", "data"],
-						action: () => navigate(project.links.storage!),
+						action: () => navigate(storage),
 					},
 					developerMode &&
-						project.links.events && {
+						events && {
 							id: `project-${project.id}-events`,
 							type: "project" as const,
 							label: "Events",
@@ -318,10 +318,10 @@ export function SpotlightProvider({
 							group: "projects",
 							priority: 147,
 							keywords: ["events", "triggers", "webhooks"],
-							action: () => navigate(project.links.events!),
+							action: () => navigate(events),
 						},
 					developerMode &&
-						project.links.explore && {
+						explore && {
 							id: `project-${project.id}-explore`,
 							type: "project" as const,
 							label: "Data Studio",
@@ -331,9 +331,9 @@ export function SpotlightProvider({
 							group: "projects",
 							priority: 146,
 							keywords: ["data studio", "ontology", "objects", "database"],
-							action: () => navigate(project.links.explore!),
+							action: () => navigate(explore),
 						},
-					project.links.settings && {
+					settings && {
 						id: `project-${project.id}-settings`,
 						type: "project" as const,
 						label: "Settings",
@@ -343,7 +343,7 @@ export function SpotlightProvider({
 						group: "projects",
 						priority: 145,
 						keywords: ["settings", "config"],
-						action: () => navigate(project.links.settings!),
+						action: () => navigate(settings),
 					},
 				].filter(Boolean) as SpotlightItem[],
 			});
@@ -354,6 +354,7 @@ export function SpotlightProvider({
 		navigate,
 		projects,
 		onCreateProject,
+		onQuickCreateProject,
 		onToggleTheme,
 		onOpenDocs,
 		onReportBug,

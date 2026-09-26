@@ -231,10 +231,12 @@ When you create a table through the API or an agent, the type name is one of
 
 ### Getting a Date into a column
 
-The **first** write to a new table infers the schema. A string column whose
-non-null values all parse as RFC3339 is promoted to `Timestamp(Millisecond, "UTC")`
-— which is exactly what a Date pin produces, so dates land in a real timestamp
-column without any declaration.
+The **first** write to a new table — the insert or upsert that creates it — infers
+the schema. A string column whose non-null values all parse as RFC3339 is promoted
+to `Timestamp(Millisecond, "UTC")` — which is exactly what a Date pin produces, so
+dates land in a real timestamp column without any declaration. The same write also
+types [geometry](/reference/geometry/#tables-and-sql) and byte-array columns; see
+[Column types from the first write](/topics/datascience/loading/#column-types-from-the-first-write).
 
 After that, the stored schema is authoritative and every later write is
 serialized against it:

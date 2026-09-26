@@ -18,7 +18,35 @@ let detail = {
 } as QuotaOperationDetail;
 let enabled = false;
 let scope: unknown[] = [];
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const actual = {
+	invoke: { ...(await import("../../../hooks/use-invoke")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	oidc: { ...(await import("react-oidc-context")) },
+	locales: { ...(await import("@flow-like/locales")) },
+};
+const globalDescriptors = [
+	"window",
+	"document",
+	"HTMLElement",
+	"Element",
+	"Node",
+	"NodeFilter",
+	"Event",
+	"CustomEvent",
+	"MutationObserver",
+	"HTMLInputElement",
+	"navigator",
+	"getComputedStyle",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
 mock.module("../../../hooks/use-invoke", () => ({
+	...actual.invoke,
 	useInvoke: (
 		_fn: unknown,
 		_context: unknown,
@@ -36,15 +64,28 @@ mock.module("../../../hooks/use-invoke", () => ({
 	},
 }));
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({ userState: { getQuotaOperationDetail: () => {} } }),
 }));
 mock.module("react-oidc-context", () => ({
+	...actual.oidc,
 	useAuth: () => ({ user: { profile: { sub: "payer" } } }),
 }));
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../../hooks/use-invoke", () => actual.invoke);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("react-oidc-context", () => actual.oidc);
+	mock.module("@flow-like/locales", () => actual.locales);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 test("operation details use an accessible lazy-loaded panel and retain estimates and own-model disclosures", async () => {
 	const window = new Window();

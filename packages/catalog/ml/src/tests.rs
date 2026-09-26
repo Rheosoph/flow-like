@@ -385,7 +385,7 @@ mod ml_tests {
     fn test_ml_predict_node_is_versioned_for_schema_sync() {
         let node = MLPredictNode::new().get_node();
 
-        assert_eq!(node.version, Some(1));
+        assert_eq!(node.version, Some(2));
     }
 }
 

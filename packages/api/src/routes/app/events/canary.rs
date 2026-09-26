@@ -31,18 +31,69 @@ fn variant_mode_label(mode: &EventVariantMode) -> &'static str {
     }
 }
 
-fn variant_audit_entry(variant: &EventVariant) -> serde_json::Value {
-    let share_field = match variant.mode {
-        EventVariantMode::Live { .. } => "weight",
-        EventVariantMode::Shadow { .. } => "sample_rate",
-    };
+const MAX_AUDITED_VARIANTS: usize = 8;
+
+fn share_basis_points(variant: &EventVariant) -> u32 {
+    (variant.mode.share() * 10000.0).round() as u32
+}
+
+fn variant_content_changed(old: &EventVariant, new: &EventVariant) -> bool {
+    old.mode != new.mode
+        || old.board_id != new.board_id
+        || old.board_version != new.board_version
+        || old.node_id != new.node_id
+        || old.default_page_id != new.default_page_id
+        || old.variables != new.variables
+}
+
+fn capped<T>(items: impl IntoIterator<Item = T>) -> (Vec<T>, bool) {
+    let mut items = items.into_iter();
+    let head = items.by_ref().take(MAX_AUDITED_VARIANTS).collect();
+    (head, items.next().is_some())
+}
+
+/// A list replace may carry any number of variants, so the record holds the diff with
+/// every list capped.
+fn variants_audit_details(before: &[EventVariant], after: &[EventVariant]) -> serde_json::Value {
+    let previous: std::collections::HashMap<&str, &EventVariant> = before
+        .iter()
+        .map(|variant| (variant.name.as_str(), variant))
+        .collect();
+    let current: std::collections::HashSet<&str> =
+        after.iter().map(|variant| variant.name.as_str()).collect();
+
+    let (added, added_truncated) = capped(
+        after
+            .iter()
+            .filter(|variant| !previous.contains_key(variant.name.as_str()))
+            .map(|variant| variant.name.as_str()),
+    );
+    let (removed, removed_truncated) = capped(
+        before
+            .iter()
+            .filter(|variant| !current.contains(variant.name.as_str()))
+            .map(|variant| variant.name.as_str()),
+    );
+    let (changed, changed_truncated) = capped(after.iter().filter_map(|variant| {
+        let old = previous.get(variant.name.as_str())?;
+        variant_content_changed(old, variant).then(|| {
+            serde_json::json!({
+                "name": variant.name,
+                "from_bp": share_basis_points(old),
+                "to_bp": share_basis_points(variant),
+            })
+        })
+    }));
+
     serde_json::json!({
-        "name": variant.name,
-        "mode": variant_mode_label(&variant.mode),
-        "board_id": variant.board_id,
-        "board_version": variant.board_version.map(super::dotted_version_key),
-        "default_page_id": variant.default_page_id,
-        share_field: variant.mode.share(),
+        "variant_count_before": before.len(),
+        "variant_count_after": after.len(),
+        "added": added,
+        "added_truncated": added_truncated,
+        "removed": removed,
+        "removed_truncated": removed_truncated,
+        "changed": changed,
+        "changed_truncated": changed_truncated,
     })
 }
 
@@ -153,6 +204,148 @@ fn nearest_rank_us(sorted: &[i64], quantile: f64) -> u64 {
     sorted[rank - 1].max(0) as u64
 }
 
+/// `variantName` for canary runs and NULL otherwise, the same key the
+/// in-memory fold groups by. Parameter-free on purpose: Postgres only matches
+/// a projected expression to its `GROUP BY` twin when neither carries a bind.
+const STATS_VARIANT_KEY: &str = r#"CASE WHEN "runVariant" = 'CANARY' THEN "variantName" END"#;
+
+/// `percentile_disc` is nearest-rank, so it agrees with [`nearest_rank_us`].
+fn stats_percentile_us(quantile: &str) -> sea_orm::sea_query::SimpleExpr {
+    sea_orm::sea_query::Expr::cust(format!(
+        r#"percentile_disc({quantile}::float8) WITHIN GROUP (ORDER BY CAST(EXTRACT(EPOCH FROM ("completedAt" - "startedAt")) * 1000000 AS BIGINT))"#
+    ))
+}
+
+fn live_runs_since(
+    app_id: &str,
+    event_id: &str,
+    since: chrono::DateTime<chrono::FixedOffset>,
+) -> sea_orm::Select<crate::entity::execution_run::Entity> {
+    use crate::entity::execution_run;
+    use crate::entity::sea_orm_active_enums::RunVariant;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+    execution_run::Entity::find()
+        .select_only()
+        .filter(execution_run::Column::AppId.eq(app_id))
+        .filter(execution_run::Column::EventId.eq(event_id))
+        .filter(execution_run::Column::CreatedAt.gte(since))
+        .filter(execution_run::Column::RunVariant.is_in([RunVariant::Primary, RunVariant::Canary]))
+}
+
+async fn variant_stats_in_sql(
+    db: &sea_orm::DatabaseConnection,
+    app_id: &str,
+    event_id: &str,
+    since: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<Vec<EventVariantStats>, sea_orm::DbErr> {
+    use crate::entity::execution_run;
+    use crate::entity::sea_orm_active_enums::RunStatus;
+    use sea_orm::sea_query::{Expr, ExprTrait};
+    use sea_orm::{ColumnTrait, QuerySelect};
+
+    let variant_key = Expr::cust(STATS_VARIANT_KEY);
+    let errors = Expr::expr(Expr::case(
+        execution_run::Column::Status.is_in([
+            RunStatus::Failed,
+            RunStatus::Cancelled,
+            RunStatus::Timeout,
+        ]),
+        Expr::col(execution_run::Column::Id),
+    ))
+    .count();
+
+    let rows: Vec<(Option<String>, i64, i64, Option<i64>, Option<i64>)> =
+        live_runs_since(app_id, event_id, since)
+            .expr_as(variant_key.clone(), "variant_name")
+            .expr_as(Expr::cust("CAST(COUNT(*) AS BIGINT)"), "requests")
+            .expr_as(errors, "errors")
+            .expr_as(stats_percentile_us("0.5"), "p50_us")
+            .expr_as(stats_percentile_us("0.95"), "p95_us")
+            .group_by(variant_key)
+            .into_tuple()
+            .all(db)
+            .await?;
+
+    let mut variants: Vec<EventVariantStats> = rows
+        .into_iter()
+        .map(
+            |(variant_name, requests, errors, p50_us, p95_us)| EventVariantStats {
+                variant_name,
+                requests: std::cmp::max(requests, 0) as u64,
+                errors: std::cmp::max(errors, 0) as u64,
+                p50_duration_us: std::cmp::max(p50_us.unwrap_or(0), 0) as u64,
+                p95_duration_us: std::cmp::max(p95_us.unwrap_or(0), 0) as u64,
+            },
+        )
+        .collect();
+    variants.sort_by(|a, b| a.variant_name.cmp(&b.variant_name));
+    Ok(variants)
+}
+
+async fn variant_stats_folded(
+    db: &sea_orm::DatabaseConnection,
+    app_id: &str,
+    event_id: &str,
+    since: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<Vec<EventVariantStats>, sea_orm::DbErr> {
+    use crate::entity::execution_run;
+    use crate::entity::sea_orm_active_enums::{RunStatus, RunVariant};
+    use sea_orm::{QueryOrder, QuerySelect};
+
+    let rows: Vec<(
+        RunVariant,
+        Option<String>,
+        RunStatus,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+        Option<chrono::DateTime<chrono::FixedOffset>>,
+    )> = live_runs_since(app_id, event_id, since)
+        .column_as(execution_run::Column::RunVariant, "run_variant")
+        .column_as(execution_run::Column::VariantName, "variant_name")
+        .column_as(execution_run::Column::Status, "status")
+        .column_as(execution_run::Column::StartedAt, "started_at")
+        .column_as(execution_run::Column::CompletedAt, "completed_at")
+        .order_by_desc(execution_run::Column::CreatedAt)
+        .limit(STATS_ROW_CAP)
+        .into_tuple()
+        .all(db)
+        .await?;
+
+    let mut grouped: std::collections::BTreeMap<Option<String>, (u64, u64, Vec<i64>)> =
+        std::collections::BTreeMap::new();
+    for (run_variant, variant_name, status, started_at, completed_at) in rows {
+        let key = match run_variant {
+            RunVariant::Canary => variant_name,
+            _ => None,
+        };
+        let entry = grouped.entry(key).or_default();
+        entry.0 += 1;
+        if matches!(
+            status,
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Timeout
+        ) {
+            entry.1 += 1;
+        }
+        if let (Some(start), Some(end)) = (started_at, completed_at) {
+            entry.2.push((end - start).num_microseconds().unwrap_or(0));
+        }
+    }
+
+    Ok(grouped
+        .into_iter()
+        .map(|(variant_name, (requests, errors, mut durations))| {
+            durations.sort_unstable();
+            EventVariantStats {
+                variant_name,
+                requests,
+                errors,
+                p50_duration_us: nearest_rank_us(&durations, 0.5),
+                p95_duration_us: nearest_rank_us(&durations, 0.95),
+            }
+        })
+        .collect())
+}
+
 /// GET /apps/{app_id}/events/{event_id}/canary/stats
 #[utoipa::path(
     get,
@@ -181,9 +374,7 @@ pub async fn canary_stats(
     Path((app_id, event_id)): Path<(String, String)>,
     Query(query): Query<CanaryStatsQuery>,
 ) -> Result<Json<EventVariantStatsResponse>, ApiError> {
-    use crate::entity::execution_run;
-    use crate::entity::sea_orm_active_enums::{RunStatus, RunVariant};
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+    use sea_orm::ConnectionTrait;
 
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
 
@@ -202,63 +393,23 @@ pub async fn canary_stats(
             _ => chrono::Duration::hours(24),
         };
 
-    let rows: Vec<(
-        RunVariant,
-        Option<String>,
-        RunStatus,
-        Option<chrono::DateTime<chrono::FixedOffset>>,
-        Option<chrono::DateTime<chrono::FixedOffset>>,
-    )> = execution_run::Entity::find()
-        .select_only()
-        .column_as(execution_run::Column::RunVariant, "run_variant")
-        .column_as(execution_run::Column::VariantName, "variant_name")
-        .column_as(execution_run::Column::Status, "status")
-        .column_as(execution_run::Column::StartedAt, "started_at")
-        .column_as(execution_run::Column::CompletedAt, "completed_at")
-        .filter(execution_run::Column::AppId.eq(&app_id))
-        .filter(execution_run::Column::EventId.eq(&event_id))
-        .filter(execution_run::Column::CreatedAt.gte(since))
-        .filter(execution_run::Column::RunVariant.is_in([RunVariant::Primary, RunVariant::Canary]))
-        .order_by_desc(execution_run::Column::CreatedAt)
-        .limit(STATS_ROW_CAP)
-        .into_tuple()
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-
-    let mut grouped: std::collections::BTreeMap<Option<String>, (u64, u64, Vec<i64>)> =
-        std::collections::BTreeMap::new();
-    for (run_variant, variant_name, status, started_at, completed_at) in rows {
-        let key = match run_variant {
-            RunVariant::Canary => variant_name,
-            _ => None,
-        };
-        let entry = grouped.entry(key).or_default();
-        entry.0 += 1;
-        if matches!(
-            status,
-            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Timeout
-        ) {
-            entry.1 += 1;
-        }
-        if let (Some(start), Some(end)) = (started_at, completed_at) {
-            entry.2.push((end - start).num_microseconds().unwrap_or(0));
-        }
-    }
-
-    let variants = grouped
-        .into_iter()
-        .map(|(variant_name, (requests, errors, mut durations))| {
-            durations.sort_unstable();
-            EventVariantStats {
-                variant_name,
-                requests,
-                errors,
-                p50_duration_us: nearest_rank_us(&durations, 0.5),
-                p95_duration_us: nearest_rank_us(&durations, 0.95),
+    let in_sql =
+        crate::telemetry::percentiles_in_sql(state.db.get_database_backend(), state.db_dialect);
+    let aggregated = if in_sql {
+        match variant_stats_in_sql(&state.db, &app_id, &event_id, since).await {
+            Ok(variants) => Ok(variants),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "canary stats SQL aggregation failed, folding runs in memory"
+                );
+                variant_stats_folded(&state.db, &app_id, &event_id, since).await
             }
-        })
-        .collect();
+        }
+    } else {
+        variant_stats_folded(&state.db, &app_id, &event_id, since).await
+    };
+    let variants = aggregated.map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
     Ok(Json(EventVariantStatsResponse {
         window: window.to_string(),
@@ -396,7 +547,6 @@ pub async fn patch_canary(
         "event.canary.share",
         "Event",
         event_id,
-        "Canary share changed",
         serde_json::json!({
             "variant": patch.name,
             "from": share_before,
@@ -521,11 +671,7 @@ pub async fn put_event_variants(
         "event.canary.variants",
         "Event",
         event_id,
-        "Canary variants replaced",
-        serde_json::json!({
-            "variants": after.iter().map(variant_audit_entry).collect::<Vec<_>>(),
-            "previous": before.iter().map(variant_audit_entry).collect::<Vec<_>>(),
-        })
+        variants_audit_details(&before, &after)
     );
 
     Ok(Json(filter_event_secrets(event)))
@@ -902,7 +1048,6 @@ pub async fn promote_canary(
         "event.canary.promote",
         "Event",
         event_id,
-        "Canary variant promoted to primary",
         serde_json::json!({
             "variant": body.variant,
             "from": {
@@ -1037,7 +1182,6 @@ pub async fn abort_canary(
         "event.canary.abort",
         "Event",
         event_id,
-        "Canary variant removed",
         serde_json::json!({
             "variant": body.variant,
             "mode": aborted_mode,
@@ -1122,4 +1266,75 @@ pub async fn list_event_setups(
             })
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variant(name: &str, weight: f32) -> EventVariant {
+        EventVariant {
+            name: name.to_string(),
+            board_id: "board".to_string(),
+            board_version: None,
+            node_id: "node".to_string(),
+            variables: std::collections::HashMap::new(),
+            default_page_id: None,
+            mode: EventVariantMode::Live { weight },
+            created_at: std::time::SystemTime::UNIX_EPOCH,
+            updated_at: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn variant_diff_records_changes_in_basis_points() {
+        let before = vec![
+            variant("kept", 0.1),
+            variant("moved", 0.1),
+            variant("gone", 0.2),
+        ];
+        let mut retargeted = variant("kept", 0.1);
+        retargeted.node_id = "other-node".to_string();
+        let after = vec![retargeted, variant("moved", 0.25), variant("new", 0.05)];
+
+        let details = variants_audit_details(&before, &after);
+
+        assert_eq!(details["variant_count_before"], 3);
+        assert_eq!(details["variant_count_after"], 3);
+        assert_eq!(details["added"], serde_json::json!(["new"]));
+        assert_eq!(details["removed"], serde_json::json!(["gone"]));
+        assert_eq!(
+            details["changed"],
+            serde_json::json!([
+                { "name": "kept", "from_bp": 1000, "to_bp": 1000 },
+                { "name": "moved", "from_bp": 1000, "to_bp": 2500 },
+            ])
+        );
+        assert_eq!(details["added_truncated"], false);
+        assert_eq!(details["removed_truncated"], false);
+        assert_eq!(details["changed_truncated"], false);
+    }
+
+    #[test]
+    fn variant_diff_caps_every_list() {
+        let before: Vec<_> = (0..20)
+            .map(|i| variant(&format!("old-{i}"), 0.01))
+            .chain((0..20).map(|i| variant(&format!("both-{i}"), 0.01)))
+            .collect();
+        let after: Vec<_> = (0..20)
+            .map(|i| variant(&format!("new-{i}"), 0.01))
+            .chain((0..20).map(|i| variant(&format!("both-{i}"), 0.02)))
+            .collect();
+
+        let details = variants_audit_details(&before, &after);
+
+        for list in ["added", "removed", "changed"] {
+            assert_eq!(
+                details[list].as_array().unwrap().len(),
+                MAX_AUDITED_VARIANTS
+            );
+            assert_eq!(details[format!("{list}_truncated")], true);
+        }
+        assert!(details.to_string().len() <= crate::audit::record::MAX_DETAILS_BYTES);
+    }
 }

@@ -83,6 +83,7 @@ module billing { //@l:billing-module
 			{
 				id: "refresh-button",
 				component: {
+					id: "refresh-button",
 					type: "button",
 					label: {
 						path: "/invoices/refresh_label",

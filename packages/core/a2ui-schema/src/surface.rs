@@ -261,6 +261,12 @@ pub enum A2UIServerMessage {
         surface_id: String,
         element_id: String,
     },
+    /// Sent once when a run ends. The page deletes the components the run detached from
+    /// `element_ids` (`clearChildren`, `removeChildAt`, `removeElement`) that nothing lists
+    /// anymore, so a flow can move or re-push children until then.
+    PruneDetached {
+        element_ids: Vec<String>,
+    },
     SetGlobalState {
         key: String,
         value: Value,
@@ -426,6 +432,10 @@ impl A2UIServerMessage {
             surface_id: surface_id.into(),
             element_id: element_id.into(),
         }
+    }
+
+    pub fn prune_detached(element_ids: Vec<String>) -> Self {
+        Self::PruneDetached { element_ids }
     }
 
     pub fn set_global_state(key: impl Into<String>, value: Value) -> Self {

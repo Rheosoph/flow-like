@@ -9,7 +9,7 @@ const window = new Window({ url: "https://localhost" });
 // happy-dom's Window does not carry the error constructors its own selector parser
 // reaches for, so querying inside this harness throws unless they are patched in.
 Object.assign(window, { SyntaxError, TypeError, Error });
-Object.assign(globalThis, {
+const globals = {
 	window,
 	document: window.document,
 	navigator: window.navigator,
@@ -22,13 +22,18 @@ Object.assign(globalThis, {
 		unobserve() {}
 		disconnect() {}
 	},
-});
-// @ts-expect-error — react-dom checks this flag before touching the DOM.
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+	IS_REACT_ACT_ENVIRONMENT: true,
+};
+const globalDescriptors = Object.keys(globals).map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+Object.assign(globalThis, globals);
 
-// The whole surface, not just `useTranslation`: the shell reaches components that read the
-// i18n instance directly, and one missing export fails the entire import chain rather than
-// an assertion — which reads as "the shell is broken" when it is the mock that is thin.
+// Spread over the real module: the shell reaches module-level locale data and components
+// that read the i18n instance directly, and one missing export fails the entire import chain
+// rather than an assertion. bun keeps a module mock for every later file in the process, so
+// the real module is put back in afterAll.
+const actualLocales = { ...(await import("@flow-like/locales")) };
 const translate = (_key: string, fallback: string) => fallback;
 const fakeI18n = {
 	t: translate,
@@ -38,6 +43,7 @@ const fakeI18n = {
 	off: () => {},
 };
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({ t: translate, i18n: fakeI18n }),
 	Trans: ({ children }: { children?: unknown }) => children ?? null,
 	i18n: fakeI18n,
@@ -45,16 +51,6 @@ mock.module("@flow-like/locales", () => ({
 	createI18n: () => fakeI18n,
 	I18nProvider: ({ children }: { children?: unknown }) => children ?? null,
 	useLanguage: () => ({ language: "en", setLanguage: () => {} }),
-	LANGUAGES: ["en"],
-	NAMESPACES: ["common"],
-	DEFAULT_NAMESPACE: "common",
-	SOURCE_LANGUAGE: "en",
-	LOCALE_CONFIG: {},
-	SOURCE_RESOURCES: {},
-	LANGUAGE_STORAGE_KEY: "language",
-	listLanguages: () => [],
-	describeLanguage: () => undefined,
-	isRtl: () => false,
 }));
 
 const { BoardActivityRail } = await import("./board-activity-rail");
@@ -77,11 +73,16 @@ function render(element: React.ReactElement): HTMLElement {
 	return container;
 }
 
-afterAll(() => {
-	act(() => {
+afterAll(async () => {
+	await act(async () => {
 		for (const root of roots) root.unmount();
 	});
 	mock.restore();
+	mock.module("@flow-like/locales", () => actualLocales);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
 });
 
 describe("board shell surfaces", () => {

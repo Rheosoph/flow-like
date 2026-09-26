@@ -1,4 +1,4 @@
-use sea_orm::sea_query::ExprTrait;
+use sea_orm::sea_query::{Expr, ExprTrait};
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -75,12 +75,27 @@ pub fn viewer_authorization(headers: &HeaderMap) -> Option<&str> {
     Some(value)
 }
 
-fn extract_client_ip(request: &Request) -> Option<String> {
+/// Proxies append to `X-Forwarded-For`, so only the entries written by the
+/// deployment's own proxies are trustworthy: the client address is the one
+/// `trusted_hops` from the right. Without that setting the leftmost entry is
+/// used, which the client chooses.
+fn forwarded_client_ip(header: &str, trusted_hops: Option<u32>) -> Option<&str> {
+    let mut hops = header.split(',').map(str::trim).filter(|ip| !ip.is_empty());
+    match trusted_hops {
+        None => hops.next(),
+        Some(0) => None,
+        Some(hops_from_right) => hops.rev().nth(hops_from_right as usize - 1),
+    }
+}
+
+fn extract_client_ip(request: &Request, trusted_hops: Option<u32>) -> Option<String> {
     if let Some(forwarded) = request.headers().get("x-forwarded-for")
         && let Ok(val) = forwarded.to_str()
     {
-        // X-Forwarded-For can contain multiple IPs; the first is the original client
-        return val.split(',').next().map(|ip| ip.trim().to_string());
+        return forwarded_client_ip(val, trusted_hops).map(str::to_string);
+    }
+    if trusted_hops.is_some() {
+        return None;
     }
     if let Some(real_ip) = request.headers().get("x-real-ip")
         && let Ok(val) = real_ip.to_str()
@@ -512,11 +527,13 @@ impl AppUser {
         state: &AppState,
     ) -> Result<Option<String>, AuthorizationError> {
         let sub = self.effective_user_id()?;
-        let user = user::Entity::find_by_id(&sub)
+        user::Entity::find_by_id(&sub)
+            .select_only()
+            .column(user::Column::TrackingId)
+            .into_tuple::<Option<String>>()
             .one(&state.db)
             .await?
-            .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))?;
-        Ok(user.tracking_id)
+            .ok_or_else(|| AuthorizationError::from(anyhow!("User not found")))
     }
 
     pub async fn tier(&self, state: &AppState) -> Result<UserTier, AuthorizationError> {
@@ -553,8 +570,7 @@ impl AppUser {
             .and_then(|o| o.user_info_url.as_deref())
             .ok_or_else(|| anyhow!("User info URL not configured"))?;
 
-        let client = flow_like_types::reqwest::Client::new();
-        let res = match client
+        let res = match user_info_http_client()
             .get(endpoint)
             .bearer_auth(&user.access_token)
             .send()
@@ -578,11 +594,14 @@ impl AppUser {
 
     pub async fn global_permission(&self, state: AppState) -> Result<GlobalPermission, ApiError> {
         let sub = self.sub()?;
-        let user = user::Entity::find_by_id(&sub)
+        let permission_bits = user::Entity::find_by_id(&sub)
+            .select_only()
+            .column(user::Column::Permission)
+            .into_tuple::<i64>()
             .one(&state.db)
             .await?
             .ok_or_else(|| anyhow!("User not found"))?;
-        let permission = GlobalPermission::from_bits(user.permission)
+        let permission = GlobalPermission::from_bits(permission_bits)
             .ok_or_else(|| anyhow!("Invalid permission bits"))?;
         Ok(permission)
     }
@@ -840,7 +859,16 @@ impl AppUser {
     }
 }
 
-async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiError> {
+    fresh_pat_permissions(user, state).await.map(|_| ())
+}
+
+/// Return the current permission mask from the same lookup that checks the
+/// token secret, owner and expiry. Cached authentication cannot widen this mask.
+pub(crate) async fn fresh_pat_permissions(
+    user: &PATUser,
+    state: &AppState,
+) -> Result<i64, ApiError> {
     let cache_key = hash_token(&user.pat);
     let Some((pat_id, secret_hash)) = pat_lookup_parts(&user.pat) else {
         state.auth_cache.invalidate(&cache_key);
@@ -856,13 +884,12 @@ async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiE
         .one(&state.db)
         .await?;
     let now = chrono::Utc::now().fixed_offset();
-    let is_current = current.is_some_and(|pat| pat_is_current(&pat, &user.sub, now));
-    if !is_current {
+    let Some(current) = current.filter(|pat| pat_is_current(pat, &user.sub, now)) else {
         state.auth_cache.invalidate(&cache_key);
         return Err(ApiError::unauthorized("PAT is no longer valid"));
-    }
+    };
 
-    Ok(())
+    Ok(current.permissions)
 }
 
 fn pat_is_current(
@@ -955,6 +982,12 @@ pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, Autho
         .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))
 }
 
+fn user_info_http_client() -> &'static flow_like_types::reqwest::Client {
+    static CLIENT: std::sync::OnceLock<flow_like_types::reqwest::Client> =
+        std::sync::OnceLock::new();
+    CLIENT.get_or_init(flow_like_types::reqwest::Client::new)
+}
+
 fn hash_token(token: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(token.as_bytes());
@@ -972,6 +1005,22 @@ fn permission_cache_lookup<T>(
     lookup: impl FnOnce() -> Option<T>,
 ) -> Option<T> {
     allow_cached_value.then(lookup).flatten()
+}
+
+/// Resolve current project authority without constructing a human principal or
+/// consulting the permission cache. Workload grants call this within admission.
+pub(crate) async fn fresh_user_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    app_id: &str,
+) -> Result<RolePermissions, ApiError> {
+    let row = db.query_one_raw(sea_orm::Statement::from_sql_and_values(
+        sea_orm::DatabaseBackend::Postgres,
+        r#"SELECT r.permissions FROM "Membership" m JOIN "Role" r ON r.id = m."roleId" AND r."appId" = m."appId" JOIN "App" a ON a.id = m."appId" WHERE m."userId" = $1 AND m."appId" = $2 AND a.status = 'ACTIVE'"#,
+        [sub.into(), app_id.into()],
+    )).await?.ok_or(ApiError::FORBIDDEN)?;
+    RolePermissions::from_bits(row.try_get::<i64>("", "permissions")?)
+        .ok_or_else(|| ApiError::internal("Invalid role permission bits"))
 }
 
 async fn user_app_permission_uncached(
@@ -1142,11 +1191,26 @@ async fn resolve_legacy_api_key_creator_user_id(
         }
     }
 
-    let members_with_roles = membership::Entity::find()
+    let role_permissions = || Expr::col((role::Entity, role::Column::Permissions));
+    let oldest_owner = membership::Entity::find()
+        .select_only()
+        .column(membership::Column::UserId)
+        .join(JoinType::InnerJoin, membership::Relation::Role.def())
         .filter(membership::Column::AppId.eq(app_id))
+        .filter(
+            role_permissions()
+                .bit_and(RolePermissions::Owner.bits())
+                .ne(0),
+        )
+        // Roles with unknown permission bits never counted as owners.
+        .filter(
+            role_permissions()
+                .bit_and(!RolePermissions::all().bits())
+                .eq(0),
+        )
         .order_by_asc(membership::Column::CreatedAt)
-        .find_also_related(role::Entity)
-        .all(&state.db)
+        .into_tuple::<String>()
+        .one(&state.db)
         .instrument(tracing::info_span!(
             target: "flow_like::observability",
             "db.query",
@@ -1155,16 +1219,7 @@ async fn resolve_legacy_api_key_creator_user_id(
         ))
         .await?;
 
-    for (member, role) in members_with_roles {
-        if let Some(role) = role
-            && let Some(permissions) = RolePermissions::from_bits(role.permissions)
-            && permissions.contains(RolePermissions::Owner)
-        {
-            return Ok(Some(member.user_id));
-        }
-    }
-
-    Ok(None)
+    Ok(oldest_owner)
 }
 
 pub async fn jwt_middleware(
@@ -1174,6 +1229,10 @@ pub async fn jwt_middleware(
 ) -> Result<Response<Body>, AuthorizationError> {
     let request = authenticate_request(&state, request).await?;
     Ok(next.run(request).await)
+}
+
+fn reserved_credential_principal(token: &str) -> Option<AppUser> {
+    crate::devices::jwt::is_device_credential(token).then_some(AppUser::Unauthorized)
 }
 
 #[tracing::instrument(
@@ -1187,7 +1246,10 @@ async fn authenticate_request(
 ) -> Result<Request, AuthorizationError> {
     let mut request = request;
 
-    let client_ip = ClientIp(extract_client_ip(&request));
+    let client_ip = ClientIp(extract_client_ip(
+        &request,
+        state.platform_config.audit.trusted_proxy_hops,
+    ));
     request.extensions_mut().insert(client_ip);
 
     // Try OpenID/JWT or Executor JWT auth
@@ -1196,6 +1258,12 @@ async fn authenticate_request(
     {
         let token = token.strip_prefix("Bearer ").unwrap_or(token);
         let token = token.trim();
+        // Device credentials have a separate principal and request proof. Never
+        // reinterpret them as a human, even when an OIDC issuer shares our keys.
+        if let Some(principal) = reserved_credential_principal(token) {
+            request.extensions_mut().insert::<AppUser>(principal);
+            return Ok(request);
+        }
         let cache_key = hash_token(token);
 
         // Check cache first
@@ -1576,6 +1644,45 @@ async fn authenticate_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_tokens_never_expose_their_attributed_subject_to_ordinary_routes() {
+        crate::backend_jwt::init_for_tests();
+        for (header_type, payload_type) in [
+            ("flow-like-device-enrollment+jwt", "device_enrollment"),
+            ("flow-like-device-session+jwt", "device_session"),
+            ("flow-like-device-future+jwt", "future_profile"),
+            ("JWT", "instance_resource"),
+            ("JWT", "device_future_profile"),
+        ] {
+            let token = crate::backend_jwt::sign_typed(
+                &serde_json::json!({"sub":"attributed-account-owner","typ":payload_type}),
+                header_type,
+            )
+            .unwrap();
+            for credential in [token.clone(), format!("DPoP {token}")] {
+                let principal = reserved_credential_principal(&credential)
+                    .expect("reserved device credential is rejected before the user-auth cache");
+                assert!(matches!(principal, AppUser::Unauthorized));
+                assert!(principal.sub().is_err());
+                assert!(principal.executor_scoped_sub().is_err());
+                assert!(principal.effective_user_id().is_err());
+                assert!(principal.entity().is_err());
+            }
+        }
+        assert!(reserved_credential_principal("pat_ordinary.secret").is_none());
+    }
+
+    #[test]
+    fn forwarded_ip_counts_trusted_hops_from_the_right() {
+        let header = "203.0.113.9, 198.51.100.4 , 10.0.0.2";
+        assert_eq!(forwarded_client_ip(header, None), Some("203.0.113.9"));
+        assert_eq!(forwarded_client_ip(header, Some(1)), Some("10.0.0.2"));
+        assert_eq!(forwarded_client_ip(header, Some(2)), Some("198.51.100.4"));
+        assert_eq!(forwarded_client_ip(header, Some(4)), None);
+        assert_eq!(forwarded_client_ip(header, Some(0)), None);
+        assert_eq!(forwarded_client_ip(" , ", None), None);
+    }
     use axum::{http::StatusCode, response::IntoResponse};
 
     #[flow_like_types::tokio::test]

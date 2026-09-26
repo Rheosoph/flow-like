@@ -20,6 +20,7 @@ import { useInvoke } from "../../../hooks";
 import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { formatRelativeTime, useSetQueryParams } from "../../../lib";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import { FlowPreview } from "../../flow";
 import {
@@ -355,9 +356,8 @@ export function TemplatePreview({
 
 	if (!template.data || !metadata.data) return <LoadingScreen />;
 
-	const nodeScores = Object.values(template.data.nodes)
-		.map((node) => node.scores)
-		.filter(Boolean);
+	const templateNodes = Object.values(template.data.nodes ?? {});
+	const nodeScores = templateNodes.map((node) => node.scores).filter(Boolean);
 
 	const avgScores =
 		nodeScores.length > 0
@@ -386,7 +386,7 @@ export function TemplatePreview({
 			{!isEditing && (
 				<div className="w-2/5 border-r bg-muted/20">
 					<FlowPreview
-						nodes={Object.values(template.data?.nodes)}
+						nodes={templateNodes}
 						comments={template.data?.comments}
 						layers={template.data?.layers}
 						variables={template.data?.variables}
@@ -436,7 +436,7 @@ export function TemplatePreview({
 									<div className="flex items-center gap-3">
 										<Badge variant="secondary" className="gap-1">
 											<Tag className="h-3 w-3" />v
-											{template.data.version.join(".")}
+											{template.data.version?.join(".")}
 										</Badge>
 										<Badge variant="outline">{template.data.stage}</Badge>
 										{currentData.age_rating && (
@@ -580,7 +580,7 @@ export function TemplatePreview({
 											/>
 										</SelectTrigger>
 										<SelectContent>
-											{boards.data?.map((workflow) => (
+											{asArray(boards.data).map((workflow) => (
 												<SelectItem key={workflow.id} value={workflow.id}>
 													{workflow.name}
 												</SelectItem>
@@ -626,7 +626,7 @@ export function TemplatePreview({
 														<SelectItem key={""} value={"none"}>
 															{t("latest", "Latest")}
 														</SelectItem>
-														{versions.data?.map((version) => (
+														{asArray(versions.data).map((version) => (
 															<SelectItem
 																key={version.join(".")}
 																value={version.join(".")}

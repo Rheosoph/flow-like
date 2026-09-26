@@ -1,19 +1,16 @@
-import { useTranslation } from "@flow-like/locales";
-import { ChevronDown } from "lucide-react";
 import {
 	Select,
 	SelectContent,
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
-	SelectValue,
 } from "../../../../components/ui/select";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 
 export function EnumVariable({
 	pin,
@@ -24,31 +21,17 @@ export function EnumVariable({
 	value: number[] | undefined | null;
 	setValue: (value: unknown) => void;
 }>) {
-	const { t } = useTranslation("flow");
+	const selected = parseUint8ArrayToJson(value);
+	const label =
+		typeof selected === "string" ? selected : `Select ${pin.friendly_name}`;
 	return (
-		<div
-			className="flex flex-row items-center justify-start ml-1 min-w-0 max-w-full"
-			onMouseDown={(e) => e.stopPropagation()}
-			onPointerDown={(e) => e.stopPropagation()}
-		>
+		<PinEditorRow>
 			<Select
-				defaultValue={parseUint8ArrayToJson(value)}
-				value={parseUint8ArrayToJson(value)}
+				defaultValue={selected}
+				value={selected}
 				onValueChange={(value) => setValue(convertJsonToUint8Array(value))}
 			>
-				{/* max-w-full, not max-w-fit: the parent caps the pin column, and a fit-content
-				    maximum lets a long option grow past it and overlap the output pins. min-w-0 and
-				    overflow-hidden are what let the trigger shrink far enough for the value's
-				    line-clamp to actually engage. */}
-				<SelectTrigger
-					noChevron
-					size="sm"
-					title={parseUint8ArrayToJson(value)}
-					className="w-fit! max-w-full! min-w-0 overflow-hidden p-0 border-0 text-xs bg-card! text-nowrap text-start max-h-fit h-4 gap-0.5 flex-row items-center"
-				>
-					<SelectValue placeholder={`Select ${pin.friendly_name}`} />
-					<ChevronDown className="size-2 min-w-2 min-h-2 shrink-0 text-card-foreground" />
-				</SelectTrigger>
+				<PinSelectTrigger label={label} />
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
@@ -62,6 +45,6 @@ export function EnumVariable({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }

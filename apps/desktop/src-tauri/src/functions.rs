@@ -3,6 +3,7 @@ use serde::Serialize;
 pub mod a2ui;
 pub mod ai;
 pub mod app;
+pub mod automation_approval;
 pub mod bit;
 pub mod channel;
 pub mod developer;

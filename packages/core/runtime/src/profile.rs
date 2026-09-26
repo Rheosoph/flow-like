@@ -369,7 +369,11 @@ impl Profile {
                 let bit = match self.get_profile_bit(bit_ref, http_client.clone()).await {
                     Ok(bit) => bit,
                     Err(err) => {
-                        println!("Skipping unresolved profile bit {bit_ref}: {err}");
+                        tracing::warn!(
+                            bit = %bit_ref,
+                            error = %err,
+                            "Skipping unresolved profile bit"
+                        );
                         continue;
                     }
                 };
@@ -500,7 +504,7 @@ impl Profile {
             let hub_bits = match hub_bits {
                 Ok(models) => models,
                 Err(err) => {
-                    println!("Bit could not be queried: {}", err);
+                    tracing::warn!(error = %err, "Bit could not be queried");
                     continue;
                 }
             };

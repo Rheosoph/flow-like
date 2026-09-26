@@ -10,3 +10,6 @@ services:
   api:
     depends_on:
       object-store-init: !reset null
+  audit-worker:
+    depends_on:
+      object-store-init: !reset null

@@ -5,12 +5,16 @@ import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
+import { usePaymentDistribution, usePayments } from "../payments/use-payments";
+import { apiErrorMessage } from "../../lib/api-error";
 import { openExternalUrl } from "../../lib/open-external";
+import { asArray } from "../../lib/response-shape";
 import type { IApp } from "../../lib/schema/app/app";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
+import { appPairs } from "../library/library-types";
 
 interface StoreRouter {
 	push(href: string): void;
@@ -25,6 +29,9 @@ export function useStoreData(
 	const auth = useAuth();
 	const invalidate = useInvalidateInvoke();
 	const [isPurchasing, setIsPurchasing] = useState(false);
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
+	const payments = usePayments();
+	const purchasingAllowed = usePaymentDistribution();
 
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
 	const app = useInvoke<IApp, [appId: string]>(
@@ -42,7 +49,7 @@ export function useStoreData(
 	const metaData = meta.data ?? null;
 
 	const isMember = useMemo(
-		() => !!(id && apps.data?.some(([a]) => a.id === id)),
+		() => !!(id && appPairs(apps.data).some(([a]) => a.id === id)),
 		[apps.data, id],
 	);
 	const routes = useInvoke(
@@ -70,12 +77,12 @@ export function useStoreData(
 	const useAppHref = useMemo(() => {
 		if (!id || !isMember) return null;
 
-		const activeEvents = (events.data ?? []).filter((event) => event.active);
+		const activeEvents = asArray(events.data).filter((event) => event.active);
 		const activeEventsById = new Map(
 			activeEvents.map((event) => [event.id, event] as const),
 		);
 
-		const hasUsableRoute = (routes.data ?? []).some((route) => {
+		const hasUsableRoute = asArray(routes.data).some((route) => {
 			const routeEvent = activeEventsById.get(route.eventId);
 			if (!routeEvent) return false;
 			return (
@@ -146,8 +153,13 @@ export function useStoreData(
 	}, [backend, id, invalidate]);
 
 	const onBuy = useCallback(async () => {
-		if (!id || isPurchasing) return;
+		if (!id || isPurchasing || !purchasingAllowed) return;
 		if (!(await ensureAuthenticated())) return;
+
+		if (payments.config?.marketplace_enabled) {
+			setCheckoutOpen(true);
+			return;
+		}
 
 		setIsPurchasing(true);
 		try {
@@ -171,13 +183,17 @@ export function useStoreData(
 			}
 		} catch (e) {
 			console.error("Purchase error:", e);
-			toast.error("Failed to start purchase. Please try again later.");
+			toast.error(
+				apiErrorMessage(e, "Failed to start purchase. Please try again later."),
+			);
 		} finally {
 			setIsPurchasing(false);
 		}
 	}, [
 		id,
 		isPurchasing,
+		purchasingAllowed,
+		payments.config?.marketplace_enabled,
 		ensureAuthenticated,
 		backend,
 		registerAppInProfile,
@@ -192,11 +208,6 @@ export function useStoreData(
 		if (!(await ensureAuthenticated())) return;
 
 		try {
-			if (appData.price && appData.price > 0) {
-				await onBuy();
-				return;
-			}
-
 			if (appData.visibility === IAppVisibility.PublicRequestAccess) {
 				await backend.appState.requestJoinApp(
 					appData.id,
@@ -206,6 +217,11 @@ export function useStoreData(
 					"Request to join app sent! The author will review your request.",
 				);
 				await apps.refetch?.();
+				return;
+			}
+
+			if (appData.price && appData.price > 0) {
+				await onBuy();
 				return;
 			}
 
@@ -269,6 +285,9 @@ export function useStoreData(
 		metaData,
 		isMember,
 		isPurchasing,
+		checkoutOpen,
+		setCheckoutOpen,
+		purchasingAllowed,
 		isLoading,
 		isError,
 		notFound,

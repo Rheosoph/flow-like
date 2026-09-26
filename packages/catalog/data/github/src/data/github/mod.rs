@@ -5,13 +5,18 @@ pub mod create_issue;
 pub mod files;
 pub mod get_repo;
 pub mod get_user;
+#[cfg(any(feature = "execute", test))]
+pub(crate) mod git;
 pub mod issues;
 pub mod list_issues;
 pub mod list_pull_requests;
 pub mod list_repos;
+pub mod local_repository;
 pub mod provider;
 pub mod pull_requests;
 pub mod releases;
+pub mod remote_repository;
+pub(crate) mod repository;
 pub mod search_code;
 pub mod search_issues;
 pub mod search_repos;

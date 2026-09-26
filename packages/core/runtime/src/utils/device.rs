@@ -4,42 +4,45 @@ pub fn info() {
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    println!("=> system:");
     // RAM and swap information:
-    println!("total memory: {} bytes", sys.total_memory());
-    println!("used memory : {} bytes", sys.used_memory());
-    println!("total swap  : {} bytes", sys.total_swap());
-    println!("used swap   : {} bytes", sys.used_swap());
+    tracing::debug!(bytes = sys.total_memory(), "total memory");
+    tracing::debug!(bytes = sys.used_memory(), "used memory");
+    tracing::debug!(bytes = sys.total_swap(), "total swap");
+    tracing::debug!(bytes = sys.used_swap(), "used swap");
 
     // Display system information:
-    println!("System name:             {:?}", System::name());
-    println!("System kernel version:   {:?}", System::kernel_version());
-    println!("System OS version:       {:?}", System::os_version());
-    println!("System host name:        {:?}", System::host_name());
+    tracing::debug!(name = ?System::name(), "System name");
+    tracing::debug!(kernel_version = ?System::kernel_version(), "System kernel version");
+    tracing::debug!(os_version = ?System::os_version(), "System OS version");
+    tracing::debug!(host_name = ?System::host_name(), "System host name");
 
     // Number of CPUs:
-    println!("NB CPUs: {}", sys.cpus().len());
+    tracing::debug!(cpus = sys.cpus().len(), "NB CPUs");
 
     // Display processes ID, name na disk usage:
     for (pid, process) in sys.processes() {
-        println!("[{pid}] {:?} {:?}", process.name(), process.disk_usage());
+        tracing::trace!(
+            %pid,
+            name = ?process.name(),
+            disk_usage = ?process.disk_usage(),
+            "process"
+        );
     }
 
     // We display all disks' information:
-    println!("=> disks:");
     let disks = Disks::new_with_refreshed_list();
     for disk in &disks {
-        println!("{disk:?}");
+        tracing::trace!(?disk, "disk");
     }
 
     // Network interfaces name, total data received and total data transmitted:
     let networks = Networks::new_with_refreshed_list();
-    println!("=> networks:");
     for (interface_name, data) in &networks {
-        println!(
-            "{interface_name}: {} B (down) / {} B (up)",
-            data.total_received(),
-            data.total_transmitted(),
+        tracing::trace!(
+            interface = %interface_name,
+            received_bytes = data.total_received(),
+            transmitted_bytes = data.total_transmitted(),
+            "network interface"
         );
         // If you want the amount of data received/transmitted since last call
         // to `Networks::refresh`, use `received`/`transmitted`.
@@ -47,9 +50,8 @@ pub fn info() {
 
     // Components temperature:
     let components = Components::new_with_refreshed_list();
-    println!("=> components:");
     for component in &components {
-        println!("{component:?}");
+        tracing::trace!(?component, "component");
     }
 }
 

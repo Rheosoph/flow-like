@@ -384,8 +384,8 @@ async fn unplugging_a_producer_keeps_only_the_wired_field_pins() {
 }
 
 /// Unplugging a producer must hand `struct_in` its open marker back. A leftover concrete schema is
-/// a contract, and `schemas_are_compatible` rejects two differing ones — the user would never be
-/// able to plug a different struct in again.
+/// a contract, and `schemas_are_compatible` rejects any producer that does not cover it — the user
+/// would never be able to plug a different struct in again.
 #[flow_like_types::tokio::test]
 async fn unplugging_a_producer_restores_the_open_marker() {
     let logics = catalog();

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>CSP Probe Sibling</title>
+		<style>
+			body {
+				margin: 0;
+				background: var(--background);
+				color: var(--foreground);
+				font-family: var(--font-sans, system-ui, sans-serif);
+				font-size: 0.875rem;
+			}
+
+			main {
+				display: grid;
+				gap: 0.5rem;
+				padding: 1rem;
+			}
+
+			.label {
+				margin: 0;
+				color: var(--muted-foreground);
+			}
+
+			.blobs {
+				margin: 0;
+				padding: 0.5rem;
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				font-family: var(--font-mono, ui-monospace, monospace);
+				font-size: 0.75rem;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+				user-select: all;
+			}
+
+			.banner {
+				margin: 0;
+				padding: 0.75rem;
+				border-radius: var(--radius);
+				background: var(--destructive);
+				color: var(--destructive-foreground);
+				font-weight: 600;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="./index.ts"></script>
+	</body>
+</html>

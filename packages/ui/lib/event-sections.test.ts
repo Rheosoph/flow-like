@@ -108,7 +108,26 @@ describe("getEventSections", () => {
 			"canary",
 			"history",
 			"identity",
+			"hosting",
 		]);
+	});
+
+	test("hosting is a shared section for supported frontends only", () => {
+		for (const event_type of ["simple_chat", "generic_form", "quick_action"]) {
+			expect(
+				getEventSections(baseEvent({ event_type })).filter(
+					(s) => s.id === "hosting",
+				),
+			).toHaveLength(1);
+		}
+		for (const event_type of ["rest", "mcp", "cron", "email"]) {
+			expect(
+				getEventSections(baseEvent({ event_type })).some(
+					(s) => s.id === "hosting",
+				),
+			).toBe(false);
+		}
+		expect(isTriggerSection("hosting")).toBe(false);
 	});
 
 	test("a page-targeted split type also drops its trigger sections", () => {

@@ -7,6 +7,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
 import { removeAppFromProfile } from "../../../lib/add-app-to-profile";
 import { detectAppType } from "../../../lib/app-type";
+import { asArray, isRecord } from "../../../lib/response-shape";
 import { boardListing } from "../../../lib/schema/flow/board-summary";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
@@ -120,6 +121,20 @@ function DashboardSkeleton() {
 	);
 }
 
+function DashboardLoadError({ onRetry }: Readonly<{ onRetry: () => void }>) {
+	const { t } = useTranslation("settings");
+	return (
+		<div className="flex flex-col items-center gap-3 rounded-xl border p-8 text-center">
+			<p className="text-sm text-muted-foreground">
+				{t("common:failedToLoadApp", "Failed to load app")}
+			</p>
+			<Button variant="outline" size="sm" onClick={onRetry}>
+				{t("retry", "Retry")}
+			</Button>
+		</div>
+	);
+}
+
 /**
  * One dashboard with two arrangements.
  *
@@ -168,7 +183,7 @@ export function ProjectDashboard({
 	// the database — instead of every board's full graph.
 	const boards = useMemo(
 		() => ({
-			data: boardSummaries.data?.map(boardListing),
+			data: asArray(boardSummaries.data).map(boardListing),
 			isLoading: boardSummaries.isLoading,
 		}),
 		[boardSummaries.data, boardSummaries.isLoading],
@@ -191,6 +206,9 @@ export function ProjectDashboard({
 		[appId],
 		enabledWithRole && permissions.canListEvents,
 	);
+	const eventList = useMemo(() => asArray(events.data), [events.data]);
+	const pageList = useMemo(() => asArray(pages.data), [pages.data]);
+	const routeList = useMemo(() => asArray(routes.data), [routes.data]);
 
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [panel, setPanel] = useState<InspectorPanel>("identity");
@@ -206,15 +224,15 @@ export function ProjectDashboard({
 		enabledWithRole && permissions.canReadCompliance,
 	);
 	const surfaces = useProjectSurfaces(
-		events.data,
-		pages.data,
-		routes.data,
+		eventList,
+		pageList,
+		routeList,
 		runs.byEvent,
 	);
 	const listing = useListingChecklist(app.data, metadata.data);
 	const suggestedType = useMemo(
-		() => detectAppType(boards.data, events.data, pages.data?.length ?? 0),
-		[boards.data, events.data, pages.data],
+		() => detectAppType(boards.data, eventList, pageList.length),
+		[boards.data, eventList, pageList],
 	);
 	const boardNames = useMemo(() => {
 		const map = new Map<string, string>();
@@ -225,7 +243,7 @@ export function ProjectDashboard({
 	const signals = useProjectSignals({
 		appId,
 		app: app.data,
-		events: events.data,
+		events: eventList,
 		runs,
 		aiAct,
 		listingDone: listing.done,
@@ -282,10 +300,27 @@ export function ProjectDashboard({
 		await onDeleted();
 	}, [appId, backend, invalidate, onDeleted]);
 
-	if (!app.data || !metadata.data || permissions.isLoading) {
+	if (
+		!isRecord(app.data) ||
+		!isRecord(metadata.data) ||
+		permissions.isLoading
+	) {
+		// With no local copy and no hub, the reads settle as errors; do not spin forever.
+		const loadFailed =
+			(app.isError && !isRecord(app.data)) ||
+			(metadata.isError && !isRecord(metadata.data));
 		return (
 			<div className="mx-auto w-full max-w-6xl px-1 py-4">
-				<DashboardSkeleton />
+				{loadFailed ? (
+					<DashboardLoadError
+						onRetry={() => {
+							void app.refetch();
+							void metadata.refetch();
+						}}
+					/>
+				) : (
+					<DashboardSkeleton />
+				)}
 			</div>
 		);
 	}

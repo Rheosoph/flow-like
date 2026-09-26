@@ -3,10 +3,12 @@ use crate::entity::{user, wasm_package_invitation, wasm_package_user};
 use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::permission::wasm_package_permission::WasmPackagePermission;
+use crate::routes::user::sign_avatar;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use flow_like_types::create_id;
+use futures::stream::{self, StreamExt};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter,
     sea_query::OnConflict,
@@ -51,16 +53,37 @@ pub struct InvitationResponse {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-fn build_user_response(
+const AVATAR_CONCURRENCY: usize = 16;
+
+/// `user.avatar` is an object-store id, not a URL, so it is signed the same way
+/// `/user/lookup` signs it and honours the same `lookup.avatar` opt-out.
+async fn signed_avatar(state: &AppState, u: Option<&user::Model>) -> Option<String> {
+    if !state.platform_config.lookup.avatar {
+        return None;
+    }
+    let u = u?;
+    let avatar_id = u.avatar.as_deref()?;
+    match sign_avatar(&u.id, avatar_id, state).await {
+        Ok(url) => Some(url),
+        Err(err) => {
+            tracing::error!(user_id = %u.id, "Failed to sign package user avatar: {:?}", err);
+            None
+        }
+    }
+}
+
+async fn build_user_response(
+    state: &AppState,
     pu: wasm_package_user::Model,
     u: Option<user::Model>,
 ) -> PackageUserResponse {
+    let avatar = signed_avatar(state, u.as_ref()).await;
     PackageUserResponse {
         id: pu.id,
         user_id: pu.user_id,
         username: u.as_ref().and_then(|u| u.username.clone()),
         name: u.as_ref().and_then(|u| u.name.clone()),
-        avatar: u.as_ref().and_then(|u| u.avatar.clone()),
+        avatar,
         permission: pu.permission,
         granted_at: pu.granted_at.to_utc(),
     }
@@ -125,13 +148,14 @@ pub async fn list_users(
     let user_map: std::collections::HashMap<String, user::Model> =
         users.into_iter().map(|u| (u.id.clone(), u)).collect();
 
-    let response: Vec<PackageUserResponse> = package_users
-        .into_iter()
+    let response: Vec<PackageUserResponse> = stream::iter(package_users)
         .map(|pu| {
             let u = user_map.get(&pu.user_id).cloned();
-            build_user_response(pu, u)
+            build_user_response(&state, pu, u)
         })
-        .collect();
+        .buffered(AVATAR_CONCURRENCY)
+        .collect()
+        .await;
 
     Ok(Json(response))
 }
@@ -326,7 +350,10 @@ pub async fn accept_invitation(
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
 
-    Ok(Json(build_user_response(pu, user_record)))
+    state.invalidate_wasm_permission(&caller_id, &pu.package_id);
+    crate::package_license::refresh_package_access(&state, &caller_id, &pu.package_id).await;
+
+    Ok(Json(build_user_response(&state, pu, user_record).await))
 }
 
 #[utoipa::path(
@@ -468,7 +495,9 @@ pub async fn update_user_permission(
         state.invalidate_wasm_permission(&caller_id, &package_id);
         state.invalidate_wasm_permission(&target_user_id, &package_id);
 
-        return Ok(Json(build_user_response(updated, user_record)));
+        return Ok(Json(
+            build_user_response(&state, updated, user_record).await,
+        ));
     }
 
     if !caller_perm.can_manage_level(target_current_perm) {
@@ -492,13 +521,16 @@ pub async fn update_user_permission(
 
     // A demotion must take effect immediately, not after the cache TTL.
     state.invalidate_wasm_permission(&target_user_id, &package_id);
+    crate::package_license::refresh_package_access(&state, &target_user_id, &package_id).await;
 
     let user_record = user::Entity::find_by_id(&target_user_id)
         .one(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
 
-    Ok(Json(build_user_response(updated, user_record)))
+    Ok(Json(
+        build_user_response(&state, updated, user_record).await,
+    ))
 }
 
 #[utoipa::path(
@@ -567,6 +599,8 @@ pub async fn remove_user(
     // Revoke the cached grant so a removed user can't keep acting for up to the
     // cache TTL.
     state.invalidate_wasm_permission(&target_user_id, &package_id);
+    // Projects this user licensed the package for pass it on or lapse.
+    crate::package_license::refresh_package_access(&state, &target_user_id, &package_id).await;
 
     Ok(Json(()))
 }

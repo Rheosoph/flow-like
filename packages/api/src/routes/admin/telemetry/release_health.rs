@@ -22,6 +22,7 @@ use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Expr, SimpleExpr};
 use sea_orm::{
@@ -666,9 +667,11 @@ async fn release_rows<C: ConnectionTrait>(
     total_installs: i64,
     limit: usize,
 ) -> Result<Vec<TelemetryReleaseRow>, ApiError> {
-    let sessions = release_sessions(db, window, source).await?;
-    let errors = release_errors(db, window.error_cutoff(), source).await?;
-    let meta = release_meta(db, source).await?;
+    let (sessions, errors, meta) = try_join!(
+        release_sessions(db, window, source),
+        release_errors(db, window.error_cutoff(), source),
+        release_meta(db, source),
+    )?;
     Ok(build_release_rows(
         sessions,
         errors,
@@ -749,8 +752,10 @@ pub async fn telemetry_release_health(
     let now = Utc::now().fixed_offset();
     let window = SessionWindow::new(now, hours);
 
-    let totals = session_totals(&state.db, window, source).await?;
-    let trend = release_trend(&state.db, window, now, bucket, source).await?;
+    let (totals, trend) = try_join!(
+        session_totals(&state.db, window, source),
+        release_trend(&state.db, window, now, bucket, source),
+    )?;
     let releases = release_rows(
         &state.db,
         window,

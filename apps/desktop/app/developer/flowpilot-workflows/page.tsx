@@ -3,6 +3,7 @@
 import { Button } from "@flow-like/flow-like-ui/components/ui/button";
 import { Input } from "@flow-like/flow-like-ui/components/ui/input";
 import { Label } from "@flow-like/flow-like-ui/components/ui/label";
+import { useTranslation } from "@flow-like/locales";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -77,6 +78,7 @@ function elapsed(value: number): string {
 }
 
 export default function FlowPilotWorkflowBenchmarksPage() {
+	const { t } = useTranslation("common");
 	const [cases, setCases] = useState<PublicBenchmarkCase[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
@@ -297,10 +299,10 @@ export default function FlowPilotWorkflowBenchmarksPage() {
 			<div className="mx-auto max-w-5xl space-y-6">
 				<header className="space-y-2">
 					<Link
-						href="/developer"
+						href="/store/packages?tab=mine"
 						className="text-sm text-muted-foreground underline"
 					>
-						Developer tools
+						{t("backToPackages", "Back to packages")}
 					</Link>
 					<h1 className="text-2xl font-semibold">
 						Workflow behavior benchmarks

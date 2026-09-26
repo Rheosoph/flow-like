@@ -1,7 +1,10 @@
 //! Backend selection, model metadata, and capability types.
 
 use super::tool_policy::specialist_tool_policy;
-use flow_like::{copilot::CopilotScope, flow::copilot::tool_spec::RESEARCH_AGENT_TOOL};
+use flow_like::{
+    copilot::CopilotScope,
+    flow::copilot::{WebResearchCapability, tool_spec::RESEARCH_AGENT_TOOL},
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -59,6 +62,14 @@ impl FlowPilotAgentBackendKind {
             Self::GithubCopilot => "COPILOT_CLI_PATH",
             Self::Codex => "CODEX_CLI_PATH",
             Self::ClaudeCode => "CLAUDE_CODE_CLI_PATH",
+        }
+    }
+
+    /// How the global orchestrator on this backend reaches the public web. Specialists never do.
+    pub(super) fn web_research(self) -> WebResearchCapability {
+        match self {
+            Self::Codex | Self::ClaudeCode => WebResearchCapability::Native,
+            Self::GithubCopilot => WebResearchCapability::Delegated,
         }
     }
 }

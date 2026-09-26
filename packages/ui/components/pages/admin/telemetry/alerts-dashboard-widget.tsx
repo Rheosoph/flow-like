@@ -175,7 +175,7 @@ export function DashboardTelemetryAlertsWidget({
 						value={rules.isLoading ? "…" : enabledRules.toLocaleString()}
 						icon={<BellRing className="h-4 w-4" />}
 						hint={t("valConfigured", "{{val}} configured", {
-							val: (rules.data?.rules.length ?? 0).toLocaleString(),
+							val: (rules.data?.rules?.length ?? 0).toLocaleString(),
 						})}
 					/>
 				</div>

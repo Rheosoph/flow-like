@@ -5,6 +5,7 @@ import {
 	isAzureBlobStorageUrl,
 	toWireVisibility,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
@@ -59,13 +60,15 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			`apps/${appId}/team/link`,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IInviteLink[]>(
+				this.backend.profile,
+				`apps/${appId}/team/link`,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 	async removeInviteLink(appId: string, linkId: string): Promise<void> {
@@ -129,13 +132,15 @@ export class TeamState implements ITeamState {
 			url += `?offset=${effectiveOffset}&limit=${limit}`;
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			url,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IJoinRequest[]>(
+				this.backend.profile,
+				url,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 	async acceptJoinRequest(appId: string, requestId: string): Promise<void> {
@@ -182,13 +187,15 @@ export class TeamState implements ITeamState {
 			url += `?offset=${effectiveOffset}&limit=${effectiveLimit}`;
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			url,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IMember[]>(
+				this.backend.profile,
+				url,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 	async getInvites(offset?: number, limit?: number): Promise<IInvite[]> {
@@ -204,13 +211,15 @@ export class TeamState implements ITeamState {
 			url += `?offset=${effectiveOffset}&limit=${effectiveLimit}`;
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			url,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IInvite[]>(
+				this.backend.profile,
+				url,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 	async getAppInvites(
@@ -229,13 +238,15 @@ export class TeamState implements ITeamState {
 			url += `?offset=${effectiveOffset}&limit=${effectiveLimit}`;
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			url,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IInvite[]>(
+				this.backend.profile,
+				url,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 	async revokeAppInvite(appId: string, inviteId: string): Promise<void> {
@@ -324,7 +335,7 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
+		const connections = await fetcher<IAppConnectionsResponse>(
 			this.backend.profile,
 			`apps/${appId}/connections`,
 			{
@@ -332,6 +343,14 @@ export class TeamState implements ITeamState {
 			},
 			this.backend.auth,
 		);
+		if (!isRecord(connections)) {
+			throw new Error(`Unexpected app connections response for app ${appId}`);
+		}
+		return {
+			...connections,
+			incoming: asArray(connections.incoming),
+			outgoing: asArray(connections.outgoing),
+		};
 	}
 
 	async addAppConnection(
@@ -465,13 +484,15 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			`apps/${appId}/connections/accessible`,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IAccessibleApp[]>(
+				this.backend.profile,
+				`apps/${appId}/connections/accessible`,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -480,13 +501,15 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			`apps/${appId}/connections/${targetAppId}/tables`,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<string[]>(
+				this.backend.profile,
+				`apps/${appId}/connections/${targetAppId}/tables`,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -498,13 +521,15 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
-			this.backend.profile,
-			`apps/${appId}/connections/${targetAppId}/events`,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
+		return asArray(
+			await fetcher<IRemoteEvent[]>(
+				this.backend.profile,
+				`apps/${appId}/connections/${targetAppId}/events`,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -517,7 +542,7 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
+		const detail = await fetcher<IRemoteEventDetail>(
 			this.backend.profile,
 			`apps/${appId}/connections/${targetAppId}/events/${eventId}/detail`,
 			{
@@ -525,6 +550,13 @@ export class TeamState implements ITeamState {
 			},
 			this.backend.auth,
 		);
+		// The caller stores this in the board's meta pin; garbage must not land there.
+		if (!isRecord(detail)) {
+			throw new Error(
+				`Unexpected remote event detail response for event ${eventId} of app ${targetAppId}`,
+			);
+		}
+		return detail;
 	}
 
 	async getConnectionGraph(
@@ -540,7 +572,7 @@ export class TeamState implements ITeamState {
 			url += `?days=${days}`;
 		}
 
-		return await fetcher(
+		const graph = await fetcher<IProcessGraphResponse>(
 			this.backend.profile,
 			url,
 			{
@@ -548,6 +580,15 @@ export class TeamState implements ITeamState {
 			},
 			this.backend.auth,
 		);
+		if (!isRecord(graph)) {
+			throw new Error(`Unexpected connection graph response for app ${appId}`);
+		}
+		return {
+			...graph,
+			nodes: asArray(graph.nodes),
+			edges: asArray(graph.edges),
+			flows: asArray(graph.flows),
+		};
 	}
 
 	async getProcessCases(
@@ -563,7 +604,7 @@ export class TeamState implements ITeamState {
 			url += `?days=${days}`;
 		}
 
-		return await fetcher(
+		const response = await fetcher<IProcessCasesResponse>(
 			this.backend.profile,
 			url,
 			{
@@ -571,6 +612,10 @@ export class TeamState implements ITeamState {
 			},
 			this.backend.auth,
 		);
+		if (!isRecord(response)) {
+			throw new Error(`Unexpected process cases response for app ${appId}`);
+		}
+		return { ...response, cases: asArray(response.cases) };
 	}
 
 	async getProcessCaseRuns(
@@ -581,7 +626,7 @@ export class TeamState implements ITeamState {
 			throw new Error("Profile or auth context not available");
 		}
 
-		return await fetcher(
+		const response = await fetcher<IProcessCaseDetailResponse>(
 			this.backend.profile,
 			`apps/${appId}/connections/cases/${caseId}`,
 			{
@@ -589,6 +634,12 @@ export class TeamState implements ITeamState {
 			},
 			this.backend.auth,
 		);
+		if (!isRecord(response)) {
+			throw new Error(
+				`Unexpected process case response for case ${caseId} of app ${appId}`,
+			);
+		}
+		return { ...response, runs: asArray(response.runs) };
 	}
 
 	async getProcessNotes(appId: string): Promise<IProcessNote[]> {
@@ -679,11 +730,13 @@ export class TeamState implements ITeamState {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
-		return await fetcher(
-			this.backend.profile,
-			`apps/${appId}/groups`,
-			{ method: "GET" },
-			this.backend.auth,
+		return asArray(
+			await fetcher<IGroup[]>(
+				this.backend.profile,
+				`apps/${appId}/groups`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -691,12 +744,18 @@ export class TeamState implements ITeamState {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
-		return await fetcher(
+		const group = await fetcher<IGroup>(
 			this.backend.profile,
 			`apps/${appId}/groups/${groupId}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(group)) {
+			throw new Error(
+				`Unexpected suite response for suite ${groupId} of app ${appId}`,
+			);
+		}
+		return group;
 	}
 
 	async updateGroup(
@@ -763,11 +822,13 @@ export class TeamState implements ITeamState {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
-		return await fetcher(
-			this.backend.profile,
-			`apps/${appId}/groups/requests`,
-			{ method: "GET" },
-			this.backend.auth,
+		return asArray(
+			await fetcher<IGroupMembershipRequest[]>(
+				this.backend.profile,
+				`apps/${appId}/groups/requests`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -817,12 +878,18 @@ export class TeamState implements ITeamState {
 		);
 		params.set("language", language ?? "en");
 
-		const { signed_url } = await fetcher<{ signed_url: string }>(
+		const upload = await fetcher<{ signed_url: string }>(
 			this.backend.profile,
 			`apps/${appId}/meta/media?${params}`,
 			{ method: "PUT" },
 			this.backend.auth,
 		);
+		const signed_url = isRecord(upload) ? upload.signed_url : undefined;
+		if (typeof signed_url !== "string" || !signed_url) {
+			throw new Error(
+				`Media upload for suite ${groupId} returned no signed URL`,
+			);
+		}
 
 		const headers: HeadersInit = { "Content-Type": file.type };
 		// Azure Blob Storage rejects a PUT without this header.
@@ -870,12 +937,22 @@ export class TeamState implements ITeamState {
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
-		return await fetcher(
+		const publication = await fetcher<IGroupPublicationStatus>(
 			this.backend.profile,
 			`apps/${appId}/groups/${groupId}/publication`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(publication)) {
+			throw new Error(
+				`Unexpected publication response for suite ${groupId} of app ${appId}`,
+			);
+		}
+		return {
+			...publication,
+			requests: asArray(publication.requests),
+			memberReadiness: asArray(publication.memberReadiness),
+		};
 	}
 
 	async leaveGroup(appId: string, groupId: string): Promise<void> {

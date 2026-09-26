@@ -607,7 +607,7 @@ pub async fn flowpilot_create_board_edit_job(
     let live_board = flow_like_state
         .get_board(&token.board_id, None)
         .map_err(|_| "The review board is not open in this desktop process.".to_string())?;
-    let board = live_board.lock().await;
+    let board = live_board.write().await;
     let commands = store
         .pending_commands_if_current(
             &board,
@@ -1222,7 +1222,7 @@ pub async fn flowpilot_ack_board_edit_job_delivery(
     if let Some(state) = app_handle.try_state::<TauriFlowLikeState>()
         && let Ok(live_board) = state.0.get_board(&job.board_id, None)
     {
-        let mut board = live_board.lock().await;
+        let mut board = live_board.write().await;
         let key = flow_ir_durable_receipt_ref_key(&job.app_id, &job.token);
         if let Some(encoded) = board.remove_internal_ref(&key) {
             match TauriFlowLikeState::get_project_meta_store(&app_handle).await {

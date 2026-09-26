@@ -1,4 +1,13 @@
-import { type UseStore, createStore, del, get, keys, set } from "idb-keyval";
+import {
+	type UseStore,
+	clear,
+	createStore,
+	del,
+	get,
+	keys,
+	set,
+} from "idb-keyval";
+import { PENDING_PAGE_ACTION_KEY } from "../components/a2ui/pending-page-action";
 import type { Surface } from "../components/a2ui/types";
 import { hasExpiredAssetUrl } from "./stable-asset-url";
 
@@ -16,7 +25,8 @@ import { hasExpiredAssetUrl } from "./stable-asset-url";
  *  - the route, because the workflow receives it as input;
  *  - the query parameters, because the workflow receives them and its output depends on them;
  *  - the signed-in identity, because a surface is built from that account's data.
- * Anything that does not match is a miss, never a stale render.
+ * Anything that does not match is a miss, never a stale render. Actions a run minted for its own
+ * output are never stored; their controls come back inert until the next run rebinds them.
  */
 
 // Created on first use rather than at import: `createStore` opens the database immediately, and
@@ -125,6 +135,39 @@ function revisionOf(key: string, prefix: string): string {
 	return key.slice(prefix.length).split(SEP)[0] ?? "";
 }
 
+const PAGE_ACTION_KEYS = new Set(["pageAction", "page_action"]);
+const CAPABILITY_KEYS = new Set(["capabilityJwt", "capability_jwt"]);
+const LITERAL_JSON_KEYS = new Set(["literalJson", "literal_json"]);
+/** Native (`lda1_`) and hosted (`da1_`) handles minted for one run's output. */
+const DYNAMIC_PAGE_ACTION_PREFIXES = ["lda1_", "da1_"];
+
+function isCapability(key: string, value: unknown): boolean {
+	return CAPABILITY_KEYS.has(key) && typeof value === "string" && value !== "";
+}
+
+function isDynamicPageAction(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const action = value as Record<string, unknown>;
+	const actionId = action.actionId ?? action.action_id;
+	if (
+		typeof actionId === "string" &&
+		DYNAMIC_PAGE_ACTION_PREFIXES.some((prefix) => actionId.startsWith(prefix))
+	)
+		return true;
+	return Object.entries(action).some(([key, child]) =>
+		isCapability(key, child),
+	);
+}
+
+function parseLiteralJson(json: string): unknown {
+	try {
+		return JSON.parse(json);
+	} catch {
+		// Invalid literal JSON is handled by its renderer and carries no parsed action.
+		return undefined;
+	}
+}
+
 /** Dynamic Page authorization is tied to its originating run. This includes
  * signed capabilities and native `lda1_` action handles, neither of which may
  * survive in IndexedDB or be replayed from a cached surface. */
@@ -132,38 +175,46 @@ export function hasPageActionCapability(value: unknown): boolean {
 	if (Array.isArray(value)) return value.some(hasPageActionCapability);
 	if (!value || typeof value !== "object") return false;
 	for (const [key, child] of Object.entries(value)) {
-		if (
-			(key === "pageAction" || key === "page_action") &&
-			child &&
-			typeof child === "object" &&
-			!Array.isArray(child)
-		) {
-			const action = child as Record<string, unknown>;
-			const actionId = action.actionId ?? action.action_id;
-			if (typeof actionId === "string" && actionId.startsWith("lda1_")) {
-				return true;
-			}
-		}
-		if (
-			(key === "capabilityJwt" || key === "capability_jwt") &&
-			typeof child === "string" &&
-			child.length > 0
-		)
-			return true;
-		if (
-			(key === "literalJson" || key === "literal_json") &&
-			typeof child === "string"
-		) {
-			try {
-				if (hasPageActionCapability(JSON.parse(child))) return true;
-			} catch {
-				// Invalid literal JSON is handled by its renderer and carries no parsed action.
-			}
+		if (PAGE_ACTION_KEYS.has(key) && isDynamicPageAction(child)) return true;
+		if (isCapability(key, child)) return true;
+		if (LITERAL_JSON_KEYS.has(key) && typeof child === "string") {
+			if (hasPageActionCapability(parseLiteralJson(child))) return true;
 			continue;
 		}
 		if (hasPageActionCapability(child)) return true;
 	}
 	return false;
+}
+
+function stripCapabilities(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(stripCapabilities);
+	if (!value || typeof value !== "object") return value;
+	const stripped: Record<string, unknown> = {};
+	for (const [key, child] of Object.entries(value)) {
+		if (isCapability(key, child)) continue;
+		if (PAGE_ACTION_KEYS.has(key) && isDynamicPageAction(child)) {
+			stripped[PENDING_PAGE_ACTION_KEY] = true;
+		} else if (LITERAL_JSON_KEYS.has(key) && typeof child === "string") {
+			const parsed = parseLiteralJson(child);
+			stripped[key] = hasPageActionCapability(parsed)
+				? JSON.stringify(stripCapabilities(parsed))
+				: child;
+		} else {
+			stripped[key] = stripCapabilities(child);
+		}
+	}
+	return stripped;
+}
+
+/**
+ * The storable form of a surface: every run-scoped Page action is replaced by a pending marker,
+ * so its control renders inert until the next load run supplies a fresh one. Compiled `pa1_`
+ * actions resolve against the current contract and are kept.
+ */
+export function stripPageActionCapabilities(surface: Surface): Surface {
+	return hasPageActionCapability(surface)
+		? (stripCapabilities(surface) as Surface)
+		: surface;
 }
 
 async function readManifest(): Promise<CacheManifest> {
@@ -245,11 +296,10 @@ export async function writePageSurfaceCache(
 
 	try {
 		const key = pageSurfaceCacheKey(identity);
-		if (hasPageActionCapability(surface)) {
-			await del(key, surfaceStore()).catch(() => undefined);
-			return;
-		}
-		const record: PageSurfaceCacheRecord = { surface, cachedAt: Date.now() };
+		const record: PageSurfaceCacheRecord = {
+			surface: stripPageActionCapabilities(surface),
+			cachedAt: Date.now(),
+		};
 		if (JSON.stringify(record.surface).length > MAX_ENTRY_BYTES) return;
 
 		await set(key, record, surfaceStore());
@@ -271,6 +321,18 @@ export async function writePageSurfaceCache(
 		await set(MANIFEST_KEY, manifest, surfaceStore());
 	} catch {
 		// IndexedDB unavailable or over quota: the page still renders, just without a head start.
+	}
+}
+
+/**
+ * Drops every saved surface. Each one is an account's rendered data, so none may outlive the
+ * sign-out on this device.
+ */
+export async function clearPageSurfaceCache(): Promise<void> {
+	try {
+		await clear(surfaceStore());
+	} catch {
+		// A store that cannot be opened holds nothing to clear.
 	}
 }
 

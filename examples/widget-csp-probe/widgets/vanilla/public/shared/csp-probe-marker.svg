@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="160" viewBox="0 0 480 160">
+	<rect width="480" height="160" fill="#b91c1c"/>
+	<text x="240" y="72" fill="#ffffff" font-family="sans-serif" font-size="28" font-weight="700" text-anchor="middle">NAVIGATION REACHED</text>
+	<text x="240" y="112" fill="#ffffff" font-family="sans-serif" font-size="18" text-anchor="middle">nav.sharedSvg failed: shared/csp-probe-marker.svg loaded</text>
+</svg>

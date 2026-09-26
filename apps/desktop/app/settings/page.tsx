@@ -18,8 +18,8 @@ import {
 	ExternalLink,
 	HardDrive,
 	type LucideIcon,
-	Package,
 	Scroll,
+	Server,
 	ShieldCheck,
 	Smartphone,
 	User,
@@ -97,14 +97,13 @@ function buildSettingsSections(
 			label: t("extensionsAmpIntegrations", "Extensions & Integrations"),
 			cards: [
 				{
-					title: t("registry", "Registry"),
+					title: t("devices", "Devices"),
 					description: t(
-						"installedPackagesAndExploreTheMarketplace",
-						"Installed packages and explore the marketplace",
+						"devicesSettingsDescription",
+						"Manage your device fleet, deployments, health, and certificates",
 					),
-					href: "/settings/registry",
-					icon: Package,
-					devOnly: true,
+					href: "/settings/devices",
+					icon: Server,
 				},
 				{
 					title: t("sinksAmpTriggers", "Sinks & Triggers"),

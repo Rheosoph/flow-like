@@ -793,7 +793,7 @@ configure_boundary() {
             # AWS APIs advertise ONNX metadata to match their local-ML
             # executors, but do not link node execution or ORT dependencies.
             DEPENDENCY_ONLY=1
-            CHECK_ARGS=(--package aws-api)
+            CHECK_ARGS=(--package aws-api --package aws-api-ecs)
             FORBIDDEN=(flow-like-catalog-automation ort ort-sys fastembed face_id tract-tflite)
             REQUIRED=(flow-like-catalog-onnx)
             FEATURE_PACKAGE="flow-like-catalog"

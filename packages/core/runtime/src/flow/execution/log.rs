@@ -61,6 +61,9 @@ pub struct LogMessage {
     pub stats: Option<LogStat>,
     pub start: SystemTime,
     pub end: SystemTime,
+    /// Groups repeats of one message ([`super::log_summary::fingerprint`]); set when stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -74,6 +77,9 @@ pub struct StoredLogMessage {
     pub bit_ids: Option<Vec<String>>,
     pub start: u64,
     pub end: u64,
+    /// Absent in tables written before fingerprints existed.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
 }
 
 impl From<LogMessage> for StoredLogMessage {
@@ -82,6 +88,9 @@ impl From<LogMessage> for StoredLogMessage {
         let token_in = log.stats.as_ref().and_then(|s| s.token_in);
         let token_out = log.stats.as_ref().and_then(|s| s.token_out);
         let bit_ids = log.stats.and_then(|s| s.bit_ids);
+        let fingerprint = log.fingerprint.unwrap_or_else(|| {
+            super::log_summary::fingerprint(log.node_id.as_deref(), log_level, &log.message).id
+        });
 
         StoredLogMessage {
             message: log.message,
@@ -91,6 +100,7 @@ impl From<LogMessage> for StoredLogMessage {
             token_in,
             token_out,
             bit_ids,
+            fingerprint: Some(fingerprint),
             start: log
                 .start
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -120,6 +130,7 @@ impl From<StoredLogMessage> for LogMessage {
             stats: Some(LogStat::new(token_in, token_out, bit_ids)),
             start: SystemTime::UNIX_EPOCH + std::time::Duration::from_micros(log.start),
             end: SystemTime::UNIX_EPOCH + std::time::Duration::from_micros(log.end),
+            fingerprint: log.fingerprint,
         }
     }
 }
@@ -135,6 +146,7 @@ impl LogMessage {
             stats: None,
             start: now,
             end: now,
+            fingerprint: None,
         }
     }
 

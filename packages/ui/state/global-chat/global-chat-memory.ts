@@ -82,7 +82,11 @@ export async function listGlobalChatMemories(
 		headers: apiHeaders(token),
 	});
 	if (!res.ok) throw new Error(`list memories failed: ${res.status}`);
-	return res.json();
+	const entries: unknown = await res.json();
+	if (!Array.isArray(entries)) {
+		throw new Error(`list memories returned ${typeof entries}, not a list`);
+	}
+	return entries;
 }
 
 /** Delete a single stored observation by id. */

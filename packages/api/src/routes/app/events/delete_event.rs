@@ -71,14 +71,6 @@ pub async fn delete_event(
             ApiError::internal_error(anyhow!(e))
         })?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "event.delete",
-        "Event",
-        event_id,
-        "Event deleted"
-    );
+    audit_branch!(state, user, app_id, "event.delete", "Event", event_id);
     Ok(Json(()))
 }

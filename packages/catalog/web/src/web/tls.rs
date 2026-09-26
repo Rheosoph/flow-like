@@ -33,13 +33,49 @@ pub struct TlsConfig {
 }
 
 #[cfg(feature = "execute")]
-pub trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
-
+pub use flow_like::flow::execution::service::ServiceIo as AsyncReadWrite;
 #[cfg(feature = "execute")]
-impl<T> AsyncReadWrite for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+pub type BoxedIo = flow_like::flow::execution::service::BoxedServiceIo;
 
+/// The placement host's managed identity takes precedence over node settings.
 #[cfg(feature = "execute")]
-pub type BoxedIo = Box<dyn AsyncReadWrite>;
+#[derive(Clone)]
+pub enum ServiceAcceptor {
+    Plain,
+    Inline(tokio_rustls::TlsAcceptor),
+    Managed(std::sync::Arc<dyn flow_like::flow::execution::service::ServiceTlsProvider>),
+}
+#[cfg(feature = "execute")]
+impl ServiceAcceptor {
+    pub async fn new(
+        context: &ExecutionContext,
+        config: &TlsConfig,
+    ) -> flow_like_types::Result<Self> {
+        if let Some(provider) = &context.app_state.service_tls_provider {
+            provider.validate().await?;
+            return Ok(Self::Managed(provider.clone()));
+        }
+        Ok(match server_acceptor(config)? {
+            Some(tls) => Self::Inline(tls),
+            None => Self::Plain,
+        })
+    }
+    pub fn encrypted(&self) -> bool {
+        !matches!(self, Self::Plain)
+    }
+    pub async fn accept(&self, stream: tokio::net::TcpStream) -> flow_like_types::Result<BoxedIo> {
+        let handshake = async {
+            match self {
+                Self::Plain => Ok(Box::new(stream) as BoxedIo),
+                Self::Inline(tls) => Ok(Box::new(tls.accept(stream).await?) as BoxedIo),
+                Self::Managed(tls) => tls.accept(stream).await,
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), handshake)
+            .await
+            .map_err(|_| flow_like_types::anyhow!("TLS handshake timed out"))?
+    }
+}
 
 #[cfg(feature = "execute")]
 pub type BoxedReader = Box<dyn tokio::io::AsyncRead + Unpin + Send>;

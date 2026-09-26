@@ -456,7 +456,7 @@ node.set_scores(NodeScores {
 
 ## Permissions & Resource Limits
 
-`flow-like.toml` carries package metadata plus package-wide resource tiers such as memory and timeout. Capability permissions are declared per node in Rust with `node.add_permission(NodePermission::...)`, and those node-level permissions are what the runtime exposes and enforces for WASM nodes.
+`flow-like.toml` carries package metadata plus package-wide resource tiers such as memory and timeout, and optionally an outbound host allowlist (`[permissions.network] allowed_hosts`) and OAuth scopes (`[[permissions.oauth_scopes]]`). Capability permissions are declared per node in Rust with `node.add_permission(NodePermission::...)`. The runtime enforces exactly those, and the registry derives the store's capability listing from the compiled node definitions, so capabilities are never repeated in the manifest.
 
 ```toml
 [permissions]

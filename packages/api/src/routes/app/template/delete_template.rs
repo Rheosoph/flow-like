@@ -89,8 +89,7 @@ pub async fn delete_template(
         app_id,
         "template.delete",
         "Template",
-        template_id,
-        "Template deleted"
+        template_id
     );
     Ok(deleted)
 }

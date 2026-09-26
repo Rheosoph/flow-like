@@ -81,6 +81,16 @@ fn data_studio_guidance_normalizes_human_table_labels() {
 }
 
 #[test]
+fn data_studio_guidance_imports_forwarded_geojson_files() {
+    let prompt = data_studio_system_prompt("");
+    assert!(prompt.contains("import_geojson"));
+    assert!(prompt.contains("FILES FORWARDED FOR IMPORT"));
+    assert!(prompt.contains("never retype coordinates"));
+    assert!(prompt.contains("never present them as metres"));
+    assert!(prompt.contains("sentinel strings such as `\"unknown\"` stays `string`"));
+}
+
+#[test]
 fn table_drops_are_data_studio_only_and_never_a_reset() {
     let data_prompt = data_studio_system_prompt("");
     assert!(data_prompt.contains("delete_table"));

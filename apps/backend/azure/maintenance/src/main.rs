@@ -27,6 +27,7 @@ const ALL_JOBS: &[MaintenanceJob] = &[
     MaintenanceJob::CacheCleanup,
     MaintenanceJob::RunSweep,
     MaintenanceJob::StateCleanup,
+    MaintenanceJob::Payments,
 ];
 
 struct Config {
@@ -122,7 +123,7 @@ fn parse_maintenance_jobs(value: Option<&str>) -> Result<Vec<MaintenanceJob>, St
         .map(|job| vec![job])
         .map_err(|error| {
             format!(
-                "MAINTENANCE_JOB must be telemetry_alerts, cache_cleanup, run_sweep, state_cleanup or all: {error}"
+                "MAINTENANCE_JOB must be telemetry_alerts, cache_cleanup, run_sweep, state_cleanup, payments or all: {error}"
             )
         }),
     }
@@ -295,6 +296,9 @@ async fn run_job(
     })?;
 
     match (job, parsed) {
+        (MaintenanceJob::Payments, MaintenanceRunResponse::Payments(result)) => {
+            tracing::info!(inbox_completed = result.inbox_completed, effects_completed = result.effects_completed, deferred = result.deferred, "Payment recovery completed");
+        }
         (MaintenanceJob::TelemetryAlerts, MaintenanceRunResponse::TelemetryAlerts(result)) => {
             tracing::info!(
                 evaluated = result.evaluated,
@@ -386,6 +390,7 @@ mod tests {
             MaintenanceJob::CacheCleanup,
             MaintenanceJob::RunSweep,
             MaintenanceJob::StateCleanup,
+            MaintenanceJob::Payments,
         ];
         assert_eq!(parse_maintenance_jobs(None).unwrap(), all);
         assert_eq!(parse_maintenance_jobs(Some("")).unwrap(), all);

@@ -97,7 +97,7 @@ export function ProjectIdentityRow({
 						type={app.app_type}
 						size={40}
 						src={sanitizeImageUrl(metadata.icon ?? undefined, "/app-logo.webp")}
-						fallback={metadata.name.substring(0, 2).toUpperCase()}
+						fallback={(metadata.name ?? "").substring(0, 2).toUpperCase()}
 					/>
 				</button>
 

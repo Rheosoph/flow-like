@@ -13,6 +13,7 @@ import {
 	createProjectUserSearch,
 	mergeProjectUserResults,
 } from "../lib/project-user-search";
+import { asArray } from "../lib/response-shape";
 import { useBackend } from "../state/backend-state";
 import type {
 	IProjectContactsPage,
@@ -21,8 +22,14 @@ import type {
 
 const CACHE_TIME = 5 * 60 * 1000;
 
+export type ProjectUserSearch = ReturnType<typeof useProjectUserSearch>;
+
+/**
+ * Without an `appId` there is no project to draw colleagues from or to exclude
+ * members of, so only the directory is searched.
+ */
 export function useProjectUserSearch(
-	appId: string,
+	appId: string | undefined,
 	query: string,
 	open: boolean,
 ) {
@@ -34,7 +41,7 @@ export function useProjectUserSearch(
 		getApiOrigin(backend.profile),
 		backend.profile?.id ?? "",
 		auth.user?.profile.sub ?? "local",
-		appId,
+		appId ?? "",
 	];
 	const contactsKey = ["projectInviteContacts", ...scope];
 	const directoryKey = ["projectInviteDirectory", ...scope];
@@ -51,10 +58,11 @@ export function useProjectUserSearch(
 
 	const contacts = useInfiniteQuery({
 		queryKey: contactsKey,
-		queryFn: ({ pageParam }) => source.getProjectContacts(appId, pageParam),
+		queryFn: ({ pageParam }) =>
+			source.getProjectContacts(appId as string, pageParam),
 		initialPageParam: undefined as string | undefined,
-		getNextPageParam: (page) => page.next_cursor ?? undefined,
-		enabled: open,
+		getNextPageParam: (page) => page?.next_cursor ?? undefined,
+		enabled: open && !!appId,
 		staleTime: CACHE_TIME,
 		gcTime: CACHE_TIME,
 		retry: 1,
@@ -70,7 +78,7 @@ export function useProjectUserSearch(
 	const index = useMemo(
 		() =>
 			createProjectUserSearch(
-				contacts.data?.pages.flatMap((p) => p.users) ?? [],
+				asArray(contacts.data?.pages).flatMap((p) => asArray(p?.users)),
 			),
 		[contacts.data],
 	);
@@ -90,7 +98,8 @@ export function useProjectUserSearch(
 	const remoteResults =
 		canSearchDirectory && !isDebouncing ? directory.data : undefined;
 	const results = useMemo(
-		() => mergeProjectUserResults(localResults, remoteResults ?? [], trimmed),
+		() =>
+			mergeProjectUserResults(localResults, asArray(remoteResults), trimmed),
 		[localResults, remoteResults, trimmed],
 	);
 
@@ -118,15 +127,17 @@ export function useProjectUserSearch(
 				(data) =>
 					data && {
 						...data,
-						pages: data.pages.map((page) => ({
+						pages: asArray(data.pages).map((page) => ({
 							...page,
-							users: page.users.filter((user) => user.id !== invitedId),
+							users: asArray(page?.users).filter(
+								(user) => user.id !== invitedId,
+							),
 						})),
 					},
 			);
 			queryClient.setQueriesData<IUserLookup[]>(
 				{ queryKey: directoryKey },
-				(data) => data?.filter((user) => user.id !== invitedId),
+				(data) => data && asArray(data).filter((user) => user.id !== invitedId),
 			);
 			return Promise.all([
 				queryClient.invalidateQueries({ queryKey: contactsKey }),

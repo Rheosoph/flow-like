@@ -7,7 +7,7 @@
 import sdk
 
 # ============================================================================
-# Node definition — note `addPermission("http")`
+# Node definition — note `addPermission("network:http")`
 # ============================================================================
 
 proc buildHttpGetDefinition(): NodeDefinition =
@@ -16,7 +16,7 @@ proc buildHttpGetDefinition(): NodeDefinition =
   def.friendlyName = "HTTP GET Request (Nim)"
   def.description = "Sends a GET request to a URL and reports the result"
   def.category = "Network/HTTP"
-  def.addPermission("http")
+  def.addPermission("network:http")
 
   def.addPin inputPin("exec", "Execute", "Trigger execution", Exec)
   def.addPin inputPin("url", "URL", "Target URL", String).withDefault("\"https://httpbin.org/get\"")

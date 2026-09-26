@@ -139,8 +139,7 @@ pub async fn add_member(
         app_id,
         "app_group.member.add",
         "AppGroup",
-        group_id,
-        "App group member added"
+        group_id
     );
 
     single_group(&state, &group_id).await
@@ -204,8 +203,7 @@ pub async fn remove_member(
         app_id,
         "app_group.member.remove",
         "AppGroup",
-        group_id,
-        "App group member removed"
+        group_id
     );
 
     Ok(Json(()))
@@ -276,8 +274,7 @@ pub async fn leave_group(
         app_id,
         "app_group.member.leave",
         "AppGroup",
-        group_id,
-        "App left a suite"
+        group_id
     );
 
     Ok(Json(()))

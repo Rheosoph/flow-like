@@ -2,6 +2,10 @@ use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Schema};
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
+pub use flow_like_storage_contracts::database::{
+    DatabaseBranch, DatabaseCleanupStats, DatabaseReference, DatabaseSelector, DatabaseTag,
+    DatabaseVersion,
+};
 use flow_like_types::Cacheable;
 use flow_like_types::async_trait;
 use flow_like_types::{Result, Value, anyhow};
@@ -34,16 +38,35 @@ use lancedb::{
     table::{CompactionOptions, Duration, OptimizeOptions},
 };
 
-use std::{any::Any, path::PathBuf, sync::Arc};
+use std::{any::Any, collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
 use crate::arrow_utils::{
     ValueBatchReader, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
-use crate::databases::df_provider::zero_column_safe_writable;
+use crate::databases::df_provider::{zero_column_safe, zero_column_safe_writable};
+use crate::databases::lance_filter_params::orient_spatial_relations;
 
 use super::VectorStore;
+use super::schema::{
+    PrimaryKeyRejected, TableInputRejected, primary_key_columns, primary_key_ineligibility,
+    primary_key_marker_update, without_primary_key_marker,
+};
+
+#[cfg(test)]
+#[path = "reference_tests.rs"]
+mod reference_tests;
+
+#[cfg(test)]
+#[path = "mutation_tests.rs"]
+mod mutation_tests;
+
+/// Tables live at the database root, so LanceDB's namespace manifest only
+/// costs a LIST + GET per connect and creates `__manifest` in fresh roots.
+pub fn connect_lance(uri: &str) -> lancedb::connection::ConnectBuilder {
+    connect(uri).namespace_client_property("manifest_enabled", "false")
+}
 
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug)]
 pub struct IndexConfigDto {
@@ -169,12 +192,64 @@ fn validate_new_columns(transform: &NewColumnTransform) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LogicalTableMutation {
+    Insert {
+        items: Vec<Value>,
+    },
+    Upsert {
+        items: Vec<Value>,
+        id_field: String,
+    },
+    Update {
+        filter: String,
+        updates: Vec<(String, String)>,
+    },
+    Delete {
+        filter: String,
+    },
+}
+
+/// A local durable acknowledgement. Cloud acknowledgement is tracked separately
+/// by the adapter's replay service.
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct LocalWriteReceipt {
+    pub operation_id: String,
+    pub sequence: u64,
+    pub state: String,
+}
+
+#[async_trait]
+pub trait LogicalTableMutationAdapter: Send + Sync {
+    /// Return only after the operation and its local materialization can survive
+    /// a process crash. Retries and remote acknowledgement belong to the adapter.
+    async fn apply(&self, mutation: LogicalTableMutation) -> Result<LocalWriteReceipt>;
+
+    /// Recover pending local materialization before returning a complete view.
+    /// None means confirmed absence, never a partial or unavailable snapshot.
+    async fn read_table(&self) -> Result<Option<Table>>;
+
+    /// Advance when a retained query provider needs to be rebuilt.
+    fn generation(&self) -> u64 {
+        0
+    }
+}
+
 #[derive(Clone)]
 pub struct LanceDBVectorStore {
     connection: Connection,
     table: Option<Table>,
     table_name: String,
     write_options: Option<WriteOptions>,
+    selector: DatabaseSelector,
+    mutation_adapter: Option<Arc<dyn LogicalTableMutationAdapter>>,
+    last_write_receipt: Arc<std::sync::RwLock<Option<LocalWriteReceipt>>>,
+    /// ID columns upserts ruled out as the table key, with the column's type and
+    /// nullability at that time; a changed column is checked again.
+    unmarkable_keys: HashMap<String, Option<(DataType, bool)>>,
 }
 
 impl Cacheable for LanceDBVectorStore {
@@ -196,13 +271,76 @@ impl LanceDBVectorStore {
         &self.table_name
     }
 
-    pub fn connection(&self) -> &Connection {
-        &self.connection
+    pub fn connection(&self) -> Result<&Connection> {
+        self.ensure_unmanaged("raw database connections")?;
+        Ok(&self.connection)
+    }
+
+    pub fn with_mutation_adapter(mut self, adapter: Arc<dyn LogicalTableMutationAdapter>) -> Self {
+        self.mutation_adapter = Some(adapter);
+        self
+    }
+
+    pub fn is_durably_managed(&self) -> bool {
+        self.mutation_adapter.is_some()
+    }
+
+    pub fn last_write_receipt(&self) -> Option<LocalWriteReceipt> {
+        self.last_write_receipt
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn mutation_generation(&self) -> u64 {
+        self.mutation_adapter
+            .as_ref()
+            .map_or(0, |adapter| adapter.generation())
+    }
+
+    fn ensure_unmanaged(&self, operation: &str) -> Result<()> {
+        if self.is_durably_managed() {
+            return Err(anyhow!(
+                "Offline-buffered tables do not support {operation}; use logical row operations"
+            ));
+        }
+        Ok(())
+    }
+
+    async fn readable_table(&self) -> Result<Option<Table>> {
+        match &self.mutation_adapter {
+            Some(adapter) => adapter.read_table().await,
+            None => Ok(self.table.clone()),
+        }
+    }
+
+    async fn require_readable_table(&self) -> Result<Table> {
+        self.readable_table()
+            .await?
+            .ok_or_else(|| anyhow!("Table not initialized"))
+    }
+
+    pub async fn table_exists(&self) -> Result<bool> {
+        Ok(self.readable_table().await?.is_some())
+    }
+
+    async fn apply_logical_mutation(&self, mutation: LogicalTableMutation) -> Result<()> {
+        self.ensure_writable()?;
+        let adapter = self
+            .mutation_adapter
+            .as_ref()
+            .ok_or_else(|| anyhow!("Missing logical mutation adapter"))?;
+        let receipt = adapter.apply(mutation).await?;
+        *self
+            .last_write_receipt
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Some(receipt);
+        Ok(())
     }
 
     pub async fn new(path: PathBuf, table_name: String) -> Result<Self> {
         Self::validate_table_name(&table_name)?;
-        let connection = connect(path.to_str().unwrap()).execute().await.ok();
+        let connection = connect_lance(path.to_str().unwrap()).execute().await.ok();
         let connection: Connection = connection.ok_or(anyhow!("Error connecting to LanceDB"))?;
 
         let table = connection.open_table(&table_name).execute().await.ok();
@@ -212,6 +350,10 @@ impl LanceDBVectorStore {
             table,
             table_name,
             write_options: None,
+            selector: DatabaseSelector::default(),
+            mutation_adapter: None,
+            last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         })
     }
 
@@ -231,7 +373,405 @@ impl LanceDBVectorStore {
             table,
             table_name,
             write_options: None,
+            selector: DatabaseSelector::default(),
+            mutation_adapter: None,
+            last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         }
+    }
+
+    /// Construct the table handle before installing a local mutation adapter.
+    /// Opening cloud metadata here would delay every new run during an outage.
+    pub fn from_connection_for_overlay(
+        connection: Connection,
+        table_name: String,
+        selector: DatabaseSelector,
+    ) -> Result<Self> {
+        Self::validate_table_name(&table_name)?;
+        Self::validate_overlay_selector(&selector)?;
+        Ok(Self {
+            connection,
+            table: None,
+            table_name,
+            write_options: None,
+            selector,
+            mutation_adapter: None,
+            last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
+        })
+    }
+
+    pub fn validate_overlay_selector(selector: &DatabaseSelector) -> Result<()> {
+        selector.validate()?;
+        if selector.branch != "main" || selector.version.is_some() || selector.tag.is_some() {
+            return Err(anyhow!(
+                "Offline-buffered tables expose only their current version; open branches, tags or versions from a run without offline buffering"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Open an existing reference strictly. A missing branch, tag, or version is an error.
+    pub async fn from_connection_with_selector(
+        connection: Connection,
+        table_name: String,
+        mut selector: DatabaseSelector,
+    ) -> Result<Self> {
+        Self::validate_table_name(&table_name)?;
+        selector.validate()?;
+        if let Some(tag) = selector.tag.take() {
+            let root = connection.open_table(&table_name).execute().await?;
+            let tags = root.tags().await?.list().await?;
+            let contents = tags
+                .get(&tag)
+                .ok_or_else(|| anyhow!("Tag '{tag}' does not exist"))?;
+            selector.branch = contents.branch.clone().unwrap_or_else(|| "main".into());
+            selector.version = Some(contents.version);
+        }
+
+        let mut open = connection.open_table(&table_name).branch(&selector.branch);
+        if let Some(version) = selector.version {
+            open = open.version(version);
+        }
+        let table = open.execute().await?;
+        Ok(Self {
+            connection,
+            table: Some(table),
+            table_name,
+            write_options: None,
+            selector,
+            mutation_adapter: None,
+            last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
+        })
+    }
+
+    /// Tags are resolved to immutable branch/version pins before this value is returned.
+    pub fn selector(&self) -> DatabaseSelector {
+        self.selector.clone()
+    }
+
+    pub async fn reference(&self) -> Result<DatabaseReference> {
+        let table = self.require_readable_table().await?;
+        Ok(DatabaseReference {
+            table: self.table_name.clone(),
+            branch: table.current_branch().unwrap_or_else(|| "main".into()),
+            version: table.version().await?,
+            read_only: self.selector.is_read_only(),
+            pinned: self.selector.is_pinned(),
+        })
+    }
+
+    /// Open another handle. Never change a shared LanceDB table handle in place.
+    pub async fn checkout(&self, mut selector: DatabaseSelector) -> Result<Self> {
+        self.ensure_unmanaged("reference checkout")?;
+        // A read-only capability cannot be promoted through checkout.
+        selector.read_only |= self.selector.read_only;
+        let mut store = Self::from_connection_with_selector(
+            self.connection.clone(),
+            self.table_name.clone(),
+            selector,
+        )
+        .await?;
+        store.write_options = self.write_options.clone();
+        Ok(store)
+    }
+
+    /// Replace credentials without moving a branch or a resolved snapshot.
+    pub async fn reopen(&self, connection: Connection) -> Result<Self> {
+        self.ensure_unmanaged("raw database reconnection")?;
+        let mut store = if self.table.is_none() && self.selector == DatabaseSelector::default() {
+            Self::from_connection(connection, self.table_name.clone()).await
+        } else {
+            Self::from_connection_with_selector(
+                connection,
+                self.table_name.clone(),
+                self.selector(),
+            )
+            .await?
+        };
+        store.write_options = self.write_options.clone();
+        Ok(store)
+    }
+
+    pub fn ensure_writable(&self) -> Result<()> {
+        if self.selector.is_read_only() {
+            return Err(anyhow!(
+                "Database reference is read-only; open the latest branch to write"
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_reference_management(&self) -> Result<()> {
+        self.ensure_unmanaged("reference management")?;
+        if self.selector.read_only {
+            return Err(anyhow!(
+                "Reference management is disabled for a read-only database"
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn list_versions(&self) -> Result<Vec<DatabaseVersion>> {
+        let mut versions = self
+            .raw()
+            .await?
+            .list_versions()
+            .await?
+            .into_iter()
+            .map(|version| DatabaseVersion {
+                version: version.version,
+                timestamp: version.timestamp.to_rfc3339(),
+                metadata: version.metadata,
+            })
+            .collect::<Vec<_>>();
+        versions.sort_by_key(|version| std::cmp::Reverse(version.version));
+        Ok(versions)
+    }
+
+    pub async fn list_branches(&self) -> Result<Vec<DatabaseBranch>> {
+        let mut branches = self
+            .raw()
+            .await?
+            .list_branches()
+            .await?
+            .into_iter()
+            .map(|(name, branch)| DatabaseBranch {
+                name,
+                parent_branch: Some(branch.parent_branch.unwrap_or_else(|| "main".into())),
+                parent_version: Some(branch.parent_version),
+                created_at: Some(branch.create_at),
+            })
+            .collect::<Vec<_>>();
+        if !branches.iter().any(|branch| branch.name == "main") {
+            branches.push(DatabaseBranch {
+                name: "main".into(),
+                parent_branch: None,
+                parent_version: None,
+                created_at: None,
+            });
+        }
+        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(branches)
+    }
+
+    pub async fn list_tags(&self) -> Result<Vec<DatabaseTag>> {
+        let table = self.raw().await?;
+        let mut tags = table
+            .tags()
+            .await?
+            .list()
+            .await?
+            .into_iter()
+            .map(|(name, tag)| DatabaseTag {
+                name,
+                branch: tag.branch.unwrap_or_else(|| "main".into()),
+                version: tag.version,
+                created_at: tag.created_at.map(|date| date.to_rfc3339()),
+                updated_at: tag.updated_at.map(|date| date.to_rfc3339()),
+            })
+            .collect::<Vec<_>>();
+        tags.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(tags)
+    }
+
+    pub async fn create_branch(&self, name: &str) -> Result<Self> {
+        self.ensure_reference_management()?;
+        if name == "main" {
+            return Err(anyhow!("The main branch already exists"));
+        }
+        let reference = self.reference().await?;
+        let table = self
+            .raw()
+            .await?
+            .create_branch(name, (reference.branch.as_str(), reference.version))
+            .await?;
+        Ok(Self {
+            connection: self.connection.clone(),
+            table: Some(table),
+            table_name: self.table_name.clone(),
+            write_options: self.write_options.clone(),
+            selector: DatabaseSelector {
+                branch: name.into(),
+                ..Default::default()
+            },
+            mutation_adapter: None,
+            last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
+        })
+    }
+
+    pub async fn delete_branch(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        if name == "main" {
+            return Err(anyhow!(
+                "The main branch cannot be deleted; drop the table instead"
+            ));
+        }
+        if name == self.selector.branch {
+            return Err(anyhow!(
+                "Open a different branch before deleting the selected branch"
+            ));
+        }
+        if let Some(tag) = self
+            .list_tags()
+            .await?
+            .into_iter()
+            .find(|tag| tag.branch == name)
+        {
+            return Err(anyhow!(
+                "Branch '{name}' is protected by tag '{}'; remove the tag first",
+                tag.name
+            ));
+        }
+        self.raw().await?.delete_branch(name).await?;
+        Ok(())
+    }
+
+    pub async fn create_tag(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        let table = self.raw().await?;
+        let version = table.version().await?;
+        table.tags().await?.create(name, version).await?;
+        Ok(())
+    }
+
+    pub async fn update_tag(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        self.ensure_clone_tag_unused(name).await?;
+        let table = self.raw().await?;
+        let version = table.version().await?;
+        table.tags().await?.update(name, version).await?;
+        Ok(())
+    }
+
+    pub async fn delete_tag(&self, name: &str) -> Result<()> {
+        self.ensure_reference_management()?;
+        self.ensure_clone_tag_unused(name).await?;
+        self.raw().await?.tags().await?.delete(name).await?;
+        Ok(())
+    }
+
+    /// Restore through a fresh handle, leaving all existing snapshot readers pinned.
+    pub async fn restore(&self) -> Result<DatabaseReference> {
+        self.ensure_reference_management()?;
+        if !self.selector.is_pinned() {
+            return Err(anyhow!(
+                "Select a historical version or tag before restoring"
+            ));
+        }
+        let mut restored = self.checkout(self.selector()).await?;
+        restored
+            .table
+            .as_ref()
+            .ok_or_else(|| anyhow!("Table not initialized"))?
+            .restore()
+            .await?;
+        restored.selector.version = None;
+        restored.selector.tag = None;
+        restored.reference().await
+    }
+
+    /// Remove eligible history while preserving tagged versions and shared branch files.
+    pub async fn cleanup_versions(&self, older_than_days: u64) -> Result<DatabaseCleanupStats> {
+        self.ensure_unmanaged("version cleanup")?;
+        self.ensure_writable()?;
+        if older_than_days == 0 {
+            return Err(anyhow!("Version retention must be at least one day"));
+        }
+        let days =
+            i64::try_from(older_than_days).map_err(|_| anyhow!("Retention period is too large"))?;
+        let retention =
+            Duration::try_days(days).ok_or_else(|| anyhow!("Retention period is too large"))?;
+        let stats = self
+            .raw()
+            .await?
+            .optimize(lancedb::table::OptimizeAction::Prune {
+                older_than: Some(retention),
+                delete_unverified: Some(false),
+                error_if_tagged_old_versions: Some(false),
+            })
+            .await?;
+        let stats = stats.prune.unwrap_or_default();
+        Ok(DatabaseCleanupStats {
+            bytes_removed: stats.bytes_removed,
+            old_versions: stats.old_versions,
+            data_files_removed: stats.data_files_removed,
+            transaction_files_removed: stats.transaction_files_removed,
+            index_files_removed: stats.index_files_removed,
+            deletion_files_removed: stats.deletion_files_removed,
+        })
+    }
+
+    /// A shallow clone shares source files. Its retained source tag protects cleanup.
+    pub async fn clone_table(&self, target: &str) -> Result<Self> {
+        self.ensure_reference_management()?;
+        Self::validate_table_name(target)?;
+        if target == self.table_name {
+            return Err(anyhow!("Choose a different table name for the clone"));
+        }
+        match self.connection.open_table(target).execute().await {
+            Ok(_) => return Err(anyhow!("Table '{target}' already exists")),
+            Err(lancedb::Error::TableNotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let source = self.raw().await?;
+        let source_uri = source.uri().await?;
+        let source_version = source.version().await?;
+        let retention_tag = format!("flow_clone_source_{target}");
+        source
+            .tags()
+            .await?
+            .create(&retention_tag, source_version)
+            .await?;
+        let result = self
+            .connection
+            .clone_table(target, source_uri)
+            .source_tag(&retention_tag)
+            .execute()
+            .await;
+        let table = match result {
+            Ok(table) => table,
+            Err(error) => {
+                // The tag is safe to remove when no target was committed.
+                if matches!(
+                    self.connection.open_table(target).execute().await,
+                    Err(lancedb::Error::TableNotFound { .. })
+                ) {
+                    source.tags().await?.delete(&retention_tag).await?;
+                }
+                return Err(error.into());
+            }
+        };
+        Ok(Self {
+            connection: self.connection.clone(),
+            table: Some(table),
+            table_name: target.into(),
+            write_options: self.write_options.clone(),
+            selector: DatabaseSelector::default(),
+            mutation_adapter: None,
+            last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
+        })
+    }
+
+    async fn ensure_clone_tag_unused(&self, name: &str) -> Result<()> {
+        if let Some(target) = name.strip_prefix("flow_clone_source_") {
+            if Self::validate_table_name(target).is_err() {
+                return Ok(());
+            }
+            match self.connection.open_table(target).execute().await {
+                Ok(_) => {
+                    return Err(anyhow!(
+                        "Table '{target}' shares source files protected by tag '{name}'; drop that clone first"
+                    ));
+                }
+                Err(lancedb::Error::TableNotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 
     pub fn set_write_options(&mut self, options: WriteOptions) {
@@ -258,6 +798,8 @@ impl LanceDBVectorStore {
         schema: Schema,
         if_not_exists: bool,
     ) -> Result<bool> {
+        self.ensure_unmanaged("explicit table creation")?;
+        self.ensure_writable()?;
         for field in schema.fields() {
             crate::geometry::validate_geometry_field(field)?;
         }
@@ -311,9 +853,16 @@ impl LanceDBVectorStore {
         Ok(created)
     }
 
-    /// Drop the whole table (data AND schema). Unlike `purge`, this allows the table to be
-    /// recreated with a different schema (e.g. a new embedding vector dimension) on the next insert.
-    pub async fn drop_table(&mut self) -> Result<()> {
+    /// Check table-wide drop restrictions before callers discard pending writes.
+    /// Returns whether the table currently exists.
+    pub async fn ensure_can_drop_table(&self) -> Result<bool> {
+        self.ensure_unmanaged("table deletion")?;
+        self.ensure_writable()?;
+        if self.selector.branch != "main" {
+            return Err(anyhow!(
+                "Dropping a table removes every branch; open the latest main branch first"
+            ));
+        }
         let exists = self
             .connection
             .table_names()
@@ -322,19 +871,39 @@ impl LanceDBVectorStore {
             .iter()
             .any(|name| name == &self.table_name);
         if exists {
+            // The legacy constructor permits an unopened table for lazy creation.
+            // Reopen strictly here so transient read errors cannot bypass dependencies.
+            let table = self
+                .connection
+                .open_table(&self.table_name)
+                .execute()
+                .await?;
+            for tag in table.tags().await?.list().await?.keys() {
+                self.ensure_clone_tag_unused(tag).await?;
+            }
+        }
+        Ok(exists)
+    }
+
+    /// Drop the whole table and every branch. Purge removes rows only.
+    pub async fn drop_table(&mut self) -> Result<()> {
+        let exists = self.ensure_can_drop_table().await?;
+        if exists {
             self.connection.drop_table(&self.table_name, &[]).await?;
         }
         self.table = None;
+        self.unmarkable_keys.clear();
         Ok(())
     }
 
     pub async fn list_tables(&self) -> Result<Vec<String>> {
+        self.ensure_unmanaged("raw database listing")?;
         let tables = self.connection.table_names().execute().await?;
         Ok(tables)
     }
 
-    /// Compact fragments, rebuild indices and prune every version except the
-    /// current one. Irreversible: time travel to older versions is gone.
+    /// Compact fragments, rebuild indices, and prune unprotected history.
+    /// Tagged versions and branch dependencies remain available.
     pub async fn prune_history(&self) -> Result<()> {
         self.run_optimize_actions(prune_history_actions()).await
     }
@@ -343,6 +912,8 @@ impl LanceDBVectorStore {
         &self,
         actions: Vec<lancedb::table::OptimizeAction>,
     ) -> Result<()> {
+        self.ensure_unmanaged("table optimization")?;
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         let scalar_indices = scalar_indices_for_compaction(&table).await?;
 
@@ -362,10 +933,14 @@ impl LanceDBVectorStore {
         transform: NewColumnTransform,
         read_columns: Option<Vec<String>>,
     ) -> Result<AddColumnsResult> {
+        self.ensure_unmanaged("schema changes")?;
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
+        // The merged schema replaces the manifest's; a stale one would drop a newer key.
+        table.checkout_latest().await?;
 
         validate_new_columns(&transform)?;
         if let NewColumnTransform::SqlExpressions(expressions) = &transform {
@@ -389,7 +964,7 @@ impl LanceDBVectorStore {
                             })
                         {
                             return Err(anyhow!(
-                                "Geometry expressions cannot add columns without preserving metadata; declare geometry when creating the table"
+                                "Geometry expressions cannot add columns without preserving metadata; add a typed column with type 'geometry' instead, then write GeoJSON values"
                             ));
                         }
                     }
@@ -401,11 +976,25 @@ impl LanceDBVectorStore {
     }
 
     pub async fn drop_columns(&self, column_names: &[&str]) -> Result<()> {
+        self.ensure_unmanaged("schema changes")?;
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
 
+        table.checkout_latest().await?;
+        let keys = table_primary_key(&table).await?;
+        if let Some(key) = column_names
+            .iter()
+            .find_map(|name| targeted_key(&keys, name))
+        {
+            return Err(PrimaryKeyRejected(format!(
+                "Column '{key}' is the key of table '{}'; the key column cannot be removed",
+                self.table_name
+            ))
+            .into());
+        }
         table.drop_columns(column_names).await?;
         Ok(())
     }
@@ -414,12 +1003,17 @@ impl LanceDBVectorStore {
         &self,
         alteration: &[ColumnAlteration],
     ) -> Result<AlterColumnsResult> {
+        self.ensure_unmanaged("schema changes")?;
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
 
+        // A change built on a stale schema would commit over, and drop, a newer key.
+        table.checkout_latest().await?;
         let schema = table.schema().await?;
+        let keys = primary_key_columns(&schema);
         for change in alteration {
             let root = change.path.split('.').next().unwrap_or(&change.path);
             if change.data_type.is_some()
@@ -431,20 +1025,39 @@ impl LanceDBVectorStore {
                     "Geometry column types cannot be altered; create a declared geometry column and insert validated values"
                 ));
             }
+            self.ensure_key_alteration_allowed(&keys, change)?;
         }
         let result = table.alter_columns(alteration).await?;
         Ok(result)
     }
 
+    /// Lance accepts both changes, but a nullable key fails every later write.
+    fn ensure_key_alteration_allowed(
+        &self,
+        keys: &[String],
+        change: &ColumnAlteration,
+    ) -> Result<()> {
+        let Some(key) = targeted_key(keys, &change.path) else {
+            return Ok(());
+        };
+        if change.nullable != Some(true) && change.data_type.is_none() {
+            return Ok(());
+        }
+        Err(PrimaryKeyRejected(format!(
+            "Column '{key}' is the key of table '{}'; the key column must stay required and keep its type",
+            self.table_name
+        ))
+        .into())
+    }
+
     pub async fn list_indices(&self) -> Result<Vec<IndexConfigDto>> {
-        let indices = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let indices = self.require_readable_table().await?;
         list_table_indices(&indices).await
     }
 
     pub async fn drop_index(&self, name: &str) -> Result<()> {
+        self.ensure_unmanaged("index changes")?;
+        self.ensure_writable()?;
         let table = self
             .table
             .clone()
@@ -458,33 +1071,42 @@ impl LanceDBVectorStore {
         filter: &str,
         updates: std::collections::HashMap<String, Value>,
     ) -> Result<()> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
-
-        let mut op = table.update();
-        op = op.only_if(filter);
-
+        self.ensure_writable()?;
+        let filter = orient_spatial_relations(filter)?;
+        let filter = filter.as_str();
+        let table = self.require_readable_table().await?;
         let schema = table.schema().await?;
-        for column in updates.keys() {
-            if crate::geometry::is_geometry_field(schema.field_with_name(column)?) {
-                return Err(anyhow!(
-                    "Geometry column '{column}' cannot be updated with SQL expressions; use a validated upsert"
-                ));
-            }
+        let mut unknown: Vec<&str> = updates
+            .keys()
+            .map(String::as_str)
+            .filter(|column| schema.field_with_name(column).is_err())
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort_unstable();
+            return Err(
+                crate::arrow_utils::unknown_columns(&self.table_name, &unknown, &schema).into(),
+            );
         }
-        for (column, value) in updates {
-            let value_str = match &value {
-                Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => "NULL".to_string(),
-                _ => format!("'{}'", value.to_string().replace('\'', "''")),
-            };
-            op = op.column(&column, &value_str);
+        let expressions = updates
+            .into_iter()
+            .map(|(column, value)| {
+                let literal =
+                    update_sql_literal(&self.table_name, schema.field_with_name(&column)?, &value)?;
+                Ok((column, literal))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if self.is_durably_managed() {
+            return self
+                .apply_logical_mutation(LogicalTableMutation::Update {
+                    filter: filter.to_string(),
+                    updates: expressions,
+                })
+                .await;
         }
-
+        let mut op = table.update().only_if(filter);
+        for (column, value) in expressions {
+            op = op.column(&column, &value);
+        }
         op.execute().await?;
         Ok(())
     }
@@ -498,15 +1120,212 @@ impl LanceDBVectorStore {
         Ok(())
     }
 
-    pub async fn make_column_nullable(&self, column: &str, nullable: bool) -> Result<()> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
-
-        let alteration = ColumnAlteration::new(column.to_string()).set_nullable(nullable);
-        table.alter_columns(&[alteration]).await?;
+    /// Adds a nullable column of a `create_table` type, null in every existing row. Unlike an
+    /// SQL expression, the declared field keeps geometry's WKB/WGS84 metadata.
+    pub async fn add_typed_column(
+        &self,
+        name: &str,
+        data_type: &str,
+        vector_size: Option<u32>,
+    ) -> Result<()> {
+        let schema = super::schema::database_fields_to_arrow_schema(&[
+            super::schema::DatabaseSchemaField {
+                name: name.to_string(),
+                data_type: data_type.to_string(),
+                nullable: true,
+                vector_size,
+                primary_key: false,
+            },
+        ])?;
+        self.add_columns(NewColumnTransform::AllNulls(Arc::new(schema)), None)
+            .await?;
         Ok(())
+    }
+
+    /// A column definition from the API or FlowPilot: exactly one of an SQL expression computed
+    /// from existing columns, or a type for an initially empty column.
+    pub async fn add_column_definition(
+        &self,
+        name: &str,
+        sql_expression: Option<&str>,
+        data_type: Option<&str>,
+        vector_size: Option<u32>,
+    ) -> Result<()> {
+        match (sql_expression, data_type) {
+            (Some(expression), None) => self.add_column(name, expression).await,
+            (None, Some(data_type)) => self.add_typed_column(name, data_type, vector_size).await,
+            _ => Err(anyhow!(
+                "Column '{name}' needs exactly one of sql_expression or type"
+            )),
+        }
+    }
+
+    pub async fn make_column_nullable(&self, column: &str, nullable: bool) -> Result<()> {
+        let alteration = ColumnAlteration::new(column.to_string()).set_nullable(nullable);
+        self.alter_column(&[alteration]).await?;
+        Ok(())
+    }
+
+    /// The table key (Lance unenforced primary key), when exactly one column carries it.
+    pub async fn primary_key(&self) -> Result<Option<String>> {
+        let table = self.require_readable_table().await?;
+        let keys = table_primary_key(&table).await?;
+        Ok(<[String; 1]>::try_from(keys).ok().map(|[key]| key))
+    }
+
+    /// Mark `column` as the table key. Repeating the current key succeeds; the key never changes.
+    pub async fn set_primary_key(&self, column: &str) -> Result<()> {
+        self.ensure_unmanaged("schema changes")?;
+        self.ensure_writable()?;
+        let table = self.table.clone().ok_or_else(|| {
+            anyhow!(
+                "Table '{}' does not exist; create it before setting its key",
+                self.table_name
+            )
+        })?;
+        table.checkout_latest().await?;
+        let keys = table_primary_key(&table).await?;
+        if !keys.is_empty() {
+            return self.expect_primary_key(&keys, column);
+        }
+        self.ensure_key_candidate(&table, column).await?;
+
+        let Err(error) = table
+            .update_field_metadata(&[primary_key_marker_update(column)])
+            .await
+        else {
+            return Ok(());
+        };
+        table.checkout_latest().await?;
+        let keys = table_primary_key(&table).await?;
+        if keys.is_empty() {
+            return Err(anyhow!(
+                "Setting column '{column}' as the key of table '{}' failed: {error}",
+                self.table_name
+            ));
+        }
+        self.expect_primary_key(&keys, column)
+    }
+
+    async fn ensure_key_candidate(&self, table: &Table, column: &str) -> Result<()> {
+        let schema = table.schema().await?;
+        let field = schema.field_with_name(column).map_err(|_| {
+            PrimaryKeyRejected(format!(
+                "Table '{}' has no column '{column}' to use as its key",
+                self.table_name
+            ))
+        })?;
+        if let Some(reason) = primary_key_ineligibility(field) {
+            return Err(PrimaryKeyRejected(format!(
+                "Column '{column}' cannot be the key of table '{}': {reason}",
+                self.table_name
+            ))
+            .into());
+        }
+        let duplicates = self.duplicate_key_values(column).await?;
+        if duplicates > 0 {
+            return Err(PrimaryKeyRejected(format!(
+                "Column '{column}' cannot be the key of table '{}': it holds {duplicates} duplicate values; remove the duplicate rows first",
+                self.table_name
+            ))
+            .into());
+        }
+        Ok(())
+    }
+
+    fn expect_primary_key(&self, keys: &[String], column: &str) -> Result<()> {
+        if keys == [column] {
+            return Ok(());
+        }
+        Err(PrimaryKeyRejected(format!(
+            "Table '{}' is already keyed on '{}'; the key cannot change to '{column}'",
+            self.table_name,
+            keys.join("', '")
+        ))
+        .into())
+    }
+
+    /// Rows beyond the first for each value of `column`.
+    async fn duplicate_key_values(&self, column: &str) -> Result<i64> {
+        use datafusion::functions_aggregate::expr_fn::{count, count_distinct};
+
+        let batches = SessionContext::new()
+            .read_table(self.to_datafusion().await?)?
+            .aggregate(
+                vec![],
+                vec![
+                    count(lit(1)).alias("rows"),
+                    count_distinct(ident(column)).alias("values"),
+                ],
+            )?
+            .select(vec![col("rows") - col("values")])?
+            .collect()
+            .await?;
+        batches
+            .first()
+            .filter(|batch| batch.num_rows() == 1)
+            .and_then(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int64Array>()
+            })
+            .map(|duplicates| duplicates.value(0))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Counting duplicate values of column '{column}' in table '{}' returned no result",
+                    self.table_name
+                )
+            })
+    }
+
+    /// Mark the upsert's ID column as the key of a table without one, so concurrent
+    /// upserts of the same new ID retry as updates. Returns whether `id_field` is the key.
+    async fn ensure_upsert_key(&mut self, table: &Table, id_field: &str) -> Result<bool> {
+        let keys = table_primary_key(table).await?;
+        if !keys.is_empty() {
+            return Ok(keys == [id_field]);
+        }
+        // The handle may predate another writer's key or a change to the column.
+        table.checkout_latest().await?;
+        let schema = table.schema().await?;
+        let keys = primary_key_columns(&schema);
+        if !keys.is_empty() {
+            return Ok(keys == [id_field]);
+        }
+        let field = schema.field_with_name(id_field).ok();
+        let signature = field.map(|field| (field.data_type().clone(), field.is_nullable()));
+        if self.unmarkable_keys.get(id_field) == Some(&signature) {
+            return Ok(false);
+        }
+        if field.is_none_or(|field| primary_key_ineligibility(field).is_some()) {
+            self.unmarkable_keys.insert(id_field.to_string(), signature);
+            return Ok(false);
+        }
+        let duplicates = self.duplicate_key_values(id_field).await?;
+        if duplicates > 0 {
+            eprintln!(
+                "[LanceDB] Not marking column '{id_field}' as the key of table '{}': it holds {duplicates} duplicate values. Remove them to stop concurrent upserts from adding more.",
+                self.table_name
+            );
+            self.unmarkable_keys.insert(id_field.to_string(), signature);
+            return Ok(false);
+        }
+        let Err(error) = table
+            .update_field_metadata(&[primary_key_marker_update(id_field)])
+            .await
+        else {
+            return Ok(true);
+        };
+        table.checkout_latest().await?;
+        let keys = table_primary_key(table).await?;
+        if keys.is_empty() {
+            eprintln!(
+                "[LanceDB] Could not mark column '{id_field}' as the key of table '{}'; concurrent upserts may duplicate new IDs: {error:#}",
+                self.table_name
+            );
+        }
+        Ok(keys == [id_field])
     }
 
     /// The returned provider supports SELECT, INSERT INTO and (via
@@ -514,17 +1333,21 @@ impl LanceDBVectorStore {
     /// Read-only surfaces registering it must validate their SQL first
     /// ([`crate::databases::sql_guard::validate_readonly_sql`]).
     pub async fn to_datafusion(&self) -> Result<Arc<dyn TableProvider>> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
         let df_table = table.base_table();
         let adapter =
             lancedb::table::datafusion::BaseTableAdapter::try_new(df_table.clone()).await?;
+        if self.selector.is_read_only() || self.is_durably_managed() {
+            return Ok(Arc::new(ReadOnlyDatabaseProvider {
+                inner: zero_column_safe(Arc::new(adapter)),
+                mutation_adapter: self.mutation_adapter.clone(),
+            }));
+        }
         Ok(zero_column_safe_writable(Arc::new(adapter), table))
     }
 
     pub async fn raw(&self) -> Result<Table> {
+        self.ensure_unmanaged("raw table access")?;
         let table = self
             .table
             .clone()
@@ -548,6 +1371,11 @@ impl LanceDBVectorStore {
     }
 
     pub async fn insert_record_batch(&mut self, batch: RecordBatch) -> Result<()> {
+        if self.is_durably_managed() {
+            crate::geometry::validate_batch(&batch)?;
+            return self.insert(record_batch_to_value(&batch)?).await;
+        }
+        self.ensure_writable()?;
         crate::geometry::validate_batch(&batch)?;
         let items = vec![batch];
 
@@ -602,13 +1430,220 @@ impl LanceDBVectorStore {
     }
 }
 
+/// Delegate reads only. Omitting mutation methods makes DataFusion reject SQL writes
+/// even when the underlying latest table is writable.
+struct ReadOnlyDatabaseProvider {
+    inner: Arc<dyn TableProvider>,
+    mutation_adapter: Option<Arc<dyn LogicalTableMutationAdapter>>,
+}
+
+impl std::fmt::Debug for ReadOnlyDatabaseProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReadOnlyDatabaseProvider")
+            .field("inner", &self.inner)
+            .field("managed", &self.mutation_adapter.is_some())
+            .finish()
+    }
+}
+
+#[async_trait]
+impl TableProvider for ReadOnlyDatabaseProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> arrow_schema::SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> datafusion::logical_expr::TableType {
+        self.inner.table_type()
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn datafusion::catalog::Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[datafusion::logical_expr::Expr],
+        limit: Option<usize>,
+    ) -> datafusion::common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
+        if let Some(adapter) = &self.mutation_adapter {
+            // Mounted SQL providers can outlive a grant. Check the adapter on
+            // every new scan even when its data generation has not changed.
+            let table = adapter
+                .read_table()
+                .await
+                .map_err(|error| datafusion::common::DataFusionError::External(error.into()))?;
+            if table.is_none() {
+                return Err(datafusion::common::DataFusionError::Execution(
+                    "The managed table is no longer available".into(),
+                ));
+            }
+        }
+        self.inner.scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&datafusion::logical_expr::Expr],
+    ) -> datafusion::common::Result<Vec<datafusion::logical_expr::TableProviderFilterPushDown>>
+    {
+        self.inner.supports_filters_pushdown(filters)
+    }
+}
+
+async fn table_primary_key(table: &Table) -> Result<Vec<String>> {
+    let schema = table.schema().await?;
+    Ok(primary_key_columns(&schema))
+}
+
+/// The key a column path names, resolved the way Lance resolves paths, so a
+/// backtick-quoted spelling of the key column is still recognised.
+fn targeted_key<'a>(keys: &'a [String], path: &str) -> Option<&'a String> {
+    let segments = lance::datatypes::parse_field_path(path).ok()?;
+    let [name] = segments.as_slice() else {
+        return None;
+    };
+    keys.iter().find(|key| *key == name)
+}
+
+/// Whether `error` means concurrent commits kept winning, as opposed to bad input.
+pub fn is_write_contention(error: &flow_like_types::Error) -> bool {
+    error.chain().any(|cause| {
+        let lance = match cause.downcast_ref::<lancedb::Error>() {
+            Some(lancedb::Error::Lance { source }) => source,
+            _ => match cause.downcast_ref::<lance::Error>() {
+                Some(source) => source,
+                None => return false,
+            },
+        };
+        matches!(
+            lance,
+            lance::Error::TooMuchWriteContention { .. }
+                | lance::Error::RetryableCommitConflict { .. }
+                | lance::Error::CommitConflict { .. }
+        )
+    })
+}
+
+pub(crate) fn update_sql_literal(
+    table: &str,
+    field: &arrow_schema::Field,
+    value: &Value,
+) -> Result<String> {
+    let column = field.name();
+    if crate::geometry::is_geometry_field(field) {
+        return geometry_sql_literal(column, value);
+    }
+    let binary = matches!(
+        field.data_type(),
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    );
+    ensure_update_value_casts(table, field, value)?;
+    Ok(match value {
+        Value::Array(bytes) if binary => binary_sql_literal(column, bytes)?,
+        Value::Object(_) if binary => return Err(binary_value_rejected(column, "an object").into()),
+        Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "NULL".to_string(),
+        _ => format!("'{}'", value.to_string().replace('\'', "''")),
+    })
+}
+
+/// Lance casts each SET literal to the column type while it writes; the same cast
+/// up front rejects a value the column cannot hold before anything is written.
+fn ensure_update_value_casts(
+    table: &str,
+    field: &arrow_schema::Field,
+    value: &Value,
+) -> Result<()> {
+    use arrow_array::{ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
+    let target = field.data_type();
+    if !(target.is_primitive() || target == &DataType::Boolean) {
+        return Ok(());
+    }
+    let literal: ArrayRef = match value {
+        Value::Null => return Ok(()),
+        Value::Bool(flag) => Arc::new(BooleanArray::from(vec![*flag])),
+        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
+            (Some(integer), _) => Arc::new(Int64Array::from(vec![integer])),
+            (None, Some(float)) => Arc::new(Float64Array::from(vec![float])),
+            (None, None) => return Ok(()),
+        },
+        Value::String(text) => Arc::new(StringArray::from(vec![text.as_str()])),
+        structured => Arc::new(StringArray::from(vec![structured.to_string()])),
+    };
+    let options = arrow::compute::CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    arrow::compute::cast_with_options(&literal, target, &options)
+        .map(|_| ())
+        .map_err(|error| {
+            TableInputRejected(format!(
+                "Column '{}' of table '{table}' is {target}; cannot store {value}: {error}",
+                field.name()
+            ))
+            .into()
+        })
+}
+
+/// Lance casts a quoted string to Binary as its UTF-8 text, so bytes read back as a
+/// JSON array are written as a hex literal.
+fn binary_sql_literal(column: &str, bytes: &[Value]) -> Result<String> {
+    bytes
+        .iter()
+        .map(|byte| byte.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+        .collect::<Option<Vec<u8>>>()
+        .map(|bytes| hex_sql_literal(&bytes))
+        .ok_or_else(|| {
+            binary_value_rejected(column, "an array that is not all integers 0-255").into()
+        })
+}
+
+/// A plain Binary column would otherwise store structured values as their JSON text.
+fn binary_value_rejected(column: &str, received: &str) -> TableInputRejected {
+    TableInputRejected(format!(
+        "Binary column '{column}' takes an array of integers 0-255, but received {received}. To store GeoJSON geometry, add a geometry column with add_column {{\"name\": \"<new column>\", \"type\": \"geometry\"}} and write the geometry there"
+    ))
+}
+
+/// An update replaces values only, so the column keeps its geometry metadata.
+fn geometry_sql_literal(column: &str, value: &Value) -> Result<String> {
+    let bytes = crate::geometry::geometry_input_wkb(value).map_err(|error| {
+        TableInputRejected(format!(
+            "Geometry column '{column}' takes a GeoJSON geometry object, a GeoJSON Feature, GeoJSON or WKT text, or null: {error}"
+        ))
+    })?;
+    Ok(bytes.map_or_else(|| "NULL".to_string(), |bytes| hex_sql_literal(&bytes)))
+}
+
+fn hex_sql_literal(bytes: &[u8]) -> String {
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    format!("X'{hex}'")
+}
+
 /// Treat the historical timezone-less millisecond timestamp as compatible
 /// with the UTC-aware schema now emitted for new timestamp columns. The stored
 /// schema remains authoritative; writes to that legacy shape are normalized at
 /// the serialization boundary.
+/// Upserts key a table after it is created, so an existing key the request does not
+/// declare is compatible; a declared key must match the existing one.
 fn schemas_compatible_for_creation(existing: &Schema, requested: &Schema) -> bool {
     if existing == requested {
         return true;
+    }
+    let requested_keys = primary_key_columns(requested);
+    if !requested_keys.is_empty() && requested_keys != primary_key_columns(existing) {
+        return false;
     }
 
     existing.metadata() == requested.metadata()
@@ -620,7 +1655,8 @@ fn schemas_compatible_for_creation(existing: &Schema, requested: &Schema) -> boo
             .all(|(existing, requested)| {
                 existing.name() == requested.name()
                     && existing.is_nullable() == requested.is_nullable()
-                    && existing.metadata() == requested.metadata()
+                    && without_primary_key_marker(existing.metadata())
+                        == without_primary_key_marker(requested.metadata())
                     && (existing.data_type() == requested.data_type()
                         || matches!(
                             (existing.data_type(), requested.data_type()),
@@ -749,8 +1785,7 @@ fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> 
     actions
 }
 
-/// Compact, rebuild indices and drop every version except the current one.
-/// Used before an archive export, where the version history is dead weight.
+/// Compact, rebuild indices, and prune unprotected history before an archive export.
 fn prune_history_actions() -> Vec<lancedb::table::OptimizeAction> {
     vec![
         lancedb::table::OptimizeAction::Compact {
@@ -904,6 +1939,14 @@ fn split_hybrid_fields(
 
 #[async_trait]
 impl VectorStore for LanceDBVectorStore {
+    fn is_durably_managed(&self) -> bool {
+        self.mutation_adapter.is_some()
+    }
+
+    fn ensure_writable(&self) -> Result<()> {
+        LanceDBVectorStore::ensure_writable(self)
+    }
+
     async fn vector_search(
         &self,
         vector: Vec<f64>,
@@ -912,10 +1955,7 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
 
         let mut query = table
             .query()
@@ -925,7 +1965,7 @@ impl VectorStore for LanceDBVectorStore {
             .offset(offset);
 
         if let Some(filter) = filter {
-            query = query.only_if(filter);
+            query = query.only_if(orient_spatial_relations(filter)?);
         }
 
         if let Some(select) = select {
@@ -947,10 +1987,7 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
 
         let mut fts_query = FullTextSearchQuery::new(text.to_string());
         if let Some(fields) = fields {
@@ -968,7 +2005,7 @@ impl VectorStore for LanceDBVectorStore {
             .offset(offset);
 
         if let Some(filter) = filter {
-            query = query.only_if(filter);
+            query = query.only_if(orient_spatial_relations(filter)?);
         }
 
         if let Some(select) = select {
@@ -992,10 +2029,7 @@ impl VectorStore for LanceDBVectorStore {
         offset: usize,
         rerank: bool,
     ) -> Result<Vec<Value>> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
         let schema = table.schema().await?;
         let (vector_column, fields) = split_hybrid_fields(&schema, fields);
 
@@ -1026,7 +2060,7 @@ impl VectorStore for LanceDBVectorStore {
         }
 
         if let Some(filter) = filter {
-            query = query.only_if(filter);
+            query = query.only_if(orient_spatial_relations(filter)?);
         }
 
         if let Some(select) = select {
@@ -1048,12 +2082,13 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
 
-        let mut query = table.query().limit(limit).only_if(filter).offset(offset);
+        let mut query = table
+            .query()
+            .limit(limit)
+            .only_if(orient_spatial_relations(filter)?)
+            .offset(offset);
 
         if let Some(select) = select {
             query = query.select(lancedb::query::Select::Columns(select));
@@ -1066,6 +2101,12 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn upsert(&mut self, items: Vec<Value>, id_field: String) -> Result<()> {
+        if self.is_durably_managed() {
+            return self
+                .apply_logical_mutation(LogicalTableMutation::Upsert { items, id_field })
+                .await;
+        }
+        self.ensure_writable()?;
         if self.table.is_none() {
             let reader = self.write_batch_reader(items.clone()).await?;
             let builder = self
@@ -1074,7 +2115,13 @@ impl VectorStore for LanceDBVectorStore {
                 .write_options(self.creation_write_options());
             match builder.execute().await {
                 Ok(table) => {
-                    self.table = Some(table);
+                    self.table = Some(table.clone());
+                    if let Err(error) = self.ensure_upsert_key(&table, &id_field).await {
+                        eprintln!(
+                            "[LanceDB] Created table '{}' but could not mark '{id_field}' as its key: {error:#}",
+                            self.table_name
+                        );
+                    }
                     return Ok(());
                 }
                 Err(lancedb::Error::TableAlreadyExists { .. }) => {
@@ -1095,12 +2142,16 @@ impl VectorStore for LanceDBVectorStore {
             }
         }
 
-        let items = self.write_batch_reader(items).await?;
         let table = self.table.clone().unwrap();
+        // Convert first: a batch that fails must not leave an irreversible key behind.
+        let items = self.write_batch_reader(items).await?;
+        // Lance only detects a concurrent insert of the same key on the unindexed path.
+        let keyed = self.ensure_upsert_key(&table, &id_field).await?;
         table
             .merge_insert(&[&id_field])
             .when_matched_update_all(None)
             .when_not_matched_insert_all()
+            .use_index(!keyed)
             .to_owned()
             .execute(items)
             .await?;
@@ -1108,6 +2159,12 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn insert(&mut self, items: Vec<Value>) -> Result<()> {
+        if self.is_durably_managed() {
+            return self
+                .apply_logical_mutation(LogicalTableMutation::Insert { items })
+                .await;
+        }
+        self.ensure_writable()?;
         if self.table.is_none() {
             let reader = self.write_batch_reader(items.clone()).await?;
             let builder = self
@@ -1152,6 +2209,16 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn delete(&self, filter: &str) -> Result<()> {
+        let filter = orient_spatial_relations(filter)?;
+        let filter = filter.as_str();
+        if self.is_durably_managed() {
+            return self
+                .apply_logical_mutation(LogicalTableMutation::Delete {
+                    filter: filter.to_string(),
+                })
+                .await;
+        }
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         table.delete(filter).await?;
         return Ok(());
@@ -1168,10 +2235,7 @@ impl VectorStore for LanceDBVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<Value>> {
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
 
         let mut query = table.query().limit(limit).offset(offset);
 
@@ -1185,6 +2249,8 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn index(&self, column: &str, index_type: Option<&str>) -> Result<()> {
+        self.ensure_unmanaged("index changes")?;
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         if let Some(kind) = native_scalar_index(index_type) {
             let wrapper = table.dataset().ok_or_else(|| {
@@ -1227,18 +2293,25 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn purge(&self) -> Result<()> {
+        if self.is_durably_managed() {
+            return self.delete("true").await;
+        }
+        self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
         table.delete("1=1").await?;
         Ok(())
     }
 
     async fn count(&self, filter: Option<String>) -> Result<usize> {
-        let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
+        let filter = filter
+            .map(|filter| orient_spatial_relations(&filter))
+            .transpose()?;
         Ok(table.count_rows(filter).await?)
     }
 
     async fn schema(&self) -> Result<arrow_schema::Schema> {
-        let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        let table = self.require_readable_table().await?;
         let schema = table.schema().await?;
         let schema = schema.as_ref().clone();
         Ok(schema)
@@ -1370,6 +2443,17 @@ mod tests {
         }
     }
 
+    /// Deterministic values that are independent across vector components.
+    /// A linear sequence places every row on one curve, where HNSW builds a
+    /// chain whose parallel construction can strand whole segments.
+    fn scattered_unit_value(index: usize) -> f32 {
+        let mut state = (index as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        state ^= state >> 31;
+        (state >> 40) as f32 / (1_u64 << 24) as f32
+    }
+
     #[tokio::test]
     async fn regression_lance_vector_and_auto_indices_match_cosine_searches() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
@@ -1390,12 +2474,7 @@ mod tests {
         ]));
         let ids = Arc::new(Int64Array::from_iter_values(0..512));
         let values = (0..512 * dimension as usize)
-            .map(|value| {
-                let pseudo_random = (value as u64)
-                    .wrapping_mul(1_664_525)
-                    .wrapping_add(1_013_904_223);
-                (pseudo_random & 0xffff) as f32 / u16::MAX as f32
-            })
+            .map(scattered_unit_value)
             .collect::<Vec<_>>();
         let query_vector = values
             .iter()
@@ -2001,6 +3080,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_lance_does_not_create_namespace_manifest() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let connection = connect_lance(&test_path).execute().await?;
+
+        assert!(connection.table_names().execute().await?.is_empty());
+        assert!(!std::path::Path::new(&test_path).join("__manifest").exists());
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn create_empty_table_is_strictly_idempotent() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
@@ -2015,6 +3107,312 @@ mod tests {
         let mismatch = Schema::new(vec![Field::new("id", DataType::Utf8, false)]);
         let error = db.create_empty_table(mismatch, true).await.unwrap_err();
         assert!(error.to_string().contains("different schema"));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_tables_type_geometry_and_byte_columns_from_their_values() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let point = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+        let line = json!({"type": "LineString", "coordinates": [[10.0, 20.0], [20.0, 30.0]]});
+
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        db.insert(vec![
+            json!({"id": 1, "geometry": point, "properties": [0, 255, 17]}),
+            json!({"id": 2, "geometry": line, "properties": [1]}),
+        ])
+        .await?;
+        db.upsert(
+            vec![json!({"id": 3, "geometry": point, "properties": [2, 3]})],
+            "id".into(),
+        )
+        .await?;
+
+        let reopened =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        let schema = reopened.schema().await?;
+        assert!(crate::geometry::is_geometry_field(
+            schema.field_with_name("geometry")?
+        ));
+        assert_eq!(
+            schema.field_with_name("properties")?.data_type(),
+            &DataType::Binary
+        );
+        let stored = reopened
+            .sql("entities", "SELECT * FROM entities ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            record_batches_to_vec(Some(stored))?,
+            vec![
+                json!({"id": 1, "geometry": point, "properties": [0, 255, 17]}),
+                json!({"id": 2, "geometry": line, "properties": [1]}),
+                json!({"id": 3, "geometry": point, "properties": [2, 3]}),
+            ]
+        );
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn binary_updates_store_the_bytes_not_their_json_text() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "blobs".to_string()).await?;
+        db.insert(vec![
+            json!({"id": 1, "payload": [1, 2]}),
+            json!({"id": 2, "payload": [3]}),
+        ])
+        .await?;
+        let set = |value: Value| HashMap::from([("payload".to_string(), value)]);
+
+        db.update("id = 1", set(json!([0, 255, 17]))).await?;
+        db.update("id = 2", set(json!([]))).await?;
+        let mut rows = db.list(None, 10, 0).await?;
+        rows.sort_by_key(|row| row["id"].as_i64());
+        assert_eq!(
+            rows,
+            vec![
+                json!({"id": 1, "payload": [0, 255, 17]}),
+                json!({"id": 2, "payload": []}),
+            ]
+        );
+
+        let error = db
+            .update("id = 1", set(json!([256])))
+            .await
+            .expect_err("256 is not a byte");
+        assert!(error.to_string().contains("'payload'"), "{error}");
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    async fn sql_rows(db: &LanceDBVectorStore, sql: &str) -> Result<Vec<Value>> {
+        record_batches_to_vec(Some(db.sql("entities", sql).await?.collect().await?))
+    }
+
+    async fn sql_ids(db: &LanceDBVectorStore, predicate: &str) -> Result<Vec<Value>> {
+        let sql = format!("SELECT id FROM entities WHERE {predicate} ORDER BY id");
+        Ok(sql_rows(db, &sql)
+            .await?
+            .into_iter()
+            .map(|row| row["id"].clone())
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn inferred_geometry_columns_answer_spatial_queries() -> Result<()> {
+        use datafusion::common::ScalarValue;
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let rows = vec![
+            json!({"id": 1, "geometry": {"type": "Point", "coordinates": [2.0, 2.0]}}),
+            json!({"id": 2, "geometry": {"type": "Point", "coordinates": [9.0, 9.0]}}),
+            json!({"id": 3, "geometry": {"type": "LineString", "coordinates": [[-1.0, 1.0], [5.0, 1.0]]}}),
+            json!({"id": 4, "geometry": {"type": "Polygon", "coordinates": [[[3.0, 3.0], [6.0, 3.0], [6.0, 6.0], [3.0, 6.0], [3.0, 3.0]]]}}),
+            json!({"id": 5, "geometry": null}),
+        ];
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        db.insert(rows.clone()).await?;
+        assert!(crate::geometry::is_geometry_field(
+            db.schema().await?.field_with_name("geometry")?
+        ));
+
+        let area = "POLYGON ((0 0,4 0,4 4,0 4,0 0))";
+        let lance_filter = format!("ST_Intersects(geometry, ST_GeomFromText('{area}'))");
+        let lance_ordered = [
+            format!("ST_Contains(ST_GeomFromText('{area}'), geometry)"),
+            format!("ST_Within(geometry, ST_GeomFromText('{area}'))"),
+        ];
+        assert_eq!(db.count(Some(lance_filter.clone())).await?, 3);
+        for predicate in &lance_ordered {
+            assert_eq!(db.count(Some(predicate.clone())).await?, 1, "{predicate}");
+        }
+        db.index("geometry", Some("RTREE")).await?;
+        for predicate in &lance_ordered {
+            assert_eq!(db.count(Some(predicate.clone())).await?, 1, "{predicate}");
+        }
+        let plan = db
+            .raw()
+            .await?
+            .query()
+            .only_if(&lance_filter)
+            .explain_plan(false)
+            .await?;
+        assert!(plan.contains("ScalarIndexQuery"), "{plan}");
+        let mut matched = db.filter(&lance_filter, None, 10, 0).await?;
+        matched.sort_by_key(|row| row["id"].as_i64());
+        assert_eq!(matched, [&rows[0], &rows[2], &rows[3]].map(Clone::clone));
+
+        let region = format!("flow_geomfromtext('{area}')");
+        for (predicate, expected) in [
+            (format!("ST_Intersects(geometry, {region})"), vec![1, 3, 4]),
+            (format!("ST_Within(geometry, {region})"), vec![1]),
+            (format!("ST_Contains({region}, geometry)"), vec![1]),
+            (format!("ST_Crosses(geometry, {region})"), vec![3]),
+            (format!("ST_Overlaps(geometry, {region})"), vec![4]),
+            (format!("ST_Disjoint(geometry, {region})"), vec![2]),
+        ] {
+            let expected: Vec<Value> = expected.into_iter().map(Value::from).collect();
+            assert_eq!(sql_ids(&db, &predicate).await?, expected, "{predicate}");
+        }
+
+        let measured = sql_rows(
+            &db,
+            "SELECT id, ST_Area(geometry) AS area, ST_Length(geometry) AS length, \
+             ST_Distance(geometry, flow_geomfromtext('POINT(2 5)')) AS distance, \
+             ST_Centroid(geometry) AS center \
+             FROM entities WHERE id IN (1, 3, 4) ORDER BY id",
+        )
+        .await?;
+        assert_eq!(measured[0]["distance"], json!(3.0));
+        assert_eq!(measured[1]["length"], json!(6.0));
+        assert_eq!(measured[2]["area"], json!(9.0));
+        assert_eq!(
+            measured[2]["center"],
+            json!({"type": "Point", "coordinates": [4.5, 4.5]})
+        );
+
+        let ctx = SessionContext::new();
+        crate::geometry::register_geo_functions(&ctx);
+        ctx.register_table("entities", db.to_datafusion().await?)?;
+        let bound = |sql: &'static str| {
+            let ctx = ctx.clone();
+            async move {
+                let batches = ctx
+                    .sql(sql)
+                    .await?
+                    .with_param_values(vec![ScalarValue::Utf8(Some(area.into()))])?
+                    .collect()
+                    .await?;
+                Ok::<_, flow_like_types::Error>(
+                    record_batches_to_vec(Some(batches))?
+                        .into_iter()
+                        .map(|row| row["id"].as_i64().unwrap_or_default())
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
+        assert_eq!(
+            bound("SELECT id FROM entities WHERE ST_Intersects(geometry, flow_geomfromtext($1)) ORDER BY id").await?,
+            [1, 3, 4]
+        );
+        let limited = bound(
+            "SELECT id FROM entities WHERE ST_Intersects(geometry, flow_geomfromtext($1)) LIMIT 2",
+        )
+        .await?;
+        assert_eq!(limited.len(), 2, "{limited:?}");
+        assert!(
+            limited.iter().all(|id| [1, 3, 4].contains(id)),
+            "{limited:?}"
+        );
+
+        let geometry_param = vec![(
+            "area".to_string(),
+            json!({"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]}),
+        )];
+        for (predicate, expected) in [
+            ("ST_Intersects(geometry, $area)", vec![1, 3, 4]),
+            ("ST_Contains($area, geometry)", vec![1]),
+            ("ST_Within(geometry, flow_geomfromtext($area))", vec![1]),
+        ] {
+            let sql = format!("SELECT id FROM entities WHERE {predicate} ORDER BY id");
+            let batches = ctx
+                .sql(&sql)
+                .await?
+                .with_param_values(crate::databases::sql_params::to_param_values(
+                    &geometry_param,
+                )?)?
+                .collect()
+                .await?;
+            let ids: Vec<i64> = record_batches_to_vec(Some(batches))?
+                .iter()
+                .filter_map(|row| row["id"].as_i64())
+                .collect();
+            assert_eq!(ids, expected, "{predicate}");
+        }
+        for (filter, expected) in [
+            ("ST_Intersects(geometry, $area)", 3),
+            ("ST_Contains($area, geometry)", 1),
+            ("ST_Within(geometry, ST_GeomFromText($area))", 1),
+        ] {
+            let bound =
+                crate::databases::lance_filter_params::bind_filter_params(filter, &geometry_param)?;
+            assert_eq!(db.count(Some(bound)).await?, expected, "{filter}");
+        }
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn typed_geometry_column_on_an_existing_table_takes_geojson_updates() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        db.insert(vec![
+            json!({"id": 1, "name": "inside"}),
+            json!({"id": 2, "name": "outline"}),
+            json!({"id": 3, "name": "unplaced"}),
+        ])
+        .await?;
+
+        assert!(
+            db.add_column("location", "flow_geomfromtext(CAST(NULL AS VARCHAR))")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("type 'geometry'")
+        );
+        db.add_typed_column("location", "geometry", None).await?;
+        let point = json!({"type": "Point", "coordinates": [2.0, 2.0]});
+        let polygon = json!({"type": "Polygon", "coordinates": [[[3.0, 3.0], [6.0, 3.0], [6.0, 6.0], [3.0, 6.0], [3.0, 3.0]]]});
+        db.update(
+            "id = 1",
+            HashMap::from([("location".to_string(), point.clone())]),
+        )
+        .await?;
+        db.update(
+            "id = 2",
+            HashMap::from([("location".to_string(), polygon.clone())]),
+        )
+        .await?;
+        assert!(
+            db.update(
+                "id = 3",
+                HashMap::from([("location".to_string(), json!({"type": "Point"}))])
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("GeoJSON geometry")
+        );
+
+        let reopened =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        assert!(crate::geometry::is_geometry_field(
+            reopened.schema().await?.field_with_name("location")?
+        ));
+        let area = "flow_geomfromtext('POLYGON ((0 0,4 0,4 4,0 4,0 0))')";
+        assert_eq!(
+            sql_ids(&reopened, &format!("ST_Intersects(location, {area})")).await?,
+            vec![json!(1), json!(2)]
+        );
+        let mut rows = reopened.filter("id IN (1, 2, 3)", None, 10, 0).await?;
+        rows.sort_by_key(|row| row["id"].as_i64());
+        assert_eq!(rows[0]["location"], point);
+        assert_eq!(rows[1]["location"], polygon);
+        assert_eq!(rows[2]["location"], Value::Null);
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())

@@ -1,6 +1,7 @@
 "use client";
 
-import { PlateStatic, type Value, createSlateEditor } from "platejs";
+import { type Value, createSlateEditor } from "platejs";
+import { PlateStatic } from "platejs/static";
 import { memo, useMemo, useRef } from "react";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import { indexEditorPaths } from "./lazy-plate-static";

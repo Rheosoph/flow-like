@@ -153,9 +153,8 @@ fn validate_token(value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
-/// `all` is the deployed default: the GCP root schedules one daily execution
-/// and sets no `MAINTENANCE_JOB`, so every maintenance job runs from that
-/// single execution.
+/// `all` is the image default. Deployments that service payments also schedule
+/// `payments` at least once per minute, independently of daily cleanup.
 fn select_jobs(value: Option<&str>) -> Result<Vec<MaintenanceJob>> {
     match value.map(str::to_ascii_lowercase).as_deref() {
         None | Some("all") => Ok(vec![
@@ -163,13 +162,15 @@ fn select_jobs(value: Option<&str>) -> Result<Vec<MaintenanceJob>> {
             MaintenanceJob::CacheCleanup,
             MaintenanceJob::RunSweep,
             MaintenanceJob::StateCleanup,
+            MaintenanceJob::Payments,
         ]),
         Some("telemetry_alerts") => Ok(vec![MaintenanceJob::TelemetryAlerts]),
         Some("cache_cleanup") => Ok(vec![MaintenanceJob::CacheCleanup]),
         Some("run_sweep") => Ok(vec![MaintenanceJob::RunSweep]),
         Some("state_cleanup") => Ok(vec![MaintenanceJob::StateCleanup]),
+        Some("payments") => Ok(vec![MaintenanceJob::Payments]),
         Some(other) => bail!(
-            "MAINTENANCE_JOB must be 'telemetry_alerts', 'cache_cleanup', 'run_sweep', 'state_cleanup' or 'all', not {other:?}"
+            "MAINTENANCE_JOB must be 'telemetry_alerts', 'cache_cleanup', 'run_sweep', 'state_cleanup', 'payments' or 'all', not {other:?}"
         ),
     }
 }
@@ -352,6 +353,9 @@ async fn run_job(client: &reqwest::Client, config: &Config, job: MaintenanceJob)
     })?;
 
     match (job, parsed) {
+        (MaintenanceJob::Payments, MaintenanceRunResponse::Payments(result)) => {
+            tracing::info!(inbox_completed = result.inbox_completed, effects_completed = result.effects_completed, deferred = result.deferred, "Payment recovery completed");
+        }
         (MaintenanceJob::TelemetryAlerts, MaintenanceRunResponse::TelemetryAlerts(result)) => {
             tracing::info!(
                 evaluated = result.evaluated,
@@ -419,7 +423,8 @@ mod tests {
                 MaintenanceJob::TelemetryAlerts,
                 MaintenanceJob::CacheCleanup,
                 MaintenanceJob::RunSweep,
-                MaintenanceJob::StateCleanup
+                MaintenanceJob::StateCleanup,
+                MaintenanceJob::Payments,
             ]
         );
         assert_eq!(
@@ -428,7 +433,8 @@ mod tests {
                 MaintenanceJob::TelemetryAlerts,
                 MaintenanceJob::CacheCleanup,
                 MaintenanceJob::RunSweep,
-                MaintenanceJob::StateCleanup
+                MaintenanceJob::StateCleanup,
+                MaintenanceJob::Payments,
             ]
         );
         assert_eq!(

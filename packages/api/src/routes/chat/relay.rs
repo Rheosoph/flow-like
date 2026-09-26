@@ -15,8 +15,8 @@ use crate::{
     state::AppState,
     usage_accounting::{
         HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
-        configured_hosted_rate, record_provider_request_id, settle_hosted_usage_invocation,
-        start_usage_invocation,
+        record_provider_request_id, settle_hosted_usage_invocation,
+        start_instance_usage_invocation, start_usage_invocation,
     },
 };
 use axum::{
@@ -30,115 +30,12 @@ use flow_like_types::Bytes;
 use flow_like_types::anyhow;
 use flow_like_types::create_id;
 use futures_util::StreamExt;
-use sea_orm::EntityTrait;
 use sea_orm::Set;
+use sea_orm::{ActiveEnum, ConnectionTrait, EntityTrait};
 use serde_json::Value as JsonValue;
 use std::convert::Infallible;
 
 const APP_ID_HEADER: &str = "x-flow-like-app-id";
-
-static HOSTED_RATES: std::sync::LazyLock<moka::sync::Cache<String, HostedRateSnapshot>> =
-    std::sync::LazyLock::new(|| {
-        moka::sync::Cache::builder()
-            .max_capacity(4096)
-            .time_to_live(std::time::Duration::from_secs(300))
-            .build()
-    });
-
-fn rate_from_catalog(model: &JsonValue) -> Result<HostedRateSnapshot, ApiError> {
-    let price = |name: &str| -> Result<i64, ApiError> {
-        let value = model
-            .get("pricing")
-            .and_then(|value| value.get(name))
-            .and_then(|value| {
-                value
-                    .as_str()
-                    .and_then(|value| value.parse::<f64>().ok())
-                    .or_else(|| value.as_f64())
-            })
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .ok_or_else(|| {
-                ApiError::internal(format!("Hosted model {name} price is unavailable"))
-            })?;
-        let micros = value
-            * if name == "request" {
-                1_000_000.0
-            } else {
-                1_000_000_000_000.0
-            };
-        if micros >= i64::MAX as f64 {
-            return Err(ApiError::internal("Hosted model price is out of range"));
-        }
-        Ok(micros.ceil() as i64)
-    };
-    let rate = HostedRateSnapshot {
-        version: format!(
-            "openrouter-{}",
-            chrono::Utc::now().format("%Y-%m-%dT%H:%MZ")
-        ),
-        input_micro_usd_per_million_tokens: price("prompt")?,
-        input_micro_usd_per_million_bytes: None,
-        max_input_bytes: None,
-        output_micro_usd_per_million_tokens: price("completion")?,
-        request_micro_usd: price("request")?,
-        context_tokens: model
-            .get("context_length")
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(0),
-        usd_micro_per_eur: 1_159_200,
-        funding_basis_points: 550,
-        api_micro_usd_per_million_ms: 20_001,
-        serving_request_micro_usd: 1,
-        max_request_ms: 240_000,
-    };
-    rate.validate()?;
-    Ok(rate)
-}
-
-async fn hosted_rate(
-    provider: &HostedProvider,
-    model: &str,
-    api_key: &str,
-) -> Result<HostedRateSnapshot, ApiError> {
-    if let Some(rate) = configured_hosted_rate(provider.label(), model)? {
-        return Ok(rate);
-    }
-    if *provider != HostedProvider::OpenRouter {
-        return Err(ApiError::internal("Hosted model pricing is not configured"));
-    }
-    if let Some(rate) = HOSTED_RATES.get(model) {
-        return Ok(rate);
-    }
-    let response = flow_like_types::reqwest::Client::new()
-        .get("https://openrouter.ai/api/v1/models")
-        .bearer_auth(api_key)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|_| ApiError::internal("Unable to verify hosted model pricing"))?
-        .error_for_status()
-        .map_err(|_| ApiError::internal("Unable to verify hosted model pricing"))?;
-    let catalog: JsonValue = response
-        .json()
-        .await
-        .map_err(|_| ApiError::internal("Hosted model pricing response is invalid"))?;
-    for entry in catalog
-        .get("data")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let (Some(id), Ok(rate)) = (
-            entry.get("id").and_then(JsonValue::as_str),
-            rate_from_catalog(entry),
-        ) {
-            HOSTED_RATES.insert(id.to_owned(), rate);
-        }
-    }
-    HOSTED_RATES
-        .get(model)
-        .ok_or_else(|| ApiError::internal("Hosted model pricing is unavailable"))
-}
 
 /// Bound the provider work before reserving money. Hidden conversation state and
 /// media inputs reserve the context ceiling because their tokens are not in the
@@ -224,7 +121,7 @@ fn bound_hosted_request(
         .into(),
         serde_json::json!(output),
     );
-    if *provider == HostedProvider::OpenRouter {
+    if *provider == HostedProvider::OpenRouter && rate.provider_pricing_available {
         let routing = obj
             .entry("provider")
             .or_insert_with(|| serde_json::json!({}));
@@ -243,16 +140,16 @@ fn bound_hosted_request(
         || String::from_utf8_lossy(&serialized).contains("image")
         || String::from_utf8_lossy(&serialized).contains("audio")
         || String::from_utf8_lossy(&serialized).contains("file");
+    // Serialized bytes over-count tokens, so they cap the reservation instead of rejecting
+    // an output budget that fits; the provider enforces the model's real context window.
+    let input_ceiling = rate.context_tokens.saturating_sub(output);
     let input = if hidden_input {
-        rate.context_tokens.saturating_sub(output)
+        input_ceiling
     } else {
-        (serialized.len() as i64).saturating_add(1024)
+        (serialized.len() as i64)
+            .saturating_add(1024)
+            .min(input_ceiling)
     };
-    if input.saturating_add(output) > rate.context_tokens {
-        return Err(ApiError::bad_request(
-            "Request exceeds this hosted model's reserved context capacity. Reduce the input or output token limit.",
-        ));
-    }
     Ok((
         input.saturating_add(output),
         rate.provider_cost(input, output),
@@ -424,7 +321,7 @@ async fn resolve_usage_context(
 async fn fetch_provider(
     state: &AppState,
     model_field: &str,
-) -> Result<(ModelProvider, HostedProvider), ApiError> {
+) -> Result<(Bit, ModelProvider, HostedProvider), ApiError> {
     let bit_model = bit::Entity::find_by_id(model_field)
         .one(&state.db)
         .await?
@@ -443,7 +340,7 @@ async fn fetch_provider(
         },
     )?;
 
-    Ok((provider, hosted_provider))
+    Ok((bit_model, provider, hosted_provider))
 }
 
 async fn enforce_tier(
@@ -452,11 +349,7 @@ async fn enforce_tier(
     provider: &ModelProvider,
 ) -> Result<(), ApiError> {
     let (plan, user_tier) = crate::quota::payer_plan(state, payer_id).await?;
-    let params = provider.params.clone().unwrap_or_default();
-    let tier = params
-        .get("tier")
-        .and_then(|v| v.as_str())
-        .unwrap_or("ENTERPRISE");
+    let tier = required_model_tier(provider);
     if !user_tier.llm_tiers.iter().any(|t| t == tier) {
         tracing::warn!(
             "User tier {:?} does not allow access to model tier {}",
@@ -466,6 +359,65 @@ async fn enforce_tier(
         return Err(ApiError::hosted_model_unavailable(payer_id, &plan, tier));
     }
     Ok(())
+}
+
+fn required_model_tier(provider: &ModelProvider) -> &str {
+    provider
+        .params
+        .as_ref()
+        .and_then(|params| params.get("tier"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("ENTERPRISE")
+}
+
+pub(crate) async fn current_instance_model_tier(
+    transaction: &sea_orm::DatabaseTransaction,
+    bit_id: &str,
+    request_path: &str,
+) -> Result<String, ApiError> {
+    let row = transaction
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT type::text AS type,parameters FROM \"Bit\" WHERE id=$1",
+            [bit_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| ApiError::forbidden("The approved model is no longer available"))?;
+    let bit_type = crate::entity::sea_orm_active_enums::BitType::try_from_value(
+        &row.try_get::<String>("", "type")?,
+    )?;
+    let bit = Bit {
+        id: bit_id.to_owned(),
+        bit_type: bit_type.into(),
+        parameters: row
+            .try_get::<Option<JsonValue>>("", "parameters")?
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    instance_model_tier(&bit, request_path)
+}
+
+fn instance_model_tier(bit: &Bit, request_path: &str) -> Result<String, ApiError> {
+    if request_path == "/instances/embeddings/embed" {
+        crate::routes::embeddings::embed::embedding_provider_for_bit(bit)?;
+        return Ok(String::new());
+    }
+    let expected_surface = match request_path {
+        "/instances/chat/completions" => ModelApiSurface::ChatCompletions,
+        "/instances/responses" => ModelApiSurface::Responses,
+        _ => return Err(ApiError::forbidden("Unsupported instance model endpoint")),
+    };
+    let provider = bit
+        .try_to_provider()
+        .ok_or_else(|| ApiError::forbidden("The approved Bit is no longer a model provider"))?;
+    if HostedProvider::from_provider_name(&provider.provider_name).is_none()
+        || provider.api_surface_or_default() != expected_surface
+    {
+        return Err(ApiError::forbidden(
+            "The approved model no longer supports this hosted endpoint",
+        ));
+    }
+    Ok(required_model_tier(&provider).to_owned())
 }
 
 /// Drop repeated tool declarations, keeping the first of each name.
@@ -723,7 +675,7 @@ async fn resolved_provider_cost(
         .ok()??;
     let rate: HostedRateSnapshot =
         serde_json::from_value(row.raw_usage?.get("accounting")?.clone()).ok()?;
-    Some(rate.provider_cost(input, output))
+    rate.known_provider_cost(input, output)
 }
 
 async fn finalize_llm_usage(
@@ -1116,11 +1068,64 @@ pub(super) async fn relay_request(
     surface: ModelApiSurface,
     prepare_upstream_body: PrepareUpstreamBody,
 ) -> Result<AxumResponse, ApiError> {
+    relay_authorized_request(
+        state,
+        RelayCaller::Human(user),
+        headers,
+        payload,
+        surface,
+        prepare_upstream_body,
+    )
+    .await
+}
+
+pub(super) async fn relay_instance_request(
+    state: AppState,
+    headers: HeaderMap,
+    mut payload: JsonValue,
+    surface: ModelApiSurface,
+    path: &str,
+    prepare_upstream_body: PrepareUpstreamBody,
+) -> Result<AxumResponse, ApiError> {
+    let model = payload
+        .get("model")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| ApiError::bad_request("Missing 'model' field"))?;
+    let usage =
+        crate::instances::authenticate_model_request(&state, &headers, "POST", path, model).await?;
+    // Provider attribution must not be supplied by the workload itself.
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("user");
+    }
+    relay_authorized_request(
+        state,
+        RelayCaller::Instance(usage),
+        headers,
+        payload,
+        surface,
+        prepare_upstream_body,
+    )
+    .await
+}
+
+enum RelayCaller {
+    Human(AppUser),
+    Instance(crate::instances::VerifiedInstanceUsage),
+}
+
+async fn relay_authorized_request(
+    state: AppState,
+    caller: RelayCaller,
+    headers: HeaderMap,
+    payload: JsonValue,
+    surface: ModelApiSurface,
+    prepare_upstream_body: PrepareUpstreamBody,
+) -> Result<AxumResponse, ApiError> {
     let model_field = payload
         .get("model")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::bad_request("Missing 'model' field"))?;
-    let (provider, hosted_provider) = fetch_provider(&state, model_field).await?;
+    let (bit, provider, hosted_provider) = fetch_provider(&state, model_field).await?;
 
     let bit_surface = provider.api_surface_or_default();
     if bit_surface != surface {
@@ -1131,19 +1136,31 @@ pub(super) async fn relay_request(
         )));
     }
 
-    let usage_context = resolve_usage_context(&state, &user, &headers).await?;
-    let payer_id = crate::quota::resolve_payer(
-        &state,
-        Some(&usage_context.user_id),
-        usage_context.app_id.as_deref(),
-    )
-    .await?;
-    enforce_tier(&payer_id, &state, &provider).await?;
+    let (usage_context, tracking_id_opt) = match &caller {
+        RelayCaller::Human(user) => {
+            let context = resolve_usage_context(&state, user, &headers).await?;
+            let payer_id = crate::quota::resolve_payer(
+                &state,
+                Some(&context.user_id),
+                context.app_id.as_deref(),
+            )
+            .await?;
+            enforce_tier(&payer_id, &state, &provider).await?;
+            (context, user.tracking_id(&state).await.ok().flatten())
+        }
+        RelayCaller::Instance(usage) => (
+            UsageRequestContext {
+                app_id: usage.app_id.clone(),
+                user_id: usage.delegated_user_id.clone(),
+                technical_user_id: None,
+            },
+            None,
+        ),
+    };
     let upstream_model_id = provider
         .model_id
         .clone()
         .unwrap_or_else(|| model_field.to_string());
-    let tracking_id_opt = user.tracking_id(&state).await.ok().flatten();
     let (mut upstream_body, stream) = prepare_upstream_body(
         &payload,
         &upstream_model_id,
@@ -1153,26 +1170,29 @@ pub(super) async fn relay_request(
     let (url, api_key) = build_provider_url(&state, &hosted_provider, surface).await?;
     let provider_label = hosted_provider.label().to_string();
     let user_sub = usage_context.user_id.clone();
-    let mut rate = hosted_rate(&hosted_provider, &upstream_model_id, &api_key).await?;
+    let (mut rate, _) = crate::bit_pricing::hosted_bit_rate(&bit);
     super::hosted_worker::apply_worker_tariff(&mut rate);
     let (estimated_tokens, estimated_cost) =
         bound_hosted_request(&mut upstream_body, surface, &rate, &hosted_provider)?;
-    let invocation_id = start_usage_invocation(
-        &state,
-        UsageInvocationStart {
-            kind: "llm",
-            user_id: Some(&user_sub),
-            technical_user_id: usage_context.technical_user_id.as_deref(),
-            app_id: usage_context.app_id.as_deref(),
-            provider: Some(&provider_label),
-            endpoint: Some(&url),
-            model_id: Some(&upstream_model_id),
-            estimated_tokens,
-            estimated_cost_micro_dollars: estimated_cost,
-            rate: Some(rate.clone()),
-        },
-    )
-    .await?;
+    let start = UsageInvocationStart {
+        kind: "llm",
+        user_id: Some(&user_sub),
+        technical_user_id: usage_context.technical_user_id.as_deref(),
+        app_id: usage_context.app_id.as_deref(),
+        provider: Some(&provider_label),
+        endpoint: Some(&url),
+        model_id: Some(&upstream_model_id),
+        estimated_tokens,
+        estimated_cost_micro_dollars: estimated_cost,
+        rate: Some(rate.clone()),
+    };
+    let invocation_id = match &caller {
+        RelayCaller::Human(_) => start_usage_invocation(&state, start).await?,
+        RelayCaller::Instance(usage) => {
+            start_instance_usage_invocation(&state, start, usage, required_model_tier(&provider))
+                .await?
+        }
+    };
     let id = invocation_id
         .as_deref()
         .ok_or_else(|| ApiError::internal("Hosted AI reservation is missing"))?;
@@ -1332,12 +1352,89 @@ where
 mod tests {
     use super::*;
 
+    fn test_bit(pricing: JsonValue) -> Bit {
+        Bit {
+            id: "hosted-preset".into(),
+            bit_type: flow_like::bit::BitTypes::Llm,
+            parameters: serde_json::json!({
+                "context_length": 32_768,
+                "model_classification": flow_like::bit::BitModelClassification::default(),
+                "provider": {"provider_name": "hosted:openrouter", "model_id": "@preset/claude-sonnet"},
+                "pricing": pricing,
+            }),
+            ..Default::default()
+        }
+    }
+
     fn test_rate() -> HostedRateSnapshot {
-        rate_from_catalog(&serde_json::json!({
-            "context_length": 32_768,
-            "pricing": {"prompt":"0.000001","completion":"0.000004","request":"0"}
-        }))
-        .unwrap()
+        crate::bit_pricing::hosted_bit_rate(&test_bit(serde_json::json!({
+            "input_micro_usd_per_million_tokens": 1_000_000,
+            "output_micro_usd_per_million_tokens": 4_000_000,
+        })))
+        .0
+    }
+
+    #[test]
+    fn instance_model_policy_rechecks_provider_surface_and_tier() {
+        let mut bit = test_bit(JsonValue::Null);
+        bit.parameters["provider"]["params"] = serde_json::json!({"tier":"FREE"});
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/chat/completions").unwrap(),
+            "FREE"
+        );
+        assert!(instance_model_tier(&bit, "/instances/responses").is_err());
+        assert!(instance_model_tier(&bit, "/chat/completions").is_err());
+        assert!(instance_model_tier(&bit, "/instances/embeddings/embed").is_err());
+        bit.parameters["provider"]["api_surface"] = serde_json::json!(ModelApiSurface::Responses);
+        assert!(instance_model_tier(&bit, "/instances/chat/completions").is_err());
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/responses").unwrap(),
+            "FREE"
+        );
+        bit.parameters["provider"]["params"]["tier"] = serde_json::json!("ENTERPRISE");
+        assert_eq!(
+            instance_model_tier(&bit, "/instances/responses").unwrap(),
+            "ENTERPRISE"
+        );
+        bit.parameters["provider"]["provider_name"] = serde_json::json!("local");
+        assert!(instance_model_tier(&bit, "/instances/responses").is_err());
+    }
+
+    #[test]
+    fn missing_bit_price_allows_presets_without_restricting_them_to_free_providers() {
+        let (rate, _) = crate::bit_pricing::hosted_bit_rate(&test_bit(JsonValue::Null));
+        rate.validate().unwrap();
+        for surface in [ModelApiSurface::ChatCompletions, ModelApiSurface::Responses] {
+            let mut body = serde_json::json!({
+                "model": "@preset/claude-sonnet",
+                "messages": [{"role": "user", "content": "Hello"}],
+            });
+            let (tokens, cost) =
+                bound_hosted_request(&mut body, surface, &rate, &HostedProvider::OpenRouter)
+                    .unwrap();
+            assert!(tokens > 0);
+            assert_eq!(cost, 0);
+            assert!(body.get("provider").is_none());
+            assert_eq!(body["model"], "@preset/claude-sonnet");
+        }
+    }
+
+    #[test]
+    fn explicitly_free_bit_still_limits_provider_prices_to_zero() {
+        let (rate, _) = crate::bit_pricing::hosted_bit_rate(&test_bit(serde_json::json!({
+            "input_micro_usd_per_million_tokens": 0,
+            "output_micro_usd_per_million_tokens": 0,
+        })));
+        let mut body = serde_json::json!({"model": "@preset/free"});
+        bound_hosted_request(
+            &mut body,
+            ModelApiSurface::ChatCompletions,
+            &rate,
+            &HostedProvider::OpenRouter,
+        )
+        .unwrap();
+        assert_eq!(body["provider"]["max_price"]["prompt"], 0.0);
+        assert_eq!(body["provider"]["max_price"]["completion"], 0.0);
     }
 
     #[test]
@@ -1358,6 +1455,29 @@ mod tests {
         assert!(body.get("max_output_tokens").is_none());
         assert_eq!(body["max_completion_tokens"], 512);
         assert_eq!(body["provider"]["max_price"]["prompt"], 1.0);
+    }
+
+    #[test]
+    fn explicit_output_budget_is_forwarded_within_the_context_window() {
+        let rate = test_rate();
+        let prompt = "Describe the screen and plan the next step. ".repeat(600);
+        for (requested, forwarded) in [(20_000, 20_000), (100_000, rate.context_tokens - 1)] {
+            let mut body = serde_json::json!({
+                "model": "selected",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": requested,
+            });
+            let (tokens, cost) = bound_hosted_request(
+                &mut body,
+                ModelApiSurface::ChatCompletions,
+                &rate,
+                &HostedProvider::OpenRouter,
+            )
+            .unwrap();
+            assert_eq!(body["max_completion_tokens"], forwarded);
+            assert!(body.get("max_tokens").is_none());
+            assert!(tokens <= rate.context_tokens && cost > 0);
+        }
     }
 
     #[test]

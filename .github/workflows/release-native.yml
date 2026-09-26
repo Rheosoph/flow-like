@@ -261,10 +261,18 @@ jobs:
             exit 1
           fi
 
+          # prepare-native-apple.ts signs the app extensions from build.rs, before
+          # Tauri imports APPLE_CERTIFICATE into its own keychain for bundling.
+          # A validated keychain therefore stays unlocked on the search list
+          # until the job ends. Tauri signs with --keychain pointing at its own
+          # copy, so the duplicate identity is not ambiguous.
+          keep_keychain=false
           cleanup() {
-            security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || true
-            security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
             rm -f "$certificate_path" "$probe_path"
+            if [ "$keep_keychain" != true ]; then
+              security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || true
+              security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
+            fi
           }
           trap cleanup EXIT
 
@@ -273,7 +281,7 @@ jobs:
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -t 600 -u "$keychain_path"
+          security set-keychain-settings "$keychain_path"
           security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
           security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
@@ -308,6 +316,8 @@ jobs:
           fi
 
           printf 'APPLE_SIGNING_IDENTITY=%s\n' "$matching_identities" >> "$GITHUB_ENV"
+          printf 'FLOW_LIKE_SIGNING_KEYCHAIN=%s\n' "$keychain_path" >> "$GITHUB_ENV"
+          keep_keychain=true
           echo "Apple Developer signing and timestamp probe succeeded."
 
       - name: Install Protoc
@@ -436,3 +446,11 @@ jobs:
         env:
           RELEASE_BUNDLE_DIR: ${{ inputs.release_bundle_dir }}
         run: bash .github/scripts/verify-appimage-bundle.sh
+
+      - name: Remove Apple signing keychain
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -n "${FLOW_LIKE_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$FLOW_LIKE_SIGNING_KEYCHAIN" || true
+          fi

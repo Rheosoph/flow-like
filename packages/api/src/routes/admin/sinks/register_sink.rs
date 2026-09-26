@@ -150,7 +150,7 @@ pub async fn register_sink(
         "admin.sink.register",
         "sink_token",
         jti,
-        format!("Sink token registered for type: {}", sink_type)
+        serde_json::json!({ "sink_type": sink_type })
     );
     Ok(Json(RegisterSinkResponse {
         token,

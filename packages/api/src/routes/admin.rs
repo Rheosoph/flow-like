@@ -13,6 +13,7 @@ pub mod bit;
 pub mod cache;
 pub mod connections;
 pub mod deletions;
+pub mod explore;
 pub mod forks;
 pub mod governance;
 pub mod home_defaults;
@@ -32,6 +33,20 @@ pub mod users;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/home-defaults/{id}", put(home_defaults::save_home_default))
+        .route("/explore", get(explore::get_explore_editor))
+        .route(
+            "/explore/placements",
+            post(explore::create_explore_placement),
+        )
+        .route(
+            "/explore/placements/{id}",
+            put(explore::update_explore_placement).delete(explore::delete_explore_placement),
+        )
+        .route("/explore/order", put(explore::order_explore))
+        .route("/explore/publish", post(explore::publish_explore))
+        .route("/explore/discard", post(explore::discard_explore))
+        .route("/explore/preview", get(explore::preview_explore))
+        .route("/explore/media", get(explore::sign_explore_media))
         .route(
             "/connections/graph",
             get(connections::get_global_connection_graph),

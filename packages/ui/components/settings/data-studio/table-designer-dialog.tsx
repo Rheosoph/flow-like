@@ -21,6 +21,7 @@ import {
 	Boxes,
 	Database,
 	GripVertical,
+	KeyRound,
 	Loader2,
 	Plus,
 	Trash2,
@@ -61,9 +62,11 @@ import {
 	IndexTypeSelect,
 	NullableSelect,
 	indexTypeEnum,
+	isKeyColumnType,
 	validateColumnName,
 	validateTableName,
 } from "../../ui/table-schema";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { PermissionNotice } from "../permission/permission-notice";
 
 const WRITE_DATA = [RolePermissions.WriteFiles, RolePermissions.WriteDatabase];
@@ -76,6 +79,7 @@ interface ColumnDraft {
 	vectorSize: string;
 	indexed: boolean;
 	indexType: string;
+	primaryKey: boolean;
 }
 
 function newColumn(): ColumnDraft {
@@ -87,6 +91,7 @@ function newColumn(): ColumnDraft {
 		vectorSize: "",
 		indexed: false,
 		indexType: "auto",
+		primaryKey: false,
 	};
 }
 
@@ -146,6 +151,18 @@ export function TableDesignerDialog({
 		},
 		[],
 	);
+
+	const setKeyColumn = useCallback((id: string, primaryKey: boolean) => {
+		setColumns((prev) =>
+			prev.map((column) => {
+				if (column.id === id)
+					return primaryKey
+						? { ...column, primaryKey, nullable: false }
+						: { ...column, primaryKey };
+				return primaryKey ? { ...column, primaryKey: false } : column;
+			}),
+		);
+	}, []);
 
 	const removeColumn = useCallback((id: string) => {
 		setColumns((prev) =>
@@ -239,6 +256,7 @@ export function TableDesignerDialog({
 			...(column.type === "vector"
 				? { vector_size: Number.parseInt(column.vectorSize, 10) }
 				: {}),
+			...(column.primaryKey ? { primary_key: true } : {}),
 		}));
 		const indexed = columns.filter(
 			(column) => column.indexed && column.type !== "vector",
@@ -391,6 +409,9 @@ export function TableDesignerDialog({
 										error={columnError(column)}
 										canRemove={columns.length > 1}
 										onChange={(patch) => updateColumn(column.id, patch)}
+										onKeyChange={(primaryKey) =>
+											setKeyColumn(column.id, primaryKey)
+										}
 										onRemove={() => removeColumn(column.id)}
 									/>
 								))}
@@ -438,6 +459,7 @@ function ColumnDesignerRow({
 	error,
 	canRemove,
 	onChange,
+	onKeyChange,
 	onRemove,
 }: Readonly<{
 	geometryEnabled: boolean;
@@ -445,6 +467,7 @@ function ColumnDesignerRow({
 	error: string | null;
 	canRemove: boolean;
 	onChange: (patch: Partial<ColumnDraft>) => void;
+	onKeyChange: (primaryKey: boolean) => void;
 	onRemove: () => void;
 }>) {
 	const { t } = useTranslation("settings");
@@ -495,6 +518,7 @@ function ColumnDesignerRow({
 							onChange({
 								type,
 								...(type === "vector" ? {} : { vectorSize: "" }),
+								...(isKeyColumnType(type) ? {} : { primaryKey: false }),
 								indexType: "auto",
 							})
 						}
@@ -502,6 +526,7 @@ function ColumnDesignerRow({
 					<NullableSelect
 						nullable={column.nullable}
 						onChange={(nullable) => onChange({ nullable })}
+						disabled={column.primaryKey}
 					/>
 				</div>
 				<Button
@@ -543,6 +568,8 @@ function ColumnDesignerRow({
 			)}
 
 			<div className="mt-2 flex flex-wrap items-center gap-2 pl-6">
+				<KeyColumnToggle column={column} onChange={onKeyChange} />
+				<span aria-hidden className="mx-1 h-4 w-px bg-border" />
 				<Switch
 					id={`index-${column.id}`}
 					checked={column.indexed}
@@ -577,7 +604,58 @@ function ColumnDesignerRow({
 				)}
 			</div>
 
+			{column.primaryKey && (
+				<p className="mt-2 pl-6 text-xs text-muted-foreground">
+					{t(
+						"tableKeyToggleHint",
+						"Concurrent Upserts on the key column can't create duplicate rows. The key is required and can't be changed once the table exists.",
+					)}
+				</p>
+			)}
+
 			{error && <p className="mt-2 pl-6 text-xs text-destructive">{error}</p>}
 		</div>
+	);
+}
+
+function KeyColumnToggle({
+	column,
+	onChange,
+}: Readonly<{
+	column: ColumnDraft;
+	onChange: (primaryKey: boolean) => void;
+}>) {
+	const { t } = useTranslation("settings");
+	const eligible = isKeyColumnType(column.type);
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<span className="inline-flex items-center gap-2">
+					<Switch
+						id={`key-${column.id}`}
+						checked={column.primaryKey}
+						onCheckedChange={onChange}
+						disabled={!eligible}
+					/>
+					<Label
+						htmlFor={`key-${column.id}`}
+						className="text-xs text-muted-foreground"
+					>
+						<KeyRound className="h-3 w-3" /> {t("tableKeyToggle", "Key")}
+					</Label>
+				</span>
+			</TooltipTrigger>
+			<TooltipContent className="max-w-64">
+				{eligible
+					? t(
+							"tableKeyToggleTooltip",
+							"Make this column the table key. A table has at most one.",
+						)
+					: t(
+							"tableKeyIneligibleType",
+							"Only text, 32/64-bit integer or binary columns can be the key.",
+						)}
+			</TooltipContent>
+		</Tooltip>
 	);
 }

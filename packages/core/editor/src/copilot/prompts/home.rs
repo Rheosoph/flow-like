@@ -35,6 +35,11 @@ Turn the user's goal into a coherent landing page, not a pile of interchangeable
   equally weighted cards.
 - Use only catalog-supported sizes, variants, accents, and config fields. Prefer `auto` or `content`
   height. Use a fixed height only when the content needs a stable viewport such as a chart or embed.
+- `appearance.className` is the one free-form styling field: optional Tailwind CSS v4 utility
+  classes for the widget root surface, at most 1024 bytes. Keep a catalog variant and accent as the
+  base and prefer theme tokens such as `bg-card` or `border-primary/30` over arbitrary colors. Use
+  it for deliberate emphasis, not decoration on every card. Never use positioning, z-index, or
+  grid-span utilities. Preserve an existing widget's `className` unless the user asks to restyle it.
 - Keep titles short, descriptions useful, and quick actions concrete. Do not fabricate user data,
   metrics, activity, or personalized copy that the available sources cannot provide.
 - Use profile name, description, interests, and tags from Home context as design signals when they

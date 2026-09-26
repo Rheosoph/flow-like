@@ -2,10 +2,6 @@
 import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
 import type { Lang, TranslationKey } from "../../i18n";
 import { defaultLang, translations } from "../../i18n";
-import dataStudio from "../../images/parallax/data-studio.png";
-import governance from "../../images/parallax/governance.png";
-import uiBuilder from "../../images/parallax/ui-builder.png";
-import workflowCore from "../../images/parallax/workflow-core.png";
 
 interface Props { id: string; lang?: Lang; }
 const { id, lang = defaultLang } = Astro.props;
@@ -28,12 +24,19 @@ const execSteps: [string, string, string][] = [
 
 const builderTabs = tList("v5.platform.builder.tabs");
 const parallaxWidths = [640, 960, 1150, 1440, 1725, 1920];
+const parallaxDimensions = { width: 1920, height: 1080 };
+const parallaxSizes =
+	"(max-width: 959px) calc(100vw - 36px), (max-height: 679px) calc(100vw - 36px), min(60vw, 1150px)";
+// This path is immutable after publication. Bump it together with the generator
+// and public/_headers when sources or encoding settings change.
+const parallaxAssetVersion = "v2";
+const parallaxBase = `/parallax/optimized/${parallaxAssetVersion}`;
 const parallaxSrcset = (name: string) =>
 	parallaxWidths
-		.map((width) => `/parallax/optimized/${name}-${width}.webp ${width}w`)
+		.map((width) => `${parallaxBase}/${name}-${width}.webp ${width}w`)
 		.join(", ");
 const parallaxMask = (name: string) =>
-	`image-set(url("/parallax/optimized/${name}-1150.webp") 1x, url("/parallax/optimized/${name}-1920.webp") 2x)`;
+	`image-set(url("${parallaxBase}/${name}-1150.webp") 1x, url("${parallaxBase}/${name}-1920.webp") 2x)`;
 ---
 
 {id === "builder" && (
@@ -49,21 +52,17 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("workflow-core")}`}
   >
     <div class="workflow-art">
-      <picture>
-        <source
-          media="(max-width: 959px)"
-          srcset={parallaxSrcset("workflow-core")}
-          sizes="calc(100vw - 36px)"
-        />
-        <img
-          src="/parallax/optimized/workflow-core-1920.webp"
-          alt={`${t("v5.platform.f.workflow.title")} — Flow-Like visual workflow and FlowScript editor`}
-          width={workflowCore.width}
-          height={workflowCore.height}
-          loading="lazy"
-          decoding="async"
-        />
-      </picture>
+      <img
+        src={`${parallaxBase}/workflow-core-1920.webp`}
+        srcset={parallaxSrcset("workflow-core")}
+        sizes={parallaxSizes}
+        data-parallax-image="workflow-core"
+        alt={`${t("v5.platform.f.workflow.title")} — Flow-Like visual workflow and FlowScript editor`}
+        width={parallaxDimensions.width}
+        height={parallaxDimensions.height}
+        loading="lazy"
+        decoding="async"
+      />
     </div>
   </div>
 )}
@@ -74,21 +73,17 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("ui-builder")}`}
   >
     <div class="workflow-art">
-      <picture>
-        <source
-          media="(max-width: 959px)"
-          srcset={parallaxSrcset("ui-builder")}
-          sizes="calc(100vw - 36px)"
-        />
-        <img
-          src="/parallax/optimized/ui-builder-1920.webp"
-          alt={`${t("v5.platform.f.frontend.title")} — Flow-Like visual page builder and interaction editor`}
-          width={uiBuilder.width}
-          height={uiBuilder.height}
-          loading="lazy"
-          decoding="async"
-        />
-      </picture>
+      <img
+        src={`${parallaxBase}/ui-builder-1920.webp`}
+        srcset={parallaxSrcset("ui-builder")}
+        sizes={parallaxSizes}
+        data-parallax-image="ui-builder"
+        alt={`${t("v5.platform.f.frontend.title")} — Flow-Like visual page builder and interaction editor`}
+        width={parallaxDimensions.width}
+        height={parallaxDimensions.height}
+        loading="lazy"
+        decoding="async"
+      />
     </div>
   </div>
 )}
@@ -99,21 +94,17 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("data-studio")}`}
   >
     <div class="workflow-art">
-      <picture>
-        <source
-          media="(max-width: 959px)"
-          srcset={parallaxSrcset("data-studio")}
-          sizes="calc(100vw - 36px)"
-        />
-        <img
-          src="/parallax/optimized/data-studio-1920.webp"
-          alt={`${t("v5.platform.f.data.title")} — Flow-Like ontology and knowledge graph workspace`}
-          width={dataStudio.width}
-          height={dataStudio.height}
-          loading="lazy"
-          decoding="async"
-        />
-      </picture>
+      <img
+        src={`${parallaxBase}/data-studio-1920.webp`}
+        srcset={parallaxSrcset("data-studio")}
+        sizes={parallaxSizes}
+        data-parallax-image="data-studio"
+        alt={`${t("v5.platform.f.data.title")} — Flow-Like ontology and knowledge graph workspace`}
+        width={parallaxDimensions.width}
+        height={parallaxDimensions.height}
+        loading="lazy"
+        decoding="async"
+      />
     </div>
   </div>
 )}
@@ -130,21 +121,17 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("governance")}`}
   >
     <div class="workflow-art">
-      <picture>
-        <source
-          media="(max-width: 959px)"
-          srcset={parallaxSrcset("governance")}
-          sizes="calc(100vw - 36px)"
-        />
-        <img
-          src="/parallax/optimized/governance-1920.webp"
-          alt={`${t("v5.platform.f.governance.title")} — Flow-Like AI inventory, security, audit, and usage governance dashboards`}
-          width={governance.width}
-          height={governance.height}
-          loading="lazy"
-          decoding="async"
-        />
-      </picture>
+      <img
+        src={`${parallaxBase}/governance-1920.webp`}
+        srcset={parallaxSrcset("governance")}
+        sizes={parallaxSizes}
+        data-parallax-image="governance"
+        alt={`${t("v5.platform.f.governance.title")} — Flow-Like AI inventory, security, audit, and usage governance dashboards`}
+        width={parallaxDimensions.width}
+        height={parallaxDimensions.height}
+        loading="lazy"
+        decoding="async"
+      />
     </div>
   </div>
 )}
@@ -267,11 +254,6 @@ const parallaxMask = (name: string) =>
     height: 100%;
     object-fit: contain;
     image-rendering: auto;
-  }
-  .workflow-art :global(picture) {
-    display: block;
-    width: 100%;
-    height: 100%;
   }
   .workflow-visual:hover:before {
     opacity: .8;

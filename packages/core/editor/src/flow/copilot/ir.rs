@@ -6391,21 +6391,29 @@ mod tests {
         };
         let multi_plan = plan_flow_capabilities(&multi_request, &catalog);
         let final_multi = FlowIrProgram {
-            modules: vec![FlowIrModule::Function {
-                name: "request".to_string(),
-                params: Vec::new(),
-                returns: Vec::new(),
-                cache: None,
-                steps: vec![FlowIrStep::Node {
-                    id: "multi".to_string(),
-                    node_type: "multi_action".to_string(),
-                    args: Vec::new(),
-                    continue_from: None,
-                    exec_arms: Vec::new(),
+            modules: vec![
+                FlowIrModule::Function {
+                    name: "request".to_string(),
+                    params: Vec::new(),
+                    returns: Vec::new(),
+                    cache: None,
+                    steps: vec![FlowIrStep::Node {
+                        id: "multi".to_string(),
+                        node_type: "multi_action".to_string(),
+                        args: Vec::new(),
+                        continue_from: None,
+                        exec_arms: Vec::new(),
+                        anchor: None,
+                    }],
                     anchor: None,
-                }],
-                anchor: None,
-            }],
+                },
+                event(vec![FlowIrStep::CallFunction {
+                    id: "call".to_string(),
+                    function: "request".to_string(),
+                    args: Vec::new(),
+                    anchor: None,
+                }]),
+            ],
             ..Default::default()
         };
         assert!(

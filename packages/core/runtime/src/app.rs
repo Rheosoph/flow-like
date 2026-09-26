@@ -2,7 +2,7 @@ use crate::{
     a2ui::widget::Page,
     bit::Metadata,
     flow::{
-        board::{Board, VersionType, commands::nodes::copy_paste::CopyPasteCommand},
+        board::{Board, BoardCell, VersionType, commands::nodes::copy_paste::CopyPasteCommand},
         event::Event,
     },
     state::FlowLikeState,
@@ -13,11 +13,13 @@ use crate::{
 };
 use flow_like_storage::Path;
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_types::{FromProto, ToProto, create_id, proto, sync::Mutex};
+use flow_like_types::{FromProto, ToProto, create_id, proto};
 use futures::{StreamExt, TryStreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::SystemTime, vec};
+pub mod duplicate;
+pub mod remap;
 pub mod sharing;
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
@@ -477,8 +479,7 @@ impl App {
             let board = self.open_board(board_id.clone(), Some(false), None).await;
             if let Ok(board) = board {
                 let vars = board
-                    .lock()
-                    .await
+                    .snapshot()
                     .variables
                     .values()
                     .cloned()
@@ -499,13 +500,13 @@ impl App {
         board_id: String,
         register: Option<bool>,
         version: Option<(u32, u32, u32)>,
-    ) -> flow_like_types::Result<Arc<Mutex<Board>>> {
+    ) -> flow_like_types::Result<Arc<BoardCell>> {
         let storage_root = Path::from("apps").join(self.id.clone());
         if let Some(app_state) = &self.app_state {
             let board = app_state.get_board(&board_id, version);
 
             if let Ok(board) = board {
-                board.lock().await.ensure_supported_format()?;
+                board.snapshot().ensure_supported_format()?;
                 return Ok(board);
             }
         }
@@ -516,7 +517,7 @@ impl App {
             .ok_or(flow_like_types::anyhow!("App state not found"))?;
 
         let board = Board::load(storage_root, &board_id, state, version).await?;
-        let board_ref = Arc::new(Mutex::new(board));
+        let board_ref = Arc::new(BoardCell::new(board));
         let register = register.unwrap_or(false);
         if register && let Some(app_state) = &self.app_state {
             app_state.register_board(&board_id, board_ref.clone(), version)?;
@@ -537,14 +538,14 @@ impl App {
         &self,
         board_id: String,
         version: Option<(u32, u32, u32)>,
-    ) -> flow_like_types::Result<Arc<Mutex<Board>>> {
+    ) -> flow_like_types::Result<Arc<BoardCell>> {
         let storage_root = Path::from("apps").join(self.id.clone());
         let state = self
             .app_state
             .clone()
             .ok_or(flow_like_types::anyhow!("App state not found"))?;
         let board = Board::load(storage_root, &board_id, state, version).await?;
-        Ok(Arc::new(Mutex::new(board)))
+        Ok(Arc::new(BoardCell::new(board)))
     }
 
     pub async fn delete_board(&mut self, board_id: &str) -> flow_like_types::Result<()> {
@@ -673,7 +674,7 @@ impl App {
     ) -> flow_like_types::Result<(String, (u32, u32, u32))> {
         let explicit_template_id = template_id.is_some();
         let mut template_id = template_id.unwrap_or_else(create_id);
-        let new_template: Arc<Mutex<Board>> = self
+        let new_template = self
             .open_board(board_id, Some(false), board_version)
             .await?;
         let old_template = self.open_template(template_id.clone(), None).await.ok();
@@ -683,8 +684,7 @@ impl App {
         }
 
         let template: (u32, u32, u32) = new_template
-            .lock()
-            .await
+            .snapshot()
             .create_template(template_id.clone(), version_type, old_template, None)
             .await?;
 
@@ -1352,8 +1352,7 @@ impl App {
             };
 
             for board in board_refs {
-                let tmp = board.lock().await.clone();
-                tmp.save(Some(store.clone())).await?;
+                board.snapshot().save(Some(store.clone())).await?;
             }
         }
 

@@ -68,28 +68,46 @@ impl NodeLogic for BrowserClickNode {
         )
         .set_schema::<AutomationSession>();
 
+        node.add_input_pin(
+            "button",
+            "Button",
+            "left, middle, or right",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("left")));
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Control, Shift, Alt, or Meta",
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_default_value(Some(json!([])));
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
-
-        element
-            .click()
+        let element = super::selector::find(&driver, &locator)
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to click element: {}", e))?;
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
+
+        let button: String =
+            super::selector::optional_input(context, "button", "left".to_string()).await?;
+        let modifiers: Vec<String> =
+            super::selector::optional_input(context, "modifiers", Vec::new()).await?;
+        super::actions::click_with_modifiers(&driver, &element, &button, &modifiers).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -167,30 +185,47 @@ impl NodeLogic for BrowserDoubleClickNode {
         )
         .set_schema::<AutomationSession>();
 
+        node.add_input_pin(
+            "button",
+            "Button",
+            "left, middle, or right",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("left")));
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Control, Shift, Alt, or Meta",
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_default_value(Some(json!([])));
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
-
-        driver
-            .action_chain()
-            .double_click_element(&element)
-            .perform()
+        let element = super::selector::find(&driver, &locator)
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to double-click element: {}", e))?;
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
+
+        let button: String =
+            super::selector::optional_input(context, "button", "left".to_string()).await?;
+        let modifiers: Vec<String> =
+            super::selector::optional_input(context, "modifiers", Vec::new()).await?;
+        super::actions::click_with_modifiers_count(&driver, &element, &button, &modifiers, 2)
+            .await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -268,23 +303,25 @@ impl NodeLogic for BrowserHoverNode {
         )
         .set_schema::<AutomationSession>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
 
         driver
             .action_chain()
@@ -369,23 +406,25 @@ impl NodeLogic for BrowserScrollIntoViewNode {
         )
         .set_schema::<AutomationSession>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
 
         element
             .scroll_into_view()

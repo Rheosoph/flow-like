@@ -47,6 +47,7 @@ import type {
 	IStoredOAuthToken,
 } from "../../../lib/oauth/types";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { normalizeRoutePath } from "../../../lib/route-path";
 import type { IEvent } from "../../../lib/schema/flow/event";
 import type { IHub } from "../../../lib/schema/hub/hub";
@@ -212,7 +213,7 @@ export function EventsOverview({
 
 	const routeByEventId = useMemo(() => {
 		const map = new Map<string, string>();
-		for (const route of routes.data ?? []) {
+		for (const route of asArray(routes.data)) {
 			map.set(route.eventId, normalizeRoutePath(route.path));
 		}
 		return map;

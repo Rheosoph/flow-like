@@ -33,15 +33,15 @@ pub fn routes() -> Router<AppState> {
 #[tracing::instrument(name = "GET /auth/openid", skip(state))]
 pub async fn openid_config(
     State(state): State<AppState>,
-) -> Result<Json<OpenIdConfig>, InternalError> {
+) -> Result<Json<OpenIdConfig>, crate::error::ApiError> {
     let config = state
         .platform_config
         .authentication
         .as_ref()
-        .unwrap()
-        .openid
-        .as_ref()
-        .unwrap()
+        .and_then(|authentication| authentication.openid.as_ref())
+        .ok_or_else(|| {
+            crate::error::ApiError::service_unavailable("OpenID sign-in is not configured")
+        })?
         .clone();
 
     Ok(Json(config))

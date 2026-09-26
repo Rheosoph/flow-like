@@ -82,7 +82,7 @@ impl NodeLogic for CloneGitHubRepoNode {
         node.add_input_pin(
             "include_git",
             "Include .git",
-            "Include the .git directory (only useful for local stores)",
+            "Copy .git metadata into non-local stores. Local clones always retain their Git metadata.",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
@@ -128,6 +128,7 @@ impl NodeLogic for CloneGitHubRepoNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
+        context.set_pin_value("repo_path", json!(null)).await?;
 
         let provider: GitHubProvider = context.evaluate_pin("provider").await?;
         let owner: String = context.evaluate_pin("owner").await?;
@@ -137,39 +138,38 @@ impl NodeLogic for CloneGitHubRepoNode {
         let depth: i64 = context.evaluate_pin("depth").await.unwrap_or(0);
         let include_git: bool = context.evaluate_pin("include_git").await.unwrap_or(false);
 
-        if owner.is_empty() || repo.is_empty() {
-            context.log_message("Owner and repository are required", LogLevel::Error);
+        if let Err(error) = super::repository::validate_repo_component(&owner)
+            .and_then(|_| super::repository::validate_repo_component(&repo))
+        {
+            context.log_message(&error.to_string(), LogLevel::Error);
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
+        if depth < 0 {
+            context.log_message("Depth must be zero or positive", LogLevel::Error);
             context.activate_exec_pin("error").await?;
             return Ok(());
         }
 
-        let clone_url = provider.clone_url(&owner, &repo);
-
         let store = target_dir.to_store(context).await?;
-        let is_local = matches!(&store, FlowLikeStore::Local(_));
-
-        let local_target = if is_local {
-            if let FlowLikeStore::Local(local) = &store {
-                let base_path = local
-                    .path_to_filesystem(&target_dir.object_path())
-                    .map_err(|e| flow_like_types::anyhow!("Failed to get local path: {}", e))?;
-                Some(base_path.join(&repo))
-            } else {
-                None
-            }
+        let local_target = if let FlowLikeStore::Local(local) = &store {
+            Some(super::repository::resolve_local_path(
+                local,
+                &target_dir.object_path().join(repo.as_str()),
+            )?)
         } else {
             None
         };
         drop(store);
 
         if let Some(target_path) = local_target {
-            // Fast path: local store — clone directly
+            // Local stores keep the working tree and its Git metadata.
             context.log_message(
                 &format!("Cloning {}/{} to {:?} (local)", owner, repo, target_path),
                 LogLevel::Info,
             );
 
-            match run_git_clone(&clone_url, &target_path, &branch, depth) {
+            match run_git_clone(&provider, &owner, &repo, &target_path, &branch, depth).await {
                 Ok(()) => {
                     target_dir.path = build_repo_subpath(&target_dir.path, &repo);
                     context
@@ -197,7 +197,7 @@ impl NodeLogic for CloneGitHubRepoNode {
                 LogLevel::Info,
             );
 
-            match run_git_clone(&clone_url, &temp_dir, &branch, depth) {
+            match run_git_clone(&provider, &owner, &repo, &temp_dir, &branch, depth).await {
                 Ok(()) => {
                     let copy_result =
                         copy_dir_to_flowpath(&temp_dir, &target_dir, &repo, include_git, context)
@@ -258,36 +258,47 @@ fn build_repo_subpath(base: &str, repo: &str) -> String {
 }
 
 #[cfg(feature = "execute")]
-fn run_git_clone(
-    clone_url: &str,
+async fn run_git_clone(
+    provider: &GitHubProvider,
+    owner: &str,
+    repo: &str,
     target: &std::path::Path,
     branch: &str,
     depth: i64,
 ) -> flow_like_types::Result<()> {
-    let mut cmd = std::process::Command::new("git");
-    cmd.arg("clone");
-
-    if !branch.is_empty() {
-        cmd.arg("--branch").arg(branch);
-    }
-
-    if depth > 0 {
-        cmd.arg("--depth").arg(depth.to_string());
-    }
-
-    cmd.arg(clone_url);
-    cmd.arg(target);
-
-    let output = cmd
-        .output()
-        .map_err(|e| flow_like_types::anyhow!("Failed to execute git: {}", e))?;
-
-    if output.status.success() {
+    let provider = provider.clone();
+    let clone_url = provider.clone_url(owner, repo);
+    let target = target.to_owned();
+    let branch = branch.to_owned();
+    flow_like_types::tokio::task::spawn_blocking(move || {
+        let mut parent = target
+            .parent()
+            .ok_or_else(|| flow_like_types::anyhow!("Clone target needs a parent directory"))?;
+        while !parent.exists() {
+            parent = parent
+                .parent()
+                .ok_or_else(|| flow_like_types::anyhow!("Clone target needs an existing parent"))?;
+        }
+        let depth = depth.to_string();
+        let mut args = vec!["clone"];
+        if !branch.is_empty() {
+            super::git::validate_ref(&branch)?;
+            args.extend(["--branch", branch.as_str()]);
+        }
+        if depth != "0" {
+            args.extend(["--depth", depth.as_str()]);
+        }
+        args.extend([
+            "--",
+            clone_url.as_str(),
+            target
+                .to_str()
+                .ok_or_else(|| flow_like_types::anyhow!("Clone target must be UTF-8"))?,
+        ]);
+        super::git::run_network(parent, &args, &provider)?;
         Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(flow_like_types::anyhow!("{}", stderr))
-    }
+    })
+    .await?
 }
 
 #[cfg(feature = "execute")]

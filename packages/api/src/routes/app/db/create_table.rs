@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::{
     lancedb::LanceDBVectorStore,
     schema::{DatabaseSchemaField, database_fields_to_arrow_schema},
@@ -20,14 +21,21 @@ pub struct CreateTableFieldPayload {
     /// Column name. Use ASCII letters, numbers, and underscores; do not start with a number.
     pub name: String,
     /// string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64,
-    /// float32/float64, binary, date32, timestamp:ms:UTC, or vector. Use
+    /// float32/float64, binary, geometry, date32, timestamp:ms:UTC, or vector. Use
     /// timestamp:ms:UTC for FlowLike Date/date-time instant fields; date32 is calendar-only.
+    /// A geometry column holds one WGS84 longitude/latitude shape per row and accepts a
+    /// GeoJSON geometry object, a GeoJSON Feature (its geometry is stored), GeoJSON text or
+    /// WKT text; write one row per feature of a FeatureCollection.
     #[serde(rename = "type")]
     pub data_type: String,
     /// Whether the column accepts null values. Defaults to true.
     pub nullable: Option<bool>,
     /// Required for vector fields; the number of float32 values in each vector.
     pub vector_size: Option<u32>,
+    /// Make this column the table key so concurrent upserts on it never create duplicate
+    /// rows. At most one column; it must set nullable to false and be a string, int32,
+    /// int64, uint32, uint64 or binary column. Defaults to false.
+    pub primary_key: Option<bool>,
 }
 
 impl From<CreateTableFieldPayload> for DatabaseSchemaField {
@@ -37,6 +45,7 @@ impl From<CreateTableFieldPayload> for DatabaseSchemaField {
             data_type: field.data_type,
             nullable: field.nullable.unwrap_or(true),
             vector_size: field.vector_size,
+            primary_key: field.primary_key.unwrap_or(false),
         }
     }
 }
@@ -89,6 +98,7 @@ pub async fn create_table(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<CreateTablePayload>,
 ) -> Result<Json<CreateTableResponse>, ApiError> {
     ensure_any_permission!(
@@ -99,6 +109,12 @@ pub async fn create_table(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    if selector != DatabaseSelector::default() {
+        return Err(ApiError::bad_request(
+            "This operation applies to the entire table. Omit branch and revision selectors."
+                .to_string(),
+        ));
+    }
 
     let if_not_exists = payload.if_not_exists.unwrap_or(true);
     let fields = payload
@@ -131,7 +147,6 @@ pub async fn create_table(
             "database.table.create",
             "DatabaseTable",
             table,
-            "Created a database table",
             serde_json::json!({
                 "column_count": fields.len(),
                 "user_scoped": scope.is_user_scoped(),

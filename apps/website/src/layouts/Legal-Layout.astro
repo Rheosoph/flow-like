@@ -8,9 +8,10 @@ interface Props {
 	title: string;
 	description?: string;
 	lastUpdated?: string;
+	locale?: string;
 }
 
-const { title, description, lastUpdated } = Astro.props;
+const { title, description, lastUpdated, locale = "en" } = Astro.props;
 
 const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
 const canonical = new URL(Astro.url.pathname, site).toString();
@@ -18,7 +19,7 @@ const desc = description ?? "Legal information for Flow-Like";
 ---
 
 <!doctype html>
-<html lang="en" class="scroll-smooth">
+<html lang={locale} class="scroll-smooth">
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width" />

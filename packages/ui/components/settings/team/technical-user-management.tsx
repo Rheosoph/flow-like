@@ -51,6 +51,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../../";
+import { asArray } from "../../../lib/response-shape";
 import { PermissionNotice, SectionLockedPanel } from "../permission";
 import {
 	SectionHeading,
@@ -108,18 +109,18 @@ export function TechnicalUserManagement({
 	const [validUntil, setValidUntil] = useState<string>("");
 	const [isCreating, setIsCreating] = useState(false);
 
-	const availableRoles =
-		roles.data?.[1].filter((role) => {
-			const perm = new RolePermissions(BigInt(role.permissions));
-			return !perm.contains(RolePermissions.Owner);
-		}) ?? [];
+	const roleList = asArray(roles.data?.[1]);
+	const availableRoles = roleList.filter((role) => {
+		const perm = new RolePermissions(BigInt(role.permissions));
+		return !perm.contains(RolePermissions.Owner);
+	});
+	const keys = asArray(apiKeys.data);
 
 	const expiredCount = useMemo(() => {
 		const now = Date.now();
-		return (apiKeys.data ?? []).filter(
-			(key) => key.valid_until && key.valid_until * 1000 < now,
-		).length;
-	}, [apiKeys.data]);
+		return keys.filter((key) => key.valid_until && key.valid_until * 1000 < now)
+			.length;
+	}, [keys]);
 
 	const handleCreate = useCallback(async () => {
 		if (!name.trim()) {
@@ -206,7 +207,7 @@ export function TechnicalUserManagement({
 				<SectionHeading
 					icon={KeyIcon}
 					title={t("apiKeys", "API keys")}
-					count={apiKeys.data?.length ?? 0}
+					count={keys.length}
 					description={t(
 						"forScriptsAndServicesAKeyActsWithTheRoleYouGiveItNothingMore",
 						"For scripts and services. A key acts with the role you give it — nothing more.",
@@ -268,7 +269,7 @@ export function TechnicalUserManagement({
 						title={t("apiKeysUnavailable", "API keys unavailable")}
 						error={apiKeys.error}
 					/>
-				) : !apiKeys.data || apiKeys.data.length === 0 ? (
+				) : keys.length === 0 ? (
 					<EmptyState
 						className="max-w-full"
 						icons={[KeyIcon]}
@@ -280,11 +281,11 @@ export function TechnicalUserManagement({
 					/>
 				) : (
 					<div className="flex flex-col gap-2">
-						{apiKeys.data.map((key) => (
+						{keys.map((key) => (
 							<ApiKeyCard
 								key={key.id}
 								apiKey={key}
-								roles={roles.data?.[1] ?? []}
+								roles={roleList}
 								onDelete={handleDelete}
 							/>
 						))}

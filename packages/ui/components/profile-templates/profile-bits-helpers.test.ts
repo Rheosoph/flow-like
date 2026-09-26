@@ -32,8 +32,8 @@ describe("profile bit references", () => {
 		).toEqual([...existing, "second.example:model"]);
 		expect(
 			appendProfileBitReference(existing, " first.example:model "),
-		).toEqual(existing);
-		expect(appendProfileBitReference(existing, "  ")).toEqual(existing);
+		).toEqual([...existing]);
+		expect(appendProfileBitReference(existing, "  ")).toEqual([...existing]);
 	});
 	test("matches qualified references exactly, including hubs with a scheme and port", () => {
 		const first = bit("https://first.example:8443", "same-id");

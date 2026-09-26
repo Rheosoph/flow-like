@@ -97,6 +97,16 @@ impl WasmSecurityConfig {
         }
     }
 
+    /// Take the package-wide settings from the manifest: resource limits and
+    /// the host allowlist. Capabilities stay exactly what the node declares;
+    /// the registry derives the manifest's capability listing from the nodes,
+    /// so it can never be the wider of the two.
+    pub fn with_package_settings(mut self, manifest: &Self) -> Self {
+        self.limits = manifest.limits.clone();
+        self.allowed_hosts = manifest.allowed_hosts.clone();
+        self
+    }
+
     /// Build a host security configuration from node-level permissions.
     pub fn from_node_permissions(permissions: &[flow_like::flow::node::NodePermission]) -> Self {
         use flow_like::flow::node::NodePermission;
@@ -113,6 +123,8 @@ impl WasmSecurityConfig {
                 NodePermission::StorageWrite => {
                     WasmCapabilities::STORAGE_WRITE | WasmCapabilities::STORAGE_DELETE
                 }
+                NodePermission::DatabaseRead => WasmCapabilities::DATABASE_READ,
+                NodePermission::DatabaseWrite => WasmCapabilities::DATABASE_WRITE,
                 NodePermission::Variables => WasmCapabilities::VARIABLES_ALL,
                 NodePermission::Cache => WasmCapabilities::CACHE_ALL,
                 NodePermission::Streaming => WasmCapabilities::STREAMING,
@@ -170,5 +182,27 @@ mod tests {
         assert_eq!(metadata.limits.memory_limit, permissive.limits.memory_limit);
         assert_eq!(metadata.limits.fuel_limit, permissive.limits.fuel_limit);
         assert_eq!(metadata.limits.timeout, permissive.limits.timeout);
+    }
+
+    #[test]
+    fn package_settings_leave_node_capabilities_alone() {
+        use flow_like::flow::node::NodePermission;
+
+        // A manifest without capability flags, as the templates ship it.
+        let manifest = WasmSecurityConfig::from_node_permissions(&[])
+            .with_allowed_hosts(vec!["api.example.com".to_string()]);
+        let declared = WasmSecurityConfig::from_node_permissions(&[
+            NodePermission::DatabaseRead,
+            NodePermission::StorageWrite,
+        ]);
+        let node = declared.clone().with_package_settings(&manifest);
+
+        assert_eq!(node.capabilities, declared.capabilities);
+        assert!(!node.capabilities.intersects(WasmCapabilities::HTTP_ALL));
+        assert_eq!(
+            node.allowed_hosts.as_deref(),
+            Some(&["api.example.com".to_string()][..])
+        );
+        assert_eq!(node.limits.memory_limit, manifest.limits.memory_limit);
     }
 }

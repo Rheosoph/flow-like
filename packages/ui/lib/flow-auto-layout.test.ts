@@ -376,6 +376,89 @@ describe("computeFlowLayout", () => {
 });
 
 describe("layout invariants", () => {
+	test("gives routed parallel branches room without widening compact columns", () => {
+		const graph = new GraphBuilder();
+		graph.exec("fork", {
+			start: true,
+			execIn: false,
+			execOuts: ["upper", "lower"],
+		});
+		for (const branch of ["upper", "lower"]) {
+			for (let index = 0; index < 3; index++) {
+				graph.exec(`${branch}-${index}`, { dataIns: index + 1 });
+				if (index)
+					graph.execLink(`${branch}-${index - 1}`, `${branch}-${index}`);
+			}
+			graph.connect(`fork:${branch}`, `${branch}-0:exec-in`);
+		}
+		graph.exec("join");
+		graph.execLink("upper-2", "join");
+		graph.execLink("lower-2", "join");
+		const input = {
+			...graph.build(),
+			nodeSizes: new Map<string, readonly [number, number]>([
+				["upper-1", [180, 133.5]],
+				["lower-1", [210, 79.25]],
+			]),
+		};
+		const compact = computeFlowLayoutDetailed(input, "compact");
+		const routed = computeFlowLayoutDetailed(input, "routed");
+		for (let index = 0; index < 3; index++) {
+			const upper = `upper-${index}`;
+			const lower = `lower-${index}`;
+			const node = graph.nodes.get(upper);
+			if (!node) throw new Error("Missing branch fixture node");
+			const height =
+				input.nodeSizes.get(upper)?.[1] ?? measureNodeBox(node).height;
+			const compactGap =
+				(compact.positions.get(lower)?.[1] ?? 0) -
+				(compact.positions.get(upper)?.[1] ?? 0) -
+				height;
+			const routedGap =
+				(routed.positions.get(lower)?.[1] ?? 0) -
+				(routed.positions.get(upper)?.[1] ?? 0) -
+				height;
+			expect(routedGap).toBeGreaterThanOrEqual(71.5);
+			expect(routedGap - compactGap).toBeGreaterThanOrEqual(32);
+		}
+		for (const [id, position] of routed.positions) {
+			const compactPosition = compact.positions.get(id);
+			if (!compactPosition)
+				throw new Error("Compact did not position a branch node");
+			expect(position[0]).toBe(compactPosition[0]);
+		}
+		const moved = {
+			...input,
+			layerNodes: input.layerNodes
+				.map((node) => ({
+					...node,
+					coordinates: [...(routed.positions.get(node.id) ?? [0, 0]), 0],
+				}))
+				.reverse(),
+		};
+		expect(computeFlowLayoutDetailed(moved, "routed").positions).toEqual(
+			routed.positions,
+		);
+	});
+
+	test("keeps routed chains and pure inputs at compact spacing", () => {
+		const graph = new GraphBuilder();
+		graph.exec("event", { start: true, execIn: false });
+		graph.exec("first", { dataIns: 2, dataOuts: 1 });
+		graph.exec("second", { dataIns: 1 });
+		graph.pure("input-a");
+		graph.pure("input-b");
+		graph.execLink("event", "first");
+		graph.execLink("first", "second");
+		graph.dataLink("input-a", "first", 0, 0);
+		graph.dataLink("input-b", "first", 0, 1);
+		graph.dataLink("first", "second");
+		const input = graph.build();
+		expect(computeFlowLayout(input, "routed")).toEqual(
+			computeFlowLayout(input, "compact"),
+		);
+	});
+
 	test("renders Branch True above False on an unarranged board", () => {
 		const graph = new GraphBuilder();
 		// Ids are chosen so alphabetical order contradicts pin order: if ordering

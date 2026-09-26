@@ -27,6 +27,7 @@ impl NodeLogic for WaitTemplateNode {
             "Waits for a template image to appear on screen",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "waitTemplate");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -59,6 +60,14 @@ impl NodeLogic for WaitTemplateNode {
             VariableType::Struct,
         )
         .set_schema::<FlowPath>();
+
+        node.add_input_pin(
+            "monitor",
+            "Monitor",
+            "Display index, -1 for primary, or -2 for all displays",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(-2)));
 
         node.add_input_pin(
             "confidence",
@@ -118,42 +127,40 @@ impl NodeLogic for WaitTemplateNode {
         context.deactivate_exec_pin("exec_timeout").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let template: FlowPath = context.evaluate_pin("template").await?;
         let confidence: f64 = context.evaluate_pin("confidence").await?;
+        let monitor: i64 = context.evaluate_pin("monitor").await.unwrap_or(-2);
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
         let poll_interval_ms: i64 = context.evaluate_pin("poll_interval_ms").await?;
 
         let template_bytes = template.get(context, false).await?;
-        let gray_template = crate::types::screen_match::to_grayscale(&template_bytes)
-            .ok_or_else(|| flow_like_types::anyhow!("Failed to decode template image"))?;
 
         let start = Instant::now();
-        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-        let poll_interval = Duration::from_millis(poll_interval_ms.max(0) as u64);
+        let timeout = Duration::from_millis(u64::try_from(timeout_ms)?.min(3_600_000));
+        let poll_interval = Duration::from_millis(poll_interval_ms.clamp(10, 10_000) as u64);
 
         loop {
-            // Capture fresh screen each iteration and match
-            if let Some(gray_screen) = crate::types::screen_match::capture_screen_grayscale() {
-                let matches = crate::types::screen_match::find_template_in_image(
-                    &gray_screen,
-                    &gray_template,
-                    confidence as f32,
-                );
-                if let Some(&(px, py, _conf)) = matches.first() {
-                    let (lx, ly) = crate::types::screen_match::physical_to_logical(px, py);
-                    let result = TemplateMatchResult {
-                        found: true,
-                        x: lx,
-                        y: ly,
-                        confidence,
-                        template_path: template.path.clone(),
-                    };
-
-                    context.set_pin_value("found", json!(true)).await?;
-                    context.set_pin_value("result", json!(result)).await?;
-                    context.activate_exec_pin("exec_out").await?;
-                    return Ok(());
-                }
+            context.check_cancelled()?;
+            _session.ensure_active(context).await?;
+            let matches = crate::types::screen_match::match_desktop_async(
+                template_bytes.clone(),
+                confidence,
+                monitor,
+            )
+            .await?;
+            if let Some(&(x, y, score)) = matches.first() {
+                let result = TemplateMatchResult {
+                    found: true,
+                    x,
+                    y,
+                    confidence: score as f64,
+                    template_path: template.path.clone(),
+                };
+                context.set_pin_value("found", json!(true)).await?;
+                context.set_pin_value("result", json!(result)).await?;
+                context.activate_exec_pin("exec_out").await?;
+                return Ok(());
             }
 
             if start.elapsed() >= timeout {
@@ -171,7 +178,7 @@ impl NodeLogic for WaitTemplateNode {
                 return Ok(());
             }
 
-            tokio::time::sleep(poll_interval).await;
+            crate::rpa::branch::delay(context, poll_interval).await?;
         }
     }
 
@@ -202,6 +209,7 @@ impl NodeLogic for WaitTemplateDisappearNode {
             "Waits for a template image to disappear from screen",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "waitTemplateDisappear");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -234,6 +242,14 @@ impl NodeLogic for WaitTemplateDisappearNode {
             VariableType::Struct,
         )
         .set_schema::<FlowPath>();
+
+        node.add_input_pin(
+            "monitor",
+            "Monitor",
+            "Display index, -1 for primary, or -2 for all displays",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(-2)));
 
         node.add_input_pin(
             "confidence",
@@ -277,28 +293,27 @@ impl NodeLogic for WaitTemplateDisappearNode {
         context.deactivate_exec_pin("exec_timeout").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let template: FlowPath = context.evaluate_pin("template").await?;
         let confidence: f64 = context.evaluate_pin("confidence").await?;
+        let monitor: i64 = context.evaluate_pin("monitor").await.unwrap_or(-2);
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
 
         let template_bytes = template.get(context, false).await?;
-        let gray_template = crate::types::screen_match::to_grayscale(&template_bytes)
-            .ok_or_else(|| flow_like_types::anyhow!("Failed to decode template image"))?;
 
         let start = Instant::now();
-        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+        let timeout = Duration::from_millis(u64::try_from(timeout_ms)?.min(3_600_000));
 
         loop {
-            let is_visible = crate::types::screen_match::capture_screen_grayscale()
-                .map(|gray_screen| {
-                    let matches = crate::types::screen_match::find_template_in_image(
-                        &gray_screen,
-                        &gray_template,
-                        confidence as f32,
-                    );
-                    !matches.is_empty()
-                })
-                .unwrap_or(false);
+            context.check_cancelled()?;
+            _session.ensure_active(context).await?;
+            let is_visible = !crate::types::screen_match::match_desktop_async(
+                template_bytes.clone(),
+                confidence,
+                monitor,
+            )
+            .await?
+            .is_empty();
 
             if !is_visible {
                 context.set_pin_value("disappeared", json!(true)).await?;
@@ -312,7 +327,7 @@ impl NodeLogic for WaitTemplateDisappearNode {
                 return Ok(());
             }
 
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            crate::rpa::branch::delay(context, Duration::from_millis(500)).await?;
         }
     }
 

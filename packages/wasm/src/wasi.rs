@@ -37,12 +37,6 @@ impl IsolatedWasiCtxBuilder {
         }
     }
 
-    /// Forward guest stdout and stderr to the host while leaving stdin closed.
-    pub fn inherit_output(&mut self) -> &mut Self {
-        self.inner.inherit_stdout().inherit_stderr();
-        self
-    }
-
     pub fn stdin(&mut self, stdin: impl StdinStream + 'static) -> &mut Self {
         self.inner.stdin(stdin);
         self

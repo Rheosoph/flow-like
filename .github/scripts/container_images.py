@@ -14,7 +14,8 @@ SCHEMA_VERSION = 1
 CLOUDS = ("all", "aws", "gcp", "azure", "docker-compose", "kubernetes", "self-hosted")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SELF_HOSTED_CLOUDS = ("docker-compose", "kubernetes")
-KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init"}
+KUBERNETES_SHARED_WORKLOADS = {"runtime", "compiler", "signaling", "object-store-init", "audit-worker"}
+API_WORKLOADS = {"api", "api-ecs"}
 CHANNEL_BRANCHES = ("dev", "main", "alpha")
 SEMVER = re.compile(
     r"(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
@@ -46,7 +47,8 @@ def layer_cache_enabled(dockerfile):
     return whole_copy is None or whole_copy > expensive
 
 
-def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", architecture_id=False):
+def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", architecture_id=False,
+           image_suffix=None, audit_features=None):
     target_id = f"{cloud}-{workload}"
     if architecture_id:
         target_id += f"-{platform.split('/')[1]}"
@@ -59,7 +61,8 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
         "context": context,
         "platform": platform,
         "runner": "ubuntu-24.04-arm" if platform == "linux/arm64" else "ubuntu-24.04",
-        "image_suffix": f"flow-like-{cloud}-{workload}",
+        "image_suffix": image_suffix or f"flow-like-{cloud}-{workload}",
+        "audit_features": audit_features or "",
         "layer_cache": layer_cache_enabled(dockerfile),
     }
 
@@ -68,6 +71,8 @@ def target(cloud, workload, platform="linux/amd64", recipe=None, context=".", ar
 # Publication records identify the fallback separately from the runtime contract.
 TARGETS = tuple(sorted([
     target("aws", "api", "linux/arm64"),
+    # The optional ECS API runs on whichever capacity a self-hosting account has.
+    *[target("aws", "api-ecs", f"linux/{architecture}", architecture_id=True) for architecture in ("amd64", "arm64")],
     target("aws", "executor", "linux/arm64"),
     target("aws", "executor-async", recipe="apps/backend/aws/executor-ecs/Dockerfile"),
     target("aws", "executor-lambda-async", "linux/arm64", recipe="apps/backend/aws/executor-async/Dockerfile"),
@@ -76,6 +81,12 @@ TARGETS = tuple(sorted([
     target("aws", "media-transformer", "linux/arm64"),
     target("aws", "event-bridge", "linux/arm64"),
     target("aws", "maintenance", "linux/arm64"),
+    target("aws", "audit-worker", "linux/arm64"),
+    *[target(cloud, "audit-worker", audit_features=cloud)
+      for cloud in ("azure", "gcp")],
+    *[target("docker-compose", "audit-worker", f"linux/{architecture}", architecture_id=True,
+             recipe="apps/backend/audit-worker/Dockerfile", image_suffix="flow-like-audit-worker", audit_features="aws,azure,gcp")
+      for architecture in ("amd64", "arm64")],
     target("aws", "signaling", "linux/arm64", recipe="apps/backend/docker-compose/signaling/Dockerfile"),
     target("aws", "migration", "linux/arm64"),
     *[target("gcp", workload) for workload in (
@@ -135,9 +146,21 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
     build_inputs = {
         "dockerfile_sha256": hashlib.sha256((REPOSITORY_ROOT / entry["dockerfile"]).read_bytes()).hexdigest(),
     }
-    if entry["workload"] == "api":
+    api = entry["workload"] in API_WORKLOADS or (entry["cloud"] == "aws" and entry["workload"] == "audit-worker")
+    if entry["audit_features"]:
+        build_inputs["audit_features"] = entry["audit_features"]
+        # Dedicated workers compile the audit section of their API's build config.
+        config = ("apps/backend/docker-compose/flow-like.config.example.json"
+                  if entry["cloud"] in SELF_HOSTED_CLOUDS else "flow-like.config.json")
+        build_inputs["runtime_config"] = "compiled-audit-section-v1"
+        build_inputs["flow_like_config_sha256"] = hashlib.sha256((REPOSITORY_ROOT / config).read_bytes()).hexdigest()
+    if entry["workload"] == "audit-worker" and entry["cloud"] in ("azure", "gcp"):
+        launcher = REPOSITORY_ROOT / f"apps/backend/{entry['cloud']}/audit-worker/entrypoint.py"
+        build_inputs["entrypoint_sha256"] = hashlib.sha256(launcher.read_bytes()).hexdigest()
+        build_inputs["database_auth"] = "entra-managed-identity" if entry["cloud"] == "azure" else "cloud-sql-iam"
+    if api:
         build_inputs["runtime_config"] = "full-document-v1"
-    if entry["workload"] == "api" and entry["cloud"] not in SELF_HOSTED_CLOUDS:
+    if api and entry["cloud"] not in SELF_HOSTED_CLOUDS:
         build_inputs["flow_like_config_sha256"] = hashlib.sha256((REPOSITORY_ROOT / "flow-like.config.json").read_bytes()).hexdigest()
         build_inputs["variant"] = "runtime-config-public-default"
     if entry["cloud"] in SELF_HOSTED_CLOUDS and entry["workload"] == "api":
@@ -146,7 +169,7 @@ def record(target_id, owner, source_sha, digest, run_id, run_attempt):
         build_inputs["variant"] = "runtime-config-self-hosted-default"
     if entry["cloud"] in SELF_HOSTED_CLOUDS and entry["workload"] == "web":
         build_inputs["variant"] = "runtime-public-config"
-    if target_id in ("aws-api", "aws-file-tracker"):
+    if entry["cloud"] == "aws" and (api or entry["workload"] == "file-tracker"):
         build_inputs["database_tls"] = "dsql-no-custom-ca"
     return {
         "schema_version": SCHEMA_VERSION,

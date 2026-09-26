@@ -175,7 +175,7 @@ export function useWidgetInstance(): WidgetInstanceContextValue | null {
 export type WidgetInstanceEventRoute =
 	| { kind: "actions"; actions: Action[] }
 	| { kind: "binding"; binding: ActionBinding }
-	| { kind: "diagnostic" };
+	| { kind: "unbound" };
 
 /**
  * Resolve a declarative widget event in compatibility order. Named handlers
@@ -196,13 +196,19 @@ export function resolveWidgetInstanceEventRoute(
 		return { kind: "actions", actions: named.actions };
 	}
 
-	const binding = widgetInstance?.actionBindings[actionId];
+	// Own keys only: an inherited name such as `constructor` must not pick up
+	// `Object` as a binding.
+	const bindings = widgetInstance?.actionBindings;
+	const binding =
+		bindings && Object.prototype.hasOwnProperty.call(bindings, actionId)
+			? bindings[actionId]
+			: undefined;
 	if (binding) return { kind: "binding", binding };
 
 	const legacyAction = widgetInstance?.actions?.[0];
 	if (legacyAction) return { kind: "actions", actions: [legacyAction] };
 
-	return { kind: "diagnostic" };
+	return { kind: "unbound" };
 }
 
 /**
@@ -353,7 +359,8 @@ export function A2UIWidgetInstance({
 		if (inlineWidgetDef) return inlineWidgetDef;
 		// Query errors retain old data, but a confirmed deletion invalidates that definition.
 		if (isMissingResourceError(fetched.error)) return undefined;
-		return fetched.data;
+		// A restored cache entry can predate the payload check and hold no widget at all.
+		return Array.isArray(fetched.data?.components) ? fetched.data : undefined;
 	}, [fromRefs, inlineWidgetDef, fetched.data, fetched.error]);
 
 	// Apply this instance's parameter values onto the widget's components, so the same widget

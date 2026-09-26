@@ -16,6 +16,7 @@ import {
 	type MediaUploadResponse,
 	updateAccountWithAvatar,
 } from "@flow-like/flow-like-ui/lib/profile-media-upload";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	INotification,
 	INotificationsOverview,
@@ -45,6 +46,7 @@ import {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { HUB_REFRESH_TIMEOUT_MS } from "../../lib/request-deadline";
 import { ApiResponseError } from "../../lib/api-error";
 import { type IShortcut, appsDB } from "../../lib/apps-db";
 import {
@@ -132,12 +134,17 @@ export class UserState implements IUserState {
 		const query = defaultId
 			? `?default_id=${encodeURIComponent(defaultId)}`
 			: "";
-		return fetcher<IHomeDefaults>(
+		const defaults = await fetcher<IHomeDefaults>(
 			profile,
 			`info/home-defaults${query}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// Throwing keeps the last good default cached instead of replacing it.
+		if (!isRecord(defaults)) {
+			throw new Error("Unexpected response from info/home-defaults");
+		}
+		return defaults;
 	}
 
 	async saveHomeLayout(
@@ -300,6 +307,9 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
+		if (!isRecord(result)) {
+			throw new Error(`Unexpected response from user/lookup for ${userId}`);
+		}
 		return result;
 	}
 
@@ -336,7 +346,7 @@ export class UserState implements IUserState {
 			),
 		);
 
-		for (const batch of batches) resolved.push(...(batch ?? []));
+		for (const batch of batches) resolved.push(...asArray(batch));
 		return resolved;
 	}
 	/**
@@ -359,7 +369,7 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
-		return result ?? [];
+		return asArray(result);
 	}
 	async getProjectContacts(
 		appId: string,
@@ -370,12 +380,22 @@ export class UserState implements IUserState {
 		}
 		const params = new URLSearchParams({ app_id: appId, limit: "500" });
 		if (after) params.set("after", after);
-		return fetcher<IProjectContactsPage>(
+		const page = await fetcher<IProjectContactsPage>(
 			this.backend.profile,
 			`user/contacts?${params}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(page)) {
+			throw new Error(
+				`Unexpected response from user/contacts for app ${appId}`,
+			);
+		}
+		return {
+			users: asArray(page.users),
+			next_cursor:
+				typeof page.next_cursor === "string" ? page.next_cursor : null,
+		};
 	}
 	async getNotifications(): Promise<INotificationsOverview> {
 		// Get local notifications first (works offline)
@@ -403,12 +423,14 @@ export class UserState implements IUserState {
 					this.backend.auth,
 				);
 
-				return {
-					invites_count: remoteResult.invites_count,
-					notifications_count:
-						(remoteResult.notifications_count ?? 0) + localCounts.total,
-					unread_count: (remoteResult.unread_count ?? 0) + localCounts.unread,
-				};
+				if (isRecord(remoteResult)) {
+					return {
+						invites_count: remoteResult.invites_count ?? 0,
+						notifications_count:
+							(remoteResult.notifications_count ?? 0) + localCounts.total,
+						unread_count: (remoteResult.unread_count ?? 0) + localCounts.unread,
+					};
+				}
 			} catch {
 				// Fall back to local only on API error
 			}
@@ -443,17 +465,19 @@ export class UserState implements IUserState {
 			});
 			if (notificationType) params.set("notification_type", notificationType);
 
-			const batch = await fetcher<INotification[]>(
-				// biome-ignore lint/style/noNonNullAssertion: callers guard presence
-				this.backend.profile!,
-				`user/notifications/list?${params}`,
-				{ method: "GET" },
-				// biome-ignore lint/style/noNonNullAssertion: callers guard presence
-				this.backend.auth!,
+			const batch = asArray(
+				await fetcher<INotification[]>(
+					// biome-ignore lint/style/noNonNullAssertion: callers guard presence
+					this.backend.profile!,
+					`user/notifications/list?${params}`,
+					{ method: "GET" },
+					// biome-ignore lint/style/noNonNullAssertion: callers guard presence
+					this.backend.auth!,
+				),
 			);
 
 			if (!batch.length) break;
-			collected.push(...batch);
+			collected.push(...batch.filter(isRecord));
 			if (batch.length < REMOTE_NOTIFICATION_PAGE_SIZE) break;
 			pageOffset += REMOTE_NOTIFICATION_PAGE_SIZE;
 		}
@@ -606,7 +630,7 @@ export class UserState implements IUserState {
 			this.hasRemoteAccessToken()
 		) {
 			try {
-				remoteResult = await fetcher<number>(
+				const count = await fetcher<number>(
 					this.backend.profile,
 					"user/notifications/read-all",
 					{
@@ -614,6 +638,7 @@ export class UserState implements IUserState {
 					},
 					this.backend.auth,
 				);
+				remoteResult = typeof count === "number" ? count : 0;
 			} catch {
 				// Ignore remote errors for offline support
 			}
@@ -754,6 +779,9 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
+		if (!isRecord(result)) {
+			throw new Error("Unexpected response from user/info");
+		}
 		return result;
 	}
 
@@ -884,7 +912,7 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
-		return result;
+		return asArray(result);
 	}
 
 	async deletePAT(id: string): Promise<void> {
@@ -907,34 +935,50 @@ export class UserState implements IUserState {
 	async getQuotaOperations(cursor?: string): Promise<QuotaOperationsPage> {
 		if (!this.backend.profile || !this.backend.auth)
 			throw new Error("Profile or auth context not available");
-		return fetcher<QuotaOperationsPage>(
+		const page = await fetcher<QuotaOperationsPage>(
 			this.backend.profile,
 			`user/usage/operations?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(page)) {
+			throw new Error("Unexpected response from user/usage/operations");
+		}
+		return { ...page, items: asArray(page.items) };
 	}
 
 	async getQuotaOperationDetail(id: string): Promise<QuotaOperationDetail> {
 		if (!this.backend.profile || !this.backend.auth)
 			throw new Error("Profile or auth context not available");
-		return fetcher<QuotaOperationDetail>(
+		const detail = await fetcher<QuotaOperationDetail>(
 			this.backend.profile,
 			`user/usage/operations/${encodeURIComponent(id)}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(detail)) {
+			throw new Error(`Unexpected response from user/usage/operations/${id}`);
+		}
+		return detail;
 	}
 
 	async getQuotaUsage(includeHistory = true): Promise<QuotaOverview> {
 		if (!this.backend.profile || !this.backend.auth)
 			throw new Error("Profile or auth context not available");
-		return fetcher<QuotaOverview>(
+		const overview = await fetcher<QuotaOverview>(
 			this.backend.profile,
 			`user/usage/quotas?includeHistory=${includeHistory}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(overview)) {
+			throw new Error("Unexpected response from user/usage/quotas");
+		}
+		return {
+			...overview,
+			resources: asArray(overview.resources),
+			usage: asArray(overview.usage),
+		};
 	}
 
 	async getPricing(): Promise<IPricingResponse> {
@@ -949,7 +993,10 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
-		return result;
+		if (!isRecord(result)) {
+			throw new Error("Unexpected response from user/pricing");
+		}
+		return { ...result, tiers: isRecord(result.tiers) ? result.tiers : {} };
 	}
 
 	async createSubscription(
@@ -1039,7 +1086,11 @@ export class UserState implements IUserState {
 		}
 
 		// If logged in, merge with remote widgets (remote takes precedence for metadata)
-		if (this.backend.profile && this.backend.auth) {
+		if (
+			this.backend.profile &&
+			this.backend.auth &&
+			this.hasRemoteAccessToken()
+		) {
 			try {
 				const queryParams = language
 					? `?language=${encodeURIComponent(language)}`
@@ -1047,11 +1098,13 @@ export class UserState implements IUserState {
 				const remoteWidgets = await fetcher<[string, string, IMetadata][]>(
 					this.backend.profile,
 					`user/widgets${queryParams}`,
-					{ method: "GET" },
+					{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 					this.backend.auth,
 				);
 
-				for (const [appId, widgetId, metadata] of remoteWidgets) {
+				for (const entry of asArray(remoteWidgets)) {
+					if (!Array.isArray(entry)) continue;
+					const [appId, widgetId, metadata] = entry;
 					const widgetName =
 						typeof metadata?.name === "string" ? metadata.name.trim() : "";
 					if (!widgetName || widgetName === widgetId) continue;
@@ -1064,9 +1117,9 @@ export class UserState implements IUserState {
 							name: widgetName,
 							description: metadata?.description ?? "",
 							thumbnail: metadata?.thumbnail,
-							tags: metadata?.tags ?? [],
+							tags: asArray(metadata?.tags),
 							icon: metadata?.icon,
-							preview_media: metadata?.preview_media ?? [],
+							preview_media: asArray(metadata?.preview_media),
 						},
 					});
 				}
@@ -1079,7 +1132,11 @@ export class UserState implements IUserState {
 	}
 
 	async getUserTemplates(language?: string): Promise<IUserTemplateInfo[]> {
-		if (!this.backend.profile || !this.backend.auth) {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
 			return [];
 		}
 
@@ -1093,17 +1150,19 @@ export class UserState implements IUserState {
 			this.backend.auth,
 		);
 
-		return result.map(([appId, templateId, metadata]) => ({
-			appId,
-			templateId,
-			metadata: {
-				name: metadata?.name ?? templateId,
-				description: metadata?.description ?? "",
-				thumbnail: metadata?.thumbnail,
-				tags: metadata?.tags ?? [],
-				icon: metadata?.icon,
-				preview_media: metadata?.preview_media ?? [],
-			},
-		}));
+		return asArray(result)
+			.filter((entry) => Array.isArray(entry))
+			.map(([appId, templateId, metadata]) => ({
+				appId,
+				templateId,
+				metadata: {
+					name: metadata?.name ?? templateId,
+					description: metadata?.description ?? "",
+					thumbnail: metadata?.thumbnail,
+					tags: asArray(metadata?.tags),
+					icon: metadata?.icon,
+					preview_media: asArray(metadata?.preview_media),
+				},
+			}));
 	}
 }

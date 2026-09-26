@@ -6,14 +6,18 @@ import {
 	BUNDLE_MANIFEST_PATH,
 	type WidgetBundleManifest,
 	isSafeEntryPath,
+	unsafeArchiveEntryPaths,
 } from "./bundle-format";
 import {
 	WIDGET_PROTOCOL,
 	type WidgetContract,
+	isValidPackageId,
 	validateContract,
+	validatePublishedCsp,
 } from "./contract-types";
-import { extractContract } from "./extract";
+import { extractContract, networkInputSchemaErrors } from "./extract";
 import {
+	archiveNameCollisions,
 	discoverGroupWidgets,
 	discoverGroups,
 	entryHash,
@@ -93,9 +97,12 @@ export interface BundleValidation {
 }
 
 /**
- * Validate a built `.flwb`: manifest shape, per-entry hashes, contract
- * validity, entry paths. Mirrors `WidgetBundleReader::validate` in
- * packages/wasm/schema/src/widget_bundle.rs.
+ * Validate a built `.flwb`: manifest shape, unsafe and colliding archive
+ * names, per-entry hashes, contract validity (including the `csp` purpose
+ * rules and the v1/v2 rule), exact entry paths. Mirrors
+ * `WidgetBundleReader::validate` in packages/wasm/schema/src/widget_bundle.rs,
+ * plus the checks only the hub publish and the bundler run: wildcard bases,
+ * address-like reasons and network input schema reachability.
  */
 export function validateBundle(flwbPath: string): BundleValidation {
 	const errors: string[] = [];
@@ -156,10 +163,17 @@ export function validateBundle(flwbPath: string): BundleValidation {
 	}
 	if (!manifest.packageId) {
 		errors.push("Bundle manifest is missing packageId");
+	} else if (!isValidPackageId(manifest.packageId)) {
+		errors.push(
+			`Invalid bundle packageId ${JSON.stringify(manifest.packageId)}: use only letters, digits, '.', '_' and '-'`,
+		);
 	}
 	if (!manifest.widgets || manifest.widgets.length === 0) {
 		errors.push("Bundle contains no widgets");
 	}
+	const names = Object.keys(entries);
+	errors.push(...unsafeArchiveEntryPaths(names));
+	errors.push(...archiveNameCollisions(names));
 
 	const sharedPaths = new Set<string>();
 	for (const shared of manifest.shared ?? []) {
@@ -187,18 +201,16 @@ export function validateBundle(flwbPath: string): BundleValidation {
 			errors.push(`Duplicate widget id in bundle: ${widget.id}`);
 		}
 		seenIds.add(widget.id);
-		const prefix = `widgets/${widget.id}/`;
-		if (!widget.entry.startsWith(prefix) || !isSafeEntryPath(widget.entry)) {
+		const expectedEntry = `widgets/${widget.id}/index.html`;
+		if (widget.entry !== expectedEntry) {
 			errors.push(
-				`Widget '${widget.id}' entry path '${widget.entry}' must live under ${prefix}`,
+				`Widget '${widget.id}' entry path '${widget.entry}' must be '${expectedEntry}'`,
 			);
 		}
-		if (
-			!widget.contract.startsWith(prefix) ||
-			!isSafeEntryPath(widget.contract)
-		) {
+		const expectedContract = `widgets/${widget.id}/contract.json`;
+		if (widget.contract !== expectedContract) {
 			errors.push(
-				`Widget '${widget.id}' contract path '${widget.contract}' must live under ${prefix}`,
+				`Widget '${widget.id}' contract path '${widget.contract}' must be '${expectedContract}'`,
 			);
 		}
 
@@ -227,7 +239,15 @@ export function validateBundle(flwbPath: string): BundleValidation {
 						`Contract id '${contract.id}' does not match widget id '${widget.id}'`,
 					);
 				}
-				errors.push(...validateContract(contract));
+				const contractErrors = validateContract(contract);
+				errors.push(
+					...(contractErrors.length > 0
+						? contractErrors
+						: [
+								...validatePublishedCsp(contract),
+								...networkInputSchemaErrors(contract),
+							]),
+				);
 			} catch (e) {
 				errors.push(
 					`Failed to parse contract for widget '${widget.id}': ${e instanceof Error ? e.message : e}`,

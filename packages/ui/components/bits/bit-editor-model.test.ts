@@ -7,8 +7,11 @@ import {
 	clone,
 	coreChanged,
 	emptyMetadata,
+	microUsdToUsd,
 	saveAdminBit,
 	splitBitSecrets,
+	updateBitPricingField,
+	usdToMicroUsd,
 	validateBitDraft,
 } from "./bit-editor-model";
 function fixture(): IBit {
@@ -174,5 +177,128 @@ describe("bit editor persistence", () => {
 		draft.parameters.provider.provider_name = "MLX";
 		expect(validateBitDraft(draft, "admin")).toContain("dependency");
 		expect(validateBitDraft(draft, "custom")).toBeNull();
+	});
+	test("hosted USD rates persist exactly and preserve unrelated parameters", async () => {
+		const original = fixture();
+		const draft = clone(original);
+		draft.parameters.pricing = { future_field: "preserved" };
+		draft.parameters = updateBitPricingField(
+			draft.parameters,
+			"input_micro_usd_per_million_tokens",
+			"0.000001",
+		);
+		draft.parameters = updateBitPricingField(
+			draft.parameters,
+			"output_micro_usd_per_million_tokens",
+			"9007199254.740991",
+		);
+		draft.parameters = updateBitPricingField(
+			draft.parameters,
+			"request_micro_usd",
+			"0.000249",
+		);
+		expect(validateBitDraft(draft, "admin", original)).toBeNull();
+		const { api, calls } = apiFixture(original);
+		const saved = await saveAdminBit(api, profile, original, draft);
+		expect(calls).toEqual(["admin/bit/bit-one"]);
+		expect(saved.parameters.pricing).toEqual({
+			input_micro_usd_per_million_tokens: 1,
+			output_micro_usd_per_million_tokens: Number.MAX_SAFE_INTEGER,
+			request_micro_usd: 249,
+			future_field: "preserved",
+		});
+		expect(saved.parameters.provider).toEqual(original.parameters.provider);
+		expect(saved.parameters.unknown).toEqual(original.parameters.unknown);
+		expect(original.parameters.pricing).toBeUndefined();
+	});
+	test("absent or removed hosted pricing and an omitted request fee remain saveable", async () => {
+		const original = fixture();
+		expect(validateBitDraft(original, "admin")).toBeNull();
+		original.parameters.pricing = null;
+		expect(validateBitDraft(original, "admin")).toBeNull();
+		original.parameters.pricing = {
+			input_micro_usd_per_million_tokens: 0,
+			output_micro_usd_per_million_tokens: 0,
+			request_micro_usd: 1,
+		};
+		const draft = clone(original);
+		draft.parameters = updateBitPricingField(
+			draft.parameters,
+			"request_micro_usd",
+			"",
+		);
+		expect(draft.parameters.pricing.request_micro_usd).toBeUndefined();
+		expect(validateBitDraft(draft, "admin")).toBeNull();
+		const { pricing: _pricing, ...withoutPricing } = draft.parameters;
+		draft.parameters = withoutPricing;
+		expect(validateBitDraft(draft, "admin")).toBeNull();
+		const { api } = apiFixture(original);
+		const saved = await saveAdminBit(api, profile, original, draft);
+		expect(saved.parameters.pricing).toBeUndefined();
+		expect(saved.parameters.unknown).toEqual(original.parameters.unknown);
+	});
+	test("configured pricing rejects malformed or incomplete rates from fields and JSON", () => {
+		const draft = fixture();
+		for (const pricing of [
+			{},
+			[],
+			"1",
+			{ input_micro_usd_per_million_tokens: 0 },
+			...[
+				"1",
+				-1,
+				0.1,
+				Number.NaN,
+				Number.POSITIVE_INFINITY,
+				Number.MAX_SAFE_INTEGER + 1,
+			].map((rate) => ({
+				input_micro_usd_per_million_tokens: rate,
+				output_micro_usd_per_million_tokens: 0,
+			})),
+			{
+				input_micro_usd_per_million_tokens: 0,
+				output_micro_usd_per_million_tokens: 0,
+				request_micro_usd: null,
+			},
+		]) {
+			draft.parameters.pricing = pricing;
+			expect(validateBitDraft(draft, "admin")).not.toBeNull();
+		}
+		draft.parameters.pricing = {
+			input_micro_usd_per_million_tokens: 0,
+			output_micro_usd_per_million_tokens: 0,
+		};
+		draft.parameters = updateBitPricingField(
+			draft.parameters,
+			"request_micro_usd",
+			"0.0000001",
+		);
+		expect(validateBitDraft(draft, "admin")).toContain("USD per request");
+	});
+	test("USD conversion keeps micro-USD precision and rejects unsupported amounts", () => {
+		for (const amount of [
+			"0",
+			"0.000001",
+			"0.000249",
+			"0.29",
+			"3.141592",
+			"9007199254.740991",
+		]) {
+			expect(microUsdToUsd(usdToMicroUsd(amount))).toBe(amount);
+		}
+		expect(usdToMicroUsd(".5")).toBe(500_000);
+		expect(usdToMicroUsd("1.")).toBe(1_000_000);
+		for (const invalid of [
+			"",
+			".",
+			"-1",
+			"NaN",
+			"Infinity",
+			"1e3",
+			"0.0000001",
+			"9007199254.740992",
+		]) {
+			expect(usdToMicroUsd(invalid)).toBeNull();
+		}
 	});
 });

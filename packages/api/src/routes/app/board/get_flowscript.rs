@@ -5,7 +5,7 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::app::{
         board::secrets::filter_board_secrets,
-        wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+        wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
     },
     state::AppState,
 };
@@ -109,8 +109,8 @@ pub async fn get_flowscript(
         .await?;
 
     let builtin_nodes = state.registry.as_ref().get_nodes_shared();
-    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
-    hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes);
+    let wasm = app_wasm_nodes_cached(&state, &app_id).await?;
+    hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &builtin_nodes);
 
     filter_board_secrets(&mut board);
 

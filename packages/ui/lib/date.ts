@@ -129,6 +129,27 @@ const RELATIVE_DIVISIONS: readonly {
 ];
 
 /**
+ * Building an Intl formatter costs far more than using one (tens of µs each in
+ * JavaScriptCore), and a page of rows formats hundreds of values per render.
+ */
+const relativeTimeFormatters = new Map<
+	Intl.RelativeTimeFormatStyle,
+	Intl.RelativeTimeFormat
+>();
+function relativeTimeFormatter(style: Intl.RelativeTimeFormatStyle) {
+	let formatter = relativeTimeFormatters.get(style);
+	if (!formatter) {
+		formatter = new Intl.RelativeTimeFormat(undefined, {
+			numeric: "auto",
+			style,
+		});
+		relativeTimeFormatters.set(style, formatter);
+	}
+	return formatter;
+}
+let absoluteDateTimeFormatter: Intl.DateTimeFormat | undefined;
+
+/**
  * "2 days ago" in the viewer's locale. Walks the whole unit ladder, so a value
  * years old reads as years rather than as a four-digit day count.
  */
@@ -144,10 +165,7 @@ export function formatRelativeTime(
 		return fallback;
 	}
 
-	const formatter = new Intl.RelativeTimeFormat(undefined, {
-		numeric: "auto",
-		style: style,
-	});
+	const formatter = relativeTimeFormatter(style);
 
 	let duration = (targetTimeMs - Date.now()) / 1000;
 	for (const division of RELATIVE_DIVISIONS) {
@@ -163,10 +181,11 @@ export function formatRelativeTime(
 export function formatAbsoluteDateTime(dateInput: DateValue, fallback = "") {
 	const parsed = parseDateValue(dateInput);
 	if (!parsed) return fallback;
-	return parsed.toLocaleString(undefined, {
+	absoluteDateTimeFormatter ??= new Intl.DateTimeFormat(undefined, {
 		dateStyle: "full",
 		timeStyle: "medium",
 	});
+	return absoluteDateTimeFormatter.format(parsed);
 }
 
 /** The epoch units Arrow ships instants in, plus Date32's day count. */
@@ -191,6 +210,51 @@ const MAX_EPOCH_DAYS = 100_000;
 const MAX_EPOCH_SECONDS = 1e11;
 const MAX_EPOCH_MILLIS = 1e14;
 const MAX_EPOCH_MICROS = 1e17;
+
+const ARROW_TYPE_UNITS: Record<string, TemporalUnit> = {
+	s: "second",
+	second: "second",
+	ms: "millisecond",
+	millisecond: "millisecond",
+	µs: "microsecond",
+	us: "microsecond",
+	microsecond: "microsecond",
+	ns: "nanosecond",
+	nanosecond: "nanosecond",
+};
+
+/**
+ * The unit an instant column's values count in, read from the Arrow type name
+ * the SQL layer reports (`Timestamp(µs)`, `Timestamp(Millisecond, None)`,
+ * `Date32`). Undefined for anything that is not an instant, durations included.
+ */
+export function temporalUnitFromTypeName(
+	typeName: string,
+): TemporalUnit | undefined {
+	const type = typeName.trim();
+	if (/^date32$/i.test(type)) return "day";
+	if (/^date64$/i.test(type)) return "millisecond";
+	const unit = /^timestamp\(\s*([^,)\s]+)/i.exec(type)?.[1];
+	return unit ? ARROW_TYPE_UNITS[unit.toLowerCase()] : undefined;
+}
+
+/**
+ * Below this magnitude a bare number is a counter or a duration, not an instant:
+ * as epoch seconds it would fall within about three years of 1970, while
+ * `response_time` and `retry_count` values are routinely that small.
+ */
+const MIN_EPOCH_MAGNITUDE = 1e8;
+
+/** Whether a stored number (or numeric string) can be an epoch instant at all. */
+export function looksLikeEpochNumber(value: unknown): boolean {
+	const number =
+		typeof value === "number" || typeof value === "bigint"
+			? Number(value)
+			: typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())
+				? Number(value)
+				: Number.NaN;
+	return Number.isFinite(number) && Math.abs(number) >= MIN_EPOCH_MAGNITUDE;
+}
 
 /** The unit a bare epoch number was most likely written in. */
 export function detectEpochUnit(value: number): TemporalUnit {
@@ -299,6 +363,11 @@ export function fromDateInputValue(value: string): Date | null {
 	return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+const calendarDateFormatters = new Map<
+	"medium" | "full",
+	Intl.DateTimeFormat
+>();
+
 /** A day-precision value read in the zone it was written in: UTC. */
 export function formatCalendarDate(
 	dateInput: DateValue,
@@ -307,7 +376,15 @@ export function formatCalendarDate(
 ) {
 	const parsed = parseDateValue(dateInput);
 	if (!parsed) return fallback;
-	return parsed.toLocaleDateString(undefined, { dateStyle, timeZone: "UTC" });
+	let formatter = calendarDateFormatters.get(dateStyle);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat(undefined, {
+			dateStyle,
+			timeZone: "UTC",
+		});
+		calendarDateFormatters.set(dateStyle, formatter);
+	}
+	return formatter.format(parsed);
 }
 
 /** The zone the editor is implicitly writing in, for a hint next to the input. */
@@ -368,45 +445,60 @@ export function looksLikeTemporalName(name: string): boolean {
 const MIN_PLAUSIBLE_YEAR = 1990;
 const MAX_PLAUSIBLE_YEAR = 2100;
 
+/** ISO 8601: a calendar date, optionally a time, optionally a zone. */
+const ISO_DATE_TIME_PATTERN =
+	/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/** Text only a machine writes, so it reads as an instant under any column name. */
+function parseMachineTimestamp(value: string): Date | null {
+	const chrono = parseChronoDateString(value);
+	if (chrono) return chrono;
+	if (!ISO_DATE_TIME_PATTERN.test(value)) return null;
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function inferEpochInstant(name: string, value: number | bigint): Date | null {
+	if (!looksLikeTemporalName(name)) return null;
+	const parsed = parseTemporalValue(value);
+	if (!parsed) return null;
+	const year = parsed.getFullYear();
+	return year >= MIN_PLAUSIBLE_YEAR && year <= MAX_PLAUSIBLE_YEAR
+		? parsed
+		: null;
+}
+
+function inferTextInstant(name: string, value: string): Date | null {
+	// A bare numeric string is the integer case wearing quotes, and reaches the
+	// string parser as an invalid date rather than as the epoch it holds.
+	const trimmed = value.trim();
+	if (/^-?\d+$/.test(trimmed)) return inferEpochInstant(name, Number(trimmed));
+	return (
+		parseMachineTimestamp(trimmed) ??
+		(looksLikeTemporalName(name) ? parseDateValue(trimmed) : null)
+	);
+}
+
 /**
  * Reads a value whose column was never *declared* temporal — the common case,
  * because backends store instants as plain integers (`created_at` as epoch
  * millis) and the schema then says nothing but `Int64`.
  *
  * A number is only believed when the name promises an instant *and* the result
- * lands in a plausible calendar window; text still goes through the ordinary
- * parser, where an ISO string speaks for itself.
+ * lands in a plausible calendar window. An ISO or chrono string speaks for
+ * itself; any other text needs the name too, because JavaScriptCore's parser
+ * reads ids and labels as dates (`HOE-87` is 1987, `Building 7` July 2001).
  */
 export function inferTemporalValue(name: string, value: unknown): Date | null {
 	if (typeof value === "number" || typeof value === "bigint") {
-		if (!looksLikeTemporalName(name)) return null;
-		const parsed = parseTemporalValue(value);
-		if (!parsed) return null;
-		const year = parsed.getFullYear();
-		return year >= MIN_PLAUSIBLE_YEAR && year <= MAX_PLAUSIBLE_YEAR
-			? parsed
-			: null;
+		return inferEpochInstant(name, value);
 	}
 	if (value instanceof Date) return parseDateValue(value);
-	if (typeof value !== "string") return null;
-
-	// A bare numeric string is the integer case wearing quotes, and reaches the
-	// string parser as an invalid date rather than as the epoch it holds.
-	const trimmed = value.trim();
-	if (/^-?\d+$/.test(trimmed)) {
-		return inferTemporalValue(name, Number(trimmed));
-	}
-	return parseDateValue(trimmed);
+	return typeof value === "string" ? inferTextInstant(name, value) : null;
 }
 
 export function parseTimespan(start: IDate, end: IDate) {
-	if (start.nanos_since_epoch > end.nanos_since_epoch) {
-		const old_end = end;
-		end = start;
-		start = old_end;
-	}
-
-	const diff = end.nanos_since_epoch - start.nanos_since_epoch;
+	const diff = Math.abs(end.nanos_since_epoch - start.nanos_since_epoch);
 	const μs = diff / 1000;
 
 	if (μs < 1000) return `${μs.toFixed(2)}μs`;

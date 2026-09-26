@@ -31,6 +31,10 @@ spec:
           command: [python, /opt/object-store/conformance.py]
           envFrom:
             - secretRef: {name: {{ include "flow-like.storageSecretName" . }}}
+            {{- if .Values.audit.bucket }}
+            # Only a principal allowed to delete versions proves the audit bucket lock.
+            - secretRef: {name: {{ .Values.rustfs.existingSecret }}}
+            {{- end }}
           env:
             - name: S3_INTERNAL_ENDPOINT
               value: {{ include "flow-like.objectStoreStsEndpoint" . | quote }}
@@ -46,6 +50,10 @@ spec:
               value: {{ .Values.storage.s3.contentBucket | quote }}
             - name: LOG_BUCKET
               value: {{ .Values.storage.s3.logBucket | quote }}
+            {{- with .Values.audit.bucket }}
+            - name: AUDIT_BUCKET
+              value: {{ . | quote }}
+            {{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532

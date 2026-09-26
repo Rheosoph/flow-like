@@ -17,6 +17,7 @@ use crate::telemetry::rollup::day_start;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::sea_query::{Alias, Expr, Func, Order as SeaOrder, Query as SeaQuery, SimpleExpr};
 use sea_orm::{
@@ -158,6 +159,19 @@ async fn group_counts<C: ConnectionTrait>(
     let stmt = db.get_database_backend().build(&q);
     let rows = GroupRow::find_by_statement(stmt).all(db).await?;
     Ok(rows)
+}
+
+async fn raw_event_total<C: ConnectionTrait>(
+    db: &C,
+    from: DateTime<FixedOffset>,
+    before: Option<DateTime<FixedOffset>>,
+) -> Result<i64, ApiError> {
+    let mut select =
+        telemetry_event::Entity::find().filter(telemetry_event::Column::CreatedAt.gte(from));
+    if let Some(before) = before {
+        select = select.filter(telemetry_event::Column::CreatedAt.lt(before));
+    }
+    Ok(select.count(db).await? as i64)
 }
 
 async fn active_installs<C: ConnectionTrait>(
@@ -355,21 +369,20 @@ pub async fn telemetry_overview(
         let cutoff = now - Duration::hours(hours);
         let prev_cutoff = cutoff - Duration::hours(hours);
 
-        let total_events = telemetry_event::Entity::find()
-            .filter(telemetry_event::Column::CreatedAt.gte(cutoff))
-            .count(&state.db)
-            .await? as i64;
+        let (total_events, previous_total_events, active_installs, top_events) = try_join!(
+            raw_event_total(&state.db, cutoff, None),
+            raw_event_total(&state.db, prev_cutoff, Some(cutoff)),
+            active_installs(&state.db, cutoff),
+            group_counts(&state.db, telemetry_event::Column::Name, cutoff),
+        )?;
+        let (sources, platforms, versions, countries) = try_join!(
+            group_counts(&state.db, telemetry_event::Column::Source, cutoff),
+            group_counts(&state.db, telemetry_event::Column::Platform, cutoff),
+            group_counts(&state.db, telemetry_event::Column::AppVersion, cutoff),
+            group_counts(&state.db, telemetry_event::Column::Country, cutoff),
+        )?;
 
-        let previous_total_events = telemetry_event::Entity::find()
-            .filter(telemetry_event::Column::CreatedAt.gte(prev_cutoff))
-            .filter(telemetry_event::Column::CreatedAt.lt(cutoff))
-            .count(&state.db)
-            .await? as i64;
-
-        let active_installs = active_installs(&state.db, cutoff).await?;
-
-        let top_events = group_counts(&state.db, telemetry_event::Column::Name, cutoff)
-            .await?
+        let top_events = top_events
             .into_iter()
             .map(|r| TopEventBucket {
                 name: r.key.unwrap_or_default(),
@@ -378,8 +391,7 @@ pub async fn telemetry_overview(
             })
             .collect();
 
-        let sources = group_counts(&state.db, telemetry_event::Column::Source, cutoff)
-            .await?
+        let sources = sources
             .into_iter()
             .map(|r| SourceBucket {
                 source: r.key.unwrap_or_default(),
@@ -387,8 +399,7 @@ pub async fn telemetry_overview(
             })
             .collect();
 
-        let platforms = group_counts(&state.db, telemetry_event::Column::Platform, cutoff)
-            .await?
+        let platforms = platforms
             .into_iter()
             .map(|r| PlatformBucket {
                 platform: r.key.unwrap_or_else(|| "unknown".to_string()),
@@ -396,8 +407,7 @@ pub async fn telemetry_overview(
             })
             .collect();
 
-        let versions = group_counts(&state.db, telemetry_event::Column::AppVersion, cutoff)
-            .await?
+        let versions = versions
             .into_iter()
             .map(|r| VersionBucket {
                 app_version: r.key.unwrap_or_else(|| "unknown".to_string()),
@@ -405,8 +415,7 @@ pub async fn telemetry_overview(
             })
             .collect();
 
-        let countries = group_counts(&state.db, telemetry_event::Column::Country, cutoff)
-            .await?
+        let countries = countries
             .into_iter()
             .map(|r| CountryBucket {
                 country: r.key.unwrap_or_else(|| "unknown".to_string()),
@@ -431,12 +440,20 @@ pub async fn telemetry_overview(
     let (start, end) = day_window(now, hours);
     let (prev_start, prev_end) = previous_day_window(start, end);
 
-    let total_events = daily_event_total(&state.db, start, end).await?;
-    let previous_total_events = daily_event_total(&state.db, prev_start, prev_end).await?;
-    let active_installs = daily_active_installs(&state.db, start, end).await?;
+    let (total_events, previous_total_events, active_installs, top_events) = try_join!(
+        daily_event_total(&state.db, start, end),
+        daily_event_total(&state.db, prev_start, prev_end),
+        daily_active_installs(&state.db, start, end),
+        daily_top_events(&state.db, start, end),
+    )?;
+    let (sources, platforms, versions, countries) = try_join!(
+        daily_dimension(&state.db, DIMENSION_SOURCE, start, end),
+        daily_dimension(&state.db, DIMENSION_PLATFORM, start, end),
+        daily_dimension(&state.db, DIMENSION_APP_VERSION, start, end),
+        daily_dimension(&state.db, DIMENSION_COUNTRY, start, end),
+    )?;
 
-    let top_events = daily_top_events(&state.db, start, end)
-        .await?
+    let top_events = top_events
         .into_iter()
         .map(|r| TopEventBucket {
             name: r.key,
@@ -445,8 +462,7 @@ pub async fn telemetry_overview(
         })
         .collect();
 
-    let sources = daily_dimension(&state.db, DIMENSION_SOURCE, start, end)
-        .await?
+    let sources = sources
         .into_iter()
         .map(|r| SourceBucket {
             source: r.key,
@@ -454,8 +470,7 @@ pub async fn telemetry_overview(
         })
         .collect();
 
-    let platforms = daily_dimension(&state.db, DIMENSION_PLATFORM, start, end)
-        .await?
+    let platforms = platforms
         .into_iter()
         .map(|r| PlatformBucket {
             platform: r.key,
@@ -463,8 +478,7 @@ pub async fn telemetry_overview(
         })
         .collect();
 
-    let versions = daily_dimension(&state.db, DIMENSION_APP_VERSION, start, end)
-        .await?
+    let versions = versions
         .into_iter()
         .map(|r| VersionBucket {
             app_version: r.key,
@@ -472,8 +486,7 @@ pub async fn telemetry_overview(
         })
         .collect();
 
-    let countries = daily_dimension(&state.db, DIMENSION_COUNTRY, start, end)
-        .await?
+    let countries = countries
         .into_iter()
         .map(|r| CountryBucket {
             country: r.key,

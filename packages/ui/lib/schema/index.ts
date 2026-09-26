@@ -103,6 +103,14 @@ export type {
 	ILogStat,
 } from "./flow/log";
 export type { ILogMetadata } from "./flow/log-metadata";
+export type {
+	ILogFold,
+	ILogGroup,
+	ILogQuery,
+	ILogSlotRange,
+	IRunLogSummary,
+	ISummaryLog,
+} from "./flow/log-query";
 export type { IRunContext } from "./flow/run-context";
 
 export type { IAddNode } from "./flow/board/commands/add-node";

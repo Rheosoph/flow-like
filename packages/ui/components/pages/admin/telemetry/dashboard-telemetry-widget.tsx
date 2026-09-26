@@ -241,7 +241,7 @@ export function DashboardTelemetryWidget({
 					? ArrowDownRight
 					: ArrowRight;
 
-	const topEvent = overview.data?.topEvents[0];
+	const topEvent = overview.data?.topEvents?.[0];
 	const isEmpty =
 		!overview.isLoading && (overview.data?.totalEvents ?? 0) === 0;
 
@@ -331,7 +331,7 @@ export function DashboardTelemetryWidget({
 						value={
 							overview.isLoading
 								? "…"
-								: String(overview.data?.sources.length ?? 0)
+								: String(overview.data?.sources?.length ?? 0)
 						}
 						icon={<Layers className="h-4 w-4" />}
 					/>
@@ -378,7 +378,7 @@ export function DashboardTelemetryWidget({
 						<TopList
 							title={t("topEvents", "Top events")}
 							buckets={
-								overview.data?.topEvents.map((e) => ({
+								overview.data?.topEvents?.map((e) => ({
 									key: e.name,
 									label: e.name,
 									count: e.count,

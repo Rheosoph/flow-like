@@ -40,6 +40,7 @@ fn get_http_client() -> Result<&'static reqwest::Client, Error> {
     }
 
     let client = reqwest::Client::builder()
+        .user_agent(concat!("flow-like-maintenance/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::none())
@@ -241,6 +242,9 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
     })?;
 
     match (payload.job, parsed) {
+        (MaintenanceJob::Payments, MaintenanceRunResponse::Payments(result)) => {
+            tracing::info!(inbox_completed = result.inbox_completed, effects_completed = result.effects_completed, deferred = result.deferred, "Payment recovery completed");
+        }
         (MaintenanceJob::TelemetryAlerts, MaintenanceRunResponse::TelemetryAlerts(result)) => {
             tracing::info!(
                 evaluated = result.evaluated,

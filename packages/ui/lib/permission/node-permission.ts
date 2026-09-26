@@ -14,6 +14,8 @@ export const NODE_PERMISSION_LABELS: Record<
 	[INodePermission.NetworkDns]: { label: "DNS Lookups", icon: "🔍" },
 	[INodePermission.StorageRead]: { label: "Storage Read", icon: "📖" },
 	[INodePermission.StorageWrite]: { label: "Storage Write", icon: "💾" },
+	[INodePermission.DatabaseRead]: { label: "Read Connected Databases", icon: "📖" },
+	[INodePermission.DatabaseWrite]: { label: "Write Connected Databases", icon: "💾" },
 	[INodePermission.Variables]: { label: "Flow Variables", icon: "🔀" },
 	[INodePermission.Cache]: { label: "Execution Cache", icon: "⚡" },
 	[INodePermission.Streaming]: { label: "Streaming Output", icon: "📡" },

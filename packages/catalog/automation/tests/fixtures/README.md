@@ -50,12 +50,12 @@ From `rustautogui` tests (top-left corner coordinates):
 
 ## Usage
 
-These fixtures are used by `integration_test.rs` when the `execute` feature is enabled, which includes `rustautogui` for actual template matching validation.
+These fixtures are used by `integration_test.rs` when the `execute` feature is enabled. Tests pass supplied images to the platform's template matcher and check known match positions without opening a desktop connection or capturing the screen.
 
 ```rust
 #[cfg(feature = "execute")]
 mod template_matching_accuracy_tests {
-    // Tests that use actual rustautogui matching
+    // Tests that match supplied images without desktop permissions
 }
 ```
 

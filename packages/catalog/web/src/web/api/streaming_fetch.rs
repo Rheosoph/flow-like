@@ -137,7 +137,7 @@ impl NodeLogic for StreamingHttpFetchNode {
                     match run {
                         Ok(_) => {}
                         Err(err) => {
-                            println!("Error running stream node {:?}", err);
+                            tracing::warn!(error = ?err, "Error running stream node");
                         }
                     }
                 }

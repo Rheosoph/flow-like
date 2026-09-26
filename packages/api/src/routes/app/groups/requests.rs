@@ -161,8 +161,7 @@ pub async fn accept_group_request(
         app_id,
         "app_group.request.accept",
         "AppGroupMember",
-        member_id,
-        "App group membership accepted"
+        member_id
     );
 
     Ok(Json(()))
@@ -227,8 +226,7 @@ pub async fn decline_group_request(
         app_id,
         "app_group.request.decline",
         "AppGroupMember",
-        member_id,
-        "App group membership declined"
+        member_id
     );
 
     Ok(Json(()))

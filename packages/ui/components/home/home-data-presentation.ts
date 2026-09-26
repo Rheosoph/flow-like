@@ -1,4 +1,7 @@
 import { type HomeDataConfig, homeDataMeasureTitle } from "./home-data-query";
+import { homeDataText } from "./home-data-text";
+
+export { homeDataText };
 
 export const HOME_DATA_COLORS = [
 	"var(--chart-1)",
@@ -85,10 +88,6 @@ export function homeDataCategoryLabel(value: unknown, length = 16): string {
 	return homeDataShortLabel(value, length);
 }
 
-export function homeDataText(value: unknown): string {
-	if (value === null || value === undefined) return "No value";
-	return typeof value === "object" ? JSON.stringify(value) : String(value);
-}
 export function homeDataNumber(value: unknown): number | null {
 	if (
 		value === null ||
@@ -101,16 +100,26 @@ export function homeDataNumber(value: unknown): number | null {
 	return Number.isFinite(number) ? number : null;
 }
 
+export interface HomeDataGroupLabels {
+	group: (value: unknown) => string;
+	series: (value: unknown) => string;
+}
+const TEXT_LABELS: HomeDataGroupLabels = {
+	group: homeDataText,
+	series: homeDataText,
+};
+
 /** Pivot server-aggregated rows without recomputing totals over a limited result. */
 export function homeDataChartSeries(
 	rows: Record<string, unknown>[],
 	config: HomeDataConfig,
+	labels: HomeDataGroupLabels = TEXT_LABELS,
 ) {
 	const series: { key: string; label: string }[] = [];
 	const seriesById = new Map<string, string>();
 	const points = new Map<string, Record<string, unknown>>();
 	for (const row of rows) {
-		const category = config.groupBy ? homeDataText(row.__group) : "Total";
+		const category = config.groupBy ? labels.group(row.__group) : "Total";
 		const groupId = JSON.stringify(row.__group ?? null);
 		const point = points.get(groupId) ?? { name: category };
 		points.set(groupId, point);
@@ -128,8 +137,8 @@ export function homeDataChartSeries(
 					key,
 					label: config.seriesBy
 						? config.measures.length === 1
-							? homeDataText(row.__series)
-							: `${homeDataText(row.__series)} · ${label}`
+							? labels.series(row.__series)
+							: `${labels.series(row.__series)} · ${label}`
 						: label,
 				});
 			}

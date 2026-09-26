@@ -18,6 +18,14 @@ execute = [
     "dep:rig",
     "dep:jsonschema",
     "dep:arboard",
+    "dep:imageproc",
+    "dep:tokio-tungstenite",
+    "dep:atspi",
+    "dep:ashpd",
+    "dep:libwayshot-xcap",
+    "dep:x11rb",
+    "dep:http",
+    "dep:windows",
 ]
 
 [dependencies]
@@ -41,9 +49,12 @@ chrono.workspace = true
 # LLM integration for self-healing automation
 rig = { workspace = true, optional = true }
 jsonschema = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+http = { version = "1", optional = true }
 
 # Image encoding
 image = { workspace = true }
+imageproc = { workspace = true, optional = true }
 
 # Desktop-only deps — not available on iOS / Android
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
@@ -56,12 +67,16 @@ arboard = { version = "3.5", optional = true }
 rustautogui = { version = "2.5", optional = true, features = ["dev"] }
 
 [target.'cfg(windows)'.dependencies]
-rustautogui = { version = "2.5", optional = true }
+windows = { version = "0.61", optional = true, features = ["Win32_UI_Accessibility", "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 rdev = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+atspi = { version = "0.25", features = ["zbus"], optional = true }
+ashpd = { version = "0.12.1", default-features = false, features = ["async-std"], optional = true }
+libwayshot-xcap = { version = "0.3.2", optional = true }
+x11rb = { version = "0.13", optional = true }
 rdev = { workspace = true, optional = true, features = ["x11", "wayland"] }
 
 [dev-dependencies]

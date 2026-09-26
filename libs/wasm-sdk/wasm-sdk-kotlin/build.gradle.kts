@@ -11,6 +11,13 @@ repositories {
     mavenCentral()
 }
 
+// KGP 2.3.0 defaults its PGP helper tasks to BouncyCastle 1.80 (CVE-2026-3505, CVE-2026-5588).
+configurations.matching { it.name == "kotlinBouncyCastleConfiguration" }.configureEach {
+    listOf("bcpg", "bcpkix").forEach {
+        project.dependencies.constraints.add(name, "org.bouncycastle:$it-jdk18on:1.86")
+    }
+}
+
 kotlin {
     wasmWasi()
 

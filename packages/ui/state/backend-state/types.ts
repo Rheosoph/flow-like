@@ -58,6 +58,8 @@ export interface IInviteLink {
 
 export interface IJoinRequest {
 	id: string;
+	approved_at?: number | null;
+	approved_by?: string | null;
 	user_id: string;
 	app_id: string;
 	comment: string;

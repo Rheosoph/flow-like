@@ -142,6 +142,22 @@ pub fn control_plane_http_client() -> reqwest::Client {
         .clone()
 }
 
+pub(crate) fn live_control_plane_http_client() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .timeout(CONTROL_PLANE_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                // Each DPoP dispatch requires a newly minted proof.
+                .retry(reqwest::retry::never())
+                .build()
+                .expect("live control-plane HTTP client should build")
+        })
+        .clone()
+}
+
 /// Follow a GET redirect without copying any headers from the authenticated
 /// request that produced it. Used for signed object-store downloads.
 pub async fn follow_get_redirect_without_credentials(
@@ -486,10 +502,12 @@ impl RemoteAppSession {
         let token = context
             .token
             .clone()
-            .filter(|token| !token.trim().is_empty())
-            .ok_or(flow_like_types::anyhow!(
+            .filter(|token| !token.trim().is_empty());
+        if context.request_authorizer().is_none() && token.is_none() {
+            return Err(flow_like_types::anyhow!(
                 "Working with a connected app requires a connected session (no auth token available)"
-            ))?;
+            ));
+        }
         let base_url = api_base_url(&context.profile.hub, context.profile.secure).ok_or(
             flow_like_types::anyhow!("No hub URL configured on the execution profile"),
         )?;
@@ -506,18 +524,31 @@ impl RemoteAppSession {
             }),
             None => json!({ "run_id": context.run_id() }),
         };
-        let response = control_plane_http_client()
+        let client = if context.request_authorizer().is_some() {
+            live_control_plane_http_client()
+        } else {
+            control_plane_http_client()
+        };
+        let mut request = client
             .post(&token_url)
-            .bearer_auth(token.trim())
             // The run id ties the minted token — and every run it triggers
             // downstream — into this run's process case, even when the bearer
             // is a user token instead of an executor JWT.
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|err| {
-                flow_like_types::anyhow!("Failed to request app connection token: {}", err)
-            })?;
+            .json(&request_body);
+        if context.request_authorizer().is_none()
+            && let Some(token) = token
+        {
+            request = request.bearer_auth(token.trim());
+        }
+        let request = context
+            .authorize_request(
+                request.build()?,
+                flow_like_types::authorization::ResourceAudience::ProjectApi,
+            )
+            .await?;
+        let response = client.execute(request).await.map_err(|err| {
+            flow_like_types::anyhow!("Failed to request app connection token: {}", err)
+        })?;
         let response = error_for_status(response, "App connection token request").await?;
         let token_response: AppConnectionTokenResponse = response.json().await?;
 
@@ -700,11 +731,9 @@ pub async fn open_remote_project_database_lease(
     let credentials: SharedCredentials =
         flow_like_types::json::from_value(presigned.shared_credentials)?;
     let database = credentials.to_db(&target_app_id).await?;
-    let refreshed = context
-        .app_state
-        .with_lance_session(database)
-        .execute()
-        .await?;
+    // The target project's presign owns this connection's credentials and session.
+    // The caller's Lance registry may authorize only its own project.
+    let refreshed = database.execute().await?;
     *connection = Some(RemoteProjectConnectionCacheEntry {
         connection: refreshed.clone(),
         refresh_at,
@@ -1562,6 +1591,237 @@ mod tests {
             refresh_at,
             requested_at + std::time::Duration::from_secs(59 * 60)
         );
+    }
+
+    #[cfg(feature = "execute")]
+    #[tokio::test]
+    async fn remote_database_uses_target_credentials_and_keeps_its_cached_connection() {
+        use flow_like::{
+            credentials::{BucketConfig, SharedCredentials, aws_credentials::AwsSharedCredentials},
+            flow::{
+                board::ExecutionStage,
+                execution::{LogLevel, context::ExecutionContext, internal_node::InternalNode},
+                node::{Node, NodeLogic},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_types::sync::{Mutex, RwLock};
+        use std::sync::{Arc, Weak};
+
+        struct Noop;
+        #[flow_like_types::async_trait]
+        impl NodeLogic for Noop {
+            fn get_node(&self) -> Node {
+                Node::new(
+                    "remote_test",
+                    "Remote test",
+                    "Remote database test",
+                    "Tests",
+                )
+            }
+            async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+                Ok(())
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let expiration = chrono::Utc::now() + chrono::Duration::hours(1);
+        let credentials = SharedCredentials::Aws(AwsSharedCredentials {
+            access_key_id: Some("target-access".into()),
+            secret_access_key: Some("target-secret".into()),
+            session_token: Some("target-session".into()),
+            meta_bucket: "target-meta".into(),
+            content_bucket: "target-content".into(),
+            logs_bucket: String::new(),
+            meta_config: None,
+            content_config: Some(BucketConfig {
+                endpoint: Some(endpoint.clone()),
+                use_path_style: true,
+                allow_http: true,
+                ..Default::default()
+            }),
+            logs_config: None,
+            region: "eu-central-1".into(),
+            expiration: Some(expiration),
+            content_path_prefix: Some("apps/target".into()),
+            user_content_path_prefix: None,
+        });
+        let response = json!({
+            "shared_credentials": credentials,
+            "expiration": expiration,
+        })
+        .to_string();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 4096];
+                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let size = socket.read(&mut buffer).await.unwrap();
+                    assert!(size > 0);
+                    request.extend_from_slice(&buffer[..size]);
+                    assert!(request.len() < 64 * 1024);
+                }
+                let headers_end = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .unwrap()
+                    + 4;
+                let content_length = String::from_utf8_lossy(&request[..headers_end])
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                assert!(content_length < 64 * 1024);
+                while request.len() < headers_end + content_length {
+                    let size = socket.read(&mut buffer).await.unwrap();
+                    assert!(size > 0);
+                    request.extend_from_slice(&buffer[..size]);
+                }
+                let request = String::from_utf8(request[..headers_end].to_vec()).unwrap();
+                let presign = request.starts_with("POST /api/v1/apps/target/db/presign/project ");
+                let mut parts = request.split_whitespace();
+                let method = parts.next().unwrap();
+                let path = parts.next().unwrap();
+                let url = reqwest::Url::parse(&format!("http://fixture{path}")).unwrap();
+                let listing = method == "GET"
+                    && url
+                        .query_pairs()
+                        .any(|(key, value)| key == "list-type" && value == "2");
+                let (status, content_type, body) = if presign {
+                    ("200 OK", "application/json", response.as_str())
+                } else if listing {
+                    (
+                        "200 OK",
+                        "application/xml",
+                        "<ListBucketResult><Name>target-content</Name><Prefix>apps/target/storage/db/</Prefix><KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated></ListBucketResult>",
+                    )
+                } else {
+                    ("404 Not Found", "application/xml", "")
+                };
+                recorded.lock().unwrap().push(request);
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+
+        let mut state =
+            FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+        // A caller-scoped registry cannot resolve the target. Reapplying this
+        // session to the explicitly authorized remote builder must fail.
+        state.set_lance_store_registry(Arc::new(
+            flow_like_storage::lance_io::object_store::ObjectStoreRegistry::empty(),
+        ));
+        let node = Arc::new(InternalNode::new(
+            Noop.get_node(),
+            Default::default(),
+            Arc::new(Noop),
+            Default::default(),
+        ));
+        let context = ExecutionContext::new(
+            Arc::new(Default::default()),
+            &Weak::new(),
+            &Arc::new(state),
+            &node,
+            &Arc::new(Mutex::new(Default::default())),
+            &Arc::new(RwLock::new(Default::default())),
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(Default::default()),
+            None,
+        )
+        .await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        context.cache.write().await.insert(
+            "remote::session::target".into(),
+            Arc::new(super::CachedRemoteAppSession {
+                session: Arc::new(Mutex::new(Some(RemoteAppSession {
+                    token: "target-connection".into(),
+                    base_url: format!("{endpoint}/api/v1"),
+                    target_app_id: "target".into(),
+                    refresh_at: deadline,
+                    valid_until: deadline,
+                }))),
+            }),
+        );
+        for table in ["first", "second"] {
+            let lease = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                super::open_remote_project_database_lease(&context, "target", table, false),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    lease.connection.table_names().execute(),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .is_empty()
+            );
+        }
+        server.abort();
+        let requests = requests.lock().unwrap();
+        let presigns: Vec<_> = requests
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .collect();
+        assert_eq!(presigns.len(), 1, "fresh remote connections remain cached");
+        assert!(
+            presigns[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer target-connection\r\n")
+        );
+        let cloud: Vec<_> = requests
+            .iter()
+            .filter(|request| !request.starts_with("POST /api/v1/"))
+            .collect();
+        assert!(!cloud.is_empty());
+        let mut listings = 0;
+        for request in cloud {
+            let path = request.split_whitespace().nth(1).unwrap();
+            let url = reqwest::Url::parse(&format!("http://fixture{path}")).unwrap();
+            if url
+                .query_pairs()
+                .any(|(key, value)| key == "list-type" && value == "2")
+            {
+                listings += 1;
+                assert!(request.starts_with("GET "));
+                assert_eq!(url.path().trim_end_matches('/'), "/target-content");
+                assert!(url.query_pairs().any(|(key, value)| key == "prefix"
+                    && value.trim_end_matches('/') == "apps/target/storage/db"));
+            } else {
+                panic!(
+                    "the namespace manifest is disabled, so only listings reach the store: {request}"
+                );
+            }
+            assert!(request.contains("Credential=target-access/"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("x-amz-security-token: target-session\r\n")
+            );
+        }
+        assert!(listings >= 2);
     }
 
     #[test]

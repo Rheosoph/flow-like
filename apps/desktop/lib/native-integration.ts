@@ -19,6 +19,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/native-event";
 import type { NativeCustomWidget } from "@flow-like/flow-like-ui/lib/native-widget";
 import type { RecentAppUse } from "@flow-like/flow-like-ui/lib/recent-apps";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { routePathsEqual } from "@flow-like/flow-like-ui/lib/route-path";
 import {
 	BUILTIN_RUNTIME_EVENT_TYPE_SET,
@@ -28,6 +29,11 @@ import {
 import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type { IExecutionUsageRecord } from "@flow-like/flow-like-ui/lib/schema/usage/tracking";
 import { parseUint8ArrayToJson } from "@flow-like/flow-like-ui/lib/uint8";
+import {
+	isUsePathname,
+	pathUseUrl,
+	readUseRoutePath,
+} from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { IBackendState } from "@flow-like/flow-like-ui/state/backend-state";
 
 export type NativeActionKind =
@@ -128,6 +134,13 @@ const section = (
 	state: available ? "ready" : "unavailable",
 });
 
+const NATIVE_EVENT_CATALOG_MAX_AGE_MS = 30 * 60_000;
+
+export type NativeEventCatalog = Map<
+	string,
+	{ events: IEvent[]; fetchedAt: number }
+>;
+
 /** Copies only display data into the native cache. Tokens, config and input defaults stay in-app. */
 export async function loadNativeSnapshot(
 	backend: IBackendState,
@@ -136,6 +149,7 @@ export async function loadNativeSnapshot(
 	authenticated: boolean,
 	now = new Date(),
 	onNotificationSources?: (sources: NativeNotificationIconSource[]) => void,
+	eventCatalog?: NativeEventCatalog,
 ): Promise<NativeSnapshot> {
 	const [
 		libraryResult,
@@ -187,59 +201,78 @@ export async function loadNativeSnapshot(
 	let eventReadsSucceeded =
 		libraryResult.status === "fulfilled" &&
 		profileResult.status === "fulfilled";
+	const nowMs = now.getTime();
+	if (eventCatalog)
+		for (const appId of eventCatalog.keys())
+			if (!names.has(appId)) eventCatalog.delete(appId);
+	const eventsByApp = new Map<string, IEvent[]>();
+	const pending = library.filter(([app]) => {
+		const cached = eventCatalog?.get(app.id);
+		if (!cached || nowMs - cached.fetchedAt >= NATIVE_EVENT_CATALOG_MAX_AGE_MS)
+			return true;
+		eventsByApp.set(app.id, cached.events);
+		return false;
+	});
 	// Bound native catalog discovery; one failed app does not hide other apps.
-	for (let index = 0; index < library.length; index += 4) {
-		const batch = library.slice(index, index + 4);
+	for (let index = 0; index < pending.length; index += 4) {
+		const batch = pending.slice(index, index + 4);
 		const results = await Promise.allSettled(
 			batch.map(([app]) => backend.eventState.getEvents(app.id)),
 		);
 		results.forEach((result, offset) => {
-			if (result.status === "rejected") {
-				eventReadsSucceeded = false;
+			const appId = batch[offset][0].id;
+			if (result.status === "fulfilled" && Array.isArray(result.value)) {
+				eventsByApp.set(appId, result.value);
+				eventCatalog?.set(appId, { events: result.value, fetchedAt: nowMs });
 				return;
 			}
-			const appId = batch[offset][0].id;
-			const app = apps.find((app) => app.id === appId);
-			if (app)
-				app.spotlightEligible = result.value.some(
-					(event) =>
-						event.active &&
-						["page", "chat"].includes(classifyAppEventInterface(event)),
-				);
-			for (const event of result.value) {
-				const kind = nativeEventActionKind(event);
-				if (!kind || !isNativeEventExposed(event)) continue;
-				const settings = nativeEventSettings(event);
-				const operation =
-					event.event_type === "mcp" ? settings.operation : undefined;
-				const action: NativeAction = {
-					kind,
-					appId,
-					eventId: event.id,
-					operation,
-				};
-				const entity: NativeEventEntity = {
-					id: `${appId}:${event.id}${operation ? `:${operation}` : ""}`,
-					appId,
-					eventId: event.id,
-					title: event.name || event.id,
-					subtitle: names.get(appId) || appId,
-					eventType: event.event_type,
-					route: event.route || (event.is_default ? "/" : undefined),
-					pageId: event.default_page_id || undefined,
-					action,
-					surfaces: settings.surfaces,
-				};
-				events.push(entity);
-				if (settings.favorite && settings.surfaces.includes("widget"))
-					favorites.push({
-						id: entity.id,
-						title: entity.title,
-						subtitle: entity.subtitle,
-						action,
-					});
-			}
+			const stale = eventCatalog?.get(appId);
+			if (stale) eventsByApp.set(appId, stale.events);
+			else eventReadsSucceeded = false;
 		});
+	}
+	for (const app of apps) {
+		const appId = app.id;
+		const appEvents = eventsByApp.get(appId);
+		if (!appEvents) continue;
+		app.spotlightEligible = appEvents.some(
+			(event) =>
+				event.active &&
+				["page", "chat"].includes(classifyAppEventInterface(event)),
+		);
+		for (const event of appEvents) {
+			const kind = nativeEventActionKind(event);
+			if (!kind || !isNativeEventExposed(event)) continue;
+			const settings = nativeEventSettings(event);
+			const operation =
+				event.event_type === "mcp" ? settings.operation : undefined;
+			const action: NativeAction = {
+				kind,
+				appId,
+				eventId: event.id,
+				operation,
+			};
+			const entity: NativeEventEntity = {
+				id: `${appId}:${event.id}${operation ? `:${operation}` : ""}`,
+				appId,
+				eventId: event.id,
+				title: event.name || event.id,
+				subtitle: names.get(appId) || appId,
+				eventType: event.event_type,
+				route: event.route || (event.is_default ? "/" : undefined),
+				pageId: event.default_page_id || undefined,
+				action,
+				surfaces: settings.surfaces,
+			};
+			events.push(entity);
+			if (settings.favorite && settings.surfaces.includes("widget"))
+				favorites.push({
+					id: entity.id,
+					title: entity.title,
+					subtitle: entity.subtitle,
+					action,
+				});
+		}
 	}
 	const runItem = (run: IExecutionUsageRecord): NativeSnapshotItem => ({
 		id: run.id,
@@ -285,13 +318,13 @@ export async function loadNativeSnapshot(
 		section(
 			"attention",
 			"Needs attention",
-			(activity?.attention ?? []).filter(visibleRun).slice(0, 8).map(runItem),
+			asArray(activity?.attention).filter(visibleRun).slice(0, 8).map(runItem),
 			activity !== undefined,
 		),
 		section(
 			"recent_runs",
 			"Recent runs",
-			(history?.items ?? []).filter(visibleRun).map(runItem),
+			asArray(history?.items).filter(visibleRun).map(runItem),
 			history !== undefined,
 		),
 		section(
@@ -897,13 +930,24 @@ export function withNativeActivePage(
 	if (
 		!webOrigin ||
 		nativeWebOrigin(webOrigin) !== webOrigin ||
-		pathname !== "/use"
+		!isUsePathname(pathname)
 	)
 		return next;
 	const params = new URLSearchParams(query);
+	if (
+		["id", "eventId", "route", APP_QUERY_PARAM].some(
+			(key) => params.getAll(key).length > 1,
+		)
+	)
+		return next;
 	const appId = params.get("id");
 	if (!snapshot.apps.some((app) => app.id === appId)) return next;
-	const route = params.get("route");
+	let route: string | null;
+	try {
+		route = readUseRoutePath(pathname) ?? params.get("route");
+	} catch {
+		return next;
+	}
 	const event = snapshot.events.find(
 		(event) =>
 			event.appId === appId &&
@@ -935,7 +979,7 @@ export function withNativeActivePage(
 		}
 		next.activePage = {
 			title: event.title,
-			url: new URL(href, webOrigin).href,
+			url: new URL(pathUseUrl(new URL(href, webOrigin)), webOrigin).href,
 		};
 	}
 	return next;

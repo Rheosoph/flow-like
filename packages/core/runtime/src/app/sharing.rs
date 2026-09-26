@@ -44,6 +44,9 @@ use zip::{
     write::{ExtendedFileOptions, FileOptions},
 };
 
+#[cfg(feature = "flow-runtime")]
+pub mod device;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PathKind {
     Prio,
@@ -2653,7 +2656,7 @@ impl App {
                     continue;
                 }
             };
-            let board = board.lock().await;
+            let board = board.snapshot();
             for variable in board.variables.values() {
                 if variable.secret && secret_has_value(variable.default_value.as_deref()) {
                     secret_variables.push(SecretVariableRef {
@@ -2697,7 +2700,7 @@ impl App {
         &self,
         reporter: &ProgressReporter,
     ) -> flow_like_types::Result<CompactionReport> {
-        use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
+        use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
 
         let app_state = self
             .app_state
@@ -2744,7 +2747,8 @@ impl App {
             if let Some(options) = write_options.clone() {
                 store.set_write_options(options);
             }
-            let result = store.prune_history().await;
+            // Export compaction must preserve snapshots used by training runs and branches.
+            let result = store.optimize(true).await;
             let bytes_after = prefix_bytes(&storage, &prefix)
                 .await
                 .unwrap_or(bytes_before);
@@ -3123,7 +3127,7 @@ mod tests {
     use crate::{
         app::{AppExecutionMode, AppStatus, AppVisibility},
         flow::{
-            board::Board,
+            board::{Board, BoardCell},
             pin::ValueType,
             variable::{Variable, VariableType},
         },
@@ -3135,7 +3139,7 @@ mod tests {
         files::store::FlowLikeStore,
         object_store::{PutPayload, memory::InMemory, path::Path as ObjectPath},
     };
-    use flow_like_types::{rand::RngCore, sync::Mutex, tokio};
+    use flow_like_types::{rand::RngCore, tokio};
     use std::{
         fs::File,
         io::{Read, Write},
@@ -3914,10 +3918,10 @@ mod tests {
         stale.mark_changed();
         stale.save(Some(meta.clone())).await.expect("save stale");
         state
-            .register_board(&board_id, Arc::new(Mutex::new(stale.clone())), None)
+            .register_board(&board_id, Arc::new(BoardCell::new(stale.clone())), None)
             .unwrap();
         state
-            .register_board(&board_id, Arc::new(Mutex::new(stale)), Some((0, 0, 1)))
+            .register_board(&board_id, Arc::new(BoardCell::new(stale)), Some((0, 0, 1)))
             .unwrap();
         assert_eq!(
             Board::load(base.clone(), &board_id, state.clone(), None)

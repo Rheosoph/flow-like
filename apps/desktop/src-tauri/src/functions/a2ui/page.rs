@@ -3,7 +3,9 @@ use crate::{
     state::{TauriFlowLikeState, TauriSettingsState},
 };
 use flow_like::{
-    a2ui::{page_targets::retarget_page_workflow_actions, widget::Page},
+    a2ui::{
+        ElementDemand, element_demand, page_targets::retarget_page_workflow_actions, widget::Page,
+    },
     app::App,
     bit::Metadata,
     flow::{
@@ -66,6 +68,8 @@ pub struct LocalPageBootstrap {
     /// client injection path serves offline apps.
     pub app_custom_css: Option<String>,
     pub execution_revision: Option<String>,
+    /// Page elements the Event's board reads, mirroring the cloud bootstrap field.
+    pub element_demand: Option<ElementDemand>,
     pub canonical_route: Option<String>,
     pub route_miss: bool,
 }
@@ -196,6 +200,7 @@ pub async fn get_local_page_bootstrap(
             revision: None,
             app_custom_css,
             execution_revision: None,
+            element_demand: None,
             canonical_route,
             route_miss,
         });
@@ -209,8 +214,8 @@ pub async fn get_local_page_bootstrap(
                 "Failed to open Event board '{}' locally: {}",
                 event.board_id, error
             ))
-        })?;
-    let board = board.lock().await;
+        })?
+        .snapshot();
     if board.id != event.board_id
         || event
             .board_version
@@ -255,6 +260,7 @@ pub async fn get_local_page_bootstrap(
         revision: Some(revision),
         app_custom_css,
         execution_revision: Some(execution_revision),
+        element_demand: Some(element_demand(&board)),
         canonical_route,
         route_miss,
     })
@@ -312,7 +318,7 @@ pub async fn get_pages(
     for board_id in board_ids {
         match app.open_board(board_id.clone(), None, None).await {
             Ok(board) => {
-                let board_guard = board.lock().await;
+                let board_guard = board.snapshot();
                 match board_guard.load_all_pages(None).await {
                     Ok(loaded) => collect_board_pages(&app_id, &board_id, loaded, &mut result),
                     Err(e) => {
@@ -346,7 +352,7 @@ pub async fn get_page(
     if let Some(bid) = board_id {
         match app.open_board(bid.clone(), None, version).await {
             Ok(board) => {
-                let board_guard = board.lock().await;
+                let board_guard = board.snapshot();
                 if !board_guard
                     .get_page_ids()
                     .iter()
@@ -395,7 +401,7 @@ pub async fn get_page(
                 continue;
             }
         };
-        let board_guard = board.lock().await;
+        let board_guard = board.snapshot();
         if !board_guard
             .get_page_ids()
             .iter()
@@ -456,7 +462,7 @@ pub async fn get_page_by_route(
 
     for board_id in app.boards.iter() {
         if let Ok(board) = app.open_board(board_id.to_string(), None, None).await {
-            let board_guard = board.lock().await;
+            let board_guard = board.snapshot();
             if let Ok(loaded) = board_guard.load_all_pages(None).await {
                 for unreadable in &loaded.unreadable {
                     tracing::warn!(
@@ -503,7 +509,7 @@ pub async fn create_page(
     let board = app.open_board(board_id, None, None).await?;
     let result_page;
     {
-        let mut board_guard = board.lock().await;
+        let mut board_guard = board.write().await;
         board_guard.save_page(&page, None).await?;
         board_guard.save(None).await?;
         result_page = page;
@@ -551,7 +557,7 @@ pub async fn update_page(
 
     match app.open_board(board_id.clone(), None, None).await {
         Ok(board) => {
-            let mut board_guard = board.lock().await;
+            let mut board_guard = board.write().await;
             board_guard.save_page(&page, None).await?;
             board_guard.save(None).await?;
         }
@@ -588,7 +594,7 @@ pub async fn delete_page(
 
     let board = app.open_board(board_id, None, None).await?;
     {
-        let mut board_guard = board.lock().await;
+        let mut board_guard = board.write().await;
         board_guard.delete_page(&page_id, None).await?;
         board_guard.save(None).await?;
     }

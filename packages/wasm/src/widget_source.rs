@@ -109,6 +109,7 @@ mod tests {
             thumbnail: None,
             contract: WidgetContract::new(id),
             keywords: Vec::new(),
+            network: None,
         }
     }
 

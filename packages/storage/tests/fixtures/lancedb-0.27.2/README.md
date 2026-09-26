@@ -20,4 +20,4 @@ The checked-in `generate.rs` and `generate.Cargo.toml` are the source and depend
 cargo run --manifest-path /path/to/temporary-generator/Cargo.toml -- /path/to/new-output
 ```
 
-Pass `v2.2` after the output directory to create the second fixture with an explicit connection-level format setting. The output directory must not already contain a table named `legacy`. Review the generated files before replacing this fixture. Keep the generator on the old crate versions so the fixture continues to test reads of data written before the upgrade.
+Pass `v2.2` after the output directory to create the second fixture with an explicit connection-level format setting. The output directory must not already contain a table named `legacy`. Review the generated files before replacing this fixture. Copy them with `cp -R` or `rsync -a`. `.pre-commit-config.yaml` excludes this directory from `trailing-whitespace`: pre-commit classifies `.manifest` as text, and the hook deletes length bytes that precede `0x0A` inside Lance's binary manifests. Keep the generator on the old crate versions so the fixture continues to test reads of data written before the upgrade.

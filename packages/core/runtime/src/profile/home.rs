@@ -47,6 +47,7 @@ pub fn validate_home_layout(layout: &Value) -> Result<(), String> {
             .ok_or("Widget appearance is required")?;
         required_text(appearance.get("variant"), 80)?;
         required_text(appearance.get("accent"), 128)?;
+        optional_text(appearance.get("className"), 1024)?;
         if !widget.get("config").is_some_and(Value::is_object) {
             return Err("Widget config must be an object".into());
         }
@@ -80,7 +81,7 @@ mod tests {
     fn layout() -> Value {
         json!({"version":1,"widgets":[{"id":"embed","type":"app-embed",
             "size":{"columns":6,"rows":4},
-            "appearance":{"variant":"card","accent":"default"},
+            "appearance":{"variant":"card","accent":"default","className":"rounded-3xl bg-primary/10"},
             "config":{"appId":"app","path":"/chat?filter=one&filter=two"}}]})
     }
 
@@ -117,5 +118,12 @@ mod tests {
         let mut invalid = layout();
         invalid["widgets"][0]["config"]["text"] = json!("x".repeat(MAX_HOME_LAYOUT_BYTES));
         assert!(validate_home_layout(&invalid).is_err());
+        let mut styled = layout();
+        styled["widgets"][0]["appearance"]["className"] = json!("x".repeat(1024));
+        assert!(validate_home_layout(&styled).is_ok());
+        for class_name in [json!(42), json!("x".repeat(1025))] {
+            styled["widgets"][0]["appearance"]["className"] = class_name;
+            assert!(validate_home_layout(&styled).is_err());
+        }
     }
 }

@@ -20,7 +20,7 @@ import {
 	Sparkles,
 	XCircle,
 } from "lucide-react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import type {
@@ -32,8 +32,10 @@ import type {
 	IValueType,
 	IVariableType,
 } from "../../lib";
+import { useClientRouter } from "../../lib/client-navigation";
 import { formatDuration } from "../../lib/date";
 import { defaultValueFromType } from "../../lib/flow-defaults";
+import { asArray } from "../../lib/response-shape";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
@@ -759,11 +761,12 @@ export function GenericEventFormInterface({
 	event,
 	config,
 	toolbarRef,
+	onNavigate,
 }: Readonly<IUseInterfaceProps>) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
 	const executionEngine = useExecutionEngine();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 
 	const [runEvents, setRunEvents] = useState<IIntercomEvent[]>([]);
@@ -813,10 +816,9 @@ export function GenericEventFormInterface({
 
 	const routeEventNames = useMemo(() => {
 		const mapping: Record<string, string> = {};
-		if (!routesQuery.data || !eventsQuery.data) return mapping;
-
-		for (const route of routesQuery.data) {
-			const evt = eventsQuery.data.find((e) => e.id === route.eventId);
+		const events = asArray(eventsQuery.data);
+		for (const route of asArray(routesQuery.data)) {
+			const evt = events.find((e) => e.id === route.eventId);
 			if (evt?.name) {
 				mapping[route.path] = evt.name;
 			}
@@ -866,13 +868,17 @@ export function GenericEventFormInterface({
 				const key = `${route}::${replace ? "r" : "p"}::${JSON.stringify(queryParams ?? {})}`;
 				if (lastNavigateToRef.current === key) continue;
 				lastNavigateToRef.current = key;
+				if (onNavigate) {
+					onNavigate(route, Boolean(replace), queryParams);
+					continue;
+				}
 
 				const navUrl = buildUseNavigationUrl(appId, route, queryParams);
 				if (replace) router.replace(navUrl);
 				else router.push(navUrl);
 			}
 		},
-		[appId, router],
+		[appId, router, onNavigate],
 	);
 
 	useEffect(() => {
@@ -899,11 +905,15 @@ export function GenericEventFormInterface({
 
 	const handleNavigateTo = useCallback(
 		(route: string, replace = false) => {
+			if (onNavigate) {
+				onNavigate(route, replace);
+				return;
+			}
 			const navUrl = buildUseNavigationUrl(appId, route);
 			if (replace) router.replace(navUrl);
 			else router.push(navUrl);
 		},
-		[appId, router],
+		[appId, router, onNavigate],
 	);
 
 	const getRouteLabel = useCallback(

@@ -669,6 +669,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_sql_runs_spatial_queries_over_inferred_geometry_columns() -> Result<()> {
+        use crate::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
+        use serde_json::json;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let berlin = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+        let paris = json!({"type": "Point", "coordinates": [2.3522, 48.8566]});
+        let district = json!({"type": "Polygon", "coordinates": [[[13.0, 52.0], [14.0, 52.0], [14.0, 53.0], [13.0, 53.0], [13.0, 52.0]]]});
+        let mut store =
+            LanceDBVectorStore::new(std::path::PathBuf::from(&test_path), "places".into()).await?;
+        store
+            .insert(vec![
+                json!({"id": 1, "geometry": berlin}),
+                json!({"id": 2, "geometry": paris}),
+                json!({"id": 3, "geometry": district}),
+            ])
+            .await?;
+
+        let connection = lancedb::connect(&test_path).execute().await?;
+        let result = execute_readonly_sql(
+            &connection,
+            WorkbenchSurface::Native,
+            Vec::new(),
+            "SELECT id, geometry, ST_Centroid(geometry) AS center FROM places \
+             WHERE ST_Intersects(geometry, flow_geomfromtext($area)) ORDER BY id",
+            &json!({"area": "POLYGON((12 51.5,15 51.5,15 53.5,12 53.5,12 51.5))"}),
+            Some(10),
+        )
+        .await?;
+
+        assert_eq!(
+            result.rows,
+            vec![
+                json!({"id": 1, "geometry": berlin, "center": berlin}),
+                json!({"id": 3, "geometry": district, "center": {"type": "Point", "coordinates": [13.5, 52.5]}}),
+            ]
+        );
+        for column in ["geometry", "center"] {
+            let column = result
+                .columns
+                .iter()
+                .find(|candidate| candidate.name == column)
+                .unwrap();
+            assert!(
+                column
+                    .metadata
+                    .get(crate::geometry::EXTENSION_NAME)
+                    .is_some_and(|name| name.starts_with("geoarrow.")),
+                "{column:?}"
+            );
+        }
+
+        let bound = execute_readonly_sql(
+            &connection,
+            WorkbenchSurface::Native,
+            Vec::new(),
+            "SELECT id FROM places WHERE ST_Contains($area, geometry) ORDER BY id",
+            &json!({"area": {"type": "Polygon", "coordinates": [[[12.0, 51.5], [15.0, 51.5], [15.0, 53.5], [12.0, 53.5], [12.0, 51.5]]]}}),
+            Some(10),
+        )
+        .await?;
+        assert_eq!(bound.rows, vec![json!({"id": 1}), json!({"id": 3})]);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn truncated_requires_a_row_beyond_the_limit() -> Result<()> {
         let test_path = format!("./tmp/{}", flow_like_types::create_id());
         std::fs::create_dir_all(&test_path).unwrap();

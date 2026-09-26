@@ -91,8 +91,8 @@ fn build_standalone_schema(schema: &Value, root_schema: &Value) -> Value {
 /// Give up on deriving fields: hand `struct_in` its open marker back and drop the unwired pins.
 ///
 /// The marker is what lets any struct producer be wired in. Leaving the last resolved schema on the
-/// pin instead would make it a contract: `schemas_are_compatible` rejects two differing concrete
-/// schemas, so after unplugging one producer the user could never plug in a different one.
+/// pin instead would make it a contract: `schemas_are_compatible` rejects any producer whose schema
+/// does not cover it, so after unplugging one producer the user could never plug in a different one.
 fn reset_to_open(node: &mut Node, error: Option<String>) {
     node.error = error;
     retain_declared_field_pins(node, &HashSet::from(["struct_in".to_string()]));

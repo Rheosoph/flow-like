@@ -213,30 +213,32 @@ function writeChunkBatches(chunkRoot: Struct, stem: string, chunks: string[], co
 
 function ingestDocument(file: Struct, index: int, chunkRoot: Struct, writer: Struct, embedder: Struct, schema: string): (chunkCount: int) {
     const { source, stem, ext, supported } = classifyDocument(file)
+    let ingested = 0
     if (!supported) {
         skippedPaths = skippedPaths.push(source)
         warn({ message: `skipping ${source}, no extractor handles .${ext}`, toast: false })
-        return 0
+    } else {
+        const kind = stageExtraction(file, ext, stem)
+        const { normalized, markup } = normalizeMarkup(stagedText)
+        const charCount = normalized.length({ mode: "Characters" })
+        let truncated = charCount > maxDocumentChars
+        const body = normalized.ellipsis({ maxLength: maxDocumentChars, ellipsis: "\n\n[truncated]" })
+        const documentJson = recordDocument(source, markup, body, charCount, truncated)
+
+        const head = body.ellipsis({ maxLength: 4000, ellipsis: " ..." })
+        const { response: metadata } = ai::extract({ model: writer, schema: schema, text: head, hint: "Only use what the excerpt actually states" })
+        const topics = json::stringify({ value: metadata, pretty: false })
+
+        writePreview(chunkRoot, stem, body)
+        let markdownAware = markup == "markdown"
+        const chunks = ai::processing::chunkText({ text: body, model: embedder, capacity: chunkCapacity, overlap: chunkOverlap, markdown: markdownAware })
+        const chunkCount = array::length({ array: chunks })
+        writeChunkBatches(chunkRoot, stem, chunks, chunkCount)
+        documentsExtracted = documentsExtracted + 1
+        info({ message: `#${index} ${kind} ${stagedTitle}: ${chunkCount} chunks over ${stagedUnits} units, ${charCount} chars, metadata ${topics}, record ${documentJson}`, toast: false })
+        ingested = chunkCount
     }
-    const kind = stageExtraction(file, ext, stem)
-    const { normalized, markup } = normalizeMarkup(stagedText)
-    const charCount = normalized.length({ mode: "Characters" })
-    let truncated = charCount > maxDocumentChars
-    const body = normalized.ellipsis({ maxLength: maxDocumentChars, ellipsis: "\n\n[truncated]" })
-    const documentJson = recordDocument(source, markup, body, charCount, truncated)
-
-    const head = body.ellipsis({ maxLength: 4000, ellipsis: " ..." })
-    const { response: metadata } = ai::extract({ model: writer, schema: schema, text: head, hint: "Only use what the excerpt actually states" })
-    const topics = json::stringify({ value: metadata, pretty: false })
-
-    writePreview(chunkRoot, stem, body)
-    let markdownAware = markup == "markdown"
-    const chunks = ai::processing::chunkText({ text: body, model: embedder, capacity: chunkCapacity, overlap: chunkOverlap, markdown: markdownAware })
-    const chunkCount = array::length({ array: chunks })
-    writeChunkBatches(chunkRoot, stem, chunks, chunkCount)
-    documentsExtracted = documentsExtracted + 1
-    info({ message: `#${index} ${kind} ${stagedTitle}: ${chunkCount} chunks over ${stagedUnits} units, ${charCount} chars, metadata ${topics}, record ${documentJson}`, toast: false })
-    return chunkCount
+    return ingested
 }
 
 eventsGeneric extractInbox(payload: Struct, folder: string) {

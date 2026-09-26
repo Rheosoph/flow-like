@@ -1,3 +1,18 @@
+import {
+	type WidgetGrantRequest,
+	type WidgetGrantResponse,
+	WidgetPolicyChangedError,
+	type WidgetPolicyDescriptor,
+	type WidgetPolicyRequest,
+	WidgetRuntimeSourcesError,
+	isDesktopWidgetGrant,
+	isPolicyChangedError,
+	parseWidgetGrantResponse,
+	parseWidgetPolicyDescriptor,
+	widgetRuntimeSourcesErrorCode,
+} from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
+import { forgetMicroWidgetGrants } from "@flow-like/flow-like-ui/components/a2ui/use-micro-widget-grant";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	AccessRequest,
 	CachedPackage,
@@ -17,6 +32,41 @@ import type { IRegistryState } from "@flow-like/flow-like-ui/state/backend-state
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+
+function requireBundleHash(request: WidgetPolicyRequest): string {
+	if (!request.bundleHash) {
+		throw new Error(
+			`Widget ${request.packageId}/${request.widgetId} has no bundle hash, so its installed bundle cannot be resolved`,
+		);
+	}
+	return request.bundleHash;
+}
+
+function widgetPolicyArgs(request: WidgetPolicyRequest, bundleHash: string) {
+	const runtimeSources = request.runtimeSources ?? [];
+	return {
+		packageId: request.packageId,
+		bundleHash,
+		widgetId: request.widgetId,
+		preview: request.preview,
+		appId: request.appId ?? null,
+		runtimeSources: runtimeSources.length > 0 ? runtimeSources : null,
+	};
+}
+
+/** `invalid_runtime_sources: …` and `runtime_sources_in_preview: …` are host bugs, never user decisions. */
+function runtimeSourcesError(
+	error: unknown,
+	request: WidgetPolicyRequest,
+): WidgetRuntimeSourcesError | null {
+	const code = widgetRuntimeSourcesErrorCode(error);
+	return code
+		? new WidgetRuntimeSourcesError(
+				code,
+				`The runtime sources sent for widget ${request.packageId}/${request.widgetId} were refused (${code})`,
+			)
+		: null;
+}
 
 export class RegistryState implements IRegistryState {
 	private initPromise: Promise<void> | null = null;
@@ -54,6 +104,7 @@ export class RegistryState implements IRegistryState {
 		try {
 			return await this.fetchSearch(filters);
 		} catch {
+			await this.ensureInit();
 			return invoke("registry_search_packages", {
 				filters: filters ?? {},
 				token: this.currentToken,
@@ -61,13 +112,20 @@ export class RegistryState implements IRegistryState {
 		}
 	}
 
+	/** With `access` the caller decides the result, so a missing token or failed request throws instead of listing nothing. */
 	async getOwnedPackages(filters?: SearchFilters): Promise<SearchResults> {
-		if (!this.backend.profile || !this.backend.auth) {
+		const access = filters?.access;
+		const hasProfile = Boolean(this.backend.profile && this.backend.auth);
+		if (access && !(hasProfile && this.currentToken)) {
+			throw new Error(`Sign in to list your packages (access=${access})`);
+		}
+		if (!hasProfile) {
 			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
 		}
 		try {
 			return await this.fetchSearch({ ...filters, ownedOnly: true });
-		} catch {
+		} catch (error) {
+			if (access) throw error;
 			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
 		}
 	}
@@ -88,15 +146,25 @@ export class RegistryState implements IRegistryState {
 		if (filters?.offset) params.set("offset", String(filters.offset));
 		if (filters?.limit) params.set("limit", String(filters.limit));
 		if (filters?.language) params.set("language", filters.language);
-		if (filters?.ownedOnly) params.set("owned_only", "true");
-		if (!filters?.ownedOnly) params.set("include_own", "true");
+		const ownedOnly = filters?.ownedOnly || filters?.access !== undefined;
+		if (ownedOnly) params.set("owned_only", "true");
+		if (!ownedOnly) params.set("include_own", "true");
+		if (filters?.access) params.set("access", filters.access);
+		if (filters?.ids) params.set("ids", filters.ids.join(","));
 		const qs = params.toString();
-		return fetcher<SearchResults>(
-			this.backend.profile!,
+		const profile = this.backend.profile;
+		if (!profile)
+			throw new Error("Profile not set. Cannot search the registry.");
+		const results = await fetcher<SearchResults>(
+			profile,
 			`registry/search${qs ? `?${qs}` : ""}`,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isRecord(results) || !Array.isArray(results.packages)) {
+			throw new Error("registry/search returned no package list");
+		}
+		return results;
 	}
 
 	private get currentToken(): string | undefined {
@@ -111,18 +179,25 @@ export class RegistryState implements IRegistryState {
 	async installPackage(
 		packageId: string,
 		version?: string,
+		_token?: string | null,
+		appId?: string,
 	): Promise<CachedPackage> {
 		await this.ensureInit();
 		return invoke("registry_install_package", {
 			packageId,
 			version,
 			token: this.currentToken,
+			appId,
 		});
 	}
 
 	async uninstallPackage(packageId: string): Promise<void> {
-		await this.ensureInit();
-		return invoke("registry_uninstall_package", { packageId });
+		try {
+			await this.ensureInit();
+			await invoke("registry_uninstall_package", { packageId });
+		} finally {
+			forgetMicroWidgetGrants(packageId);
+		}
 	}
 
 	async getInstalledPackages(): Promise<InstalledPackage[]> {
@@ -229,6 +304,68 @@ export class RegistryState implements IRegistryState {
 
 	async setAuthToken(token: string | null): Promise<void> {
 		return invoke("registry_set_auth_token", { token });
+	}
+
+	async describeWidgetPolicy(
+		request: WidgetPolicyRequest,
+	): Promise<WidgetPolicyDescriptor> {
+		const bundleHash = requireBundleHash(request);
+		await this.ensureInit();
+		let descriptor: unknown;
+		try {
+			descriptor = await invoke<unknown>(
+				"registry_describe_widget_policy",
+				widgetPolicyArgs(request, bundleHash),
+			);
+		} catch (error) {
+			throw runtimeSourcesError(error, request) ?? error;
+		}
+		return parseWidgetPolicyDescriptor(descriptor, {
+			packageId: request.packageId,
+			bundleHash,
+			widgetId: request.widgetId,
+			preview: request.preview,
+		});
+	}
+
+	async mintWidgetGrant(
+		request: WidgetGrantRequest,
+	): Promise<WidgetGrantResponse> {
+		const bundleHash = requireBundleHash(request);
+		await this.ensureInit();
+		let response: unknown;
+		try {
+			response = await invoke<unknown>("registry_mint_widget_grant", {
+				...widgetPolicyArgs(request, bundleHash),
+				policyDigest: request.policyDigest,
+			});
+		} catch (error) {
+			if (isPolicyChangedError(error)) {
+				throw new WidgetPolicyChangedError(
+					`The permissions of widget ${request.packageId}/${request.widgetId} changed since they were approved`,
+				);
+			}
+			throw runtimeSourcesError(error, request) ?? error;
+		}
+		return {
+			...parseWidgetGrantResponse(response, isDesktopWidgetGrant),
+			runtime: null,
+		};
+	}
+
+	async revokeWidgetGrants(
+		packageId: string,
+		widgetId?: string,
+	): Promise<void> {
+		try {
+			await this.ensureInit();
+			await invoke("registry_revoke_widget_grants", {
+				packageId,
+				widgetId: widgetId ?? null,
+			});
+		} finally {
+			forgetMicroWidgetGrants(packageId, widgetId);
+		}
 	}
 
 	async getPackageComments(

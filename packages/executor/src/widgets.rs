@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 pub(crate) struct HubAccess {
     pub callback_url: String,
     pub jwt: String,
+    pub hosted_frontend: bool,
 }
 
 pub struct HubWidgetSource {

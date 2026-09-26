@@ -66,7 +66,7 @@ export function DashboardTelemetryTracesWidget({
 	);
 
 	const maxP95 = Math.max(1, ...operations.map((operation) => operation.p95));
-	const totalOperations = stats.data?.operations.length ?? 0;
+	const totalOperations = stats.data?.operations?.length ?? 0;
 	const worstErrorRate = (stats.data?.operations ?? []).reduce(
 		(max, operation) => Math.max(max, operation.errorRate),
 		0,

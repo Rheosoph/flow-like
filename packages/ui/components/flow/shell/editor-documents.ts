@@ -26,6 +26,19 @@ export type IEditorDocument =
 
 export type IEditorDocumentKind = IEditorDocument["kind"];
 
+export const EDITOR_TAB_COLORS = [
+	"red",
+	"orange",
+	"yellow",
+	"green",
+	"teal",
+	"blue",
+	"purple",
+	"pink",
+] as const;
+
+export type IEditorTabColor = (typeof EDITOR_TAB_COLORS)[number];
+
 export interface IEditorTab {
 	/** Stable for the tab's life. Deduped by `documentKey`, suffixed for extra instances. */
 	readonly key: string;
@@ -35,6 +48,12 @@ export interface IEditorTab {
 	 * Restored when the tab is focused, so two tabs on one file can sit at different depths.
 	 */
 	readonly layerPath?: string;
+	/**
+	 * Pinned tabs are always a prefix of the strip — every mutator keeps them there — so
+	 * strip order, render order and "the neighbour a close falls back to" stay one order.
+	 */
+	readonly pinned?: boolean;
+	readonly color?: IEditorTabColor;
 }
 
 /** Identity of the *document*, ignoring where a tab is parked inside it. */
@@ -125,8 +144,55 @@ export function withDocumentOpened(
 	};
 	const at = tabs.findIndex((other) => other.key === options?.after);
 	const next = [...tabs];
-	next.splice(at === -1 ? tabs.length : at + 1, 0, tab);
+	next.splice(
+		Math.max(at === -1 ? tabs.length : at + 1, pinnedCount(tabs)),
+		0,
+		tab,
+	);
 	return { tabs: next, key: tab.key };
+}
+
+function pinnedCount(tabs: readonly IEditorTab[]): number {
+	return tabs.filter((tab) => tab.pinned).length;
+}
+
+/** Stable partition, pinned first. Only needed where tabs arrive from outside the mutators. */
+export function withPinnedFirst(tabs: readonly IEditorTab[]): IEditorTab[] {
+	return [
+		...tabs.filter((tab) => tab.pinned),
+		...tabs.filter((tab) => !tab.pinned),
+	];
+}
+
+/**
+ * Pinning appends to the pinned group; unpinning puts the tab first among the rest. Both
+ * land on the boundary, so the tab moves as little as the prefix rule allows.
+ */
+export function withTabPinned(
+	tabs: readonly IEditorTab[],
+	key: string,
+	pinned: boolean,
+): IEditorTab[] {
+	const tab = tabByKey(tabs, key);
+	if (!tab || Boolean(tab.pinned) === pinned) return [...tabs];
+	const { pinned: _previous, ...rest } = tab;
+	const moved: IEditorTab = pinned ? { ...rest, pinned: true } : rest;
+	const others = tabs.filter((other) => other.key !== key);
+	const boundary = pinnedCount(others);
+	return [...others.slice(0, boundary), moved, ...others.slice(boundary)];
+}
+
+/** `undefined` clears the colour. */
+export function withTabColor(
+	tabs: readonly IEditorTab[],
+	key: string,
+	color: IEditorTabColor | undefined,
+): IEditorTab[] {
+	return tabs.map((tab) => {
+		if (tab.key !== key || tab.color === color) return tab;
+		const { color: _previous, ...rest } = tab;
+		return color === undefined ? rest : { ...rest, color };
+	});
 }
 
 export function withTabClosed(
@@ -303,23 +369,32 @@ export function deserializeTabs(raw: string | null | undefined): {
 	const seen = new Set<string>();
 	const tabs: IEditorTab[] = [];
 	for (const entry of payload.tabs) {
-		if (typeof entry !== "object" || entry === null) continue;
-		const tab = entry as Record<string, unknown>;
-		if (typeof tab.key !== "string" || seen.has(tab.key)) continue;
-		if (!isDocument(tab.doc)) continue;
+		const tab = parseTab(entry);
+		if (!tab || seen.has(tab.key)) continue;
 		seen.add(tab.key);
-		tabs.push({
-			key: tab.key,
-			doc: tab.doc,
-			...(typeof tab.layerPath === "string"
-				? { layerPath: tab.layerPath }
-				: {}),
-		});
+		tabs.push(tab);
 	}
 
 	const active =
 		typeof payload.active === "string" && seen.has(payload.active)
 			? payload.active
 			: null;
-	return { tabs, activeKey: active };
+	return { tabs: withPinnedFirst(tabs), activeKey: active };
+}
+
+function parseTab(entry: unknown): IEditorTab | undefined {
+	if (typeof entry !== "object" || entry === null) return undefined;
+	const tab = entry as Record<string, unknown>;
+	if (typeof tab.key !== "string" || !isDocument(tab.doc)) return undefined;
+	return {
+		key: tab.key,
+		doc: tab.doc,
+		...(typeof tab.layerPath === "string" ? { layerPath: tab.layerPath } : {}),
+		...(tab.pinned === true ? { pinned: true } : {}),
+		...(isTabColor(tab.color) ? { color: tab.color } : {}),
+	};
+}
+
+function isTabColor(value: unknown): value is IEditorTabColor {
+	return (EDITOR_TAB_COLORS as readonly unknown[]).includes(value);
 }

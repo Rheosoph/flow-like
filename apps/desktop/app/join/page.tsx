@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import {
 	Button,
 	LoadingScreen,
@@ -12,7 +14,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/join-invite";
 import { useTranslation } from "@flow-like/locales";
 import { LogIn } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -22,7 +24,7 @@ export default function JoinPage() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
 	const auth = useAuth();
-	const router = useRouter();
+	const router = useClientRouter();
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("appId");
 	const token = searchParams.get("token");

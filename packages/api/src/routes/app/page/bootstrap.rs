@@ -31,6 +31,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use flow_like::a2ui::ElementDemand;
 use flow_like::a2ui::widget::Page;
 use flow_like::flow::compiled::prerun::{decorate_page_actions, redact_page_execution_routes};
 use flow_like::flow::event::Event;
@@ -72,6 +73,11 @@ pub struct BootstrapResponse {
     /// Revision of the Page execution authority map. Clients return this with
     /// lifecycle and static action invocations.
     pub execution_revision: Option<String>,
+    /// Page elements the Event's board reads (`selectors`) and whether it also resolves
+    /// element references at run time (`dynamic`). Page runs send the matching elements
+    /// with the invocation; anything else is requested from the live page.
+    #[schema(value_type = Option<Object>)]
+    pub element_demand: Option<ElementDemand>,
     /// The app-wide stylesheet, injected above every page surface and scoped to
     /// the app root. Delivered here rather than read from the owner-gated
     /// appearance route, because an ordinary viewer holds only `ExecuteEvents`.
@@ -92,7 +98,7 @@ struct RouteResolution {
 /// This is deliberately the same canonical form as the `/use` client resolver. Case remains
 /// significant, while links may omit a leading slash, contain a query/fragment, or retain a
 /// trailing slash from an older saved route.
-fn normalize_route_path(path: &str) -> String {
+pub(crate) fn normalize_route_path(path: &str) -> String {
     let raw = path.trim();
     if raw.is_empty() {
         return "/".to_string();
@@ -112,13 +118,16 @@ fn normalize_route_path(path: &str) -> String {
     }
 }
 
-fn canonical_event_route(event: &Event) -> Option<String> {
-    event
-        .route
-        .as_deref()
+/// The route an Event answers: its own mapping, or `/` for the app default without one.
+pub(crate) fn canonical_route(route: Option<&str>, is_default: bool) -> Option<String> {
+    route
         .filter(|route| !route.trim().is_empty())
         .map(normalize_route_path)
-        .or_else(|| event.is_default.then(|| "/".to_string()))
+        .or_else(|| is_default.then(|| "/".to_string()))
+}
+
+fn canonical_event_route(event: &Event) -> Option<String> {
+    canonical_route(event.route.as_deref(), event.is_default)
 }
 
 /// Preserve the client resolver's precedence rules: an explicit root mapping wins over a
@@ -196,11 +205,21 @@ fn resolve_served_target(
     variant::resolve_page_target(event, pin, &split_key).map_err(ApiError::bad_request)
 }
 
+/// The Event projection every bootstrap serves: no secrets, execution targets, or server-side
+/// case-key mappings. The mappings are a `HashMap` the client never reads, and their per-instance
+/// iteration order would otherwise change the response body, and so its ETag, on every request.
+pub(crate) fn bootstrap_event(event: Event) -> Event {
+    let mut event = filter_event_list_execution(filter_event_secrets(event));
+    event.correlation_mappings = None;
+    event
+}
+
 fn bootstrap_response(
     event: Event,
     page: Option<Page>,
     app_custom_css: Option<String>,
     execution_revision: Option<String>,
+    element_demand: Option<ElementDemand>,
     served_variant: Option<String>,
     canonical_route: Option<String>,
     route_miss: bool,
@@ -224,6 +243,7 @@ fn bootstrap_response(
         revision,
         app_custom_css,
         execution_revision,
+        element_demand,
         served_variant,
     })
     .map_err(|error| ApiError::internal_error(anyhow!("failed to encode bootstrap: {error}")))?;
@@ -348,7 +368,7 @@ pub async fn bootstrap(
     // An Event without `default_page_id` is still a valid bootstrap target for generic forms,
     // chats, and other runnable surfaces. When it declares a custom page, however, that page is
     // part of the contract and a missing version-bound artifact remains a uniform 404.
-    let (page, execution_revision) = if event.default_page_id.is_some() {
+    let (page, execution_revision, element_demand) = if event.default_page_id.is_some() {
         let contract = resolve_page_contract_for_bootstrap(&state, &app_id, &event).await?;
         let mut page = decorate_page_actions(
             &contract.page,
@@ -361,11 +381,15 @@ pub async fn bootstrap(
         if !can_use_direct_board {
             page = redact_page_execution_routes(&page).map_err(ApiError::internal_error)?;
         }
-        (Some(page), Some(contract.manifest_revision))
+        (
+            Some(page),
+            Some(contract.manifest_revision),
+            Some(contract.element_demand),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
-    let mut event = filter_event_list_execution(filter_event_secrets(event));
+    let mut event = bootstrap_event(event);
     if !can_use_direct_board && event.default_page_id.is_some() {
         event = redact_page_event_board_metadata(event);
     }
@@ -376,6 +400,7 @@ pub async fn bootstrap(
             .as_ref()
             .and_then(|frontend| frontend.custom_css.clone()),
         execution_revision,
+        element_demand,
         served_variant,
         canonical_route,
         route_miss,
@@ -386,7 +411,12 @@ pub async fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::a2ui::BoundValue;
+    use flow_like::a2ui::widget::{ActionBinding, PageContent, Widget, WidgetInstance};
+    use flow_like::flow::compiled::prerun::PrerunPageExecution;
     use flow_like::flow::event::{EventVariant, EventVariantMode};
+    use flow_like::flow::pin::ValueType;
+    use flow_like::flow::variable::{Variable, VariableType};
     use std::collections::HashMap;
 
     fn event(id: &str, route: Option<&str>, is_default: bool) -> Event {
@@ -479,6 +509,7 @@ mod tests {
             None,
             Some("per1_test".to_string()),
             None,
+            None,
             Some("/".to_string()),
             false,
             &headers,
@@ -502,6 +533,7 @@ mod tests {
             None,
             Some("per1_test".to_string()),
             None,
+            None,
             Some("/".to_string()),
             false,
             &conditional,
@@ -515,12 +547,99 @@ mod tests {
             None,
             Some("per1_test".to_string()),
             None,
+            None,
             Some("/".to_string()),
             false,
             &conditional,
         )
         .unwrap();
         assert_eq!(not_modified.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn bootstrap_etag_survives_rebuilt_hash_maps() {
+        let mut source = event("page-event", Some("/"), true);
+        source.correlation_mappings = Some(
+            (0..16)
+                .map(|index| (format!("key-{index}"), format!("order.field_{index}")))
+                .collect(),
+        );
+        source.variables = (0..16)
+            .map(|index| {
+                let variable = Variable::new(
+                    &format!("variable-{index}"),
+                    VariableType::String,
+                    ValueType::Normal,
+                );
+                (variable.id.clone(), variable)
+            })
+            .collect();
+
+        let mut instance = WidgetInstance::new("widget-0", "instance-0");
+        let mut page = Page::new("page", "Page", "/");
+        for index in 0..8 {
+            instance
+                .customization_values
+                .insert(format!("custom-{index}"), vec![index]);
+            instance.action_bindings.insert(
+                format!("action-{index}"),
+                ActionBinding::CustomAction {
+                    action_name: format!("custom-{index}"),
+                    context_mapping: (0..8)
+                        .map(|key| {
+                            (
+                                format!("field-{key}"),
+                                BoundValue::path(format!("/data/{index}/{key}")),
+                            )
+                        })
+                        .collect(),
+                },
+            );
+            page.widget_refs.insert(
+                format!("instance-{index}"),
+                Widget::new(format!("widget-{index}"), "Widget", "root"),
+            );
+        }
+        page = page.with_content(PageContent::Widget(instance));
+
+        let event_value = flow_like_types::json::to_value(&source).unwrap();
+        let page_value = flow_like_types::json::to_value(&page).unwrap();
+        let execution = PrerunPageExecution {
+            page_id: "page".to_string(),
+            action_events: Vec::new(),
+            special_events: Default::default(),
+        };
+        let respond = |headers: &HeaderMap| {
+            let event: Event = flow_like_types::json::from_value(event_value.clone()).unwrap();
+            let page: Page = flow_like_types::json::from_value(page_value.clone()).unwrap();
+            let page = decorate_page_actions(&page, &execution, "per1_test").unwrap();
+            let page = redact_page_execution_routes(&page).unwrap();
+            bootstrap_response(
+                redact_page_event_board_metadata(bootstrap_event(event)),
+                Some(page),
+                Some(".app { color: red; }".to_string()),
+                Some("per1_test".to_string()),
+                Some(ElementDemand {
+                    selectors: vec!["page/title".to_string(), "type:switch".to_string()],
+                    dynamic: true,
+                }),
+                None,
+                Some("/".to_string()),
+                false,
+                headers,
+            )
+            .unwrap()
+        };
+
+        let first = respond(&HeaderMap::new());
+        assert_eq!(first.status(), StatusCode::OK);
+        let etag = first.headers()[header::ETAG].clone();
+        let mut conditional = HeaderMap::new();
+        conditional.insert(header::IF_NONE_MATCH, etag.clone());
+        for _ in 0..16 {
+            assert_eq!(respond(&HeaderMap::new()).headers()[header::ETAG], etag);
+            assert_eq!(respond(&conditional).status(), StatusCode::NOT_MODIFIED);
+        }
     }
 
     fn page_variant(name: &str) -> EventVariant {
@@ -616,6 +735,7 @@ mod tests {
             revision: None,
             app_custom_css: None,
             execution_revision: None,
+            element_demand: None,
             served_variant: None,
         };
         let value = flow_like_types::json::to_value(response).unwrap();

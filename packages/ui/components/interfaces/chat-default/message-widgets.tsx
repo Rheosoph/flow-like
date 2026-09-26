@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import {
 	registerWidgetSnapshotSource,
@@ -42,15 +42,10 @@ interface MessageWidgetProps {
 	appId?: string;
 	boardId?: string;
 	eventId?: string;
+	/** Pre-capture the rendered widget for the model's context once it settles. */
+	snapshots: boolean;
 }
 
-/**
- * Renders a single embedded a2ui widget instance inside a chat message. The
- * widget is mounted in its own local surface so that action-feedback a2ui
- * updates (streamed back after a widget action triggers its workflow) mutate
- * this widget in place. A maximize control opens the same live surface in a
- * fullscreen dialog.
- */
 function replaySurface(widget: IChatWidget): Surface {
 	let next = buildSurface(widget);
 	for (const update of widget.updates ?? []) {
@@ -70,6 +65,8 @@ function updateSignature(
 interface ReplayState {
 	instanceId: string;
 	appliedCount: number;
+	/** The last applied entry itself; identity short-circuits the content check. */
+	lastApplied: unknown;
 	lastSig: string | null;
 	/** Unpersisted action-feedback messages applied on top of the replay. */
 	feedbackCount: number;
@@ -80,9 +77,21 @@ function replayState(widget: IChatWidget): ReplayState {
 	return {
 		instanceId: widget.instance_id,
 		appliedCount: updates.length,
+		lastApplied: updates[updates.length - 1],
 		lastSig: updateSignature(updates, updates.length - 1),
 		feedbackCount: 0,
 	};
+}
+
+/** True when `updates` still starts with everything the replay already applied. */
+function extendsReplay(state: ReplayState, updates: unknown[]): boolean {
+	if (updates.length < state.appliedCount) return false;
+	const index = state.appliedCount - 1;
+	if (index < 0) return true;
+	return (
+		updates[index] === state.lastApplied ||
+		updateSignature(updates, index) === state.lastSig
+	);
 }
 
 /** Keys the snapshot cache: changes exactly when the rendered state does. */
@@ -90,11 +99,25 @@ function contentSignature(state: ReplayState): string {
 	return `${state.feedbackCount}:${state.appliedCount}:${state.lastSig ?? ""}`;
 }
 
-function MessageWidget({
+/**
+ * Renders a single embedded a2ui widget instance inside a chat message. The
+ * widget is mounted in its own local surface so that action-feedback a2ui
+ * updates (streamed back after a widget action triggers its workflow) mutate
+ * this widget in place. A maximize control opens the same live surface in a
+ * fullscreen dialog.
+ *
+ * Memoized on widget identity: the streaming bubble re-renders once per
+ * animation frame while text arrives, and without this boundary every frame
+ * re-rendered the whole widget tree (charts, maps, tables, micro-widget
+ * iframes). The event processor and `mergeChatWidgets` keep the widget object
+ * unless its updates actually grow, so identity is the right key.
+ */
+const MessageWidget = memo(function MessageWidget({
 	widget,
 	appId,
 	boardId,
 	eventId,
+	snapshots,
 }: MessageWidgetProps) {
 	const { t } = useTranslation("chat");
 	// Dexie liveQuery re-materializes message objects on every table write, so
@@ -110,6 +133,7 @@ function MessageWidget({
 	const replayRef = useRef<ReplayState>({
 		instanceId: "",
 		appliedCount: 0,
+		lastApplied: undefined,
 		lastSig: null,
 		feedbackCount: 0,
 	});
@@ -126,12 +150,11 @@ function MessageWidget({
 	useEffect(() => {
 		const updates = widget.updates ?? [];
 		const state = replayRef.current;
-		const extendsApplied =
-			state.instanceId === widget.instance_id &&
-			updates.length >= state.appliedCount &&
-			updateSignature(updates, state.appliedCount - 1) === state.lastSig;
 
-		if (extendsApplied) {
+		if (
+			state.instanceId === widget.instance_id &&
+			extendsReplay(state, updates)
+		) {
 			if (updates.length === state.appliedCount) return;
 			const tail = updates.slice(state.appliedCount);
 			setSurface((prev) =>
@@ -142,6 +165,7 @@ function MessageWidget({
 				),
 			);
 			state.appliedCount = updates.length;
+			state.lastApplied = updates[updates.length - 1];
 			state.lastSig = updateSignature(updates, updates.length - 1);
 			setSignature(contentSignature(state));
 			return;
@@ -161,15 +185,18 @@ function MessageWidget({
 	}, []);
 
 	// The inline container is the capture source; while maximized it is empty,
-	// so pre-capture pauses and the last inline capture keeps serving.
+	// so pre-capture pauses and the last inline capture keeps serving. With
+	// snapshots disabled the send path never asks for one, so rasterizing on
+	// every settle would be pure main-thread waste.
 	useEffect(() => {
+		if (!snapshots) return;
 		const instanceId = widget.instance_id;
 		registerWidgetSnapshotSource(instanceId, signature);
 		if (!maximized) {
 			scheduleWidgetSnapshot(instanceId, signature, () => containerRef.current);
 		}
 		return () => unregisterWidgetSnapshotSource(instanceId);
-	}, [widget.instance_id, signature, maximized]);
+	}, [widget.instance_id, signature, maximized, snapshots]);
 
 	const renderer = (
 		<A2UIRenderer
@@ -211,7 +238,7 @@ function MessageWidget({
 			</Dialog>
 		</div>
 	);
-}
+});
 
 export interface MessageWidgetsProps {
 	widgets: IChatWidget[] | undefined;
@@ -219,14 +246,17 @@ export interface MessageWidgetsProps {
 	boardId?: string;
 	eventId?: string;
 	className?: string;
+	/** Pre-capture widgets for the model's context; off when the chat never attaches snapshots. */
+	snapshots?: boolean;
 }
 
-export function MessageWidgets({
+export const MessageWidgets = memo(function MessageWidgets({
 	widgets,
 	appId,
 	boardId,
 	eventId,
 	className,
+	snapshots = true,
 }: MessageWidgetsProps) {
 	if (!widgets?.length) return null;
 
@@ -241,8 +271,9 @@ export function MessageWidgets({
 					appId={widget.origin?.appId ?? appId}
 					boardId={widget.origin?.boardId ?? boardId}
 					eventId={widget.origin?.eventId ?? eventId}
+					snapshots={snapshots}
 				/>
 			))}
 		</div>
 	);
-}
+});

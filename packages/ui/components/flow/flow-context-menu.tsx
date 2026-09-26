@@ -1,111 +1,33 @@
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
+import { Slot } from "@radix-ui/react-slot";
 import {
-	FileCode2Icon,
-	FolderInputIcon,
-	LocateFixedIcon,
-	MessageCircleDashedIcon,
-	MessageCircleIcon,
-	PlayCircleIcon,
-	VariableIcon,
-	ZapIcon,
-} from "lucide-react";
-import MiniSearch from "minisearch";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-	ContextMenu,
-	ContextMenuContent,
-	ContextMenuItem,
-	ContextMenuSub,
-	ContextMenuSubContent,
-	ContextMenuSubTrigger,
-	ContextMenuTrigger,
-} from "../../components/ui/context-menu";
-import { type IBoard, doPinsMatch } from "../../lib";
-import { MAIN_FILE_LABEL, boardModules } from "../../lib/flow-modules";
-import { type ILayer, ILayerType } from "../../lib/schema/flow/board";
+	type PointerEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import { boardModules } from "../../lib/flow-modules";
+import type { IBoard } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
-import type { IPin } from "../../lib/schema/flow/pin";
+import { type IPin, IPinType, IVariableType } from "../../lib/schema/flow/pin";
 import type { IVariable } from "../../lib/schema/flow/variable";
-import { convertJsonToUint8Array } from "../../lib/uint8";
+import { Popover, PopoverAnchor } from "../ui/popover";
+import { NodePalette, type NodePaletteHandlers } from "./node-palette";
 import {
-	Button,
-	Dialog,
-	DialogContent,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-	Label,
-} from "../ui";
-import { Checkbox } from "../ui/checkbox";
-import { Input } from "../ui/input";
-import { ScrollArea } from "../ui/scroll-area";
-import { Separator } from "../ui/separator";
-import { compareByNameThenId } from "./category-tree";
-import { FlowContextMenuNodes } from "./flow-context-menu-nodes";
+	type PaletteEntry,
+	bindVariableNode,
+	boardInputsKey,
+	buildDropIndex,
+	buildPaletteEntries,
+	buildPaletteModel,
+	collectBoardInputs,
+	isFunctionReferencePin,
+} from "./node-palette-model";
 
-type SearchableNode = INode & {
-	pin_in_names: string[];
-	pin_out_names: string[];
-};
-
-// MiniSearch's default tokenizer drops punctuation, so operator names like
-// "/" or "!=" would never be indexed nor matched. Keep operator runs as tokens.
-const SPACE_OR_PUNCTUATION = /[\n\r\p{Z}\p{P}]+/u;
-const OPERATOR_RUN = /[+\-*/%^!<>=&|~]+/g;
-function tokenizeWithOperators(text: string): string[] {
-	const tokens = text.split(SPACE_OR_PUNCTUATION).filter(Boolean);
-	const operators = text.match(OPERATOR_RUN);
-	if (operators) tokens.push(...operators);
-	return tokens;
-}
-
-interface MenuInputs {
-	startNodes: INode[];
-	variables: IVariable[];
-	functionLayers: ILayer[];
-}
-
-function collectMenuInputs(
-	board: IBoard | undefined,
-	currentLayerId: string | undefined,
-): MenuInputs {
-	if (!board) return { startNodes: [], variables: [], functionLayers: [] };
-	const variables = Object.values(board.variables);
-	if (currentLayerId) {
-		const layer = board.layers[currentLayerId];
-		if (layer?.type === ILayerType.Function) {
-			variables.push(...Object.values(layer.variables));
-		}
-	}
-	return {
-		startNodes: Object.values(board.nodes)
-			.filter((node) => node.start)
-			.sort(
-				(a, b) =>
-					a.friendly_name.localeCompare(b.friendly_name) ||
-					a.id.localeCompare(b.id),
-			),
-		variables: variables.sort(compareByNameThenId),
-		functionLayers: Object.values(board.layers)
-			.filter((layer) => layer.type === ILayerType.Function)
-			.sort(compareByNameThenId),
-	};
-}
-
-function menuInputsKey(inputs: MenuInputs): string {
-	return JSON.stringify([
-		inputs.startNodes.map((node) => [node.id, node.friendly_name]),
-		inputs.variables.map((variable) => [
-			variable.id,
-			variable.name,
-			variable.data_type,
-			variable.value_type,
-			variable.schema ?? null,
-		]),
-		inputs.functionLayers.map((layer) => [layer.id, layer.name]),
-	]);
-}
+const LONG_PRESS_MS = 700;
 
 function useStableByKey<T>(value: T, keyOf: (value: T) => string): T {
 	const key = keyOf(value);
@@ -113,6 +35,8 @@ function useStableByKey<T>(value: T, keyOf: (value: T) => string): T {
 	if (ref.current.key !== key) ref.current = { key, value };
 	return ref.current.value;
 }
+
+const isTouchOrPen = (event: PointerEvent) => event.pointerType !== "mouse";
 
 export function FlowContextMenu({
 	nodes,
@@ -158,668 +82,228 @@ export function FlowContextMenu({
 	onClose: () => void;
 }>) {
 	const { t } = useTranslation("flow");
-	const inputRef = useRef<HTMLInputElement>(null);
-	const placeholderInputRef = useRef<HTMLInputElement>(null);
-	const menuBlockedRef = useRef(false);
-	const [filter, setFilter] = useState("");
-	const [contextSensitive, setContextSensitive] = useState(true);
-	const [isPlaceholderOpen, setIsPlaceholderOpen] = useState(false);
-	const [placeholderName, setPlaceholderName] = useState("Placeholder");
-
-	const resolveRefValue = useCallback(
-		(value: string | null | undefined) => {
-			if (!value) return null;
-			return refs?.[value] ?? value;
-		},
-		[refs],
+	const [open, setOpen] = useState(false);
+	const [point, setPoint] = useState({ x: 0, y: 0 });
+	const [session, setSession] = useState(0);
+	const longPressRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+		undefined,
 	);
-
-	const buildVariableNode = useCallback(
-		(nodeName: "variable_get" | "variable_set", variable: IVariable) => {
-			const baseNode = nodes.find((node) => node.name === nodeName);
-			if (!baseNode) return undefined;
-
-			const pins = Object.values(baseNode.pins).map((pin) => {
-				if (pin.name === "var_ref") {
-					return {
-						...pin,
-						default_value: convertJsonToUint8Array(variable.id),
-					};
-				}
-				if (pin.name === "value_in" || pin.name === "value_ref") {
-					return {
-						...pin,
-						data_type: variable.data_type,
-						value_type: variable.value_type,
-						schema: variable.schema ?? null,
-					};
-				}
-				return pin;
-			});
-			const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
-
-			const friendlyName =
-				nodeName === "variable_get"
-					? t("getName", "Get {{name}}", { name: variable.name })
-					: t("setName", "Set {{name}}", { name: variable.name });
-
-			return {
-				...baseNode,
-				friendly_name: friendlyName,
-				pin_in_names: Object.values(newPins)
-					.filter((pin) => pin.pin_type === "Input")
-					.map((pin) => pin.friendly_name),
-				pin_out_names: Object.values(newPins)
-					.filter((pin) => pin.pin_type === "Output")
-					.map((pin) => pin.friendly_name),
-				pins: newPins,
-			};
-		},
-		[nodes],
-	);
-
-	useEffect(() => {
-		if (isPlaceholderOpen) {
-			requestAnimationFrame(() => placeholderInputRef.current?.focus());
-		}
-	}, [isPlaceholderOpen]);
-
-	const confirmPlaceholder = () => {
-		const name = placeholderName.trim();
-		if (!name) return;
-		onPlaceholder(name);
-		setIsPlaceholderOpen(false);
-		setPlaceholderName("Placeholder");
-	};
+	const refsRef = useRef(refs);
+	refsRef.current = refs;
+	const everOpened = session > 0;
 
 	// The board object is replaced on every edit; only these slices feed the
-	// menu, so keying on their content keeps the catalog sort + search index
-	// from being rebuilt after every mutation while the menu is closed.
-	const rawMenuInputs = useMemo(
-		() => collectMenuInputs(board, currentLayerId),
+	// palette, so keying on their content keeps the catalog sort + search index
+	// from being rebuilt after every mutation.
+	const rawInputs = useMemo(
+		() => collectBoardInputs(board, currentLayerId),
 		[board, currentLayerId],
 	);
-	const menuInputs = useStableByKey(rawMenuInputs, menuInputsKey);
+	const boardInputs = useStableByKey(rawInputs, boardInputsKey);
 
-	const modules = useMemo(() => boardModules(board?.layers), [board?.layers]);
-	// The selection lives on the layer the canvas is showing, so moving it there is the
-	// only entry that would do nothing.
-	const currentFileId = currentLayerId ?? null;
-	const canMoveSelection =
-		Boolean(onMoveSelectionToModule) &&
-		movableSelectionCount > 0 &&
-		modules.length > 0;
+	// Built on first open: most board sessions never right-click the canvas.
+	const model = useMemo(() => {
+		if (!everOpened) return null;
+		return buildPaletteModel(
+			buildPaletteEntries(nodes, boardInputs, {
+				call: (name) => t("callName", "Call {{name}}", { name }),
+				get: (name) => t("getName", "Get {{name}}", { name }),
+				set: (name) => t("setName", "Set {{name}}", { name }),
+			}),
+		);
+	}, [everOpened, nodes, boardInputs, t]);
 
-	const handleNodePlace = useCallback(
-		async (node: INode) => {
-			await onNodePlace(node);
-		},
-		[onNodePlace],
+	const liveDrop = useMemo(
+		() =>
+			open && model && droppedPin
+				? {
+						pin: droppedPin,
+						fits: buildDropIndex(model.entries, droppedPin, refsRef.current),
+					}
+				: undefined,
+		[open, model, droppedPin],
 	);
 
-	const sortedNodes = useMemo(() => {
-		if (!nodes) return [];
+	const modules = useMemo(() => boardModules(board?.layers), [board?.layers]);
 
-		let callRefNode: INode | undefined = undefined;
-		let variableGetNode: INode | undefined = undefined;
-		let variableSetNode: INode | undefined = undefined;
-		let callFunctionNode: INode | undefined = undefined;
+	const openAt = useCallback((x: number, y: number) => {
+		setSession((value) => value + 1);
+		setPoint({ x, y });
+		setOpen(true);
+	}, []);
 
-		const normalNodes =
-			nodes
-				// .filter(
-				// 	(node) => node.name !== "variable_set" && node.name !== "variable_get",
-				// )
-				.toSorted((a, b) => {
-					// Counter Intuitive, but we save one iteration by doing this
-					if (a.name === "control_call_reference") {
-						callRefNode = a;
-					}
+	const close = useCallback(() => {
+		setOpen(false);
+		onClose();
+	}, [onClose]);
 
-					if (a.name === "variable_get") {
-						variableGetNode = a;
-					}
+	const clearLongPress = useCallback(
+		() => clearTimeout(longPressRef.current),
+		[],
+	);
+	useEffect(() => clearLongPress, [clearLongPress]);
 
-					if (a.name === "variable_set") {
-						variableSetNode = a;
-					}
+	const createVariableFromPin = useCallback(
+		(pin: IPin) => {
+			if (!onCreateVariable) return;
+			const variable: IVariable = {
+				id: createId(),
+				name: pin.friendly_name || pin.name,
+				data_type: pin.data_type,
+				value_type: pin.value_type,
+				exposed: false,
+				secret: false,
+				editable: true,
+				schema: pin.schema ? (refsRef.current[pin.schema] ?? pin.schema) : null,
+				default_value: pin.default_value ?? null,
+			};
+			onCreateVariable(variable);
+			const writes = pin.pin_type === IPinType.Output;
+			const base = nodes.find(
+				(node) => node.name === (writes ? "variable_set" : "variable_get"),
+			);
+			if (!base) return;
+			onNodePlace(
+				bindVariableNode(
+					base,
+					variable,
+					writes
+						? t("setName", "Set {{name}}", { name: variable.name })
+						: t("getName", "Get {{name}}", { name: variable.name }),
+				),
+			);
+		},
+		[onCreateVariable, onNodePlace, nodes, t],
+	);
 
-					if (a.name === "control_call_function") {
-						callFunctionNode = a;
-					}
+	const handlers = useMemo<NodePaletteHandlers>(() => {
+		const thenClose =
+			<A extends unknown[]>(run: (...args: A) => unknown) =>
+			(...args: A) => {
+				void run(...args);
+				close();
+			};
+		const eventNode = nodes.find((node) => node.name === "events_simple");
+		const canCreateVariable =
+			droppedPin &&
+			onCreateVariable &&
+			droppedPin.data_type !== IVariableType.Execution &&
+			!isFunctionReferencePin(droppedPin);
+		return {
+			placeEntry: thenClose((entry: PaletteEntry) => onNodePlace(entry.node)),
+			placeComment: thenClose(onCommentPlace),
+			placePlaceholder: thenClose(onPlaceholder),
+			placeEvent: eventNode
+				? thenClose(() => onNodePlace(eventNode))
+				: undefined,
+			ping: onPingHere ? thenClose(onPingHere) : undefined,
+			editAsFlowScript:
+				onEditSelectionAsFlowScript && selectionCount > 0
+					? thenClose(onEditSelectionAsFlowScript)
+					: undefined,
+			discussInChat:
+				onDiscussInChat && selectionCount === 1
+					? thenClose(onDiscussInChat)
+					: undefined,
+			// Which file an event belongs to follows its ENTRY node: moving part of a
+			// chain changes where those nodes are drawn, not the event's file.
+			moveToModule:
+				onMoveSelectionToModule &&
+				movableSelectionCount > 0 &&
+				modules.length > 0
+					? thenClose(onMoveSelectionToModule)
+					: undefined,
+			createVariable: canCreateVariable
+				? thenClose(() => createVariableFromPin(droppedPin))
+				: undefined,
+		};
+	}, [
+		close,
+		nodes,
+		droppedPin,
+		onCreateVariable,
+		onNodePlace,
+		onCommentPlace,
+		onPlaceholder,
+		onPingHere,
+		onEditSelectionAsFlowScript,
+		onDiscussInChat,
+		onMoveSelectionToModule,
+		selectionCount,
+		movableSelectionCount,
+		modules.length,
+		createVariableFromPin,
+	]);
 
-					if (a.friendly_name === b.friendly_name) {
-						return a.category.localeCompare(b.category);
-					}
-					return a.friendly_name.localeCompare(b.friendly_name);
-				}) ?? [];
+	// Closing clears the board's dropped pin, which reshapes the palette's rows and chips.
+	// The exit animation keeps showing the session the user acted on.
+	const sessionRef = useRef({ drop: liveDrop, handlers });
+	if (open) sessionRef.current = { drop: liveDrop, handlers };
+	const shown = open ? { drop: liveDrop, handlers } : sessionRef.current;
 
-		if (callRefNode) {
-			menuInputs.startNodes.forEach((node) => {
-				const pins = Object.values(callRefNode?.pins ?? {}).map((pin) =>
-					pin.name === "fn_ref"
-						? { ...pin, default_value: convertJsonToUint8Array(node.id) }
-						: pin,
-				);
-				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
-
-				normalNodes.push({
-					...(callRefNode as INode),
-					pin_in_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-					friendly_name: t("callFriendly_name", "Call {{friendly_name}}", {
-						friendly_name: node.friendly_name,
-					}),
-					category: "Events/Call",
-					pins: newPins,
-				});
-			});
-		}
-
-		if (variableGetNode && variableSetNode) {
-			menuInputs.variables.forEach((variable) => {
-				const getPins = Object.values(variableGetNode?.pins ?? {}).map(
-					(pin) => {
-						if (pin.name === "var_ref") {
-							return {
-								...pin,
-								default_value: convertJsonToUint8Array(variable.id),
-							};
-						}
-						if (pin.name === "value_ref") {
-							return {
-								...pin,
-								data_type: variable.data_type,
-								value_type: variable.value_type,
-								schema: variable.schema ?? null,
-							};
-						}
-						return pin;
-					},
-				);
-				const setPins = Object.values(variableSetNode?.pins ?? {}).map(
-					(pin) => {
-						if (pin.name === "var_ref") {
-							return {
-								...pin,
-								default_value: convertJsonToUint8Array(variable.id),
-							};
-						}
-						if (pin.name === "value_in" || pin.name === "value_ref") {
-							return {
-								...pin,
-								data_type: variable.data_type,
-								value_type: variable.value_type,
-								schema: variable.schema ?? null,
-							};
-						}
-						return pin;
-					},
-				);
-				const newGetPins = Object.fromEntries(
-					getPins.map((pin) => [pin.id, pin]),
-				);
-				const newSetPins = Object.fromEntries(
-					setPins.map((pin) => [pin.id, pin]),
-				);
-
-				normalNodes.push({
-					...(variableGetNode as INode),
-					id: `get${variable.id}`,
-					pin_in_names: Object.values(newGetPins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(newGetPins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-					friendly_name: t("getName", "Get {{name}}", { name: variable.name }),
-					category: "Variables/Get",
-					pins: newGetPins,
-				});
-
-				normalNodes.push({
-					...(variableSetNode as INode),
-					id: `set${variable.id}`,
-					pin_in_names: Object.values(newSetPins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(newSetPins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-					friendly_name: t("setName", "Set {{name}}", { name: variable.name }),
-					category: "Variables/Set",
-					pins: newSetPins,
-				});
-			});
-		}
-
-		if (callFunctionNode) {
-			menuInputs.functionLayers.forEach((layer) => {
-				const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
-					pin.name === "function_layer_id"
-						? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
-						: pin,
-				);
-				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
-
-				normalNodes.push({
-					...(callFunctionNode as INode),
-					id: `fn-call-${layer.id}`,
-					pin_in_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-					friendly_name: t("callName", "Call {{name}}", { name: layer.name }),
-					category: "Functions/Call",
-					pins: newPins,
-				});
-			});
-		}
-
-		return normalNodes;
-	}, [nodes, menuInputs]);
-
-	const searchableNodes = useMemo(() => {
-		const dedupedNodes = new Map<string, SearchableNode>();
-		for (const node of sortedNodes) {
-			dedupedNodes.set(node.id, {
-				...(node as SearchableNode),
-				pin_in_names: Object.values(node.pins)
-					.filter((pin) => pin.pin_type === "Input")
-					.map((pin) => pin.friendly_name),
-				pin_out_names: Object.values(node.pins)
-					.filter((pin) => pin.pin_type === "Output")
-					.map((pin) => pin.friendly_name),
-			});
-		}
-		return Array.from(dedupedNodes.values());
-	}, [sortedNodes]);
-
-	const searchIndex = useMemo(() => {
-		const miniSearch = new MiniSearch<SearchableNode>({
-			tokenize: tokenizeWithOperators,
-			fields: [
-				"name",
-				"friendly_name",
-				"category",
-				"description",
-				"pin_in_names",
-				"pin_out_names",
-			],
-			storeFields: ["id"],
-			searchOptions: {
-				prefix: true,
-				fuzzy: 0.2,
-				boost: {
-					name: 3,
-					friendly_name: 2,
-					category: 1.5,
-					description: 0.75,
-					pin_in_names: 1,
-					pin_out_names: 1,
-				},
+	const virtualAnchor = useMemo(
+		() => ({
+			current: {
+				getBoundingClientRect: () =>
+					DOMRect.fromRect({ ...point, width: 0, height: 0 }),
 			},
-		});
-
-		if (searchableNodes.length > 0) {
-			miniSearch.addAll(searchableNodes);
-		}
-
-		const nodeMap = new Map<string, INode>(
-			searchableNodes.map((node) => [node.id, node]),
-		);
-		return { miniSearch, nodeMap };
-	}, [searchableNodes]);
-
-	const searchResults = useMemo(() => {
-		if (filter === "") {
-			return [] as INode[];
-		}
-
-		return searchIndex.miniSearch
-			.search(filter, {
-				prefix: true,
-				fuzzy: 0.2,
-			})
-			.map((result) => searchIndex.nodeMap.get(String(result.id)))
-			.filter((node): node is INode => node !== undefined);
-	}, [filter, searchIndex]);
-
-	const displayedItems = useMemo(() => {
-		const baseItems = filter === "" ? sortedNodes : (searchResults ?? []);
-
-		if (!droppedPin || !contextSensitive) {
-			return baseItems;
-		}
-
-		return baseItems.filter((node) => {
-			const isRefInHandle = droppedPin.id.startsWith("ref_in_");
-			const isRefOutHandle = droppedPin.id.startsWith("ref_out_");
-
-			if (isRefInHandle) return node.fn_refs?.can_reference_fns ?? false;
-			if (isRefOutHandle)
-				return node.fn_refs?.can_be_referenced_by_fns ?? false;
-
-			const pins = Object.values(node.pins);
-			return pins.some((pin) => {
-				if (pin.pin_type === droppedPin.pin_type) return false;
-				return doPinsMatch(pin, droppedPin, refs, node);
-			});
-		});
-	}, [filter, sortedNodes, searchResults, droppedPin, contextSensitive, refs]);
-
-	useEffect(() => {
-		inputRef.current?.focus();
-	}, [filter]);
+		}),
+		[point],
+	);
 
 	return (
-		<>
-			<ContextMenu
-				onOpenChange={(open) => {
-					if (open) {
-						// Block clicks for 200ms after menu opens to prevent accidental triggers
-						menuBlockedRef.current = true;
-						setTimeout(() => {
-							menuBlockedRef.current = false;
-						}, 200);
-					} else if (!isPlaceholderOpen && menuBlockedRef.current === false) {
-						onClose();
-						setFilter("");
-					}
+		// Modal like the context menu it replaces: the click that dismisses it must not
+		// also reach the canvas, where it would clear the selection or start a drag.
+		<Popover
+			modal
+			open={open}
+			onOpenChange={(next) => {
+				if (!next) close();
+			}}
+		>
+			<PopoverAnchor virtualRef={virtualAnchor} />
+			<Slot
+				// A node's own context menu handles its right-click first and marks the
+				// event handled; the board palette only opens for what is left over.
+				onContextMenu={(event: React.MouseEvent) => {
+					clearLongPress();
+					if (event.defaultPrevented) return;
+					event.preventDefault();
+					openAt(event.clientX, event.clientY);
+				}}
+				onPointerDown={(event: PointerEvent) => {
+					if (event.defaultPrevented || !isTouchOrPen(event)) return;
+					clearLongPress();
+					const { clientX, clientY } = event;
+					longPressRef.current = setTimeout(
+						() => openAt(clientX, clientY),
+						LONG_PRESS_MS,
+					);
+				}}
+				onPointerMove={(event: PointerEvent) => {
+					if (isTouchOrPen(event)) clearLongPress();
+				}}
+				onPointerUp={(event: PointerEvent) => {
+					if (isTouchOrPen(event)) clearLongPress();
+				}}
+				onPointerCancel={(event: PointerEvent) => {
+					if (isTouchOrPen(event)) clearLongPress();
 				}}
 			>
-				<ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-				<ContextMenuContent className="w-80 max-h-120 h-120 overflow-y-hidden overflow-x-hidden flex flex-col">
-					<div className="sticky">
-						<div className="flex flex-row w-full items-center justify-between bg-accent text-accent-foreground p-1 mb-1">
-							<small className="font-bold">{t("actions", "Actions")}</small>
-							{droppedPin && (
-								<div className="flex flex-row items-center gap-2">
-									<div className="grid gap-1.5 leading-none">
-										<small>{t("contextSensitive", "Context Sensitive")}</small>
-									</div>
-									<Checkbox
-										id="context-sensitive"
-										checked={contextSensitive}
-										onCheckedChange={(checked) =>
-											setContextSensitive(checked.valueOf() as boolean)
-										}
-									/>
-								</div>
-							)}
-						</div>
-						<ContextMenuItem
-							className="flex flex-row gap-1 items-center"
-							onSelect={(event) => {
-								if (menuBlockedRef.current) {
-									event.preventDefault();
-									return;
-								}
-								onCommentPlace();
-							}}
-						>
-							<MessageCircleDashedIcon className="w-4 h-4" />
-							{t("comment", "Comment")}
-						</ContextMenuItem>
-						<ContextMenuItem
-							className="flex flex-row gap-1 items-center"
-							onSelect={(event) => {
-								if (menuBlockedRef.current) {
-									event.preventDefault();
-									return;
-								}
-								const node_ref = sortedNodes.find(
-									(node) => node.name === "events_simple",
-								);
-								if (node_ref) onNodePlace(node_ref);
-							}}
-						>
-							<PlayCircleIcon className="w-4 h-4" />
-							{t("event", "Event")}
-						</ContextMenuItem>
-						<ContextMenuItem
-							className="flex flex-row gap-1 items-center"
-							onSelect={(event) => {
-								if (menuBlockedRef.current) {
-									event.preventDefault();
-									return;
-								}
-								setIsPlaceholderOpen(true);
-							}}
-						>
-							<ZapIcon className="w-4 h-4" />
-							{t("placeholder", "Placeholder")}
-						</ContextMenuItem>
-						{onEditSelectionAsFlowScript && selectionCount > 0 && (
-							<ContextMenuItem
-								className="flex flex-row gap-1 items-center"
-								onSelect={(event) => {
-									if (menuBlockedRef.current) {
-										event.preventDefault();
-										return;
-									}
-									onEditSelectionAsFlowScript();
-									onClose();
-								}}
-							>
-								<FileCode2Icon className="w-4 h-4" />
-								{t("editSelectionAsFlowscript", "Edit selection as FlowScript")}
-							</ContextMenuItem>
-						)}
-						{onPingHere && (
-							<ContextMenuItem
-								className="flex flex-row gap-1 items-center"
-								onSelect={(event) => {
-									if (menuBlockedRef.current) {
-										event.preventDefault();
-										return;
-									}
-									onPingHere();
-									onClose();
-								}}
-							>
-								<LocateFixedIcon className="w-4 h-4" />
-								{t("pingHere", "Ping here for teammates")}
-							</ContextMenuItem>
-						)}
-						{onDiscussInChat && selectionCount === 1 && (
-							<ContextMenuItem
-								className="flex flex-row gap-1 items-center"
-								onSelect={(event) => {
-									if (menuBlockedRef.current) {
-										event.preventDefault();
-										return;
-									}
-									onDiscussInChat();
-									onClose();
-								}}
-							>
-								<MessageCircleIcon className="w-4 h-4" />
-								{t("discussInChat", "Discuss in chat")}
-							</ContextMenuItem>
-						)}
-						{/* Which file an event belongs to follows its ENTRY node: moving part of a
-						    chain changes where those nodes are drawn, not the event's file. */}
-						{canMoveSelection && (
-							<ContextMenuSub>
-								<ContextMenuSubTrigger className="flex flex-row gap-1 items-center">
-									<FolderInputIcon className="w-4 h-4" />
-									{t("moveToModule", "Move to module")}
-								</ContextMenuSubTrigger>
-								<ContextMenuSubContent className="max-h-64 overflow-y-auto">
-									<ContextMenuItem
-										disabled={currentFileId === null}
-										onSelect={(event) => {
-											if (menuBlockedRef.current) {
-												event.preventDefault();
-												return;
-											}
-											onMoveSelectionToModule?.(null);
-											onClose();
-										}}
-									>
-										{MAIN_FILE_LABEL}
-									</ContextMenuItem>
-									{modules.map((module) => (
-										<ContextMenuItem
-											key={module.id}
-											disabled={currentFileId === module.id}
-											onSelect={(event) => {
-												if (menuBlockedRef.current) {
-													event.preventDefault();
-													return;
-												}
-												onMoveSelectionToModule?.(module.id);
-												onClose();
-											}}
-										>
-											{module.pathLabel}
-										</ContextMenuItem>
-									))}
-								</ContextMenuSubContent>
-							</ContextMenuSub>
-						)}
-						{/* TODO: create the get node if input, set node if output! */}
-						{droppedPin &&
-							onCreateVariable &&
-							droppedPin.data_type !== "Execution" && (
-								<ContextMenuItem
-									className="flex flex-row gap-1 items-center"
-									onSelect={(event) => {
-										if (menuBlockedRef.current) {
-											event.preventDefault();
-											return;
-										}
-										const resolvedSchema = resolveRefValue(droppedPin.schema);
-										const variable: IVariable = {
-											id: createId(),
-											name: droppedPin.friendly_name || droppedPin.name,
-											data_type: droppedPin.data_type,
-											value_type: droppedPin.value_type,
-											exposed: false,
-											secret: false,
-											editable: true,
-											schema: resolvedSchema ?? null,
-											default_value: droppedPin.default_value ?? null,
-										};
-										onCreateVariable(variable);
-
-										const variableNodeName =
-											droppedPin.pin_type === "Output"
-												? "variable_set"
-												: "variable_get";
-										const variableNode = buildVariableNode(
-											variableNodeName,
-											variable,
-										);
-										if (variableNode) {
-											onNodePlace(variableNode);
-										}
-										onClose();
-									}}
-								>
-									<VariableIcon className="w-4 h-4" />
-									{`Create Variable from Pin`}
-								</ContextMenuItem>
-							)}
-						<Separator className="my-1" />
-						<Input
-							ref={inputRef}
-							autoComplete="off"
-							spellCheck="false"
-							autoCorrect="off"
-							autoCapitalize="off"
-							className="mb-1"
-							autoFocus
-							type="search"
-							placeholder="Search..."
-							value={filter}
-							onChange={(e) => {
-								setFilter(e.target.value);
-							}}
-							onKeyDown={(e) => {
-								e.stopPropagation();
-							}}
-						/>
-					</div>
-					<div className="pr-1 flex grow flex-col overflow-hidden">
-						<ScrollArea
-							className="h-full w-78 max-h-full overflow-auto border rounded-md"
-							onFocusCapture={() => {
-								if (inputRef.current && filter !== "") {
-									inputRef.current.focus();
-								}
-							}}
-						>
-							{nodes && (
-								<FlowContextMenuNodes
-									items={displayedItems}
-									filter={filter}
-									onNodePlace={handleNodePlace}
-									menuBlockedRef={menuBlockedRef}
-								/>
-							)}
-						</ScrollArea>
-					</div>
-				</ContextMenuContent>
-			</ContextMenu>
-			<Dialog
-				open={isPlaceholderOpen}
-				onOpenChange={(open) => {
-					setIsPlaceholderOpen(open);
-				}}
-			>
-				<DialogContent
-					className="sm:max-w-md"
-					onOpenAutoFocus={(e) => e.preventDefault()} // we'll focus manually
-				>
-					<DialogHeader>
-						<DialogTitle>
-							{t("nameYourPlaceholder", "Name Your Placeholder")}
-						</DialogTitle>
-					</DialogHeader>
-					<div className="grid gap-2">
-						<Label htmlFor="placeholder-name">Name</Label>
-						<Input
-							id="placeholder-name"
-							ref={placeholderInputRef}
-							placeholder={t("egTemporaryResult", "e.g. Temporary Result")}
-							value={placeholderName}
-							onChange={(e) => setPlaceholderName(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") {
-									e.preventDefault();
-									confirmPlaceholder();
-								}
-								if (e.key === "Escape") {
-									e.preventDefault();
-									setIsPlaceholderOpen(false);
-								}
-							}}
-						/>
-					</div>
-					<DialogFooter className="mt-4">
-						<Button
-							variant="outline"
-							onClick={() => setIsPlaceholderOpen(false)}
-						>
-							{t("cancel", "Cancel")}
-						</Button>
-						<Button
-							onClick={confirmPlaceholder}
-							disabled={!placeholderName.trim()}
-						>
-							{t("create", "Create")}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
-		</>
+				{children}
+			</Slot>
+			{model && (
+				<NodePalette
+					key={session}
+					open={open}
+					model={model}
+					drop={shown.drop}
+					selectionCount={Math.max(selectionCount, movableSelectionCount)}
+					modules={modules}
+					currentModuleId={currentLayerId ?? null}
+					handlers={shown.handlers}
+				/>
+			)}
+		</Popover>
 	);
 }

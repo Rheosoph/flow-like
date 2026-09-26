@@ -16,6 +16,7 @@
 // Logging -> logging.flow.d
 // Math -> math.flow.d
 // Notifications -> notifications.flow.d
+// Payments -> payments.flow.d
 // Processing -> processing.flow.d
 // Streaming -> streaming.flow.d
 // Structs -> structs.flow.d

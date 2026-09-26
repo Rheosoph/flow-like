@@ -75,9 +75,9 @@ impl Cacheable for GaladrielModel {
 impl ModelLogic for GaladrielModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor {
-            inner: Box::new(self.client.clone()),
-        })
+        Ok(ModelConstructor::with_max_tokens_body_param(
+            self.client.clone(),
+        ))
     }
 
     async fn default_model(&self) -> Option<String> {

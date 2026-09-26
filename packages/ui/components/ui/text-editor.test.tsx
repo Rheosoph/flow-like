@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { PlateStatic, createSlateEditor } from "platejs";
+import { createSlateEditor } from "platejs";
+import { PlateStatic } from "platejs/static";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BaseEditorKit } from "../editor/editor-base-kit";

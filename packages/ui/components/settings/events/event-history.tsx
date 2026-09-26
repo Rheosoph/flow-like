@@ -28,6 +28,7 @@ import {
 	diffTimelineEntries,
 } from "../../../lib/event-history";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import type { INode } from "../../../lib/schema/flow/board";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
@@ -151,8 +152,8 @@ export function EventHistory({
 		Boolean(appId && eventId && timelineSupported && canReadEvents),
 	);
 	const timelineData = timeline.data;
-	const entries = timelineData?.entries ?? [];
-	const boardIds = timelineData?.boards ?? [];
+	const entries = asArray(timelineData?.entries);
+	const boardIds = asArray(timelineData?.boards);
 
 	const runsQuery = useInvoke<
 		IEventTimelineRun[],
@@ -170,7 +171,7 @@ export function EventHistory({
 				canReadBoards,
 		),
 	);
-	const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
+	const runs = useMemo(() => asArray(runsQuery.data), [runsQuery.data]);
 
 	// Selecting a version row focuses the activity below; clicking again clears it.
 	const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -380,7 +381,7 @@ function VersionTable({
 	runsFailed: boolean;
 }>) {
 	const { t } = useTranslation("settings");
-	const entries = timeline.entries;
+	const entries = asArray(timeline.entries);
 
 	const rows = useMemo<IVersionRow[]>(() => {
 		const byKey = new Map(

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use arrow::datatypes::FieldRef;
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
@@ -9,6 +9,8 @@ use flow_like_types::{
     serde::{Serializer, ser::SerializeMap},
 };
 use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+use crate::databases::vector::schema::TableInputRejected;
 
 pub type ValueBatchReader = Box<dyn RecordBatchReader + Send>;
 
@@ -61,32 +63,237 @@ pub fn value_to_record_batch_with_fields(
         None => infer_fields(&records)?,
     };
 
-    normalize_temporal_values(&mut records, &fields)?;
+    normalize_temporal_values(&mut records, &fields)
+        .map_err(|error| TableInputRejected(error.to_string()))?;
     normalize_geometry_values(&mut records, &fields)?;
+    normalize_text_values(&mut records, &fields);
 
     // Build a record batch. Schema inference above deliberately sees the raw
     // values so new tables keep their traced column types; only the write is
     // coerced.
     let rows: Vec<TemporalSafeValue> = records.iter().map(TemporalSafeValue).collect();
-    let batch: RecordBatch = serde_arrow::to_record_batch(&fields, &rows)?;
+    let batch: RecordBatch = serde_arrow::to_record_batch(&fields, &rows)
+        .map_err(|error| TableInputRejected(error.to_string()))?;
     Ok(batch)
 }
 
-/// Converts values for the first write to a new table, promoting columns whose
-/// non-null values are all RFC3339 instants to UTC millisecond timestamps.
+/// Converts rows bound for the existing `table`, taking every column's type,
+/// metadata and nullability from its schema instead of the values: inferred
+/// types would turn GeoJSON for a geometry column into a struct, bytes for a
+/// Binary column into a list of 64-bit integers, and instants into strings.
 ///
-/// Existing tables must continue to use `value_to_record_batch_with_fields`
-/// with their persisted schema so legacy string columns remain strings.
-pub(crate) fn value_to_record_batch_with_utc_timestamp_inference(
+/// Only the columns some row carries are written, in table order, so partial
+/// rows keep their merge semantics.
+pub fn value_to_record_batch_for_schema(
     records: Vec<Value>,
+    schema: &arrow_schema::Schema,
+    table: &str,
 ) -> Result<RecordBatch> {
-    let fields = promote_rfc3339_instants(&records, infer_fields(&records)?);
+    let mut carried = std::collections::BTreeSet::new();
+    for (row, record) in records.iter().enumerate() {
+        let Value::Object(record) = record else {
+            return Err(TableInputRejected(format!(
+                "Row {row} for table '{table}' must be a JSON object keyed by column name"
+            ))
+            .into());
+        };
+        carried.extend(record.keys().map(String::as_str));
+    }
+
+    let unknown: Vec<&str> = carried
+        .iter()
+        .copied()
+        .filter(|name| schema.field_with_name(name).is_err())
+        .collect();
+    if !unknown.is_empty() {
+        return Err(unknown_columns(table, &unknown, schema).into());
+    }
+
+    let fields = schema
+        .fields()
+        .iter()
+        .filter(|field| carried.contains(field.name().as_str()))
+        .cloned()
+        .collect();
     value_to_record_batch_with_fields(records, Some(fields))
 }
 
+pub(crate) fn unknown_columns(
+    table: &str,
+    unknown: &[&str],
+    schema: &arrow_schema::Schema,
+) -> TableInputRejected {
+    TableInputRejected(format!(
+        "Table '{table}' has no column {}; its columns are {}",
+        quoted_list(unknown.iter().copied()),
+        quoted_list(schema.fields().iter().map(|field| field.name().as_str()))
+    ))
+}
+
+fn quoted_list<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    names
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Converts values for the first write to a new table. Top-level columns whose
+/// non-null values are all GeoJSON geometries become WGS 84 geometry columns,
+/// arrays of byte-sized integers become Binary, and RFC3339 instants become UTC
+/// millisecond timestamps.
+///
+/// Existing tables must continue to use `value_to_record_batch_with_fields`
+/// with their persisted schema so legacy columns keep their type.
+pub(crate) fn value_to_record_batch_with_utc_timestamp_inference(
+    records: Vec<Value>,
+) -> Result<RecordBatch> {
+    let fields = infer_new_table_fields(&records)?;
+    value_to_record_batch_with_fields(records, Some(fields))
+}
+
+fn infer_new_table_fields(records: &[Value]) -> Result<Vec<FieldRef>> {
+    let value_typed = value_typed_fields(records)?;
+    let masked: HashSet<&str> = value_typed
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
+    let samples: Vec<MaskedRecord> = records
+        .iter()
+        .map(|record| MaskedRecord {
+            record,
+            masked: &masked,
+        })
+        .collect();
+
+    let fields = trace_fields(&samples, records)?
+        .into_iter()
+        .map(|field| {
+            value_typed
+                .iter()
+                .find(|typed| typed.name() == field.name())
+                .cloned()
+                .unwrap_or(field)
+        })
+        .collect();
+
+    Ok(promote_rfc3339_instants(records, fields))
+}
+
+/// Serializes a record with the given top-level columns traced as null, so a
+/// column typed from its values never has to be expressible to the tracer.
+/// GeoJSON is not: Point and Polygon rows nest `coordinates` differently.
+struct MaskedRecord<'a> {
+    record: &'a Value,
+    masked: &'a HashSet<&'a str>,
+}
+
+impl Serialize for MaskedRecord<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let Value::Object(entries) = self.record else {
+            return self.record.serialize(serializer);
+        };
+        let mut map = serializer.serialize_map(Some(entries.len()))?;
+        for (key, value) in entries {
+            if self.masked.contains(key.as_str()) {
+                map.serialize_entry(key, &())?;
+            } else {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ValueShape {
+    Geometry,
+    Bytes,
+}
+
+/// Columns whose values carry a FlowLike type that serde_arrow cannot see: a
+/// Geometry pin's GeoJSON would trace as a struct, and a Bytes pin's array as
+/// a list of 64-bit integers.
+fn value_typed_fields(records: &[Value]) -> Result<Vec<FieldRef>> {
+    let mut seen = HashSet::new();
+    records
+        .iter()
+        .filter_map(Value::as_object)
+        .flat_map(|record| record.keys())
+        .filter(|name| name.as_str() != "vector" && seen.insert(name.as_str()))
+        .filter_map(|name| value_typed_field(records, name).transpose())
+        .map(|field| field.map(Arc::new))
+        .collect()
+}
+
+/// A column whose values all name a geometry kind is a geometry column, so a
+/// value that is not a valid WGS 84 geometry fails the write instead of turning
+/// the column into a struct.
+fn value_typed_field(records: &[Value], name: &str) -> Result<Option<Field>> {
+    let mut shape = None;
+    let mut nullable = false;
+    let mut has_bytes = false;
+
+    for record in records {
+        let value = record.get(name).unwrap_or(&Value::Null);
+        if value.is_null() {
+            nullable = true;
+            continue;
+        }
+
+        let value_shape = if crate::geometry::names_geometry_kind(value) {
+            ValueShape::Geometry
+        } else if is_byte_array(value) {
+            has_bytes |= value.as_array().is_some_and(|bytes| !bytes.is_empty());
+            ValueShape::Bytes
+        } else {
+            return Ok(None);
+        };
+        if shape.is_some_and(|shape| shape != value_shape) {
+            return Ok(None);
+        }
+        shape = Some(value_shape);
+    }
+
+    Ok(match shape {
+        None => None,
+        Some(ValueShape::Geometry) => {
+            validate_inferred_geometries(records, name)?;
+            Some(crate::geometry::geometry_field(name, nullable))
+        }
+        Some(ValueShape::Bytes) if has_bytes => Some(Field::new(name, DataType::Binary, nullable)),
+        Some(ValueShape::Bytes) => None,
+    })
+}
+
+fn validate_inferred_geometries(records: &[Value], name: &str) -> Result<()> {
+    for (row, record) in records.iter().enumerate() {
+        let value = record.get(name).unwrap_or(&Value::Null);
+        if let Err(error) = crate::geometry::geometry_input(value) {
+            return Err(TableInputRejected(format!(
+                "Column '{name}' holds GeoJSON geometries, but row {row} is not a valid WGS 84 geometry: {error}"
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn is_byte_array(value: &Value) -> bool {
+    value.as_array().is_some_and(|values| {
+        values
+            .iter()
+            .all(|value| value.as_u64().is_some_and(|byte| byte <= u8::MAX as u64))
+    })
+}
+
 fn infer_fields(records: &[Value]) -> Result<Vec<FieldRef>> {
+    trace_fields(records, records)
+}
+
+fn trace_fields<T: Serialize>(samples: &[T], records: &[Value]) -> Result<Vec<FieldRef>> {
     let mut fields: Vec<FieldRef> =
-        Vec::<FieldRef>::from_samples(records, TracingOptions::default().allow_null_fields(true))?;
+        Vec::<FieldRef>::from_samples(samples, TracingOptions::default().allow_null_fields(true))
+            .map_err(|error| TableInputRejected(error.to_string()))?;
 
     for field in &mut fields {
         if field.name() == "vector" {
@@ -401,15 +608,36 @@ fn normalize_geometry_values(records: &mut [Value], fields: &[FieldRef]) -> Resu
             else {
                 continue;
             };
-            if !value.is_null() {
-                let bytes = flow_like_geometry::to_wkb(value).map_err(|error| {
-                    anyhow!("Geometry column '{}', row {row}: {error}", field.name())
-                })?;
-                *value = Value::Array(bytes.into_iter().map(Value::from).collect());
-            }
+            let bytes = crate::geometry::geometry_input_wkb(value).map_err(|error| {
+                TableInputRejected(format!(
+                    "Geometry column '{}', row {row}: {error}",
+                    field.name()
+                ))
+            })?;
+            *value = bytes.map_or(Value::Null, |bytes| {
+                Value::Array(bytes.into_iter().map(Value::from).collect())
+            });
         }
     }
     Ok(())
+}
+
+/// Declared text columns store objects and arrays as their compact JSON text,
+/// the way an update already does.
+fn normalize_text_values(records: &mut [Value], fields: &[FieldRef]) {
+    for field in fields.iter().filter(|field| {
+        matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8)
+            && !crate::geometry::is_geometry_field(field)
+    }) {
+        for record in records.iter_mut() {
+            if let Some(value @ (Value::Object(_) | Value::Array(_))) = record
+                .as_object_mut()
+                .and_then(|record| record.get_mut(field.name()))
+            {
+                *value = Value::String(value.to_string());
+            }
+        }
+    }
 }
 
 /// JSON's data model with lossless byte-array support for Arrow Binary columns.
@@ -615,6 +843,300 @@ mod tests {
         ];
         let batch = value_to_record_batch_with_fields(rows.clone(), Some(fields))?;
         assert_eq!(record_batch_to_value(&batch)?, rows);
+        Ok(())
+    }
+
+    fn inferred_type(batch: &RecordBatch, name: &str) -> DataType {
+        batch
+            .schema()
+            .field_with_name(name)
+            .unwrap_or_else(|error| panic!("{name}: {error}"))
+            .data_type()
+            .clone()
+    }
+
+    #[test]
+    fn new_tables_store_geojson_geometries_as_wgs84_geometry() -> Result<()> {
+        let rows = vec![
+            json!({"id": "a", "geometry": {"type": "Point", "coordinates": [13.405, 52.52]}}),
+            json!({"id": "b", "geometry": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]}}),
+            json!({"id": "c", "geometry": null}),
+        ];
+
+        let batch = value_to_record_batch_with_utc_timestamp_inference(rows.clone())?;
+
+        assert_eq!(
+            batch.schema().field_with_name("geometry")?,
+            &crate::geometry::geometry_field("geometry", true)
+        );
+        assert_eq!(record_batch_to_value(&batch)?, rows);
+        Ok(())
+    }
+
+    #[test]
+    fn new_tables_keep_objects_that_do_not_all_name_a_geometry_kind() -> Result<()> {
+        let feature = json!({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [1.0, 2.0]},
+            "properties": {"name": "a"}
+        });
+        let rows = vec![
+            json!({"feature": feature, "partly": {"type": "Point", "coordinates": [1.0, 2.0]}}),
+            json!({"feature": feature, "partly": {"type": "Unknown", "coordinates": [1.0, 2.0]}}),
+        ];
+        let batch = value_to_record_batch_with_utc_timestamp_inference(rows)?;
+
+        assert_eq!(record_batch_to_value(&batch)?[0]["feature"], feature);
+        for name in ["feature", "partly"] {
+            assert!(
+                matches!(inferred_type(&batch, name), DataType::Struct(_)),
+                "{name}"
+            );
+            assert!(!crate::geometry::is_geometry_field(
+                batch.schema().field_with_name(name)?
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn new_tables_store_annotated_geometries_without_their_foreign_members() -> Result<()> {
+        let rows = vec![json!({"annotated": {
+            "type": "Point",
+            "coordinates": [8.0, 50.0],
+            "bbox": [8.0, 50.0, 8.0, 50.0],
+            "name": "HQ"
+        }})];
+        let batch = value_to_record_batch_with_utc_timestamp_inference(rows)?;
+
+        assert!(crate::geometry::is_geometry_field(
+            batch.schema().field_with_name("annotated")?
+        ));
+        assert_eq!(
+            record_batch_to_value(&batch)?[0]["annotated"],
+            json!({"type": "Point", "coordinates": [8.0, 50.0]})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn new_tables_reject_invalid_geometries_naming_column_and_row() {
+        let error = value_to_record_batch_with_utc_timestamp_inference(vec![
+            json!({"projected": {"type": "Point", "coordinates": [8.0, 50.0]}}),
+            json!({"projected": {"type": "Point", "coordinates": [500000.0, 4649776.0]}}),
+        ])
+        .expect_err("projected coordinates are not WGS 84");
+
+        assert!(
+            error.downcast_ref::<TableInputRejected>().is_some(),
+            "{error:#}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("'projected'"), "{message}");
+        assert!(message.contains("row 1"), "{message}");
+        assert!(message.contains("WGS 84"), "{message}");
+    }
+
+    #[test]
+    fn declared_text_columns_store_objects_and_arrays_as_json_text() -> Result<()> {
+        let batch = value_to_record_batch_with_fields(
+            vec![json!({
+                "tags": {"addr:city": "Springfield", "levels": [1, 2]},
+                "ids": ["a", "b"],
+                "count": 3
+            })],
+            Some(vec![
+                Arc::new(Field::new("tags", DataType::Utf8, true)),
+                Arc::new(Field::new("ids", DataType::LargeUtf8, true)),
+                Arc::new(Field::new("count", DataType::Utf8, true)),
+            ]),
+        )?;
+
+        assert_eq!(
+            record_batch_to_value(&batch)?[0],
+            json!({
+                "tags": r#"{"addr:city":"Springfield","levels":[1,2]}"#,
+                "ids": r#"["a","b"]"#,
+                "count": "3"
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn declared_geometry_columns_take_features_and_text() -> Result<()> {
+        let point = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+        let batch = value_to_record_batch_with_fields(
+            vec![
+                json!({"geom": {"type": "Feature", "geometry": point, "properties": {}}}),
+                json!({"geom": point.to_string()}),
+                json!({"geom": "POINT (13.405 52.52)"}),
+                json!({"geom": {"type": "Feature", "geometry": null, "properties": {}}}),
+            ],
+            Some(vec![Arc::new(crate::geometry::geometry_field(
+                "geom", true,
+            ))]),
+        )?;
+
+        let rows = record_batch_to_value(&batch)?;
+        assert_eq!(
+            rows.iter()
+                .map(|row| row["geom"].clone())
+                .collect::<Vec<_>>(),
+            vec![point.clone(), point.clone(), point, Value::Null]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn conversion_failures_are_table_input_rejections() {
+        let error = value_to_record_batch_with_fields(
+            vec![json!({"count": "seven"})],
+            Some(vec![Arc::new(Field::new("count", DataType::Int64, true))]),
+        )
+        .expect_err("text is not an integer");
+        assert!(
+            error.downcast_ref::<TableInputRejected>().is_some(),
+            "{error:#}"
+        );
+
+        let error = value_to_record_batch_for_schema(
+            vec![json!({"id": "a", "color": "red"})],
+            &existing_table_schema(),
+            "places",
+        )
+        .expect_err("unknown columns are rejected");
+        assert!(
+            error.downcast_ref::<TableInputRejected>().is_some(),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn new_tables_store_byte_arrays_as_binary() -> Result<()> {
+        let rows = vec![
+            json!({"payload": [0, 255, 17], "wide": [1, 300], "signed": [-1, -2], "ratios": [0.5], "empty": []}),
+            json!({"payload": [], "wide": [2], "signed": [-3], "ratios": [1.5], "empty": []}),
+            json!({"payload": null, "wide": [4], "signed": [-5], "ratios": [2.5], "empty": []}),
+        ];
+
+        let batch = value_to_record_batch_with_utc_timestamp_inference(rows.clone())?;
+
+        assert_eq!(
+            batch.schema().field_with_name("payload")?,
+            &Field::new("payload", DataType::Binary, true)
+        );
+        for name in ["wide", "signed", "ratios", "empty"] {
+            assert!(
+                !matches!(inferred_type(&batch, name), DataType::Binary),
+                "{name}"
+            );
+        }
+        assert_eq!(record_batch_to_value(&batch)?, rows);
+        Ok(())
+    }
+
+    #[test]
+    fn value_typing_leaves_the_vector_column_and_existing_tables_alone() -> Result<()> {
+        let fields = infer_new_table_fields(&[json!({"vector": [1, 2, 3], "bytes": [1, 2]})])?;
+        let vector = fields
+            .iter()
+            .find(|field| field.name() == "vector")
+            .unwrap();
+        assert!(matches!(vector.data_type(), DataType::FixedSizeList(_, 3)));
+
+        let point = json!({"type": "Point", "coordinates": [1.0, 2.0]});
+        let batch = value_to_record_batch(vec![json!({"bytes": [1, 2], "location": point})])?;
+        assert!(!matches!(inferred_type(&batch, "bytes"), DataType::Binary));
+        assert!(!crate::geometry::is_geometry_field(
+            batch.schema().field_with_name("location")?
+        ));
+        Ok(())
+    }
+
+    fn existing_table_schema() -> arrow_schema::Schema {
+        arrow_schema::Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("payload", DataType::Binary, true),
+            crate::geometry::geometry_field("location", true),
+            Field::new(
+                "seen_at",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("note", DataType::LargeUtf8, true),
+        ])
+    }
+
+    #[test]
+    fn existing_table_rows_take_geometry_and_binary_columns_from_the_schema() -> Result<()> {
+        let schema = existing_table_schema();
+        let rows = vec![
+            json!({"location": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]}, "payload": [0, 255, 17], "id": "a"}),
+            json!({"id": "b", "location": {"type": "Point", "coordinates": [13.405, 52.52]}, "payload": null}),
+            json!({"id": "c", "location": null, "payload": []}),
+        ];
+
+        let batch = value_to_record_batch_for_schema(rows.clone(), &schema, "places")?;
+
+        assert_eq!(batch.num_columns(), 3);
+        for name in ["id", "payload", "location"] {
+            assert_eq!(
+                batch.schema().field_with_name(name)?,
+                schema.field_with_name(name)?
+            );
+        }
+        assert_eq!(record_batch_to_value(&batch)?, rows);
+        Ok(())
+    }
+
+    #[test]
+    fn existing_table_rows_follow_the_table_column_order() -> Result<()> {
+        let batch = value_to_record_batch_for_schema(
+            vec![
+                json!({"note": "first", "seen_at": "2026-08-09T12:34:56.789Z", "id": "a"}),
+                json!({"id": "b", "note": null}),
+            ],
+            &existing_table_schema(),
+            "places",
+        )?;
+
+        let names: Vec<String> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect();
+        assert_eq!(names, ["id", "seen_at", "note"]);
+
+        let seen_at = batch
+            .column_by_name("seen_at")
+            .and_then(|column| column.as_any().downcast_ref::<TimestampMillisecondArray>())
+            .expect("seen_at should keep the table's millisecond timestamp type");
+        assert_eq!(
+            seen_at.value(0),
+            chrono::DateTime::parse_from_rfc3339("2026-08-09T12:34:56.789Z")?.timestamp_millis()
+        );
+        assert_eq!(record_batch_to_value(&batch)?[1]["seen_at"], Value::Null);
+        Ok(())
+    }
+
+    #[test]
+    fn existing_table_rows_reject_columns_the_table_lacks() -> Result<()> {
+        let error = value_to_record_batch_for_schema(
+            vec![
+                json!({"id": "a", "color": "red"}),
+                json!({"id": "b", "Location": null}),
+            ],
+            &existing_table_schema(),
+            "places",
+        )
+        .expect_err("unknown columns cannot be merged into the table");
+
+        assert_eq!(
+            error.to_string(),
+            "Table 'places' has no column 'Location', 'color'; its columns are 'id', 'payload', 'location', 'seen_at', 'note'"
+        );
         Ok(())
     }
 

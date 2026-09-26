@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import type { EventEmitter } from "node:events";
 import { type Server, type ServerResponse, createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { join, resolve } from "node:path";
@@ -271,11 +272,12 @@ export async function startDevServer(
 	}
 
 	let closed = false;
+	const processEmitter = process as EventEmitter;
 	const close = async () => {
 		if (closed) return;
 		closed = true;
-		process.off("SIGINT", onSignal);
-		process.off("SIGTERM", onSignal);
+		processEmitter.off("SIGINT", onSignal);
+		processEmitter.off("SIGTERM", onSignal);
 		for (const entry of devGroups) killChild(entry.child);
 		await new Promise<void>((done) => server.close(() => done()));
 	};

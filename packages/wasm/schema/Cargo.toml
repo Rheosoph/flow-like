@@ -7,17 +7,19 @@ edition = "2024"
 default = []
 manifest = ["dep:toml"]
 nodes = ["manifest", "dep:flow-like-runtime"]
-bundle = ["manifest", "dep:anyhow", "dep:sha2", "dep:zip"]
+bundle = ["manifest", "dep:anyhow", "dep:zip"]
 openapi = ["dep:utoipa", "flow-like-runtime?/openapi"]
 
 [dependencies]
 anyhow = { version = "1", optional = true }
+base64.workspace = true
 bitflags.workspace = true
 flow-like-runtime = { workspace = true, features = ["flow-metadata"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-sha2 = { version = "0.10", optional = true }
+sha2 = "0.10"
 toml = { workspace = true, optional = true }
+unicode-normalization = "0.1.25"
 utoipa = { version = "5", optional = true }
 zip = { version = "8.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 

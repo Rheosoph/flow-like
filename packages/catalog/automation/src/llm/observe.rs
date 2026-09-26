@@ -103,7 +103,7 @@ impl NodeLogic for LLMObserveScreenNode {
         );
         node.set_flowscript_name("automation.llm", "observeScreen");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -163,8 +163,10 @@ impl NodeLogic for LLMObserveScreenNode {
             "elements",
             "Elements",
             "List of observed elements",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<ObservedElement>()
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.set_long_running(true);
 

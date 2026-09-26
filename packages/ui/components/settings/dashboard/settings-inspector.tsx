@@ -55,6 +55,7 @@ import { TextEditor } from "../../ui/text-editor";
 import { Textarea } from "../../ui/textarea";
 import { PermissionNotice } from "../permission";
 import { AppDangerZone } from "./app-danger-zone";
+import { EuroAmountInput } from "../../payments/euro-amount-input";
 import type { ProjectDraft } from "./use-project-draft";
 import type {
 	DashboardPermissions,
@@ -208,6 +209,7 @@ export function SettingsInspector({
 	const canEditApp = permissions.canWriteApp;
 
 	const { draftApp, draftMetadata, setDraftApp, setDraftMetadata } = draft;
+	const [priceValid, setPriceValid] = useState(true);
 	const panels = useMemo(
 		() =>
 			developerMode
@@ -332,7 +334,7 @@ export function SettingsInspector({
 								title={active.label}
 								description={active.description}
 								dirty={draft.isPanelDirty(activePanel)}
-								saving={draft.isSaving}
+								saving={draft.isSaving || !priceValid}
 								onSave={() => draft.savePanel(activePanel)}
 								onReset={() => draft.resetPanel(activePanel)}
 							/>
@@ -803,18 +805,13 @@ export function SettingsInspector({
 											/>
 										</div>
 										<div className="space-y-2">
-											<Label>{t("price", "Price ($)")}</Label>
-											<Input
-												type="number"
-												placeholder="0.00"
-												value={draftApp.price ?? ""}
+											<Label>{t("priceEur", "Price (EUR)")}</Label>
+											<EuroAmountInput
+												value={draftApp.price}
 												disabled={!canEditApp}
-												onChange={(event) =>
-													setDraftApp({
-														...draftApp,
-														price:
-															Number.parseFloat(event.target.value) || null,
-													})
+												onValidityChange={setPriceValid}
+												onChange={(price) =>
+													setDraftApp({ ...draftApp, price })
 												}
 											/>
 										</div>

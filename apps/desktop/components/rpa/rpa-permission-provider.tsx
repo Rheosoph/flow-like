@@ -1,162 +1,136 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type RpaConsentRememberScope,
 	type RpaConsentRequest,
+	type RpaSystemPermissionRequest,
 	saveRpaAutomationConsent,
 } from "./rpa-consent";
 import { RpaConsentDialog } from "./rpa-consent-dialog";
 import { RpaPermissionDialog } from "./rpa-permission-dialog";
 
-type RpaPermissionRetry = {
-	appId: string;
-	boardId: string;
-	nodeId: string;
+type PermissionRequest = RpaSystemPermissionRequest & {
+	nodeId?: string;
 	payload?: object;
-	permissions?: {
-		accessibility: boolean;
-		screen_recording: boolean;
-	};
-	checkError?: string;
-	requestId?: string;
-	skipConsentCheck?: boolean;
+	legacyRetry?: boolean;
 };
 
-export function RpaPermissionProvider() {
-	const [permissionOpen, setPermissionOpen] = useState(false);
-	const [consentOpen, setConsentOpen] = useState(false);
-	const [pendingRetry, setPendingRetry] = useState<RpaPermissionRetry | null>(
-		null,
+function useRequestQueue<T extends { requestId: string }>(
+	name: string,
+	normalize: (detail: T) => T,
+) {
+	const requests = useRef<T[]>([]);
+	const [current, setCurrent] = useState<T | null>(null);
+	const finish = useCallback(
+		(requestId: string, granted: boolean) => {
+			if (requests.current[0]?.requestId !== requestId) return;
+			const request = requests.current.shift();
+			if (!request) return;
+			setCurrent(requests.current[0] ?? null);
+			window.dispatchEvent(
+				new CustomEvent(`${name}-result`, { detail: { requestId, granted } }),
+			);
+			return request;
+		},
+		[name],
 	);
-	const [pendingSystemRequestId, setPendingSystemRequestId] = useState<
-		string | null
-	>(null);
-	const [pendingConsent, setPendingConsent] =
-		useState<RpaConsentRequest | null>(null);
-
 	useEffect(() => {
-		const handlePermissionsRequired = (event: Event) => {
-			const permissionEvent = event as CustomEvent<RpaPermissionRetry>;
-			if (permissionEvent.detail.requestId) {
-				setPendingSystemRequestId(permissionEvent.detail.requestId);
-				setPendingRetry(null);
-			} else {
-				setPendingSystemRequestId(null);
-				setPendingRetry(permissionEvent.detail);
+		const receive = (event: Event) => {
+			const request = normalize((event as CustomEvent<T>).detail);
+			if (
+				!request ||
+				requests.current.some((item) => item.requestId === request.requestId)
+			)
+				return;
+			requests.current.push(request);
+			setCurrent(requests.current[0]);
+		};
+		window.addEventListener(`${name}-required`, receive);
+		return () => {
+			window.removeEventListener(`${name}-required`, receive);
+			for (const request of requests.current.splice(0)) {
+				window.dispatchEvent(
+					new CustomEvent(`${name}-result`, {
+						detail: { requestId: request.requestId, granted: false },
+					}),
+				);
 			}
-			setPermissionOpen(true);
 		};
+	}, [name, normalize]);
+	return { current, finish };
+}
 
-		window.addEventListener(
-			"flow:rpa-permissions-required",
-			handlePermissionsRequired,
-		);
-		return () => {
-			window.removeEventListener(
-				"flow:rpa-permissions-required",
-				handlePermissionsRequired,
+const normalizeConsent = (request: RpaConsentRequest) => request;
+const normalizePermission = (
+	request: PermissionRequest,
+): PermissionRequest => ({
+	...request,
+	requestId: request.requestId ?? crypto.randomUUID(),
+	required: request.required ?? ["input_control", "screen_capture"],
+	legacyRetry: !request.requestId,
+});
+
+export function RpaPermissionProvider() {
+	const consent = useRequestQueue("flow:rpa-consent", normalizeConsent);
+	const permission = useRequestQueue(
+		"flow:rpa-permissions",
+		normalizePermission,
+	);
+	const [saving, setSaving] = useState(false);
+	const [consentError, setConsentError] = useState<string | null>(null);
+	const consentRequest = consent.current;
+	const permissionRequest = permission.current;
+
+	const confirmConsent = async (rememberFor: RpaConsentRememberScope) => {
+		if (!consentRequest || saving) return;
+		setSaving(true);
+		setConsentError(null);
+		try {
+			await saveRpaAutomationConsent(consentRequest, rememberFor);
+			consent.finish(consentRequest.requestId, true);
+		} catch (error) {
+			setConsentError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	const finishPermission = (granted: boolean) => {
+		if (!permissionRequest) return;
+		const completed = permission.finish(permissionRequest.requestId, granted);
+		if (completed?.legacyRetry && granted) {
+			window.dispatchEvent(
+				new CustomEvent("flow:rpa-permissions-retry", { detail: completed }),
 			);
-		};
-	}, []);
-
-	useEffect(() => {
-		const handleConsentRequired = (event: Event) => {
-			const consentEvent = event as CustomEvent<RpaConsentRequest>;
-			setPendingConsent(consentEvent.detail);
-			setConsentOpen(true);
-		};
-
-		window.addEventListener("flow:rpa-consent-required", handleConsentRequired);
-		return () => {
-			window.removeEventListener(
-				"flow:rpa-consent-required",
-				handleConsentRequired,
-			);
-		};
-	}, []);
-
-	const completeSystemPermissionRequest = (granted: boolean) => {
-		if (!pendingSystemRequestId) return;
-		window.dispatchEvent(
-			new CustomEvent("flow:rpa-permissions-result", {
-				detail: {
-					granted,
-					requestId: pendingSystemRequestId,
-				},
-			}),
-		);
-		setPendingSystemRequestId(null);
-	};
-
-	const completeConsentRequest = (granted: boolean) => {
-		if (!pendingConsent) return;
-		window.dispatchEvent(
-			new CustomEvent("flow:rpa-consent-result", {
-				detail: {
-					granted,
-					requestId: pendingConsent.requestId,
-				},
-			}),
-		);
-		setPendingConsent(null);
-	};
-
-	const retryExecution = () => {
-		if (pendingSystemRequestId) {
-			completeSystemPermissionRequest(true);
-			return;
 		}
-		if (!pendingRetry) return;
-
-		window.dispatchEvent(
-			new CustomEvent("flow:rpa-permissions-retry", {
-				detail: pendingRetry,
-			}),
-		);
-		setPendingRetry(null);
-	};
-
-	const confirmConsent = (rememberFor: RpaConsentRememberScope) => {
-		if (!pendingConsent) return;
-
-		if (rememberFor === "board") {
-			saveRpaAutomationConsent("board", pendingConsent.boardId);
-		}
-		if (rememberFor === "event" && pendingConsent.eventId) {
-			saveRpaAutomationConsent("event", pendingConsent.eventId);
-		}
-
-		setConsentOpen(false);
-		completeConsentRequest(true);
-	};
-
-	const cancelConsent = () => {
-		setConsentOpen(false);
-		completeConsentRequest(false);
 	};
 
 	return (
 		<>
 			<RpaConsentDialog
-				open={consentOpen}
-				context={pendingConsent?.context ?? "execution"}
-				boardId={pendingConsent?.boardId}
-				eventId={pendingConsent?.eventId}
-				onCancel={cancelConsent}
+				key={consentRequest?.requestId ?? "no-consent"}
+				open={!!consentRequest}
+				context={consentRequest?.context ?? "execution"}
+				boardId={consentRequest?.boardId}
+				eventId={consentRequest?.eventId}
+				required={consentRequest?.required}
+				pending={saving}
+				error={consentError}
+				onCancel={() => {
+					if (consentRequest) consent.finish(consentRequest.requestId, false);
+					setConsentError(null);
+				}}
 				onConfirm={confirmConsent}
 			/>
 			<RpaPermissionDialog
-				open={permissionOpen}
-				onOpenChange={(nextOpen) => {
-					setPermissionOpen(nextOpen);
-					if (!nextOpen) {
-						if (pendingSystemRequestId) completeSystemPermissionRequest(false);
-						setPendingRetry(null);
-					}
+				key={permissionRequest?.requestId ?? "no-permission"}
+				open={!!permissionRequest}
+				required={permissionRequest?.required}
+				onOpenChange={(open) => {
+					if (!open) finishPermission(false);
 				}}
-				onContinueAnyway={retryExecution}
-				onPermissionsGranted={retryExecution}
+				onPermissionsGranted={() => finishPermission(true)}
 			/>
 		</>
 	);

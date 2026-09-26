@@ -1,9 +1,9 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { SlateElementProps } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
-import { SlateElement } from "platejs";
+import { SlateElement } from "platejs/static";
 
 export interface TFocusNodeElement {
 	type: "focus_node";

@@ -9,6 +9,8 @@ use std::collections::HashSet;
 use std::time::Instant;
 use utoipa::ToSchema;
 
+pub mod explore;
+
 #[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
 pub struct DbStateResponse {
     pub rtt: u128,
@@ -22,6 +24,8 @@ pub fn routes() -> Router<AppState> {
         .route("/db", get(get_store_db))
         .route("/groups", get(list_public_groups))
         .route("/groups/{group_id}", get(get_public_group))
+        .route("/explore", get(explore::get_explore))
+        .route("/explore/search", get(explore::search_explore))
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]

@@ -5,8 +5,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::connection::{
-        AppConnectionInfo, app_meta_lookup, graph::presign_media, role_name_lookup,
-        role_permission_lookup, to_connection_info,
+        AppConnectionInfo, app_meta_lookup, graph::presign_media, role_lookup, to_connection_info,
     },
     state::AppState,
 };
@@ -79,8 +78,7 @@ pub async fn get_connections(
         })
         .collect();
 
-    let role_names = role_name_lookup(&state, &role_ids).await?;
-    let role_permissions = role_permission_lookup(&state, &role_ids).await?;
+    let (role_names, role_permissions) = role_lookup(&state, &role_ids).await?;
     let app_meta = app_meta_lookup(&state, &other_app_ids).await?;
     let media = presign_media(&state, &app_meta).await;
 

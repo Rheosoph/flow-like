@@ -80,6 +80,7 @@ import {
 	runNativeAction,
 } from "../../lib/native-action-result";
 import { isTauri } from "../../lib/platform";
+import { asArray } from "../../lib/response-shape";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import {
 	type IMessage,
@@ -425,7 +426,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 	const memoryModels = useMemo(
 		() =>
-			(profileBits.data ?? []).filter(
+			asArray(profileBits.data).filter(
 				(bit) => bit.type === IBitTypes.Embedding,
 			),
 		[profileBits.data],

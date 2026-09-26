@@ -49,6 +49,128 @@ handling and optional custom compiled defaults, see
 A compiled default remains recoverable from the binary even when supplied as
 a BuildKit secret; it must contain no credentials.
 
+## Deploy the audit worker separately
+
+The API records pending audit events. A separate scheduled Container Apps Job
+seals and signs them, writes daily signed checkpoints and archives, and prunes archived database
+rows. The API image does not run that job. Deploy it before directing traffic to
+the new API version.
+
+`apps/backend/azure/audit-worker/deploy.py` prints its proposed operations by
+default. With `--apply`, it provisions a separate user-assigned identity, an audit
+storage account/container, locked retention, narrowly scoped custom roles, and a
+job that runs once a minute. The job exposes no HTTP listener. Its identity can
+read/write audit blobs and read/sign with one Key Vault key; it cannot delete
+blobs, change retention, or administer keys.
+
+Build the Azure worker image from the repository root:
+
+```sh
+docker build --platform linux/amd64 \
+  -f apps/backend/azure/audit-worker/Dockerfile \
+  -t flow-like-azure-audit-worker .
+```
+
+The worker compiles the `audit` section of the same document as the Azure API
+image: the tracked public default, or the API build's `flow_like_config` BuildKit
+secret with its `FLOW_LIKE_CONFIG_SHA256` build argument. It reads no
+configuration at runtime, so the API's `FLOW_LIKE_CONFIG_*` sources do not reach
+it. Set audit policy in that build input; see
+[Audit policy](/self-hosting/audit-trail/#audit-policy).
+
+Publish it to your registry and select the resulting digest. This image adds an
+Entra PostgreSQL launcher to the shared audit binary. It obtains a short-lived
+token from the Container Apps identity endpoint, places it in the child process's
+connection URL, and runs `--once`. Tokens stay out of files, logs and process
+arguments. The launcher stops the process before token expiry, with a maximum
+runtime of 55 minutes. Each scheduled execution obtains a token again.
+
+Prepare a versioned P-256 Key Vault key, a Container Apps environment with private
+database connectivity, and versioned Key Vault secrets for the worker database
+URL, shared base64 entry key and shared export-token encryption key. Both vaults
+must use Azure RBAC. Keep the signing key and worker database secret outside the
+API's access.
+
+Create the worker's user-assigned identity using the resource group and `--name`
+you will pass to the planner. The default name is `flow-like-audit-worker`.
+Bind its principal UUID to a separate PostgreSQL Entra role and apply the
+[database grants below](#bootstrap-database-roles) before starting the job. The
+planner reuses that identity. The database secret must contain a password-free
+URL whose username matches `--database-user`, with certificate verification:
+
+```text
+postgresql://<audit worker database role>@<server>.postgres.database.azure.com:5432/<database>?sslmode=verify-full
+```
+
+Export the selected signing key version's public key as SPKI PEM and prepare a
+public JSON file mapping its key ID to the PEM. Keep historical verifier keys in
+the map when rotating. The planner passes this map as `AUDIT_VERIFYING_KEYS` and
+its current ID as `AUDIT_KID`, avoiding a Key Vault public-key read at every job
+startup. During apply, it reads the selected key once and checks its curve,
+signing capability, enabled state, and public key before locking storage.
+
+Set the variables in this example to those resource IDs, versioned secret/key
+URIs, public JSON file, database role, and image digest:
+
+```sh
+python3 apps/backend/azure/audit-worker/deploy.py \
+  --subscription "$AZURE_SUBSCRIPTION_ID" --resource-group audit --location westeurope \
+  --environment-id "$AZURE_ENVIRONMENT_ID" \
+  --api-identity-id "$API_IDENTITY_ID" \
+  --storage-account "$AUDIT_STORAGE_ACCOUNT" --image "$AUDIT_WORKER_IMAGE" \
+  --key-vault-id "$AUDIT_KEY_VAULT_ID" --key-id "$AUDIT_KEY_VERSION_URI" \
+  --kid "$AUDIT_KID" --verifying-keys-file "$AUDIT_VERIFYING_KEYS_FILE" \
+  --secrets-vault-id "$AUDIT_SECRETS_VAULT_ID" \
+  --database-user "$AUDIT_DATABASE_USER" \
+  --database-secret-uri "$AUDIT_DATABASE_SECRET_URI" \
+  --entry-key-secret-uri "$AUDIT_ENTRY_KEY_SECRET_URI" \
+  --encryption-secret-uri "$SINK_TOKEN_ENCRYPTION_KEY_SECRET_URI"
+```
+
+For a private Azure Container Registry, add
+`--registry-server <name>.azurecr.io` and grant the worker identity pull access
+to the existing registry beforehand. The planner configures identity-based
+pulls but does not create a registry or grant registry permissions. Without
+this option, the image must be anonymously pullable.
+
+Review the output and repeat with `--apply`. This locks the retention policy,
+which cannot subsequently be shortened. The default of 1461 days covers the
+default archive horizon; raise `--retention-days` when increasing
+`archive_years_after_year_end`. Existing storage must already meet that duration.
+The script verifies the lock and rejects protected append writes, shared account
+keys, and public blob access before deploying the job. Its schedule retries on
+the next minute rather than adding platform retries to a failed execution.
+
+The deployment identity must be able to read the signing key's public part and
+enumerate the API identity's security groups and inherited RBAC assignments,
+including management-group policies. The script rejects direct, inherited, or
+conditional API roles that can use audit storage, sign, read the worker
+database secret, or change worker resources and permissions.
+Remove broad API grants when this check fails. Key Vault role propagation can
+take time; rerun the deployment after a newly assigned role becomes effective.
+The worker's inherited roles are checked too: evidence deletion, retention
+changes, key/secret administration, and modifying its own job are rejected.
+
+Configure the API's Key Vault secret store to resolve the same `AUDIT_ENTRY_KEY`
+and existing `SINK_TOKEN_ENCRYPTION_KEY`, plus the same public `AUDIT_KID` and
+`AUDIT_VERIFYING_KEYS`. The Azure API disables process-environment overrides for
+these secrets. The two shared secret values must match byte for byte. The
+planner does not read their contents; the launcher checks the database URL when
+the job starts. Secret references are version-pinned, so rotation requires a
+coordinated API reload and worker redeployment. For entry-key rotation, pass
+`--previous-entry-key-secret-uri` for the previous key and publish that same
+previous value as the API's `AUDIT_ENTRY_KEY_PREVIOUS` while old records drain.
+
+Set `AUDIT_WORKER=off` on the API and remove signing-key, audit bucket, and
+`AUDIT_KMS_*` settings. API startup rejects worker settings. Verify a signed
+checkpoint from `checkpoints/YYYY/MM/DD.json` after deployment and copy
+checkpoints to an independently controlled destination. The shared worker
+binary's `--verify-checkpoint FILE` mode uses public verifying keys and a
+database account that can only read evidence; invoke that binary directly for
+verification because the Azure launcher accepts only `--once`. Alert on failed
+jobs and missing or stale checkpoints. Lifecycle tiering and Monitor alert
+resources remain separate deployment configuration.
+
 ## PostgreSQL identity and lifecycle
 
 Configure the API with:
@@ -116,6 +238,25 @@ alter default privileges for role "<migration managed identity name>"
 Run the existing-table grants after initial schema creation. Default privileges
 cover future objects created by the named migration identity. Keep DDL, role
 administration, and database ownership off the API identity.
+
+Restrict the audit tables after every schema migration. Create the audit worker's
+Entra principal with `pgaadauth_create_principal_with_oid`, using its own managed
+identity name and principal UUID as for the API. Its password-free URL belongs
+only in the worker's Key Vault secret. With the schema owner's short-lived
+`DATABASE_URL` available to Bun, run:
+
+```sh
+AUDIT_DB_GRANTS_ONLY=true \
+API_DATABASE_ROLE='<API managed identity name>' \
+AUDIT_DATABASE_ROLE='<audit worker managed identity name>' \
+bun apps/backend/shared/audit_database_roles.ts
+```
+
+This mode preserves both managed-identity logins and does not set their passwords. It
+restricts API audit access to reading evidence and inserting pending records;
+the worker owns sealing, signing state, archives, and its lease. Run it before
+starting either workload, with Bun's `pg` dependency available. Neither role may
+inherit a schema owner or another role that restores the revoked privileges.
 
 ### Rejected database configuration
 

@@ -13,6 +13,8 @@ import {
 	useInvoke,
 	useSpotlightStore,
 } from "@flow-like/flow-like-ui";
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
@@ -20,9 +22,10 @@ import {
 	BookmarkMinus,
 	BookmarkPlus,
 	ExternalLink,
+	Server,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -39,7 +42,7 @@ interface SpotlightWrapperProps {
 
 export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const { t } = useTranslation("common");
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const { setTheme } = useTheme();
@@ -282,6 +285,21 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const additionalItems = useMemo<SpotlightItem[]>(() => {
 		const items: SpotlightItem[] = [...openBoardItems];
 
+		items.push({
+			id: "nav-devices",
+			type: "navigation",
+			label: t("devices", "Devices"),
+			description: t(
+				"devicesOverviewDescription",
+				"Manage all your devices, deployments, and certificates",
+			),
+			icon: Server,
+			group: "navigation",
+			keywords: ["devices", "fleet", "servers", "deployments", "certificates"],
+			priority: 80,
+			action: () => router.push("/settings/devices"),
+		});
+
 		if (isCurrentPageShortcut) {
 			items.push({
 				id: "action-remove-shortcut",
@@ -354,7 +372,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					"exit",
 				],
 				priority: 30,
-				action: () => auth.signoutRedirect(),
+				action: () =>
+					clearPageSurfaceCache().then(() => auth.signoutRedirect()),
 			});
 
 			items.push({
@@ -489,6 +508,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		handleRemoveShortcut,
 		shortcuts,
 		appMetadata.data,
+		t,
 	]);
 
 	const handleQuickCreateProject = useCallback(

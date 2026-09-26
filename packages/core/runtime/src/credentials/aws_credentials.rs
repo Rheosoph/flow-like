@@ -1,9 +1,9 @@
 #[cfg(feature = "flow-runtime")]
 use crate::credentials::{LogsDbBuilder, db_path_from_base};
 use crate::credentials::{SharedCredentialsTrait, StoreType};
-use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
-use flow_like_storage::lancedb;
+use flow_like_storage::databases::vector::lancedb::connect_lance;
+use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 #[cfg(feature = "flow-runtime")]
@@ -332,7 +332,7 @@ fn make_s3_builder(
     let storage_options = s3_storage_options(config);
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
-        let mut builder = lancedb::connect(&url)
+        let mut builder = connect_lance(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
             .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
             .storage_option("aws_region".to_string(), region.clone());

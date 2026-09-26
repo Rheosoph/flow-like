@@ -228,6 +228,21 @@ pub(crate) async fn get_or_rotate_room_key_with_db(
     app_id: &str,
     board_id: &str,
 ) -> Result<(String, String), ApiError> {
+    // The key rotates once a day, so nearly every call can be answered from the committed row
+    // without touching the coordination lock; only rotation and creation need to serialize.
+    let today = chrono::Utc::now().fixed_offset().date_naive();
+    let committed = BoardSync::find()
+        .filter(board_sync::Column::AppId.eq(app_id))
+        .filter(board_sync::Column::BoardId.eq(board_id))
+        .one(db)
+        .await?;
+    if let Some(current) = committed
+        .as_ref()
+        .and_then(|sync| current_room_key(sync, today))
+    {
+        return Ok(current);
+    }
+
     let app_id = app_id.to_owned();
     let board_id = board_id.to_owned();
     crate::db::retry_transaction(
@@ -247,6 +262,20 @@ pub(crate) async fn get_or_rotate_room_key_with_db(
     .await
 }
 
+/// The stored `(key, key_id)` when it was issued today and therefore needs no rotation.
+fn current_room_key(
+    sync: &board_sync::Model,
+    today: chrono::NaiveDate,
+) -> Option<(String, String)> {
+    let issued_on = sync.last_synced_at.date_naive();
+    (issued_on >= today).then(|| {
+        (
+            sync.sync_encryption_key.clone(),
+            issued_on.format("%Y-%m-%d").to_string(),
+        )
+    })
+}
+
 async fn room_key_in_transaction(
     txn: &sea_orm::DatabaseTransaction,
     app_id: &str,
@@ -262,16 +291,14 @@ async fn room_key_in_transaction(
         .one(txn)
         .await?;
 
+    if let Some(current) = existing
+        .as_ref()
+        .and_then(|sync| current_room_key(sync, today))
+    {
+        return Ok(current);
+    }
+
     let encryption_key = match existing {
-        Some(sync) if sync.last_synced_at.date_naive() >= today => {
-            return Ok((
-                sync.sync_encryption_key,
-                sync.last_synced_at
-                    .date_naive()
-                    .format("%Y-%m-%d")
-                    .to_string(),
-            ));
-        }
         Some(sync) => {
             let new_key = generate_encryption_key();
             let mut active_sync: board_sync::ActiveModel = sync.into();

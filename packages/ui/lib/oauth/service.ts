@@ -65,6 +65,30 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
 		.replace(/=+$/, "");
 }
 
+interface IRefreshTokenResponse {
+	access_token: string;
+	refresh_token?: string;
+	expires_in?: number;
+	token_type?: string;
+}
+
+/** Only a refusal ends a refresh token; a 5xx, timeout or rate limit says nothing about it. */
+function refreshRefused(status: number): boolean {
+	return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/** A 2xx without an access token (an upstream error body) must not replace the stored token. */
+function readRefreshResponse(
+	body: unknown,
+	providerId: string,
+): IRefreshTokenResponse {
+	const accessToken = (body as { access_token?: unknown } | null)?.access_token;
+	if (typeof accessToken !== "string" || !accessToken) {
+		throw new Error(`Token refresh for ${providerId} returned no access_token`);
+	}
+	return body as IRefreshTokenResponse;
+}
+
 export interface OAuthServiceConfig {
 	runtime: IOAuthRuntime;
 	tokenStore: IOAuthTokenStoreWithPending;
@@ -578,16 +602,16 @@ export function createOAuthService(config: OAuthServiceConfig) {
 
 				if (!response.ok) {
 					await response.text();
-					await tokenStore.deleteToken(provider.id);
+					if (refreshRefused(response.status)) {
+						await tokenStore.deleteToken(provider.id);
+					}
 					throw new Error(`Token refresh failed: ${response.status}`);
 				}
 
-				const tokenResponse = (await response.json()) as {
-					access_token: string;
-					refresh_token?: string;
-					expires_in?: number;
-					token_type?: string;
-				};
+				const tokenResponse = readRefreshResponse(
+					await response.json(),
+					provider.id,
+				);
 
 				const updatedToken: IStoredOAuthToken = {
 					...token,
@@ -633,16 +657,16 @@ export function createOAuthService(config: OAuthServiceConfig) {
 
 			if (!response.ok) {
 				await response.text();
-				await tokenStore.deleteToken(provider.id);
+				if (refreshRefused(response.status)) {
+					await tokenStore.deleteToken(provider.id);
+				}
 				throw new Error(`Token refresh failed: ${response.status}`);
 			}
 
-			const tokenResponse = (await response.json()) as {
-				access_token: string;
-				refresh_token?: string;
-				expires_in?: number;
-				token_type?: string;
-			};
+			const tokenResponse = readRefreshResponse(
+				await response.json(),
+				provider.id,
+			);
 
 			const updatedToken: IStoredOAuthToken = {
 				...token,

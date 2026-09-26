@@ -149,14 +149,23 @@ pub async fn list_discounts(
     Path(app_id): Path<String>,
     Query(query): Query<ListDiscountsQuery>,
 ) -> Result<Json<Vec<DiscountResponse>>, ApiError> {
-    let sub = user.sub()?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
-    verify_sales_access(&state, &sub, &app_id).await?;
+    Ok(Json(
+        discounts_for_app(&state, &app_id, query.active_only).await?,
+    ))
+}
 
+/// The app's discounts, newest first. Callers must verify access first.
+pub(super) async fn discounts_for_app(
+    state: &AppState,
+    app_id: &str,
+    active_only: bool,
+) -> Result<Vec<DiscountResponse>, ApiError> {
     let mut query_builder =
-        app_discount::Entity::find().filter(app_discount::Column::AppId.eq(&app_id));
+        app_discount::Entity::find().filter(app_discount::Column::AppId.eq(app_id));
 
-    if query.active_only {
+    if active_only {
         query_builder = query_builder.filter(app_discount::Column::IsActive.eq(true));
     }
 
@@ -165,9 +174,7 @@ pub async fn list_discounts(
         .all(&state.db)
         .await?;
 
-    let response: Vec<DiscountResponse> = discounts.into_iter().map(Into::into).collect();
-
-    Ok(Json(response))
+    Ok(discounts.into_iter().map(Into::into).collect())
 }
 
 /// GET /apps/{app_id}/sales/discounts/{discount_id} - Get a specific discount
@@ -201,9 +208,7 @@ pub async fn get_discount(
     Extension(user): Extension<AppUser>,
     Path((app_id, discount_id)): Path<(String, String)>,
 ) -> Result<Json<DiscountResponse>, ApiError> {
-    let sub = user.sub()?;
-
-    verify_sales_access(&state, &sub, &app_id).await?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
     let discount = app_discount::Entity::find_by_id(&discount_id)
         .filter(app_discount::Column::AppId.eq(&app_id))
@@ -243,9 +248,7 @@ pub async fn create_discount(
     Path(app_id): Path<String>,
     Json(body): Json<CreateDiscountRequest>,
 ) -> Result<Json<DiscountResponse>, ApiError> {
-    let sub = user.sub()?;
-
-    verify_sales_access(&state, &sub, &app_id).await?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
     // Validate discount code uniqueness for this app
     let existing = app_discount::Entity::find()
@@ -361,9 +364,7 @@ pub async fn update_discount(
     Path((app_id, discount_id)): Path<(String, String)>,
     Json(body): Json<UpdateDiscountRequest>,
 ) -> Result<Json<DiscountResponse>, ApiError> {
-    let sub = user.sub()?;
-
-    verify_sales_access(&state, &sub, &app_id).await?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
     let existing = app_discount::Entity::find_by_id(&discount_id)
         .filter(app_discount::Column::AppId.eq(&app_id))
@@ -489,9 +490,7 @@ pub async fn delete_discount(
     Extension(user): Extension<AppUser>,
     Path((app_id, discount_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let sub = user.sub()?;
-
-    verify_sales_access(&state, &sub, &app_id).await?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
     let existing = app_discount::Entity::find_by_id(&discount_id)
         .filter(app_discount::Column::AppId.eq(&app_id))
@@ -543,9 +542,7 @@ pub async fn toggle_discount(
     Extension(user): Extension<AppUser>,
     Path((app_id, discount_id)): Path<(String, String)>,
 ) -> Result<Json<DiscountResponse>, ApiError> {
-    let sub = user.sub()?;
-
-    verify_sales_access(&state, &sub, &app_id).await?;
+    verify_sales_access(&state, &user, &app_id).await?;
 
     let existing = app_discount::Entity::find_by_id(&discount_id)
         .filter(app_discount::Column::AppId.eq(&app_id))

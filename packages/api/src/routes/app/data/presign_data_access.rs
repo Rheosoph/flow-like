@@ -127,7 +127,6 @@ pub async fn presign_data_access(
         "file.access.authorize",
         "Storage",
         app_id,
-        "Issued scoped app storage credentials",
         serde_json::json!({
             "scope": "app",
             "access_mode": access_mode,
@@ -222,7 +221,6 @@ pub async fn presign_user_data_access(
         "file.access.authorize",
         "Storage",
         app_id,
-        "Issued scoped private storage credentials",
         serde_json::json!({
             "scope": "user",
             "access_mode": access_mode,

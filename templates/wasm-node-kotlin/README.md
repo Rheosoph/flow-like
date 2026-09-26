@@ -172,14 +172,41 @@ The `Context` class provides helpers for common operations:
 
 ## Permissions
 
-Edit `flow-like.toml` to declare what your node needs:
+Declare what each node needs in code with `NodeDefinition.addPermission`. The sandbox
+grants a node exactly the permissions it declares, and the registry derives the store's
+capability listing from the compiled node definitions:
+
+```kotlin
+val def = NodeDefinition(
+    name = "my_node",
+    friendlyName = "My Node",
+    description = "Does something useful",
+    category = "Custom/WASM",
+)
+def.addPermission("streaming")     // Stream output to the UI
+def.addPermission("network:http")  // Outbound HTTP requests
+```
+
+Permission names: `network:http`, `network:websocket`, `network:tcp`, `network:udp`,
+`network:dns`, `storage:read`, `storage:write`, `database:read`, `database:write`,
+`variables`, `cache`, `streaming`, `models`, `a2ui`, `oauth`, `functions`. The SDK passes
+the string through unchanged, so use these exact names; a node definition with an
+unknown name fails to load.
+
+`flow-like.toml` only carries what a node cannot state: resource tiers, the package-wide
+outbound host allowlist and OAuth scopes. Capability flags are not authored there.
 
 ```toml
 [permissions]
 memory = "standard"     # minimal | light | standard | heavy | intensive
 timeout = "standard"    # quick | standard | extended | long_running
-variables = false       # Access to board variables
-cache = false           # Access to cache storage
-streaming = true        # Can stream output to UI
-models = false          # Access to ML models
+
+[permissions.network]
+allowed_hosts = []      # Package-wide outbound host allowlist (empty = unrestricted)
+
+# [[permissions.oauth_scopes]]
+# provider = "<provider id>"
+# scopes = ["<scope>"]
+# reason = "Why the package needs these scopes"
+# required = true
 ```

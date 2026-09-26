@@ -196,7 +196,7 @@ async fn ensure_action_board_published(
             ))
         })?;
     let (current, existing) = {
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         let current = guard.version;
         let existing = guard.get_versions(None).await.map_err(|error| {
             ApiError::internal(format!(
@@ -230,12 +230,12 @@ async fn ensure_action_board_published(
             .map(str::trim)
             .filter(|node_id| !node_id.is_empty())
             .ok_or_else(|| ApiError::bad_request("The ontology action has no start node"))?;
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         validated_action_parameter_schema(&guard, start_node_id)?;
     }
     let mut prepared = None;
     if pinned == current {
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         if existing.contains(&pinned) {
             if publish_draft {
                 let unchanged =
@@ -320,7 +320,7 @@ async fn ensure_action_board_published(
         // ontology commit succeeded but whose final pointer save may not have.
         // Finish that commit when content still matches; otherwise publish the
         // newer draft at another immutable patch.
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         if guard
             .snapshot_matches_current(pinned, None)
             .await
@@ -385,7 +385,7 @@ async fn derive_action_parameter_schema(
                 "Could not load the action's pinned board version to derive its parameter schema: {error}"
             ))
         })?;
-    let guard = board.lock().await;
+    let guard = board.snapshot();
     validated_action_parameter_schema(&guard, start_node_id)
 }
 
@@ -714,7 +714,7 @@ pub(crate) async fn commit_action_board_snapshots(
                 ))
             })?;
         let committed = board
-            .lock()
+            .write()
             .await
             .commit_prepared_snapshot(prepared, None)
             .await

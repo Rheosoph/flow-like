@@ -59,7 +59,8 @@ impl NodeLogic for FlushLocalDatabaseNode {
             VariableType::String,
         );
 
-        node.set_version(2);
+        super::references::add_reference_output(&mut node);
+        node.set_version(3);
         node
     }
 
@@ -80,6 +81,9 @@ impl NodeLogic for FlushLocalDatabaseNode {
             return Ok(());
         }
 
+        let reference =
+            super::references::optional_reference(cached_db.db.read().await.inner()).await?;
+        context.set_pin_value("reference", json!(reference)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

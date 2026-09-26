@@ -15,12 +15,14 @@ pub mod internal;
 pub mod ai_act;
 pub mod analytics;
 pub mod api;
+pub mod audit;
 pub mod board;
 pub mod cache;
 pub mod comments;
 pub mod connection;
 pub mod data;
 pub mod db;
+pub mod device_metadata;
 pub mod events;
 pub mod flowpilot_builds;
 pub mod fork;
@@ -59,6 +61,7 @@ pub fn routes() -> Router<AppState> {
                 .put(internal::upsert_app::upsert_app)
                 .delete(internal::delete_app::delete_app),
         )
+        .route("/{app_id}/device-metadata", get(device_metadata::export))
         .route("/{app_id}/detail", get(internal::get_detail::get_detail))
         .route(
             "/{app_id}/visibility",
@@ -124,6 +127,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/api", api::routes())
         .nest("/{app_id}/routes", route::routes())
         .nest("/{app_id}/ai-act", ai_act::routes())
+        .nest("/{app_id}/audit", audit::routes())
 }
 
 #[macro_export]

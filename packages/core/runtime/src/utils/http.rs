@@ -4,13 +4,13 @@ use flow_like_types::{
     reqwest::{self, Request},
     sync::{DashMap, mpsc},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use super::cache::{cache_file_exists, read_cache_file, write_cache_file};
+use super::cache::{cache_file_exists, delete_cache_file, read_cache_file, write_cache_file};
 
 /// Client for hub metadata requests.
 ///
@@ -37,12 +37,32 @@ const HEADERS_TO_CACHE: [&str; 8] = [
     "accept-language",
 ];
 
+/// The body a Lambda Function URL still answers with HTTP 200 when the
+/// function's runtime died. It is never data, so it must never be cached.
+pub fn is_upstream_failure_envelope(value: &Value) -> bool {
+    value.get("errorType").is_some_and(Value::is_string)
+        && value.get("errorMessage").is_some_and(Value::is_string)
+}
+
+fn accepts_as<T: DeserializeOwned>(value: &Value) -> bool {
+    !is_upstream_failure_envelope(value)
+        && flow_like_types::json::from_value::<T>(value.clone()).is_ok()
+}
+
+/// A background revalidation of a cached response. The replacement is only
+/// cached when it still parses as the type the cached copy was read as, so an
+/// outage answering 2xx with garbage cannot overwrite the good offline copy.
+pub struct Refetch {
+    pub request: Request,
+    pub accepts: fn(&Value) -> bool,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HTTPClient {
     pub cache: Arc<DashMap<String, Value>>,
 
     #[serde(skip)]
-    sender: Option<mpsc::Sender<Request>>,
+    sender: Option<mpsc::Sender<Refetch>>,
 
     /// Lazily initialized to avoid triggering iOS Network.framework
     /// before the run loop is active (causes `nw_dictionary_copy null`).
@@ -91,12 +111,18 @@ impl HTTPClient {
         }
 
         let value = response.json::<Value>().await?;
+        if is_upstream_failure_envelope(&value) {
+            return Err(flow_like_types::anyhow!(
+                "Request answered with an upstream failure envelope: {}",
+                value
+            ));
+        }
+        let parsed = flow_like_types::json::from_value::<T>(value.clone())?;
         let _ = self.put(request_hash, &value);
-        let value = flow_like_types::json::from_value::<T>(value.clone())?;
-        Ok(value)
+        Ok(parsed)
     }
 
-    pub fn new() -> (HTTPClient, mpsc::Receiver<Request>) {
+    pub fn new() -> (HTTPClient, mpsc::Receiver<Refetch>) {
         let (tx, rx) = mpsc::channel(1000);
         (
             HTTPClient {
@@ -116,21 +142,31 @@ impl HTTPClient {
         }
     }
 
-    /// Refetches the request
-    /// This is used to update the cache in the background
-    async fn refetch(&self, request: &Request) {
-        if let Some(sender) = &self.sender {
-            match request.try_clone() {
-                Some(cloned) => {
-                    if let Err(e) = sender.send_timeout(cloned, Duration::from_secs(30)).await {
-                        eprintln!("Failed to send request: {}", e);
-                    }
-                }
-                None => {
-                    eprintln!("Skipping refetch: request body is not clonable");
-                }
-            }
+    /// Queues a background revalidation. A cached read never waits for it: when
+    /// the queue is full (the hub is slow or unreachable) the refetch is dropped.
+    fn refetch<T: DeserializeOwned>(&self, request: &Request) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let Some(request) = request.try_clone() else {
+            tracing::debug!("Skipping refetch: request body is not clonable");
+            return;
+        };
+        if let Err(error) = sender.try_send(Refetch {
+            request,
+            accepts: accepts_as::<T>,
+        }) {
+            tracing::debug!("Skipping refetch: {}", error);
         }
+    }
+
+    fn cached_value(&self, request_hash: &str) -> Option<Value> {
+        let value = self.cache.get(request_hash)?.value().clone();
+        if is_upstream_failure_envelope(&value) {
+            self.cache.remove(request_hash);
+            return None;
+        }
+        Some(value)
     }
 
     /// Fastest cache, but not persistent
@@ -143,13 +179,11 @@ impl HTTPClient {
         for<'de> T: Deserialize<'de> + Clone,
     {
         let value = self
-            .cache
-            .get(request_hash)
+            .cached_value(request_hash)
             .ok_or(flow_like_types::anyhow!("Value not found in cache"))?;
-        let value = value.value();
-        let value = flow_like_types::json::from_value::<T>(value.clone())?;
+        let value = flow_like_types::json::from_value::<T>(value)?;
 
-        self.refetch(request).await;
+        self.refetch::<T>(request);
         Ok(value)
     }
 
@@ -171,10 +205,16 @@ impl HTTPClient {
 
         let cache_string = read_cache_file(&string_hash)?;
         let generic_value = flow_like_types::json::from_slice::<Value>(&cache_string)?;
+        if is_upstream_failure_envelope(&generic_value) {
+            let _ = delete_cache_file(&string_hash);
+            return Err(flow_like_types::anyhow!(
+                "Cache file holds an upstream failure envelope"
+            ));
+        }
         self.cache
             .insert(request_hash.to_string(), generic_value.clone());
         let value = flow_like_types::json::from_value::<T>(generic_value)?;
-        self.refetch(request).await;
+        self.refetch::<T>(request);
         Ok(value)
     }
 
@@ -235,5 +275,38 @@ impl HTTPClient {
         self.cache.insert(request_hash.to_string(), body.clone());
         write_cache_file(&string_hash, &flow_like_types::json::to_vec(body)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::json::json;
+
+    #[derive(Deserialize)]
+    struct HubName {
+        #[allow(dead_code)]
+        name: String,
+    }
+
+    #[test]
+    fn a_crashed_lambda_envelope_is_never_accepted() {
+        let envelope = json!({
+            "errorType": "Runtime.ExitError",
+            "errorMessage": "RequestId: r Error: Runtime exited with error: exit status 101"
+        });
+        assert!(is_upstream_failure_envelope(&envelope));
+        assert!(!accepts_as::<Value>(&envelope));
+    }
+
+    #[test]
+    fn a_refetch_replaces_only_values_that_still_parse_as_the_cached_type() {
+        assert!(accepts_as::<HubName>(&json!({ "name": "hub" })));
+        assert!(!accepts_as::<HubName>(
+            &json!({ "message": "Service Unavailable" })
+        ));
+        assert!(!is_upstream_failure_envelope(
+            &json!({ "errorType": 1, "errorMessage": "not an envelope" })
+        ));
     }
 }

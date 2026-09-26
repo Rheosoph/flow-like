@@ -24,7 +24,6 @@ const SYSTEM_PROMPT = `You are an advanced AI writing assistant, similar to VSCo
 
 export const createCopilotKit = (appId?: string) => [
 	...MarkdownKit,
-	// @ts-ignore
 	CopilotPlugin.configure(({ api }) => ({
 		options: {
 			completeOptions: {
@@ -32,8 +31,8 @@ export const createCopilotKit = (appId?: string) => [
 				body: {
 					system: SYSTEM_PROMPT,
 				},
-				// @ts-ignore
-				fetch: async (request, init) => {
+				// Plate only calls `fetch(api, init)`; Bun's `typeof fetch` also declares `preconnect`.
+				fetch: (async (request, init) => {
 					const backend = useBackendStore.getState().backend;
 					console.dir({
 						request,
@@ -63,7 +62,7 @@ export const createCopilotKit = (appId?: string) => [
 					const text = response.choices[0]?.message?.content || "0";
 
 					return new Response(JSON.stringify({ ...response, text: text }));
-				},
+				}) as typeof fetch,
 				onError: (err) => {
 					// Mock the API response. Remove it when you implement the route /api/ai/copilot
 					console.warn(err);

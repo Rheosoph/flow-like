@@ -22,7 +22,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::hub::Lookup;
-use flow_like_types::Value;
+use flow_like_types::{Value, tokio::try_join};
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
     sea_query::{Alias, Expr, ExprTrait, Func, Order, SimpleExpr, extension::postgres::PgBinOper},
@@ -500,25 +500,34 @@ pub async fn user_search(
             .order_by_asc(user::Column::Id)
             .limit(limit),
     };
-    let exact_matches = exact_query.all(&state.db).await?;
+    let fuzzy_query = term.as_ref().map(|term| {
+        ranked_candidates(
+            scoped(user::Entity::find().filter(search_condition(term))),
+            term,
+            limit,
+        )
+    });
 
     // Pasting an id or address that already resolved needs no substring scan; typing
     // a name still gets one, so near-matches keep showing up alongside an exact hit.
-    let resolved_identifier =
-        !exact_matches.is_empty() && (trimmed.contains('@') || is_idp_handle(trimmed));
+    // Only an identifier-shaped term can skip the scan, so every other term runs both
+    // passes at once instead of waiting on a result that cannot change the decision.
+    let looks_like_identifier = trimmed.contains('@') || is_idp_handle(trimmed);
 
-    let fuzzy_matches = match &term {
-        Some(_) if resolved_identifier => Vec::new(),
-        Some(term) => {
-            ranked_candidates(
-                scoped(user::Entity::find().filter(search_condition(term))),
-                term,
-                limit,
-            )
-            .all(&state.db)
-            .await?
+    let (exact_matches, fuzzy_matches) = match fuzzy_query {
+        Some(fuzzy_query) if !looks_like_identifier => {
+            try_join!(exact_query.all(&state.db), fuzzy_query.all(&state.db))?
         }
-        None => Vec::new(),
+        Some(fuzzy_query) => {
+            let exact_matches = exact_query.all(&state.db).await?;
+            let fuzzy_matches = if exact_matches.is_empty() {
+                fuzzy_query.all(&state.db).await?
+            } else {
+                Vec::new()
+            };
+            (exact_matches, fuzzy_matches)
+        }
+        None => (exact_query.all(&state.db).await?, Vec::new()),
     };
 
     let mut seen = HashSet::with_capacity(exact_matches.len() + fuzzy_matches.len());

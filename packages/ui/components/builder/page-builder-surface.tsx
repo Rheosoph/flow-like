@@ -10,9 +10,12 @@ import {
 	Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useInvoke } from "../../hooks/use-invoke";
+import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
+import { isMissingResourceError } from "../../lib/api-error";
+import { addNodeCommand } from "../../lib/command/generic-command";
 import { parseDateValue } from "../../lib/date";
+import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type {
 	IPage,
@@ -37,6 +40,15 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
 import { WidgetBuilder } from "./WidgetBuilder";
+import { PageNoCacheSetting } from "./page-no-cache-setting";
+import {
+	type CreateWorkflowEventRequest,
+	WORKFLOW_EVENT_NODE_NAMES,
+	getPageWorkflowEvents,
+	nextWorkflowEventCoordinates,
+	resolvePageBoardId,
+	workflowEventsForComponent,
+} from "./page-workflow-events";
 
 const AUTO_SAVE_DELAY = 2000; // 2 seconds debounce for components
 const METADATA_SAVE_DELAY = 1000; // 1 second debounce for metadata/canvas settings (shorter to reduce data loss)
@@ -92,6 +104,9 @@ export function PageBuilderSurface({
 }: Readonly<PageBuilderSurfaceProps>) {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
+	const invalidate = useInvalidateInvoke();
+	const [page, setPage] = useState<IPage | null>(null);
+	const effectiveBoardId = resolvePageBoardId(boardId, pageId, page);
 
 	// Fetch all pages for the app (for action context)
 	const allPages = useInvoke(
@@ -115,16 +130,79 @@ export function PageBuilderSurface({
 		!!appId,
 	);
 
-	// Fetch board to extract workflow events (simple event nodes)
+	// Fetch the linked board, including when the page was opened without a board URL parameter.
 	const board = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
-		[appId, boardId ?? ""],
-		!!appId && !!boardId,
-		[appId, boardId],
+		[appId, effectiveBoardId ?? ""],
+		!!appId && !!effectiveBoardId,
+		[appId, effectiveBoardId],
+	);
+	// Fetched on first use: only creating an event node needs the catalog.
+	const catalog = useInvoke(
+		backend.boardState.getCatalog,
+		backend.boardState,
+		[appId],
+		false,
+	);
+	const { refetch: refetchBoard } = board;
+	const { data: catalogNodes, refetch: refetchCatalog } = catalog;
+	const boardNodes = board.data?.nodes;
+	const hasBoard = !!appId && !!effectiveBoardId;
+
+	const refreshWorkflowEvents = useCallback(() => {
+		if (hasBoard) void refetchBoard({ cancelRefetch: false });
+	}, [hasBoard, refetchBoard]);
+
+	const createWorkflowEvent = useCallback(
+		async ({ name, kind }: CreateWorkflowEventRequest) => {
+			if (!effectiveBoardId) {
+				throw new Error(
+					`Cannot create a workflow event: page "${pageId}" is not linked to a board.`,
+				);
+			}
+			const nodeName = WORKFLOW_EVENT_NODE_NAMES[kind];
+			const nodes =
+				catalogNodes ?? (await refetchCatalog({ throwOnError: true })).data;
+			const template = nodes?.find((node) => node.name === nodeName);
+			if (!template) {
+				throw new Error(
+					t(
+						"workflowEventNodeMissingFromCatalog",
+						"The {{node}} node is not in this app's catalog, so the event could not be created.",
+						{ node: nodeName },
+					),
+				);
+			}
+			const { command, node } = addNodeCommand({
+				node: {
+					...structuredClone(template),
+					friendly_name: name,
+					coordinates: nextWorkflowEventCoordinates(boardNodes),
+				},
+				current_layer: null,
+			});
+			const executed = await backend.boardState.executeCommand(
+				appId,
+				effectiveBoardId,
+				command,
+			);
+			await refetchBoard();
+			return { nodeId: executed?.node?.id ?? node.id, name, kind };
+		},
+		[
+			appId,
+			pageId,
+			effectiveBoardId,
+			catalogNodes,
+			refetchCatalog,
+			boardNodes,
+			backend.boardState,
+			refetchBoard,
+			t,
+		],
 	);
 
-	const [page, setPage] = useState<IPage | null>(null);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isSaving, setIsSaving] = useState(false);
 	const [showSettings, setShowSettings] = useState(false);
@@ -143,29 +221,23 @@ export function PageBuilderSurface({
 
 	// Build action context for the widget builder (pages, workflow events, behavior hooks)
 	const actionContext = useMemo(() => {
-		const pages =
-			allPages.data?.map((pageInfo) => ({
-				id: pageInfo.pageId,
-				name: pageInfo.name || pageInfo.pageId,
-			})) ?? [];
+		const pages = asArray(allPages.data).map((pageInfo) => ({
+			id: pageInfo.pageId,
+			name: pageInfo.name || pageInfo.pageId,
+		}));
 
-		const workflowEvents = board.data?.nodes
-			? Object.values(board.data.nodes)
-					.filter((node) => node.name === "events_simple")
-					.map((node) => ({
-						nodeId: node.id,
-						name:
-							node.friendly_name ||
-							node.comment ||
-							t("unnamedEvent", "Unnamed Event"),
-					}))
-			: [];
+		const workflowEvents = getPageWorkflowEvents(
+			boardNodes,
+			t("unnamedEvent", "Unnamed Event"),
+		);
 
 		return {
 			appId,
-			boardId,
+			boardId: effectiveBoardId,
 			pages,
 			workflowEvents,
+			refreshWorkflowEvents,
+			createWorkflowEvent: hasBoard ? createWorkflowEvent : undefined,
 			// Pass behavior hooks for preview mode
 			pageId: page?.id,
 			onLoadEventId: page?.onLoadEventId,
@@ -173,7 +245,17 @@ export function PageBuilderSurface({
 			onIntervalEventId: page?.onIntervalEventId,
 			onIntervalSeconds: page?.onIntervalSeconds,
 		};
-	}, [appId, boardId, page, allPages.data, board.data?.nodes, t]);
+	}, [
+		appId,
+		effectiveBoardId,
+		page,
+		allPages.data,
+		boardNodes,
+		refreshWorkflowEvents,
+		createWorkflowEvent,
+		hasBoard,
+		t,
+	]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only names a page that does not exist yet; re-running on a language switch would reload over the working copy.
 	useEffect(() => {
@@ -203,7 +285,20 @@ export function PageBuilderSurface({
 				lastSavedWidgetRefsRef.current = JSON.stringify(
 					loadedPage.widgetRefs ?? {},
 				);
-			} catch {
+			} catch (error) {
+				// Only a confirmed miss may become a blank page. After any other failure (server
+				// unreachable, payload not on this device) a stand-in would autosave over the
+				// real page.
+				const confirmedMiss =
+					isMissingResourceError(error) ||
+					(error instanceof Error &&
+						error.message.startsWith("Page not found"));
+				if (!confirmedMiss) {
+					console.error("Failed to load page", error);
+					setPage(null);
+					pageRef.current = null;
+					return;
+				}
 				const newPage: IPage = {
 					id: pageId,
 					name: t("newPage", "New Page"),
@@ -226,6 +321,17 @@ export function PageBuilderSurface({
 		loadPage();
 	}, [pageId, appId, boardId, backend.pageState]);
 
+	const savePage = useCallback(
+		async (pageToSave: IPage) => {
+			await backend.pageState.updatePage(appId, pageToSave);
+			const linkedBoardId = pageToSave.boardId || boardId;
+			if (linkedBoardId) {
+				await invalidate(backend.boardState.getBoard, [appId, linkedBoardId]);
+			}
+		},
+		[appId, boardId, backend.pageState, backend.boardState, invalidate],
+	);
+
 	// Save pending changes on unmount instead of just cancelling
 	useEffect(() => {
 		return () => {
@@ -244,13 +350,13 @@ export function PageBuilderSurface({
 						...currentPage,
 						updatedAt: new Date().toISOString(),
 					};
-					backend.pageState.updatePage(appId, pageToSave).catch((error) => {
+					savePage(pageToSave).catch((error) => {
 						console.error("Failed to save page on unmount:", error);
 					});
 				}
 			}
 		};
-	}, [appId, backend.pageState]);
+	}, [appId, savePage]);
 
 	// Keyboard shortcut to jump to flow editor (Cmd/Ctrl+Shift+F)
 	useEffect(() => {
@@ -296,7 +402,7 @@ export function PageBuilderSurface({
 					widgetRefs: nextWidgetRefs,
 					updatedAt: new Date().toISOString(),
 				};
-				await backend.pageState.updatePage(appId, updatedPage);
+				await savePage(updatedPage);
 				pageRef.current = updatedPage;
 				setPage(updatedPage);
 				lastSavedComponentsRef.current = componentsJson;
@@ -309,7 +415,7 @@ export function PageBuilderSurface({
 				setIsSaving(false);
 			}
 		},
-		[appId, backend.pageState],
+		[appId, savePage],
 	);
 
 	// Handle component changes from WidgetBuilder - triggers auto-save
@@ -385,7 +491,7 @@ export function PageBuilderSurface({
 						...currentPage,
 						updatedAt: new Date().toISOString(),
 					};
-					await backend.pageState.updatePage(appId, pageToSave);
+					await savePage(pageToSave);
 					pageRef.current = pageToSave;
 					setPage(pageToSave);
 					setLastSavedAt(new Date());
@@ -396,7 +502,7 @@ export function PageBuilderSurface({
 				}
 			}, METADATA_SAVE_DELAY);
 		},
-		[appId, backend.pageState],
+		[appId, savePage],
 	);
 
 	const handleSaveMetadata = useCallback(async () => {
@@ -416,7 +522,7 @@ export function PageBuilderSurface({
 				...currentPage,
 				updatedAt: new Date().toISOString(),
 			};
-			await backend.pageState.updatePage(appId, pageToSave);
+			await savePage(pageToSave);
 			pageRef.current = pageToSave;
 			setPage(pageToSave);
 			setLastSavedAt(new Date());
@@ -425,7 +531,7 @@ export function PageBuilderSurface({
 		} finally {
 			setIsSaving(false);
 		}
-	}, [appId, backend.pageState]);
+	}, [appId, savePage]);
 
 	if (!pageId) {
 		return (
@@ -590,7 +696,10 @@ export function PageBuilderSurface({
 								onUpdatePage={updatePageProperty}
 								onSave={handleSaveMetadata}
 								isSaving={isSaving}
-								workflowEvents={actionContext.workflowEvents}
+								workflowEvents={workflowEventsForComponent(
+									actionContext.workflowEvents,
+								)}
+								onRefreshWorkflowEvents={refreshWorkflowEvents}
 							/>
 						</ScrollArea>
 					</SheetContent>
@@ -606,14 +715,19 @@ function PageSettingsPanel({
 	onSave,
 	isSaving,
 	workflowEvents,
+	onRefreshWorkflowEvents,
 }: Readonly<{
 	page: IPage;
 	onUpdatePage: <K extends keyof IPage>(key: K, value: IPage[K]) => void;
 	onSave: () => void;
 	isSaving: boolean;
 	workflowEvents: { nodeId: string; name: string }[];
+	onRefreshWorkflowEvents: () => void;
 }>) {
 	const { t } = useTranslation("common");
+	const refreshEventsOnOpen = (open: boolean) => {
+		if (open) onRefreshWorkflowEvents();
+	};
 	const updateMeta = (key: string, value: string | undefined) => {
 		const currentMeta = page.meta || { keywords: [] };
 		onUpdatePage("meta", { ...currentMeta, [key]: value });
@@ -692,6 +806,7 @@ function PageSettingsPanel({
 						onValueChange={(v) =>
 							onUpdatePage("onLoadEventId", v === "none" ? undefined : v)
 						}
+						onOpenChange={refreshEventsOnOpen}
 					>
 						<SelectTrigger>
 							<SelectValue
@@ -713,6 +828,12 @@ function PageSettingsPanel({
 							"Executes when the page first loads",
 						)}
 					</p>
+					{page.onLoadEventId && (
+						<PageNoCacheSetting
+							noCache={page.noCache === true}
+							onChange={(noCache) => onUpdatePage("noCache", noCache)}
+						/>
+					)}
 				</div>
 
 				<div className="space-y-2">
@@ -722,6 +843,7 @@ function PageSettingsPanel({
 						onValueChange={(v) =>
 							onUpdatePage("onUnloadEventId", v === "none" ? undefined : v)
 						}
+						onOpenChange={refreshEventsOnOpen}
 					>
 						<SelectTrigger>
 							<SelectValue
@@ -752,6 +874,7 @@ function PageSettingsPanel({
 						onValueChange={(v) =>
 							onUpdatePage("onIntervalEventId", v === "none" ? undefined : v)
 						}
+						onOpenChange={refreshEventsOnOpen}
 					>
 						<SelectTrigger>
 							<SelectValue

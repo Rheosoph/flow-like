@@ -60,9 +60,10 @@ async fn playable_store_url(
     local: bool,
 ) -> Result<Option<String>> {
     let url = match store {
-        FlowLikeStore::AWS(_) | FlowLikeStore::Google(_) | FlowLikeStore::Azure(_) => {
-            store.sign("GET", path, ttl).await?.to_string()
-        }
+        FlowLikeStore::AWS(_)
+        | FlowLikeStore::Google(_)
+        | FlowLikeStore::Azure(_)
+        | FlowLikeStore::Signed(_) => store.sign("GET", path, ttl).await?.to_string(),
         FlowLikeStore::Local(store) if local => {
             let path = store.path_to_filesystem(path)?;
             let path = path

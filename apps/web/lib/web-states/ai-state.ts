@@ -6,6 +6,16 @@ import type {
 } from "@flow-like/flow-like-ui";
 import { type WebBackendRef, getApiBaseUrl } from "./api-utils";
 
+const parseDataLines = (lines: readonly string[]): IResponseChunk[] =>
+	lines.flatMap((line) => {
+		if (!line.startsWith("data: ")) return [];
+		try {
+			return [JSON.parse(line.slice(6)) as IResponseChunk];
+		} catch {
+			return [];
+		}
+	});
+
 export class WebAIState implements IAIState {
 	constructor(private readonly backend: WebBackendRef) {}
 
@@ -41,33 +51,29 @@ export class WebAIState implements IAIState {
 
 		const reader = response.body.getReader();
 		const decoder = new TextDecoder();
+		// A `data:` line can span two network reads; the tail waits for the next one.
+		let pending = "";
 
 		return new ReadableStream<IResponseChunk[]>({
+			// A pull that enqueues nothing is not repeated, so read until a chunk or the end.
 			async pull(controller) {
-				const { done, value } = await reader.read();
-				if (done) {
-					controller.close();
-					return;
-				}
+				for (;;) {
+					const { done, value } = await reader.read();
+					pending += decoder.decode(value, { stream: !done });
+					const lines = pending.split("\n");
+					pending = done ? "" : (lines.pop() ?? "");
+					const chunks = parseDataLines(lines);
 
-				const text = decoder.decode(value, { stream: true });
-				const lines = text.split("\n");
-				const chunks: IResponseChunk[] = [];
-
-				for (const line of lines) {
-					if (line.startsWith("data: ")) {
-						try {
-							const data = JSON.parse(line.slice(6));
-							chunks.push(data);
-						} catch {
-							// Ignore parse errors
-						}
+					if (chunks.length > 0) controller.enqueue(chunks);
+					if (done) {
+						controller.close();
+						return;
 					}
+					if (chunks.length > 0) return;
 				}
-
-				if (chunks.length > 0) {
-					controller.enqueue(chunks);
-				}
+			},
+			cancel(reason) {
+				return reader.cancel(reason);
 			},
 		});
 	}

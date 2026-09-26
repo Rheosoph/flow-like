@@ -1,5 +1,5 @@
 use crate::{
-    entity::{certificate, course, meta, user},
+    entity::{certificate, meta, user},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::course::{access::ensure_course_readable, progress::required_lessons_completed},
@@ -9,10 +9,13 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use flow_like_types::{create_id, tokio::try_join};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use utoipa::ToSchema;
 
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
@@ -56,38 +59,75 @@ fn verified_display_name(user: &user::Model) -> String {
         .unwrap_or_else(|| "Anonymous".to_string())
 }
 
+type CourseMetaNames = HashMap<String, Vec<(String, String)>>;
+
+async fn recipient_display_name(state: &AppState, user_id: &str) -> Result<String, ApiError> {
+    Ok(user::Entity::find_by_id(user_id)
+        .one(&state.db)
+        .await?
+        .map(|user| verified_display_name(&user))
+        .unwrap_or_else(|| "Anonymous".to_string()))
+}
+
+async fn course_meta_names(
+    state: &AppState,
+    course_ids: Vec<String>,
+) -> Result<CourseMetaNames, ApiError> {
+    let mut names = CourseMetaNames::new();
+    if course_ids.is_empty() {
+        return Ok(names);
+    }
+
+    let rows: Vec<(Option<String>, String, String)> = meta::Entity::find()
+        .select_only()
+        .columns([
+            meta::Column::CourseId,
+            meta::Column::Lang,
+            meta::Column::Name,
+        ])
+        .filter(meta::Column::CourseId.is_in(course_ids))
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+
+    for (course_id, lang, name) in rows {
+        if let Some(course_id) = course_id {
+            names.entry(course_id).or_default().push((lang, name));
+        }
+    }
+    Ok(names)
+}
+
+fn certificate_view(
+    cert: certificate::Model,
+    recipient_name: &str,
+    names: &CourseMetaNames,
+    language: &str,
+) -> CertificateView {
+    let course_name = names.get(&cert.course_id).and_then(|metas| {
+        metas
+            .iter()
+            .find(|(lang, _)| lang == language)
+            .or_else(|| metas.first())
+            .map(|(_, name)| name.clone())
+    });
+
+    let mut view: CertificateView = cert.into();
+    view.recipient_name = Some(recipient_name.to_string());
+    view.course_name = course_name;
+    view
+}
+
 async fn enrich_certificate(
     state: &AppState,
     cert: certificate::Model,
     language: &str,
 ) -> Result<CertificateView, ApiError> {
-    let recipient_name = user::Entity::find_by_id(&cert.user_id)
-        .one(&state.db)
-        .await?
-        .map(|user| verified_display_name(&user))
-        .or_else(|| Some("Anonymous".to_string()));
-
-    let course_name = if let Some(_c) = course::Entity::find_by_id(&cert.course_id)
-        .one(&state.db)
-        .await?
-    {
-        let metas = meta::Entity::find()
-            .filter(meta::Column::CourseId.eq(&cert.course_id))
-            .all(&state.db)
-            .await?;
-        metas
-            .iter()
-            .find(|m| m.lang == language)
-            .or_else(|| metas.first())
-            .map(|m| m.name.clone())
-    } else {
-        None
-    };
-
-    let mut view: CertificateView = cert.into();
-    view.recipient_name = recipient_name;
-    view.course_name = course_name;
-    Ok(view)
+    let (recipient_name, names) = try_join!(
+        recipient_display_name(state, &cert.user_id),
+        course_meta_names(state, vec![cert.course_id.clone()]),
+    )?;
+    Ok(certificate_view(cert, &recipient_name, &names, language))
 }
 
 #[utoipa::path(
@@ -166,14 +206,23 @@ pub async fn list_my_certificates(
     let sub = user.sub()?;
     let language = q.language.clone().unwrap_or_else(|| "en".to_string());
     let rows = certificate::Entity::find()
-        .filter(certificate::Column::UserId.eq(sub))
+        .filter(certificate::Column::UserId.eq(&sub))
         .all(&state.db)
         .await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(enrich_certificate(&state, row, &language).await?);
+    if rows.is_empty() {
+        return Ok(Json(vec![]));
     }
-    Ok(Json(out))
+
+    let course_ids = rows.iter().map(|row| row.course_id.clone()).collect();
+    let (recipient_name, names) = try_join!(
+        recipient_display_name(&state, &sub),
+        course_meta_names(&state, course_ids),
+    )?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| certificate_view(row, &recipient_name, &names, &language))
+            .collect(),
+    ))
 }
 
 #[utoipa::path(

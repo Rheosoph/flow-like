@@ -5,6 +5,7 @@ import { contractDefaults } from "@flow-like/widget-sdk";
 import {
 	Blocks,
 	MonitorPause,
+	Package,
 	Play,
 	Square,
 	TriangleAlert,
@@ -41,6 +42,7 @@ import {
 	CardHeader,
 	CardTitle,
 } from "../ui/card";
+import { WidgetNetworkSummary } from "./widget-network-access";
 
 const MAX_KEYWORD_CHIPS = 4;
 
@@ -55,6 +57,8 @@ export interface WidgetCardProps {
 	packageVersion?: string;
 	/** Widget bundle sha256 for desktop (`flow-widget://`) preview serving. */
 	bundleHash?: string | null;
+	/** Shown under the name where widgets of several packages share a grid. */
+	packageName?: string;
 	className?: string;
 }
 
@@ -244,6 +248,7 @@ export function WidgetCard({
 	packageId,
 	packageVersion,
 	bundleHash,
+	packageName,
 	className,
 }: WidgetCardProps) {
 	const { t } = useTranslation("store");
@@ -324,6 +329,12 @@ export function WidgetCard({
 						<CardTitle className="truncate text-sm font-medium">
 							{widget.name}
 						</CardTitle>
+						{packageName && (
+							<p className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground">
+								<Package className="h-3 w-3 shrink-0" aria-hidden="true" />
+								{packageName}
+							</p>
+						)}
 						{widget.description && (
 							<CardDescription className="mt-1 line-clamp-2 text-xs">
 								{widget.description}
@@ -365,6 +376,7 @@ export function WidgetCard({
 				)}
 				{!live && <PausedHint reason={pausedReason} />}
 				<ContractSummaryBadges widget={widget} />
+				<WidgetNetworkSummary widget={widget} showPreviewNote={canPreview} />
 				<KeywordChips keywords={widget.keywords ?? []} />
 			</CardContent>
 		</Card>

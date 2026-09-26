@@ -29,6 +29,7 @@ import {
 	formatComputeLeg,
 	formatDurationShare,
 } from "../../../lib/compute-cost";
+import { asArray } from "../../../lib/response-shape";
 import type {
 	IAdminAppUsage,
 	IAdminPaginated,
@@ -385,7 +386,7 @@ function ActivityTrendChart({
 	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
-			overview?.trend.map((point) => ({
+			overview?.trend?.map((point) => ({
 				label: point.label,
 				aiCalls: point.aiInvocations,
 				executions: point.executions,
@@ -490,7 +491,7 @@ function SpendTokenTrendChart({
 	const { t } = useTranslation("admin");
 	const data = useMemo(
 		() =>
-			overview?.trend.map((point) => ({
+			overview?.trend?.map((point) => ({
 				label: point.label,
 				costDollars: dollarValue(point.cost),
 				tokens: point.tokens,
@@ -592,15 +593,15 @@ function SpendMixChart({
 			{
 				key: "llm",
 				name: "LLM",
-				value: overview?.totals.llmPrice ?? 0,
+				value: overview?.totals?.llmPrice ?? 0,
 			},
 			{
 				key: "embedding",
 				name: t("embeddings", "Embeddings"),
-				value: overview?.totals.embeddingPrice ?? 0,
+				value: overview?.totals?.embeddingPrice ?? 0,
 			},
 		],
-		[overview?.totals.embeddingPrice, overview?.totals.llmPrice, t],
+		[overview?.totals?.embeddingPrice, overview?.totals?.llmPrice, t],
 	);
 	const total = data.reduce((sum, item) => sum + item.value, 0);
 
@@ -722,7 +723,7 @@ function TechnicalUsers({
 			</CardHeader>
 			<CardContent className="space-y-2">
 				{loading && <Skeleton className="h-36 w-full" />}
-				{overview?.technicalUsers.map((technicalUser) => {
+				{overview?.technicalUsers?.map((technicalUser) => {
 					return (
 						<div
 							key={technicalUser.technicalUserId}
@@ -771,7 +772,7 @@ function TechnicalUsers({
 						</div>
 					);
 				})}
-				{overview && overview.technicalUsers.length === 0 && (
+				{overview && (overview.technicalUsers?.length ?? 0) === 0 && (
 					<div className="rounded-md border p-4 text-sm text-muted-foreground">
 						{t(
 							"noApikeyUsageForThisPeriod",
@@ -885,7 +886,7 @@ function PowerUsers({
 	const { t } = useTranslation("admin");
 	const maxInteractions = Math.max(
 		1,
-		...(overview?.powerUsers.map((user) => user.totalInteractions) ?? []),
+		...(overview?.powerUsers?.map((user) => user.totalInteractions) ?? []),
 	);
 
 	return (
@@ -903,7 +904,7 @@ function PowerUsers({
 			</CardHeader>
 			<CardContent className="space-y-2">
 				{loading && <Skeleton className="h-36 w-full" />}
-				{overview?.powerUsers.map((user) => (
+				{overview?.powerUsers?.map((user) => (
 					<div
 						key={user.userId}
 						className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"
@@ -939,7 +940,7 @@ function PowerUsers({
 						</div>
 					</div>
 				))}
-				{overview && overview.powerUsers.length === 0 && (
+				{overview && (overview.powerUsers?.length ?? 0) === 0 && (
 					<div className="rounded-md border p-4 text-sm text-muted-foreground">
 						{t(
 							"noPowerUsersInTheLast30Days",
@@ -1753,7 +1754,7 @@ function UsageOperations({
 						/>
 					)}
 					{invocations.isLoading && <Skeleton className="h-32 w-full" />}
-					{invocations.data?.items.map((item) => (
+					{invocations.data?.items?.map((item) => (
 						<div
 							key={item.id}
 							className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"
@@ -1796,7 +1797,7 @@ function UsageOperations({
 							</div>
 						</div>
 					))}
-					{invocations.data?.items.length === 0 && (
+					{invocations.data?.items?.length === 0 && (
 						<div className="rounded-md border p-4 text-sm text-muted-foreground">
 							{t(
 								"noLedgerEntriesForThisPeriod",
@@ -1838,7 +1839,7 @@ function UsageOperations({
 						/>
 					)}
 					{alerts.isLoading && <Skeleton className="h-32 w-full" />}
-					{alerts.data?.items.map((alert) => (
+					{alerts.data?.items?.map((alert) => (
 						<div
 							key={alert.id}
 							className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"
@@ -1866,7 +1867,7 @@ function UsageOperations({
 							</Button>
 						</div>
 					))}
-					{alerts.data?.items.length === 0 && (
+					{alerts.data?.items?.length === 0 && (
 						<div className="rounded-md border p-4 text-sm text-muted-foreground">
 							{t("noUsageAlerts", "No usage alerts.")}
 						</div>
@@ -2017,7 +2018,7 @@ export function UsageOverviewSection({
 					</CardHeader>
 					<CardContent className="space-y-2">
 						{overview.isLoading && <Skeleton className="h-28 w-full" />}
-						{overview.data?.users.map((user) => (
+						{overview.data?.users?.map((user) => (
 							<div
 								key={user.userId ?? "unknown"}
 								className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"
@@ -2058,7 +2059,7 @@ export function UsageOverviewSection({
 					</CardHeader>
 					<CardContent className="space-y-2">
 						{overview.isLoading && <Skeleton className="h-28 w-full" />}
-						{overview.data?.models.map((model) => (
+						{overview.data?.models?.map((model) => (
 							<div
 								key={`${model.kind}:${model.provider ?? ""}:${model.modelId}`}
 								className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm"
@@ -2140,7 +2141,7 @@ function AiActConformityPreview({
 	});
 
 	const stats = useMemo(() => {
-		const rows = inventory.data ?? [];
+		const rows = asArray(inventory.data);
 		const assessed = rows.filter(
 			(r) => r.status.toUpperCase() !== "UNASSESSED",
 		);

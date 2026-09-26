@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
@@ -6,11 +6,25 @@ import { type Root, createRoot } from "react-dom/client";
 let pathname = "/apps/chat";
 let search = "page=one";
 const stop = mock(() => {});
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll.
+const actual = {
+	nextNavigation: { ...(await import("next/navigation")) },
+	frontendAudio: { ...(await import("../lib/frontend-audio")) },
+};
 mock.module("next/navigation", () => ({
+	...actual.nextNavigation,
 	usePathname: () => pathname,
 	useSearchParams: () => new URLSearchParams(search),
 }));
-mock.module("../lib/frontend-audio", () => ({ stopAllFrontendAudio: stop }));
+mock.module("../lib/frontend-audio", () => ({
+	...actual.frontendAudio,
+	stopAllFrontendAudio: stop,
+}));
+afterAll(() => {
+	mock.module("next/navigation", () => actual.nextNavigation);
+	mock.module("../lib/frontend-audio", () => actual.frontendAudio);
+});
 const { FrontendAudioLifecycle } = await import("./frontend-audio-lifecycle");
 
 let browser: Window;

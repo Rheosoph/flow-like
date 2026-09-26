@@ -204,11 +204,16 @@ pub async fn get_execution_activity(
         query
     };
 
-    let day_rows = day_select(base(), state.db.get_database_backend())
-        .into_model::<BucketStatusCount>()
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
+    let (day_rows, app_rows) = flow_like_types::tokio::join!(
+        day_select(base(), state.db.get_database_backend())
+            .into_model::<BucketStatusCount>()
+            .all(&state.db),
+        app_select(base())
+            .into_model::<AppStatusCount>()
+            .all(&state.db),
+    );
+    let day_rows = day_rows.map_err(|e| ApiError::internal_error(e.into()))?;
+    let app_rows = app_rows.map_err(|e| ApiError::internal_error(e.into()))?;
 
     let total_microseconds: i64 = day_rows.iter().map(|row| row.total_microseconds).sum();
     let per_day = fold_counts(
@@ -232,12 +237,6 @@ pub async fn get_execution_activity(
 
     let total: i64 = buckets.iter().map(|bucket| bucket.count).sum();
     let attention_total: i64 = buckets.iter().map(|bucket| bucket.attention_count).sum();
-
-    let app_rows = app_select(base())
-        .into_model::<AppStatusCount>()
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(e.into()))?;
 
     let mut apps: Vec<ExecutionActivityApp> = fold_counts(
         app_rows

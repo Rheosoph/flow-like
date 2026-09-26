@@ -40,16 +40,19 @@ function paintDepotChart(rows: Struct[]): (depots: int) {
 
 function lowBatteryDigest(rows: Struct[], floor: int): (digest: string) {
     const { arrayOut: weak, kept: weakCount } = array::filterBy({ arrayIn: rows, key: "battery_percent", operator: "Less Than", value: `${floor}`, compare: "Number", ignoreCase: false, invert: false })
-    if (weakCount == 0) {
-        return "All vehicles are above the charge floor."
+    // Function returns bind shared output pins, so each branch assigns the digest and the one
+    // trailing `return` publishes it.
+    let digest = "All vehicles are above the charge floor."
+    if (weakCount > 0) {
+        // BUG: `let lines: string[] = []` renders the local unreadable — a type annotation on a
+        // literal initializer breaks every later read of it. The untyped form resolves.
+        let lines = []
+        for (const vehicle of weak) {
+            lines = array::push({ arrayIn: lines, value: `- ${vehicle.plate} at ${vehicle.depot}, ${vehicle.battery_percent}% left` }).arrayOut
+        }
+        digest = string::join({ strings: lines, separator: "\n" })
     }
-    // BUG: `let lines: string[] = []` renders the local unreadable — a type annotation on a
-    // literal initializer breaks every later read of it. The untyped form resolves.
-    let lines = []
-    for (const vehicle of weak) {
-        lines = array::push({ arrayIn: lines, value: `- ${vehicle.plate} at ${vehicle.depot}, ${vehicle.battery_percent}% left` }).arrayOut
-    }
-    return string::join({ strings: lines, separator: "\n" })
+    return digest
 }
 
 function renderFleetSummary(vehicles: Struct[]): (total: int) {

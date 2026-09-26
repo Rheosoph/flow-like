@@ -81,7 +81,16 @@ function draft(type = IBitTypes.Llm): IBit {
 	return {
 		id: "draft",
 		type,
-		meta: { en: { name: "", description: "", tags: [] } },
+		meta: {
+			en: {
+				name: "",
+				description: "",
+				tags: [],
+				preview_media: [],
+				created_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+				updated_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+			},
+		},
 		authors: [],
 		repository: "",
 		download_link: "",
@@ -99,7 +108,7 @@ function draft(type = IBitTypes.Llm): IBit {
 		dependency_tree_hash: "",
 		created: "",
 		updated: "",
-	} as IBit;
+	};
 }
 
 describe("generic Hugging Face references", () => {

@@ -9,6 +9,7 @@ export function ExploreHubLayout({
 	subtitle,
 	toolbar,
 	filters,
+	actions,
 	children,
 	scrollRef,
 }: Readonly<{
@@ -16,6 +17,7 @@ export function ExploreHubLayout({
 	subtitle: string;
 	toolbar: ReactNode;
 	filters?: ReactNode;
+	actions?: ReactNode;
 	children: ReactNode;
 	scrollRef?: Ref<HTMLDivElement>;
 }>) {
@@ -28,7 +30,11 @@ export function ExploreHubLayout({
 			>
 				<div className="mx-auto w-full max-w-[1600px] px-4 pt-5 pb-12 sm:px-8 sm:pt-6">
 					<div data-explore-header className="space-y-4">
-						<ExploreHubHeader active={active} subtitle={subtitle} />
+						<ExploreHubHeader
+							active={active}
+							subtitle={subtitle}
+							actions={actions}
+						/>
 						<div data-explore-toolbar>{toolbar}</div>
 						<div data-explore-filters className="min-h-12">
 							{filters}

@@ -5,11 +5,12 @@
 //! `AiActModelRegistry`. Runs inline/awaited so it is safe in serverless
 //! (Lambda) deployments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, FixedOffset};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QuerySelect,
+    sea_query::Expr,
 };
 
 use crate::{
@@ -54,6 +55,24 @@ impl ResolvedPosture {
             systemic_risk: false,
             vetted: false,
         }
+    }
+
+    /// Whether a stored observation already carries everything a reconcile
+    /// would write, apart from `lastSeenAt`.
+    fn matches(
+        &self,
+        existing: &ai_act_model_observation::Model,
+        discovered: &DiscoveredModel,
+        source: &AiModelSource,
+    ) -> bool {
+        existing.provider == discovered.provider
+            && existing.source == *source
+            && existing.posture == self.posture
+            && existing.hosted == self.hosted
+            && existing.open_licence == self.open_licence
+            && existing.systemic_risk == self.systemic_risk
+            && existing.vetted == self.vetted
+            && existing.dynamic_selector == discovered.dynamic_selector
     }
 }
 
@@ -142,7 +161,21 @@ pub async fn reconcile_app_models(
         })
         .collect();
 
+    let registry = load_registry(
+        state,
+        discovered
+            .values()
+            .map(|(model_id, _)| model_id.clone())
+            .collect(),
+    )
+    .await;
+
+    // Observations whose resolved fields are unchanged only need `lastSeenAt`
+    // bumped, which one statement does for all of them; new ones go in as one
+    // insert. Only observations that actually changed are updated row by row.
     let mut written = 0usize;
+    let mut unchanged_ids: Vec<String> = Vec::new();
+    let mut new_observations: Vec<ai_act_model_observation::ActiveModel> = Vec::new();
     for (key, (model_id, disc)) in discovered {
         let source = match (disc.from_monitoring, disc.from_board) {
             (true, true) => AiModelSource::Both,
@@ -151,23 +184,26 @@ pub async fn reconcile_app_models(
             (false, false) => continue,
         };
 
-        let posture = resolve_posture(state, disc.provider.as_deref(), &model_id).await;
-        let drift = !existing_by_key.contains_key(&key);
+        let posture = resolve_posture(&registry, disc.provider.as_deref(), &model_id);
 
-        if let Some(existing) = existing_by_key.get(&key) {
-            let mut active: ai_act_model_observation::ActiveModel = existing.clone().into();
-            active.provider = Set(disc.provider.clone());
-            active.source = Set(source);
-            active.posture = Set(posture.posture.clone());
-            active.hosted = Set(posture.hosted);
-            active.open_licence = Set(posture.open_licence);
-            active.systemic_risk = Set(posture.systemic_risk);
-            active.vetted = Set(posture.vetted);
-            active.dynamic_selector = Set(disc.dynamic_selector);
-            active.last_seen_at = Set(now);
-            active.update(&state.db).await?;
-        } else {
-            let active = ai_act_model_observation::ActiveModel {
+        match existing_by_key.get(&key) {
+            Some(existing) if posture.matches(existing, &disc, &source) => {
+                unchanged_ids.push(existing.id.clone());
+            }
+            Some(existing) => {
+                let mut active: ai_act_model_observation::ActiveModel = existing.clone().into();
+                active.provider = Set(disc.provider.clone());
+                active.source = Set(source);
+                active.posture = Set(posture.posture.clone());
+                active.hosted = Set(posture.hosted);
+                active.open_licence = Set(posture.open_licence);
+                active.systemic_risk = Set(posture.systemic_risk);
+                active.vetted = Set(posture.vetted);
+                active.dynamic_selector = Set(disc.dynamic_selector);
+                active.last_seen_at = Set(now);
+                active.update(&state.db).await?;
+            }
+            None => new_observations.push(ai_act_model_observation::ActiveModel {
                 id: Set(flow_like_types::create_id()),
                 app_id: Set(app_id.to_string()),
                 model_id: Set(model_id),
@@ -179,37 +215,71 @@ pub async fn reconcile_app_models(
                 systemic_risk: Set(posture.systemic_risk),
                 vetted: Set(posture.vetted),
                 dynamic_selector: Set(disc.dynamic_selector),
-                drift_flagged: Set(drift),
+                drift_flagged: Set(true),
                 first_seen_at: Set(now),
                 last_seen_at: Set(now),
-            };
-            active.insert(&state.db).await?;
+            }),
         }
         written += 1;
+    }
+
+    if !unchanged_ids.is_empty() {
+        ai_act_model_observation::Entity::update_many()
+            .col_expr(
+                ai_act_model_observation::Column::LastSeenAt,
+                Expr::value(now),
+            )
+            .filter(ai_act_model_observation::Column::Id.is_in(unchanged_ids))
+            .exec(&state.db)
+            .await?;
+    }
+
+    if !new_observations.is_empty() {
+        ai_act_model_observation::Entity::insert_many(new_observations)
+            .exec_without_returning(&state.db)
+            .await?;
     }
 
     Ok(written)
 }
 
+type RegistryKey = (String, String);
+
+/// Registry rows for the given model ids, keyed by `(provider, model_id)`.
+/// Best effort: a failed lookup leaves every model at `UNKNOWN`.
+async fn load_registry(
+    state: &AppState,
+    model_ids: Vec<String>,
+) -> HashMap<RegistryKey, ai_act_model_registry::Model> {
+    if model_ids.is_empty() {
+        return HashMap::new();
+    }
+
+    ai_act_model_registry::Entity::find()
+        .filter(ai_act_model_registry::Column::ModelId.is_in(model_ids))
+        .all(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|record| ((record.provider.clone(), record.model_id.clone()), record))
+        .collect()
+}
+
 /// Resolve a model's posture from the registry. Unknown models default to
 /// `UNKNOWN`/unvetted so they surface for admin review.
-async fn resolve_posture(
-    state: &AppState,
+fn resolve_posture(
+    registry: &HashMap<RegistryKey, ai_act_model_registry::Model>,
     provider: Option<&str>,
     model_id: &str,
 ) -> ResolvedPosture {
-    let provider = provider.unwrap_or("unknown");
-    let record = ai_act_model_registry::Entity::find()
-        .filter(ai_act_model_registry::Column::Provider.eq(provider))
-        .filter(ai_act_model_registry::Column::ModelId.eq(model_id))
-        .one(&state.db)
-        .await
-        .ok()
-        .flatten();
+    let key = (
+        provider.unwrap_or("unknown").to_string(),
+        model_id.to_string(),
+    );
 
-    match record {
+    match registry.get(&key) {
         Some(r) => ResolvedPosture {
-            posture: r.posture,
+            posture: r.posture.clone(),
             hosted: r.hosted,
             open_licence: r.open_licence,
             systemic_risk: r.systemic_risk,

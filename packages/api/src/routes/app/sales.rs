@@ -7,6 +7,7 @@ use crate::state::AppState;
 
 pub mod dashboard;
 pub mod discounts;
+pub mod flow_payments;
 pub mod overview;
 pub mod price;
 pub mod purchases;
@@ -17,6 +18,7 @@ pub fn routes() -> Router<AppState> {
         // Sales overview/stats
         .route("/", get(overview::get_sales_overview))
         .route("/stats", get(overview::get_sales_stats))
+        .route("/flow-payments", get(flow_payments::get_flow_payments))
         // Purchases list
         .route("/purchases", get(purchases::list_purchases))
         // Price management

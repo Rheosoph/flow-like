@@ -29,24 +29,6 @@ pub async fn stage(
     tenant: Option<&str>,
     payload: &[u8],
 ) -> Result<DispatchIntent, ApiError> {
-    if let Some(row) = state
-        .db
-        .query_one_raw(sql(
-            "SELECT * FROM \"CloudDispatchIntent\" WHERE id=$1",
-            vec![id.into()],
-        ))
-        .await?
-    {
-        return Ok(DispatchIntent::from_query_result(&row, "")?);
-    }
-    let op = state
-        .db
-        .query_one_raw(sql(
-            "SELECT \"payerId\",deadline FROM \"QuotaOperation\" WHERE id=$1 AND kind='workflow'",
-            vec![id.into()],
-        ))
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
     let path = Path::from(format!(
         "system/dispatch/{}/{}.json",
         blake3::hash(id.as_bytes()).to_hex(),
@@ -69,16 +51,28 @@ pub async fn stage(
         Err(error) => return Err(ApiError::internal_error(error.into())),
     }
     let now = chrono::Utc::now().timestamp_millis();
-    state.db.execute_raw(sql("INSERT INTO \"CloudDispatchIntent\" (id,\"payerId\",\"jobId\",\"functionName\",\"tenantId\",\"payloadPath\",state,\"nextAttemptAt\",\"expiresAt\",attempts,\"createdAt\") VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,0,$7) ON CONFLICT (id) DO NOTHING",vec![id.into(),op.try_get::<String>("","payerId")?.into(),job_id.into(),function.into(),tenant.map(str::to_owned).into(),path.to_string().into(),now.into(),op.try_get::<i64>("","deadline")?.into()])).await?;
-    let row = state
+    // The payload is stored before the row so recovery never claims an intent it cannot read.
+    // No row back means an intent already exists or the workflow reservation does not.
+    if let Some(row) = state.db.query_one_raw(sql("INSERT INTO \"CloudDispatchIntent\" (id,\"payerId\",\"jobId\",\"functionName\",\"tenantId\",\"payloadPath\",state,\"nextAttemptAt\",\"expiresAt\",attempts,\"createdAt\") SELECT $1::TEXT,\"payerId\",$2::TEXT,$3::TEXT,$4::TEXT,$5::TEXT,'pending',$6::BIGINT,deadline,0,$6::BIGINT FROM \"QuotaOperation\" WHERE id=$1::TEXT AND kind='workflow' ON CONFLICT (id) DO NOTHING RETURNING id,\"jobId\",\"functionName\",\"tenantId\",\"payloadPath\"",vec![id.into(),job_id.into(),function.into(),tenant.map(str::to_owned).into(),path.to_string().into(),now.into()])).await? {
+        return Ok(DispatchIntent::from_query_result(&row, "")?);
+    }
+    let Some(row) = state
         .db
         .query_one_raw(sql(
             "SELECT * FROM \"CloudDispatchIntent\" WHERE id=$1",
             vec![id.into()],
         ))
         .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    Ok(DispatchIntent::from_query_result(&row, "")?)
+    else {
+        let _ = state.meta_bucket.as_generic().delete(&path).await;
+        return Err(ApiError::NOT_FOUND);
+    };
+    let intent = DispatchIntent::from_query_result(&row, "")?;
+    // A repeated stage carries a new job id, so its payload is not the one the intent points at.
+    if intent.payload_path != path.to_string() {
+        let _ = state.meta_bucket.as_generic().delete(&path).await;
+    }
+    Ok(intent)
 }
 pub async fn claim(state: &AppState, id: &str) -> Result<bool, ApiError> {
     let now = chrono::Utc::now().timestamp_millis();

@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { useAppPermissions } from "../../../../hooks/use-app-permissions";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import { RolePermissions } from "../../../../lib/permission/role-permission";
+import { asArray } from "../../../../lib/response-shape";
 import { cn } from "../../../../lib/utils";
 import { useBackend } from "../../../../state/backend-state";
 import type {
@@ -168,7 +169,7 @@ export function QueryWorkbench({
 		canReadData,
 	);
 	const savedQueries = useMemo(
-		() => savedQueriesQuery.data ?? [],
+		() => asArray(savedQueriesQuery.data),
 		[savedQueriesQuery.data],
 	);
 

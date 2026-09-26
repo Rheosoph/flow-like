@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { LockIcon, MousePointerSquareDashedIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 import type { PeerUserInfo } from "../../../hooks/use-peer-users";
+import { resolveBoardRef } from "../../../lib/board-refs";
 import {
 	type NodeWatchers,
 	type PresenceMark,
@@ -234,6 +235,7 @@ export const BoardInspector = memo(function BoardInspector({
 	}
 
 	const permissions = node.wasm?.permissions ?? [];
+	const description = resolveBoardRef(node.description, board?.refs);
 
 	return (
 		<div className="flex flex-col">
@@ -247,9 +249,9 @@ export const BoardInspector = memo(function BoardInspector({
 				{typeof node.version === "number" && (
 					<Row label={t("version", "Version")} value={node.version} mono />
 				)}
-				{node.description && (
+				{description && (
 					<p className="px-2 pb-1 pt-0.5 text-[11px] leading-snug text-muted-foreground">
-						{node.description}
+						{description}
 					</p>
 				)}
 				{node.error && (

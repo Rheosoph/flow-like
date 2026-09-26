@@ -13,6 +13,11 @@ fn home_prompt_validates_a_profile_bound_draft_and_stages_it_for_review() {
     assert!(prompt.contains("open the personal Home page or choose Edit with FlowPilot"));
     assert!(prompt.contains("Request `include_comparisons` only"));
     assert!(prompt.contains("profile name, description, interests, and tags"));
+    assert!(prompt.contains("`appearance.className` is the one free-form styling field"));
+    assert!(prompt.contains("for the widget root surface, at most 1024 bytes"));
+    assert!(prompt.contains("prefer theme tokens such as `bg-card`"));
+    assert!(prompt.contains("Never use positioning, z-index, or\n  grid-span utilities"));
+    assert!(prompt.contains("Preserve an existing widget's `className` unless the user asks"));
     assert!(prompt.contains("answer without staging a\nchange"));
     assert!(prompt.contains("use `current_layout` as the edit base"));
     assert!(prompt.contains("retain the user's unsaved\n   changes"));

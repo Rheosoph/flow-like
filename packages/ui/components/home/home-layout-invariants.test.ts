@@ -85,9 +85,9 @@ describe("home layout inheritance and history invariants", () => {
 					original.widgets.map((widget) => widget.id).sort(),
 				);
 				for (const widget of changed.widgets)
-					expect(widget.config).toBe(
+					expect(
 						original.widgets.find((item) => item.id === widget.id)?.config,
-					);
+					).toBe(widget.config);
 				expect(JSON.stringify(original)).toBe(snapshot);
 			}
 	});

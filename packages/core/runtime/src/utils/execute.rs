@@ -66,7 +66,7 @@ pub async fn sidecar(
     with_bash: Option<bool>,
 ) -> flow_like_types::Result<StdCommand> {
     let path = side_car_path(command)?;
-    println!("Sidecar path: {:?}", path);
+    tracing::debug!(?path, "Sidecar path");
 
     if !path.exists() {
         return Err(flow_like_types::anyhow!(

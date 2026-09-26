@@ -5,7 +5,8 @@ edition = "2024"
 
 [features]
 default = ["all"]
-all = ["graph", "vector"]
+all = ["graph", "vector", "database"]
+database = ["dep:schemars", "dep:serde"]
 graph = ["dep:schemars", "dep:serde"]
 vector = ["dep:arrow-schema"]
 

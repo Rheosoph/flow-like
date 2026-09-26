@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import {
 	Button,
 	LibraryPage,
@@ -11,7 +13,6 @@ import { useTranslation } from "@flow-like/locales";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ImportIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -20,7 +21,7 @@ import ImportArchiveDialog from "./components/ImportArchiveDialog";
 
 export default function DesktopLibraryPage() {
 	const { t } = useTranslation("common");
-	const router = useRouter();
+	const router = useClientRouter();
 	const auth = useAuth();
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
 	const [importPath, setImportPath] = useState<string | null>(null);

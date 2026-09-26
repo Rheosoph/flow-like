@@ -25,6 +25,7 @@ impl NodeLogic for AssertTemplateExistsNode {
             "Asserts that a template image exists on screen",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "assertTemplateExists");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -59,6 +60,14 @@ impl NodeLogic for AssertTemplateExistsNode {
         .set_default_value(Some(json!("")));
 
         node.add_input_pin(
+            "template",
+            "Template",
+            "Template image from any FlowPath store; preferred over a local path",
+            VariableType::Struct,
+        )
+        .set_schema::<flow_like_catalog_core::FlowPath>();
+
+        node.add_input_pin(
             "confidence",
             "Confidence",
             "Minimum match confidence",
@@ -91,27 +100,18 @@ impl NodeLogic for AssertTemplateExistsNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use rustautogui::MatchMode;
-
         context.deactivate_exec_pin("exec_pass").await?;
         context.deactivate_exec_pin("exec_fail").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let template_path: String = context.evaluate_pin("template_path").await?;
+        session.ensure_active(context).await?;
+        let template_bytes = crate::types::screen_match::load_template(context).await?;
         let confidence: f64 = context.evaluate_pin("confidence").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let mut gui = autogui.lock().await;
-
-        gui.prepare_template_from_file(&template_path, None, MatchMode::Segmented)
-            .map_err(|e| flow_like_types::anyhow!("Failed to prepare template: {}", e))?;
-
-        let passed = gui
-            .find_image_on_screen(confidence as f32)
-            .ok()
-            .flatten()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+        let matches =
+            crate::types::screen_match::match_desktop_async(template_bytes.clone(), confidence, -2)
+                .await?;
+        let passed = !matches.is_empty();
 
         context.set_pin_value("passed", json!(passed)).await?;
 
@@ -151,6 +151,7 @@ impl NodeLogic for AssertColorAtPositionNode {
             "Asserts that a specific color exists at a position",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "assertColor");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -234,41 +235,30 @@ impl NodeLogic for AssertColorAtPositionNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use xcap::Monitor;
-
         context.deactivate_exec_pin("exec_pass").await?;
         context.deactivate_exec_pin("exec_fail").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
         let target_r: i64 = context.evaluate_pin("red").await?;
         let target_g: i64 = context.evaluate_pin("green").await?;
         let target_b: i64 = context.evaluate_pin("blue").await?;
         let tolerance: i64 = context.evaluate_pin("tolerance").await?;
+        if [target_r, target_g, target_b, tolerance]
+            .iter()
+            .any(|v| !(0..=255).contains(v))
+        {
+            return Err(flow_like_types::anyhow!(
+                "Color channels and tolerance must be between 0 and 255"
+            ));
+        }
 
-        let passed = {
-            let monitors = Monitor::all()
-                .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-            let monitor = monitors
-                .first()
-                .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-            let image = monitor
-                .capture_image()
-                .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
-
-            if x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() {
-                let pixel = image.get_pixel(x as u32, y as u32);
-                let r = pixel[0] as i64;
-                let g = pixel[1] as i64;
-                let b = pixel[2] as i64;
-                (r - target_r).abs() <= tolerance
-                    && (g - target_g).abs() <= tolerance
-                    && (b - target_b).abs() <= tolerance
-            } else {
-                false
-            }
-        };
+        let [r, g, b] = crate::types::screen_match::capture_pixel(x, y)?;
+        let passed = (r as i64 - target_r).abs() <= tolerance
+            && (g as i64 - target_g).abs() <= tolerance
+            && (b as i64 - target_b).abs() <= tolerance;
 
         context.set_pin_value("passed", json!(passed)).await?;
 

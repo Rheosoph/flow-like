@@ -104,9 +104,13 @@ async function renderInstance(
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		});
 		// React Query retains successful data when its refetch fails.
-		expect(client.getQueryData(["getWidget", "app-1", "artikel"])).toEqual(
-			inlineWidgetDef,
-		);
+		expect(
+			client.getQueryData<typeof inlineWidgetDef>([
+				"getWidget",
+				"app-1",
+				"artikel",
+			]),
+		).toEqual(inlineWidgetDef);
 	}
 
 	return host as unknown as HTMLElement;
@@ -135,7 +139,11 @@ describe("A2UIWidgetInstance cached definitions after a failed refetch", () => {
 		test(`removes the cached widget when the server returns ${status}`, async () => {
 			const host = await renderInstance(
 				() => createElement("div", { "data-external": "cached" }),
-				new ApiResponseError({ status, message: "Widget no longer exists" }),
+				new ApiResponseError({
+					status,
+					code: "NOT_FOUND",
+					message: "Widget no longer exists",
+				}),
 			);
 			expect(host.innerHTML).not.toContain('data-external="cached"');
 			expect(host.textContent).toContain("could not be resolved");

@@ -14,6 +14,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -116,7 +117,7 @@ export default function AdminCoursesPage() {
 	});
 
 	const filteredCourses = useMemo(
-		() => coursesQuery.data ?? [],
+		() => asArray(coursesQuery.data),
 		[coursesQuery.data],
 	);
 

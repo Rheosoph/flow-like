@@ -53,7 +53,11 @@ import {
 } from "../ui/resizable";
 import { Sheet, SheetContent } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { BuilderProvider, useBuilder } from "./BuilderContext";
+import {
+	type ActionContext,
+	BuilderProvider,
+	useBuilder,
+} from "./BuilderContext";
 import {
 	BuilderDndProvider,
 	type WidgetDragData,
@@ -171,19 +175,7 @@ export interface WidgetBuilderProps {
 	 */
 	appCustomCss?: string;
 	/** Context for action editor (pages, events, etc.) */
-	actionContext?: {
-		appId?: string;
-		boardId?: string;
-		pageId?: string;
-		pages?: { id: string; name: string; boardId?: string }[];
-		workflowEvents?: { nodeId: string; name: string }[];
-		widgetActions?: { id: string; label: string; description?: string }[];
-		eventId?: string;
-		onLoadEventId?: string;
-		onUnloadEventId?: string;
-		onIntervalEventId?: string;
-		onIntervalSeconds?: number;
-	};
+	actionContext?: ActionContext;
 	/** Current page ID for the page switcher */
 	currentPageId?: string;
 	/** Called when user switches to a different page */

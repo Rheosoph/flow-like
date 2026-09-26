@@ -2,12 +2,19 @@
 
 import { useMemo } from "react";
 import { getCronScheduledTime } from "../../../lib/event-entry";
-import { validateGeolocationEvent } from "../../../lib/geolocation-event";
 import type { EventSectionId } from "../../../lib/event-sections";
 import {
 	getEventSections,
 	isTriggerSection,
 } from "../../../lib/event-sections";
+import {
+	type HostingBlocker,
+	getHostedFrontendKind,
+	getHostedRoute,
+	getHostingBlockers,
+	parseFrontendHosting,
+} from "../../../lib/frontend-hosting";
+import { validateGeolocationEvent } from "../../../lib/geolocation-event";
 import { isRuntimeConfigured } from "../../../lib/runtime-vars-utils";
 import type { IVariable } from "../../../lib/schema/flow/board";
 import type { IEvent } from "../../../lib/schema/flow/event";
@@ -72,6 +79,13 @@ const SECRET_FIELDS: Record<string, { keys: string[]; label: string }[]> = {
 	email: [
 		{ keys: ["secret_imap_password", "password"], label: "IMAP password" },
 	],
+};
+
+const HOSTING_REQUIREMENT: Record<HostingBlocker, string> = {
+	no_route: "given a route path",
+	inactive: "active",
+	local_execution: "set to Remote execution",
+	internal_exposure: "Public",
 };
 
 const missing = (value: unknown) =>
@@ -221,6 +235,19 @@ export function computeEventIssues({
 			title: "No flow bound",
 			detail: "This event has nothing to run.",
 		});
+	}
+
+	if (getHostedFrontendKind(event) && parseFrontendHosting(config).enabled) {
+		const blockers = getHostingBlockers(event, getHostedRoute(event));
+		if (blockers.length > 0) {
+			issues.push({
+				id: "hosting-not-live",
+				severity: "blocking",
+				section: "hosting",
+				title: "Hosted link is not live",
+				detail: `It returns 404 until the event is ${blockers.map((blocker) => HOSTING_REQUIREMENT[blocker]).join(" and ")}.`,
+			});
+		}
 	}
 
 	if (requiresSink && !event.active) {

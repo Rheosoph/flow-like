@@ -76,8 +76,7 @@ pub async fn delete_profile_template(
         user,
         "admin.profile.delete",
         "profile_template",
-        audit_profile_id,
-        "Profile template deleted"
+        audit_profile_id
     );
     Ok(Json(profiles))
 }

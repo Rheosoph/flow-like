@@ -60,6 +60,7 @@ import {
 } from "../../../";
 import { apiErrorMessage } from "../../../lib/api-error";
 import { formatRelativeTime } from "../../../lib/date";
+import { asArray } from "../../../lib/response-shape";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -129,14 +130,20 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 	const [roleFilter, setRoleFilter] = useState<string>("all");
 	const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
 
-	const members = useMemo(() => team?.pages.flat() ?? [], [team]);
-	const invites = useMemo(() => invitePages?.pages.flat() ?? [], [invitePages]);
+	const members = useMemo(
+		() => team?.pages.flatMap((page) => asArray(page)) ?? [],
+		[team],
+	);
+	const invites = useMemo(
+		() => invitePages?.pages.flatMap((page) => asArray(page)) ?? [],
+		[invitePages],
+	);
 	// A denied or failed role read means "roles unknown", never "no roles". The
 	// two platforms disagree on a 403 here — desktop throws, web swallows it and
 	// returns [] — so the degradation is decided here, not by the state class.
 	const rolesDenied = !access.canReadRoles;
 	const rolesUnknown = rolesDenied || roles.isError;
-	const roleList = rolesUnknown ? undefined : (roles.data?.[1] ?? []);
+	const roleList = rolesUnknown ? undefined : asArray(roles.data?.[1]);
 
 	const filteredTeam = useMemo(() => {
 		if (roleFilter === "all") return members;

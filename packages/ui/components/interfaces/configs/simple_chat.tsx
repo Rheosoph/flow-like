@@ -18,6 +18,7 @@ import {
 	CUSTOM_CHAT_THEME_VALUE,
 	resolveChatThemePreset,
 } from "../../../lib/chat-theme-presets";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
 import { AssetPicker } from "../../builder/AssetPicker";
@@ -81,8 +82,9 @@ export function SimpleChatConfig({
 	);
 
 	const routes = useMemo(() => {
-		const list = routesQuery.data ?? [];
-		return list.slice().sort((a, b) => a.path.localeCompare(b.path));
+		return asArray(routesQuery.data)
+			.slice()
+			.sort((a, b) => a.path.localeCompare(b.path));
 	}, [routesQuery.data]);
 
 	const setValue = (key: string, value: any, deleteKeys: string[] = []) => {

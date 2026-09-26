@@ -32,7 +32,7 @@ import {
 	homeDataColumns,
 	homeDataMeasureTitle,
 	homeOntologyColumns,
-	homeSavedQuerySql,
+	homeSavedQuerySchemaQuery,
 	normalizeHomeDataConfig,
 	resolveHomeQueryParams,
 	updateHomeDataMeasure,
@@ -248,16 +248,13 @@ export function HomeDataWidgetSettings({
 					} else if (savedQuery) {
 						const result = await backend.queryState.executeSql(
 							config.appId,
-							{
-								sql: `SELECT * FROM (\n${homeSavedQuerySql(savedQuery.sql)}\n) AS "__home_schema" WHERE false`,
-								params: resolveHomeQueryParams(
+							homeSavedQuerySchemaQuery(
+								savedQuery,
+								resolveHomeQueryParams(
 									{ queryParams: stableParams },
 									auth?.user?.profile?.sub,
 								),
-								surface: savedQuery.surface,
-								overlay_id: savedQuery.overlay_id,
-								limit: 1,
-							},
+							),
 							personal,
 						);
 						if (active) setColumns(result.columns);
@@ -761,7 +758,7 @@ export function HomeDataWidgetSettings({
 										["quarter", "Quarter"],
 										["year", "Year"],
 									]}
-									hint="Date grouping expects a timestamp, date, or ISO date string. Dates are grouped in UTC."
+									hint="Date grouping expects a timestamp, date, ISO date string, or epoch number (seconds to nanoseconds). Dates are grouped in UTC."
 									onChange={(timeBucket) =>
 										patch({
 											timeBucket: timeBucket as HomeDataConfig["timeBucket"],

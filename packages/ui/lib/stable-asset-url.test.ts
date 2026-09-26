@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { IStorageItemActionResult } from "../state/backend-state/types";
 import {
 	confirmStableAssetUrl,
 	hasExpiredAssetUrl,
@@ -251,7 +252,7 @@ describe("stabilizeSignedUrls", () => {
 		const first = signedAws(isoNow());
 		stableAssetUrl(first);
 
-		const unchanged = { prefix: "b", error: "nope" };
+		const unchanged: IStorageItemActionResult = { prefix: "b", error: "nope" };
 		const [rewritten, passthrough] = stabilizeSignedUrls([
 			{ prefix: "a", url: signedAws(isoNow(60_000)) },
 			unchanged,

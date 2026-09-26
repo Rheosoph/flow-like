@@ -281,8 +281,17 @@ async fn rehydrate_with_registry(
         node_registry: registry,
         parent: None,
     }));
-    let board =
-        Board::from_loaded_proto(proto, storage_root.clone(), Arc::new(hydration_state)).await?;
+    let board = if expected_etag.is_some() {
+        Board::from_loaded_proto(proto, storage_root.clone(), Arc::new(hydration_state)).await?
+    } else {
+        Board::from_loaded_proto_for_version(
+            proto,
+            storage_root.clone(),
+            Arc::new(hydration_state),
+            version,
+        )
+        .await?
+    };
     if board.id != board_id {
         return Err(anyhow!(
             "source for board {board_id} contains board {}",

@@ -1,4 +1,5 @@
 import type { QuotaOverview, QuotaResource } from "./quota";
+import { asArray } from "./response-shape";
 
 export interface RuntimeSample {
 	averageRuntimeMs: number;
@@ -19,7 +20,7 @@ export function getRuntimeSample(
 	const since = cutoff.toISOString().slice(0, 10);
 	let runtimeMs = 0;
 	let cloudStarts = 0;
-	for (const row of overview.usage) {
+	for (const row of asArray(overview.usage)) {
 		if (
 			row.fundingClass !== "cloud" ||
 			!row.appId ||

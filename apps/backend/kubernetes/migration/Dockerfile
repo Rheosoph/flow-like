@@ -44,6 +44,7 @@ export default defineConfig({
 CONFIGEOF
 
 COPY apps/backend/kubernetes/migration/run-migration.sh /usr/local/bin/run-migration.sh
+COPY apps/backend/shared/audit_database_roles.ts /workspace/audit_database_roles.ts
 COPY apps/backend/kubernetes/migration/wait-for-migration.ts /usr/local/bin/wait-for-migration.ts
 
 RUN chmod +x /usr/local/bin/run-migration.sh

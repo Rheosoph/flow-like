@@ -229,8 +229,7 @@ pub async fn upsert_template(
         app_id,
         "template.update",
         "Template",
-        app_upsert.0,
-        "Template updated"
+        app_upsert.0
     );
     Ok(Json(app_upsert))
 }

@@ -7,3 +7,6 @@ pub mod mouse;
 pub mod session;
 pub mod wait;
 pub mod window;
+
+#[cfg(feature = "execute")]
+pub mod native;

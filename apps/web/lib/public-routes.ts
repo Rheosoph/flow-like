@@ -17,6 +17,18 @@ export const PUBLIC_ROUTES: readonly PublicRoute[] = [
 			"Entry point of the hosted app: ask FlowPilot for something, or browse your apps",
 	},
 	{
+		path: "/store/explore",
+		title: "Explore",
+		description:
+			"Curated storefront of apps and node packages published to the Flow-Like store",
+	},
+	{
+		path: "/store/explore/search",
+		title: "Search Explore",
+		description:
+			"Search and filter apps, node packages and collections — query with ?q=, filter with ?type=, ?categories=, ?price=",
+	},
+	{
 		path: "/store/explore/apps",
 		title: "Explore apps",
 		description: "Browse apps and suites published to the Flow-Like store",

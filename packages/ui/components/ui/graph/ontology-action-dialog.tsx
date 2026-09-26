@@ -208,7 +208,7 @@ export const OntologyActionDialog: React.FC<OntologyActionDialogProps> = ({
 		} finally {
 			setSubmitting(false);
 		}
-	}, [action, node, onInvoke, parameters]);
+	}, [action, node, onInvoke, parameters, t]);
 
 	return (
 		<Dialog

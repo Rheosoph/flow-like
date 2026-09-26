@@ -3,6 +3,7 @@ import type { IApp } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import type { LibraryItem } from "./library-types";
 import {
+	appPairs,
 	sortAppPairsByRecency,
 	sortItems,
 	sortItemsByRank,
@@ -159,5 +160,26 @@ describe("sortItemsByRank", () => {
 		expect(ids(sortItemsByRank(forward, (id) => ranks[id], "recent"))).toEqual(
 			ids(sortItemsByRank(reversed, (id) => ranks[id], "recent")),
 		);
+	});
+});
+
+describe("appPairs", () => {
+	type Pair = [IApp, IMetadata | undefined];
+	const pair = [{ id: "a" }, undefined] as unknown as Pair;
+
+	test("drops entries that are not [app, metadata] pairs", () => {
+		const rows = [
+			pair,
+			null,
+			{ id: "b" },
+			[null, {}],
+			[{ name: "no id" }, undefined],
+		] as unknown as Pair[];
+		expect(appPairs(rows)).toEqual([pair]);
+	});
+
+	test("reads a non-list response as no rows", () => {
+		expect(appPairs({ errorType: "Runtime" } as unknown as Pair[])).toEqual([]);
+		expect(appPairs(undefined)).toEqual([]);
 	});
 });

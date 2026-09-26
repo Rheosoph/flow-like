@@ -10,6 +10,10 @@ pub mod geometry;
 pub use flow_like_storage_files as files;
 #[cfg(feature = "database-runtime")]
 pub mod lancedb_write_options;
+#[cfg(feature = "database-runtime")]
+pub mod renewable_lance;
+#[cfg(feature = "database-runtime")]
+pub use flow_like_storage_contracts as contracts;
 
 #[cfg(feature = "database-runtime")]
 pub use arrow;

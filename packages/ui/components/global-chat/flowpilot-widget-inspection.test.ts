@@ -86,6 +86,7 @@ describe("persisted FlowPilot page inspection", () => {
 				board_id: "board",
 				component_count: 4,
 				components: page.components,
+				no_cache: false,
 				lifecycle: {
 					on_load_event_id: null,
 					on_unload_event_id: null,
@@ -105,6 +106,7 @@ describe("persisted FlowPilot page inspection", () => {
 		page.onUnloadEventId = "unload-entry";
 		page.onIntervalEventId = "poll-entry";
 		page.onIntervalSeconds = 30;
+		page.noCache = true;
 		page.content = [{ ComponentRef: "root" }];
 		const result = await inspectFlowPilotWidgetPage(
 			{ getPageAuthoritative: async () => page },
@@ -113,6 +115,7 @@ describe("persisted FlowPilot page inspection", () => {
 		expect(result).toMatchObject({
 			page: {
 				content: page.content,
+				no_cache: true,
 				lifecycle: {
 					on_load_event_id: "load-entry",
 					on_unload_event_id: "unload-entry",

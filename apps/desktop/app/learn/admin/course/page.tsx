@@ -16,6 +16,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { Trans, useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronRight, Pencil, Plus, Trash2 } from "lucide-react";
@@ -71,7 +72,7 @@ function CourseAdminContent() {
 	const appsQuery = useInvoke(backend.appState.getApps, backend.appState, []);
 
 	const appOptions: AppOption[] = useMemo(() => {
-		const data = (appsQuery.data ?? []) as Array<unknown>;
+		const data = asArray(appsQuery.data as Array<unknown> | undefined);
 		return data
 			.map((entry) => {
 				if (Array.isArray(entry) && entry.length >= 1) {
@@ -160,7 +161,7 @@ function CourseAdminContent() {
 	});
 
 	const course = structureQuery.data?.course ?? null;
-	const modules = structureQuery.data?.modules ?? [];
+	const modules = asArray(structureQuery.data?.modules);
 
 	if (!courseId) {
 		return (
@@ -253,7 +254,7 @@ function CourseAdminContent() {
 
 				<AppLinksEditor
 					courseId={courseId}
-					links={linksQuery.data ?? []}
+					links={asArray(linksQuery.data)}
 					appOptions={appOptions}
 					onChanged={() =>
 						queryClient.invalidateQueries({
@@ -518,7 +519,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 									)}
 								</div>
 								<ul className="ml-4 space-y-1">
-									{m.lessons.map((l) => (
+									{asArray(m.lessons).map((l) => (
 										<li key={l.id}>
 											<button
 												type="button"
@@ -548,7 +549,7 @@ function ModulesEditor({ courseId, modules, onChanged }: ModulesEditorProps) {
 											onClick={() =>
 												createLesson.mutate({
 													moduleId: m.id,
-													position: m.lessons.length,
+													position: asArray(m.lessons).length,
 												})
 											}
 											disabled={createLesson.isPending}

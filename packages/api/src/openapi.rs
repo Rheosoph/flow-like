@@ -128,9 +128,47 @@ impl Modify for SecurityAddon {
         (name = "tmp", description = "Temporary file operations"),
         (name = "courses", description = "Flow-Like University: courses, lessons, challenges, leaderboard"),
         (name = "ai-act", description = "EU AI Act conformity assessment and model governance"),
-        (name = "telemetry", description = "Anonymous, opt-in product telemetry")
+        (name = "audit", description = "Audit trail: records, verification, heads and per-app export"),
+        (name = "telemetry", description = "Anonymous, opt-in product telemetry"),
+        (name = "payments", description = "Payment accounts, purchases, flow payments and recovery")
     ),
     paths(
+        crate::payments::accounts::get_account,
+        crate::payments::admin::queue,
+        crate::payments::admin::block_seller,
+        crate::payments::admin::retry_effect,
+        crate::payments::earnings::history,
+        crate::payments::earnings::balance,
+        crate::payments::legacy_checkout::history,
+        crate::payments::legacy_checkout::receipt,
+        crate::payments::accounts::countries,
+        crate::payments::accounts::onboarding,
+        crate::payments::accounts::resume,
+        crate::payments::accounts::disconnect,
+        crate::payments::accounts::reconnect,
+        crate::payments::accounts::readiness,
+        crate::payments::accounts::get_settings,
+        crate::payments::accounts::update_settings,
+        crate::payments::accounts::terms,
+        crate::payments::node::create,
+        crate::payments::node::executor_get,
+        crate::payments::node::executor_cancel,
+        crate::payments::node::payer_get,
+        crate::payments::node::checkout,
+        crate::payments::node::decline,
+        crate::payments::node::report,
+        crate::payments::marketplace::checkout,
+        crate::payments::marketplace::checkout_package,
+        crate::payments::marketplace::get_purchase,
+        crate::payments::marketplace::list_purchases,
+        crate::payments::marketplace::list_sales,
+        crate::payments::marketplace::cancel,
+        crate::payments::marketplace::withdraw,
+        crate::payments::marketplace::refund_sale,
+        crate::payments::marketplace::accept_seller_terms,
+        crate::payments::marketplace::accept_package_seller_terms,
+        crate::payments::marketplace::approve,
+        crate::payments::marketplace::comp,
         // Health routes
         crate::routes::health::health,
         crate::routes::health::db_health,
@@ -250,7 +288,13 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::invoke_board_async::invoke_board_async,
         crate::routes::app::board::prerun_board::prerun_board,
         crate::routes::app::board::query_logs::query_logs,
+        crate::routes::app::board::run_logs::query_run_logs,
+        crate::routes::app::board::run_logs::count_run_logs,
+        crate::routes::app::board::run_logs::get_run_log_summary,
         crate::routes::app::board::get_runs::get_runs,
+        crate::routes::app::board::get_run_payload::get_run_payload,
+        crate::routes::app::board::report_run::report_run,
+        crate::routes::app::board::upload_run_logs::upload_run_logs,
         crate::routes::app::board::get_execution_elements::get_execution_elements,
         crate::routes::app::board::element_demand::get_element_demand,
         crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
@@ -349,6 +393,17 @@ impl Modify for SecurityAddon {
         crate::routes::app::groups::requests::decline_group_request,
         crate::routes::store::list_public_groups,
         crate::routes::store::get_public_group,
+        crate::routes::store::explore::get_explore,
+        crate::routes::store::explore::search_explore,
+        crate::routes::admin::explore::get_explore_editor,
+        crate::routes::admin::explore::create_explore_placement,
+        crate::routes::admin::explore::update_explore_placement,
+        crate::routes::admin::explore::delete_explore_placement,
+        crate::routes::admin::explore::order_explore,
+        crate::routes::admin::explore::publish_explore,
+        crate::routes::admin::explore::discard_explore,
+        crate::routes::admin::explore::preview_explore,
+        crate::routes::admin::explore::sign_explore_media,
         crate::routes::user::groups::get_user_groups,
         crate::routes::admin::connections::get_global_connection_graph,
         // API key routes
@@ -362,6 +417,7 @@ impl Modify for SecurityAddon {
         // Sales routes
         crate::routes::app::sales::overview::get_sales_overview,
         crate::routes::app::sales::overview::get_sales_stats,
+        crate::routes::app::sales::flow_payments::get_flow_payments,
         crate::routes::app::sales::purchases::list_purchases,
         crate::routes::app::sales::price::update_price,
         crate::routes::app::sales::discounts::list_discounts,
@@ -436,6 +492,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::realtime::access,
         // Invoke presign
         crate::routes::app::invoke::presign::presign,
+        crate::routes::app::invoke::offline_replay::offline_replay,
+        crate::routes::app::invoke::offline_replay::offline_capabilities,
         crate::routes::app::invoke::context::execution_context,
         // Database routes
         crate::routes::app::db::list_tables::list_tables,
@@ -456,10 +514,14 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::get_indices::get_db_indices,
         crate::routes::app::db::add_column::add_column,
         crate::routes::app::db::alter_column::alter_column,
+        crate::routes::app::db::set_primary_key::set_primary_key,
         crate::routes::app::db::drop_columns::drop_columns,
         crate::routes::app::db::build_index::build_index,
         crate::routes::app::db::drop_index::drop_index,
         crate::routes::app::db::drop_table::drop_table,
+        crate::routes::app::db::references::history,
+        crate::routes::app::db::references::reference_action,
+        crate::routes::app::db::references::compare,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
         crate::routes::app::db::presign_db_access::presign_project_db_access,
@@ -484,6 +546,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::graph::sample::sample_nodes,
         crate::routes::app::graph::upsert_nodes::upsert_nodes,
         crate::routes::app::graph::upsert_edges::upsert_edges,
+        crate::routes::app::graph::update_object::update_object,
+        crate::routes::app::graph::update_relationship::update_relationship,
         crate::routes::app::graph::actions::invoke_ontology_action,
         crate::routes::app::graph::actions::prerun_ontology_action,
         // App package routes
@@ -513,7 +577,12 @@ impl Modify for SecurityAddon {
         crate::routes::registry::publish::publish,
         crate::routes::registry::search::search,
         crate::routes::registry::download::download,
+        crate::routes::registry::pricing::update_price,
         crate::routes::registry::widget_asset::get_widget_asset,
+        crate::routes::registry::widget_sandbox::get_widget_sandbox,
+        crate::routes::registry::widget_policy::describe_widget_policy,
+        crate::routes::registry::widget_policy::describe_widget_runtime_policy,
+        crate::routes::registry::widget_policy::mint_widget_grant,
         // Bit routes
         crate::routes::bit::get_bit::get_bit,
         crate::routes::bit::get_with_dependencies::get_with_dependencies,
@@ -607,6 +676,18 @@ impl Modify for SecurityAddon {
         crate::routes::admin::runs::sweep_runs,
         crate::routes::admin::cache::sweep_cache,
         crate::routes::admin::resources::get_resources,
+        // Audit trail
+        crate::routes::audit::records::list_records,
+        crate::routes::audit::verify::verify_chain,
+        crate::routes::audit::verify::verify_epochs,
+        crate::routes::audit::head::chain_head,
+        crate::routes::audit::head::check_head,
+        crate::routes::admin::logs::chain_status::chain_status,
+        crate::routes::app::audit::export::export_records,
+        crate::routes::app::audit::webhook::get_webhook,
+        crate::routes::app::audit::webhook::put_webhook,
+        crate::routes::app::audit::webhook::rotate_webhook_secret,
+        crate::routes::app::audit::webhook::delete_webhook,
         // Course routes (University)
         crate::routes::course::courses::list_courses,
         crate::routes::course::courses::get_course,
@@ -654,6 +735,28 @@ impl Modify for SecurityAddon {
         crate::routes::course::weekly::rotate_weekly,
     ),
     components(schemas(
+        crate::routes::app::board::run_logs::QueryRunLogsRequest,
+        crate::routes::app::board::run_logs::CountRunLogsRequest,
+        crate::routes::app::board::run_logs::CountRunLogsResponse,
+        flow_like::flow::execution::log_query::LogQuery,
+        flow_like::flow::execution::log_query::LogFold,
+        flow_like::flow::execution::log_summary::LogSummary,
+        flow_like::flow::execution::log_summary::SummaryLog,
+        flow_like::flow::execution::log_summary::LogGroup,
+        flow_like::flow::execution::log_summary::LogSlotRange,
+        crate::payments::accounts::ConnectView,
+        crate::payments::admin::BlockInput,
+        crate::payments::admin::RetryInput,
+        crate::payments::accounts::OnboardingInput,
+        crate::payments::accounts::ResumeInput,
+        crate::payments::accounts::SettingsInput,
+        crate::payments::node::CreatePayment,
+        crate::payments::node::PaymentView,
+        crate::payments::node::ReportInput,
+        crate::payments::marketplace::CheckoutInput,
+        crate::payments::marketplace::RefundInput,
+        crate::payments::marketplace::Confirmation,
+        crate::payments::marketplace::WithdrawalInput,
         // User schedule schemas
         crate::routes::user::schedules::ScheduleConfig,
         crate::routes::user::schedules::UserSchedule,
@@ -691,6 +794,26 @@ impl Modify for SecurityAddon {
         crate::routes::admin::resources::ConnectionStateCount,
         crate::routes::admin::resources::DatabaseCounters,
         crate::routes::admin::resources::DatabaseRates,
+        // Audit trail schemas
+        crate::routes::audit::records::AuditRecordPage,
+        crate::routes::audit::records::AuditRecordView,
+        crate::routes::audit::records::AuditRecordCursor,
+        crate::routes::audit::records::AuditRecordStatus,
+        crate::routes::audit::head::AuditHead,
+        crate::routes::audit::head::HeadCheckBody,
+        crate::routes::audit::head::HeadCheckResponse,
+        crate::audit::verify::ChainReport,
+        crate::audit::verify::EpochReport,
+        crate::audit::verify::HeadCheck,
+        crate::audit::wire::SealLine,
+        crate::audit::wire::EpochLine,
+        crate::routes::admin::logs::chain_status::ChainStatusResponse,
+        crate::routes::admin::logs::chain_status::LatestArchive,
+        crate::routes::admin::logs::chain_status::RecentChain,
+        crate::routes::app::audit::export::AuditExportClass,
+        crate::routes::app::audit::webhook::AuditWebhookView,
+        crate::routes::app::audit::webhook::PutAuditWebhookBody,
+        crate::routes::app::audit::webhook::AuditWebhookSecret,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,
         crate::routes::oauth::TokenRefreshRequest,
@@ -703,6 +826,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::graph::import_read::ImportQueryPayload,
         crate::routes::app::db::add_column::AddColumnPayload,
         crate::routes::app::db::alter_column::AlterColumnPayload,
+        crate::routes::app::db::set_primary_key::SetPrimaryKeyPayload,
         crate::routes::app::db::build_index::BuildIndexPayload,
         crate::routes::app::db::build_index::IndexType,
         crate::routes::app::db::db_delete::DeleteFromDBPayload,
@@ -735,6 +859,26 @@ impl Modify for SecurityAddon {
         crate::routes::app::connection::graph::ProcessNoteInfo,
         crate::routes::app::connection::notes::UpsertProcessNoteRequest,
         crate::routes::app::groups::GroupInfo,
+        crate::routes::explore::model::PlacementContent,
+        crate::routes::explore::model::PlacementInput,
+        crate::routes::explore::model::PlacementItemDoc,
+        crate::routes::explore::model::CollectionRule,
+        crate::routes::explore::model::LayoutDoc,
+        crate::routes::explore::model::ExploreEditorState,
+        crate::routes::explore::model::ExploreOrderBody,
+        crate::routes::explore::model::ItemRef,
+        crate::routes::explore::model::ExploreChange,
+        crate::routes::explore::model::SlotTrace,
+        crate::routes::explore::resolve::ResolvedExplore,
+        crate::routes::explore::resolve::ExplorePreview,
+        crate::routes::store::explore::ExploreSearchResponse,
+        crate::routes::store::explore::ExploreFacets,
+        crate::routes::store::explore::FacetCount,
+        crate::routes::store::explore::SearchPackageHit,
+        crate::routes::admin::explore::CreatePlacementBody,
+        crate::routes::admin::explore::UpdatePlacementBody,
+        crate::routes::admin::explore::ExploreRevisionBody,
+        crate::routes::admin::explore::ExploreMediaUpload,
         crate::routes::app::groups::GroupMemberInfo,
         crate::routes::app::groups::crud::CreateGroupRequest,
         crate::routes::app::groups::crud::UpdateGroupRequest,
@@ -845,6 +989,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::sales::overview::SalesOverview,
         crate::routes::app::sales::overview::DailyStat,
         crate::routes::app::sales::overview::SalesStats,
+        crate::routes::app::sales::flow_payments::FlowPaymentsReport,
+        crate::routes::app::sales::flow_payments::FlowPaymentDay,
+        crate::routes::app::sales::flow_payments::FlowPaymentItem,
         crate::routes::app::sales::price::UpdatePriceRequest,
         crate::routes::app::sales::price::PriceResponse,
         crate::routes::app::sales::discounts::ListDiscountsQuery,
@@ -877,6 +1024,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::prerun_board::PrerunBoardQuery,
         crate::routes::app::board::element_demand::ElementDemandQuery,
         crate::routes::app::board::element_demand::ElementDemandResponse,
+        crate::routes::app::board::report_run::ReportRunRequest,
+        crate::routes::app::board::report_run::ReportRunResponse,
+        crate::routes::app::board::upload_run_logs::UploadRunLogsRequest,
         crate::routes::app::events::invoke_event::InvokeEventQuery,
         crate::routes::app::events::invoke_event::InvokeEventRequest,
         crate::routes::app::events::invoke_event::InvokeEventResponse,
@@ -914,6 +1064,10 @@ impl Modify for SecurityAddon {
         crate::routes::app::graph::upsert_nodes::UpsertNodesPayload,
         crate::routes::app::graph::upsert_nodes::UpsertResult,
         crate::routes::app::graph::upsert_edges::UpsertEdgesPayload,
+        crate::routes::app::graph::update_object::UpdateObjectPayload,
+        crate::routes::app::graph::update_object::UpdateOverlayRowResponse,
+        crate::routes::app::graph::update_object::UpdateOverlayRowOutcome,
+        crate::routes::app::graph::update_relationship::UpdateRelationshipPayload,
         crate::routes::app::graph::neighbors::NeighborsPayload,
         crate::routes::app::graph::children::ChildrenPayload,
         crate::routes::app::graph::subgraph::SubgraphPayload,
@@ -944,6 +1098,34 @@ impl Modify for SecurityAddon {
         crate::routes::app::packages::AppPackageResponse,
         crate::routes::app::packages::PatchInfo,
         crate::routes::app::packages::PackageUpdateInfo,
+        crate::package_license::PackageLicense,
+        crate::package_license::LicenseStatus,
+        crate::routes::registry::pricing::UpdatePackagePriceRequest,
+        crate::routes::registry::pricing::PackagePriceResponse,
+        // Widget policy and grants
+        flow_like_wasm_schema::widget_policy::WidgetPolicyDescriptor,
+        flow_like_wasm_schema::widget_policy::WidgetPolicyStatus,
+        flow_like_wasm_schema::widget_policy::WidgetPolicy,
+        flow_like_wasm_schema::widget_policy::WidgetCsp,
+        flow_like_wasm_schema::widget_policy::CspDirective,
+        flow_like_wasm_schema::widget_policy::WidgetUrlTemplate,
+        flow_like_wasm_schema::widget_policy::WidgetNetworkInputSlot,
+        flow_like_wasm_schema::widget_policy::PlatformStorageScope,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeDescriptor,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeStatus,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeRejection,
+        flow_like_wasm_schema::widget_policy::WidgetRuntimeSourceRequest,
+        flow_like_wasm_schema::widget_policy::WidgetEngineSupport,
+        flow_like_wasm_schema::widget_sources::WidgetNetwork,
+        flow_like_wasm_schema::widget_sources::WidgetNetworkPurpose,
+        flow_like_wasm_schema::widget_sources::WidgetNetworkSource,
+        flow_like_wasm_schema::widget_sources::WidgetSourceClass,
+        flow_like_wasm_schema::widget_sources::WidgetSourceKind,
+        flow_like_wasm_schema::widget_sources::WidgetSourceLevel,
+        flow_like_wasm_schema::widget_sources::SourceProvenance,
+        crate::routes::registry::widget_policy::WidgetPolicyDescribeRequest,
+        crate::routes::registry::widget_policy::WidgetGrantRequest,
+        crate::routes::registry::widget_policy::WidgetGrantResponse,
         // Realtime
         crate::routes::app::board::realtime::RealtimeParams,
         crate::realtime_ice::RealtimeIceServer,
@@ -1213,6 +1395,55 @@ mod tests {
     }
 
     #[test]
+    fn widget_policy_documents_declared_and_runtime_describe_and_grants() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let policy = spec
+            .pointer(
+                "/paths/~1registry~1package~1{package_id}~1widget-policy~1{version}~1{widget_id}",
+            )
+            .and_then(Value::as_object)
+            .expect("widget policy path is documented");
+        assert!(policy.contains_key("get"), "declared describe is missing");
+        assert_eq!(
+            policy
+                .get("post")
+                .and_then(|post| {
+                    post.pointer("/requestBody/content/application~1json/schema/$ref")
+                })
+                .and_then(Value::as_str),
+            Some("#/components/schemas/WidgetPolicyDescribeRequest")
+        );
+        for property in [
+            "networkInputs",
+            "platformStorage",
+            "runtime",
+            "engine",
+            "network",
+        ] {
+            assert!(
+                spec.pointer(&format!(
+                    "/components/schemas/WidgetPolicyDescriptor/properties/{property}"
+                ))
+                .is_some(),
+                "descriptor property {property} is missing"
+            );
+        }
+        for property in ["appId", "runtimeSources"] {
+            assert!(
+                spec.pointer(&format!(
+                    "/components/schemas/WidgetGrantRequest/properties/{property}"
+                ))
+                .is_some(),
+                "grant request property {property} is missing"
+            );
+        }
+        assert!(
+            spec.pointer("/components/schemas/WidgetGrantResponse/properties/runtime")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn telemetry_paths_are_documented() {
         let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
         let paths = spec
@@ -1283,5 +1514,97 @@ mod tests {
                 "OpenAPI path '{path}' has no '{method}' operation"
             );
         }
+    }
+
+    /// The admin dashboard, the app audit page and the SDKs read these shapes.
+    #[test]
+    fn audit_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let paths = spec
+            .get("paths")
+            .and_then(|p| p.as_object())
+            .expect("spec exposes paths");
+
+        for (path, method) in [
+            ("/audit/records", "get"),
+            ("/audit/verify", "get"),
+            ("/audit/verify/epochs", "get"),
+            ("/audit/head", "get"),
+            ("/audit/head/check", "post"),
+            ("/admin/logs/chain-status", "get"),
+            ("/apps/{app_id}/audit/export", "get"),
+            ("/apps/{app_id}/audit/webhook", "get"),
+            ("/apps/{app_id}/audit/webhook", "put"),
+            ("/apps/{app_id}/audit/webhook", "delete"),
+            ("/apps/{app_id}/audit/webhook/rotate", "post"),
+        ] {
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing OpenAPI path '{path}'"));
+            assert!(
+                entry.contains_key(method),
+                "OpenAPI path '{path}' has no '{method}' operation"
+            );
+        }
+    }
+    /// The storefront, the admin editor and the SDKs read these shapes. utoipa 5.4 ignores
+    /// `rename_all_fields`, so the placement variants must spell their camelCase fields themselves.
+    #[test]
+    fn explore_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        let paths = spec
+            .get("paths")
+            .and_then(|p| p.as_object())
+            .expect("spec exposes paths");
+
+        for (path, method) in [
+            ("/store/explore", "get"),
+            ("/store/explore/search", "get"),
+            ("/admin/explore", "get"),
+            ("/admin/explore/placements", "post"),
+            ("/admin/explore/placements/{id}", "put"),
+            ("/admin/explore/placements/{id}", "delete"),
+            ("/admin/explore/order", "put"),
+            ("/admin/explore/publish", "post"),
+            ("/admin/explore/discard", "post"),
+            ("/admin/explore/preview", "get"),
+            ("/admin/explore/media", "get"),
+        ] {
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing OpenAPI path '{path}'"));
+            assert!(
+                entry.contains_key(method),
+                "OpenAPI path '{path}' has no '{method}' operation"
+            );
+        }
+
+        let content = serde_json::to_string(
+            spec.pointer("/components/schemas/PlacementContent")
+                .expect("PlacementContent is registered"),
+        )
+        .unwrap();
+        for field in [
+            "ctaLabel",
+            "ctaHref",
+            "imageUrl",
+            "rotationSeconds",
+            "autoFill",
+        ] {
+            assert!(
+                content.contains(&format!("\"{field}\"")),
+                "PlacementContent does not expose {field}"
+            );
+        }
+        assert!(!content.contains("cta_label") && !content.contains("rotation_seconds"));
+        assert!(
+            spec.pointer("/paths/~1store~1explore~1search/get/parameters")
+                .and_then(Value::as_array)
+                .is_some_and(|parameters| parameters
+                    .iter()
+                    .any(|parameter| parameter.get("name") == Some(&Value::from("type"))))
+        );
     }
 }

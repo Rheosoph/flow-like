@@ -8,9 +8,19 @@ import {
 } from "@tanstack/react-query";
 import { isEqual } from "lodash-es";
 import { useCallback } from "react";
+import { isRecord } from "../lib/response-shape";
 import { useBackend } from "../state/backend-state";
 
 type BackendFunction<T, Args extends any[]> = (...args: Args) => Promise<T>;
+
+/** Tauri commands reject with `{ error: string }`, which `String()` reduces to "[object Object]". */
+function toError(error: unknown): Error {
+	if (error instanceof Error) return error;
+	const nativeMessage = (error as { error?: unknown } | null)?.error;
+	const message =
+		typeof nativeMessage === "string" ? nativeMessage : String(error);
+	return new Error(message, { cause: error });
+}
 
 // Undefined args are mapped to null (JSON-stable) instead of being dropped:
 // dropping them erases argument positions, so e.g. searchApps(query: "X") and
@@ -58,10 +68,7 @@ export function useInvoke<T, Args extends any[]>(
 				return response; // No need to cast if types are correctly inferred/set
 			} catch (error) {
 				console.error("Error invoking backend function:", error);
-				if (error instanceof Error) {
-					throw error;
-				}
-				throw new Error(String(error));
+				throw toError(error);
 			}
 		},
 		enabled,
@@ -132,10 +139,7 @@ export function useInfiniteInvoke<T, Args extends any[]>(
 				return response;
 			} catch (error) {
 				console.error("Error invoking infinite backend function:", error);
-				if (error instanceof Error) {
-					throw error;
-				}
-				throw new Error(String(error));
+				throw toError(error);
 			}
 		},
 		getNextPageParam: (lastPage, allPages) => {
@@ -145,6 +149,11 @@ export function useInfiniteInvoke<T, Args extends any[]>(
 			// A short page means the source is exhausted — asking again would just
 			// issue a request that returns [].
 			if (Array.isArray(lastPage) && lastPage.length < pageSize) {
+				return undefined;
+			}
+
+			// An empty or garbled body is no evidence of more pages; paging on would loop.
+			if (lastPage === null || typeof lastPage !== "object") {
 				return undefined;
 			}
 
@@ -283,6 +292,17 @@ export function injectData<T, Args extends any[]>(
 	} as UseQueryResult<T, Error>;
 }
 
+/**
+ * A background refresh that swaps a cached list or record for another kind of
+ * value (an error body, an empty response) is a malformed answer, not an update.
+ */
+function keepsShape(next: unknown, previous: unknown): boolean {
+	if (previous === undefined || previous === null) return true;
+	if (Array.isArray(previous)) return Array.isArray(next);
+	if (isRecord(previous)) return isRecord(next);
+	return true;
+}
+
 export async function injectDataFunction<T, Args extends any[]>(
 	lambda: () => Promise<T>,
 	context: any,
@@ -294,12 +314,19 @@ export async function injectDataFunction<T, Args extends any[]>(
 ): Promise<UseQueryResult<T, Error>> {
 	try {
 		const boundLambda = lambda.bind(context);
-		const result = await boundLambda();
 		const queryKey = toQueryKey([
 			backendFn.name || "backendFn",
 			...args,
 			...additionalDeps,
 		]);
+		const fetched = await boundLambda();
+		const result = keepsShape(fetched, oldData) ? fetched : (oldData as T);
+		if (result !== fetched) {
+			console.warn(
+				"[injectDataFunction] Ignoring a background result of a different shape than the cached data:",
+				queryKey,
+			);
+		}
 
 		if (!isEqual(result, oldData)) {
 			queryClient?.setQueryData(queryKey, result);

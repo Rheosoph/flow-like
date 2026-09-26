@@ -6,7 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
 use super::get_routes::RouteMapping;
 
@@ -37,20 +37,20 @@ pub async fn get_default_route(
 ) -> Result<Json<Option<RouteMapping>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ListEvents);
 
-    let model = event::Entity::find()
+    let row = event::Entity::find()
         .filter(event::Column::AppId.eq(&app_id))
         .filter(event::Column::IsDefault.eq(true))
+        .select_only()
+        .columns([event::Column::Id, event::Column::Route])
+        .into_tuple::<(String, Option<String>)>()
         .one(&state.db)
         .await?;
 
-    let result = model.map(|e| {
-        let path = e.route.clone().unwrap_or_else(|| "/".to_string());
-        RouteMapping {
-            id: e.id.clone(),
-            path,
-            event_id: e.id,
-            is_default: true,
-        }
+    let result = row.map(|(id, route)| RouteMapping {
+        id: id.clone(),
+        path: route.unwrap_or_else(|| "/".to_string()),
+        event_id: id,
+        is_default: true,
     });
 
     Ok(Json(result))

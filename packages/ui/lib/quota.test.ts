@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { apiResponseError, isUpgradeRequiredError } from "./api-error";
+import {
+	apiResponseError,
+	isPurchaseRequiredError,
+	isUpgradeRequiredError,
+} from "./api-error";
 import {
 	type QuotaOverview,
 	type QuotaResource,
@@ -71,6 +75,19 @@ describe("plan quota UI contract", () => {
 			}),
 		);
 		expect(isUpgradeRequiredError(error)).toBe(false);
+	});
+	test("a package licence for a project does not suggest upgrading a subscription", () => {
+		const error = apiResponseError(
+			{ status: 402, headers: new Headers(), statusText: "Payment Required" },
+			JSON.stringify({
+				error: {
+					code: "PACKAGE_LICENSE_REQUIRED",
+					message: "Buy this package before adding it to the project",
+				},
+			}),
+		);
+		expect(isUpgradeRequiredError(error)).toBe(false);
+		expect(isPurchaseRequiredError(error)).toBe(true);
 	});
 	test("warning deduplication separates payer, allowance period and threshold", () => {
 		const overview = {

@@ -63,13 +63,15 @@ impl NodeLogic for UpsertLocalDatabaseNode {
             VariableType::String,
         );
 
-        node.set_version(2);
+        super::add_write_receipt_outputs(&mut node);
+        node.set_version(3);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        super::publish_write_receipt(context, None, "").await?;
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
@@ -78,8 +80,17 @@ impl NodeLogic for UpsertLocalDatabaseNode {
         let value: Value = context.evaluate_pin("value").await?;
         let value = vec![value];
 
-        match database.upsert_from(context, value, id_row).await {
-            Ok(()) => {
+        match database
+            .upsert_from_with_receipt(context, value, id_row)
+            .await
+        {
+            Ok(receipt) => {
+                let fallback = if database.has_buffered_writes().await {
+                    "buffered"
+                } else {
+                    "applied"
+                };
+                super::publish_write_receipt(context, receipt, fallback).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
@@ -154,13 +165,15 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
             VariableType::String,
         );
 
-        node.set_version(2);
+        super::add_write_receipt_outputs(&mut node);
+        node.set_version(3);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        super::publish_write_receipt(context, None, "").await?;
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
@@ -168,8 +181,17 @@ impl NodeLogic for BatchUpsertLocalDatabaseNode {
         let value: Vec<Value> = context.evaluate_pin("value").await?;
         let id_row: String = context.evaluate_pin("id_row").await?;
 
-        match database.upsert_from(context, value, id_row).await {
-            Ok(()) => {
+        match database
+            .upsert_from_with_receipt(context, value, id_row)
+            .await
+        {
+            Ok(receipt) => {
+                let fallback = if database.has_buffered_writes().await {
+                    "buffered"
+                } else {
+                    "applied"
+                };
+                super::publish_write_receipt(context, receipt, fallback).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {

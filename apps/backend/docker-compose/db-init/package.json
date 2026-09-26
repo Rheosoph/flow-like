@@ -3,5 +3,12 @@
   "private": true,
   "type": "module",
   "dependencies": { "dotenv": "17.2.3", "pg": "8.16.3", "prisma": "7.3.0" },
-  "trustedDependencies": ["@prisma/engines", "prisma"]
+  "trustedDependencies": ["@prisma/engines", "prisma"],
+  "overrides": {
+    "@hono/node-server": "1.19.17",
+    "effect": "3.21.2",
+    "hono": "4.13.8",
+    "lodash": "4.18.1",
+    "valibot": "1.4.2"
+  }
 }

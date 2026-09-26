@@ -13,16 +13,47 @@ mod e2e_isolation;
 mod e2e_runtime;
 mod event_bus;
 mod event_sink;
+mod execution_credentials;
 mod execution_identity;
+mod frontend_assets;
 mod functions;
 mod local_page_actions;
+#[cfg(any(test, not(debug_assertions)))]
+mod logging;
 mod profile;
+mod run_index;
+mod run_reports;
 mod settings;
 mod state;
 #[cfg(desktop)]
 mod tray;
 pub mod utils;
+mod widget_grants;
 mod widget_protocol;
+
+#[tauri::command]
+fn execution_open_auth_session(webview: tauri::Webview) -> Result<String, String> {
+    execution_credentials::open_session(webview.window().label(), webview.label())
+}
+
+#[tauri::command]
+fn execution_set_auth(
+    webview: tauri::Webview,
+    hub: String,
+    subject: Option<String>,
+    token: Option<String>,
+    session_id: String,
+    sequence: u64,
+) -> Result<(), String> {
+    execution_credentials::update_session(
+        webview.label(),
+        hub,
+        subject,
+        token,
+        session_id,
+        sequence,
+    )
+}
 
 // Stub for tray_update_state on non-desktop platforms
 #[cfg(not(desktop))]
@@ -34,11 +65,11 @@ async fn tray_update_state() -> Result<(), String> {
 use flow_like::{
     flow_like_storage::{
         Path,
+        databases::vector::lancedb::connect_lance,
         files::store::{FlowLikeStore, local_store::LocalObjectStore},
-        lancedb,
     },
     state::{FlowLikeConfig, FlowLikeState},
-    utils::http::HTTPClient,
+    utils::http::{HTTPClient, Refetch},
 };
 use flow_like_catalog::{get_catalog, initialize as initialize_catalog};
 use flow_like_types::{sync::Mutex, tokio::time::interval};
@@ -279,13 +310,10 @@ fn ios_safe_area_js(native_top: i64, native_bottom: i64) -> String {
 // --- iOS Release logging -----------------------------------------------------
 #[cfg(all(target_os = "ios", not(debug_assertions)))]
 mod ios_release_logging {
-    use tracing_subscriber::{
-        EnvFilter, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
-    };
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     pub fn init() {
         use std::sync::OnceLock;
-        use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
         static INIT_GUARD: OnceLock<()> = OnceLock::new();
 
         // If we've already run (or someone else set a global subscriber), bail quietly.
@@ -296,24 +324,9 @@ mod ios_release_logging {
         // Prefer Apple unified logging so you can see everything in Console.app
         let oslog = tracing_oslog::OsLogger::new("com.flow-like.app", "default");
 
-        // Keep third-party noise down; raise your own crate(s). Never panic on parse errors.
-        let builder = EnvFilter::builder().with_default_directive(LevelFilter::INFO.into());
-        let mut filter = builder.from_env_lossy();
-        for d in [
-            "tao=warn",
-            "wry=warn",
-            "tauri=info",
-            "flow_like=info",
-            "flow_like_types=info",
-        ] {
-            if let Ok(dir) = d.parse() {
-                filter = filter.add_directive(dir);
-            }
-        }
-
         // Don't panic if a global subscriber is already installed.
         let _ = tracing_subscriber::registry()
-            .with(filter)
+            .with(crate::logging::release_filter())
             .with(oslog)
             .try_init(); // <- returns Err if someone else initialized first; we ignore it.
     }
@@ -496,25 +509,29 @@ pub fn run() {
     config.register_app_meta_store(build_store(project_dir.clone()));
 
     config.register_log_store(build_store(logs_dir.clone()));
+    config.register_run_index(Arc::new(run_index::SqliteRunIndex::open(
+        logs_dir.join("runs.db"),
+    )));
+    let run_report_queue = run_reports::RunReportQueue::open(logs_dir.join("runs.db"));
 
     config.register_temporary_store(build_store(temporary_dir.clone()));
 
     config.register_build_project_database(Arc::new(move |path: Path| {
         let directory = project_dir.join(path.to_string());
         let _ = std::fs::create_dir_all(&directory);
-        lancedb::connect(directory.to_string_lossy().as_ref())
+        connect_lance(directory.to_string_lossy().as_ref())
     }));
 
     config.register_build_user_database(Arc::new(move |path: Path| {
         let directory = user_dir.join(path.to_string());
         let _ = std::fs::create_dir_all(&directory);
-        lancedb::connect(directory.to_string_lossy().as_ref())
+        connect_lance(directory.to_string_lossy().as_ref())
     }));
 
     config.register_build_logs_database(Arc::new(move |path: Path| {
         let directory = logs_dir.join(path.to_string());
         let _ = std::fs::create_dir_all(&directory);
-        lancedb::connect(directory.to_string_lossy().as_ref())
+        connect_lance(directory.to_string_lossy().as_ref())
     }));
 
     // On Android, use a custom ObjectStore wrapper to avoid hard_link() which fails on Android SELinux
@@ -529,7 +546,8 @@ pub fn run() {
     functions::telemetry::init_crash_capture(&mut settings_state);
     let settings_state = Arc::new(Mutex::new(settings_state));
     let (http_client, refetch_rx) = HTTPClient::new();
-    let state = FlowLikeState::new(config, http_client);
+    let mut state = FlowLikeState::new(config, http_client);
+    state.lance_session = FlowLikeState::retained_lance_session(None);
     let state_ref = Arc::new(state);
     let registry_state = Arc::new(Mutex::new(None));
 
@@ -567,19 +585,35 @@ pub fn run() {
         let file_layer = settings::open_log_file().map(|file| {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
-                .with_writer(std::sync::Arc::new(file))
+                .with_writer(file)
         });
 
+        // One filter in front of both layers: INFO by default, noisy
+        // dependencies at WARN, overridable through FLOW_LIKE_LOG_LEVEL.
+        // The file layer goes first: the first fmt layer to see a span caches
+        // its formatted fields for the others, and the file must not inherit
+        // stderr's ANSI colour codes.
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
+            .with(logging::release_filter())
             .with(file_layer)
+            .with(tracing_subscriber::fmt::layer())
             .init();
     }
 
     let settings_state_for_sink = settings_state.clone();
     let shared_wasm_engine =
         state::TauriWasmEngineState::create_shared().expect("Failed to create shared WasmEngine");
-    let mut builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default()
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                execution_credentials::revoke_webview(webview.label());
+            }
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                execution_credentials::revoke_window(window.label());
+            }
+        });
 
     // Tauri requires this plugin to be registered first so a secondary process exits before any
     // other plugin or application setup hook runs.
@@ -597,6 +631,7 @@ pub fn run() {
         .manage(state::TauriRegistryState(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
+        .manage(run_report_queue)
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -666,6 +701,8 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 functions::telemetry::track(&telemetry_handle, "app_started", None).await;
             });
+
+            run_reports::spawn_drain(app.app_handle().clone());
 
             // Start the WasmEngine epoch ticker inside the async runtime
             if let Some(wasm_state) = app.try_state::<state::TauriWasmEngineState>() {
@@ -936,8 +973,7 @@ pub fn run() {
                 let client = http_client.client();
 
                 println!("Refetch Handler Started");
-                while let Some(event) = receiver.recv().await {
-                    let request = event;
+                while let Some(Refetch { request, accepts }) = receiver.recv().await {
                     let request_hash = http_client.quick_hash(&request);
                     let response = match client.execute(request).await {
                         Ok(response) => response,
@@ -965,6 +1001,13 @@ pub fn run() {
                             continue;
                         }
                     };
+
+                    if !accepts(&value) {
+                        tracing::warn!(
+                            "Skipping refetch cache update, response no longer matches the cached type"
+                        );
+                        continue;
+                    }
 
                     match http_client.put(&request_hash, &value) {
                         Ok(result) => result,
@@ -1106,6 +1149,9 @@ pub fn run() {
             functions::app::app_set_stylesheet,
             functions::app::app_list_packages,
             functions::app::sharing::export_app_to_file,
+            functions::app::device_export::prepare_device_project_export,
+            functions::app::device_export::read_device_project_export_chunk,
+            functions::app::device_export::release_device_project_export,
             functions::app::sharing::import_app_from_file,
             functions::app::sharing::get_app_export_preflight,
             functions::app::sharing::inspect_app_archive,
@@ -1113,11 +1159,15 @@ pub fn run() {
             functions::app::fork::apply_fork_bundle,
             functions::app::fork::summarize_local_app_bundle,
             functions::app::fork::upload_local_app_content_bundle,
+            functions::app::duplicate::duplicate_local_app,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
             functions::app::tables::db_table_summaries,
             functions::app::tables::db_table_summaries_user,
             functions::app::tables::db_schema,
+            functions::app::tables::db_history,
+            functions::app::tables::db_reference_action,
+            functions::app::tables::db_compare,
             functions::app::tables::db_create_table,
             functions::app::tables::db_list,
             functions::app::tables::db_count,
@@ -1131,6 +1181,7 @@ pub fn run() {
             functions::app::tables::db_drop_columns,
             functions::app::tables::db_add_column,
             functions::app::tables::db_alter_column,
+            functions::app::tables::db_set_primary_key,
             functions::app::tables::db_drop_index,
             functions::app::tables::db_drop_table,
             functions::app::graph::graph_list_overlays,
@@ -1151,6 +1202,8 @@ pub fn run() {
             functions::app::graph::graph_sample,
             functions::app::graph::graph_upsert_nodes,
             functions::app::graph::graph_upsert_edges,
+            functions::app::graph::graph_update_object,
+            functions::app::graph::graph_update_relationship,
             functions::app::graph::graph_paths,
             functions::app::graph::graph_analytics,
             functions::app::saved_queries::query_saved_list,
@@ -1200,11 +1253,16 @@ pub fn run() {
             functions::flow::board::get_flowscript_file,
             functions::flow::board::get_execution_elements,
             functions::flow::board::element_demand,
+            functions::flow::board::get_board_run_requirements,
             functions::flow::board::save_board,
             functions::flow::run::execute_board,
             functions::flow::run::execute_event,
             functions::flow::run::list_runs,
+            functions::flow::run::get_run_payload,
             functions::flow::run::query_run,
+            functions::flow::run::query_run_logs,
+            functions::flow::run::count_run_logs,
+            functions::flow::run::get_run_log_summary,
             functions::flow::run::cancel_execution,
             functions::flow::event::validate_event,
             functions::flow::event::get_event,
@@ -1223,6 +1281,7 @@ pub fn run() {
             functions::flow::regression::list_regression_suite_runs,
             functions::flow::regression::get_regression_suite_run,
             functions::flow::event::upsert_event,
+            functions::flow::event::local_sink_registration_plan,
             functions::flow::event::restore_event,
             functions::flow::event::delete_event,
             functions::flow::template::get_template,
@@ -1336,14 +1395,22 @@ pub fn run() {
             functions::registry::registry_load_local,
             functions::registry::registry_init,
             functions::registry::registry_set_auth_token,
+            execution_open_auth_session,
+            execution_set_auth,
+            functions::registry::registry_describe_widget_policy,
+            functions::registry::registry_mint_widget_grant,
+            functions::registry::registry_revoke_widget_grants,
             functions::permissions::check_rpa_permissions,
             functions::permissions::request_rpa_permission,
+            functions::automation_approval::get_rpa_requirements,
+            functions::automation_approval::grant_rpa_automation,
             functions::recording::start_recording,
             functions::recording::pause_recording,
             functions::recording::resume_recording,
             functions::recording::stop_recording,
             functions::recording::get_recording_status,
             functions::recording::get_recorded_actions,
+            functions::recording::clear_recorded_actions,
             functions::recording::insert_recording_to_board,
             functions::statistics::get_board_statistics,
             functions::statistics::get_cached_statistics,
@@ -1381,7 +1448,7 @@ pub fn run() {
         .join()
         .expect("context thread");
 
-    builder
+    frontend_assets::register(builder, &context)
         .run(context)
         .expect("error while running tauri application");
 }

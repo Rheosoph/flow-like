@@ -14,9 +14,10 @@ use crate::{
 use axum::{Extension, Json, extract::State};
 use flow_like::profile::{ProfileApp, ProfileShortcut, Settings};
 use flow_like_types::{Value, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
+use std::collections::{HashMap, HashSet};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -132,6 +133,20 @@ pub async fn sync_profiles(
     let mut skipped: Vec<String> = Vec::new();
     let mut deleted: Vec<String> = Vec::new();
 
+    let mut unvisited_ids: HashSet<String> = profiles.iter().map(|p| p.id.clone()).collect();
+    let mut existing_profiles: HashMap<String, profile::Model> = if unvisited_ids.is_empty() {
+        HashMap::new()
+    } else {
+        profile::Entity::find()
+            .filter(profile::Column::UserId.eq(&sub))
+            .filter(profile::Column::Id.is_in(unvisited_ids.iter().cloned()))
+            .all(&state.db)
+            .await?
+            .into_iter()
+            .map(|existing| (existing.id.clone(), existing))
+            .collect()
+    };
+
     for mut profile_req in profiles {
         profile_req.name = super::validate_profile_name(&profile_req.name)?;
         for extension in [
@@ -149,8 +164,14 @@ pub async fn sync_profiles(
             return Err(ApiError::bad_request("Profile ID is required"));
         }
 
-        // Check if profile exists on server (including soft-deleted)
-        let found_profile = find_profile_for_user(&state.db, &sub, &profile_req.id).await?;
+        // Check if profile exists on server (including soft-deleted). A repeated
+        // ID has to see what its first occurrence wrote, so only the first one
+        // may use the prefetched row.
+        let found_profile = if unvisited_ids.remove(&profile_req.id) {
+            existing_profiles.remove(&profile_req.id)
+        } else {
+            find_profile_for_user(&state.db, &sub, &profile_req.id).await?
+        };
 
         if let Some(existing) = found_profile {
             // If this profile was soft-deleted, tell the client to delete it locally

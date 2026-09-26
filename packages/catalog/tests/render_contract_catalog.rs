@@ -462,10 +462,6 @@ const KNOWN_GAPS: &[(&str, Invariant)] = &[
     // case, so applying once settles the board. What is left is that the first Apply of an
     // untouched document is not a no-op.
     //
-    // `board/ttwctnp…` — two `node `reroute` is missing required inputs: route_in` diagnostics and
-    // ZERO commands. The document is fine; reconcile objects to reroute nodes whose `route_in` the
-    // board leaves unwired, which is board data, not something the renderer produced.
-    ("board/ttwctnp08u18sg2z6nmcqqak", Invariant::NotNoop),
     // `board/bypaw…` — one `UpdateNodePin value_in = Null`, plus two `namespace rss::… is unknown`
     // diagnostics. The `rss` namespace is absent because this test builds the catalog with the
     // default metadata features; that half is an artefact of the harness, not a product defect.

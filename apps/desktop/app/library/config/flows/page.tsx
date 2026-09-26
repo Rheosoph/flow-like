@@ -88,10 +88,14 @@ export default function Page() {
 
 	const handleOpenBoard = async (boardId: string) => {
 		if (!app.data) return;
+		// Only a warm-up: a board listed from the hub may not be on disk yet, and
+		// the editor loads it (local first, then remote) on its own.
 		await invoke("get_app_board", {
 			appId: app.data.id,
 			boardId,
 			pushToRegistry: true,
+		}).catch((error) => {
+			console.warn(`[Flows] Preloading board ${boardId} failed:`, error);
 		});
 		router.push(`/flow?id=${boardId}&app=${app.data.id}`);
 	};

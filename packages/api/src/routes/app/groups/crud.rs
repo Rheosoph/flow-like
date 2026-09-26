@@ -199,8 +199,7 @@ pub async fn create_group(
         app_id,
         "app_group.create",
         "AppGroup",
-        group_id,
-        "App group created"
+        group_id
     );
 
     single_group(&state, &group_id).await
@@ -419,8 +418,7 @@ pub async fn update_group(
         app_id,
         "app_group.update",
         "AppGroup",
-        group_id,
-        "App group updated"
+        group_id
     );
 
     single_group(&state, &group_id).await
@@ -468,8 +466,7 @@ pub async fn delete_group(
         app_id,
         "app_group.delete",
         "AppGroup",
-        group_id,
-        "App group deleted"
+        group_id
     );
 
     Ok(deleted)

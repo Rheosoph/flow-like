@@ -64,6 +64,9 @@ pub mod unified;
 pub mod wasi;
 pub mod widget;
 pub mod widget_bundle;
+pub use flow_like_wasm_schema::widget_frame;
+pub use flow_like_wasm_schema::widget_policy;
+pub use flow_like_wasm_schema::widget_sources;
 pub mod widget_source;
 
 pub use abi::{WasmAbi, WASM_ABI_VERSION};

@@ -1,3 +1,4 @@
+import { asArray, isRecord } from "../../lib/response-shape";
 import type {
 	IExecutionActivity,
 	IExecutionUsageRecord,
@@ -8,7 +9,10 @@ export function homeActivityDays(value: unknown): 1 | 7 | 30 {
 }
 
 export function hasAttentionSeverity(status: string): boolean {
-	return ["error", "fatal"].includes(status.toLowerCase());
+	return (
+		typeof status === "string" &&
+		["error", "fatal"].includes(status.toLowerCase())
+	);
 }
 
 export function homeActivityPeriod(days: number): string {
@@ -50,27 +54,41 @@ export interface HomeActivity {
 	attentionCapped: boolean;
 }
 
+function count(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 export function normalizeHomeActivity(
 	response: IExecutionActivity,
 ): HomeActivity {
-	const attention = response.attention ?? [];
+	const attention = asArray(response.attention).filter((record) =>
+		isRecord(record),
+	);
+	const attentionTotal = count(response.attention_total);
 	return {
 		days: response.days,
-		buckets: (response.buckets ?? []).map((bucket) => ({
-			day: bucket.day,
-			count: bucket.count,
-			attentionCount: bucket.attention_count,
-		})),
-		apps: (response.apps ?? []).map((app) => ({
-			appId: app.app_id,
-			count: app.count,
-			attentionCount: app.attention_count,
-		})),
-		total: response.total,
-		attentionTotal: response.attention_total,
-		averageMicroseconds: response.average_microseconds,
+		buckets: asArray(response.buckets)
+			.filter((bucket) => isRecord(bucket))
+			.map((bucket) => ({
+				day: bucket.day,
+				count: count(bucket.count),
+				attentionCount: count(bucket.attention_count),
+			})),
+		apps: asArray(response.apps)
+			.filter((app) => isRecord(app))
+			.map((app) => ({
+				appId: app.app_id ?? null,
+				count: count(app.count),
+				attentionCount: count(app.attention_count),
+			})),
+		total: count(response.total),
+		attentionTotal,
+		averageMicroseconds:
+			typeof response.average_microseconds === "number"
+				? response.average_microseconds
+				: null,
 		attention,
-		attentionCapped: response.attention_total > attention.length,
+		attentionCapped: attentionTotal > attention.length,
 	};
 }
 

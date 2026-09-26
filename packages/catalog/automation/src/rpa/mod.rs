@@ -1,5 +1,6 @@
 pub mod act;
 pub mod assert;
+pub(crate) mod branch;
 pub mod checkpoint;
 pub mod diagnose;
 pub mod error_handler;

@@ -596,7 +596,6 @@ const supportPage = {
 		keywords: ["support", "operations", "SLA"],
 		themeColor: "#7c3aed",
 	},
-	cache: true,
 };
 
 const pageList = [

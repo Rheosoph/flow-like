@@ -15,12 +15,13 @@ production and retain it with the deployment configuration.
 
 Repository names follow `ghcr.io/<owner>/flow-like-<target>-<workload>`; the owner
 is the lowercased GitHub repository owner. Forks publish to their own namespace.
-The checked-in matrix contains 55 platform builds for 40 image repositories:
+The checked-in matrix contains 58 platform builds for 42 image repositories:
 
 | Target | Workloads | Platform |
 | --- | --- | --- |
 | AWS | API, compiler, file-tracker, media-transformer, event-bridge, maintenance, signaling, migration | ARM64 |
 | AWS | executor, executor-async | AMD64 |
+| AWS | api-ecs | AMD64 and ARM64 |
 | GCP | API, queue-worker, executor, signaling, migration, scheduler, maintenance | AMD64 |
 | Azure | API, queue-worker, executor, maintenance, scheduler, migration, signaling, otel-collector | AMD64 |
 | Docker Compose | API, runtime, compiler, execution-manager, sink-services, signaling, db-init, object-store-init, web | AMD64 and ARM64 |
@@ -38,7 +39,8 @@ set is published, the workflow combines both records of each self-hosted
 repository into one multi-architecture image index, so a Compose host or a
 mixed-architecture Kubernetes cluster pulls the index by tag or digest and
 receives the matching platform. Cloud repositories stay single-image manifests
-because Lambda rejects an index. See [Tags and visibility](#tags-and-visibility).
+because Lambda rejects an index. The AWS ECS API never runs on Lambda, so its two
+records become an index as well. See [Tags and visibility](#tags-and-visibility).
 
 The fifteen self-hosted packages are public: anyone can pull them without a
 registry login. Cloud packages (AWS, GCP, Azure) stay private to the owner
@@ -83,6 +85,13 @@ default through the `flow_like_config` BuildKit secret and its
 document. A secret mount avoids a loose copy in a build layer; it does not hide
 the embedded content from someone who can pull the image. Prefer runtime config
 for installation-specific settings.
+
+The dedicated audit worker recipes take the same build input as their API:
+`FLOW_LIKE_CONFIG` for `flow-like-audit-worker` (default: the Compose example,
+whose `audit` section matches the Kubernetes example) and the `flow_like_config`
+secret for the Azure and GCP workers. The worker compiles that document's `audit`
+section as its only policy and accepts no runtime config; see
+[Audit policy](/self-hosting/audit-trail/#audit-policy).
 
 ## Runtime API configuration
 
@@ -160,6 +169,118 @@ still uses the hosted `flow-like.com/thirdparty/callback` relay and may select
 the stored profile's Hub. These runtime variables do not configure that separate
 relay or its provider registrations.
 
+## Host chat, form and page frontends
+
+The existing `apps/web` application includes the hosted App route
+`/a/<app-id>/<route>`, which serves the chat, form or custom page published on
+that route. Deploy the normal Compose or Kubernetes `web` image, or publish the
+normal web static export. The browser resolves routes through the API at
+runtime, so publishing an Event does not require another web build.
+
+Container images use the [runtime web settings](#runtime-web-configuration)
+above. For a static host, build the web application from a checkout with the
+workspace dependencies installed:
+
+```sh
+NEXT_PUBLIC_API_URL=https://api.example.com \
+NEXT_PUBLIC_REDIRECT_URL=https://app.example.com/callback \
+NEXT_PUBLIC_REDIRECT_LOGOUT_URL=https://app.example.com/ \
+bun --cwd apps/web run build
+```
+
+Upload `apps/web/out` to the web host. These static-build settings use the same
+API and login callback as the rest of the web application. `NEXT_PUBLIC_API_URL`
+is the browser-reachable API origin, without `/api/v1`. Changing these build
+settings requires another export; container runtime settings do not.
+
+Set `FRONTEND_BASE_URL` on the API to the existing web origin, for example
+`https://app.example.com`. Compose setup derives it from `--web-origin`;
+Kubernetes setup derives `api.frontendBaseUrl` from `PUBLIC_WEB_URL`. Both
+local defaults use `http://localhost:3001`. Update this value when moving the
+web application to another domain and restart the API. If `FRONTEND_BASE_URL`
+is unset or blank, the API can reuse a configured `FRONTEND_URL`.
+
+### Browser access and sign-in
+
+Keep the web origin in the API's `CORS_ALLOWED_ORIGINS`, preserving desktop and
+other application origins. Helm uses `api.corsAllowedOrigins`. Hosted frontends
+use the web application's existing OpenID client and `/callback` route. Keep
+the deployed callback registered with that identity provider. No separate
+OpenID application or callback is needed for `/a`.
+
+Hosting starts disabled. Enabling it requires sign-in by default: the web
+application uses its normal login and returns to the original App route.
+**Allow anonymous access** is a separate opt-in with a confirmation warning
+that anyone with the link can execute workflows and the App owner pays for
+usage. Disabling hosting clears that choice in the editor. Save the Event to
+apply hosting and access changes. It must also use Remote execution and Public
+exposure, and be active. See
+[Events](/apps/events/#publish-a-hosted-chat-form-or-page).
+
+The API permits anonymous use only when the Event's decoded configuration
+explicitly sets `frontend_hosting.allow_anonymous` to `true`. A legacy
+`auth_proxy: false` or a missing `allow_anonymous` value never enables anonymous
+access.
+
+Micro-widgets follow the registry's existing access rules. Anonymous pages can
+load public widget packages when the registry allows anonymous reads. Private
+packages still require package access. Custom Page actions use the published
+page contract; hosted chat does not execute raw board widget actions.
+
+### Static routes and API front doors
+
+The web export includes `_redirects` rules for hosts that support that format.
+Both container web images include equivalent Nginx routing. On other static
+hosts, rewrite these request paths to the corresponding export file while
+preserving the requested browser URL and query string:
+
+| Web host request | Export file |
+| --- | --- |
+| `/a/<app-id>/<route>` | `/a.html` |
+| `/use/<app-route>?id=<app-id>` | `/use.html` |
+| `/callback` | `/callback.html` |
+
+The query form, such as `/a?app=<app-id>&route=/orders`, also works when the
+host resolves `/a` to `/a.html`. Configure clean URLs for the exported pages.
+An `index.html` fallback alone does not load the requested interface entry
+point. On Cloudflare Pages, rewrite `/a/*` to `/a`, never to `/a.html`: Pages
+answers a `.html` target with a redirect to the clean path, which drops the
+route.
+
+App routes also need the `/use/*` rewrite for direct links
+such as `/use/orders/123?id=my-app`. Serve existing exported files first, including
+`/use/__next.*.txt` route payloads used when entering the App. Preserve `id` and other query parameters
+when serving `/use.html`. `/use/?id=my-app` selects the App's root route;
+event-only links remain `/use?id=my-app&eventId=event`. Legacy
+`/use?id=my-app&route=/orders/123` links are converted to the path form by the
+web application through browser history replacement. Desktop uses the same
+path format and resolves deep links through its bundled assets.
+
+With **separate API and web origins**, the API's `/a/*` shortlinks redirect to
+the same path on the web origin. Forward those API shortlinks to the API along
+with `/frontend/*`, `/api/v1/*`, `/r/*` and `/m/*`. The bundled Compose API
+proxy and default Helm API ingress already forward every API path.
+
+With **one shared origin**, route `/a` and `/use`, including their subpaths,
+directly to the **web** service. Route `/frontend/*`, `/api/v1/*`, `/r/*` and
+`/m/*` to the **API** service. The Helm values include this path-based example.
+Sending the shared origin's `/a/*` paths to the API would redirect them back to
+themselves.
+
+For API requests, preserve `Authorization`, `X-Flow-Like-Session`, query strings
+and request bodies, allow CORS preflight requests, disable response caching,
+and stream execution responses without proxy buffering. An edge that replaces
+`Authorization` with its origin signature must preserve the viewer token using
+the existing `X-Flow-Like-Authorization` contract.
+
+After deployment, open a published route's link in a fresh browser session
+and submit a form or send a chat message. Test a sign-in-protected route and
+confirm the normal callback returns to it. A `503` mentioning
+`FRONTEND_BASE_URL` means the API shortlink destination is missing or invalid.
+A route with no Event, or whose Event is not published, inactive, Local or
+Internal, returns `404` from the hosted API; the web host may still serve the
+static entry page that displays that error.
+
 ## Tags and visibility
 
 Each repository receives three kinds of references. Every tag of one release
@@ -182,9 +303,9 @@ commit. The workflow requests the index annotations
 `org.opencontainers.image.revision`, `org.opencontainers.image.source` and
 `org.opencontainers.image.version`; an OCI index keeps them, while a Docker
 manifest list (produced when the pushed images use Docker media types) cannot
-carry annotations. The twenty-five cloud repositories are single-platform: the
-tags point at the image manifest itself, never at an index, because Lambda
-requires a single-image manifest. The workflow asserts this after every copy.
+carry annotations. Apart from the ECS API, the twenty-six cloud repositories are
+single-platform: the tags point at the image manifest itself, never at an index,
+because Lambda requires a single-image manifest. The workflow asserts this after every copy.
 The image config labels carry the revision and source for both kinds and are the
 fallback the guard reads.
 

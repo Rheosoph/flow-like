@@ -34,7 +34,8 @@ impl NodeLogic for DeleteLocalDatabaseNode {
         node.set_flowscript_name("db", "delete");
         node.set_receiver("database");
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(3);
+        node.set_version(4);
+        super::add_write_receipt_outputs(&mut node);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -83,11 +84,18 @@ impl NodeLogic for DeleteLocalDatabaseNode {
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        super::publish_write_receipt(context, None, "").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let cached_db = database.load(context).await?;
         cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.db.write().await;
+        if super::skip_missing_table(context, &database, "delete").await? {
+            super::publish_write_receipt(context, None, "applied").await?;
+            context.set_pin_value("deleted_values", json!([])).await?;
+            context.activate_exec_pin("exec_out").await?;
+            return Ok(());
+        }
         let filter: String = context.evaluate_pin("filter").await?;
         let filter = params::bind_lance_filter(context, &filter).await?;
 
@@ -115,6 +123,9 @@ impl NodeLogic for DeleteLocalDatabaseNode {
             database.delete(&normalized_filter).await?;
         }
 
+        let receipt = database.inner().last_write_receipt();
+        drop(database);
+        super::publish_write_receipt(context, receipt, "applied").await?;
         context
             .set_pin_value("deleted_values", json!(deleted_values))
             .await?;

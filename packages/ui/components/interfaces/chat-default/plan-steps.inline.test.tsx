@@ -30,8 +30,8 @@ async function mount(node: React.ReactNode) {
 		IS_REACT_ACT_ENVIRONMENT: true,
 	});
 	const { createRoot } = await import("react-dom/client");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	const root = createRoot(container);
 	await act(async () => {
 		root.render(node);

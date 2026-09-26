@@ -65,6 +65,7 @@ pub async fn search_bits(
                 meta::Entity::find()
                     .select_only()
                     .column(meta::Column::BitId)
+                    .filter(meta::Column::BitId.is_not_null())
                     .filter(
                         meta::Column::Description
                             .contains(search_str)

@@ -30,6 +30,7 @@
 
 import type { IStorageState } from "../state/backend-state/storage-state";
 import type { IStorageItemActionResult } from "../state/backend-state/types";
+import { asArray } from "./response-shape";
 import { signedUrlExpiry } from "./stable-asset-url";
 
 /**
@@ -181,14 +182,17 @@ async function flush(appId: string) {
 	let results: IStorageItemActionResult[] = [];
 	try {
 		// The backends split this at the route's per-request cap themselves.
-		results = await queue.storageState.downloadStorageItems(appId, queue.paths);
+		results = asArray(
+			await queue.storageState.downloadStorageItems(appId, queue.paths),
+		);
 	} catch (error) {
 		console.warn("[assetUrlCache] Failed to sign storage assets:", error);
 	}
 
+	// Every queued path must settle below, or its callers wait forever.
 	const signed = new Map<string, string>();
 	for (const result of results) {
-		if (result.url && !result.error) signed.set(result.prefix, result.url);
+		if (result?.url && !result.error) signed.set(result.prefix, result.url);
 	}
 
 	const now = Date.now();

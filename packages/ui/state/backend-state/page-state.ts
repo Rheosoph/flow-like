@@ -1,4 +1,5 @@
 import type { SurfaceComponent } from "../../components/a2ui/types";
+import type { IElementDemand } from "../../lib/schema/flow/element-demand";
 import type { IEvent } from "../../lib/schema/flow/event";
 import type { Version } from "./widget-state";
 
@@ -101,8 +102,11 @@ export interface IPage {
 	onIntervalSeconds?: number;
 	/** Widget definitions referenced by widget instances on this page. Key is instance ID */
 	widgetRefs?: Record<string, IWidgetRef>;
-	/** When true, cache the last rendered state and show it instantly while onLoad runs */
-	cache?: boolean;
+	/**
+	 * Pages with an onLoad event replay their last rendered output while it refreshes. When true,
+	 * that output is neither replayed nor stored, and a loading screen shows until onLoad renders.
+	 */
+	noCache?: boolean;
 }
 
 export interface PageListItem {
@@ -146,6 +150,11 @@ export interface IPageBootstrap {
 	readonly appCustomCss?: string | null;
 	/** Authority revision used by governed Page actions and lifecycle hooks. */
 	readonly executionRevision?: string | null;
+	/**
+	 * Page elements the Event's board reads. Governed runs send these with the invocation
+	 * instead of asking the Board demand endpoint, which a Page viewer may not read.
+	 */
+	readonly elementDemand?: Pick<IElementDemand, "selectors" | "dynamic"> | null;
 	readonly canonicalRoute?: string | null;
 	readonly routeMiss?: boolean;
 	/**

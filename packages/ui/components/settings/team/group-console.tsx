@@ -69,6 +69,7 @@ import {
 	useInvoke,
 	useSearch,
 } from "../../..";
+import { asArray } from "../../../lib/response-shape";
 import {
 	VISIBILITY_META,
 	fromWireVisibility,
@@ -109,7 +110,8 @@ export function GroupConsole({
 		[appId, group.id],
 		open && access.canReadTeam && !access.isLoading,
 	);
-	const current = detail.data ?? group;
+	// A garbled or stale restored detail must not replace the list row.
+	const current = detail.data?.id === group.id ? detail.data : group;
 	// Anchoring says which app steers the suite; the role says whether this
 	// account may steer it. Every write below needs both.
 	const isAnchor = current.owner_app_id === appId;
@@ -598,7 +600,7 @@ function useAppVisibilityMap() {
 			string,
 			{ visibility: IAppVisibility; name?: string }
 		>();
-		for (const entry of apps.data ?? []) {
+		for (const entry of asArray(apps.data)) {
 			const [app, metadata] = entry as [IApp, IMetadata | undefined];
 			map.set(app.id, { visibility: app.visibility, name: metadata?.name });
 		}
@@ -645,9 +647,10 @@ function AppsTab({
 	const [manualId, setManualId] = useState("");
 	const appMap = useAppVisibilityMap();
 
+	const members = asArray(group.members);
 	const memberIds = useMemo(
-		() => new Set(group.members.map((member) => member.app_id)),
-		[group.members],
+		() => new Set(members.map((member) => member.app_id)),
+		[members],
 	);
 	const suiteIsPublic = isStoreVisible(fromWireVisibility(group.visibility));
 
@@ -733,7 +736,7 @@ function AppsTab({
 		}
 	};
 
-	const ownMembership = group.members.find(
+	const ownMembership = members.find(
 		(member) => member.app_id === appId && member.kind !== "PRIMARY",
 	);
 
@@ -752,7 +755,7 @@ function AppsTab({
 			/>
 
 			<div className="space-y-2">
-				{group.members.map((member) => {
+				{members.map((member) => {
 					const known = appMap.get(member.app_id);
 					const hiddenMeta =
 						suiteIsPublic && known && !isStoreVisible(known.visibility)
@@ -961,6 +964,7 @@ function PublicationRequestPanel({
 	request,
 }: Readonly<{ request: IGroupPublicationRequest }>) {
 	const { t } = useTranslation("settings");
+	const logs = asArray(request.logs);
 	return (
 		<div className="rounded-lg border border-primary/40 bg-primary/5 p-3 space-y-2">
 			<div className="flex items-center gap-2">
@@ -980,9 +984,9 @@ function PublicationRequestPanel({
 				})}
 				{formatRelativeTime(request.createdAt)}
 			</p>
-			{request.logs.length > 0 && (
+			{logs.length > 0 && (
 				<ul className="space-y-1.5 border-t pt-2">
-					{request.logs.map((log) => (
+					{logs.map((log) => (
 						<li key={log.id} className="text-xs text-muted-foreground">
 							<span className="text-foreground">
 								{log.message ?? "Status update"}
@@ -1063,12 +1067,13 @@ function VisibilityTab({
 	const visibility = fromWireVisibility(group.visibility);
 	const status = publication.data;
 	const canPublish = status?.canRequestPublication ?? true;
-	const pending = status?.requests.find((request) =>
-		["PENDING", "ONHOLD", "ON_HOLD"].includes(request.status.toUpperCase()),
+	const pending = asArray(status?.requests).find((request) =>
+		["PENDING", "ONHOLD", "ON_HOLD"].includes(
+			(request.status ?? "").toUpperCase(),
+		),
 	);
-	const blockers = (status?.memberReadiness ?? []).filter(
-		(entry) => !entry.ready,
-	);
+	const readiness = asArray(status?.memberReadiness);
+	const blockers = readiness.filter((entry) => !entry.ready);
 
 	const transitions = useMemo(() => {
 		const all = getVisibilityTransitions(visibility);
@@ -1095,7 +1100,7 @@ function VisibilityTab({
 				group.id,
 			]);
 			await onChange();
-			return { reviewRequested: result.reviewRequested };
+			return { reviewRequested: result?.reviewRequested ?? false };
 		},
 		[appId, backend.teamState, group.id, invalidate, onChange],
 	);
@@ -1150,9 +1155,7 @@ function VisibilityTab({
 				</InfoNote>
 			)}
 
-			{isAnchor && (
-				<MemberReadinessList readiness={status?.memberReadiness ?? []} />
-			)}
+			{isAnchor && <MemberReadinessList readiness={readiness} />}
 		</div>
 	);
 }

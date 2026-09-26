@@ -85,7 +85,7 @@ pub async fn update_connection(
         "app_connection.update",
         "AppConnection",
         connection_id,
-        "App connection role updated"
+        serde_json::json!({ "role_id": payload.role_id })
     );
 
     Ok(Json(()))

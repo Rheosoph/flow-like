@@ -9,51 +9,90 @@ import type {
 } from "../../state/backend-state/page-state";
 
 const noop = () => {};
+// bun keeps a module mock for every later file in the process, so each mocked module is captured
+// first and put back in afterAll.
+const actual = {
+	idbStorage: { ...(await import("../../lib/idb-storage")) },
+	locales: { ...(await import("@flow-like/locales")) },
+	nextNavigation: { ...(await import("next/navigation")) },
+	oidc: { ...(await import("react-oidc-context")) },
+	assetSource: { ...(await import("../../hooks/use-asset-source")) },
+	runtimeTailwind: { ...(await import("../../lib/use-runtime-tailwind")) },
+	backendState: { ...(await import("../../state/backend-state")) },
+	executionService: {
+		...(await import("../../state/execution-service-context")),
+	},
+	routeDialog: { ...(await import("../a2ui/RouteDialogProvider")) },
+	widgetInstance: { ...(await import("../a2ui/layout/A2UIWidgetInstance")) },
+	elementStorage: { ...(await import("../a2ui/hooks/use-element-storage")) },
+	elementsRequestHandler: {
+		...(await import("../a2ui/elements-request-handler")),
+	},
+	widgetQueryHandler: { ...(await import("../a2ui/widget-query-handler")) },
+	scopedCustomCss: { ...(await import("../scoped-custom-css")) },
+	nativeWidgetPageCapture: {
+		...(await import("./native-widget-page-capture")),
+	},
+	pageLoadingSkeleton: { ...(await import("./page-loading-skeleton")) },
+	componentRegistry: { ...(await import("../a2ui/ComponentRegistry")) },
+};
 const persistence = {
 	getAll: async () => ({}),
 	set: async () => {},
 	clearPage: async () => {},
 };
 mock.module("../../lib/idb-storage", () => ({
+	...actual.idbStorage,
 	appGlobalState: persistence,
 	pageLocalState: persistence,
 }));
 const translate = (_key: string, fallback: string) => fallback;
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: translate }),
 	i18n: { t: translate },
 }));
 const router = { push: noop, replace: noop };
 mock.module("next/navigation", () => ({
+	...actual.nextNavigation,
 	useRouter: () => router,
 	usePathname: () => "/developer/flowpilot-e2e",
 	useSearchParams: () => new URLSearchParams("host=ignored"),
 }));
-mock.module("react-oidc-context", () => ({ useAuth: () => null }));
+mock.module("react-oidc-context", () => ({
+	...actual.oidc,
+	useAuth: () => null,
+}));
 mock.module("../../hooks/use-asset-source", () => ({
+	...actual.assetSource,
 	useAssetSource: () => ({ src: undefined }),
 }));
 mock.module("../../lib/use-runtime-tailwind", () => ({
+	...actual.runtimeTailwind,
 	useRuntimeTailwindStyles: noop,
 }));
 const executeEvent = mock(async () => undefined);
 const backend = { eventState: { executeEvent } };
 mock.module("../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => backend,
 	useSignedIn: () => false,
 	useBackendReady: () => true,
 }));
 mock.module("../../state/execution-service-context", () => ({
+	...actual.executionService,
 	useExecutionServiceOptional: () => null,
 }));
 const childrenOnly = ({ children }: { children: ReactNode }) => children;
 const dialogs = { openDialog: noop, closeDialog: noop };
 mock.module("../a2ui/RouteDialogProvider", () => ({
+	...actual.routeDialog,
 	RouteDialogProvider: childrenOnly,
 	useRouteDialog: () => dialogs,
 	useRouteDialogSafe: () => dialogs,
 }));
 mock.module("../a2ui/layout/A2UIWidgetInstance", () => ({
+	...actual.widgetInstance,
 	useWidgetInstance: () => undefined,
 	resolveWidgetInstanceEventRoute: noop,
 }));
@@ -62,16 +101,27 @@ const elementStorage = {
 	restoreSurfaceValues: async () => ({}),
 };
 mock.module("../a2ui/hooks/use-element-storage", () => ({
+	...actual.elementStorage,
 	useElementStorage: () => elementStorage,
 }));
 mock.module("../a2ui/elements-request-handler", () => ({
+	...actual.elementsRequestHandler,
 	handleElementsRequestMessage: () => false,
 }));
 mock.module("../a2ui/widget-query-handler", () => ({
+	...actual.widgetQueryHandler,
 	handleWidgetQueryMessage: () => false,
 }));
-mock.module("../scoped-custom-css", () => ({ ScopedCustomCss: () => null }));
+mock.module("../scoped-custom-css", () => ({
+	...actual.scopedCustomCss,
+	ScopedCustomCss: () => null,
+}));
+mock.module("./native-widget-page-capture", () => ({
+	...actual.nativeWidgetPageCapture,
+	NativeWidgetPageCaptureBridge: () => null,
+}));
 mock.module("./page-loading-skeleton", () => ({
+	...actual.pageLoadingSkeleton,
 	PageLoadingSkeleton: () => null,
 }));
 
@@ -87,6 +137,7 @@ const renderers = {
 	text: A2UIText,
 };
 mock.module("../a2ui/ComponentRegistry", () => ({
+	...actual.componentRegistry,
 	getComponentRenderer: (type: keyof typeof renderers) => renderers[type],
 }));
 
@@ -114,7 +165,35 @@ afterEach(async () => {
 	restoreGlobals = undefined;
 	executeEvent.mockClear();
 });
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../lib/idb-storage", () => actual.idbStorage);
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("next/navigation", () => actual.nextNavigation);
+	mock.module("react-oidc-context", () => actual.oidc);
+	mock.module("../../hooks/use-asset-source", () => actual.assetSource);
+	mock.module("../../lib/use-runtime-tailwind", () => actual.runtimeTailwind);
+	mock.module("../../state/backend-state", () => actual.backendState);
+	mock.module(
+		"../../state/execution-service-context",
+		() => actual.executionService,
+	);
+	mock.module("../a2ui/RouteDialogProvider", () => actual.routeDialog);
+	mock.module("../a2ui/layout/A2UIWidgetInstance", () => actual.widgetInstance);
+	mock.module("../a2ui/hooks/use-element-storage", () => actual.elementStorage);
+	mock.module(
+		"../a2ui/elements-request-handler",
+		() => actual.elementsRequestHandler,
+	);
+	mock.module("../a2ui/widget-query-handler", () => actual.widgetQueryHandler);
+	mock.module("../scoped-custom-css", () => actual.scopedCustomCss);
+	mock.module(
+		"./native-widget-page-capture",
+		() => actual.nativeWidgetPageCapture,
+	);
+	mock.module("./page-loading-skeleton", () => actual.pageLoadingSkeleton);
+	mock.module("../a2ui/ComponentRegistry", () => actual.componentRegistry);
+});
 
 const page: IPage = {
 	id: "intake-page",
@@ -129,6 +208,7 @@ const page: IPage = {
 		{
 			id: "root",
 			component: {
+				id: "root",
 				type: "column",
 				children: {
 					explicitList: ["summary_input", "submit_ticket", "queue_result"],
@@ -138,6 +218,7 @@ const page: IPage = {
 		{
 			id: "summary_input",
 			component: {
+				id: "summary_input",
 				type: "textField",
 				label: { literalString: "Summary" },
 				value: { path: "/summary" },
@@ -146,12 +227,14 @@ const page: IPage = {
 		{
 			id: "submit_ticket",
 			component: {
+				id: "submit_ticket",
 				type: "button",
 				label: { literalString: "Submit ticket" },
 				eventHandlers: {
 					click: [
 						{
 							name: "workflow_event",
+							context: {},
 							pageAction: {
 								actionId: "pa1_submit",
 								manifestRevision: "execution-v1",
@@ -164,6 +247,7 @@ const page: IPage = {
 		{
 			id: "queue_result",
 			component: {
+				id: "queue_result",
 				type: "text",
 				content: { literalString: "Awaiting submission" },
 			},

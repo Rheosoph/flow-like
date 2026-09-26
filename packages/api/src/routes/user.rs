@@ -7,14 +7,25 @@ use billing::get_billing_session;
 use flow_like_types::create_id;
 use info::user_info;
 use pricing::get_pricing;
-use sea_orm::{EntityTrait, sea_query::OnConflict};
+use sea_orm::{EntityTrait, QuerySelect, sea_query::OnConflict};
 use subscribe::create_subscription_checkout;
 
 /// Ensures a user row exists in the DB for the given `sub`.
 /// Uses INSERT ... ON CONFLICT DO NOTHING so it's safe to call concurrently.
 pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate::error::ApiError> {
-    let existing = user::Entity::find_by_id(sub).one(&state.db).await?;
+    let cache_key = format!("user_exists:{sub}");
+    if state.get_cache::<bool>(&cache_key).unwrap_or(false) {
+        return Ok(());
+    }
+
+    let existing = user::Entity::find_by_id(sub)
+        .select_only()
+        .column(user::Column::Id)
+        .into_tuple::<String>()
+        .one(&state.db)
+        .await?;
     if existing.is_some() {
+        state.set_cache(cache_key, true);
         return Ok(());
     }
 
@@ -32,8 +43,10 @@ pub async fn ensure_user_exists(state: &AppState, sub: &str) -> Result<(), crate
         .await;
 
     match res {
-        Ok(_) => Ok(()),
-        Err(sea_orm::DbErr::RecordNotInserted) => Ok(()),
+        Ok(_) | Err(sea_orm::DbErr::RecordNotInserted) => {
+            state.set_cache(cache_key, true);
+            Ok(())
+        }
         Err(e) => Err(e.into()),
     }
 }

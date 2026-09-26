@@ -32,6 +32,20 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: flowlike_test
+          POSTGRES_PASSWORD: standalone-ci
+          POSTGRES_DB: flowlike_standalone
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowlike_test -d flowlike_standalone"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-environment
@@ -53,6 +67,36 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+
+      - name: Test standalone workflow updates and crash recovery
+        run: cargo test --locked --package flow-like-standalone --profile ci --test workflow_rollout -- --include-ignored
+
+      - name: Test instance credentials and rollout validation against PostgreSQL
+        run: 'cargo test --locked --package flow-like-api --profile ci --lib instances:: -- --include-ignored'
+        env:
+          FLOW_LIKE_DEVICE_TEST_DATABASE_URL: postgres://flowlike_test:standalone-ci@localhost:5432/flowlike_standalone
+
+      - name: Test device sharing, inventory and account recovery against PostgreSQL
+        run: 'cargo test --locked --package flow-like-api --profile ci --lib devices:: -- --include-ignored'
+        env:
+          FLOW_LIKE_DEVICE_TEST_DATABASE_URL: postgres://flowlike_test:standalone-ci@localhost:5432/flowlike_standalone
+
+      - name: Test Linux workload isolation on the disposable runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap quota e2fsprogs
+          cargo test --locked --package flow-like-standalone --profile ci --lib --no-run --message-format=json > /tmp/standalone-test-targets.jsonl
+          test_binary=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          targets = [json.loads(line) for line in Path('/tmp/standalone-test-targets.jsonl').read_text().splitlines()]
+          binaries = [target['executable'] for target in targets if target.get('reason') == 'compiler-artifact' and target.get('executable') and target.get('profile', {}).get('test') and target['target']['name'] == 'flow_like_standalone']
+          if len(binaries) != 1:
+              raise SystemExit('Expected one standalone library test executable')
+          print(binaries[0])
+          PY
+          )
+          sudo scripts/test-standalone-isolation-linux.sh --disposable-linux-host "$test_binary"
 
   package-security:
     name: Package manager security

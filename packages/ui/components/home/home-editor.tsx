@@ -23,6 +23,7 @@ import {
 	rectSortingStrategy,
 	useSortable,
 } from "@dnd-kit/sortable";
+import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowDown,
 	ArrowLeft,
@@ -61,6 +62,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { useRuntimeTailwindRef } from "../../lib/use-runtime-tailwind";
 import { cn } from "../../lib/utils";
 import {
 	type AssistantHomeLayoutSource,
@@ -105,6 +107,7 @@ import { HomeDataWidgetSettings } from "./data-widget-settings";
 import {
 	HOME_ACCENTS as ACCENTS,
 	homeAppearanceStyle,
+	homeWidgetFrameClassName,
 } from "./home-appearance";
 import {
 	type HomeDragPoint,
@@ -118,12 +121,14 @@ import {
 	HOME_ROW_HEIGHT,
 	MAX_HOME_LAYOUT_BYTES,
 	MAX_HOME_WIDGETS,
+	MAX_HOME_WIDGET_CLASS_NAME_BYTES,
 	homeLayoutByteLength,
 	homeWidgetAutoHeight,
 	homeWidgetHeight,
 	homeWidgetSpan,
 	minimumHomeWidgetRows,
 	moveHomeWidget,
+	normalizeHomeWidgetClassName,
 	responsiveHomeColumns,
 } from "./home-layout";
 import {
@@ -1814,6 +1819,15 @@ function HomeWidgetFrame({
 		height: number;
 	} | null>(null);
 	const frameRef = useRef<HTMLElement | null>(null);
+	const attachFrame = useCallback(
+		(node: HTMLElement | null) => {
+			frameRef.current = node;
+			setNodeRef(node);
+		},
+		[setNodeRef],
+	);
+	// Only widgets with their own classes pay for the runtime Tailwind compiler.
+	const attachStyledFrame = useRuntimeTailwindRef(attachFrame);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const [contentHeight, setContentHeight] = useState(120);
 	const [dataState, setDataState] = useState("");
@@ -1924,13 +1938,9 @@ function HomeWidgetFrame({
 		alignSelf: size.heightMode === "content" ? "start" : undefined,
 		position: "relative",
 	} as CSSProperties;
-	const borderless = widget.appearance.variant === "borderless";
 	return (
 		<section
-			ref={(node) => {
-				frameRef.current = node;
-				setNodeRef(node);
-			}}
+			ref={widget.appearance.className ? attachStyledFrame : attachFrame}
 			style={style}
 			data-home-widget={widget.id}
 			data-widget-type={widget.type}
@@ -1939,19 +1949,13 @@ function HomeWidgetFrame({
 			data-home-placeholder={
 				placeholder ? (activeDrop ? "active" : "outside") : undefined
 			}
-			className={cn(
-				"group/widget relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl",
-				borderless && !editing && autoHeight && "overflow-visible rounded-none",
-				borderless
-					? "bg-transparent"
-					: "border border-border/60 bg-card/70 shadow-sm shadow-black/[0.02]",
-				editing && "border border-border/70 bg-card/80",
-				selected &&
-					editing &&
-					"ring-2 ring-primary ring-offset-2 ring-offset-background",
-				placeholder &&
-					"border-dashed border-primary/70 bg-primary/5 ring-1 ring-primary/25",
-			)}
+			className={homeWidgetFrameClassName({
+				appearance: widget.appearance,
+				editing,
+				selected,
+				placeholder,
+				autoHeight,
+			})}
 		>
 			{editing && !placeholder && (
 				<div
@@ -2575,6 +2579,18 @@ function WidgetInspector({
 						))}
 					</div>
 				</div>
+				<WidgetClassNameField
+					value={widget.appearance.className}
+					onChange={(className) =>
+						onChange({
+							appearance: {
+								variant: widget.appearance.variant,
+								accent: widget.appearance.accent,
+								...(className ? { className } : {}),
+							},
+						})
+					}
+				/>
 			</div>
 			<div className="border-t border-border/60 p-5">
 				{widget.type === "data" ? (
@@ -2600,6 +2616,48 @@ function WidgetInspector({
 					Remove widget
 				</Button>
 			</div>
+		</div>
+	);
+}
+
+function WidgetClassNameField({
+	value,
+	onChange,
+}: {
+	value?: string;
+	onChange: (className: string | undefined) => void;
+}) {
+	const { t } = useTranslation("flow");
+	const [draft, setDraft] = useState(value ?? "");
+	const [synced, setSynced] = useState(value);
+	// Keep the typed spacing unless the saved classes changed elsewhere, e.g. undo or FlowPilot.
+	if (synced !== value) {
+		setSynced(value);
+		if (normalizeHomeWidgetClassName(draft) !== value) setDraft(value ?? "");
+	}
+	return (
+		<div className="space-y-2">
+			<Label htmlFor="home-widget-classes">{t("tailwindClasses2")}</Label>
+			<Textarea
+				id="home-widget-classes"
+				value={draft}
+				onChange={(event) => {
+					setDraft(event.target.value);
+					const next = normalizeHomeWidgetClassName(event.target.value);
+					if (next !== value) onChange(next);
+				}}
+				rows={2}
+				maxLength={MAX_HOME_WIDGET_CLASS_NAME_BYTES}
+				placeholder="rounded-3xl border-primary/40 bg-primary/10 [&_h2]:text-lg"
+				spellCheck={false}
+				autoComplete="off"
+				autoCorrect="off"
+				autoCapitalize="off"
+				className="font-mono text-xs"
+			/>
+			<p className="text-[11px] leading-relaxed text-muted-foreground">
+				{t("homeWidgetClassesHint")}
+			</p>
 		</div>
 	);
 }

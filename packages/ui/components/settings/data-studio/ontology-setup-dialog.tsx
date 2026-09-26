@@ -27,6 +27,7 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -36,7 +37,6 @@ import {
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import type { ArrowSchemaJSON } from "../../ui/lance-viewer";
-import { ScrollArea } from "../../ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -45,9 +45,11 @@ import {
 	SelectValue,
 } from "../../ui/select";
 import { Switch } from "../../ui/switch";
+import { OntologySchemaGraph, useRevealTarget } from "./ontology-schema-graph";
 import {
 	AddRelationshipForm,
 	type RelationshipEndpoint,
+	type RelationshipPrefill,
 	type WizardEdge,
 	apiName,
 	buildEdge,
@@ -227,10 +229,10 @@ export function OntologySetupDialog({
 		new Set(),
 	);
 	const [addingEdge, setAddingEdge] = useState(false);
-	const [edgePrefill, setEdgePrefill] = useState<{
-		sourceId: string;
-		dstColumn: string;
-	} | null>(null);
+	const [edgePrefill, setEdgePrefill] = useState<RelationshipPrefill | null>(
+		null,
+	);
+	const { reveal, domId, revealedKey } = useRevealTarget();
 	const [loadingSchemas, setLoadingSchemas] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -438,6 +440,32 @@ export function OntologySetupDialog({
 		setAddingEdge(false);
 		setEdgePrefill(null);
 	}, []);
+
+	const openAddRelationship = useCallback(
+		(prefill: RelationshipPrefill | null) => {
+			setEdgePrefill(prefill);
+			setAddingEdge(true);
+			reveal("add-relationship");
+		},
+		[reveal],
+	);
+
+	const linkFromDiagram = useCallback(
+		(source: NodeLabelMapping, target: NodeLabelMapping) =>
+			openAddRelationship({
+				sourceId: source.id ?? "",
+				targetId: target.id ?? "",
+			}),
+		[openAddRelationship],
+	);
+
+	const revealEdge = useCallback(
+		(index: number) => {
+			const edge = edges[index];
+			if (edge) reveal(`edge-${edge.origin_key}`);
+		},
+		[edges, reveal],
+	);
 
 	const duplicateLabels = useMemo(() => {
 		const counts = new Map<string, number>();
@@ -691,9 +719,9 @@ export function OntologySetupDialog({
 					</div>
 				)}
 
-				<div className="min-h-0 flex-1 overflow-hidden">
+				<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 					{step === "sources" && (
-						<div className="flex h-full min-h-80 flex-col gap-4">
+						<div className="flex min-h-80 flex-1 flex-col gap-4">
 							<div className="space-y-1.5">
 								<Label htmlFor="ontology-name">
 									{t("ontologyName", "Ontology name")}
@@ -723,7 +751,7 @@ export function OntologySetupDialog({
 									})}
 								</Badge>
 							</div>
-							<ScrollArea className="min-h-0 flex-1 rounded-lg border">
+							<div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
 								<div className="grid gap-2 p-3 sm:grid-cols-2">
 									{projectTables.map((table) => (
 										<div
@@ -753,12 +781,12 @@ export function OntologySetupDialog({
 										</p>
 									)}
 								</div>
-							</ScrollArea>
+							</div>
 						</div>
 					)}
 
 					{step === "objects" && (
-						<ScrollArea className="h-full min-h-80 pr-3">
+						<DialogBody className="min-h-80 pr-3">
 							<div className="space-y-3">
 								<div>
 									<p className="text-sm font-medium">
@@ -924,11 +952,11 @@ export function OntologySetupDialog({
 									);
 								})}
 							</div>
-						</ScrollArea>
+						</DialogBody>
 					)}
 
 					{step === "relationships" && (
-						<ScrollArea className="h-full min-h-80 pr-3">
+						<DialogBody className="min-h-80 pr-3">
 							<div className="space-y-3">
 								<div className="flex items-start justify-between gap-3">
 									<div>
@@ -946,10 +974,7 @@ export function OntologySetupDialog({
 										<Button
 											size="sm"
 											variant="outline"
-											onClick={() => {
-												setEdgePrefill(null);
-												setAddingEdge(true);
-											}}
+											onClick={() => openAddRelationship(null)}
 											disabled={objects.length === 0}
 										>
 											<Plus className="h-4 w-4" />
@@ -958,17 +983,35 @@ export function OntologySetupDialog({
 									)}
 								</div>
 
-								{addingEdge && (
-									<AddRelationshipForm
-										endpoints={endpoints}
-										takenLabels={takenLabels}
-										prefill={edgePrefill}
-										onAdd={addEdge}
-										onCancel={() => {
-											setAddingEdge(false);
-											setEdgePrefill(null);
-										}}
+								{objects.length > 0 && (
+									<OntologySchemaGraph
+										className="h-72"
+										title={name.trim() || undefined}
+										nodes={objects}
+										edges={edges}
+										onSelectRelationship={revealEdge}
+										onConnect={linkFromDiagram}
 									/>
+								)}
+
+								{addingEdge && (
+									<div id={domId("add-relationship")}>
+										<AddRelationshipForm
+											key={
+												edgePrefill
+													? `${edgePrefill.sourceId}>${edgePrefill.targetId ?? ""}>${edgePrefill.dstColumn ?? ""}`
+													: "blank"
+											}
+											endpoints={endpoints}
+											takenLabels={takenLabels}
+											prefill={edgePrefill}
+											onAdd={addEdge}
+											onCancel={() => {
+												setAddingEdge(false);
+												setEdgePrefill(null);
+											}}
+										/>
+									</div>
 								)}
 
 								{edges.length === 0 && !addingEdge && (
@@ -992,6 +1035,8 @@ export function OntologySetupDialog({
 									<EdgeReviewCard
 										key={edge.origin_key}
 										edge={edge}
+										domId={domId(`edge-${edge.origin_key}`)}
+										highlighted={revealedKey === `edge-${edge.origin_key}`}
 										issue={edgeLabelIssue(edge)}
 										onEdgeChange={updateEdge}
 										onReverse={reverseEdge}
@@ -1017,13 +1062,12 @@ export function OntologySetupDialog({
 													size="sm"
 													variant="outline"
 													className="h-7 font-mono text-[11px]"
-													onClick={() => {
-														setEdgePrefill({
+													onClick={() =>
+														openAddRelationship({
 															sourceId: object.id ?? "",
 															dstColumn: column,
-														});
-														setAddingEdge(true);
-													}}
+														})
+													}
 												>
 													<Plus className="h-3 w-3" />
 													{`${object.table}.${column}`}
@@ -1033,11 +1077,11 @@ export function OntologySetupDialog({
 									</div>
 								)}
 							</div>
-						</ScrollArea>
+						</DialogBody>
 					)}
 
 					{step === "publish" && (
-						<div className="space-y-5 py-2">
+						<DialogBody className="space-y-5 py-2">
 							<div className="space-y-1.5">
 								<Label htmlFor="ontology-description">
 									{t("description", "Description")}
@@ -1123,7 +1167,7 @@ export function OntologySetupDialog({
 									"The ontology stays private until you expose it from Sharing. Object views and board bindings are generated automatically.",
 								)}
 							</p>
-						</div>
+						</DialogBody>
 					)}
 				</div>
 
@@ -1178,6 +1222,8 @@ export function OntologySetupDialog({
 
 interface EdgeReviewCardProps {
 	edge: WizardEdge;
+	domId?: string;
+	highlighted?: boolean;
 	issue?: "invalid" | "duplicate";
 	onEdgeChange: (originKey: string, patch: Partial<EdgeLabelMapping>) => void;
 	onReverse: (originKey: string) => void;
@@ -1186,6 +1232,8 @@ interface EdgeReviewCardProps {
 
 function EdgeReviewCard({
 	edge,
+	domId,
+	highlighted,
 	issue,
 	onEdgeChange,
 	onReverse,
@@ -1194,7 +1242,12 @@ function EdgeReviewCard({
 	const { t } = useTranslation("settings");
 	const containmentId = `edge-containment-${edge.origin_key}`;
 	return (
-		<div className="space-y-3 rounded-xl border p-4">
+		<div
+			id={domId}
+			className={`space-y-3 rounded-xl border p-4 transition-shadow duration-300${
+				highlighted ? " ring-2 ring-primary/60" : ""
+			}`}
+		>
 			<div className="flex items-center justify-between gap-3">
 				<div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
 					<Badge variant="secondary">{edge.src_label}</Badge>

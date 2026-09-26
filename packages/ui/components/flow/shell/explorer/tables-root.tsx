@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { DatabaseIcon, RefreshCwIcon, TableIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { useInvoke } from "../../../../hooks";
+import { asArray } from "../../../../lib/response-shape";
 import { useBackend, useBackendReady } from "../../../../state/backend-state";
 import { Button } from "../../../ui/button";
 import {
@@ -52,9 +53,9 @@ export function TablesRoot({
 
 	const rows = useMemo(() => {
 		const entries: { scope: IEditorScope; table: string }[] = [];
-		for (const table of appTables.data ?? [])
+		for (const table of asArray(appTables.data))
 			entries.push({ scope: "app", table });
-		for (const table of userTables.data ?? [])
+		for (const table of asArray(userTables.data))
 			entries.push({ scope: "user", table });
 		return entries;
 	}, [appTables.data, userTables.data]);

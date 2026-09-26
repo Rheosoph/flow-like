@@ -101,7 +101,8 @@ pub use flow_like_catalog_processing::processing;
     not(any(target_os = "ios", target_os = "android"))
 ))]
 pub use flow_like_catalog_automation::{
-    browser, computer, fingerprint, llm as automation_llm, rpa, selector, vision,
+    browser, capabilities as automation_capabilities, computer, fingerprint, llm as automation_llm,
+    rpa, selector, types::screen_match as automation_screen, vision,
 };
 
 macro_rules! package_nodes {

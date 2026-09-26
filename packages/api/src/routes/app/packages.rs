@@ -12,16 +12,18 @@ use utoipa::ToSchema;
 use crate::{
     ensure_permission,
     entity::{
-        app_package, membership, meta, sea_orm_active_enums::WasmPackageVisibility, wasm_package,
-        wasm_package_version,
+        app_package, membership, meta, wasm_package, wasm_package_user, wasm_package_version,
     },
     error::ApiError,
     middleware::jwt::AppUser,
+    package_license::{self, PackageLicense},
     permission::role_permission::RolePermissions,
     routes::{LanguageParams, registry::types::MetaSummary},
     state::AppState,
 };
 use flow_like_types::create_id;
+use futures::future::join_all;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +59,83 @@ pub struct AppPackageResponse {
     pub added_at: DateTime<Utc>,
     pub stale: bool,
     pub metadata: Option<MetaSummary>,
+    pub price: i64,
+    pub license: PackageLicense,
+    /// Whether the caller holds the package and could license it here.
+    pub viewer_has_package: bool,
+}
+
+/// Per-request facts the response needs beyond the pin and its package.
+struct PinContext {
+    holders: HashMap<String, String>,
+    viewer_packages: HashSet<String>,
+    now: DateTime<Utc>,
+}
+
+impl PinContext {
+    async fn load(
+        state: &AppState,
+        pins: &[app_package::Model],
+        viewer: Option<&str>,
+    ) -> Result<Self, ApiError> {
+        let membership_ids: Vec<String> = pins
+            .iter()
+            .filter_map(|pin| pin.membership_id.clone())
+            .collect();
+        let holders = if membership_ids.is_empty() {
+            HashMap::new()
+        } else {
+            membership::Entity::find()
+                .filter(membership::Column::Id.is_in(membership_ids))
+                .all(&state.db)
+                .await?
+                .into_iter()
+                .map(|member| (member.id, member.user_id))
+                .collect()
+        };
+        let viewer_packages = match viewer {
+            Some(viewer) if !pins.is_empty() => wasm_package_user::Entity::find()
+                .filter(wasm_package_user::Column::UserId.eq(viewer))
+                .filter(
+                    wasm_package_user::Column::PackageId
+                        .is_in(pins.iter().map(|pin| pin.package_id.clone())),
+                )
+                .filter(wasm_package_user::Column::Permission.ne(0))
+                .all(&state.db)
+                .await?
+                .into_iter()
+                .map(|row| row.package_id)
+                .collect(),
+            _ => HashSet::new(),
+        };
+        Ok(Self {
+            holders,
+            viewer_packages,
+            now: Utc::now(),
+        })
+    }
+
+    fn respond(
+        &self,
+        model: &app_package::Model,
+        pkg: Option<&wasm_package::Model>,
+        meta: Option<&meta::Model>,
+    ) -> AppPackageResponse {
+        let holder = model
+            .membership_id
+            .as_ref()
+            .and_then(|id| self.holders.get(id).cloned());
+        let viewer_has_package = pkg.is_some_and(|pkg| {
+            !package_license::requires_license(pkg) || self.viewer_packages.contains(&pkg.id)
+        });
+        AppPackageResponse::from_model(
+            model,
+            pkg,
+            meta,
+            package_license::license(model, pkg, holder, self.now),
+            viewer_has_package,
+        )
+    }
 }
 
 impl AppPackageResponse {
@@ -64,6 +143,8 @@ impl AppPackageResponse {
         model: &app_package::Model,
         pkg: Option<&wasm_package::Model>,
         meta: Option<&meta::Model>,
+        license: PackageLicense,
+        viewer_has_package: bool,
     ) -> Self {
         Self {
             id: model.id.clone(),
@@ -81,12 +162,70 @@ impl AppPackageResponse {
             added_at: model.added_at.to_utc(),
             stale: model.stale,
             metadata: meta.map(MetaSummary::from_model),
+            price: pkg.map_or(0, |p| p.price),
+            license,
+            viewer_has_package,
         }
     }
 }
 
 fn pick_best_meta<'a>(metas: &'a [meta::Model], language: &str) -> Option<&'a meta::Model> {
     MetaSummary::pick_best(metas, language)
+}
+
+/// Meta rows store bare media ids; clients need signed URLs to render the icon and thumbnail.
+async fn presign_pin_media<'a>(
+    state: &AppState,
+    responses: impl IntoIterator<Item = &'a mut AppPackageResponse>,
+) {
+    let Ok(master_creds) = state.master_credentials().await else {
+        return;
+    };
+    let Ok(store) = master_creds.to_store(false).await else {
+        return;
+    };
+    let store = &store;
+    join_all(responses.into_iter().filter_map(|response| {
+        let package_id = response.package_id.clone();
+        response
+            .metadata
+            .as_mut()
+            .map(|metadata| async move { metadata.presign_media(&package_id, store).await })
+    }))
+    .await;
+}
+
+/// The response for a single pin, with its package, best meta and licence.
+async fn pin_response(
+    state: &AppState,
+    pin: &app_package::Model,
+    language: &str,
+    viewer: Option<&str>,
+) -> Result<AppPackageResponse, ApiError> {
+    let pkg = wasm_package::Entity::find_by_id(&pin.package_id)
+        .one(&state.db)
+        .await?;
+    let metas = meta::Entity::find()
+        .filter(meta::Column::WasmPackageId.eq(&pin.package_id))
+        .filter(
+            meta::Column::Lang
+                .eq(language)
+                .or(meta::Column::Lang.eq("en")),
+        )
+        .all(&state.db)
+        .await?;
+    let context = PinContext::load(state, std::slice::from_ref(pin), viewer).await?;
+    let mut response = context.respond(pin, pkg.as_ref(), pick_best_meta(&metas, language));
+    presign_pin_media(state, std::iter::once(&mut response)).await;
+    Ok(response)
+}
+
+fn license_lapsed() -> ApiError {
+    ApiError::coded(
+        axum::http::StatusCode::BAD_REQUEST,
+        "PACKAGE_LICENSE_LAPSED",
+        "No admin or owner of this project has this package, so it takes no updates. An admin or the owner who has the package needs to reactivate it.",
+    )
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -122,7 +261,7 @@ pub fn routes() -> Router<AppState> {
     get,
     path = "/apps/{app_id}/packages",
     tag = "packages",
-    description = "List all WASM packages added to this app.",
+    description = "List all WASM packages added to this app with their price and project licence state.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("language" = Option<String>, Query, description = "Language code (default: en)")
@@ -148,6 +287,11 @@ pub async fn list_packages(
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let language = query.language.as_deref().unwrap_or("en");
 
+    // Self-heal: a holder who left through a path without a licence hook, or an
+    // admin who just got the package, is reflected before the list is shown.
+    let lapses = package_license::reconcile_app(&state.db, &app_id).await?;
+    package_license::notify_lapses(&state, &lapses).await;
+
     let packages = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(&app_id))
         .all(&state.db)
@@ -157,36 +301,45 @@ pub async fn list_packages(
         return Ok(Json(Vec::new()));
     }
 
+    let viewer = user.sub().ok();
+    let context = PinContext::load(&state, &packages, viewer.as_deref()).await?;
     let package_ids: Vec<String> = packages.iter().map(|p| p.package_id.clone()).collect();
 
-    let wasm_with_meta = wasm_package::Entity::find()
-        .filter(wasm_package::Column::Id.is_in(package_ids))
+    // Packages and metas load separately: a package without a meta row in the
+    // requested languages still has a price and a licence to report.
+    let pkg_map: HashMap<String, wasm_package::Model> = wasm_package::Entity::find()
+        .filter(wasm_package::Column::Id.is_in(package_ids.clone()))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|wp| (wp.id.clone(), wp))
+        .collect();
+    let mut metas_by_package: HashMap<String, Vec<meta::Model>> = HashMap::new();
+    for meta in meta::Entity::find()
+        .filter(meta::Column::WasmPackageId.is_in(package_ids))
         .filter(
             meta::Column::Lang
                 .eq(language)
                 .or(meta::Column::Lang.eq("en")),
         )
-        .find_with_related(meta::Entity)
         .all(&state.db)
-        .await?;
+        .await?
+    {
+        if let Some(package_id) = meta.wasm_package_id.clone() {
+            metas_by_package.entry(package_id).or_default().push(meta);
+        }
+    }
 
-    let pkg_map: std::collections::HashMap<String, (wasm_package::Model, Vec<meta::Model>)> =
-        wasm_with_meta
-            .into_iter()
-            .map(|(wp, metas)| (wp.id.clone(), (wp, metas)))
-            .collect();
-
-    let responses = packages
+    let mut responses: Vec<AppPackageResponse> = packages
         .iter()
         .map(|p| {
-            let (pkg, meta) = if let Some((wp, metas)) = pkg_map.get(&p.package_id) {
-                (Some(wp), pick_best_meta(metas, language))
-            } else {
-                (None, None)
-            };
-            AppPackageResponse::from_model(p, pkg, meta)
+            let meta = metas_by_package
+                .get(&p.package_id)
+                .and_then(|metas| pick_best_meta(metas, language));
+            context.respond(p, pkg_map.get(&p.package_id), meta)
         })
         .collect();
+    presign_pin_media(&state, &mut responses).await;
 
     Ok(Json(responses))
 }
@@ -195,7 +348,7 @@ pub async fn list_packages(
     post,
     path = "/apps/{app_id}/packages",
     tag = "packages",
-    description = "Add a WASM package to this app.",
+    description = "Add a WASM package to this app. The calling admin or owner must hold the package (bought, granted or free) and becomes its licence holder for the project.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("language" = Option<String>, Query, description = "Language code (default: en)")
@@ -205,7 +358,8 @@ pub async fn list_packages(
         (status = 200, description = "Package added", body = AppPackageResponse),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
+        (status = 402, description = "Paid package the caller has not bought (PACKAGE_LICENSE_REQUIRED)"),
+        (status = 403, description = "Forbidden, or no access to a private or request-access package (PACKAGE_ACCESS_REQUIRED)"),
         (status = 404, description = "Package not found")
     ),
     security(
@@ -234,12 +388,7 @@ pub async fn add_package(
         .await?
         .ok_or(ApiError::not_found("Package not found"))?;
 
-    if wasm_pkg.visibility == WasmPackageVisibility::Private {
-        let access = crate::check_wasm_access!(state, &user_id, &request.package_id);
-        if access.is_none() {
-            return Err(ApiError::FORBIDDEN);
-        }
-    }
+    package_license::ensure_holds(&state.db, &user_id, &wasm_pkg).await?;
 
     let mem = membership::Entity::find()
         .filter(membership::Column::AppId.eq(&app_id))
@@ -258,25 +407,14 @@ pub async fn add_package(
         added_at: Set(now),
         auto_update: Set(request.auto_update),
         stale: Set(false),
+        stale_since: Set(None),
     };
 
     let inserted = model.insert(&state.db).await?;
 
-    let metas = meta::Entity::find()
-        .filter(meta::Column::WasmPackageId.eq(&request.package_id))
-        .filter(
-            meta::Column::Lang
-                .eq(language)
-                .or(meta::Column::Lang.eq("en")),
-        )
-        .all(&state.db)
-        .await?;
-
-    Ok(Json(AppPackageResponse::from_model(
-        &inserted,
-        Some(&wasm_pkg),
-        pick_best_meta(&metas, language),
-    )))
+    Ok(Json(
+        pin_response(&state, &inserted, language, Some(&user_id)).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -337,6 +475,7 @@ pub async fn remove_package(
     request_body = UpdatePackageRequest,
     responses(
         (status = 200, description = "Package updated", body = AppPackageResponse),
+        (status = 400, description = "The package licence lapsed in this project (PACKAGE_LICENSE_LAPSED)"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Package not found in app, or requested version not published")
@@ -369,9 +508,7 @@ pub async fn update_package(
         .ok_or(ApiError::not_found("Package not found in app"))?;
 
     if existing.stale {
-        return Err(ApiError::bad_request(
-            "Package is stale and cannot be updated",
-        ));
+        return Err(license_lapsed());
     }
 
     let mut active: app_package::ActiveModel = existing.into();
@@ -399,22 +536,10 @@ pub async fn update_package(
 
     let updated = active.update(&state.db).await?;
 
-    let wasm_with_meta = wasm_package::Entity::find_by_id(&updated.package_id)
-        .filter(
-            meta::Column::Lang
-                .eq(language)
-                .or(meta::Column::Lang.eq("en")),
-        )
-        .find_with_related(meta::Entity)
-        .all(&state.db)
-        .await?;
-
-    let (pkg, meta) = wasm_with_meta
-        .first()
-        .map(|(wp, metas)| (Some(wp), pick_best_meta(metas, language)))
-        .unwrap_or((None, None));
-
-    Ok(Json(AppPackageResponse::from_model(&updated, pkg, meta)))
+    let viewer = user.sub().ok();
+    Ok(Json(
+        pin_response(&state, &updated, language, viewer.as_deref()).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -509,8 +634,10 @@ pub async fn check_updates(
 ) -> Result<Json<Vec<PackageUpdateInfo>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
 
+    // A lapsed pin takes no updates until someone licenses it again.
     let packages = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(&app_id))
+        .filter(app_package::Column::Stale.eq(false))
         .all(&state.db)
         .await?;
 
@@ -553,7 +680,7 @@ pub async fn check_updates(
     post,
     path = "/apps/{app_id}/packages/{package_id}/reactivate",
     tag = "packages",
-    description = "Reactivate a stale package. The caller must be an admin and have access to the package.",
+    description = "License a lapsed package again. The calling admin or owner must hold the package and becomes its licence holder.",
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("package_id" = String, Path, description = "Package ID"),
@@ -602,14 +729,7 @@ pub async fn reactivate_package(
         .await?
         .ok_or(ApiError::not_found("Package no longer exists in registry"))?;
 
-    if wasm_pkg.visibility == WasmPackageVisibility::Private {
-        let access = crate::check_wasm_access!(state, &user_id, &package_id);
-        if access.is_none() {
-            return Err(ApiError::forbidden(
-                "You do not have access to this package",
-            ));
-        }
-    }
+    package_license::ensure_holds(&state.db, &user_id, &wasm_pkg).await?;
 
     let mem = membership::Entity::find()
         .filter(membership::Column::AppId.eq(&app_id))
@@ -620,22 +740,11 @@ pub async fn reactivate_package(
 
     let mut active: app_package::ActiveModel = existing.into();
     active.stale = Set(false);
+    active.stale_since = Set(None);
     active.membership_id = Set(Some(mem.id));
     let updated = active.update(&state.db).await?;
 
-    let metas = meta::Entity::find()
-        .filter(meta::Column::WasmPackageId.eq(&package_id))
-        .filter(
-            meta::Column::Lang
-                .eq(language)
-                .or(meta::Column::Lang.eq("en")),
-        )
-        .all(&state.db)
-        .await?;
-
-    Ok(Json(AppPackageResponse::from_model(
-        &updated,
-        Some(&wasm_pkg),
-        pick_best_meta(&metas, language),
-    )))
+    Ok(Json(
+        pin_response(&state, &updated, language, Some(&user_id)).await?,
+    ))
 }

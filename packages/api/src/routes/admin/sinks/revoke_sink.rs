@@ -83,14 +83,7 @@ pub async fn revoke_sink(
 
     tracing::info!(jti = %jti, revoked_by = ?revoked_by, "Revoked sink token");
 
-    audit!(
-        state,
-        user,
-        "admin.sink.revoke",
-        "sink_token",
-        jti,
-        format!("Sink token revoked: {}", jti)
-    );
+    audit!(state, user, "admin.sink.revoke", "sink_token", jti);
     Ok(Json(RevokeSinkResponse {
         success: true,
         jti,

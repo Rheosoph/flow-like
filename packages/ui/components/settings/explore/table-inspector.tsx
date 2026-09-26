@@ -1,19 +1,35 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { AlertTriangle, Database, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Database, RefreshCw } from "lucide-react";
 import type React from "react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { useAppPermissions } from "../../../hooks/use-app-permissions";
-import { useInvoke } from "../../../hooks/use-invoke";
+import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { cn } from "../../../lib";
 import { getErrorMessage } from "../../../lib/error-message";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
-import { parseIndexType } from "../../../state/backend-state/db-state";
+import {
+	type IDatabaseSelector,
+	parseIndexType,
+} from "../../../state/backend-state/db-state";
 import { Button } from "../../ui/button";
-import LanceDBExplorer from "../../ui/lance-viewer";
+import LanceDBExplorer, { LanceTableHeading } from "../../ui/lance-viewer";
+import {
+	DatabaseDeleteDialog,
+	DatabaseDeleteMenuItems,
+	type DatabaseDeleteOperation,
+	databaseDeleteOperations,
+} from "../data-studio/database-delete-controls";
+import { DatabaseHistoryControls } from "../data-studio/database-history-controls";
+import {
+	databaseSelectorKey,
+	isDatabaseSnapshot,
+} from "../data-studio/database-reference";
+import { OfflineManagedBadge } from "../offline-access/offline-managed-badge";
 import { SectionLockedPanel } from "../permission/permission-gate";
 import { PermissionNotice } from "../permission/permission-notice";
 
@@ -26,6 +42,9 @@ export interface TableInspectorProps {
 	appId: string;
 	table: string;
 	userScoped?: boolean;
+	selector?: IDatabaseSelector;
+	onSelectorChange?: (selector: IDatabaseSelector) => void;
+	onTableDeleted?: () => void;
 	/** Controlled page (1-based). Falls back to internal state when omitted. */
 	page?: number;
 	pageSize?: number;
@@ -33,27 +52,148 @@ export interface TableInspectorProps {
 	className?: string;
 	/** Hosted inside another chrome: drop the fullscreen escape hatch. */
 	embedded?: boolean;
-	/** Extra header actions, rendered next to the explorer toolbar. */
-	children?: React.ReactNode;
+	/** Shows a back button before the table name. */
+	onBack?: () => void;
 }
 
-export function TableInspector({
+interface TableInspectorDataProps extends TableInspectorProps {
+	leading?: React.ReactNode;
+	meta?: React.ReactNode;
+}
+
+export function TableInspector(props: Readonly<TableInspectorProps>) {
+	return (
+		<TableInspectorView
+			key={`${props.appId}:${props.table}:${props.userScoped ?? false}`}
+			{...props}
+		/>
+	);
+}
+
+function TableInspectorView(props: Readonly<TableInspectorProps>) {
+	const permissions = useAppPermissions(props.appId);
+	const backend = useBackend();
+	const [internalSelector, setInternalSelector] = useState<IDatabaseSelector>(
+		{},
+	);
+	const selector = props.selector ?? internalSelector;
+	const referenceHistory = useInvoke(
+		backend.dbState.databaseHistory,
+		backend.dbState,
+		[props.appId, props.table, props.userScoped, selector],
+		Boolean(props.appId && props.table) && permissions.can(...READ_DATA),
+	);
+	// Resolve a movable tag once so rows, schema and count use the same version.
+	const resolvedSelector =
+		selector.tag && referenceHistory.data?.reference
+			? {
+					branch: referenceHistory.data.reference.branch,
+					version: referenceHistory.data.reference.version,
+					read_only: selector.read_only,
+				}
+			: selector;
+	const select = (next: IDatabaseSelector) => {
+		setInternalSelector(next);
+		props.onSelectorChange?.(next);
+		if (!props.onSelectorChange)
+			props.onPageChange?.(1, props.pageSize ?? DEFAULT_TABLE_PAGE_SIZE);
+	};
+	const canRead = permissions.can(...READ_DATA);
+	const leading = props.onBack ? (
+		<TableInspectorBackButton onClick={props.onBack} />
+	) : null;
+	const offlineWrites = backend.offlineWritesState;
+	const meta =
+		props.appId && props.table && canRead ? (
+			<>
+				<DatabaseHistoryControls
+					key={databaseSelectorKey(selector)}
+					appId={props.appId}
+					table={props.table}
+					userScoped={props.userScoped}
+					selector={selector}
+					canWrite={permissions.can(...WRITE_DATA)}
+					onSelect={select}
+				/>
+				{offlineWrites && (
+					<OfflineManagedBadge
+						appId={props.appId}
+						table={props.table}
+						userScoped={props.userScoped}
+						state={offlineWrites}
+					/>
+				)}
+			</>
+		) : null;
+	const unresolved =
+		canRead &&
+		(referenceHistory.error ||
+			(selector.tag && !referenceHistory.data?.reference));
+	return (
+		<div
+			className={cn("flex h-full min-h-0 min-w-0 flex-col", props.className)}
+		>
+			{unresolved ? (
+				<div className="flex flex-col gap-3">
+					<TableInspectorHeader
+						leading={leading}
+						tableName={props.table}
+						meta={meta}
+					/>
+					<div className="space-y-2 text-sm">
+						<p role={referenceHistory.error ? "alert" : "status"}>
+							{referenceHistory.error
+								? getErrorMessage(referenceHistory.error)
+								: "Resolving tagged snapshot…"}
+						</p>
+						{referenceHistory.error && (
+							<Button
+								variant="outline"
+								onClick={() => void referenceHistory.refetch()}
+							>
+								Retry
+							</Button>
+						)}
+					</div>
+				</div>
+			) : (
+				<TableInspectorData
+					key={databaseSelectorKey(resolvedSelector)}
+					{...props}
+					className="min-h-0"
+					selector={resolvedSelector}
+					leading={leading}
+					meta={meta}
+				/>
+			)}
+		</div>
+	);
+}
+
+function TableInspectorData({
 	appId,
 	table,
 	userScoped,
+	selector,
+	onTableDeleted,
 	page,
 	pageSize,
 	onPageChange,
 	className,
 	embedded,
-	children,
-}: Readonly<TableInspectorProps>) {
+	leading,
+	meta,
+}: Readonly<TableInspectorDataProps>) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
+	const invalidate = useInvalidateInvoke();
 	const permissions = useAppPermissions(appId);
 	const canRead = permissions.can(...READ_DATA);
-	const canWrite = permissions.can(...WRITE_DATA);
+	const canWrite =
+		permissions.can(...WRITE_DATA) && !isDatabaseSnapshot(selector);
 
+	const [deleteOperation, setDeleteOperation] =
+		useState<DatabaseDeleteOperation | null>(null);
 	const [internalPage, setInternalPage] = useState(page ?? 1);
 	const [internalPageSize, setInternalPageSize] = useState(
 		pageSize ?? DEFAULT_TABLE_PAGE_SIZE,
@@ -80,19 +220,19 @@ export function TableInspector({
 	const schema = useInvoke(
 		backend.dbState.getSchema,
 		backend.dbState,
-		[appId, table, userScoped],
+		[appId, table, userScoped, selector],
 		enabled,
 	);
 	const count = useInvoke(
 		backend.dbState.countItems,
 		backend.dbState,
-		[appId, table, userScoped],
+		[appId, table, userScoped, selector],
 		enabled,
 	);
 	const list = useInvoke(
 		backend.dbState.listItems,
 		backend.dbState,
-		[appId, table, offset, activePageSize, userScoped],
+		[appId, table, offset, activePageSize, userScoped, selector],
 		enabled,
 	);
 
@@ -109,12 +249,27 @@ export function TableInspector({
 		schema.refetch();
 		count.refetch();
 		list.refetch();
-	}, [schema.refetch, count.refetch, list.refetch]);
+		void invalidate(backend.dbState.databaseHistory, [appId, table]);
+	}, [
+		schema.refetch,
+		count.refetch,
+		list.refetch,
+		invalidate,
+		backend.dbState,
+		appId,
+		table,
+	]);
 
 	const handleOptimize = useCallback(
 		async (keepVersions = true) => {
 			try {
-				await backend.dbState.optimize(appId, table, keepVersions, userScoped);
+				await backend.dbState.optimize(
+					appId,
+					table,
+					keepVersions,
+					userScoped,
+					selector,
+				);
 				toast.success(t("optimizedTable", "Optimized table"));
 				handleRefresh();
 			} catch (err) {
@@ -126,7 +281,7 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	const handleUpdateItem = useCallback(
@@ -138,6 +293,7 @@ export function TableInspector({
 					filter,
 					updates,
 					userScoped,
+					selector,
 				);
 				handleRefresh();
 			} catch (err) {
@@ -149,13 +305,19 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	const handleDropColumns = useCallback(
 		async (columns: string[]) => {
 			try {
-				await backend.dbState.dropColumns(appId, table, columns, userScoped);
+				await backend.dbState.dropColumns(
+					appId,
+					table,
+					columns,
+					userScoped,
+					selector,
+				);
 				toast.success(
 					t("droppedColumns", {
 						defaultValue_one: "Dropped column",
@@ -173,7 +335,7 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	const handleAddColumn = useCallback(
@@ -184,6 +346,7 @@ export function TableInspector({
 					table,
 					{ name, sql_expression: sqlExpression },
 					userScoped,
+					selector,
 				);
 				toast.success(
 					t("addedColumnName", 'Added column "{{name}}"', { name }),
@@ -198,7 +361,7 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	const handleAlterColumn = useCallback(
@@ -210,6 +373,7 @@ export function TableInspector({
 					column,
 					nullable,
 					userScoped,
+					selector,
 				);
 				toast.success(
 					t("alteredColumnName", 'Altered column "{{name}}"', { name: column }),
@@ -224,18 +388,52 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
+	);
+
+	const handleSetPrimaryKey = useCallback(
+		async (column: string) => {
+			try {
+				await backend.dbState.setPrimaryKey(
+					appId,
+					table,
+					column,
+					userScoped,
+					selector,
+				);
+				toast.success(
+					t("tableKeySetMessage", '"{{name}}" is now the table key', {
+						name: column,
+					}),
+				);
+				handleRefresh();
+			} catch (err) {
+				toast.error(
+					t("tableKeySetFailedMessage", "Set table key failed: {{message}}", {
+						message: getErrorMessage(err),
+					}),
+				);
+				throw err;
+			}
+		},
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	const handleGetIndices = useCallback(
-		async () => backend.dbState.getIndices(appId, table, userScoped),
-		[backend.dbState, appId, table, userScoped],
+		async () => backend.dbState.getIndices(appId, table, userScoped, selector),
+		[backend.dbState, appId, table, userScoped, selector],
 	);
 
 	const handleDropIndex = useCallback(
 		async (indexName: string) => {
 			try {
-				await backend.dbState.dropIndex(appId, table, indexName, userScoped);
+				await backend.dbState.dropIndex(
+					appId,
+					table,
+					indexName,
+					userScoped,
+					selector,
+				);
 				toast.success(
 					t("droppedIndexName", 'Dropped index "{{name}}"', {
 						name: indexName,
@@ -251,7 +449,7 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	const handleBuildIndex = useCallback(
@@ -264,6 +462,7 @@ export function TableInspector({
 					parseIndexType(indexType),
 					undefined,
 					userScoped,
+					selector,
 				);
 				toast.success(
 					t("builtIndexOnColumn", 'Built index on "{{column}}"', { column }),
@@ -278,7 +477,7 @@ export function TableInspector({
 				throw err;
 			}
 		},
-		[backend.dbState, appId, table, userScoped, handleRefresh, t],
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
 	// Column layouts are stored per table; without the app they collide across
@@ -289,38 +488,34 @@ export function TableInspector({
 		"flex flex-col h-full grow max-h-full min-w-0",
 		className,
 	);
+	const header = (
+		<TableInspectorHeader leading={leading} tableName={table} meta={meta} />
+	);
 
 	if (!hasTarget) {
 		return (
 			<TableInspectorNotice
 				className={containerCls}
+				header={<TableInspectorHeader leading={leading} />}
 				title={t("selectATable", "Select a table")}
 				description={t(
 					"chooseATableToInspectItsRowsSchemaAndIndexes",
 					"Choose a table to inspect its rows, schema, and indexes.",
 				)}
-			>
-				{children}
-			</TableInspectorNotice>
+			/>
 		);
 	}
 
 	if (permissions.isLoading) {
-		return (
-			<TableInspectorSkeleton className={containerCls} tableName={table}>
-				{children}
-			</TableInspectorSkeleton>
-		);
+		return <TableInspectorSkeleton className={containerCls} header={header} />;
 	}
 
 	// An empty grid reads as "this table has no rows", which is the opposite of
 	// "you may not read it" — so a denial replaces the grid instead of filling it.
 	if (!canRead) {
 		return (
-			<div className={cn(containerCls, "p-4 gap-4")}>
-				<TableInspectorHeader tableName={table}>
-					{children}
-				</TableInspectorHeader>
+			<div className={cn(containerCls, "gap-3")}>
+				<TableInspectorHeader leading={leading} tableName={table} />
 				<SectionLockedPanel
 					feature={t("tableData", "Table data")}
 					description={t(
@@ -334,8 +529,8 @@ export function TableInspector({
 		);
 	}
 
-	const loadError = schema.error ?? list.error;
-	if (loadError && (!schema.data || !list.data)) {
+	const loadError = schema.error ?? list.error ?? count.error;
+	if (loadError) {
 		return (
 			<TableInspectorNotice
 				className={containerCls}
@@ -347,24 +542,23 @@ export function TableInspector({
 					loadError,
 					t("common:unknownError", "Unknown error"),
 				)}
+				header={header}
 				onRetry={handleRefresh}
-			>
-				{children}
-			</TableInspectorNotice>
+			/>
 		);
 	}
 
 	if (!schema.data || !list.data) {
-		return (
-			<TableInspectorSkeleton className={containerCls} tableName={table}>
-				{children}
-			</TableInspectorSkeleton>
-		);
+		return <TableInspectorSkeleton className={containerCls} header={header} />;
 	}
+
+	const deleteOperations = permissions.can(...WRITE_DATA)
+		? databaseDeleteOperations(selector ?? {}, Boolean(onTableDeleted))
+		: [];
 
 	return (
 		<div className={containerCls}>
-			{!canWrite && (
+			{!permissions.can(...WRITE_DATA) && (
 				<PermissionNotice
 					tone="readOnly"
 					className="mb-3 shrink-0"
@@ -383,23 +577,46 @@ export function TableInspector({
 				settingsScope={settingsScope}
 				allowFullscreen={!embedded}
 				arrowSchema={schema.data}
-				rows={list.data}
+				rows={asArray(list.data)}
 				initialPage={activePage}
 				initialPageSize={activePageSize}
 				onPageRequest={handlePageRequest}
 				loading={list.isLoading}
 				error={list.error?.message}
 				onRefresh={handleRefresh}
+				refreshing={schema.isFetching || count.isFetching || list.isFetching}
+				leading={leading}
+				meta={meta}
+				menuItems={
+					deleteOperations.length > 0 ? (
+						<DatabaseDeleteMenuItems
+							operations={deleteOperations}
+							onSelect={setDeleteOperation}
+						/>
+					) : undefined
+				}
 				onOptimize={canWrite ? handleOptimize : undefined}
 				onUpdateItem={canWrite ? handleUpdateItem : undefined}
 				onDropColumns={canWrite ? handleDropColumns : undefined}
 				onAddColumn={canWrite ? handleAddColumn : undefined}
 				onAlterColumn={canWrite ? handleAlterColumn : undefined}
+				onSetPrimaryKey={canWrite ? handleSetPrimaryKey : undefined}
 				onGetIndices={handleGetIndices}
 				onDropIndex={canWrite ? handleDropIndex : undefined}
 				onBuildIndex={canWrite ? handleBuildIndex : undefined}
 			>
-				{children}
+				{deleteOperations.length > 0 && (
+					<DatabaseDeleteDialog
+						operation={deleteOperation}
+						onOperationChange={setDeleteOperation}
+						appId={appId}
+						table={table}
+						userScoped={userScoped}
+						selector={selector ?? {}}
+						onChanged={handleRefresh}
+						onTableDeleted={onTableDeleted}
+					/>
+				)}
 			</LanceDBExplorer>
 		</div>
 	);
@@ -417,36 +634,52 @@ const LOADING_ROW_KEYS = [
 	"eight",
 ];
 
+function TableInspectorBackButton({ onClick }: { onClick: () => void }) {
+	const { t } = useTranslation("settings");
+	return (
+		<Button
+			variant="ghost"
+			size="icon"
+			className="size-8 shrink-0"
+			aria-label={t("back", "Back")}
+			title={t("back", "Back")}
+			onClick={onClick}
+		>
+			<ArrowLeft />
+		</Button>
+	);
+}
+
 const TableInspectorHeader: React.FC<{
+	leading?: React.ReactNode;
 	tableName?: string;
-	children?: React.ReactNode;
-}> = ({ tableName, children }) => (
-	<div className="flex items-center gap-3">
-		{children}
-		{tableName && (
-			<div className="flex items-center gap-2 min-w-0">
-				<Database className="h-5 w-5 text-muted-foreground animate-pulse shrink-0" />
-				<span className="text-sm font-medium truncate">{tableName}</span>
+	meta?: React.ReactNode;
+}> = ({ leading, tableName, meta }) => (
+	<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+		<div className="flex min-w-0 items-center gap-1.5">
+			{leading}
+			{tableName && <LanceTableHeading name={tableName} />}
+		</div>
+		{meta && (
+			<div className="flex min-w-0 items-center gap-3">
+				<span aria-hidden className="h-5 w-px shrink-0 bg-border" />
+				{meta}
 			</div>
 		)}
 	</div>
 );
 
 const TableInspectorSkeleton: React.FC<{
-	tableName: string;
+	header: React.ReactNode;
 	className?: string;
-	children?: React.ReactNode;
-}> = ({ tableName, className, children }) => (
-	<div className={cn(className, "p-4 gap-4")}>
-		<TableInspectorHeader tableName={tableName}>
-			{children}
-		</TableInspectorHeader>
+}> = ({ header, className }) => (
+	<div className={cn(className, "gap-3")}>
+		{header}
 		<div className="flex items-center gap-2">
-			<div className="h-9 w-24 bg-muted animate-pulse rounded" />
-			<div className="h-9 flex-1 bg-muted animate-pulse rounded" />
-			<div className="h-9 w-20 bg-muted animate-pulse rounded" />
+			<div className="h-8 w-80 max-w-full bg-muted animate-pulse rounded-md" />
+			<div className="ml-auto h-8 w-28 bg-muted animate-pulse rounded-md" />
 		</div>
-		<div className="flex-1 rounded border overflow-hidden">
+		<div className="flex-1 rounded-xl border overflow-hidden">
 			<div className="h-10 bg-muted/60 border-b flex items-center gap-4 px-4">
 				{LOADING_COLUMN_KEYS.map((key, index) => (
 					<div
@@ -471,28 +704,21 @@ const TableInspectorSkeleton: React.FC<{
 				</div>
 			))}
 		</div>
-		<div className="flex items-center justify-between shrink-0">
-			<div className="h-4 w-32 bg-muted animate-pulse rounded" />
-			<div className="flex gap-1">
-				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-				<div className="h-8 w-8 bg-muted animate-pulse rounded" />
-			</div>
-		</div>
 	</div>
 );
 
 const TableInspectorNotice: React.FC<{
+	header: React.ReactNode;
 	title: string;
 	description: string;
 	className?: string;
 	destructive?: boolean;
 	onRetry?: () => void;
-	children?: React.ReactNode;
-}> = ({ title, description, className, destructive, onRetry, children }) => {
+}> = ({ header, title, description, className, destructive, onRetry }) => {
 	const { t } = useTranslation("settings");
 	return (
-		<div className={cn(className, "p-4 gap-4")}>
-			<TableInspectorHeader>{children}</TableInspectorHeader>
+		<div className={cn(className, "gap-3")}>
+			{header}
 			<div className="flex flex-1 items-center justify-center">
 				<div className="max-w-md rounded-lg border bg-card p-8 text-center">
 					{destructive ? (

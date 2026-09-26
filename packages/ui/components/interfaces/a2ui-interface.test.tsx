@@ -5,11 +5,23 @@ import { createRoot } from "react-dom/client";
 import type { IUseInterfaceProps } from "./interfaces";
 
 const handleServerMessage = mock((_message: unknown) => {});
+// bun keeps a module mock for every later file in the process, so each one is put back in afterAll.
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	renderer: { ...(await import("../a2ui/A2UIRenderer")) },
+	surfaceManager: { ...(await import("../a2ui/SurfaceManager")) },
+	idbStorage: { ...(await import("../../lib/idb-storage")) },
+};
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
-mock.module("../a2ui/A2UIRenderer", () => ({ A2UIRenderer: () => null }));
+mock.module("../a2ui/A2UIRenderer", () => ({
+	...actual.renderer,
+	A2UIRenderer: () => null,
+}));
 mock.module("../a2ui/SurfaceManager", () => ({
+	...actual.surfaceManager,
 	useSurfaceManager: () => ({
 		surfaces: new Map(),
 		handleServerMessage,
@@ -17,6 +29,7 @@ mock.module("../a2ui/SurfaceManager", () => ({
 	}),
 }));
 mock.module("../../lib/idb-storage", () => ({
+	...actual.idbStorage,
 	appGlobalState: {
 		getAll: async () => ({}),
 		set: async () => {},
@@ -27,7 +40,13 @@ mock.module("../../lib/idb-storage", () => ({
 		clearPage: async () => {},
 	},
 }));
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("../a2ui/A2UIRenderer", () => actual.renderer);
+	mock.module("../a2ui/SurfaceManager", () => actual.surfaceManager);
+	mock.module("../../lib/idb-storage", () => actual.idbStorage);
+});
 
 describe("A2UIInterface streamed state", () => {
 	test("shares streamed state with the app and switches scope when the app changes", async () => {

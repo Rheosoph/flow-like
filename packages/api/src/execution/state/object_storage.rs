@@ -13,13 +13,18 @@ use flow_like_storage::{
     files::store::FlowLikeStore,
     object_store::{self, ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion, path::Path},
 };
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt, stream};
 use sea_orm::DatabaseConnection;
 use std::{collections::HashSet, sync::Arc};
 
 const RUNS_PREFIX: &str = "execution/runs";
 const EVENTS_PREFIX: &str = "execution/events";
 const INDEXES_PREFIX: &str = "execution/indexes";
+/// Event objects read or rewritten at once.
+const EVENT_OBJECT_CONCURRENCY: usize = 16;
+/// Event keys are `{sequence:08}`; past this they stop sorting by sequence,
+/// so a listing offset is only trusted below it.
+const PADDED_SEQUENCE_LIMIT: i32 = 99_999_999;
 
 pub struct ObjectStorageStateStore {
     store: Arc<dyn ObjectStore>,
@@ -98,6 +103,53 @@ impl ObjectStorageStateStore {
 
     fn events_prefix(run_id: &str) -> Path {
         Path::from(format!("{EVENTS_PREFIX}/{run_id}/"))
+    }
+
+    fn event_sequence(location: &Path) -> Option<i32> {
+        location.filename()?.strip_suffix(".json")?.parse().ok()
+    }
+
+    async fn read_event(
+        &self,
+        location: Path,
+    ) -> Result<Option<ExecutionEventRecord>, StateStoreError> {
+        self.get_json(&location).await
+    }
+
+    /// Flags the event at `location` as delivered when it is one of `wanted`,
+    /// and says whether it was.
+    async fn deliver_event_at(
+        &self,
+        location: Path,
+        wanted: Arc<HashSet<String>>,
+    ) -> Result<bool, StateStoreError> {
+        let Some(mut record) = self.get_json::<ExecutionEventRecord>(&location).await? else {
+            return Ok(false);
+        };
+        if !wanted.contains(&record.id) {
+            return Ok(false);
+        }
+        record.delivered = true;
+        self.put_json(&location, &record).await?;
+        Ok(true)
+    }
+
+    /// [`Self::deliver_event_at`] over `locations` with bounded concurrency;
+    /// returns how many events it flagged.
+    async fn deliver_events_at(
+        &self,
+        locations: Vec<Path>,
+        wanted: &Arc<HashSet<String>>,
+    ) -> Result<usize, StateStoreError> {
+        let flagged = stream::iter(
+            locations
+                .into_iter()
+                .map(|location| self.deliver_event_at(location, wanted.clone())),
+        )
+        .buffer_unordered(EVENT_OBJECT_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
+        Ok(flagged.into_iter().filter(|flagged| *flagged).count())
     }
 
     async fn put_json<T: serde::Serialize>(
@@ -510,36 +562,60 @@ impl ExecutionStateStore for ObjectStorageStateStore {
     ) -> Result<Vec<ExecutionEventRecord>, StateStoreError> {
         let prefix = Self::events_prefix(&query.run_id);
 
-        let list_result = self
-            .store
-            .list(Some(&prefix))
+        // Keys are zero-padded sequences, so the listing can start at the
+        // cursor instead of walking the events the client already has.
+        let listing = match query.after_sequence {
+            Some(after) if (0..PADDED_SEQUENCE_LIMIT).contains(&after) => self
+                .store
+                .list_with_offset(Some(&prefix), &Self::event_path(&query.run_id, after)),
+            _ => self.store.list(Some(&prefix)),
+        };
+        let mut locations: Vec<Path> = listing
             .try_collect::<Vec<_>>()
             .await
-            .map_err(|e| StateStoreError::Database(e.to_string()))?;
+            .map_err(|e| StateStoreError::Database(e.to_string()))?
+            .into_iter()
+            .map(|object| object.location)
+            .filter(
+                |location| match (query.after_sequence, Self::event_sequence(location)) {
+                    (Some(after), Some(sequence)) => sequence > after,
+                    _ => true,
+                },
+            )
+            .collect();
+        locations.sort();
+
+        // Every object past a cursor counts towards the limit. An undelivered
+        // read cannot tell before it has the body, so it reads page by page.
+        if !query.only_undelivered
+            && let Some(limit) = query.limit
+        {
+            locations.truncate(limit as usize);
+        }
 
         let mut records = Vec::new();
-        for obj in list_result {
-            if let Some(after_seq) = query.after_sequence
-                && let Some(seq_str) = obj
-                    .location
-                    .filename()
-                    .and_then(|s| s.strip_suffix(".json"))
-                && let Ok(seq) = seq_str.parse::<i32>()
-                && seq <= after_seq
-            {
-                continue;
-            }
-
-            if let Some(record) = self.get_json::<ExecutionEventRecord>(&obj.location).await?
-                && (!query.only_undelivered || !record.delivered)
-            {
-                records.push(record);
-            }
-
-            if let Some(limit) = query.limit
-                && records.len() >= limit as usize
-            {
+        let mut pending = locations.into_iter();
+        'pages: loop {
+            let page: Vec<Path> = pending.by_ref().take(EVENT_OBJECT_CONCURRENCY).collect();
+            if page.is_empty() {
                 break;
+            }
+            let fetched = stream::iter(page.into_iter().map(|location| self.read_event(location)))
+                .buffered(EVENT_OBJECT_CONCURRENCY)
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            for record in fetched.into_iter().flatten() {
+                if query.only_undelivered && record.delivered {
+                    continue;
+                }
+                records.push(record);
+                if query
+                    .limit
+                    .is_some_and(|limit| records.len() >= limit as usize)
+                {
+                    break 'pages;
+                }
             }
         }
 
@@ -585,27 +661,39 @@ impl ExecutionStateStore for ObjectStorageStateStore {
         // The trait supplies opaque IDs, while this backend keys objects by
         // run and sequence. List only this run's prefix to resolve them; the
         // old `run:sequence` parser never matched executor-generated IDs.
-        let mut remaining = event_ids.iter().map(String::as_str).collect::<HashSet<_>>();
-        let objects = self
+        let wanted = Arc::new(event_ids.iter().cloned().collect::<HashSet<_>>());
+        let mut locations: Vec<Path> = self
             .store
             .list(Some(&Self::events_prefix(run_id)))
             .try_collect::<Vec<_>>()
             .await
-            .map_err(|error| StateStoreError::Database(error.to_string()))?;
-        for object in objects {
-            let Some(mut record) = self
-                .get_json::<ExecutionEventRecord>(&object.location)
-                .await?
-            else {
-                continue;
-            };
-            if remaining.remove(record.id.as_str()) {
-                record.delivered = true;
-                self.put_json(&object.location, &record).await?;
-                if remaining.is_empty() {
-                    break;
-                }
+            .map_err(|error| StateStoreError::Database(error.to_string()))?
+            .into_iter()
+            .map(|object| object.location)
+            .collect();
+        locations.sort();
+
+        // A canonical id is a hash of the run and the sequence the object is
+        // keyed by, so the listing alone names those objects. Only ids minted
+        // for legacy executors still need the bodies read to be found.
+        let (named, unnamed): (Vec<Path>, Vec<Path>) =
+            locations.into_iter().partition(|location| {
+                Self::event_sequence(location).is_some_and(|sequence| {
+                    wanted.contains(&canonical_execution_event_id(run_id, sequence))
+                })
+            });
+
+        let mut remaining = wanted
+            .len()
+            .saturating_sub(self.deliver_events_at(named, &wanted).await?);
+
+        let mut pending = unnamed.into_iter();
+        while remaining > 0 {
+            let page: Vec<Path> = pending.by_ref().take(EVENT_OBJECT_CONCURRENCY).collect();
+            if page.is_empty() {
+                break;
             }
+            remaining = remaining.saturating_sub(self.deliver_events_at(page, &wanted).await?);
         }
 
         Ok(())

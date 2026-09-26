@@ -11,7 +11,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -54,6 +54,16 @@ pub async fn get_routes(
     let events = event::Entity::find()
         .filter(event::Column::AppId.eq(&app_id))
         .filter(event::Column::Route.is_not_null())
+        .select_only()
+        .columns([
+            event::Column::Id,
+            event::Column::Route,
+            event::Column::IsDefault,
+            event::Column::Active,
+            event::Column::EventType,
+            event::Column::PageId,
+        ])
+        .into_tuple::<(String, Option<String>, bool, bool, String, Option<String>)>()
         .all(&state.db)
         .await?;
 
@@ -63,17 +73,17 @@ pub async fn get_routes(
     let can_read_events = permission.has_permission(RolePermissions::ReadEvents);
     let routes = events
         .into_iter()
-        .filter(|e| is_listed_event_type(&e.event_type))
-        .filter(|e| {
+        .filter(|(_, _, _, _, event_type, _)| is_listed_event_type(event_type))
+        .filter(|(_, _, _, active, event_type, page_id)| {
             can_read_events
-                || (e.active && is_user_facing_event_parts(e.page_id.as_deref(), &e.event_type))
+                || (*active && is_user_facing_event_parts(page_id.as_deref(), event_type))
         })
-        .filter_map(|e| {
-            e.route.map(|path| RouteMapping {
-                id: e.id.clone(),
+        .filter_map(|(id, route, is_default, _, _, _)| {
+            route.map(|path| RouteMapping {
+                id: id.clone(),
                 path,
-                event_id: e.id,
-                is_default: e.is_default,
+                event_id: id,
+                is_default,
             })
         })
         .collect();

@@ -1,4 +1,9 @@
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
+import {
+	forgetDetached,
+	pruneDetached,
+	recordDetached,
+} from "./detached-children";
 import { geoMapViewportValue } from "./geoConversions";
 import { applyMediaSourceUpdate } from "./media-source";
 import { applyCalendarUpdate, applyGanttUpdate } from "./planning-updates";
@@ -632,7 +637,10 @@ export function applyA2UIMessage(
 			for (const comp of message.components) {
 				components[comp.id] = comp;
 			}
-			return { ...surface, components };
+			return forgetDetached(
+				{ ...surface, components },
+				message.components.map((comp) => comp.id),
+			);
 		}
 		case "dataModelUpdate": {
 			if (message.surfaceId !== surface.id) return surface;
@@ -671,7 +679,7 @@ export function applyA2UIMessage(
 					} as unknown as SurfaceComponent["component"],
 				};
 			}
-			return { ...surface, components };
+			return forgetDetached({ ...surface, components }, [component.id]);
 		}
 		case "removeElement": {
 			if (message.surfaceId !== surface.id) return surface;
@@ -697,83 +705,95 @@ export function applyA2UIMessage(
 				}
 			}
 			delete components[elementId];
-			return { ...surface, components };
+			return recordDetached(surface, { ...surface, components }, elementId);
 		}
 		case "upsertElement": {
-			const { element_id, value } = message;
-			if (!element_id) return surface;
-			const separatorIndex = element_id.indexOf("/");
-			const scopeId =
-				separatorIndex >= 0 ? element_id.slice(0, separatorIndex) : surface.id;
-			const componentId =
-				separatorIndex >= 0 ? element_id.slice(separatorIndex + 1) : element_id;
-			if (!componentId) return surface;
-
-			const updateValue = (value ?? {}) as Record<string, unknown>;
-
-			// A non-surface prefix addresses one declarative widget instance. Its
-			// children stay inside the host's inline definition, so resolve the
-			// instance locally and never fall back to another matching widget.
-			// A prefix that names no instance here is another page's id: a flow
-			// written against that page retargets to this surface's component of
-			// the same name (the same rule the runtime applies to reads).
-			if (
-				scopeId !== surface.id &&
-				(surfaceOwnsScope(surface, scopeId) ||
-					surface.components[componentId] === undefined)
-			) {
-				return (
-					applyWidgetInternalUpdate(
-						surface,
-						componentId,
-						updateValue,
-						scopeId,
-					) ?? surface
-				);
+			const next = applyUpsertElement(surface, message);
+			const updateType = isPlainObject(message.value)
+				? message.value.type
+				: undefined;
+			if (updateType === "clearChildren" || updateType === "removeChildAt") {
+				return recordDetached(surface, next, message.element_id);
 			}
-
-			const component = surface.components[componentId];
-
-			// The target may live inside a widget instance's inline definition
-			// rather than as a top-level component.
-			if (!component) {
-				const nested = applyWidgetInternalUpdate(
-					surface,
-					componentId,
-					updateValue,
-				);
-				if (nested) return nested;
+			if (updateType === "createComponent" && next !== surface) {
+				return forgetDetached(next, [
+					message.element_id.slice(message.element_id.indexOf("/") + 1),
+				]);
 			}
-
-			// createComponent creates the element if missing and replaces it if
-			// present, so it is handled here rather than in applyElementUpdate.
-			if (updateValue.type === "createComponent") {
-				const newComponent: SurfaceComponent = {
-					id: componentId,
-					component: updateValue.component as SurfaceComponent["component"],
-					style:
-						(updateValue.style as SurfaceComponent["style"]) ??
-						component?.style,
-				};
-				return {
-					...surface,
-					components: { ...surface.components, [componentId]: newComponent },
-				};
-			}
-
-			if (!component) return surface;
-
-			return {
-				...surface,
-				components: {
-					...surface.components,
-					[componentId]: applyElementUpdate(component, updateValue),
-				},
-			};
+			return next;
 		}
+		case "pruneDetached":
+			return pruneDetached(surface, message.element_ids ?? []);
 		default:
 			return surface;
 	}
+}
+
+function applyUpsertElement(
+	surface: Surface,
+	message: Extract<A2UIServerMessage, { type: "upsertElement" }>,
+): Surface {
+	const { element_id, value } = message;
+	if (!element_id) return surface;
+	const separatorIndex = element_id.indexOf("/");
+	const scopeId =
+		separatorIndex >= 0 ? element_id.slice(0, separatorIndex) : surface.id;
+	const componentId =
+		separatorIndex >= 0 ? element_id.slice(separatorIndex + 1) : element_id;
+	if (!componentId) return surface;
+
+	const updateValue = (value ?? {}) as Record<string, unknown>;
+
+	// A non-surface prefix addresses one declarative widget instance. Its
+	// children stay inside the host's inline definition, so resolve the
+	// instance locally and never fall back to another matching widget.
+	// A prefix that names no instance here is another page's id: a flow
+	// written against that page retargets to this surface's component of
+	// the same name (the same rule the runtime applies to reads).
+	if (
+		scopeId !== surface.id &&
+		(surfaceOwnsScope(surface, scopeId) ||
+			surface.components[componentId] === undefined)
+	) {
+		return (
+			applyWidgetInternalUpdate(surface, componentId, updateValue, scopeId) ??
+			surface
+		);
+	}
+
+	const component = surface.components[componentId];
+
+	// The target may live inside a widget instance's inline definition
+	// rather than as a top-level component.
+	if (!component) {
+		const nested = applyWidgetInternalUpdate(surface, componentId, updateValue);
+		if (nested) return nested;
+	}
+
+	// createComponent creates the element if missing and replaces it if
+	// present, so it is handled here rather than in applyElementUpdate.
+	if (updateValue.type === "createComponent") {
+		const newComponent: SurfaceComponent = {
+			id: componentId,
+			component: updateValue.component as SurfaceComponent["component"],
+			style:
+				(updateValue.style as SurfaceComponent["style"]) ?? component?.style,
+		};
+		return {
+			...surface,
+			components: { ...surface.components, [componentId]: newComponent },
+		};
+	}
+
+	if (!component) return surface;
+
+	return {
+		...surface,
+		components: {
+			...surface.components,
+			[componentId]: applyElementUpdate(component, updateValue),
+		},
+	};
 }
 
 /**

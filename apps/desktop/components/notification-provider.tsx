@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import { useBackend, useHub } from "@flow-like/flow-like-ui";
 import type {
 	IIntercomEvent,
@@ -10,7 +12,6 @@ import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -171,7 +172,7 @@ export default function NotificationProvider({
 	appId,
 }: NotificationProviderProps = {}) {
 	const auth = useAuth();
-	const router = useRouter();
+	const router = useClientRouter();
 	const backend = useBackend();
 	const tauriBackend = backend as TauriBackend | undefined;
 	const authContext = tauriBackend?.auth ?? auth;

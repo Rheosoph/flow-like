@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { ILogMetadata } from "../../../lib";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 
 /** Runs carry microsecond epoch timestamps (see `LogMeta` in the core crate). */
@@ -116,7 +117,7 @@ export function useProjectRuns(
 	const backend = useBackend();
 	const boardIds = useMemo(
 		() =>
-			(boards ?? [])
+			asArray(boards)
 				.map((board) => board.id)
 				.sort()
 				.slice(0, MAX_BOARDS_SAMPLED),
@@ -124,7 +125,7 @@ export function useProjectRuns(
 	);
 	const boardNames = useMemo(() => {
 		const map = new Map<string, string>();
-		for (const board of boards ?? []) map.set(board.id, board.name);
+		for (const board of asArray(boards)) map.set(board.id, board.name);
 		return map;
 	}, [boards]);
 
@@ -138,7 +139,7 @@ export function useProjectRuns(
 			const perBoard = await Promise.all(
 				boardIds.map(async (boardId) => {
 					try {
-						return await backend.boardState.listRuns(
+						const runs = await backend.boardState.listRuns(
 							appId,
 							boardId,
 							undefined,
@@ -153,6 +154,7 @@ export function useProjectRuns(
 							// also carries the run's whole serialized input payload.
 							true,
 						);
+						return asArray(runs);
 					} catch {
 						// A board with no run store yet simply has no runs.
 						return [] as ILogMetadata[];
@@ -168,7 +170,7 @@ export function useProjectRuns(
 			ready: query.isFetched,
 			isLoading: canRead && query.isLoading,
 			denied: !canRead,
-			...summarize(toRuns(query.data ?? [], boardNames)),
+			...summarize(toRuns(asArray(query.data), boardNames)),
 		}),
 		[query.data, query.isFetched, query.isLoading, boardNames, canRead],
 	);

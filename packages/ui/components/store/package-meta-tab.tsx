@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import type {
 	PackageMeta,
 	PushMediaResponse,
@@ -94,10 +95,10 @@ export function PackageMetaTab({
 			longDescriptionRef.current = meta.longDescription ?? "";
 			releaseNotesRef.current = meta.releaseNotes ?? "";
 			setForm({
-				name: meta.name,
+				name: meta.name ?? "",
 				description: meta.description,
 				longDescription: meta.longDescription,
-				tags: meta.tags ?? [],
+				tags: asArray(meta.tags),
 				website: meta.website,
 				supportUrl: meta.supportUrl,
 				docsUrl: meta.docsUrl,

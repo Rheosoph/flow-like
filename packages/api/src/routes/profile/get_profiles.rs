@@ -46,6 +46,13 @@ pub struct ProfileResponse {
     pub deleted_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
+fn is_expired_tombstone(
+    row: &profile::Model,
+    cutoff: chrono::DateTime<chrono::FixedOffset>,
+) -> bool {
+    row.deleted_at.is_some_and(|deleted_at| deleted_at < cutoff)
+}
+
 /// Get all profiles for the authenticated user.
 /// Includes soft-deleted profiles (with `deleted_at` set) so clients can clean up locally.
 /// Tombstones older than 30 days are automatically hard-deleted.
@@ -65,22 +72,26 @@ pub async fn get_profiles(
 ) -> Result<Json<Vec<ProfileResponse>>, ApiError> {
     let sub = user.sub()?;
 
-    // Purge tombstones older than 30 days
-    let cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
-    profile::Entity::delete_many()
-        .filter(
-            profile::Column::UserId
-                .eq(&sub)
-                .and(profile::Column::DeletedAt.is_not_null())
-                .and(profile::Column::DeletedAt.lt(cutoff)),
-        )
-        .exec(&state.db)
-        .await?;
-
-    let all_profiles = profile::Entity::find()
+    let mut all_profiles = profile::Entity::find()
         .filter(profile::Column::UserId.eq(&sub))
         .all(&state.db)
         .await?;
+
+    // Purge tombstones older than 30 days. Only a read that actually saw one
+    // pays for the write, so the usual request stays a single SELECT.
+    let cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::days(30);
+    if all_profiles.iter().any(|p| is_expired_tombstone(p, cutoff)) {
+        profile::Entity::delete_many()
+            .filter(
+                profile::Column::UserId
+                    .eq(&sub)
+                    .and(profile::Column::DeletedAt.is_not_null())
+                    .and(profile::Column::DeletedAt.lt(cutoff)),
+            )
+            .exec(&state.db)
+            .await?;
+        all_profiles.retain(|p| !is_expired_tombstone(p, cutoff));
+    }
 
     let mut result = Vec::with_capacity(all_profiles.len());
 

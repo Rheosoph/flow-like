@@ -4,6 +4,7 @@ import { ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { isRecord } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import {
@@ -54,7 +55,7 @@ export function UsageOperationDetails({
 		open && !!auth.user?.profile.sub,
 		[auth.user?.profile.sub],
 	);
-	const detail = query.data;
+	const detail = isRecord(query.data) ? query.data : undefined;
 	const byteMetered = detail?.meteringBasis === "input_bytes";
 	return (
 		<Sheet open={open} onOpenChange={setOpen}>

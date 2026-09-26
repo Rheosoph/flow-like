@@ -241,6 +241,11 @@ pub async fn enforce_app_usage_limits_for_user(
     }
 }
 
+fn is_enforced(limit: &app_usage_limit::Model) -> bool {
+    period_start(&limit.period).is_some()
+        && (limit.cost_micro_dollars.is_some() || limit.token_limit.is_some())
+}
+
 /// Returns a policy rejection as a value so a reservation transaction can
 /// commit its alert while omitting the rejected reservation.
 pub(crate) async fn check_app_usage_limits_for_user<C: ConnectionTrait>(
@@ -270,21 +275,34 @@ pub(crate) async fn check_app_usage_limits_for_user<C: ConnectionTrait>(
         .await
         .map_err(ApiError::from)?;
 
-    if limits.is_empty() {
+    let mut users = limits
+        .iter()
+        .filter(|limit| is_enforced(limit))
+        .map(|limit| limit.user_id.clone())
+        .collect::<Vec<_>>();
+    if users.is_empty() {
         return Ok(None);
     }
+    users.sort_unstable();
+    users.dedup();
+    let mut counters = crate::rolling_usage::admission_counters(db, app_id, &users)
+        .await
+        .map_err(ApiError::from)?;
 
     for limit in limits {
-        if period_start(&limit.period).is_none() {
-            continue;
-        }
-        if limit.cost_micro_dollars.is_none() && limit.token_limit.is_none() {
+        if !is_enforced(&limit) {
             continue;
         }
 
-        let Some(current) = crate::rolling_usage::totals(db, app_id, &limit.user_id, &limit.period)
-            .await
-            .map_err(ApiError::from)?
+        let Some(current) = crate::rolling_usage::totals_from(
+            db,
+            &mut counters,
+            app_id,
+            &limit.user_id,
+            &limit.period,
+        )
+        .await
+        .map_err(ApiError::from)?
         else {
             return Ok(Some(ApiError::usage_refresh_pending()));
         };

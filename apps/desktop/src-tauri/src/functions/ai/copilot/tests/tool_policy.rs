@@ -688,6 +688,17 @@ fn mcp_server_instructions_are_derived_from_specialist_tools() {
     assert!(global.contains("sealed no-argument research_agent"));
     assert!(global.len() < 2_000);
 
+    let native_web_global = flowpilot_mcp_server_instructions(
+        ["list_apps", "flowpilot_board", "flowpilot_home"],
+        false,
+    );
+    assert!(native_web_global.contains("platform orchestrator"));
+    assert!(native_web_global.contains("built-in web search"));
+    assert!(native_web_global.contains("one that errors never blocks web research"));
+    assert!(native_web_global.contains("Specialists have no web access"));
+    assert!(!native_web_global.contains("research_agent"));
+    assert!(native_web_global.len() < 2_000);
+
     let home = flowpilot_mcp_server_instructions(
         [
             "get_home_context",

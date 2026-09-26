@@ -5,7 +5,7 @@
 /// Copy this pattern into your node.mbt when you need network access.
 
 // ============================================================================
-// Node definition — note `def.add_permission("http")`
+// Node definition — note `def.add_permission("network:http")`
 // ============================================================================
 
 fn build_http_get_definition() -> @sdk.NodeDefinition {
@@ -15,7 +15,7 @@ fn build_http_get_definition() -> @sdk.NodeDefinition {
     "Sends a GET request to a URL and reports the result",
     "Network/HTTP",
   )
-  def.add_permission("http")
+  def.add_permission("network:http")
 
   def.add_pin(@sdk.input_pin("exec", "Execute", "Trigger execution", @sdk.DataType::Exec))
   def.add_pin(

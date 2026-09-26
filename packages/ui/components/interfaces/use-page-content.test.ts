@@ -4,6 +4,7 @@ import {
 	resetBoardReadiness,
 	whenBoardReady,
 } from "../../lib/board-readiness";
+import type { IPage } from "../../state/backend-state/page-state";
 import {
 	type IStoreRedirectState,
 	deriveRouteMappings,
@@ -300,6 +301,19 @@ describe("store redirect", () => {
 	});
 });
 
+function storedPage(): IPage {
+	return {
+		id: "page-1",
+		name: "Page",
+		content: [],
+		layoutType: "freeform",
+		components: [],
+		createdAt: "2026-01-01T00:00:00.000Z",
+		updatedAt: "2026-01-01T00:00:00.000Z",
+		boardId: "board-1",
+	};
+}
+
 describe("page board synchronization", () => {
 	beforeEach(() => {
 		resetBoardReadiness();
@@ -311,7 +325,7 @@ describe("page board synchronization", () => {
 		const boardReady = new Promise<void>((resolve) => {
 			finishBoardSync = resolve;
 		});
-		const page = { id: "page-1", boardId: "board-1" };
+		const page = storedPage();
 		const boardState = {
 			async getBoard() {
 				calls.push("board:start");
@@ -356,7 +370,7 @@ describe("page board synchronization", () => {
 
 	test("retries after board synchronization when the page cannot be read yet", async () => {
 		const calls: string[] = [];
-		const page = { id: "page-1", boardId: "board-1" };
+		const page = storedPage();
 		let attempts = 0;
 		let markFirstAttemptFailed: (() => void) | undefined;
 		const firstAttemptFailed = new Promise<void>((resolve) => {
@@ -415,7 +429,7 @@ describe("page board synchronization", () => {
 	});
 
 	test("reads the pinned version's page, not the draft board's", async () => {
-		const page = { id: "page-1", boardId: "board-1" };
+		const page = storedPage();
 		const seen: unknown[] = [];
 		const boardState = { async getBoard() {} };
 		const pageState = {
@@ -441,7 +455,7 @@ describe("page board synchronization", () => {
 
 	test("still lets page state fall back when board synchronization fails", async () => {
 		const calls: string[] = [];
-		const page = { id: "page-1", boardId: "board-1" };
+		const page = storedPage();
 		const boardState = {
 			async getBoard() {
 				calls.push("board");

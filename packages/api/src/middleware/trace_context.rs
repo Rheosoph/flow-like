@@ -254,6 +254,7 @@ pub async fn trace_context_middleware(mut req: Request, next: Next) -> Response 
 
     let span = server_span(context.as_ref(), &method, &route);
     let mut lifetime = RequestLifetime::new(span.clone(), method, route, started);
+    req.extensions_mut().insert(lifetime.fault());
     let response = next.run(req).instrument(span).await;
     lifetime.response_ready(response.status());
     let (parts, body) = response.into_parts();

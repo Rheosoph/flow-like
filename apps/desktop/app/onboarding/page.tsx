@@ -19,6 +19,7 @@ import {
 } from "@flow-like/flow-like-ui/components/ui/avatar";
 import { Badge } from "@flow-like/flow-like-ui/components/ui/badge";
 import { BitHover } from "@flow-like/flow-like-ui/components/ui/bit-hover";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
@@ -172,7 +173,11 @@ export default function Onboarding() {
 
 				const allProfiles = (await response.json()) as OnlineProfile[];
 				if (cancelled) return;
-				const serverProfiles = allProfiles.filter((p) => !p.deleted_at);
+				if (!Array.isArray(allProfiles))
+					throw new Error("Profile list response is not an array");
+				const serverProfiles = allProfiles.filter(
+					(p) => isRecord(p) && typeof p.id === "string" && !p.deleted_at,
+				);
 
 				if (serverProfiles.length > 0) {
 					let firstProfileId: string | null = null;

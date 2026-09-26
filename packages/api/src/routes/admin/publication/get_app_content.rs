@@ -100,7 +100,7 @@ pub async fn get_app_content(
             Ok(b) => b,
             Err(_) => continue,
         };
-        let board = board.lock().await;
+        let board = board.snapshot();
 
         let computation = compute_board_score(&board);
 

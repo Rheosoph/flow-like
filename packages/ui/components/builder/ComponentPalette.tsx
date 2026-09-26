@@ -2,7 +2,6 @@
 
 import { useDraggable } from "@dnd-kit/core";
 import { useTranslation } from "@flow-like/locales";
-import { useQuery } from "@tanstack/react-query";
 import {
 	AlignCenter,
 	Calendar,
@@ -44,12 +43,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks";
+import { useAppPackageWidgets } from "../../hooks/use-app-package-widgets";
 import { useSearch } from "../../hooks/use-search-index";
 import { cn } from "../../lib";
-import {
-	type AppPackageWidget,
-	listAppPackageWidgets,
-} from "../../lib/package-widgets";
+import type { AppPackageWidget } from "../../lib/package-widgets";
 import { useBackend } from "../../state/backend-state";
 import type { IUserWidgetInfo } from "../../state/backend-state/user-state";
 import { Badge } from "../ui/badge";
@@ -650,21 +647,8 @@ export function ComponentPalette({
 		[],
 	);
 
-	// Package widgets of the current app (§6.1) — resolved from the installed
-	// manifests of packages added to the app; empty on hosts without the
-	// per-app package listing (see listAppPackageWidgets).
-	const { data: packageWidgets } = useQuery({
-		queryKey: ["app-package-widgets", effectiveAppId],
-		queryFn: () =>
-			listAppPackageWidgets(
-				{
-					listPackages: backend.appState.listPackages?.bind(backend.appState),
-					getPackage: (packageId) =>
-						backend.registryState.getPackage(packageId),
-				},
-				effectiveAppId as string,
-			),
-		enabled: !!effectiveAppId && showWidgets,
+	const { data: packageWidgets } = useAppPackageWidgets(effectiveAppId, {
+		enabled: showWidgets,
 	});
 
 	const { data: apps } = useInvoke(

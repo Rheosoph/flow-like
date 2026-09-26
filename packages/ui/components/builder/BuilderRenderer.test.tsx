@@ -22,6 +22,20 @@ function ActionProbe({ elementRef }: ComponentProps) {
 		</button>
 	);
 }
+const editorControlClick = mock(noop);
+function EditorControlProbe({ elementRef }: ComponentProps) {
+	return (
+		<div ref={elementRef}>
+			<button
+				type="button"
+				data-builder-interactive=""
+				onClick={editorControlClick}
+			>
+				<span>Reload</span>
+			</button>
+		</div>
+	);
+}
 const builder = {
 	selection: { componentIds: [] as string[] },
 	selectComponent: selected,
@@ -35,21 +49,47 @@ const builder = {
 	widgetRefs: {},
 };
 
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll.
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	builderContext: { ...(await import("./BuilderContext")) },
+	microWidgetReload: { ...(await import("./use-micro-widget-reload")) },
+	widgetBuilder: { ...(await import("./WidgetBuilder")) },
+	builderDnd: { ...(await import("./BuilderDndContext")) },
+	dndKit: { ...(await import("@dnd-kit/core")) },
+	runtimeTailwind: { ...(await import("../../lib/use-runtime-tailwind")) },
+	actionHandler: { ...(await import("../a2ui/ActionHandler")) },
+	tooltip: { ...(await import("../ui/tooltip")) },
+	componentRegistry: { ...(await import("../a2ui/ComponentRegistry")) },
+};
+
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({
 		t: (key: string, fallback?: string) => fallback ?? key,
 	}),
 }));
-mock.module("./BuilderContext", () => ({ useBuilder: () => builder }));
+mock.module("./BuilderContext", () => ({
+	...actual.builderContext,
+	useBuilder: () => builder,
+}));
+mock.module("./use-micro-widget-reload", () => ({
+	...actual.microWidgetReload,
+	useMicroWidgetReload: () => null,
+}));
 mock.module("./WidgetBuilder", () => ({
+	...actual.widgetBuilder,
 	CONTAINER_TYPES: new Set(["row", "column", "box"]),
 	ROOT_ID: "root",
 }));
 mock.module("./BuilderDndContext", () => ({
+	...actual.builderDnd,
 	COMPONENT_MOVE_TYPE: "a2ui-component-move",
 	useBuilderDnd: () => dragState,
 }));
 mock.module("@dnd-kit/core", () => ({
+	...actual.dndKit,
 	useDraggable: () => ({
 		attributes: {},
 		listeners: {},
@@ -60,17 +100,21 @@ mock.module("@dnd-kit/core", () => ({
 	useDroppable: () => ({ setNodeRef: noop }),
 }));
 mock.module("../../lib/use-runtime-tailwind", () => ({
+	...actual.runtimeTailwind,
 	useRuntimeTailwindStyles: noop,
 }));
 mock.module("../a2ui/ActionHandler", () => ({
+	...actual.actionHandler,
 	ActionProvider: ({ children }: { children: ReactNode }) => children,
 }));
 mock.module("../ui/tooltip", () => ({
+	...actual.tooltip,
 	Tooltip: ({ children }: { children: ReactNode }) => children,
 	TooltipTrigger: ({ children }: { children: ReactNode }) => children,
 	TooltipContent: () => null,
 }));
 mock.module("../a2ui/ComponentRegistry", () => ({
+	...actual.componentRegistry,
 	getComponentRenderer: (type: string) => {
 		const renderers = {
 			row: A2UIRow,
@@ -79,12 +123,25 @@ mock.module("../a2ui/ComponentRegistry", () => ({
 			text: A2UIText,
 			spacer: A2UISpacer,
 			button: ActionProbe,
+			editorControl: EditorControlProbe,
 		};
 		return renderers[type as keyof typeof renderers];
 	},
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("./BuilderContext", () => actual.builderContext);
+	mock.module("./use-micro-widget-reload", () => actual.microWidgetReload);
+	mock.module("./WidgetBuilder", () => actual.widgetBuilder);
+	mock.module("./BuilderDndContext", () => actual.builderDnd);
+	mock.module("@dnd-kit/core", () => actual.dndKit);
+	mock.module("../../lib/use-runtime-tailwind", () => actual.runtimeTailwind);
+	mock.module("../a2ui/ActionHandler", () => actual.actionHandler);
+	mock.module("../ui/tooltip", () => actual.tooltip);
+	mock.module("../a2ui/ComponentRegistry", () => actual.componentRegistry);
+});
 
 let root: Root | undefined;
 let restoreGlobals: (() => void) | undefined;
@@ -241,6 +298,39 @@ describe("BuilderRenderer element roots", () => {
 		});
 		expect(selected.mock.calls).toEqual([["action", false]]);
 		expect(runtimeClick).not.toHaveBeenCalled();
+	});
+
+	test("lets editor controls inside an element handle their own clicks", async () => {
+		const surface = {
+			id: "builder-test",
+			rootComponentId: "root",
+			components: {
+				root: {
+					id: "root",
+					component: {
+						type: "column",
+						children: { explicitList: ["control"] },
+					},
+				},
+				control: { id: "control", component: { type: "editorControl" } },
+			},
+			dataModel: [],
+		} as unknown as Surface;
+		editorControlClick.mockClear();
+		const { host, window } = await renderBuilder(surface);
+		const control = host.querySelector('[data-builder-component="control"]');
+		await act(() => {
+			control
+				?.querySelector("span")
+				?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+		});
+		expect(editorControlClick).toHaveBeenCalledTimes(1);
+		expect(selected).not.toHaveBeenCalled();
+		await act(() => {
+			control?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+		});
+		expect(selected.mock.calls).toEqual([["control", false]]);
+		expect(editorControlClick).toHaveBeenCalledTimes(1);
 	});
 
 	test("keeps the selected element's drag handle mounted throughout a drag", async () => {

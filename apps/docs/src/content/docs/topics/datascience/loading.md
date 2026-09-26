@@ -100,6 +100,63 @@ Build a stable key before using upsert. After a large write, [Flush Database](/n
 
 Query local records with [(SQL) Filter Database](/nodes/data/database/search/filter-local-db/). Keep result limits and selected fields bounded for interactive workflows.
 
+### Column types from the first write
+
+A table without a declared schema takes its schema from the insert or upsert that creates it. Most columns follow their JSON shape. These top-level columns are typed from their non-null values instead:
+
+| Values in the first write | Column type |
+|---------------------------|-------------|
+| Strings that all parse as RFC3339, as a Date pin produces | `Timestamp(Millisecond, "UTC")`, see [Dates](/reference/dates/#getting-a-date-into-a-column) |
+| Valid GeoJSON geometries, as a Geometry pin produces, including mixed kinds | WKB geometry with WGS 84 metadata, see [Geometry](/reference/geometry/#tables-and-sql) |
+| Arrays of integers 0–255, at least one non-empty, as a Byte array pin produces | `Binary` |
+| Arrays in a column named `vector` | Fixed-size `Float32` vector, sized by the first non-empty array |
+
+A single value that does not fit, such as a Feature wrapper or the integer 300, leaves the column to its JSON shape. Reads return geometry as GeoJSON and `Binary` as an array of numbers.
+
+After creation, the stored schema is authoritative. Later writes must fit it, so a `Binary` column rejects values outside 0–255, and existing tables keep their column types. Declared schemas have no integer-list type; nest a list of small integers inside an object when it must stay a list. To change an inferred type, recreate the table or create it with a declared schema in Data Studio.
+
+### Branches, versions, and snapshots
+
+Open Database and Open Remote Database accept a branch and a revision: Latest, Version, or
+Tag. Latest opens the current branch for writes when permissions allow. Version and Tag
+open read-only snapshots. Version numbers belong to a branch; tags resolve to a branch and
+version when opened. A missing branch, version, or tag raises an error.
+
+Use Checkout Database to open another reference without changing a connection already used
+elsewhere in the flow. Snapshot Database flushes pending writes and returns a frozen handle.
+Give the snapshot a retention tag when a model or experiment needs that data after version
+cleanup. Get Database Reference and Flush Database expose the committed version. Save that
+reference with the app, storage scope, selected columns, filter, and split definition when
+recording training provenance.
+
+| Task | Nodes |
+|------|-------|
+| Inspect history | List Database Versions, List Database Branches, List Database Tags |
+| Run an experiment on separate data | Create Database Branch, Checkout Database |
+| Name a retained snapshot | Create Database Tag, Move Database Tag, Delete Database Tag |
+| Restore historical contents | Restore Database Version |
+| Compare two views | Compare Database Views |
+| Create another table sharing source data | Clone Database |
+| Remove a branch | Delete Database Branch |
+| Remove old unprotected versions | Cleanup Database Versions |
+
+Restore Database Version writes a new version on the snapshot's branch. Compare Database
+Views requires a unique, non-null string or integer key and returns full counts with a
+bounded changed-row preview. Clone Database shares source files and retains a source tag;
+it is not an independent backup. Remove the clone before removing its source protection.
+
+Read-only snapshot handles also apply to existing filters, vector searches, schema reads,
+and DataFusion mounts. Writes through these handles fail before queuing rows. The Predict
+node accepts an optional Output Database and a Key Column so a frozen input can write full
+rows with predictions to a separate writable branch or table.
+
+Data Studio's native table viewer provides the same history and reference controls. To
+delete rows, enter a filter, preview its matches, and confirm the table name. The filter
+runs again when deletion executes, so concurrent writes may change the number removed.
+Drop Table removes the whole table, including every branch, and prunes graph references.
+Use row deletion or Purge Database when the schema and history should remain available.
+The multi-source Query Workbench continues to use its own source selection.
+
 ## External sources
 
 DataFusion can register PostgreSQL, MySQL, SQLite, DuckDB, ClickHouse, Oracle, BigQuery, Athena, FlightSQL, and other cataloged sources. Browse [DataFusion databases](/nodes/data/datafusion/databases/) and [DataFusion lakes](/nodes/data/datafusion/lakes/) for the current set.
@@ -140,6 +197,7 @@ Write to a temporary or versioned path first when replacing an important artifac
 | Spreadsheet table is missing | Worksheet selection, merged cells, table boundaries |
 | JSON fields disappear | Schema optionality, field names, repair behavior |
 | Duplicate database records | Stable key, upsert choice, checkpoint timing |
+| A database column has an unexpected type | Values in the write that created the table, declared schema |
 
 ## Next steps
 

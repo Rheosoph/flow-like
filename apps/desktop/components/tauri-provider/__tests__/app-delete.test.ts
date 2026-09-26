@@ -42,7 +42,11 @@ import { AppState } from "../app-state";
 const APP = "app-1";
 
 const apiError = (status: number) =>
-	new ApiResponseError({ status, message: `HTTP ${status}` });
+	new ApiResponseError({
+		status,
+		code: status === 404 ? "NOT_FOUND" : undefined,
+		message: `HTTP ${status}`,
+	});
 
 function onlineBackend() {
 	return {

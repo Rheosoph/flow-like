@@ -9,6 +9,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_types::tokio::try_join;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -69,13 +70,16 @@ pub async fn get_comments(
     Path(app_id): Path<String>,
     Query(query): Query<CommentsQuery>,
 ) -> Result<Json<CommentsResponse>, ApiError> {
-    let app_model = app::Entity::find_by_id(&app_id)
+    let visibility = app::Entity::find_by_id(&app_id)
+        .select_only()
+        .column(app::Column::Visibility)
+        .into_tuple::<Visibility>()
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    let is_public = app_model.visibility == Visibility::Public
-        || app_model.visibility == Visibility::PublicRequestAccess;
+    let is_public =
+        visibility == Visibility::Public || visibility == Visibility::PublicRequestAccess;
 
     if !is_public {
         ensure_in_project!(user, &app_id, &state);
@@ -84,19 +88,18 @@ pub async fn get_comments(
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(20).min(100);
 
-    let total = comment::Entity::find()
-        .filter(comment::Column::AppId.eq(&app_id))
-        .count(&state.db)
-        .await?;
-
-    let comments_with_users = comment::Entity::find()
-        .filter(comment::Column::AppId.eq(&app_id))
-        .find_also_related(user::Entity)
-        .order_by_desc(comment::Column::CreatedAt)
-        .limit(Some(limit))
-        .offset(Some(offset))
-        .all(&state.db)
-        .await?;
+    let (total, comments_with_users) = try_join!(
+        comment::Entity::find()
+            .filter(comment::Column::AppId.eq(&app_id))
+            .count(&state.db),
+        comment::Entity::find()
+            .filter(comment::Column::AppId.eq(&app_id))
+            .find_also_related(user::Entity)
+            .order_by_desc(comment::Column::CreatedAt)
+            .limit(Some(limit))
+            .offset(Some(offset))
+            .all(&state.db),
+    )?;
 
     let comments = comments_with_users
         .into_iter()

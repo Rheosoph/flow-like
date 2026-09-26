@@ -29,6 +29,7 @@ pub mod daemon;
 pub mod deeplink;
 pub mod discord;
 pub mod email;
+pub mod failure_log;
 pub mod file;
 pub mod geolocation;
 pub mod github;

@@ -5,7 +5,7 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::app::{
         db::{ScopeParams, resolve_connection},
-        wasm_catalog::app_wasm_nodes,
+        wasm_catalog::app_wasm_nodes_cached,
     },
     state::AppState,
 };
@@ -120,7 +120,8 @@ pub async fn get_app_nodes(
             ),
         }
     }
-    nodes.extend(app_wasm_nodes(&state, &app_id).await?);
+    let wasm = app_wasm_nodes_cached(&state, &app_id).await?;
+    nodes.extend(wasm.nodes.iter().cloned());
 
     Ok(Json(nodes))
 }

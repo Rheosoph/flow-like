@@ -7,12 +7,19 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::{Extension, Json};
+use chrono::{Duration, Utc};
+use flow_like_types::tokio::try_join;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+const MAX_HOURS: i64 = 24 * 90;
+
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct ListTelemetryEventsQuery {
+    /// Lookback window in hours, clamped to 1..=2160. Omit to list every retained event.
+    #[serde(default)]
+    pub hours: Option<i64>,
     #[serde(default)]
     pub page: Option<u64>,
     /// Page size, capped at 100. Default 50.
@@ -94,6 +101,11 @@ pub async fn list_telemetry_events(
 
     let mut select = telemetry_event::Entity::find();
 
+    if let Some(hours) = q.hours {
+        let cutoff = Utc::now().fixed_offset() - Duration::hours(hours.clamp(1, MAX_HOURS));
+        select = select.filter(telemetry_event::Column::CreatedAt.gte(cutoff));
+    }
+
     if let Some(name) = &q.name
         && !name.is_empty()
     {
@@ -112,13 +124,11 @@ pub async fn list_telemetry_events(
         select = select.filter(telemetry_event::Column::AnonId.eq(anon_id));
     }
 
-    let total = select.clone().count(&state.db).await?;
-
-    let records = select
+    let paginator = select
+        .clone()
         .order_by_desc(telemetry_event::Column::CreatedAt)
-        .paginate(&state.db, page_size)
-        .fetch_page(page)
-        .await?;
+        .paginate(&state.db, page_size);
+    let (total, records) = try_join!(select.count(&state.db), paginator.fetch_page(page))?;
 
     Ok(Json(ListTelemetryEventsResponse {
         events: records.into_iter().map(Into::into).collect(),

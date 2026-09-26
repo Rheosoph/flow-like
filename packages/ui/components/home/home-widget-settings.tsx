@@ -13,7 +13,9 @@ import {
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { useAppCategoryLabel } from "../../lib/app-category";
 import { APP_CATEGORY_ORDER } from "../../lib/category-meta";
+import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
+import { appPairs } from "../library/library-types";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -167,23 +169,25 @@ export function HomeAppPicker({
 		enabled: allowExplore,
 		staleTime: 60_000,
 	});
+	const explored = appPairs(results.data);
+	const owned = appPairs(library.data);
 	const selectedDetails = useQueries({
 		queries: value.map((id) => ({
 			queryKey: ["home", ...scope, "app-picker-name", id],
 			queryFn: () => backend.appState.getAppMeta(id),
 			enabled:
-				!(library.data ?? []).some(([app]) => app.id === id) &&
-				!(results.data ?? []).some(([app]) => app.id === id),
+				!owned.some(([app]) => app.id === id) &&
+				!explored.some(([app]) => app.id === id),
 			staleTime: 60_000,
 		})),
 	});
 	const available = new Map(
-		(library.data ?? []).map(([app, metadata]) => [
+		owned.map(([app, metadata]) => [
 			app.id,
 			{ id: app.id, name: metadata?.name ?? app.id, inLibrary: true },
 		]),
 	);
-	for (const [app, metadata] of allowExplore ? (results.data ?? []) : [])
+	for (const [app, metadata] of allowExplore ? explored : [])
 		if (!available.has(app.id))
 			available.set(app.id, {
 				id: app.id,
@@ -376,14 +380,15 @@ function EmbedSettings({ widget, onChange }: SettingsProps) {
 	});
 	const update = (key: string, value: unknown) =>
 		onChange({ ...config, [key]: value });
-	const interfaces = (events.data ?? []).filter(
+	const appEvents = asArray(events.data);
+	const interfaces = appEvents.filter(
 		(event) =>
 			event.default_page_id ||
 			["simple_chat", "generic_form", "quick_action"].includes(
 				event.event_type,
 			),
 	);
-	const routes = (events.data ?? []).filter((event) => event.route);
+	const routes = appEvents.filter((event) => event.route);
 	return (
 		<div className="space-y-4">
 			<HomeAppPicker

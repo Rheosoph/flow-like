@@ -1,6 +1,6 @@
 import type { ComponentInfo } from "./build";
 import { type Bounds, componentBounds, translateNodes } from "./place";
-import type { LGraph, LayoutComment, StyleConfig } from "./types";
+import type { LGraph, LayoutBox, LayoutComment, StyleConfig } from "./types";
 
 function unionBounds(a: Bounds, b: Bounds): Bounds {
 	return {
@@ -240,6 +240,25 @@ export interface CommentBinding {
 }
 
 /**
+ * A comment covers a node when the node's centre lies inside it. Auto layout
+ * and comment dragging share this rule so both agree on what a comment owns.
+ */
+export function coversCentre(
+	comment: Omit<LayoutBox, "id">,
+	position: readonly [number, number],
+	size: readonly [number, number] | undefined,
+): boolean {
+	const centreX = position[0] + (size?.[0] ?? 0) / 2;
+	const centreY = position[1] + (size?.[1] ?? 0) / 2;
+	return (
+		centreX >= comment.x &&
+		centreX <= comment.x + comment.width &&
+		centreY >= comment.y &&
+		centreY <= comment.y + comment.height
+	);
+}
+
+/**
  * Records which nodes each comment currently covers so the comment can follow
  * them. Without this, every layout strands annotations over unrelated nodes.
  */
@@ -254,15 +273,7 @@ export function bindComments(
 		if (comment.isLocked) continue;
 		const contained: string[] = [];
 		for (const [nodeId, position] of originalPositions) {
-			const size = sizes.get(nodeId);
-			const centreX = position[0] + (size?.[0] ?? 0) / 2;
-			const centreY = position[1] + (size?.[1] ?? 0) / 2;
-			if (
-				centreX >= comment.x &&
-				centreX <= comment.x + comment.width &&
-				centreY >= comment.y &&
-				centreY <= comment.y + comment.height
-			) {
+			if (coversCentre(comment, position, sizes.get(nodeId))) {
 				contained.push(nodeId);
 			}
 		}

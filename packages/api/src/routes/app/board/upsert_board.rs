@@ -154,7 +154,7 @@ pub async fn upsert_board(
     }
 
     let board = app.open_board(id, Some(false), None).await?;
-    let mut board = board.lock().await;
+    let mut board = board.write().await;
 
     board.name = params.name.unwrap_or(board.name.clone());
     board.description = params.description.unwrap_or(board.description.clone());
@@ -176,15 +176,7 @@ pub async fn upsert_board(
         );
     }
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "board.update",
-        "Board",
-        board.id,
-        "Board created or updated"
-    );
+    audit_branch!(state, user, app_id, "board.update", "Board", board.id);
     let response_board = (created_board && had_template).then(|| {
         let mut response_board = (*board).clone();
         filter_board_secrets(&mut response_board);

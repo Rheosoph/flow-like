@@ -70,13 +70,15 @@ impl NodeLogic for InsertLocalDatabaseNode {
             VariableType::String,
         );
 
-        node.set_version(2);
+        super::add_write_receipt_outputs(&mut node);
+        node.set_version(3);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        super::publish_write_receipt(context, None, "").await?;
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
@@ -84,8 +86,14 @@ impl NodeLogic for InsertLocalDatabaseNode {
         let value: Value = context.evaluate_pin("value").await?;
         let value = vec![value];
 
-        match database.insert_from(context, value).await {
-            Ok(()) => {
+        match database.insert_from_with_receipt(context, value).await {
+            Ok(receipt) => {
+                let fallback = if database.has_buffered_writes().await {
+                    "buffered"
+                } else {
+                    "applied"
+                };
+                super::publish_write_receipt(context, receipt, fallback).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
@@ -159,21 +167,29 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
             VariableType::String,
         );
 
-        node.set_version(2);
+        super::add_write_receipt_outputs(&mut node);
+        node.set_version(3);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        super::publish_write_receipt(context, None, "").await?;
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?;
         let value: Vec<Value> = context.evaluate_pin("value").await?;
 
-        match database.insert_from(context, value).await {
-            Ok(()) => {
+        match database.insert_from_with_receipt(context, value).await {
+            Ok(receipt) => {
+                let fallback = if database.has_buffered_writes().await {
+                    "buffered"
+                } else {
+                    "applied"
+                };
+                super::publish_write_receipt(context, receipt, fallback).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
@@ -266,13 +282,15 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
             VariableType::String,
         );
 
-        node.set_version(2);
+        super::add_write_receipt_outputs(&mut node);
+        node.set_version(3);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
+        super::publish_write_receipt(context, None, "").await?;
         context.deactivate_exec_pin("error").await?;
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
         let database = database.load(context).await?;
@@ -304,6 +322,7 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         let mut chunk = Vec::with_capacity(chunk_size as usize);
 
         let mut errors: Vec<String> = Vec::new();
+        let mut last_receipt = None;
 
         while let Some(element) = records.next().await {
             let record = match element {
@@ -326,7 +345,12 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
                     });
             chunk.push(json_obj);
             if chunk.len() as u64 == chunk_size {
-                let insert = database.insert_from(context, chunk.to_owned()).await;
+                let insert = database
+                    .insert_from_with_receipt(context, chunk.to_owned())
+                    .await;
+                if let Ok(receipt) = &insert {
+                    last_receipt = receipt.clone();
+                }
                 if let Err(e) = insert {
                     context
                         .log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
@@ -337,7 +361,12 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         }
 
         if !chunk.is_empty() {
-            let insert = database.insert_from(context, chunk.to_owned()).await;
+            let insert = database
+                .insert_from_with_receipt(context, chunk.to_owned())
+                .await;
+            if let Ok(receipt) = &insert {
+                last_receipt = receipt.clone();
+            }
             if let Err(e) = insert {
                 context.log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
                 errors.push(e.to_string());
@@ -345,6 +374,12 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         }
 
         if errors.is_empty() {
+            let fallback = if database.has_buffered_writes().await {
+                "buffered"
+            } else {
+                "applied"
+            };
+            super::publish_write_receipt(context, last_receipt, fallback).await?;
             context.activate_exec_pin("exec_out").await?;
         } else {
             context

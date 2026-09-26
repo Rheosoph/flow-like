@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { getErrorMessage } from "../../lib/error-message";
+import { asArray } from "../../lib/response-shape";
 import type { SearchResults } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
 import {
@@ -73,7 +74,7 @@ const PACKAGE_CARD_SKELETON_KEYS = Array.from(
 	(_, index) => `package-skeleton-${index}`,
 );
 
-function PackageCardSkeleton() {
+export function PackageCardSkeleton() {
 	return (
 		<div className="flex min-h-96 flex-col rounded-xl border border-border/60 bg-card p-2.5">
 			<Skeleton className="aspect-video w-full rounded-lg" />
@@ -189,7 +190,7 @@ export function PackageDetailWrapper({
 	);
 }
 
-const PACKAGE_GRID_CLASS_NAME =
+export const PACKAGE_GRID_CLASS_NAME =
 	"grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4";
 
 export function PackageListContent({
@@ -258,6 +259,7 @@ export function PackageListContent({
 		searchResults.isFetching ||
 		searchQuery.trim() !== debouncedQuery;
 	const hasFilters = !!searchQuery || sortBy !== "downloads" || verifiedOnly;
+	const packages = asArray(searchResults.data?.packages);
 	const totalPages = Math.ceil((searchResults.data?.totalCount ?? 0) / limit);
 	const currentPage = Math.floor(offset / limit) + 1;
 	const clearFilters = () => {
@@ -423,7 +425,7 @@ export function PackageListContent({
 							<PackageCardSkeleton key={key} />
 						))}
 					</div>
-				) : searchResults.data?.packages.length === 0 ? (
+				) : searchResults.data && packages.length === 0 ? (
 					<div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/10 px-6 py-16 text-center">
 						<Package
 							aria-hidden="true"
@@ -450,7 +452,7 @@ export function PackageListContent({
 					</div>
 				) : (
 					<div className={PACKAGE_GRID_CLASS_NAME}>
-						{searchResults.data?.packages.map((pkg) => (
+						{packages.map((pkg) => (
 							<PackageCard
 								key={pkg.id}
 								pkg={pkg}

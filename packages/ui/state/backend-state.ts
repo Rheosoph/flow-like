@@ -55,6 +55,7 @@ import type {
 	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 } from "./backend-state/helper-state";
+import type { IOfflineWritesState } from "./backend-state/offline-writes-state";
 import type { IPageState } from "./backend-state/page-state";
 import type { IQueryState } from "./backend-state/query-state";
 import type { IRegistryState } from "./backend-state/registry-state";
@@ -80,6 +81,7 @@ export * from "./backend-state/api-state";
 export * from "./backend-state/empty-states/index";
 export * from "./backend-state/registry-state";
 export * from "./backend-state/idb-route-state";
+export * from "./backend-state/offline-writes-state";
 export * from "./backend-state/sales-state";
 export type {
 	IAIState,
@@ -256,6 +258,8 @@ export interface IBackendState {
 	usageState?: IUsageState;
 	/** Analytics state for creator dashboard metrics and feedback */
 	analyticsState?: IAnalyticsState;
+	/** Offline write buffering for online projects (desktop only) */
+	offlineWritesState?: IOfflineWritesState;
 
 	/** Optional runtime profile (desktop/mobile providers populate this). */
 	profile?: IProfile;

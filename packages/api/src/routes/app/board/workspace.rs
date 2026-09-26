@@ -7,7 +7,7 @@ use crate::{
         board::secrets::filter_board_secrets,
         db::{ScopeParams, resolve_connection},
         template::get_template::VersionQuery,
-        wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+        wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
     },
     state::AppState,
 };
@@ -64,7 +64,7 @@ pub async fn workspace(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let sub = permission.sub()?;
 
-    // 1. Load board
+    // 1. Parse the requested board version
     let version_opt = if let Some(ver_str) = params.version {
         let parts = ver_str
             .split('_')
@@ -82,22 +82,41 @@ pub async fn workspace(
         None
     };
 
-    let mut board = state
-        .master_board(&sub, &app_id, &board_id, &state, version_opt)
-        .await?;
+    let load_bindings = permission.has_permission(RolePermissions::ReadDatabase)
+        || permission.has_permission(RolePermissions::ReadFiles);
 
+    // 2. Load board, app, WASM catalog and Data Studio listings concurrently
+    let (board, app, wasm, studio) = flow_like_types::tokio::join!(
+        state.master_board(&sub, &app_id, &board_id, &state, version_opt),
+        state.master_app(&sub, &app_id, &state),
+        app_wasm_nodes_cached(&state, &app_id),
+        async {
+            if !load_bindings {
+                return None;
+            }
+            Some(
+                match resolve_connection(&state, &user, &app_id, &ScopeParams { scope: None }).await
+                {
+                    Ok(connection) => Ok(flow_like_types::tokio::join!(
+                        flow_like_storage::databases::graph::lancegraph::list_overlays(&connection),
+                        flow_like_storage::databases::graph::lancegraph::list_ontology_imports(
+                            &connection
+                        )
+                    )),
+                    Err(error) => Err(error),
+                },
+            )
+        }
+    );
+    let mut board = board?;
+    let wasm = wasm?;
+    let app = app?;
+
+    // 3. Assemble the catalog (builtin + Data Studio bindings + app WASM nodes)
     let mut catalog = state.registry.as_ref().get_nodes();
-    if permission.has_permission(RolePermissions::ReadDatabase)
-        || permission.has_permission(RolePermissions::ReadFiles)
-    {
-        match resolve_connection(&state, &user, &app_id, &ScopeParams { scope: None }).await {
-            Ok(connection) => {
-                let (ontologies, imports) = flow_like_types::tokio::join!(
-                    flow_like_storage::databases::graph::lancegraph::list_overlays(&connection),
-                    flow_like_storage::databases::graph::lancegraph::list_ontology_imports(
-                        &connection
-                    )
-                );
+    if let Some(studio) = studio {
+        match studio {
+            Ok((ontologies, imports)) => {
                 match ontologies {
                     Ok(ontologies) => {
                         let ontologies = ontologies
@@ -149,15 +168,9 @@ pub async fn workspace(
             ),
         }
     }
-    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
-    hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &catalog);
+    hydrate_board_wasm_metadata(&mut board, &wasm.nodes, &catalog);
     filter_board_secrets(&mut board);
-
-    // 2. Load catalog (builtin + app WASM nodes)
-    catalog.extend(wasm_nodes);
-
-    // 3. Load app
-    let app = state.master_app(&sub, &app_id, &state).await?;
+    catalog.extend(wasm.nodes.iter().cloned());
 
     Ok(Json(WorkspaceResponse {
         board,

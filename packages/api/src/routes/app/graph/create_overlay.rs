@@ -287,7 +287,6 @@ pub async fn create_overlay(
         "graph.overlay.create",
         "GraphOverlay",
         overlay_id,
-        "Created a graph overlay",
         serde_json::json!({
             "user_scoped": scope.is_user_scoped(),
             "exposed": def.exposed,

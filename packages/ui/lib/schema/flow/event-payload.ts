@@ -1,6 +1,14 @@
 import type { IVoiceConfig } from "./event-payload-chat";
 
+export interface IFrontendHosting {
+	enabled: boolean;
+	allow_anonymous: boolean;
+	auth_proxy: boolean;
+}
+
 export interface IEventPayload {
+	/** Hosted chat, form or custom page access. Disabled when absent. */
+	frontend_hosting?: IFrontendHosting | null;
 	ai_disclosure?: string | null;
 	allow_file_upload?: boolean | null;
 	attach_widget_snapshots?: boolean | null;

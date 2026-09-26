@@ -2133,6 +2133,15 @@ declare namespace web {
      * @impure has side effects / drives control flow
      */
     function extractLinks({ startingPage: string, sameDomain?: bool, offsetMs?: int, depth?: int }): Set<string>;
+
+    // === Web/Services ===
+
+    /**
+     * Marks a supervised daemon ready after its initialization succeeds. Continue into the daemon's long-running work; returning from the workflow stops the service.
+     * @node service_ready @alias serviceReady
+     * @impure has side effects / drives control flow
+     */
+    function serviceReady(): void;
 }
 
 declare namespace websocket {

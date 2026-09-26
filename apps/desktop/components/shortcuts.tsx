@@ -1,4 +1,5 @@
 "use client";
+
 import {
 	Shortcuts as ShortcutsUI,
 	nowSystemTime,
@@ -6,10 +7,11 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
 import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import { useTranslation } from "@flow-like/locales";
 import { useLiveQuery } from "dexie-react-hooks";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -18,7 +20,7 @@ import { appsDB } from "../lib/apps-db";
 export function Shortcuts() {
 	const { t } = useTranslation("common");
 	const backend = useBackend();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const auth = useAuth();

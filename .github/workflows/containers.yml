@@ -21,6 +21,7 @@ on:
       - 'packages/**'
       - 'apps/backend/**'
       - 'apps/web/**'
+      - 'apps/website/src/content/legal/payments/**'
   workflow_dispatch:
     inputs:
       cloud:
@@ -52,6 +53,10 @@ jobs:
           persist-credentials: false
       - name: Test CI helpers
         run: python3 -m unittest discover -s .github/scripts/tests
+      - name: Test cloud audit deployment and database login helpers
+        run: |
+          python3 -B -m unittest discover -s apps/backend/azure/audit-worker -p 'test_*.py'
+          python3 -B -m unittest discover -s apps/backend/gcp/audit-worker -p 'test_*.py'
       - name: Test public web runtime configuration
         run: python3 -B -m unittest discover -s apps/backend/docker-compose/web/tests
       - name: Test Compose deployment scripts
@@ -207,6 +212,7 @@ jobs:
           build-args: |
             CARGO_BUILD_JOBS=2
             CRDB_CA_URL=
+            AUDIT_FEATURES=${{ matrix.audit_features || 'aws' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

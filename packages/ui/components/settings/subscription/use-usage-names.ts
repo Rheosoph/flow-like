@@ -35,10 +35,10 @@ export function useUsageNames(
 			id ? (appQueries[apps.indexOf(id)]?.data?.name ?? id) : "Standalone AI",
 		modelName: (id?: string | null) => {
 			if (!id) return "Workflow";
-			const bit = modelQueries[models.indexOf(id)]?.data;
+			const meta = modelQueries[models.indexOf(id)]?.data?.meta;
 			return (
-				bit?.meta.en?.name ??
-				(bit ? Object.values(bit.meta)[0]?.name : undefined) ??
+				meta?.en?.name ??
+				(meta ? Object.values(meta)[0]?.name : undefined) ??
 				id
 			);
 		},
@@ -56,7 +56,7 @@ export function usageFundingLabel(value: string): string {
 				local: "Local · free",
 				none: "No hosted AI",
 			} as Record<string, string>
-		)[value] ?? value.replaceAll("_", " ")
+		)[value] ?? (value ?? "").replaceAll("_", " ")
 	);
 }
 
@@ -76,6 +76,6 @@ export function usageStatusLabel(value: string): string {
 				released: "Released",
 				expired: "Expired",
 			} as Record<string, string>
-		)[value] ?? value.replaceAll("_", " ")
+		)[value] ?? (value ?? "").replaceAll("_", " ")
 	);
 }

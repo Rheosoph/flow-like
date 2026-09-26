@@ -19,6 +19,7 @@ flow-like-types = { workspace = true }
 flow-like-catalog-std-support = { workspace = true }
 flow-like-catalog-data-support = { workspace = true, default-features = false }
 ahash = { workspace = true }
+tracing.workspace = true
 blake3 = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }

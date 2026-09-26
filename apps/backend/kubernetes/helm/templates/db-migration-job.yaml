@@ -31,10 +31,34 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
+                  name: {{ required "database.migration.existingSecret is required" .Values.database.migration.existingSecret }}
+                  key: DATABASE_URL
+            - name: API_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
                   name: {{ include "flow-like.databaseSecretName" . }}
                   key: DATABASE_URL
+            - name: AUDIT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "audit.database.existingSecret is required" .Values.audit.database.existingSecret }}
+                  key: DATABASE_URL
+          {{- if .Values.database.caSecret }}
+          volumeMounts:
+            - name: database-ca
+              mountPath: /etc/database
+              readOnly: true
+          {{- end }}
           {{- with .Values.database.migration.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if .Values.database.caSecret }}
+      volumes:
+        - name: database-ca
+          secret:
+            secretName: {{ .Values.database.caSecret | quote }}
+            items:
+              - {key: ca.crt, path: ca.crt}
+      {{- end }}
 {{- end }}

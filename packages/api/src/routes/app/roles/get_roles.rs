@@ -9,7 +9,8 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use flow_like_types::tokio::try_join;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
 /// The app's default role id (when set) together with all of its roles.
 pub type AppRoles = (Option<String>, Vec<role::Model>);
@@ -47,18 +48,21 @@ pub async fn get_roles(
         return Err(ApiError::FORBIDDEN);
     }
 
-    let app = app::Entity::find_by_id(app_id.clone())
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| {
-            tracing::warn!("App {} not found", app_id);
-            ApiError::NOT_FOUND
-        })?;
+    let (default_role_id, roles) = try_join!(
+        app::Entity::find_by_id(app_id.clone())
+            .select_only()
+            .column(app::Column::DefaultRoleId)
+            .into_tuple::<Option<String>>()
+            .one(&state.db),
+        role::Entity::find()
+            .filter(role::Column::AppId.eq(app_id.clone()))
+            .all(&state.db),
+    )?;
 
-    let roles = role::Entity::find()
-        .filter(role::Column::AppId.eq(app_id.clone()))
-        .all(&state.db)
-        .await?;
+    let default_role_id = default_role_id.ok_or_else(|| {
+        tracing::warn!("App {} not found", app_id);
+        ApiError::NOT_FOUND
+    })?;
 
-    Ok(Json((app.default_role_id, roles)))
+    Ok(Json((default_role_id, roles)))
 }

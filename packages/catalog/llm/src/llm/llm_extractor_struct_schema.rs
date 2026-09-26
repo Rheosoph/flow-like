@@ -62,9 +62,13 @@ fn schema_is_struct(schema: &str) -> Result<(), String> {
     }
 
     #[cfg(feature = "execute")]
-    if !jsonschema::meta::is_valid(&parsed) {
+    if !jsonschema::meta::try_is_valid(&parsed).unwrap_or(false) {
         return Err("Reference struct does not carry a valid JSON Schema".to_string());
     }
+
+    #[cfg(feature = "execute")]
+    super::llm_extractor::compile_validator(&parsed)
+        .map_err(|error| format!("Reference struct schema cannot be compiled: {error}"))?;
 
     Ok(())
 }
@@ -99,7 +103,7 @@ impl NodeLogic for LLMExtractWithStructSchemaNode {
         );
         node.set_flowscript_name("ai", "extractWithStructSchema");
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -151,6 +155,14 @@ impl NodeLogic for LLMExtractWithStructSchemaNode {
             VariableType::String,
         )
         .set_default_value(Some(json::json!("")));
+
+        node.add_input_pin(
+            "max_tokens",
+            "Max Tokens",
+            "Output token budget for the model. 0 leaves it to the provider. Raise this if large extractions come back empty because the model ran out of room before calling the tool",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json::json!(0)));
 
         node.add_output_pin(
             "exec_out",

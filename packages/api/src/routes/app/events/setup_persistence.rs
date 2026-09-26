@@ -9,7 +9,7 @@ use crate::{
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, QuerySelect, TryIntoModel, sea_query::OnConflict,
+    QuerySelect, TryIntoModel, sea_query::OnConflict,
 };
 use std::collections::HashMap;
 
@@ -267,6 +267,8 @@ pub(super) async fn prune_registration_versions(
 ) -> Result<(), PersistError> {
     // Each page obtains the same Event lock as setup before reading serving pointers.
     // Re-reading those pointers prevents a concurrent setup from losing its active rows.
+    // Only an engine that caps its transactions needs pages; the others prune in one.
+    let paged = state.db_dialect.bounded_transactions();
     for _ in 0..256 {
         let removed = state
             .transaction(|txn| {
@@ -296,6 +298,28 @@ pub(super) async fn prune_registration_versions(
                         .into_iter()
                         .flatten()
                         .collect();
+                    if !paged {
+                        // Registrations first, so removing their auth rows cannot cascade
+                        // through ON DELETE SET NULL.
+                        event_remote_registration::Entity::delete_many()
+                            .filter(event_remote_registration::Column::AppId.eq(&app_id))
+                            .filter(event_remote_registration::Column::EventId.eq(&event_id))
+                            .filter(event_remote_registration::Column::Variant.eq(&variant))
+                            .filter(
+                                event_remote_registration::Column::EventVersion
+                                    .is_not_in(protected.clone()),
+                            )
+                            .exec(txn)
+                            .await?;
+                        event_remote_auth::Entity::delete_many()
+                            .filter(event_remote_auth::Column::AppId.eq(&app_id))
+                            .filter(event_remote_auth::Column::EventId.eq(&event_id))
+                            .filter(event_remote_auth::Column::Variant.eq(&variant))
+                            .filter(event_remote_auth::Column::EventVersion.is_not_in(protected))
+                            .exec(txn)
+                            .await?;
+                        return Ok(0);
+                    }
                     let rows = event_remote_registration::Entity::find()
                         .filter(event_remote_registration::Column::AppId.eq(&app_id))
                         .filter(event_remote_registration::Column::EventId.eq(&event_id))
@@ -304,7 +328,6 @@ pub(super) async fn prune_registration_versions(
                             event_remote_registration::Column::EventVersion
                                 .is_not_in(protected.clone()),
                         )
-                        .order_by_asc(event_remote_registration::Column::Id)
                         .limit(32)
                         .all(txn)
                         .await?;
@@ -332,7 +355,6 @@ pub(super) async fn prune_registration_versions(
                         .filter(event_remote_auth::Column::EventId.eq(&event_id))
                         .filter(event_remote_auth::Column::Variant.eq(&variant))
                         .filter(event_remote_auth::Column::EventVersion.is_not_in(protected))
-                        .order_by_asc(event_remote_auth::Column::Id)
                         .limit(32)
                         .all(txn)
                         .await?;

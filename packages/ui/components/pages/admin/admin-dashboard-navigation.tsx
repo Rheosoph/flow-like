@@ -11,6 +11,7 @@ import {
 	GraduationCap,
 	HardDrive,
 	Key,
+	LayoutGrid,
 	Lightbulb,
 	type LucideIcon,
 	MessageSquareHeart,
@@ -107,6 +108,14 @@ export const ADMIN_SECTIONS: AdminSection[] = [
 			"Publish the main home and optional defaults for profile templates.",
 		icon: SlidersHorizontal,
 		href: "/admin/home",
+		permission: GlobalPermission.WriteLandingPage,
+	},
+	{
+		title: "Explore",
+		description:
+			"Curate announcements, spotlights and collections on the Explore page.",
+		icon: LayoutGrid,
+		href: "/admin/explore",
 		permission: GlobalPermission.WriteLandingPage,
 	},
 	{
@@ -250,6 +259,7 @@ const GROUPS = [
 			"EU AI Act",
 			"University",
 			"Home Layouts",
+			"Explore",
 			"Starter Profiles",
 		],
 	},

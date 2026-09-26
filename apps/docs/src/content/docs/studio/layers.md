@@ -27,6 +27,8 @@ Clicking on a *layer* / *placeholder node* allows you to navigate inside. Here y
 
 ![A screenshot showing how to navigate inside and outside of a layered node](../../../assets/InsideLayers.webp)
 
+A layer gets one pin per value that crosses its boundary, not one per connection. An output outside that feeds five nodes inside becomes a single input, named after that output, which fans out to all five. *Extend (Ungroup)* puts the nodes back and wires them to each other directly again.
+
 Collapsing nodes into layers allows you to create meaningful abstractions of your flow graph, so that the top layer effectively represents the core logic of your application:
 
 ![A screenshot showing how collapsed nodes can help to make the core application logic explicit on the top level](../../../assets/FlowWithLayers.webp)

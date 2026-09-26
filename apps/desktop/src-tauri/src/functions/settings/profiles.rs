@@ -1,5 +1,5 @@
 use crate::{
-    functions::TauriFunctionError,
+    functions::{TauriFunctionError, recording},
     profile::UserProfile,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
@@ -13,11 +13,27 @@ use flow_like_types::tokio::task::JoinHandle;
 use futures::future::join_all;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tauri::{AppHandle, Url};
 use tauri_plugin_dialog::DialogExt;
 use tracing::instrument;
 use urlencoding::encode;
+
+fn recording_profile_identity(settings: &crate::settings::Settings) -> Option<(String, String)> {
+    settings
+        .profiles
+        .get(&settings.current_profile)
+        .or_else(|| settings.profiles.values().next())
+        .map(|profile| {
+            (
+                profile.hub_profile.id.clone(),
+                profile.hub_profile.hub.clone(),
+            )
+        })
+}
 
 fn presign_icon(icon: &str) -> Result<String, TauriFunctionError> {
     // if it already looks like a URL (has a scheme), return it as-is to avoid double-presigning
@@ -122,21 +138,33 @@ async fn get_bits(
     // Collect all futures for models and embedding models
     let mut bits: HashMap<&str, &str> = HashMap::new();
     let mut hubs: HashMap<&str, Hub> = HashMap::new();
+    let mut unreachable_hubs: HashSet<&str> = HashSet::new();
 
     for profile in profiles.iter() {
         for bit_id in profile.bits.iter() {
             let (hub, bit) = bit_id.split_once(':').unwrap_or(("", bit_id));
-            bits.insert(bit, hub);
-            if !hubs.contains_key(hub) {
-                hubs.insert(hub, Hub::new(hub, http_client.clone()).await?);
+            if unreachable_hubs.contains(hub) {
+                continue;
             }
+            if !hubs.contains_key(hub) {
+                match Hub::new(hub, http_client.clone()).await {
+                    Ok(resolved) => {
+                        hubs.insert(hub, resolved);
+                    }
+                    Err(error) => {
+                        tracing::warn!(hub, %error, "Skipping bits of an unreachable hub");
+                        unreachable_hubs.insert(hub);
+                        continue;
+                    }
+                }
+            }
+            bits.insert(bit, hub);
         }
     }
 
-    let bit_features = bits.iter().map(|(bit_id, hub_id)| {
-        let hub = hubs.get(hub_id).unwrap();
-        hub.get_bit(bit_id)
-    });
+    let bit_features = bits
+        .iter()
+        .filter_map(|(bit_id, hub_id)| Some(hubs.get(hub_id)?.get_bit(bit_id)));
 
     let bits_results = join_all(bit_features).await;
 
@@ -156,10 +184,9 @@ async fn get_bits(
             let bits = profile
                 .bits
                 .iter()
-                .map(|bit_url| {
+                .filter_map(|bit_url| {
                     let (_hub, bit) = bit_url.split_once(':').unwrap_or(("", bit_url));
-                    let bit = bits_map.get(bit).unwrap();
-                    bit.clone()
+                    bits_map.get(bit).cloned()
                 })
                 .collect();
             let user_profile = UserProfile::new(profile.clone());
@@ -254,13 +281,23 @@ pub async fn set_current_profile(
     app_handle: AppHandle,
     profile_id: String,
 ) -> Result<UserProfile, TauriFunctionError> {
+    let mut recording_guard = recording::lock_recording_lifecycle(&app_handle).await?;
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
+    let recording_identity_before = recording_profile_identity(&settings);
     let profile = settings
         .profiles
         .get(&profile_id)
         .cloned()
         .ok_or(anyhow::anyhow!("Profile not found"))?;
+    if recording_identity_before
+        != Some((
+            profile.hub_profile.id.clone(),
+            profile.hub_profile.hub.clone(),
+        ))
+    {
+        recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
+    }
     settings.set_current_profile(&profile, &app_handle).await?;
     settings.serialize();
     Ok(profile.clone())
@@ -272,8 +309,10 @@ pub async fn upsert_profile(
     app_handle: AppHandle,
     profile: UserProfile,
 ) -> Result<UserProfile, TauriFunctionError> {
+    let mut recording_guard = recording::lock_recording_lifecycle(&app_handle).await?;
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
+    let recording_identity_before = recording_profile_identity(&settings);
 
     // Custom bits are managed only through upsert_custom_bit/remove_custom_bit;
     // a client-provided profile copy must never wipe them.
@@ -294,7 +333,20 @@ pub async fn upsert_profile(
         .profiles
         .insert(profile.hub_profile.id.clone(), profile.clone());
 
-    if settings.current_profile == profile.hub_profile.id || settings.current_profile.is_empty() {
+    let will_select =
+        settings.current_profile == profile.hub_profile.id || settings.current_profile.is_empty();
+    let next_identity = if will_select {
+        Some((
+            profile.hub_profile.id.clone(),
+            profile.hub_profile.hub.clone(),
+        ))
+    } else {
+        recording_profile_identity(&settings)
+    };
+    if recording_identity_before != next_identity {
+        recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
+    }
+    if will_select {
         settings.set_current_profile(&profile, &app_handle).await?;
     };
 
@@ -318,13 +370,18 @@ pub async fn merge_synced_profile(
     {
         profile.hub_profile.icon = Some(icon);
     }
+    let mut recording_guard = recording::lock_recording_lifecycle(&app_handle).await?;
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
+    let recording_identity_before = recording_profile_identity(&settings);
     let existing = settings
         .profiles
         .get_mut(&profile.hub_profile.id)
         .ok_or_else(|| TauriFunctionError::new("This profile no longer exists."))?;
     let applied = existing.merge_synced(profile, &expected_updated, &remote_updated);
+    if recording_identity_before != recording_profile_identity(&settings) {
+        recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
+    }
     settings.try_serialize()?;
     Ok(applied)
 }
@@ -385,14 +442,31 @@ pub async fn remap_profile_id(
     local_id: String,
     server_id: String,
 ) -> Result<(), TauriFunctionError> {
+    let mut recording_guard = recording::lock_recording_lifecycle(&app_handle).await?;
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
+    let recording_identity_before = recording_profile_identity(&settings);
 
-    // Get and remove the profile with old ID
     let mut profile = settings
         .profiles
-        .remove(&local_id)
+        .get(&local_id)
+        .cloned()
         .ok_or(anyhow::anyhow!("Profile not found"))?;
+    let affects_current = local_id != server_id
+        && recording_identity_before
+            .as_ref()
+            .is_some_and(|(id, _)| id == &local_id || id == &server_id);
+    if affects_current {
+        recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
+    }
+    recording::remap_recording_profile(
+        &app_handle,
+        &local_id,
+        &server_id,
+        &profile.hub_profile.hub,
+    )
+    .await?;
+    settings.profiles.remove(&local_id);
 
     // Update the profile's ID
     profile.hub_profile.id = server_id.clone();
@@ -405,6 +479,9 @@ pub async fn remap_profile_id(
         settings.current_profile = server_id;
     }
 
+    if !affects_current && recording_identity_before != recording_profile_identity(&settings) {
+        recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
+    }
     settings.serialize();
     Ok(())
 }
@@ -415,8 +492,10 @@ pub async fn delete_profile(
     app_handle: AppHandle,
     profile_id: String,
 ) -> Result<(), TauriFunctionError> {
+    let mut recording_guard = recording::lock_recording_lifecycle(&app_handle).await?;
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
+    let recording_identity_before = recording_profile_identity(&settings);
 
     if !settings.profiles.contains_key(&profile_id) {
         return Ok(());
@@ -434,6 +513,9 @@ pub async fn delete_profile(
         settings.current_profile = settings.profiles.keys().next().cloned().unwrap_or_default();
     }
 
+    if recording_identity_before != recording_profile_identity(&settings) {
+        recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
+    }
     settings.serialize();
     Ok(())
 }

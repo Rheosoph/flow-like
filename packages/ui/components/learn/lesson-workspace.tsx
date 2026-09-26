@@ -39,6 +39,7 @@ import type {
 	IStoredOAuthToken,
 } from "../../lib";
 import { EVENT_CONFIG } from "../../lib/event-config";
+import { asArray } from "../../lib/response-shape";
 import { IExecutionStage, ILogLevel } from "../../lib/schema/flow/board";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -695,7 +696,7 @@ function AppPagesPane({
 			secs_since_epoch: Math.floor(Date.now() / 1000),
 			nanos_since_epoch: 0,
 		};
-		return (pages.data ?? []).map((page) => ({
+		return asArray(pages.data).map((page) => ({
 			appId,
 			pageId: page.pageId,
 			boardId: page.boardId ?? null,

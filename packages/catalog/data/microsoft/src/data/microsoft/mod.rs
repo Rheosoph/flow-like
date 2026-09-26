@@ -1,5 +1,6 @@
 pub mod calendar;
 pub mod copilot;
+pub mod copilot_studio;
 pub mod excel;
 pub mod graph;
 pub mod onedrive;
@@ -10,6 +11,7 @@ pub mod provider;
 pub mod sharepoint;
 pub mod teams;
 pub mod todo;
+pub mod workiq;
 
 // Re-export types for external use
 pub use calendar::{Calendar, CalendarEvent, MeetingTimeSuggestion};
@@ -17,6 +19,7 @@ pub use copilot::{
     ActionItem, CopilotInteraction, GraphSearchHit, GraphSearchResource, MeetingInsight,
     MeetingNote,
 };
+pub use copilot_studio::{CopilotStudioAgent, CopilotStudioProvider};
 pub use excel::ExcelWorksheet;
 pub use onedrive::{OneDriveItem, OneDriveParentReference};
 pub use onenote::{OneNoteNotebook, OneNotePage, OneNoteSection};
@@ -28,3 +31,4 @@ pub use sharepoint::{
 };
 pub use teams::{Channel, ChatMessage, Team};
 pub use todo::{TodoTask, TodoTaskList};
+pub use workiq::WorkIqProvider;

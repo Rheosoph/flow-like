@@ -16,9 +16,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::connection::{
-        AppMetaPreview, app_meta_lookup, role_name_lookup, role_permission_lookup, status_to_string,
-    },
+    routes::app::connection::{AppMetaPreview, app_meta_lookup, role_lookup, status_to_string},
     state::AppState,
 };
 use axum::{
@@ -261,7 +259,9 @@ const OBSERVED_FLOW_GROUP: &str =
 
 /// Observed chains an app participates in — as terminal app or anywhere in
 /// the recorded chain. Chain membership goes through the indexed
-/// `ExecutionRunCallerApp` mirror rows.
+/// `ExecutionRunCallerApp` mirror rows. The two ways to participate are a
+/// `UNION` of run ids rather than an `OR`, so each branch can be driven by its
+/// own index instead of the `OR` forcing a scan of every recent run.
 pub(crate) async fn observed_flows_for_app(
     state: &AppState,
     app_id: &str,
@@ -269,8 +269,12 @@ pub(crate) async fn observed_flows_for_app(
 ) -> Result<Vec<ObservedFlow>, ApiError> {
     let sql = format!(
         r#"{OBSERVED_FLOW_SELECT}
-           WHERE (EXISTS (SELECT 1 FROM "public"."ExecutionRunCallerApp" c WHERE c."runId" = r.id AND c."appId" = $1)
-                  OR (r."appId" = $2 AND jsonb_array_length(r."callerAppChain") > 0))
+           WHERE r.id IN (
+                   SELECT c."runId" FROM "public"."ExecutionRunCallerApp" c WHERE c."appId" = $1
+                   UNION
+                   SELECT t.id FROM "public"."ExecutionRun" t
+                   WHERE t."appId" = $2 AND t."updatedAt" >= $3
+                     AND jsonb_array_length(t."callerAppChain") > 0)
              AND r."updatedAt" >= $3
            {OBSERVED_FLOW_GROUP}
            ORDER BY run_count DESC
@@ -566,8 +570,7 @@ pub async fn get_connection_graph(
         .iter()
         .filter_map(|c| c.role_id.clone())
         .collect();
-    let role_names = role_name_lookup(&state, &role_ids).await?;
-    let role_permissions = role_permission_lookup(&state, &role_ids).await?;
+    let (role_names, role_permissions) = role_lookup(&state, &role_ids).await?;
     let content = content_stats(&state, &visible_ids).await?;
     let media = presign_media(&state, &app_meta).await;
     let categories = app_category_lookup(&state, &visible_ids).await;

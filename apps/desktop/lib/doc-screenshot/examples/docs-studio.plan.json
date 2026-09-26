@@ -121,7 +121,7 @@
 				},
 				{
 					"type": "waitFor",
-					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"selector": "#node-palette-search",
 					"state": "visible",
 					"timeoutMs": 15000
 				},
@@ -131,17 +131,17 @@
 				},
 				{
 					"type": "fill",
-					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"selector": "#node-palette-search",
 					"value": "mail"
 				},
 				{
 					"type": "waitFor",
-					"selector": "#docs-mail-copy",
+					"selector": "[data-row-id=\"node:mail_copy\"]",
 					"state": "visible"
 				},
 				{
 					"type": "hover",
-					"selector": "#docs-mail-copy"
+					"selector": "[data-row-id=\"node:mail_copy\"]"
 				},
 				{
 					"type": "capture",
@@ -317,7 +317,7 @@
 				},
 				{
 					"type": "waitFor",
-					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"selector": "#node-palette-search",
 					"state": "visible",
 					"timeoutMs": 15000
 				},
@@ -327,17 +327,17 @@
 				},
 				{
 					"type": "fill",
-					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"selector": "#node-palette-search",
 					"value": "mail"
 				},
 				{
 					"type": "waitFor",
-					"selector": "#docs-mail-copy",
+					"selector": "[data-row-id=\"node:mail_copy\"]",
 					"state": "visible"
 				},
 				{
 					"type": "hover",
-					"selector": "#docs-mail-copy"
+					"selector": "[data-row-id=\"node:mail_copy\"]"
 				},
 				{
 					"type": "capture",
@@ -633,7 +633,7 @@
 				},
 				{
 					"type": "waitFor",
-					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"selector": "#node-palette-search",
 					"state": "visible"
 				},
 				{
@@ -642,8 +642,7 @@
 				},
 				{
 					"type": "hover",
-					"selector": "[role=\"menuitem\"]",
-					"index": 2
+					"selector": "[data-palette-action=\"placeholder\"]"
 				},
 				{
 					"type": "capture",
@@ -678,27 +677,33 @@
 				},
 				{
 					"type": "click",
-					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-history)"
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Run History\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": "#flow-runs h3",
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Run History\"][aria-pressed=\"true\"]",
 					"state": "visible",
 					"timeoutMs": 15000
 				},
 				{
 					"type": "waitFor",
-					"selector": "#flow-runs span[title=\"Local execution\"]",
+					"selector": "#board-panel span[title=\"Local execution\"]",
 					"state": "visible",
 					"timeoutMs": 15000
 				},
 				{
 					"type": "click",
-					"selector": "#flow-runs span[title=\"Local execution\"]"
+					"selector": "#board-panel span[title=\"Local execution\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": ".log-container",
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Logs\"][aria-pressed=\"true\"]",
+					"state": "visible",
+					"timeoutMs": 15000
+				},
+				{
+					"type": "waitFor",
+					"selector": "#board-panel .log-container",
 					"state": "visible",
 					"timeoutMs": 20000
 				},
@@ -711,7 +716,8 @@
 					"type": "capture",
 					"name": "RunsAndLogs",
 					"output": "RunsAndLogs.webp",
-					"mode": "viewport"
+					"mode": "viewport",
+					"hideSelectors": ["[data-slot=\"tooltip-content\"]"]
 				}
 			]
 		},
@@ -740,22 +746,28 @@
 				},
 				{
 					"type": "click",
-					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-notebook-pen)"
+					"selector": "footer [data-slot=\"popover-trigger\"][title=\"Version\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] #version",
+					"selector": "[data-slot=\"popover-content\"][data-state=\"open\"] [data-slot=\"select-trigger\"]",
 					"state": "visible",
 					"timeoutMs": 10000
 				},
 				{
 					"type": "click",
-					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"dropdown-menu-trigger\"]"
+					"selector": "[data-slot=\"popover-content\"][data-state=\"open\"] [data-slot=\"select-trigger\"]",
+					"index": 0
 				},
 				{
 					"type": "waitFor",
-					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"selector": "[data-slot=\"select-content\"][data-state=\"open\"] [role=\"option\"]:nth-child(5)",
 					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "waitFor",
+					"text": "1.2.1",
 					"timeoutMs": 10000
 				},
 				{
@@ -791,11 +803,11 @@
 				},
 				{
 					"type": "click",
-					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-variable)"
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Variables & Functions\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"selector": "#board-sidebar [data-token-id=\"docs-confidence\"] button.fl-tok-btn",
 					"state": "visible",
 					"timeoutMs": 10000
 				},
@@ -837,11 +849,11 @@
 				},
 				{
 					"type": "click",
-					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-variable)"
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Variables & Functions\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"selector": "#board-sidebar [data-token-id=\"docs-confidence\"] button.fl-tok-btn",
 					"state": "visible",
 					"timeoutMs": 10000
 				},
@@ -852,18 +864,27 @@
 				},
 				{
 					"type": "click",
-					"selector": "#flow-variables [role=\"button\"]:has(p)",
-					"index": 0
+					"selector": "#board-sidebar [data-token-id=\"docs-confidence\"] button.fl-tok-btn"
 				},
 				{
 					"type": "waitFor",
-					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"tabs-trigger\"][id$=\"-trigger-type\"]",
 					"state": "visible",
 					"timeoutMs": 10000
 				},
 				{
 					"type": "click",
-					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type"
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"tabs-trigger\"][id$=\"-trigger-type\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] #var_type",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] #var_type"
 				},
 				{
 					"type": "waitFor",
@@ -904,11 +925,11 @@
 				},
 				{
 					"type": "click",
-					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-variable)"
+					"selector": "nav[aria-label=\"Board surfaces\"] button[aria-label=\"Variables & Functions\"]"
 				},
 				{
 					"type": "waitFor",
-					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"selector": "#board-sidebar [data-token-id=\"docs-confidence\"] button.fl-tok-btn",
 					"state": "visible",
 					"timeoutMs": 10000
 				},
@@ -919,18 +940,27 @@
 				},
 				{
 					"type": "click",
-					"selector": "#flow-variables [role=\"button\"]:has(p)",
-					"index": 0
+					"selector": "#board-sidebar [data-token-id=\"docs-confidence\"] button.fl-tok-btn"
 				},
 				{
 					"type": "waitFor",
-					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"tabs-trigger\"][id$=\"-trigger-type\"]",
 					"state": "visible",
 					"timeoutMs": 10000
 				},
 				{
 					"type": "click",
-					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type + [data-slot=\"select-trigger\"]"
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"tabs-trigger\"][id$=\"-trigger-type\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] #var_type",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] #var_type ~ [data-slot=\"select-trigger\"]"
 				},
 				{
 					"type": "waitFor",

@@ -95,6 +95,13 @@ impl Cacheable for CachedDB {
 
 #[cfg(feature = "execute")]
 impl CachedDB {
+    /// A durable local receipt does not imply that replay reached the cloud.
+    pub async fn last_write_receipt(
+        &self,
+    ) -> Option<flow_like_storage::databases::vector::lancedb::LocalWriteReceipt> {
+        self.db.read().await.inner().last_write_receipt()
+    }
+
     pub fn write_origin(context: &ExecutionContext) -> BufferedWriteOrigin {
         BufferedWriteOrigin::new(context.id.clone(), Some(context.trace.id.clone()))
     }
@@ -104,11 +111,22 @@ impl CachedDB {
         context: &ExecutionContext,
         items: Vec<Value>,
     ) -> flow_like_types::Result<()> {
-        self.db
-            .write()
+        self.insert_from_with_receipt(context, items)
             .await
-            .insert_with_origin(items, Self::write_origin(context))
-            .await
+            .map(|_| ())
+    }
+
+    pub async fn insert_from_with_receipt(
+        &self,
+        context: &ExecutionContext,
+        items: Vec<Value>,
+    ) -> flow_like_types::Result<
+        Option<flow_like_storage::databases::vector::lancedb::LocalWriteReceipt>,
+    > {
+        let mut db = self.db.write().await;
+        db.insert_with_origin(items, Self::write_origin(context))
+            .await?;
+        Ok(db.inner().last_write_receipt())
     }
 
     pub async fn upsert_from(
@@ -117,11 +135,23 @@ impl CachedDB {
         items: Vec<Value>,
         id_field: String,
     ) -> flow_like_types::Result<()> {
-        self.db
-            .write()
+        self.upsert_from_with_receipt(context, items, id_field)
             .await
-            .upsert_with_origin(items, id_field, Self::write_origin(context))
-            .await
+            .map(|_| ())
+    }
+
+    pub async fn upsert_from_with_receipt(
+        &self,
+        context: &ExecutionContext,
+        items: Vec<Value>,
+        id_field: String,
+    ) -> flow_like_types::Result<
+        Option<flow_like_storage::databases::vector::lancedb::LocalWriteReceipt>,
+    > {
+        let mut db = self.db.write().await;
+        db.upsert_with_origin(items, id_field, Self::write_origin(context))
+            .await?;
+        Ok(db.inner().last_write_receipt())
     }
 
     pub async fn ensure_flushed(&self) -> flow_like_types::Result<()> {
@@ -280,6 +310,7 @@ impl NodeDBConnection {
             .as_any()
             .downcast_ref::<CachedDB>()
             .ok_or(flow_like_types::anyhow!("Could not downcast"))?;
+        let generation = generation.wrapping_add(db.db.read().await.inner().mutation_generation());
         Ok((db.clone(), generation))
     }
 }

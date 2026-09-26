@@ -168,21 +168,21 @@ pub async fn list_registrations(
 ) -> Result<Json<ListRegistrationsResponse>, ApiError> {
     let _permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
 
-    let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
-        .await
-        .map_err(|e| ApiError::not_found(e.to_string()))?;
-
-    // Determine version filter: explicit query > the variant's `EventSetup`
-    // pointer > `event.last_setup_version` (stable only, pre-backfill
-    // fallback). We re-fetch the row to read `last_setup_version` without
-    // touching the CoreEvent serializer surface.
-    let event_row = crate::entity::event::Entity::find_by_id(&event.id)
+    // One read serves both the CoreEvent and `last_setup_version`, which the
+    // CoreEvent conversion drops.
+    let event_row = crate::entity::event::Entity::find_by_id(&event_id)
         .filter(crate::entity::event::Column::AppId.eq(&app_id))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
-        .ok_or_else(|| ApiError::not_found("event row missing"))?;
+        .map_err(|e| ApiError::not_found(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("Event not found: {event_id}")))?;
+    let last_setup_version = event_row.last_setup_version.clone();
+    let event =
+        super::db::db_model_to_event(event_row).map_err(|e| ApiError::not_found(e.to_string()))?;
 
+    // Determine version filter: explicit query > the variant's `EventSetup`
+    // pointer > `event.last_setup_version` (stable only, pre-backfill
+    // fallback).
     let variant = query
         .variant
         .as_deref()
@@ -199,7 +199,7 @@ pub async fn list_registrations(
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
                 .map(|row| row.event_version);
             if variant == STABLE_VARIANT {
-                pointer.or_else(|| event_row.last_setup_version.clone())
+                pointer.or(last_setup_version)
             } else {
                 pointer
             }
@@ -213,11 +213,6 @@ pub async fn list_registrations(
     if let Some(ref v) = version_filter {
         q = q.filter(event_remote_registration::Column::EventVersion.eq(v));
     }
-    let rows = q
-        .order_by_asc(event_remote_registration::Column::Path)
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
     let mut auth_q = EventRemoteAuth::find()
         .filter(event_remote_auth::Column::AppId.eq(&app_id))
@@ -226,11 +221,14 @@ pub async fn list_registrations(
     if let Some(ref v) = version_filter {
         auth_q = auth_q.filter(event_remote_auth::Column::EventVersion.eq(v));
     }
-    let mut auths = auth_q
-        .order_by_asc(event_remote_auth::Column::Kind)
-        .all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
+    let (rows, mut auths) = flow_like_types::tokio::try_join!(
+        q.order_by_asc(event_remote_registration::Column::Path)
+            .all(&state.db),
+        auth_q
+            .order_by_asc(event_remote_auth::Column::Kind)
+            .all(&state.db),
+    )
+    .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
 
     let auth_ids: HashSet<String> = rows.iter().filter_map(|row| row.auth_id.clone()).collect();
     let returned_auth_ids: HashSet<String> = auths.iter().map(|auth| auth.id.clone()).collect();

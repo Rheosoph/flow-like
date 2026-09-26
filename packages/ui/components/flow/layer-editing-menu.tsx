@@ -419,7 +419,11 @@ export function usePinEditor(
 				depends_on: prev?.depends_on ?? [],
 				default_value: edit.default_value ?? null,
 				data_type: edit.data_type,
-				description: edit.description ?? "",
+				// The payload pin shows a localized hint in place of its description; saving
+				// that hint would persist UI text as the pin's contract.
+				description: isPayloadPin(edit, isGenericEvent)
+					? (prev?.description ?? "")
+					: (edit.description ?? ""),
 				friendly_name: edit.friendly_name ?? edit.name,
 				name: toMachineName(edit.friendly_name ?? edit.name),
 				options: edit.options ?? null,
@@ -444,7 +448,7 @@ export function usePinEditor(
 			nextPins[p.id] = { ...nextPins[p.id], index: p.index };
 
 		return nextPins;
-	}, [edits, entity]);
+	}, [edits, entity, isGenericEvent]);
 
 	return {
 		edits,
@@ -553,7 +557,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				...node,
 				pins: nextPins as unknown as INode["pins"],
 				friendly_name: nodeName || node.friendly_name,
-				description: nodeDescription || node.description,
+				description: nodeDescription,
 			};
 			await onApply(updated);
 		} else if (layer) {

@@ -25,6 +25,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn, formatRelativeTime } from "../../lib";
+import { asArray } from "../../lib/response-shape";
 import { IExecutionMode } from "../../lib/schema/flow/board";
 import type { IBoardSummary } from "../../lib/schema/flow/board-summary";
 import { useBackend } from "../../state/backend-state";
@@ -366,7 +367,7 @@ export function FlowLibraryBoardsSection({
 	}
 
 	const uniqueBoards = Array.from(
-		new Map((boards.data ?? []).map((board) => [board.id, board])).values(),
+		new Map(asArray(boards.data).map((board) => [board.id, board])).values(),
 	);
 
 	return (
@@ -454,6 +455,7 @@ export function FlowLibraryBoardCard({
 		app.id,
 		board.id,
 	]);
+	const pageList = asArray(pages.data);
 
 	// Summaries carry the server-aggregated minimum per category — the same fold the
 	// card used to run over every node of a full board.
@@ -521,9 +523,9 @@ export function FlowLibraryBoardCard({
 						</p>
 					)}
 
-					{pages.data && pages.data.length > 0 && (
+					{pageList.length > 0 && (
 						<div className="flex flex-wrap gap-1">
-							{pages.data.slice(0, 4).map((page) => (
+							{pageList.slice(0, 4).map((page) => (
 								<Link
 									key={page.pageId}
 									href={`/page-builder?id=${page.pageId}&app=${app.id}&board=${board.id}`}
@@ -536,14 +538,14 @@ export function FlowLibraryBoardCard({
 									</span>
 								</Link>
 							))}
-							{pages.data.length > 4 && (
+							{pageList.length > 4 && (
 								<HoverCard openDelay={100} closeDelay={200}>
 									<HoverCardTrigger asChild>
 										<span
 											className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer relative z-10"
 											onClick={(event) => event.stopPropagation()}
 										>
-											+{pages.data.length - 4} more
+											+{pageList.length - 4} more
 										</span>
 									</HoverCardTrigger>
 									<HoverCardContent
@@ -552,7 +554,7 @@ export function FlowLibraryBoardCard({
 										className="w-48 p-2"
 									>
 										<div className="space-y-1">
-											{pages.data.slice(4).map((page) => (
+											{pageList.slice(4).map((page) => (
 												<Link
 													key={page.pageId}
 													href={`/page-builder?id=${page.pageId}&app=${app.id}&board=${board.id}`}
@@ -594,7 +596,7 @@ export function FlowLibraryBoardCard({
 								<TooltipTrigger asChild>
 									<span className="flex items-center gap-1">
 										<FileText className="h-3 w-3" />
-										{pages.data?.length ?? 0}
+										{pageList.length}
 									</span>
 								</TooltipTrigger>
 								<TooltipContent>{t("pages", "Pages")}</TooltipContent>
@@ -620,8 +622,7 @@ export function FlowLibraryBoardCard({
 
 function ExecutionModeBadge({ mode }: Readonly<{ mode?: IExecutionMode }>) {
 	const { t } = useTranslation("flow");
-	const effectiveMode = mode ?? IExecutionMode.Hybrid;
-	const config = {
+	const configs = {
 		[IExecutionMode.Hybrid]: {
 			icon: <Shuffle className="h-2.5 w-2.5" />,
 			label: t("hybrid", "Hybrid"),
@@ -634,7 +635,10 @@ function ExecutionModeBadge({ mode }: Readonly<{ mode?: IExecutionMode }>) {
 			icon: <Monitor className="h-2.5 w-2.5" />,
 			label: t("local", "Local"),
 		},
-	}[effectiveMode];
+	};
+	// A newer hub may report a mode this client does not know.
+	const effectiveMode = mode && mode in configs ? mode : IExecutionMode.Hybrid;
+	const config = configs[effectiveMode];
 
 	return (
 		<Tooltip>

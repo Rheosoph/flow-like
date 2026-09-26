@@ -1,5 +1,6 @@
 import { Client } from "pg";
 import { runPrePush } from "./prisma/pre-push";
+import { provisionAuditDatabaseRoles } from "./audit_database_roles";
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is required");
@@ -30,7 +31,12 @@ try {
   });
   const code = await child.exited;
   if (code !== 0) throw new Error(`Schema update failed with exit code ${code}`);
-  console.log("Database schema applied");
+  try {
+    await provisionAuditDatabaseRoles(client);
+  } catch {
+    throw new Error("Audit database role provisioning failed; verify migration ownership, distinct logins and the audit schema");
+  }
+  console.log("Database schema and separated audit roles applied");
 } finally {
   await client.end();
 }

@@ -1,0 +1,54 @@
+// Spellings people wrote in the FlowScript editor that production apply-failure telemetry
+// rejected. Each section is one captured failure class; all of them must apply cleanly.
+use log::{ info }
+
+const retryPolicy: Struct = { "mode": "fast", retries: [1, 2, 3], nested: { enabled: true } }
+
+// `string::concat` / `string::equal` take a family of same-named `string` pins, and the
+// receiver binds the first one: the named `string` is the NEXT occurrence, not a double binding.
+function joinParts(title: string, body: string, footer: string): (text: string, parts: string[]) {
+    const joined = title.concat({ string: body, string: footer })
+    const parts = [title, body, footer]
+    return joined, parts
+}
+
+function isMarkdown(name: string): (hit: bool) {
+    const hit = name.equal({ string: "md", ignoreCase: true })
+    return hit
+}
+
+// Member reads on an untyped struct are unknown, not `Struct`: the literal side decides.
+function scoreRows(rows: Struct[]): (label: string) {
+    const threshold: int = 3
+    let label: string = ""
+    for (const row of rows) {
+        if (row.score >= threshold) {
+            label = "Title: " + row.title
+        }
+    }
+    if (rows.length >= 2) {
+        info({ message: label, toast: false })
+    }
+    return label
+}
+
+eventsSimple editorSpellings() {
+    const { text } = joinParts("a", "b", "c")
+    const markdown = isMarkdown(text)
+    if (markdown) {
+        info({ message: text, toast: false })
+    }
+}
+
+// `db::open` also returns an optional `reference`; a plain binding still means the connection.
+function filterProspects(grid: Struct): (rows: Struct[]) {
+    const rows = db::filter({ database: grid, filter: "a = 1", limit: 5 })
+    return rows
+}
+
+eventsSimple openGrid() {
+    const grid = db::open({ name: "prospects", userScoped: false })
+    const rows = filterProspects(grid)
+    const direct = db::filter({ database: grid, filter: "a = 2", limit: 5 })
+    log::info({ message: "opened", toast: false })
+}

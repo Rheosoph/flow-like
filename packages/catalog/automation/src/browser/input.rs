@@ -84,25 +84,27 @@ impl NodeLogic for BrowserTypeTextNode {
         )
         .set_schema::<AutomationSession>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let text: String = context.evaluate_pin("text").await?;
         let clear_first: bool = context.evaluate_pin("clear_first").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
 
         if clear_first {
             element
@@ -183,25 +185,6 @@ impl NodeLogic for BrowserPressKeyNode {
         .set_default_value(Some(json!("")));
 
         node.add_input_pin("key", "Key", "Key to press", VariableType::String)
-            .set_options(
-                flow_like::flow::pin::PinOptions::new()
-                    .set_valid_values(vec![
-                        "Enter".to_string(),
-                        "Tab".to_string(),
-                        "Escape".to_string(),
-                        "Backspace".to_string(),
-                        "Delete".to_string(),
-                        "ArrowUp".to_string(),
-                        "ArrowDown".to_string(),
-                        "ArrowLeft".to_string(),
-                        "ArrowRight".to_string(),
-                        "Home".to_string(),
-                        "End".to_string(),
-                        "PageUp".to_string(),
-                        "PageDown".to_string(),
-                    ])
-                    .build(),
-            )
             .set_default_value(Some(json!("Enter")));
 
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
@@ -214,56 +197,38 @@ impl NodeLogic for BrowserPressKeyNode {
         )
         .set_schema::<AutomationSession>();
 
+        node.add_input_pin(
+            "modifiers",
+            "Modifiers",
+            "Control, Shift, Alt, or Meta",
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array)
+        .set_default_value(Some(json!([])));
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let key: String = context.evaluate_pin("key").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let key_code = match key.as_str() {
-            "Enter" => Key::Enter,
-            "Tab" => Key::Tab,
-            "Escape" => Key::Escape,
-            "Backspace" => Key::Backspace,
-            "Delete" => Key::Delete,
-            "ArrowUp" => Key::Up,
-            "ArrowDown" => Key::Down,
-            "ArrowLeft" => Key::Left,
-            "ArrowRight" => Key::Right,
-            "Home" => Key::Home,
-            "End" => Key::End,
-            "PageUp" => Key::PageUp,
-            "PageDown" => Key::PageDown,
-            _ => {
-                return Err(flow_like_types::anyhow!("Unknown key: {}", key));
-            }
-        };
-
-        if selector.is_empty() {
-            driver
-                .action_chain()
-                .send_keys(key_code)
-                .perform()
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to press key: {}", e))?;
-        } else {
-            let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-            })?;
-            element
-                .send_keys(key_code)
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to press key on element: {}", e))?;
+        let modifiers: Vec<String> =
+            super::selector::optional_input(context, "modifiers", Vec::new()).await?;
+        if !locator.value.is_empty() {
+            super::selector::find(&driver, &locator)
+                .await?
+                .focus()
+                .await?;
         }
+        super::actions::key_chord(&driver, &key, &modifiers).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -349,25 +314,28 @@ impl NodeLogic for BrowserSelectOptionNode {
         )
         .set_schema::<AutomationSession>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use thirtyfour::components::SelectElement;
-        use thirtyfour::prelude::*;
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let value: String = context.evaluate_pin("value").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find select element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find select element '{}': {}", selector, e)
+            })?;
 
         let select = SelectElement::new(&element)
             .await

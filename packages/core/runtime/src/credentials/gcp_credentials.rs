@@ -1,9 +1,9 @@
 #[cfg(feature = "flow-runtime")]
 use crate::credentials::{LogsDbBuilder, db_path_from_base};
 use crate::credentials::{SharedCredentialsTrait, StoreType};
-use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
-use flow_like_storage::lancedb;
+use flow_like_storage::databases::vector::lancedb::connect_lance;
+use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 #[cfg(feature = "flow-runtime")]
@@ -321,7 +321,7 @@ fn make_gcs_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
     move |path| {
         let url = format!("gs://{}/{}", bucket, path);
-        let builder = lancedb::connect(&url);
+        let builder = connect_lance(&url);
         match &credential {
             Some((option, value)) => builder.storage_option(option.to_string(), value.clone()),
             None => builder,

@@ -7,8 +7,8 @@ use crate::error::ApiError;
 use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use crate::usage_accounting::{
-    HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart, configured_hosted_rate,
-    settle_hosted_usage_invocation, start_usage_invocation,
+    HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
+    settle_hosted_usage_invocation, start_instance_usage_invocation, start_usage_invocation,
 };
 use axum::{
     Extension, Json,
@@ -171,7 +171,12 @@ async fn fetch_embedding_provider(
         .await?
         .ok_or_else(|| anyhow!("Bit not found: {}", bit_id))?;
 
-    let bit: Bit = bit_model.into();
+    embedding_provider_for_bit(&Bit::from(bit_model))
+}
+
+pub(crate) fn embedding_provider_for_bit(
+    bit: &Bit,
+) -> Result<(EmbeddingModelProvider, RemoteExecutionConfig), ApiError> {
     let embedding_provider = bit
         .try_to_embedding()
         .ok_or_else(|| anyhow!("Bit is not an embedding model"))?;
@@ -228,26 +233,26 @@ fn is_internal_hosted_embedding_provider(provider_name: &str) -> bool {
         || normalized.starts_with("hosted:")
 }
 
-async fn enforce_embedding_tier(
-    payer_id: &str,
-    state: &AppState,
-    provider: &EmbeddingModelProvider,
-) -> Result<(), ApiError> {
-    let (plan, user_tier) = crate::quota::payer_plan(state, payer_id).await?;
-    let params = provider.provider.params.clone().unwrap_or_default();
-    let tier = params
-        .get("tier")
-        .and_then(|v| v.as_str())
-        .unwrap_or("FREE");
-    if !user_tier.llm_tiers.iter().any(|t| t == tier) {
-        tracing::warn!(
-            "User tier {:?} does not allow access to embedding tier {}",
-            user_tier,
-            tier
-        );
-        return Err(ApiError::hosted_model_unavailable(payer_id, &plan, tier));
-    }
-    Ok(())
+/// Every plan can embed, so one estimated gateway tariff meters all internal
+/// embedding models instead of per-model deployment configuration.
+fn internal_embedding_rate() -> HostedRateSnapshot {
+    let mut rate = HostedRateSnapshot {
+        version: "internal-embedding-2026-09-14".into(),
+        provider_pricing_available: true,
+        input_micro_usd_per_million_tokens: 0,
+        input_micro_usd_per_million_bytes: Some(50_000),
+        max_input_bytes: Some((INTERNAL_MAX_BATCH_SIZE * INTERNAL_MAX_TEXT_LEN) as i64),
+        output_micro_usd_per_million_tokens: 0,
+        request_micro_usd: 0,
+        context_tokens: 1,
+        usd_micro_per_eur: 1_159_200,
+        funding_basis_points: 0,
+        api_micro_usd_per_million_ms: 20_001,
+        serving_request_micro_usd: 1,
+        max_request_ms: 120_000,
+    };
+    crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    rate
 }
 
 pub async fn embed_text(
@@ -256,25 +261,59 @@ pub async fn embed_text(
     headers: HeaderMap,
     Json(payload): Json<EmbedRequest>,
 ) -> Result<Response, ApiError> {
-    // 1. Fetch bit and validate remote config (CACHED for performance!)
     let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
-
-    // 2. Enforce user tier
     let usage_context = resolve_usage_context(&state, &user, &headers).await?;
-    let payer_id = crate::quota::resolve_payer(
+    embed_authorized_text(
+        state,
+        payload,
+        embedding_provider,
+        remote_config,
+        usage_context,
+        None,
+    )
+    .await
+}
+
+pub async fn embed_instance_text(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EmbedRequest>,
+) -> Result<Response, ApiError> {
+    let instance = crate::instances::authenticate_model_request(
         &state,
-        Some(&usage_context.user_id),
-        usage_context.app_id.as_deref(),
+        &headers,
+        "POST",
+        "/instances/embeddings/embed",
+        &payload.model,
     )
     .await?;
-    enforce_embedding_tier(&payer_id, &state, &embedding_provider).await?;
-    let user_id = usage_context.user_id.clone();
+    let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
+    let usage_context = UsageRequestContext {
+        app_id: instance.app_id.clone(),
+        user_id: instance.delegated_user_id.clone(),
+        technical_user_id: None,
+    };
+    embed_authorized_text(
+        state,
+        payload,
+        embedding_provider,
+        remote_config,
+        usage_context,
+        Some(instance),
+    )
+    .await
+}
 
-    // 3. Build upstream request based on implementation
-    let model_id = remote_config.model_id.as_deref().unwrap_or(&payload.model);
-    let mut rate = configured_hosted_rate("internal", model_id)?
-        .ok_or_else(|| ApiError::internal("Hosted embedding pricing is not configured"))?;
-    crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+async fn embed_authorized_text(
+    state: AppState,
+    payload: EmbedRequest,
+    embedding_provider: EmbeddingModelProvider,
+    remote_config: RemoteExecutionConfig,
+    usage_context: UsageRequestContext,
+    instance: Option<crate::instances::VerifiedInstanceUsage>,
+) -> Result<Response, ApiError> {
+    let user_id = usage_context.user_id.clone();
+    let rate = internal_embedding_rate();
     let prefix = match payload.embed_type {
         EmbedType::Query => &embedding_provider.prefix.query,
         EmbedType::Document => &embedding_provider.prefix.paragraph,
@@ -303,22 +342,22 @@ pub async fn embed_text(
         ));
     }
     let price_estimate = rate.provider_cost_bytes(token_count_estimate)?;
-    let invocation_id = start_usage_invocation(
-        &state,
-        UsageInvocationStart {
-            kind: "embedding",
-            user_id: Some(&user_id),
-            technical_user_id: usage_context.technical_user_id.as_deref(),
-            app_id: usage_context.app_id.as_deref(),
-            provider: Some(&embedding_provider.provider.provider_name),
-            endpoint: Some("internal"),
-            model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
-            estimated_tokens: token_count_estimate,
-            estimated_cost_micro_dollars: price_estimate,
-            rate: Some(rate.clone()),
-        },
-    )
-    .await?;
+    let start = UsageInvocationStart {
+        kind: "embedding",
+        user_id: Some(&user_id),
+        technical_user_id: usage_context.technical_user_id.as_deref(),
+        app_id: usage_context.app_id.as_deref(),
+        provider: Some(&embedding_provider.provider.provider_name),
+        endpoint: Some("internal"),
+        model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
+        estimated_tokens: token_count_estimate,
+        estimated_cost_micro_dollars: price_estimate,
+        rate: Some(rate.clone()),
+    };
+    let invocation_id = match &instance {
+        Some(instance) => start_instance_usage_invocation(&state, start, instance, "").await?,
+        None => start_usage_invocation(&state, start).await?,
+    };
 
     let id = invocation_id
         .ok_or_else(|| ApiError::internal("Hosted embedding reservation is missing"))?;
@@ -372,6 +411,12 @@ fn embedding_input_bytes(input: &[String], prefix: &str) -> i64 {
 #[cfg(test)]
 mod byte_meter_tests {
     use super::*;
+    #[test]
+    fn built_in_rate_is_valid_and_meters_input_bytes() {
+        let rate = internal_embedding_rate();
+        assert!(rate.validate().is_ok());
+        assert_eq!(rate.provider_cost_bytes(1_000_000).unwrap(), 50_000);
+    }
     #[test]
     fn input_meter_counts_utf8_and_prefixes_without_relying_on_words() {
         assert_eq!(

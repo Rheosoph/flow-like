@@ -10,10 +10,12 @@ use flow_like_types::Value;
 use sea_orm::sea_query::ExprTrait;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Set,
-    sea_query::{Expr, OnConflict},
+    sea_query::{CaseStatement, Expr, OnConflict},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
+use std::time::Duration;
 use utoipa::ToSchema;
 
 use super::fingerprint::{FingerprintFrame, fingerprint};
@@ -376,6 +378,30 @@ struct BatchContext {
     country: Option<String>,
 }
 
+/// Releases this replica has already stored, so a batch stops re-sending the
+/// idempotent insert. The TTL lets a row removed out of band reappear.
+static RECORDED_RELEASES: LazyLock<moka::sync::Cache<String, ()>> = LazyLock::new(|| {
+    moka::sync::Cache::builder()
+        .max_capacity(1_000)
+        .time_to_live(Duration::from_secs(10 * 60))
+        .build()
+});
+
+// `source` comes from the closed `SOURCES` vocabulary, so the separator is unambiguous.
+fn release_key(version: &str, source: &str) -> String {
+    format!("{source}:{version}")
+}
+
+pub(super) fn release_is_recorded(version: &str, source: &str) -> bool {
+    RECORDED_RELEASES.contains_key(&release_key(version, source))
+}
+
+/// Call only once the upsert is committed: a rolled-back insert remembered as
+/// recorded would not be retried until the entry expires.
+pub(super) fn mark_release_recorded(version: &str, source: &str) {
+    RECORDED_RELEASES.insert(release_key(version, source), ());
+}
+
 /// Records a release the first time it reports in. Shared with the session
 /// ingest so release health works without any error report.
 pub(super) async fn upsert_release<C: ConnectionTrait>(
@@ -434,23 +460,41 @@ fn new_issue(
     }
 }
 
+/// Bumps every `(issue id, count)` of a batch in one statement.
+///
 /// `installCount` is deliberately not maintained here — it is recomputed as a
 /// distinct install count when an issue is read.
-async fn bump_issue<C: ConnectionTrait>(
+async fn bump_issues<C: ConnectionTrait>(
     db: &C,
-    issue_id: &str,
-    count: i32,
+    bumps: &[(String, i32)],
     release: Option<&str>,
     now: chrono::DateTime<chrono::FixedOffset>,
 ) -> Result<(), DbErr> {
+    let increment: Expr = match bumps {
+        [] => return Ok(()),
+        [(_, count)] => Expr::value(*count),
+        _ => bumps
+            .iter()
+            .fold(CaseStatement::new(), |case, (issue_id, count)| {
+                case.case(
+                    Expr::col(telemetry_issue::Column::Id).eq(issue_id.as_str()),
+                    *count,
+                )
+            })
+            .finally(0)
+            .into(),
+    };
+
     let mut update = telemetry_issue::Entity::update_many()
         .col_expr(
             telemetry_issue::Column::EventCount,
-            Expr::col(telemetry_issue::Column::EventCount).add(count),
+            Expr::col(telemetry_issue::Column::EventCount).add(increment),
         )
         .col_expr(telemetry_issue::Column::LastSeen, Expr::value(now))
         .col_expr(telemetry_issue::Column::UpdatedAt, Expr::value(now))
-        .filter(telemetry_issue::Column::Id.eq(issue_id));
+        .filter(
+            telemetry_issue::Column::Id.is_in(bumps.iter().map(|(issue_id, _)| issue_id.as_str())),
+        );
 
     if let Some(release) = release {
         update = update.col_expr(telemetry_issue::Column::LastRelease, Expr::value(release));
@@ -478,12 +522,14 @@ async fn resolve_issues<C: ConnectionTrait>(
     let mut planned: HashMap<String, String> = HashMap::new();
     let mut inserts = Vec::new();
 
+    let mut bumps: Vec<(String, i32)> = Vec::new();
     for issue in existing {
         if let Some(group) = groups.get(&issue.fingerprint) {
-            bump_issue(db, &issue.id, group.count, payload.release.as_deref(), now).await?;
+            bumps.push((issue.id.clone(), group.count));
         }
         ids.insert(issue.fingerprint, issue.id);
     }
+    bump_issues(db, &bumps, payload.release.as_deref(), now).await?;
 
     for (fingerprint, group) in groups {
         if ids.contains_key(fingerprint) {
@@ -514,15 +560,17 @@ async fn resolve_issues<C: ConnectionTrait>(
         .all(db)
         .await?;
 
+    let mut lost_races: Vec<(String, i32)> = Vec::new();
     for issue in created {
         let lost_race = planned
             .get(&issue.fingerprint)
             .is_some_and(|planned_id| *planned_id != issue.id);
         if lost_race && let Some(group) = groups.get(&issue.fingerprint) {
-            bump_issue(db, &issue.id, group.count, payload.release.as_deref(), now).await?;
+            lost_races.push((issue.id.clone(), group.count));
         }
         ids.insert(issue.fingerprint, issue.id);
     }
+    bump_issues(db, &lost_races, payload.release.as_deref(), now).await?;
 
     Ok(ids)
 }
@@ -555,14 +603,23 @@ async fn persist_errors(
         country,
     };
     let now = chrono::Utc::now().fixed_offset();
+    let record_release = context
+        .release
+        .as_deref()
+        .is_some_and(|release| !release_is_recorded(release, &context.source));
 
-    state
+    let response = state
         .transaction(|txn| {
             let context = context.clone();
             let errors = errors.clone();
-            Box::pin(async move { persist_batch(txn, &context, errors, now).await })
+            Box::pin(async move { persist_batch(txn, &context, errors, now, record_release).await })
         })
-        .await
+        .await?;
+
+    if record_release && let Some(release) = context.release.as_deref() {
+        mark_release_recorded(release, &context.source);
+    }
+    Ok(response)
 }
 
 async fn persist_batch<C: ConnectionTrait>(
@@ -570,8 +627,9 @@ async fn persist_batch<C: ConnectionTrait>(
     context: &BatchContext,
     errors: Vec<ValidatedError>,
     now: chrono::DateTime<chrono::FixedOffset>,
+    record_release: bool,
 ) -> Result<TelemetryErrorIngestResponse, DbErr> {
-    if let Some(release) = context.release.as_deref() {
+    if record_release && let Some(release) = context.release.as_deref() {
         upsert_release(txn, release, &context.source, now).await?;
     }
 

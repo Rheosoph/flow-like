@@ -71,6 +71,7 @@ async function deliver(
 }
 
 test("real FlowPilot stream returns only completed answer through native completion", async () => {
+	const answer = "Your order arrives Tuesday.";
 	const result = await deliver(async (onChunk) => {
 		onChunk(
 			'<plan_step>{"id":"private-plan","title":"Internal reasoning"}</plan_step>',
@@ -85,14 +86,9 @@ test("real FlowPilot stream returns only completed answer through native complet
 		);
 		return { message: "Final fallback" };
 	});
-	expect(result).toMatchObject({
-		status: "success",
-		text: "Your order arrives Tuesday.",
-	});
+	expect(result).toMatchObject({ status: "success", text: answer });
 	expect(JSON.stringify(result)).not.toContain("private");
-	expect(useGlobalChatStore.getState().messages[0].inner.content).toBe(
-		result.text,
-	);
+	expect(useGlobalChatStore.getState().messages[0].inner.content).toBe(answer);
 });
 
 test("nonstreaming backend result is returned to Shortcuts", async () => {

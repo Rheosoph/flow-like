@@ -339,6 +339,42 @@ pub enum ExecutionStatus {
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ExploreItemKind {
+    #[sea_orm(string_value = "APP")]
+    App,
+    #[sea_orm(string_value = "PACKAGE")]
+    Package,
+    #[sea_orm(string_value = "COLLECTION")]
+    Collection,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ExplorePlacementKind {
+    #[sea_orm(string_value = "ANNOUNCEMENT")]
+    Announcement,
+    #[sea_orm(string_value = "SPOTLIGHT")]
+    Spotlight,
+    #[sea_orm(string_value = "FEATURE")]
+    Feature,
+    #[sea_orm(string_value = "COLLECTION")]
+    Collection,
+    #[sea_orm(string_value = "RAIL")]
+    Rail,
+    #[sea_orm(string_value = "SPONSORED")]
+    Sponsored,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
+pub enum ExploreSlotArea {
+    #[sea_orm(string_value = "GRID")]
+    Grid,
+    #[sea_orm(string_value = "ROW")]
+    Row,
+    #[sea_orm(string_value = "UNPLACED")]
+    Unplaced,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum InvitationStatus {
     #[sea_orm(string_value = "PENDING")]
     Pending,

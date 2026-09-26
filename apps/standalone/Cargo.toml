@@ -1,0 +1,83 @@
+[package]
+name = "flow-like-standalone"
+version = "0.1.0"
+edition = "2024"
+description = "Persistent Flow-Like device agent and project service host"
+
+[features]
+default = ["runtime"]
+frontend = ["runtime"]
+runtime = [
+    "dep:axum",
+    "dep:flow-like-runtime",
+    "dep:flow-like-catalog",
+    "dep:flow-like-storage",
+    "dep:flow-like-types",
+    "dep:jsonschema",
+    "dep:flow-like-wasm",
+    "flow-like-offline-writes/runtime",
+]
+
+[dependencies]
+axum = { workspace = true, optional = true }
+anyhow = "1"
+flow-like-device-protocol.workspace = true
+flow-like-offline-writes.workspace = true
+flow-like-device-crypto = { workspace = true, features = ["sqlite"] }
+flow-like-types-contracts = { workspace = true, default-features = false }
+reqwest.workspace = true
+url = "2"
+base64.workspace = true
+argon2.workspace = true
+chacha20poly1305.workspace = true
+zeroize = { workspace = true, features = ["derive"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+dotenvy = "0.15.7"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+webrtc = "=0.20.5"
+sysinfo = { version = "0.37.2", default-features = false, features = ["system", "network"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+fs2 = "0.4.3"
+thiserror = "2"
+sha2 = "0.10"
+hmac = "0.12"
+blake3.workspace = true
+snow = "0.9.6"
+openmls = "0.9.0"
+openmls_basic_credential = "0.6.0"
+openmls_traits = "0.6.0"
+openmls_rust_crypto = "0.6.0"
+tls_codec = "0.5"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2"
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser", "zeroize"] }
+instant-acme = { version = "0.8.5", default-features = false, features = ["ring", "hyper-rustls"] }
+x509-parser = { version = "0.18", features = ["verify"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+flow-like-runtime = { workspace = true, optional = true, features = ["app-runtime"] }
+flow-like-catalog = { workspace = true, optional = true, features = ["remote-metadata", "portable-execute", "local"] }
+flow-like-storage = { workspace = true, optional = true, features = ["files", "database-runtime"] }
+flow-like-types = { workspace = true, optional = true }
+jsonschema = { workspace = true, optional = true }
+flow-like-wasm = { workspace = true, optional = true, features = ["model"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+axum.workspace = true
+flow-like-offline-writes = { workspace = true, features = ["test-support"] }
+tempfile = "3"
+wat = "1"

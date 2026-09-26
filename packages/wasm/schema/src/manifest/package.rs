@@ -1,5 +1,6 @@
 use super::PackagePermissions;
 use crate::widget::WidgetContract;
+use crate::widget_frame::is_valid_package_id;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -20,6 +21,10 @@ pub struct PackageWidgetEntry {
     pub contract: WidgetContract,
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Declared-source classification the hub adds to package details for the
+    /// store badge. Display-only; never taken from a publisher manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::widget_sources::WidgetNetwork>,
 }
 
 /// Domain category for WASM packages.
@@ -163,6 +168,11 @@ impl PackageManifest {
         let mut errors = Vec::new();
         if self.id.is_empty() {
             errors.push("Package ID is required".to_string());
+        } else if !is_valid_package_id(&self.id) {
+            errors.push(format!(
+                "Invalid package id {:?}: use only letters, digits, '.', '_' and '-'",
+                self.id
+            ));
         }
         if self.name.is_empty() {
             errors.push("Package name is required".to_string());
@@ -260,6 +270,7 @@ mod tests {
             thumbnail: None,
             contract: WidgetContract::new("sales-chart"),
             keywords: Vec::new(),
+            network: None,
         });
         assert!(
             manifest
@@ -278,6 +289,83 @@ mod tests {
                 .unwrap_err()
                 .iter()
                 .any(|error| error.contains("does not match"))
+        );
+    }
+
+    #[test]
+    fn package_ids_outside_the_url_safe_charset_are_rejected() {
+        for id in ["com.example.maps", "my_pkg-1.v2"] {
+            assert!(
+                PackageManifest::new(id, "Name", "1.0.0", "d")
+                    .validate()
+                    .is_ok()
+            );
+        }
+        for id in [
+            "com example",
+            "com;example",
+            "com\"example",
+            "com'example",
+            "com/example",
+            ".",
+            "..",
+            "pkg\ninjected",
+        ] {
+            let errors = PackageManifest::new(id, "Name", "1.0.0", "d")
+                .validate()
+                .unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("Invalid package id")),
+                "{id:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn widget_contracts_with_csp_are_validated() {
+        let mut manifest =
+            PackageManifest::new("com.example.maps", "Maps", "1.0.0", "ships widgets");
+        manifest.widget_bundle_path = Some("widgets.flwb".into());
+        let mut contract = WidgetContract::new("live-map");
+        contract.csp = Some(vec![crate::widget_policy::WidgetCspPurpose {
+            reason: "Loads vector map tiles".into(),
+            connect_src: vec!["https://api.maptiler.com".into()],
+            ..Default::default()
+        }]);
+        manifest.widgets.push(PackageWidgetEntry {
+            id: "live-map".into(),
+            name: "Live map".into(),
+            description: "map".into(),
+            icon: None,
+            thumbnail: None,
+            contract,
+            keywords: Vec::new(),
+            network: None,
+        });
+        assert!(
+            manifest
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("must use contractVersion 2"))
+        );
+
+        manifest.widgets[0].contract.contract_version = crate::widget::CONTRACT_VERSION;
+        assert!(manifest.validate().is_ok());
+
+        manifest.widgets[0].contract.csp = Some(vec![crate::widget_policy::WidgetCspPurpose {
+            reason: "Loads vector map tiles".into(),
+            connect_src: vec!["https://a.*.maptiler.com".into()],
+            ..Default::default()
+        }]);
+        assert!(
+            manifest
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("wildcards"))
         );
     }
 }

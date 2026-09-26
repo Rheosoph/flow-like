@@ -5,6 +5,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
@@ -52,9 +53,7 @@ export function FlowDeepLinkHandler({
 		if (consumed.current === key) return;
 		consumed.current = key;
 
-		const prototype = (catalog.data as INode[]).find(
-			(n) => n.name === addNodeName,
-		);
+		const prototype = asArray(catalog.data).find((n) => n.name === addNodeName);
 		if (!prototype) {
 			toast.error(`Node "${addNodeName}" not found in this app's catalog`);
 			return;
@@ -97,6 +96,7 @@ export function FlowDeepLinkHandler({
 		catalog.data,
 		backend.boardState,
 		queryClient,
+		t,
 	]);
 
 	return null;

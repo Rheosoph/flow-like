@@ -17,6 +17,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
 import { AlertCircle, CheckCircle, Clock, Inbox } from "lucide-react";
@@ -250,7 +251,7 @@ export default function AdminSolutionsPage() {
 									<Skeleton className="h-8 w-16" />
 								) : (
 									<div className="text-2xl font-bold">
-										{solutions.data?.solutions.length ?? 0}
+										{asArray(solutions.data?.solutions).length}
 									</div>
 								)}
 							</CardContent>
@@ -258,7 +259,7 @@ export default function AdminSolutionsPage() {
 					</div>
 
 					<SolutionsPage
-						data={solutions.data}
+						data={isRecord(solutions.data) ? solutions.data : undefined}
 						isLoading={solutions.isLoading}
 						error={solutions.error}
 						page={page}

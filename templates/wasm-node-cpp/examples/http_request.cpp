@@ -74,7 +74,7 @@ static std::string http_get(const std::string& url, const std::string& headers_j
 }
 
 /// Build the node definition for this example.
-/// Note: add_permission("http") is required for the host to allow requests.
+/// Note: add_permission("network:http") is required for the host to allow requests.
 ///
 /// In your node.cpp, the build_http_get_definition() return value would be
 /// serialised by exports_flow_like_node_get_node / get_nodes.
@@ -88,7 +88,7 @@ static std::string http_get(const std::string& url, const std::string& headers_j
 //     def.friendly_name = "HTTP GET Request (C++)";
 //     def.description   = "Sends a GET request to a URL and reports the result";
 //     def.category      = "Network/HTTP";
-//     def.add_permission("http");
+//     def.add_permission("network:http");
 //
 //     def.add_pin(PinDefinition::input("exec", "Execute", "Trigger", "Exec"));
 //     def.add_pin(PinDefinition::input("url", "URL", "Target URL", "String")

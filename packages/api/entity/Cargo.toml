@@ -4,11 +4,6 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[lib]
-# Keep generated SeaORM sources in their existing location so schema regeneration does not need a
-# second output convention. The target is nevertheless compiled as an independent crate.
-path = "src/lib.rs"
-
 [features]
 default = []
 domain-conversions = [

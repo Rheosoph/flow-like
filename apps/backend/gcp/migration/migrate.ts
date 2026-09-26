@@ -9,8 +9,11 @@
  * as `DATABASE_URL` to exactly two child processes in turn - the pre-push SQL
  * runner (`packages/api/prisma/pre-push.ts`: column type changes Prisma emits
  * without the USING clause they need) and `prisma db push` - and exits with
- * the first non-zero exit code. The URLs are never printed and never written
- * to disk. Every environment variable that would let a static password, a
+ * the first non-zero exit code. After a successful push the same token opens
+ * one in-process connection that applies the API/audit-worker privilege
+ * boundary (`apps/backend/shared/audit_database_roles.ts`, grant-only mode)
+ * when Terraform has named the two roles. The URLs are never printed and never
+ * written to disk. Every environment variable that would let a static password, a
  * connection string, a key file or a proxy back in is refused before anything
  * else happens, so a mis-set job surfaces as a one-line configuration error
  * rather than as a silently different identity.
@@ -24,6 +27,8 @@ import { isIPv4 } from "node:net";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { GoogleAuth } from "google-auth-library";
+import { Client } from "pg";
+import { provisionAuditDatabaseRoles } from "./audit_database_roles";
 
 // The narrowest scope Cloud SQL accepts for IAM database login. The token
 // becomes a PostgreSQL password and is copied into driver state, and Prisma
@@ -56,6 +61,9 @@ export const REQUIRED_SETTINGS = {
 	user: "GCP_POSTGRES_USER",
 	serverCa: "GCP_POSTGRES_SERVER_CA",
 } as const;
+// Role names of the API and the audit worker, set by Terraform on the job.
+export const API_ROLE_SETTING = "API_DATABASE_ROLE";
+export const AUDIT_ROLE_SETTING = "AUDIT_DATABASE_ROLE";
 
 // Everything libpq would otherwise read from the environment, plus every way
 // to reintroduce a static password or to interpose the Cloud SQL Auth Proxy.
@@ -477,6 +485,75 @@ async function runChild(
 	}
 }
 
+export type Environment = Record<string, string | undefined>;
+
+export interface AuditRoleDependencies {
+	readonly connect: (databaseUrl: string) => Promise<Client>;
+	readonly provision: typeof provisionAuditDatabaseRoles;
+}
+
+async function connectClient(databaseUrl: string): Promise<Client> {
+	const client = new Client({ connectionString: databaseUrl });
+	await client.connect();
+	return client;
+}
+
+const AUDIT_ROLE_DEPENDENCIES: AuditRoleDependencies = {
+	connect: connectClient,
+	provision: provisionAuditDatabaseRoles,
+};
+
+// Applies the API/audit-worker privilege boundary on the pushed schema and
+// returns the job's exit code for that step. Until Terraform names the worker
+// role, or while the role does not exist yet, the step is skipped and the push
+// alone is the job's success; once the role exists the boundary is part of the
+// migration and its failure is the job's failure.
+export async function applyAuditRoles(
+	env: Environment,
+	databaseUrl: string,
+	deps: AuditRoleDependencies = AUDIT_ROLE_DEPENDENCIES,
+): Promise<number> {
+	const auditRole = env[AUDIT_ROLE_SETTING];
+	if (auditRole === undefined || auditRole === "") {
+		console.log(
+			`[migration] audit role provisioning skipped: ${AUDIT_ROLE_SETTING} is not set`,
+		);
+		return 0;
+	}
+	let client: Client | undefined;
+	try {
+		client = await deps.connect(databaseUrl);
+		const existing = await client.query(
+			"SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1",
+			[auditRole],
+		);
+		if (existing.rows.length === 0) {
+			console.log(
+				`[migration] audit role provisioning skipped: role "${auditRole}" does not exist in pg_roles`,
+			);
+			return 0;
+		}
+		await deps.provision(client, {
+			...env,
+			AUDIT_DB_GRANTS_ONLY: "true",
+			API_DATABASE_ROLE: env[API_ROLE_SETTING],
+			AUDIT_DATABASE_ROLE: auditRole,
+		});
+		console.log(
+			`[migration] audit privilege boundary applied: api="${env[API_ROLE_SETTING]}" worker="${auditRole}"`,
+		);
+		return 0;
+	} catch (error) {
+		// Grant-only mode issues no statement that carries a credential and the
+		// token never appears in a driver error, so the message is safe to print.
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`[migration] audit role provisioning failed: ${message}`);
+		return 1;
+	} finally {
+		await client?.end().catch(() => undefined);
+	}
+}
+
 export async function main(): Promise<number> {
 	const config = readConfig((name) => process.env[name]);
 	const posture = tlsPosture(config);
@@ -516,10 +593,20 @@ export async function main(): Promise<number> {
 			);
 			return prePush;
 		}
-		return await runChild(
+		const push = await runChild(
 			"prisma db push",
 			PRISMA_ARGS,
 			databaseUrl(config, token, serverCaPath),
+		);
+		if (push !== 0) {
+			return push;
+		}
+		console.log("[migration] schema push complete");
+		// Same identity and token as the push; node-postgres needs its own TLS
+		// spelling, which is the pre-push URL (the pinned CA is still in scratch).
+		return await applyAuditRoles(
+			process.env,
+			prePushDatabaseUrl(config, token, serverCaPath),
 		);
 	} finally {
 		if (scratch !== undefined) {

@@ -17,7 +17,8 @@ const cache = new Map<string, string>();
 const ICON_RENDER_SIZE = 128;
 
 export function getIconDataUri(iconKey: string): string {
-	if (cache.has(iconKey)) return cache.get(iconKey)!;
+	const cached = cache.get(iconKey);
+	if (cached !== undefined) return cached;
 
 	const Icon = GRAPH_ICONS[iconKey] ?? GRAPH_ICONS.database;
 	if (!Icon) return "";

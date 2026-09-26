@@ -6,15 +6,26 @@ interface StoredReturnUrl {
 	ts: number;
 }
 
-/**
- * Only same-origin relative paths may be used as post-login redirect targets —
- * anything else (absolute URLs, protocol-relative `//host`) would let a
- * crafted login round trip bounce the user to an attacker-chosen site.
- */
+/** Accept only relative, same-origin destinations after sign-in. */
 export function sanitizeReturnUrl(url: unknown): string | null {
 	if (typeof url !== "string") return null;
-	if (!url.startsWith("/") || url.startsWith("//")) return null;
-	return url === "/" ? null : url;
+	if (
+		!url.startsWith("/") ||
+		url.startsWith("//") ||
+		/[\s\\]|\p{Cc}/u.test(url)
+	)
+		return null;
+	try {
+		const origin = "https://return.flow-like.invalid";
+		const parsed = new URL(url, origin);
+		// Dot-segment removal can expose a protocol-relative path in a value
+		// such as /.//example.com. Never return that path to the router.
+		if (parsed.origin !== origin || parsed.pathname.startsWith("//"))
+			return null;
+		return url === "/" ? null : url;
+	} catch {
+		return null;
+	}
 }
 
 export function currentRelativeUrl(): string | undefined {

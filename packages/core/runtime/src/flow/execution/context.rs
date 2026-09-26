@@ -19,7 +19,7 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use flow_like_model_provider::provider::ModelProviderConfiguration;
-use flow_like_storage::object_store::path::Path;
+use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
 use flow_like_types::Value;
 use flow_like_types::channel::{Channel, ChannelOutcome};
 use flow_like_types::intercom::{InterComCallback, InterComEvent};
@@ -44,6 +44,26 @@ const A2UI_UPDATE_LOG_KEY: &str = "__a2ui_update_log";
 /// Backstop against high-frequency streaming loops (e.g. sprite/chart updates)
 /// retaining every payload for the whole run. Chat flows stay far below this.
 const A2UI_UPDATE_LOG_CAP: usize = 1024;
+
+fn validate_live_resource_url(
+    url: &flow_like_types::reqwest::Url,
+) -> Result<(), flow_like_types::authorization::AuthorizationError> {
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let path = url.path().to_ascii_lowercase();
+    if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.path().contains('\\')
+        || ["%2f", "%5c", "%25"]
+            .iter()
+            .any(|escape| path.contains(escape))
+    {
+        return Err(flow_like_types::authorization::AuthorizationError::InvalidRequest);
+    }
+    Ok(())
+}
 
 pub(super) fn fresh_local_variable_scope(
     function_variables: &std::collections::HashMap<String, Variable>,
@@ -84,6 +104,70 @@ impl Cacheable for A2UIUpdateLog {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+const A2UI_DETACHED_KEY: &str = "__a2ui_detached_elements";
+
+/// Element ids this run detached children from. Unlike [`A2UIUpdateLog`] it is never capped:
+/// a missed id would leave that container's dropped children on the page for good.
+#[derive(Clone, Default)]
+struct A2UIDetachedElements {
+    ids: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+}
+
+impl Cacheable for A2UIDetachedElements {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+fn detaching_element_id(message: &crate::a2ui::A2UIServerMessage) -> Option<&str> {
+    use crate::a2ui::A2UIServerMessage as Msg;
+    match message {
+        Msg::UpsertElement { element_id, value } => matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("clearChildren" | "removeChildAt")
+        )
+        .then_some(element_id.as_str()),
+        Msg::RemoveElement { element_id, .. } => Some(element_id.as_str()),
+        _ => None,
+    }
+}
+
+/// The run's closing `pruneDetached`, sent only when the run detached children. Delivery is
+/// best effort: a page that misses it keeps the detached components, as before.
+pub(super) async fn stream_prune_detached(
+    cache: &RwLock<AHashMap<String, Arc<dyn Cacheable>>>,
+    callback: &InterComCallback,
+) {
+    let element_ids: Vec<String> = {
+        let cache = cache.read().await;
+        let Some(detached) = cache
+            .get(A2UI_DETACHED_KEY)
+            .and_then(|c| c.as_any().downcast_ref::<A2UIDetachedElements>().cloned())
+        else {
+            return;
+        };
+        detached
+            .ids
+            .lock()
+            .map(|ids| ids.iter().cloned().collect())
+            .unwrap_or_default()
+    };
+    if element_ids.is_empty() {
+        return;
+    }
+    let message = crate::a2ui::A2UIServerMessage::prune_detached(element_ids);
+    if let Err(err) = InterComEvent::with_type("a2ui", message)
+        .call(callback)
+        .await
+    {
+        tracing::warn!(error = %err, "Failed to stream the run's pruneDetached message");
     }
 }
 
@@ -197,15 +281,19 @@ impl ExecutionContextCache {
     }
 
     pub fn get_cache(&self, node: bool, user: bool) -> flow_like_types::Result<Path> {
-        let mut base = Path::from("tmp");
-
-        if user {
-            base = base.join("user").join(self.sub.clone());
+        let base = if matches!(self.stores.temporary_store, Some(FlowLikeStore::Local(_))) {
+            let base = Path::from("tmp");
+            let base = if user {
+                base.join("user").join(self.sub.clone())
+            } else {
+                base.join("global")
+            };
+            base.join("apps").join(self.app_id.clone())
         } else {
-            base = base.join("global");
-        }
-
-        base = base.join("apps").join(self.app_id.clone());
+            let (user_prefix, global_prefix) =
+                flow_like_types::storage_paths::temporary_prefixes(&self.sub, &self.app_id);
+            Path::from(if user { user_prefix } else { global_prefix })
+        };
 
         if !node {
             return Ok(base);
@@ -251,6 +339,7 @@ const ELEMENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct ExecutionContext {
+    pub executor_payment_auth: Option<super::ExecutorPaymentAuth>,
     pub id: Arc<str>,
     pub run: Weak<Mutex<Run>>,
     pub nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
@@ -303,6 +392,46 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
+    /// Descendant contexts share the provider through their execution state.
+    pub fn request_authorizer(
+        &self,
+    ) -> Option<&Arc<dyn flow_like_types::authorization::RequestAuthorizer>> {
+        self.app_state.request_authorizer.as_ref()
+    }
+
+    pub async fn authorize_request(
+        &self,
+        mut request: flow_like_types::reqwest::Request,
+        audience: flow_like_types::authorization::ResourceAudience,
+    ) -> flow_like_types::Result<flow_like_types::reqwest::Request> {
+        use flow_like_types::{
+            authorization::AuthorizationRequest,
+            reqwest::header::{AUTHORIZATION, HeaderValue},
+        };
+        if let Some(provider) = self.request_authorizer() {
+            validate_live_resource_url(request.url())?;
+            request.headers_mut().remove(AUTHORIZATION);
+            request.headers_mut().remove("dpop");
+            let authorization = provider
+                .authorize(AuthorizationRequest {
+                    audience,
+                    method: request.method().as_str(),
+                    url: request.url().as_str(),
+                })
+                .await?;
+            authorization.validate()?;
+            let mut value = HeaderValue::from_str(authorization.authorization())?;
+            value.set_sensitive(true);
+            request.headers_mut().insert(AUTHORIZATION, value);
+            if let Some(proof) = authorization.dpop() {
+                let mut value = HeaderValue::from_str(proof)?;
+                value.set_sensitive(true);
+                request.headers_mut().insert("dpop", value);
+            }
+        }
+        Ok(request)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
@@ -331,6 +460,7 @@ impl ExecutionContext {
         }
 
         let (
+            executor_payment_auth,
             run_id,
             stream_state,
             log_spill_threshold,
@@ -342,6 +472,7 @@ impl ExecutionContext {
             Some(run) => {
                 let run = run.lock().await;
                 (
+                    run.executor_payment_auth.clone(),
                     run.id.clone(),
                     run.stream_state,
                     run.log_spill_threshold,
@@ -352,6 +483,7 @@ impl ExecutionContext {
                 )
             }
             None => (
+                None,
                 "".to_string(),
                 false,
                 super::DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
@@ -367,6 +499,7 @@ impl ExecutionContext {
             ),
         };
         ExecutionContext {
+            executor_payment_auth,
             id,
             run_id,
             elements,
@@ -474,6 +607,7 @@ impl ExecutionContext {
             trace.snapshot_variables(variables).await;
         }
         ExecutionContext {
+            executor_payment_auth: run_meta.executor_payment_auth.clone(),
             id,
             run_id: run_meta.run_id.clone(),
             elements: run_meta.elements.clone(),
@@ -647,6 +781,7 @@ impl ExecutionContext {
             trace.snapshot_variables(&self.variables).await;
         }
         ExecutionContext {
+            executor_payment_auth: self.executor_payment_auth.clone(),
             id,
             run: self.run.clone(),
             elements: self.elements.clone(),
@@ -1369,7 +1504,38 @@ impl ExecutionContext {
     ) -> flow_like_types::Result<()> {
         tracing::debug!("Streaming A2UI update");
         self.record_a2ui_update(&message).await;
+        self.record_detached(&message).await;
         self.stream_response("a2ui", message).await
+    }
+
+    /// Get-or-insert under a single write lock: parallel branches emitting the run's first
+    /// update must not race two entries into existence.
+    async fn shared_cache_entry<T: Cacheable + Clone + Default + 'static>(&self, key: &str) -> T {
+        let mut cache = self.cache.write().await;
+        if let Some(entry) = cache
+            .get(key)
+            .and_then(|c| c.as_any().downcast_ref::<T>().cloned())
+        {
+            return entry;
+        }
+        let entry = T::default();
+        cache.insert(
+            key.to_string(),
+            Arc::new(entry.clone()) as Arc<dyn Cacheable>,
+        );
+        entry
+    }
+
+    async fn record_detached(&self, message: &crate::a2ui::A2UIServerMessage) {
+        let Some(element_id) = detaching_element_id(message) else {
+            return;
+        };
+        let detached = self
+            .shared_cache_entry::<A2UIDetachedElements>(A2UI_DETACHED_KEY)
+            .await;
+        if let Ok(mut ids) = detached.ids.lock() {
+            ids.insert(element_id.to_string());
+        }
     }
 
     /// Records surface-mutating a2ui messages in a run-scoped log so nodes that
@@ -1388,25 +1554,9 @@ impl ExecutionContext {
             return;
         }
 
-        // Get-or-insert under a single write lock: parallel branches emitting
-        // the run's first update must not race two logs into existence.
-        let log = {
-            let mut cache = self.cache.write().await;
-            match cache
-                .get(A2UI_UPDATE_LOG_KEY)
-                .and_then(|c| c.as_any().downcast_ref::<A2UIUpdateLog>().cloned())
-            {
-                Some(log) => log,
-                None => {
-                    let log = A2UIUpdateLog::default();
-                    cache.insert(
-                        A2UI_UPDATE_LOG_KEY.to_string(),
-                        Arc::new(log.clone()) as Arc<dyn Cacheable>,
-                    );
-                    log
-                }
-            }
-        };
+        let log = self
+            .shared_cache_entry::<A2UIUpdateLog>(A2UI_UPDATE_LOG_KEY)
+            .await;
 
         if let Ok(mut entries) = log.entries.lock() {
             if entries.len() >= A2UI_UPDATE_LOG_CAP {
@@ -1757,6 +1907,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cloud_user_paths_match_credentials_and_local_scratch_paths_stay_unchanged() {
+        let mut cache = ExecutionContextCache {
+            stores: FlowLikeStores::default(),
+            app_id: "project".into(),
+            model_usage_app_id: None,
+            board_dir: Path::from("apps/project"),
+            board_id: "board".into(),
+            node_id: Arc::from("node"),
+            sub: "auth0|delegating-user".into(),
+            shadow: false,
+        };
+        let (user, global) =
+            flow_like_types::storage_paths::temporary_prefixes(&cache.sub, &cache.app_id);
+        assert_eq!(cache.get_cache(false, true).unwrap().as_ref(), user);
+        assert_eq!(
+            cache.get_cache(true, true).unwrap().as_ref(),
+            format!("{user}/node")
+        );
+        assert_eq!(cache.get_cache(false, false).unwrap().as_ref(), global);
+        assert_eq!(
+            cache.get_user_dir(false).unwrap().join("db").as_ref(),
+            "users/auth0%7Cdelegating-user/apps/project/db"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        cache.stores.temporary_store = Some(FlowLikeStore::Local(Arc::new(
+            flow_like_storage::files::store::local_store::LocalObjectStore::new(
+                directory.path().to_path_buf(),
+            )
+            .unwrap(),
+        )));
+        assert_eq!(
+            cache.get_cache(false, true).unwrap().as_ref(),
+            "tmp/user/auth0%7Cdelegating-user/apps/project"
+        );
+    }
+
+    #[test]
+    fn live_project_requests_require_tls_or_explicit_loopback() {
+        for url in [
+            "https://api.example.test/api/v1/apps/project/connections/target/token",
+            "http://localhost:3000/api/v1",
+            "http://127.0.0.1:3000/api/v1",
+            "http://[::1]:3000/api/v1",
+        ] {
+            assert!(
+                validate_live_resource_url(&flow_like_types::reqwest::Url::parse(url).unwrap())
+                    .is_ok()
+            );
+        }
+        for url in [
+            "http://api.example.test/api/v1",
+            "https://user:password@api.example.test/api/v1",
+            "https://api.example.test/api/v1/..%2fadmin",
+        ] {
+            assert!(
+                validate_live_resource_url(&flow_like_types::reqwest::Url::parse(url).unwrap())
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn empty_traces_are_retained_once_per_node() {
         let mut traces = Vec::new();
         let mut represented_nodes = AHashSet::new();
@@ -1795,5 +2007,76 @@ mod tests {
         append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, second);
 
         assert_eq!(traces.len(), 2);
+    }
+
+    use crate::a2ui::A2UIServerMessage;
+    use flow_like_types::json::json;
+
+    fn update(element_id: &str, kind: &str) -> A2UIServerMessage {
+        A2UIServerMessage::upsert_element(element_id, json!({ "type": kind, "index": 0 }))
+    }
+
+    fn capturing_callback() -> (InterComCallback, Arc<std::sync::Mutex<Vec<InterComEvent>>>) {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let callback: InterComCallback = Some(Arc::new(move |event| {
+            sink.lock().unwrap().push(event);
+            Box::pin(async { Ok(()) })
+        }));
+        (callback, events)
+    }
+
+    #[test]
+    fn only_child_removals_detach() {
+        assert_eq!(
+            detaching_element_id(&update("page/list", "clearChildren")),
+            Some("page/list")
+        );
+        assert_eq!(
+            detaching_element_id(&update("inst/list", "removeChildAt")),
+            Some("inst/list")
+        );
+        assert_eq!(
+            detaching_element_id(&A2UIServerMessage::remove_element("page", "card")),
+            Some("card")
+        );
+        assert_eq!(detaching_element_id(&update("list", "pushChild")), None);
+        assert_eq!(
+            detaching_element_id(&update("list", "createComponent")),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn run_end_names_every_detaching_element_once() {
+        let detached = A2UIDetachedElements::default();
+        detached
+            .ids
+            .lock()
+            .unwrap()
+            .extend(["list", "card", "list"].map(String::from));
+        let cache = RwLock::new(AHashMap::new());
+        cache.write().await.insert(
+            A2UI_DETACHED_KEY.to_string(),
+            Arc::new(detached) as Arc<dyn Cacheable>,
+        );
+        let (callback, events) = capturing_callback();
+
+        stream_prune_detached(&cache, &callback).await;
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "a2ui");
+        assert_eq!(
+            events[0].payload,
+            json!({ "type": "pruneDetached", "element_ids": ["card", "list"] })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_detached_nothing_sends_nothing() {
+        let (callback, events) = capturing_callback();
+        stream_prune_detached(&RwLock::new(AHashMap::new()), &callback).await;
+        assert!(events.lock().unwrap().is_empty());
     }
 }

@@ -5,6 +5,33 @@ import { act, createElement } from "react";
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"window",
+	"document",
+	"navigator",
+	"localStorage",
+	"HTMLElement",
+	"Element",
+	"Node",
+	"MutationObserver",
+	"HTMLButtonElement",
+	"SVGElement",
+	"Event",
+	"CustomEvent",
+	"MouseEvent",
+	"PointerEvent",
+	"Blob",
+	"getComputedStyle",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"ResizeObserver",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+
 function installDomGlobals() {
 	Object.assign(globalThis, {
 		window,
@@ -38,14 +65,27 @@ installDomGlobals();
 // @ts-expect-error — react-dom checks this flag before touching the DOM.
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	nextThemes: { ...(await import("next-themes")) },
+	sonner: { ...(await import("sonner")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	monacoReact: { ...(await import("@monaco-editor/react")) },
+	monacoCodeEditor: { ...(await import("../../ui/monaco-code-editor")) },
+	appearanceRail: { ...(await import("./appearance-rail")) },
+};
+
 const translate = (_key: string, fallback: string) => fallback;
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: translate }),
 }));
 mock.module("next-themes", () => ({
+	...actual.nextThemes,
 	useTheme: () => ({ resolvedTheme: "dark" }),
 }));
 mock.module("sonner", () => ({
+	...actual.sonner,
 	toast: { success: () => {}, error: () => {} },
 }));
 
@@ -61,14 +101,17 @@ const backend = {
 	},
 };
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => backend,
 }));
 
 /** Monaco loads its editor from a CDN; the studio only needs a text surface here. */
 mock.module("@monaco-editor/react", () => ({
+	...actual.monacoReact,
 	default: () => createElement("div"),
 }));
 mock.module("../../ui/monaco-code-editor", () => ({
+	...actual.monacoCodeEditor,
 	MonacoCodeEditor: ({
 		value,
 		onChange,
@@ -85,6 +128,7 @@ mock.module("../../ui/monaco-code-editor", () => ({
 }));
 
 mock.module("./appearance-rail", () => ({
+	...actual.appearanceRail,
 	AppearanceRail: ({
 		onChange,
 		state,
@@ -129,10 +173,21 @@ async function render(): Promise<HTMLElement> {
 	return container;
 }
 
-afterAll(() => {
-	act(() => {
+afterAll(async () => {
+	await act(async () => {
 		for (const root of roots) root.unmount();
 	});
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("next-themes", () => actual.nextThemes);
+	mock.module("sonner", () => actual.sonner);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("@monaco-editor/react", () => actual.monacoReact);
+	mock.module("../../ui/monaco-code-editor", () => actual.monacoCodeEditor);
+	mock.module("./appearance-rail", () => actual.appearanceRail);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
 });
 
 const sheetOf = (container: HTMLElement) =>

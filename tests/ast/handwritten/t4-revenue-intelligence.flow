@@ -176,10 +176,11 @@ module ingest {
 
 module scoring {
     function talkRatio(spokenSeconds: float, totalSeconds: float): (ratio: float) {
-        if (totalSeconds <= 0.0) {
-            return 0.5
+        let ratio = 0.5
+        if (totalSeconds > 0.0) {
+            ratio = spokenSeconds / totalSeconds
         }
-        return spokenSeconds / totalSeconds
+        return ratio
     }
 
     function blend(similarity: float, ratio: float, daysSinceTouch: int): (score: float) {

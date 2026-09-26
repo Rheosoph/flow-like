@@ -1,16 +1,13 @@
+use super::list_scores::load_app_names;
 use crate::{
-    entity::{app_board_score, meta},
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::global_permission::GlobalPermission,
-    state::AppState,
+    entity::app_board_score, error::ApiError, middleware::jwt::AppUser,
+    permission::global_permission::GlobalPermission, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::sea_query::Expr;
 use sea_orm::sea_query::ExprTrait;
-use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
+use sea_orm::{EntityTrait, FromQueryResult, QuerySelect};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use utoipa::ToSchema;
 
 #[derive(FromQueryResult)]
@@ -94,18 +91,7 @@ pub async fn get_scores_summary(
 
     // Resolve app names for display.
     let app_ids: Vec<String> = worst.iter().map(|a| a.app_id.clone()).collect();
-    let names: HashMap<String, String> = if app_ids.is_empty() {
-        HashMap::new()
-    } else {
-        meta::Entity::find()
-            .filter(meta::Column::AppId.is_in(app_ids))
-            .filter(meta::Column::Lang.eq("en"))
-            .all(&state.db)
-            .await?
-            .into_iter()
-            .filter_map(|m| m.app_id.clone().map(|aid| (aid, m.name)))
-            .collect()
-    };
+    let names = load_app_names(&state, app_ids).await?;
 
     let worst_apps = worst
         .into_iter()

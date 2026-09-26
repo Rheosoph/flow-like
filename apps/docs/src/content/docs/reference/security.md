@@ -83,9 +83,11 @@ that a high resource limit cannot affect overall capacity.
 
 There are two related configuration paths:
 
-1. A package manifest selects memory and timeout tiers.
+1. A package manifest selects memory and timeout tiers. The desktop loader for
+   installed packages applies them to every node it loads from the package.
 2. Node-level permissions can be converted directly into a security
-   configuration that uses the runtime defaults.
+   configuration that uses the runtime defaults. The server executor uses this
+   path and does not apply the manifest tiers.
 
 Current package-manifest defaults are:
 
@@ -116,6 +118,8 @@ External nodes declare permissions with these serialized names:
 | `network:dns` | DNS lookups |
 | `storage:read` | Read from the host-provided storage scope |
 | `storage:write` | Write and delete within the host-provided storage scope |
+| `database:read` | Read from wired database and SQL session pins |
+| `database:write` | Modify rows through wired database pins |
 | `variables` | Read and write execution variables |
 | `cache` | Read and write the execution cache |
 | `streaming` | Stream incremental output |
@@ -125,15 +129,19 @@ External nodes declare permissions with these serialized names:
 | `functions` | Call registered functions or subflows |
 
 The node-permission conversion begins with no capabilities and adds the
-declared set. Package manifests can also specify network host allowlists and
-resource tiers.
+declared set. A package manifest cannot add or remove capabilities. It authors
+only resource tiers, a network host allowlist, and OAuth scopes. The capability
+listing shown in the store is derived by the registry from the compiled node
+definitions, not authored.
 
 :::caution
-An empty `allowed_hosts` list means unrestricted hosts when HTTP is enabled in
-the package manifest. Use an explicit allowlist when a package only needs known
-services. In a self-hosted `per_run` sandbox, the deployment's external gateway
-and network restrictions still apply to permitted WASM host calls and native
-nodes.
+An empty `allowed_hosts` list means unrestricted hosts. Use an explicit
+allowlist when a package only needs known services, but do not treat it as a
+complete egress control: the desktop loader for installed packages applies it
+to WebSocket connects and WASI sockets, the Flow-Like HTTP host function does
+not consult it, and the server executor does not apply it. In a self-hosted
+`per_run` sandbox, the deployment's external gateway and network restrictions
+still apply to permitted WASM host calls and native nodes.
 :::
 
 See [Sandboxing and permissions](/dev/wasm-nodes/sandboxing/) for the author

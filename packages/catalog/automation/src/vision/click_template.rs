@@ -26,6 +26,7 @@ impl NodeLogic for ClickTemplateNode {
             "Finds a template image on screen and clicks on it",
             "Automation/Vision",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation.vision", "clickTemplate");
         node.add_icon("/flow/icons/vision.svg");
 
@@ -46,7 +47,7 @@ impl NodeLogic for ClickTemplateNode {
         node.add_input_pin(
             "session",
             "Session",
-            "Automation session handle (provides template matching via rustautogui)",
+            "Automation session handle",
             VariableType::Struct,
         )
         .set_schema::<AutomationSession>();
@@ -58,6 +59,14 @@ impl NodeLogic for ClickTemplateNode {
             VariableType::Struct,
         )
         .set_schema::<FlowPath>();
+
+        node.add_input_pin(
+            "monitor",
+            "Monitor",
+            "Display index, -1 for primary, or -2 for all displays",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(-2)));
 
         node.add_input_pin(
             "confidence",
@@ -149,14 +158,16 @@ impl NodeLogic for ClickTemplateNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use rustautogui::MouseClick;
+        use enigo::{Button, Coordinate, Direction, Mouse};
 
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let template: FlowPath = context.evaluate_pin("template").await?;
         let confidence: f64 = context.evaluate_pin("confidence").await?;
+        let monitor: i64 = context.evaluate_pin("monitor").await.unwrap_or(-2);
         let click_type: String = context.evaluate_pin("click_type").await?;
         let offset_x: i64 = context.evaluate_pin("offset_x").await?;
         let offset_y: i64 = context.evaluate_pin("offset_y").await?;
@@ -167,55 +178,58 @@ impl NodeLogic for ClickTemplateNode {
         // Download template image using FlowPath's caching mechanism
         let template_bytes = template.get(context, false).await?;
 
-        // Use xcap screen capture + direct NCC (bypasses rustautogui's broken macOS capture)
-        let (matches, _gray_template, _gray_screen) =
-            crate::types::screen_match::find_template_on_screen(&template_bytes, confidence as f32)
-                .ok_or_else(|| {
-                    flow_like_types::anyhow!("Failed to capture screen or decode template")
-                })?;
-
-        let autogui = session.get_autogui(context).await?;
-        let mut gui = autogui.lock().await;
-
-        let perform_click =
-            |gui: &mut rustautogui::RustAutoGui, x: u32, y: u32| -> flow_like_types::Result<()> {
-                gui.move_mouse_to_pos(x, y, 0.1)
-                    .map_err(|e| flow_like_types::anyhow!("Failed to move mouse: {}", e))?;
-
-                match click_type.as_str() {
-                    "Right" => gui.click(MouseClick::RIGHT),
-                    "Double" => gui.double_click(),
-                    _ => gui.click(MouseClick::LEFT),
-                }
-                .map_err(|e| flow_like_types::anyhow!("Failed to click: {}", e))?;
-                Ok(())
+        let matches = crate::types::screen_match::match_desktop_async(
+            template_bytes.clone(),
+            confidence,
+            monitor,
+        )
+        .await?;
+        let target = if let Some(&(x, y, _)) = matches.first() {
+            Some((
+                i32::try_from(
+                    i64::from(x)
+                        .checked_add(offset_x)
+                        .ok_or_else(|| flow_like_types::anyhow!("Click X overflow"))?,
+                )?,
+                i32::try_from(
+                    i64::from(y)
+                        .checked_add(offset_y)
+                        .ok_or_else(|| flow_like_types::anyhow!("Click Y overflow"))?,
+                )?,
+                true,
+            ))
+        } else if fallback_x != -1 && fallback_y != -1 {
+            Some((
+                i32::try_from(fallback_x)?,
+                i32::try_from(fallback_y)?,
+                false,
+            ))
+        } else {
+            None
+        };
+        if let Some((x, y, found)) = target {
+            let (button, double) = match click_type.to_lowercase().as_str() {
+                "left" => (Button::Left, false),
+                "right" => (Button::Right, false),
+                "double" => (Button::Left, true),
+                _ => return Err(flow_like_types::anyhow!("Unknown click type")),
             };
-
-        if let Some((phys_x, phys_y, _conf)) = matches.first() {
-            // Convert physical (Retina) coordinates to logical mouse coordinates
-            let (lx, ly) = crate::types::screen_match::physical_to_logical(*phys_x, *phys_y);
-            let click_x = (lx as i64 + offset_x) as u32;
-            let click_y = (ly as i64 + offset_y) as u32;
-
-            perform_click(&mut gui, click_x, click_y)?;
-
-            context.set_pin_value("found", json!(true)).await?;
-            context.set_pin_value("x", json!(click_x as i64)).await?;
-            context.set_pin_value("y", json!(click_y as i64)).await?;
-            context.activate_exec_pin("exec_out").await?;
-            return Ok(());
-        }
-
-        // Template not found - try fallback coordinates if provided
-        if fallback_x >= 0 && fallback_y >= 0 {
-            let click_x = fallback_x as u32;
-            let click_y = fallback_y as u32;
-
-            perform_click(&mut gui, click_x, click_y)?;
-
-            context.set_pin_value("found", json!(false)).await?;
-            context.set_pin_value("x", json!(fallback_x)).await?;
-            context.set_pin_value("y", json!(fallback_y)).await?;
+            let mut input = session.create_enigo(context).await?;
+            let cancellation = context.get_cancellation_token();
+            tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
+                input.move_mouse(x, y, Coordinate::Abs)?;
+                input.button(button, Direction::Click)?;
+                if double {
+                    crate::computer::mouse::interruptible_sleep(80, cancellation.as_ref())?;
+                    input.button(button, Direction::Click)?;
+                }
+                Ok(())
+            })
+            .await??;
+            session.apply_delay(context).await?;
+            context.set_pin_value("found", json!(found)).await?;
+            context.set_pin_value("x", json!(x)).await?;
+            context.set_pin_value("y", json!(y)).await?;
             context.activate_exec_pin("exec_out").await?;
             return Ok(());
         }

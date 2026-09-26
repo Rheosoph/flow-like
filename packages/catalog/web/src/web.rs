@@ -9,6 +9,7 @@ pub mod mqtt;
 pub mod remote;
 pub mod rest;
 pub mod scrape;
+pub mod service_ready;
 pub mod tcp;
 #[cfg(all(test, feature = "execute"))]
 pub(crate) mod test_support;

@@ -347,12 +347,12 @@ pub async fn upsert_request(
         "admin.publication.review",
         "publication_request",
         request_id,
-        format!(
-            "Publication request {}: {} {}",
-            body.action,
-            target.kind(),
-            target.app_id().or(target.group_id()).unwrap_or_default()
-        )
+        serde_json::json!({
+            "status": new_status,
+            "target_kind": target.kind(),
+            "app_id": target.app_id(),
+            "group_id": target.group_id(),
+        })
     );
     Ok(Json(ReviewPublicationResponse {
         id: updated.id,

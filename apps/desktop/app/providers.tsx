@@ -21,6 +21,7 @@ import {
 	cleanupLegacyQueryCacheBlob,
 	createSmartQueryPersister,
 } from "@flow-like/flow-like-ui/lib/query-persister";
+import { UseNavigationProvider } from "@flow-like/flow-like-ui/lib/use-navigation-provider";
 import { I18nProvider } from "@flow-like/locales";
 import dynamic from "next/dynamic";
 import { Suspense, useEffect } from "react";
@@ -31,10 +32,12 @@ import DownloadNotificationProvider from "../components/download-notification-pr
 import GlobalAnchorHandler from "../components/global-anchor-component";
 import { IdbMigrationGate } from "../components/idb-migration-gate";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
+import { LocalSinkConsentProvider } from "../components/local-sink";
 import { NativeIntegrationProvider } from "../components/native-integration-provider";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
+import { OfflineWritesNotifier } from "../components/offline-writes-notifier";
 import { PendingInviteRedeemer } from "../components/pending-invite-redeemer";
 import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
@@ -137,65 +140,69 @@ export function Providers({
 	children: React.ReactNode;
 }>) {
 	return (
-		<IdbMigrationGate>
-			<ReactFlowProvider>
-				<QueryClientProvider client={queryClient}>
-					<NetworkAwareProvider>
-						<IOSWebviewHardening />
-						<NetworkStatusIndicator />
-						<UpdateProvider />
-						<TrayProvider />
-						<GlobalAnchorHandler />
-						<I18nProvider>
-							<ThemeProvider
-								attribute="class"
-								defaultTheme="system"
-								enableSystem
-								storageKey="theme"
-								disableTransitionOnChange
-							>
-								<TooltipProvider>
-									<ToastProvider />
-									<TauriProvider>
-										<DownloadNotificationProvider />
-										<RpaPermissionProvider />
-										<DeeplinkNavigationHandler>
-											<OAuthCallbackHandler>
-												<OAuthExecutionProvider>
-													<DesktopAuthProvider>
-														<Toaster />
-														<PendingInviteRedeemer />
-														<NotificationProvider />
-														<RuntimeVariablesProviderComponent>
-															<ExecutionServiceProvider>
-																<ExecutionEngineProviderComponent>
-																	<SpotlightWrapper>
-																		<TelemetryProvider>
-																			<ThemeLoader />
-																			<Suspense fallback={null}>
-																				<NativeIntegrationProvider />
-																			</Suspense>
-																			<AppSidebar>{children}</AppSidebar>
-																			<GlobalToolBridge />
-																			<GlobalChatOverlay />
-																			<FlowPilotBubbleButton />
-																			<GlobalUpgradeDialog />
-																		</TelemetryProvider>
-																	</SpotlightWrapper>
-																</ExecutionEngineProviderComponent>
-															</ExecutionServiceProvider>
-														</RuntimeVariablesProviderComponent>
-													</DesktopAuthProvider>
-												</OAuthExecutionProvider>
-											</OAuthCallbackHandler>
-										</DeeplinkNavigationHandler>
-									</TauriProvider>
-								</TooltipProvider>
-							</ThemeProvider>
-						</I18nProvider>
-					</NetworkAwareProvider>
-				</QueryClientProvider>
-			</ReactFlowProvider>
-		</IdbMigrationGate>
+		<UseNavigationProvider routeMode="query">
+			<IdbMigrationGate>
+				<ReactFlowProvider>
+					<QueryClientProvider client={queryClient}>
+						<NetworkAwareProvider>
+							<IOSWebviewHardening />
+							<NetworkStatusIndicator />
+							<UpdateProvider />
+							<TrayProvider />
+							<GlobalAnchorHandler />
+							<I18nProvider>
+								<ThemeProvider
+									attribute="class"
+									defaultTheme="system"
+									enableSystem
+									storageKey="theme"
+									disableTransitionOnChange
+								>
+									<TooltipProvider>
+										<ToastProvider />
+										<TauriProvider>
+											<DownloadNotificationProvider />
+											<OfflineWritesNotifier />
+											<RpaPermissionProvider />
+											<LocalSinkConsentProvider />
+											<DeeplinkNavigationHandler>
+												<OAuthCallbackHandler>
+													<OAuthExecutionProvider>
+														<DesktopAuthProvider>
+															<Toaster />
+															<PendingInviteRedeemer />
+															<NotificationProvider />
+															<RuntimeVariablesProviderComponent>
+																<ExecutionServiceProvider>
+																	<ExecutionEngineProviderComponent>
+																		<SpotlightWrapper>
+																			<TelemetryProvider>
+																				<ThemeLoader />
+																				<Suspense fallback={null}>
+																					<NativeIntegrationProvider />
+																				</Suspense>
+																				<AppSidebar>{children}</AppSidebar>
+																				<GlobalToolBridge />
+																				<GlobalChatOverlay />
+																				<FlowPilotBubbleButton />
+																				<GlobalUpgradeDialog />
+																			</TelemetryProvider>
+																		</SpotlightWrapper>
+																	</ExecutionEngineProviderComponent>
+																</ExecutionServiceProvider>
+															</RuntimeVariablesProviderComponent>
+														</DesktopAuthProvider>
+													</OAuthExecutionProvider>
+												</OAuthCallbackHandler>
+											</DeeplinkNavigationHandler>
+										</TauriProvider>
+									</TooltipProvider>
+								</ThemeProvider>
+							</I18nProvider>
+						</NetworkAwareProvider>
+					</QueryClientProvider>
+				</ReactFlowProvider>
+			</IdbMigrationGate>
+		</UseNavigationProvider>
 	);
 }

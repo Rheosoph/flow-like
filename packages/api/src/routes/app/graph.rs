@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 
 use crate::{
@@ -29,7 +29,9 @@ pub mod schema;
 pub mod search;
 pub mod sql;
 pub mod subgraph;
+pub mod update_object;
 pub mod update_overlay;
+pub mod update_relationship;
 pub mod upsert_edges;
 pub mod upsert_nodes;
 pub mod validate;
@@ -112,6 +114,11 @@ pub fn routes() -> Router<AppState> {
         .route("/{overlay_id}/sample", get(sample::sample_nodes))
         .route("/{overlay_id}/nodes", post(upsert_nodes::upsert_nodes))
         .route("/{overlay_id}/edges", post(upsert_edges::upsert_edges))
+        .route("/{overlay_id}/objects", patch(update_object::update_object))
+        .route(
+            "/{overlay_id}/relationships",
+            patch(update_relationship::update_relationship),
+        )
         .route(
             "/{overlay_id}/actions/{action_id}/invoke",
             post(actions::invoke_ontology_action),

@@ -6,30 +6,39 @@ use flow_like_types::tokio;
 use hyper::body::{Body as HttpBody, Frame, SizeHint};
 use lambda_http::{Request, RequestExt, Response};
 use opentelemetry::trace::{
-    SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState, TracerProvider,
+    SpanContext, SpanId, SpanKind, TraceContextExt, TraceFlags, TraceId, TraceState, TracerProvider,
 };
-use opentelemetry::{Context as OtelContext, KeyValue, Value};
+use opentelemetry::{Context as OtelContext, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::trace::{
-    IdGenerator, RandomIdGenerator, Sampler, SdkTracerProvider, SpanData, SpanExporter,
+    Sampler, SamplingDecision, SdkTracerProvider, ShouldSample, SpanData, SpanExporter,
     SpanProcessor,
 };
+use span_export::{XrayIds, sanitize};
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tower::Service;
 use tracing::{Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::prelude::*;
 
+#[path = "../../shared/span_export.rs"]
+mod span_export;
+
 const TARGET: &str = "flow_like::observability";
 const MAX_QUEUED_SPANS: usize = 2048;
 const EXPORT_BUDGET: Duration = Duration::from_millis(200);
+const INVOCATION: &str = "lambda.invocation";
+/// Between dev p90 (338 ms) and p99 (2.4 s): keeps roughly the slowest 3%.
+const SLOW_INVOCATION: Duration = Duration::from_secs(1);
+const REMEMBERED_TRACES: usize = 64;
 type FlushFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[derive(Clone, Debug, Default)]
@@ -69,98 +78,81 @@ impl SpanProcessor for InvocationSpans {
     }
 }
 
-fn sanitize(span: &mut SpanData) {
-    // Only our explicit target is collected. This second boundary prevents a
-    // future instrument(skip_all) omission from exporting handler arguments.
-    span.attributes
-        .retain(|attribute| safe_attribute(attribute));
-    span.events = Default::default();
-    span.links = Default::default();
-    if matches!(span.status, opentelemetry::trace::Status::Error { .. })
+/// Every invocation is recorded; export is decided per trace id when the batch
+/// is flushed. A trace whose invocation span is in the batch is kept when the
+/// ratio selects it, any of its spans failed, it ran slow, it was a cold start,
+/// or the platform sampled it. Late spans of other traces reuse a remembered
+/// decision or fall back to the ratio, so they never flip the current trace.
+#[derive(Debug)]
+struct TailSampling {
+    ratio: Sampler,
+    remembered: Mutex<VecDeque<(TraceId, bool)>>,
+}
+
+impl TailSampling {
+    fn new(rate: f64) -> Self {
+        Self {
+            ratio: Sampler::TraceIdRatioBased(rate),
+            remembered: Mutex::default(),
+        }
+    }
+
+    fn ratio_keeps(&self, trace_id: TraceId) -> bool {
+        self.ratio
+            .should_sample(None, trace_id, INVOCATION, &SpanKind::Server, &[], &[])
+            .decision
+            == SamplingDecision::RecordAndSample
+    }
+
+    fn retain(&self, mut batch: Vec<SpanData>) -> Vec<SpanData> {
+        let mut decisions = HashMap::new();
+        for span in batch.iter().filter(|span| span.name == INVOCATION) {
+            let trace_id = span.span_context.trace_id();
+            let keep = decisions.entry(trace_id).or_insert(false);
+            *keep = *keep || notable_invocation(span) || self.ratio_keeps(trace_id);
+        }
+        for span in &batch {
+            if let Some(keep) = decisions.get_mut(&span.span_context.trace_id()) {
+                *keep = *keep || matches!(span.status, opentelemetry::trace::Status::Error { .. });
+            }
+        }
+        let mut remembered = self.remembered.lock().ok();
+        if let Some(remembered) = remembered.as_mut() {
+            for (trace_id, keep) in &decisions {
+                remembered.retain(|(known, _)| known != trace_id);
+                remembered.push_back((*trace_id, *keep));
+            }
+            while remembered.len() > REMEMBERED_TRACES {
+                remembered.pop_front();
+            }
+        }
+        batch.retain(|span| {
+            let trace_id = span.span_context.trace_id();
+            *decisions.entry(trace_id).or_insert_with(|| {
+                remembered
+                    .as_ref()
+                    .and_then(|remembered| {
+                        remembered
+                            .iter()
+                            .find_map(|(known, keep)| (*known == trace_id).then_some(*keep))
+                    })
+                    .unwrap_or_else(|| self.ratio_keeps(trace_id))
+            })
+        });
+        batch
+    }
+}
+
+fn notable_invocation(span: &SpanData) -> bool {
+    // The invocation span has a parent only when the platform header said Sampled=1.
+    span.parent_span_id != SpanId::INVALID
         || span
             .attributes
-            .iter()
-            .any(|attribute| attribute.key.as_str() == "error.type")
-    {
-        span.status = opentelemetry::trace::Status::error("");
-    }
-    if span.name.len() > 96
-        || !span
-            .name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-    {
-        span.name = "operation".into();
-    }
-}
-
-fn safe_attribute(attribute: &KeyValue) -> bool {
-    let key = attribute.key.as_str();
-    match (&attribute.value, key) {
-        (Value::I64(_), "http.status_code" | "http.response.status_code" | "retry_count") => true,
-        (Value::Bool(_), "faas.coldstart" | "http.cancelled") => true,
-        (
-            Value::F64(value),
-            "http.response_ready_ms" | "http.first_byte_ms" | "http.duration_ms",
-        ) => value.is_finite() && *value >= 0.0,
-        (Value::String(value), "http.route") => {
-            let value = value.as_str();
-            value.len() <= 256
-                && (value == "unmatched" || value.starts_with('/'))
-                && value
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"/_-.{}:*".contains(&b))
-        }
-        (
-            Value::String(value),
-            "http.method"
-            | "http.request.method"
-            | "db.operation"
-            | "db.system.name"
-            | "db.table"
-            | "rpc.service"
-            | "rpc.method"
-            | "cloud.service"
-            | "error.type",
-        ) => {
-            value.as_str().len() <= 64
-                && value
-                    .as_str()
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        }
-        (Value::String(value), "faas.invocation_id") => {
-            let value = value.as_str();
-            value.len() == 36
-                && value.bytes().enumerate().all(|(i, b)| {
-                    if [8, 13, 18, 23].contains(&i) {
-                        b == b'-'
-                    } else {
-                        b.is_ascii_hexdigit()
-                    }
-                })
-        }
-        _ => false,
-    }
-}
-
-#[derive(Debug, Default)]
-struct XrayIds(RandomIdGenerator);
-
-impl IdGenerator for XrayIds {
-    fn new_trace_id(&self) -> TraceId {
-        let mut bytes = self.0.new_trace_id().to_bytes();
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as u32;
-        bytes[..4].copy_from_slice(&seconds.to_be_bytes());
-        TraceId::from_bytes(bytes)
-    }
-
-    fn new_span_id(&self) -> SpanId {
-        self.0.new_span_id()
-    }
+            .contains(&KeyValue::new("faas.coldstart", true))
+        || span
+            .end_time
+            .duration_since(span.start_time)
+            .is_ok_and(|duration| duration >= SLOW_INVOCATION)
 }
 
 trait LocalExporter: Send + Sync {
@@ -182,6 +174,7 @@ impl LocalExporter for opentelemetry_otlp::SpanExporter {
 struct Enabled {
     _provider: Option<SdkTracerProvider>,
     spans: InvocationSpans,
+    sampling: TailSampling,
     exporter: Box<dyn LocalExporter>,
     export_lock: tokio::sync::Mutex<()>,
 }
@@ -246,9 +239,7 @@ pub fn init() -> Result<Telemetry, lambda_http::Error> {
     let provider = SdkTracerProvider::builder()
         .with_resource(resource)
         .with_id_generator(XrayIds::default())
-        .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-            sample_rate,
-        ))))
+        .with_sampler(Sampler::AlwaysOn)
         .with_span_processor(spans.clone())
         .build();
     let layer = tracing_opentelemetry::layer()
@@ -268,6 +259,7 @@ pub fn init() -> Result<Telemetry, lambda_http::Error> {
         inner: Some(Arc::new(Enabled {
             _provider: Some(provider),
             spans,
+            sampling: TailSampling::new(sample_rate),
             exporter: Box::new(exporter),
             export_lock: tokio::sync::Mutex::new(()),
         })),
@@ -283,6 +275,7 @@ impl Telemetry {
     #[cfg(test)]
     fn for_test(
         spans: InvocationSpans,
+        sample_rate: f64,
         callback: Arc<dyn Fn(Vec<SpanData>) -> FlushFuture + Send + Sync>,
     ) -> Self {
         struct TestExporter(Arc<dyn Fn(Vec<SpanData>) -> FlushFuture + Send + Sync>);
@@ -302,6 +295,7 @@ impl Telemetry {
             inner: Some(Arc::new(Enabled {
                 _provider: None,
                 spans,
+                sampling: TailSampling::new(sample_rate),
                 exporter: Box::new(TestExporter(callback)),
                 export_lock: tokio::sync::Mutex::new(()),
             })),
@@ -328,6 +322,7 @@ impl Telemetry {
                 .lock()
                 .map(|mut queue| std::mem::take(&mut *queue))
                 .unwrap_or_default();
+            let batch = inner.sampling.retain(batch);
             if batch.is_empty() {
                 return Ok(());
             }
@@ -423,7 +418,13 @@ where
         let span = tracing::info_span!(target: "flow_like::observability", parent: None, "lambda.invocation", otel.kind = "server", faas.coldstart = cold, faas.invocation_id = tracing::field::Empty, otel.status_code = tracing::field::Empty);
         if let Some(context) = request.lambda_context_ref() {
             span.record("faas.invocation_id", context.request_id.as_str());
-            if let Some(parent) = context.xray_trace_id.as_deref().and_then(xray_parent) {
+            // An unsampled platform parent is never exported, so start a new root.
+            if let Some(parent) = context
+                .xray_trace_id
+                .as_deref()
+                .and_then(xray_parent)
+                .filter(|parent| parent.span().span_context().is_sampled())
+            {
                 let _ = span.set_parent(parent);
             }
         }
@@ -641,6 +642,134 @@ mod tests {
         }
         assert_eq!(queue.queue.lock().unwrap().len(), MAX_QUEUED_SPANS);
         assert_eq!(queue.dropped.load(Ordering::Relaxed), 1);
+    }
+
+    const RATIO_KEEPS: u128 = 0x69abcdef_00000000_00000000_00000001;
+    const RATIO_DROPS: u128 = 0x69abcdef_00000000_ffffffff_ffffffff;
+    const OTHER_RATIO_DROPS: u128 = 0x69abcdf0_00000000_fffffffe_ffffffff;
+
+    fn trace(value: u128) -> TraceId {
+        TraceId::from_bytes(value.to_be_bytes())
+    }
+
+    fn recorded(name: &'static str, trace_id: u128) -> SpanData {
+        let queue = InvocationSpans::default();
+        let provider = SdkTracerProvider::builder()
+            .with_span_processor(queue.clone())
+            .build();
+        drop(provider.tracer("test").start(name));
+        let mut span = queue.queue.lock().unwrap().pop().unwrap();
+        span.span_context = SpanContext::new(
+            trace(trace_id),
+            span.span_context.span_id(),
+            TraceFlags::SAMPLED,
+            false,
+            TraceState::default(),
+        );
+        span.parent_span_id = SpanId::INVALID;
+        span.end_time = span.start_time + Duration::from_millis(40);
+        span
+    }
+
+    fn invocation(trace_id: u128) -> SpanData {
+        let mut span = recorded(INVOCATION, trace_id);
+        span.attributes = vec![KeyValue::new("faas.coldstart", false)];
+        span
+    }
+
+    fn names(batch: &[SpanData]) -> Vec<&str> {
+        batch.iter().map(|span| span.name.as_ref()).collect()
+    }
+
+    #[test]
+    fn ratio_decision_is_deterministic_per_trace_id() {
+        let first = TailSampling::new(0.05);
+        let second = TailSampling::new(0.05);
+        assert!(first.ratio_keeps(trace(RATIO_KEEPS)));
+        assert!(!first.ratio_keeps(trace(RATIO_DROPS)));
+        let kept = (0..10_000u64)
+            .map(|i| trace(RATIO_DROPS & !u128::from(u64::MAX) | u128::from(u64::MAX / 10_000 * i)))
+            .filter(|trace_id| {
+                let keep = first.ratio_keeps(*trace_id);
+                assert_eq!(keep, first.ratio_keeps(*trace_id));
+                assert_eq!(keep, second.ratio_keeps(*trace_id));
+                keep
+            })
+            .count();
+        assert!((450..=550).contains(&kept), "{kept}");
+    }
+
+    #[test]
+    fn an_ordinary_fast_successful_trace_is_dropped() {
+        let sampling = TailSampling::new(0.05);
+        let batch = vec![
+            recorded("http.request", RATIO_DROPS),
+            invocation(RATIO_DROPS),
+        ];
+        assert!(sampling.retain(batch).is_empty());
+    }
+
+    #[test]
+    fn each_keep_rule_exports_the_whole_invocation_trace() {
+        type Apply = fn(&mut SpanData, &mut SpanData);
+        let rules: [(&str, u128, Apply); 6] = [
+            ("ratio", RATIO_KEEPS, |_, _| {}),
+            ("child error", RATIO_DROPS, |child, _| {
+                child.status = opentelemetry::trace::Status::error("")
+            }),
+            ("invocation error", RATIO_DROPS, |_, root| {
+                root.status = opentelemetry::trace::Status::error("")
+            }),
+            ("slow", RATIO_DROPS, |_, root| {
+                root.end_time = root.start_time + SLOW_INVOCATION
+            }),
+            ("cold start", RATIO_DROPS, |_, root| {
+                root.attributes = vec![KeyValue::new("faas.coldstart", true)]
+            }),
+            ("platform sampled", RATIO_DROPS, |_, root| {
+                root.parent_span_id = SpanId::from_bytes([1; 8]);
+                root.parent_span_is_remote = true;
+            }),
+        ];
+        for (rule, trace_id, apply) in rules {
+            let mut child = recorded("db.query", trace_id);
+            let mut root = invocation(trace_id);
+            apply(&mut child, &mut root);
+            let kept = TailSampling::new(0.05).retain(vec![child, root]);
+            assert_eq!(names(&kept), ["db.query", INVOCATION], "{rule}");
+        }
+    }
+
+    #[test]
+    fn late_spans_follow_their_own_trace_decision() {
+        let sampling = TailSampling::new(0.05);
+        let mut late_error = recorded("background.task", OTHER_RATIO_DROPS);
+        late_error.status = opentelemetry::trace::Status::error("");
+        assert!(
+            sampling
+                .retain(vec![late_error, invocation(RATIO_DROPS)])
+                .is_empty(),
+            "an unknown late error neither keeps itself nor the current trace"
+        );
+
+        let late_unknown = recorded("background.task", RATIO_KEEPS);
+        let kept = sampling.retain(vec![late_unknown, invocation(RATIO_DROPS)]);
+        assert_eq!(
+            names(&kept),
+            ["background.task"],
+            "unknown traces use the ratio"
+        );
+
+        let mut cold = invocation(OTHER_RATIO_DROPS);
+        cold.attributes = vec![KeyValue::new("faas.coldstart", true)];
+        assert_eq!(sampling.retain(vec![cold]).len(), 1);
+        let late = recorded("background.task", OTHER_RATIO_DROPS);
+        let kept = sampling.retain(vec![late, invocation(RATIO_DROPS)]);
+        assert_eq!(
+            names(&kept),
+            ["background.task"],
+            "a late span of a kept trace follows the remembered decision"
+        );
     }
 
     #[tokio::test]

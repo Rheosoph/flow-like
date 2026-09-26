@@ -21,6 +21,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { ObjectEditField } from "../../../lib/ontology-object-edit";
 import type {
 	OntologyQueryLanguagePreference,
 	OntologyQueryProposal,
@@ -272,6 +273,28 @@ export interface GraphViewerProps {
 	 * containment mappings, and must keep rendering exactly as it does today.
 	 */
 	enableClusterLayout?: boolean;
+	/** Column types per node label, for the inspector's property editors. */
+	nodeEditFields?: ReadonlyMap<string, ReadonlyMap<string, ObjectEditField>>;
+	/** Column types per relationship label, for the inspector's property editors. */
+	edgeEditFields?: ReadonlyMap<string, ReadonlyMap<string, ObjectEditField>>;
+	/**
+	 * Saves edited property values of one object. Omitted, the node inspector
+	 * is read-only. Rejects with StaleObjectError when the row moved on.
+	 */
+	onUpdateNodeProperties?: (
+		node: SubgraphNode,
+		updates: Record<string, unknown>,
+		baseline: Record<string, unknown>,
+	) => Promise<void>;
+	/**
+	 * Saves edited property values of one join-table relationship. Omitted, the
+	 * edge inspector is read-only.
+	 */
+	onUpdateEdgeProperties?: (
+		edge: SubgraphEdge,
+		updates: Record<string, unknown>,
+		baseline: Record<string, unknown>,
+	) => Promise<void>;
 }
 
 interface PathOutcome {
@@ -318,6 +341,10 @@ export function GraphViewer({
 	showInspector = true,
 	analytics,
 	enableClusterLayout = false,
+	nodeEditFields,
+	edgeEditFields,
+	onUpdateNodeProperties,
+	onUpdateEdgeProperties,
 }: GraphViewerProps) {
 	const { t } = useTranslation("common");
 	const searchListId = useId();
@@ -624,6 +651,14 @@ export function GraphViewer({
 			setSelectedNode(updated);
 		}
 	}, [data, selectedNode]);
+
+	useEffect(() => {
+		if (!selectedEdge || !data) return;
+		const updated = data.edges.find((edge) => edge.id === selectedEdge.id);
+		if (updated && updated !== selectedEdge) {
+			setSelectedEdge(updated);
+		}
+	}, [data, selectedEdge]);
 
 	// Selection is reached from the canvas, the search panel and the inspector.
 	// Emitting from the resolved state keeps one notification per actual change;
@@ -2221,6 +2256,13 @@ export function GraphViewer({
 						}
 						onFindPath={onFindPaths ? handleArmPath : undefined}
 						onRunAction={onRunAction}
+						editFields={nodeEditFields?.get(selectedNode.label)}
+						onUpdateProperties={
+							onUpdateNodeProperties && !isCollapsedGroupId(selectedNode.id)
+								? (updates, baseline) =>
+										onUpdateNodeProperties(selectedNode, updates, baseline)
+								: undefined
+						}
 					/>
 				</div>
 			)}
@@ -2236,6 +2278,7 @@ export function GraphViewer({
 				>
 					<GraphEdgeInspector
 						edge={selectedEdge}
+						overlay={overlay}
 						sourceCaption={edgeSourceCaption}
 						targetCaption={edgeTargetCaption}
 						sourceAccountId={nodeCaptionAccountId(
@@ -2250,6 +2293,16 @@ export function GraphViewer({
 							setSelectedEdge(null);
 							setSelectedEdgeKey(null);
 						}}
+						sourceNode={nodeMap.get(selectedEdge.source)}
+						targetNode={nodeMap.get(selectedEdge.target)}
+						editFields={edgeEditFields?.get(selectedEdge.label)}
+						onUpdateProperties={
+							onUpdateEdgeProperties
+								? (updates, baseline) =>
+										onUpdateEdgeProperties(selectedEdge, updates, baseline)
+								: undefined
+						}
+						onOpenNode={handleConnectionClick}
 					/>
 				</div>
 			)}

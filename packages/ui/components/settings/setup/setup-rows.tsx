@@ -147,6 +147,7 @@ export function RequirementRow({
 		requirement;
 	const { state, dirty, editorKey, update } = usePendingValue(seeded);
 	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string>();
 
 	const usable = useMemo(
 		() => isRuntimeVariableConfigured(state, refs),
@@ -155,7 +156,17 @@ export function RequirementRow({
 	const status = waived ? "optional" : requirement.satisfied ? "set" : "need";
 
 	const save = useCallback(async () => {
-		if (!runtimeVars || !usable) return;
+		if (!usable) return;
+		if (!runtimeVars) {
+			setError(
+				t(
+					"deviceStorageUnavailableKeepThisPageOpenAndTryAgain",
+					"Device storage is unavailable. Keep this page open and try again.",
+				),
+			);
+			return;
+		}
+		setError(undefined);
 		setBusy(true);
 		try {
 			await runtimeVars.saveValues(appId, boardId, [
@@ -166,10 +177,13 @@ export function RequirementRow({
 					isSecret: variable.secret,
 				},
 			]);
-		} catch (error) {
-			toast.error(
-				t("couldNotSaveOnThisDevice", "Could not save on this device"),
-				{ description: error instanceof Error ? error.message : undefined },
+			toast.success(t("savedOnThisDevice", "Saved on this device"));
+		} catch {
+			setError(
+				t(
+					"couldNotSaveOnThisDeviceDraftKept",
+					"Could not save on this device. Your draft is still here. Try again.",
+				),
 			);
 		} finally {
 			setBusy(false);
@@ -177,14 +191,30 @@ export function RequirementRow({
 	}, [runtimeVars, usable, appId, boardId, variable, state.default_value, t]);
 
 	const clear = useCallback(async () => {
-		if (!runtimeVars) return;
+		if (!runtimeVars) {
+			setError(
+				t(
+					"deviceStorageUnavailableKeepThisPageOpenAndTryAgain",
+					"Device storage is unavailable. Keep this page open and try again.",
+				),
+			);
+			return;
+		}
+		setError(undefined);
 		setBusy(true);
 		try {
 			await runtimeVars.deleteValue(appId, variable.id);
+		} catch {
+			setError(
+				t(
+					"couldNotClearDeviceValueTryAgain",
+					"Could not clear this value. Try again.",
+				),
+			);
 		} finally {
 			setBusy(false);
 		}
-	}, [runtimeVars, appId, variable.id]);
+	}, [runtimeVars, appId, variable.id, t]);
 
 	return (
 		<RowShell tone="device" status={status} first={first}>
@@ -270,6 +300,7 @@ export function RequirementRow({
 								size="icon"
 								className="h-9 w-9"
 								onClick={save}
+								aria-label={t("saveOnThisDevice", "Save on this device")}
 								disabled={busy || !usable}
 							>
 								<SaveIcon className="h-4 w-4" />
@@ -307,6 +338,11 @@ export function RequirementRow({
 					disabled={busy}
 				/>
 			</div>
+			{error && (
+				<p role="alert" className="pl-5 text-sm text-destructive">
+					{error}
+				</p>
+			)}
 
 			{requirement.alsoShared && (
 				<button
@@ -369,11 +405,13 @@ export function SharedParameterRow({
 	);
 	const { state, dirty, editorKey, update } = usePendingValue(resolved);
 	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string>();
 
 	const readOnly = locked || disabled;
 
 	const commit = useCallback(
 		async (next: IVariable) => {
+			setError(undefined);
 			setBusy(true);
 			try {
 				await backend.boardState.executeCommand(
@@ -384,10 +422,13 @@ export function SharedParameterRow({
 				await invalidate(backend.boardState.getBoardVariables, [appId]);
 				await invalidate(backend.boardState.getBoard, [appId, boardId]);
 				toast.success(t("savedToTheApp", "Saved to the app"));
-			} catch (error) {
-				toast.error(t("couldNotSaveToTheApp", "Could not save to the app"), {
-					description: error instanceof Error ? error.message : undefined,
-				});
+			} catch {
+				setError(
+					t(
+						"couldNotSaveToTheAppDraftKept",
+						"Could not save to the app. Your draft is still here. Try again.",
+					),
+				);
 			} finally {
 				setBusy(false);
 			}
@@ -511,6 +552,12 @@ export function SharedParameterRow({
 					</p>
 				)}
 			</div>
+
+			{error && (
+				<p role="alert" className="pl-5 text-sm text-destructive">
+					{error}
+				</p>
+			)}
 
 			{overridden && (
 				<button

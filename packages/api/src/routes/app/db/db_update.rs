@@ -3,13 +3,16 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_write_connection, validate_table_name},
+    routes::app::db::{
+        ScopeParams, resolve_write_connection, table_input_error, validate_table_name,
+    },
     state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 use std::collections::HashMap;
 
@@ -31,6 +34,7 @@ pub struct UpdatePayload {
     request_body = String,
     responses(
         (status = 200, description = "Items updated", body = ()),
+        (status = 400, description = "An update value does not fit its column or names a column the table does not have"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -49,6 +53,7 @@ pub async fn update_table(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<UpdatePayload>,
 ) -> Result<Json<()>, ApiError> {
     ensure_any_permission!(
@@ -59,12 +64,16 @@ pub async fn update_table(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    super::validate_writable_selector(&selector)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table.clone(), selector)
+        .await?;
 
     let column_count = payload.updates.len();
-    db.update(&payload.filter, payload.updates).await?;
+    db.update(&payload.filter, payload.updates)
+        .await
+        .map_err(table_input_error)?;
 
     audit_branch!(
         state,
@@ -73,7 +82,6 @@ pub async fn update_table(
         "database.rows.update",
         "DatabaseTable",
         table,
-        "Updated database rows matching a filter",
         serde_json::json!({
             "column_count": column_count,
             "user_scoped": scope.is_user_scoped(),

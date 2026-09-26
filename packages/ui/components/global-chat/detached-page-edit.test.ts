@@ -308,7 +308,7 @@ describe("detached page payload", () => {
 			version: [1, 2, 3],
 			onLoadEventId: "node-1",
 			onIntervalSeconds: 30,
-			cache: true,
+			noCache: true,
 			widgetRefs: { instance: { id: "w" } as never },
 			components: [column("root", [])],
 			canvasSettings: { padding: "8px", customCss: ".x{}" },
@@ -329,7 +329,7 @@ describe("detached page payload", () => {
 			version: [1, 2, 3],
 			onLoadEventId: "node-1",
 			onIntervalSeconds: 30,
-			cache: true,
+			noCache: true,
 			updatedAt: "2026-02-01T00:00:00.000Z",
 		});
 		expect(next.widgetRefs).toEqual(original.widgetRefs);

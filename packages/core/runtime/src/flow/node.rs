@@ -124,6 +124,12 @@ pub enum NodePermission {
     /// Write to node/user storage
     #[serde(rename = "storage:write")]
     StorageWrite,
+    /// Read from explicitly wired database and SQL session pins.
+    #[serde(rename = "database:read")]
+    DatabaseRead,
+    /// Modify rows through explicitly wired database pins.
+    #[serde(rename = "database:write")]
+    DatabaseWrite,
     /// Access flow variables
     #[serde(rename = "variables")]
     Variables,
@@ -201,6 +207,13 @@ pub struct Node {
     /// (`flowscript_receiver`); `Some("")` opts out: the node is callable statically only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver: Option<String>,
+    /// The editor hides this node's unconnected data pins behind its latch.
+    /// Presentation only; execution never reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pins_collapsed: Option<bool>,
+    /// The editor generated this reroute and may replace it during automatic layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_reroute: Option<bool>,
 }
 
 impl Node {
@@ -232,6 +245,8 @@ impl Node {
             namespace: None,
             alias: None,
             receiver: None,
+            pins_collapsed: None,
+            auto_reroute: None,
         }
     }
 
@@ -367,6 +382,13 @@ impl Node {
 
     pub fn set_start(&mut self, start: bool) {
         self.start = Some(start);
+    }
+
+    /// Event nodes are entry points users name and describe for whoever calls them — function
+    /// references, agents that expose them as tools, API consumers. Their description and the
+    /// names/descriptions of their pins are instance data, never catalog wording to refresh.
+    pub fn owns_descriptive_text(&self) -> bool {
+        self.start.unwrap_or(false)
     }
 
     pub fn set_event_callback(&mut self, callback: bool) {
@@ -821,6 +843,15 @@ impl Node {
             hasher.append(wasm.package_id.as_bytes());
         }
 
+        if let Some(pins_collapsed) = &self.pins_collapsed {
+            hasher.append(&[*pins_collapsed as u8]);
+        }
+
+        if let Some(auto_reroute) = &self.auto_reroute {
+            hasher.append(b"auto_reroute");
+            hasher.append(&[*auto_reroute as u8]);
+        }
+
         self.hash = Some(hasher.finalize64());
     }
 
@@ -916,6 +947,7 @@ pub fn mints_pins_on_update(node_type: &str) -> bool {
             | "string_render_template"
             // Mode-driven: pins swap with a dropdown.
             | "a2ui_push_csv_to_chart"
+            | "onnx_laya"
             // Case-driven: one exec pin per case, from a literal or a wired enum.
             | "control_switch"
             // Mirror-driven: pins copied from a target function layer.
@@ -1263,6 +1295,24 @@ mod tests {
         assert_eq!(explicit.namespace.as_deref(), Some("text"));
         assert_eq!(explicit.alias.as_deref(), Some("strip"));
         assert_eq!(explicit.receiver.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn auto_reroute_changes_node_hash_without_changing_semantic_hash() {
+        let mut node = super::Node::new("reroute", "Reroute", "", "Control");
+        let semantic = node.semantic_hash();
+        node.hash();
+        let manual = node.hash;
+
+        node.auto_reroute = Some(true);
+        node.hash();
+        let generated = node.hash;
+        assert_ne!(manual, generated);
+        assert_eq!(semantic, node.semantic_hash());
+
+        node.auto_reroute = Some(false);
+        node.hash();
+        assert_ne!(generated, node.hash);
     }
 
     #[test]

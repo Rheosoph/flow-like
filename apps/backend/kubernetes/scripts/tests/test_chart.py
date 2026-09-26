@@ -72,6 +72,13 @@ class ChartTest(unittest.TestCase):
             result[item["name"]] = item
         return result
 
+    def assert_worker_config_is_compiled_in(self, docs=None):
+        env = self.env("audit-worker", docs)
+        self.assertFalse(any(name.startswith("FLOW_LIKE_CONFIG") or name in ("AUDIT_WORKER_PAUSED", "AUDIT_API_DATABASE_ROLE") for name in env))
+        worker = self.resource("Deployment", "audit-worker", docs)["spec"]["template"]["spec"]
+        self.assertNotIn("hub-config", json.dumps(worker))
+        self.assertNotIn("/etc/flow-like", [x["mountPath"] for x in worker["containers"][0]["volumeMounts"]])
+
     def test_default_isolation_and_queue_consumer(self):
         api = self.env("api")
         queue = self.env("queue-bridge")
@@ -80,6 +87,16 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(api["REDIS_EXECUTION_QUEUE"]["value"], "exec:jobs:v3")
         self.assertEqual(queue["REDIS_EXECUTION_QUEUE"]["value"], api["REDIS_EXECUTION_QUEUE"]["value"])
         self.assertFalse(any(x["metadata"]["name"] == "flow-like-executor-pool" for x in self.docs))
+
+    def test_stripe_api_secret_is_not_inherited_by_other_workloads(self):
+        api_secret = {"secretRef": {"name": self.values["api"]["existingSecret"]}}
+        api = self.resource("Deployment", "api")["spec"]["template"]["spec"]
+        self.assertIn(api_secret, api["containers"][0]["envFrom"])
+        for resource in self.docs:
+            if resource["kind"] not in {"Deployment", "StatefulSet", "Job"} or resource["metadata"]["name"] == "flow-like-api":
+                continue
+            for container in resource["spec"]["template"]["spec"]["containers"]:
+                self.assertNotIn(api_secret, container.get("envFrom", []))
 
     def test_namespace_reaches_api_without_sink_services(self):
         env = self.env("api", self.render("--set", "sinkServices.enabled=false"))
@@ -103,6 +120,10 @@ class ChartTest(unittest.TestCase):
         secret = next(x for x in self.secrets["items"] if x["metadata"]["name"] == "flow-like-hub-config")
         self.assertIsInstance(json.loads(secret["stringData"]["flow-like.config.json"]), dict)
         self.assertNotIn("stringData", json.dumps(self.values))
+        # The worker's audit policy is compiled into its image; no audit-only copy exists.
+        self.assert_worker_config_is_compiled_in()
+        self.assertFalse(any(x["metadata"]["name"] == "flow-like-audit-config" for x in self.secrets["items"]))
+        self.assertNotIn("runtimeConfig", self.values["audit"])
 
     def test_api_configmap_and_secret_key_env_sources(self):
         docs = self.render("--set-string", "api.runtimeConfig.existingSecret=,api.runtimeConfig.existingConfigMap=public-hub,api.runtimeConfig.key=hub.json")
@@ -110,20 +131,25 @@ class ChartTest(unittest.TestCase):
         volume = next(x for x in pod["volumes"] if x["name"] == "api-runtime-config")
         self.assertEqual(volume["configMap"]["name"], "public-hub")
         self.assertEqual(volume["configMap"]["items"][0]["key"], "hub.json")
+        self.assert_worker_config_is_compiled_in(docs)
         docs = self.render("--set-string", "api.runtimeConfig.existingSecret=,api.runtimeConfig.secretKeyRef.name=private-hub,api.runtimeConfig.secretKeyRef.key=json")
         env = self.env("api", docs)
         self.assertEqual(env["FLOW_LIKE_CONFIG_JSON"]["valueFrom"]["secretKeyRef"], {"name": "private-hub", "key": "json"})
         self.assertNotIn("FLOW_LIKE_CONFIG_FILE", env)
         pod = self.resource("Deployment", "api", docs)["spec"]["template"]["spec"]
         self.assertNotIn("api-runtime-config", [x["name"] for x in pod["volumes"]])
+        self.assert_worker_config_is_compiled_in(docs)
+        self.assertNotIn("private-hub", json.dumps(self.resource("Deployment", "audit-worker", docs)))
 
     def test_api_secret_store_reference_and_embedded_fallback(self):
         docs = self.render("--set-string", "api.runtimeConfig.existingSecret=,api.runtimeConfig.secretRef=hub_config")
         env = self.env("api", docs)
         self.assertEqual(env["FLOW_LIKE_CONFIG_SECRET_REF"]["value"], "hub_config")
         self.assertNotIn("FLOW_LIKE_CONFIG_FILE", env)
+        self.assert_worker_config_is_compiled_in(docs)
         docs = self.render("--set-string", "api.runtimeConfig.existingSecret=")
         self.assertFalse(any(key.startswith("FLOW_LIKE_CONFIG_") for key in self.env("api", docs)))
+        self.assert_worker_config_is_compiled_in(docs)
 
     def test_api_conflicting_sources_and_duplicate_env_fail_render(self):
         for settings in ("api.runtimeConfig.existingConfigMap=hub", "api.runtimeConfig.secretKeyRef.name=hub", "api.runtimeConfig.secretRef=hub"):
@@ -189,6 +215,28 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["FLOW_LIKE_WEB_REDIRECT_URL"]["value"], "https://web.example.test/callback")
         self.assertEqual(env["FLOW_LIKE_WEB_LOGOUT_URL"]["value"], "https://web.example.test/")
 
+    def test_hosted_frontend_destination_is_configurable_and_chart_managed(self):
+        self.assertEqual(self.env("api")["FRONTEND_BASE_URL"]["value"], "http://localhost:3001")
+        docs = self.render("--set-string", "api.frontendBaseUrl=https://app.example.test")
+        self.assertEqual(self.env("api", docs)["FRONTEND_BASE_URL"]["value"], "https://app.example.test")
+        error = self.render("--set-string", "api.env[0].name=FRONTEND_BASE_URL,api.env[0].value=https://other.example.test", valid=False)
+        self.assertIn("api.env cannot override chart-managed FRONTEND_BASE_URL", error)
+
+    def test_shared_origin_ingress_example_serves_frontends_from_web(self):
+        text = (BASE / "helm/values.yaml").read_text()
+        example = text.split("# Example with path-based routing on single host:\n", 1)[1].split("  hosts:\n", 1)[0]
+        hosts = yaml.safe_load("\n".join(line.removeprefix("  # ") for line in example.splitlines()))["hosts"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ingress.json"
+            path.write_text(json.dumps({"ingress": {"enabled": True, "hosts": hosts}}))
+            docs = self.render("-f", str(path))
+        ingress = next(doc for doc in docs if doc["kind"] == "Ingress" and doc["metadata"]["name"] == "flow-like")
+        paths = {item["path"]: item["backend"]["service"]["name"] for item in ingress["spec"]["rules"][0]["http"]["paths"]}
+        for path in ["/a", "/"]:
+            self.assertEqual(paths[path], "flow-like-web")
+        for path in ["/frontend", "/api", "/r", "/m"]:
+            self.assertEqual(paths[path], "flow-like-api")
+
     def test_only_migration_init_mounts_api_token(self):
         pod = self.resource("Deployment", "api")["spec"]["template"]["spec"]
         self.assertFalse(pod["automountServiceAccountToken"])
@@ -197,6 +245,33 @@ class ChartTest(unittest.TestCase):
         rules = self.resource("Role", "api")["rules"]
         self.assertEqual(rules[0]["verbs"], ["get"])
         self.assertEqual(set(rules[0]["resourceNames"]), {"flow-like-db-migrate-1", "flow-like-object-init-1"})
+
+    def test_worker_waits_for_the_migration_job_with_its_own_read_only_role(self):
+        api = self.resource("Deployment", "api")["spec"]["template"]["spec"]
+        worker = self.resource("Deployment", "audit-worker")["spec"]["template"]["spec"]
+        self.assertFalse(worker["automountServiceAccountToken"])
+        self.assertNotIn("migration-api-access", [v["name"] for v in worker["containers"][0]["volumeMounts"]])
+        self.assertEqual([c["name"] for c in worker["initContainers"]], ["wait-for-database-migration"])
+        init = worker["initContainers"][0]
+        self.assertEqual(init["image"], api["initContainers"][0]["image"])
+        self.assertEqual(init["command"], ["bun", "/usr/local/bin/wait-for-migration.ts"])
+        self.assertEqual({x["name"]: x.get("value") for x in init["env"]}["MIGRATION_JOB_NAME"], "flow-like-db-migrate-1")
+        self.assertEqual(init["volumeMounts"], [{"name": "migration-api-access", "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount", "readOnly": True}])
+        volume = next(v for v in worker["volumes"] if v["name"] == "migration-api-access")
+        self.assertEqual(volume["projected"]["sources"][0]["serviceAccountToken"]["expirationSeconds"], 3600)
+        role = self.resource("Role", "audit-worker")
+        self.assertEqual(role["rules"], [{"apiGroups": ["batch"], "resources": ["jobs"], "resourceNames": ["flow-like-db-migrate-1"], "verbs": ["get"]}])
+        binding = self.resource("RoleBinding", "audit-worker")
+        self.assertEqual(binding["roleRef"]["name"], "flow-like-audit-worker")
+        self.assertEqual(binding["subjects"], [{"kind": "ServiceAccount", "name": "flow-like-audit-worker", "namespace": "flow-like"}])
+        selector = self.resource("NetworkPolicy", "kubernetes-api")["spec"]["podSelector"]["matchExpressions"][0]["values"]
+        self.assertIn("audit-worker", selector)
+        docs = self.render("--set", "database.migration.enabled=false")
+        worker = self.resource("Deployment", "audit-worker", docs)["spec"]["template"]["spec"]
+        self.assertNotIn("initContainers", worker)
+        self.assertNotIn("migration-api-access", [v["name"] for v in worker["volumes"]])
+        self.assertFalse(any(x["kind"] in ("Role", "RoleBinding") and x["metadata"]["name"] == "flow-like-audit-worker" for x in docs))
+        self.assertNotIn("audit-worker", self.resource("NetworkPolicy", "kubernetes-api", docs)["spec"]["podSelector"]["matchExpressions"][0]["values"])
 
     def test_infrastructure_security_and_pvc_rollout(self):
         redis = self.resource("Deployment", "redis")
@@ -252,6 +327,97 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["S3_PUBLIC_ENDPOINT"]["value"], "https://s3.example.com")
         self.assertFalse(any(x["kind"] == "StatefulSet" and x["metadata"]["name"].endswith("rustfs") for x in docs))
 
+    def test_audit_worker_has_exclusive_signing_and_bucket_credentials(self):
+        api = self.resource("Deployment", "api")["spec"]["template"]["spec"]
+        worker = self.resource("Deployment", "audit-worker")["spec"]["template"]["spec"]
+        self.assertNotEqual(api["serviceAccountName"], worker["serviceAccountName"])
+        self.assertFalse(worker["automountServiceAccountToken"])
+        self.assertNotIn("ports", worker["containers"][0])
+        self.assertEqual(worker["containers"][0]["readinessProbe"]["exec"]["command"], ["/app/flow-like-audit-worker", "--health-check"])
+        api_env, worker_env = self.env("api"), self.env("audit-worker")
+        self.assertEqual(api_env["AUDIT_WORKER"]["value"], "off")
+        self.assertFalse(any(name.startswith(("AUDIT_BUCKET", "AUDIT_SIGNING", "AUDIT_KMS", "AUDIT_VAULT")) for name in api_env))
+        self.assertEqual(api_env["AUDIT_ENTRY_KEY"], worker_env["AUDIT_ENTRY_KEY"])
+        self.assertNotEqual(api_env["DATABASE_URL"], worker_env["DATABASE_URL"])
+        self.assertEqual(worker_env["AUDIT_BUCKET"]["value"], "flow-like-audit")
+        self.assertIn("rustfs:9000", worker_env["AUDIT_BUCKET_ENDPOINT"]["value"])
+        self.assertNotIn("flow-like-audit", [x["secretRef"]["name"] for x in api["containers"][0]["envFrom"]])
+        self.assertEqual(worker["containers"][0]["envFrom"], [{"secretRef": {"name": "flow-like-audit"}}])
+        secrets = {x["metadata"]["name"]: x["stringData"] for x in self.secrets["items"]}
+        self.assertEqual(set(secrets["flow-like-audit"]), {"AUDIT_SIGNING_KEY"})
+        self.assertEqual(set(secrets["flow-like-audit-bucket"]), {"AUDIT_BUCKET_ACCESS_KEY_ID", "AUDIT_BUCKET_SECRET_ACCESS_KEY"})
+        self.assertNotIn(secrets["flow-like-audit-bucket"]["AUDIT_BUCKET_SECRET_ACCESS_KEY"], json.dumps(self.values))
+        init = next(x for x in self.docs if x["kind"] == "Job" and x["metadata"]["labels"].get("app.kubernetes.io/component") == "object-store-init")
+        container = init["spec"]["template"]["spec"]["containers"][0]
+        self.assertNotIn("flow-like-audit", [x["secretRef"]["name"] for x in container["envFrom"]])
+        env = {x["name"]: x for x in container["env"]}
+        self.assertEqual(env["AUDIT_BUCKET_ACCESS_KEY_ID"]["valueFrom"]["secretKeyRef"]["name"], "flow-like-audit-bucket")
+        self.assertEqual(env["AUDIT_BUCKET_LOCK_MODE"]["value"], "COMPLIANCE")
+        self.assertEqual(env["AUDIT_BUCKET_RETENTION_YEARS"]["value"], "4")
+        policy = self.resource("NetworkPolicy", "audit-worker")
+        self.assertEqual(policy["spec"]["ingress"], [])
+        self.assertEqual(policy["spec"]["podSelector"]["matchLabels"]["app.kubernetes.io/component"], "audit-worker")
+        for override in ["audit.bucket=flow-like-logs", "audit.bucketSecret=", "audit.retentionYears=3", "audit.lockMode=legal", "audit.entrySecret=", "audit.database.existingSecret=flow-like-database", "database.migration.existingSecret=flow-like-database", "sinkServices.enabled=true"]:
+            with self.subTest(override=override):
+                self.render("--set", override, valid=False)
+
+    def test_pausing_the_worker_scales_it_to_zero_and_keeps_its_configuration(self):
+        docs = self.render("--set", "audit.replicaCount=0")
+        self.assertEqual(self.resource("Deployment", "audit-worker", docs)["spec"]["replicas"], 0)
+        self.assertEqual(self.env("audit-worker", docs), self.env("audit-worker"))
+        self.assert_worker_config_is_compiled_in(docs)
+
+    def test_disabling_worker_stops_the_deployment_without_an_api_fallback(self):
+        docs = self.render("--set", "audit.worker=false")
+        self.assertFalse(any(x["kind"] == "Deployment" and x["metadata"]["name"] == "flow-like-audit-worker" for x in docs))
+        self.assertEqual(self.env("api", docs)["AUDIT_WORKER"]["value"], "off")
+        self.assertNotIn("AUDIT_BUCKET", self.env("api", docs))
+
+    def test_tls_database_separates_migration_api_and_worker_credentials(self):
+        database = self.resource("StatefulSet", "cockroachdb")["spec"]["template"]["spec"]
+        command = database["containers"][0]["command"]
+        self.assertNotIn("--insecure", command)
+        self.assertIn("--certs-dir=/cockroach/certs", command)
+        self.assertEqual(database["volumes"][0]["secret"]["secretName"], "flow-like-database-node")
+        api = self.resource("Deployment", "api")["spec"]["template"]["spec"]
+        worker = self.resource("Deployment", "audit-worker")["spec"]["template"]["spec"]
+        for pod in [api, worker]:
+            volume_secrets = [x.get("secret", {}).get("secretName") for x in pod["volumes"]]
+            self.assertIn("flow-like-database-ca", volume_secrets)
+            self.assertNotIn("flow-like-database-init", volume_secrets)
+            self.assertNotIn("flow-like-database-node", volume_secrets)
+            self.assertNotIn("flow-like-database-ca-admin", volume_secrets)
+        migration = next(x for x in self.docs if x["kind"] == "Job" and x["metadata"]["labels"].get("app.kubernetes.io/component") == "db-migration")
+        env = {x["name"]: x for x in migration["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual(env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["name"], "flow-like-database-migration")
+        self.assertEqual(env["API_DATABASE_URL"], {"name": "API_DATABASE_URL", **{k: v for k, v in self.env("api")["DATABASE_URL"].items() if k != "name"}})
+        self.render("--set", "database.internal.tls.nodeSecret=", valid=False)
+
+    def test_kms_and_vault_configuration_reaches_only_the_worker(self):
+        settings = "audit.kmsKeyId=transit/audit,audit.kmsProvider=vault,audit.vaultAddress=https://vault.vault:8200,audit.vaultTokenFile=/vault/secrets/token"
+        docs = self.render("--set", settings)
+        worker = self.env("audit-worker", docs)
+        self.assertEqual(worker["AUDIT_VAULT_ADDR"]["value"], "https://vault.vault:8200")
+        self.assertEqual(worker["AUDIT_VAULT_TOKEN_FILE"]["value"], "/vault/secrets/token")
+        self.assertNotIn("AUDIT_VAULT_ADDR", self.env("api", docs))
+        for environment in [
+            {"AUDIT_KMS_KEY_ID": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1"},
+            {"AUDIT_KMS_KEY_ID": "alias/audit", "AUDIT_KMS_AWS_ACCESS_KEY_ID": "AKIAKMS", "AUDIT_KMS_AWS_SECRET_ACCESS_KEY": "kms-secret"},
+            {"AUDIT_KMS_KEY_ID": "transit/audit", "AUDIT_VAULT_ADDR": "https://vault.vault:8200", "AUDIT_VAULT_TOKEN": "hvs.exampletoken"},
+        ]:
+            with self.subTest(key=environment["AUDIT_KMS_KEY_ID"]), patch.dict(os.environ, environment, clear=True):
+                manifest, values = setup.generate("flow-like", "flow-like")
+            data = {x["metadata"]["name"]: x["stringData"] for x in manifest["items"]}
+            self.assertNotIn("AUDIT_SIGNING_KEY", data.get("flow-like-audit", {}))
+            self.assertEqual(set(data["flow-like-audit-bucket"]), {"AUDIT_BUCKET_ACCESS_KEY_ID", "AUDIT_BUCKET_SECRET_ACCESS_KEY"})
+            self.assertEqual(values["audit"]["kmsKeyId"], environment["AUDIT_KMS_KEY_ID"])
+            self.assertNotIn("kms-secret", json.dumps(values))
+            self.assertNotIn("hvs.exampletoken", json.dumps(values))
+        for environment, problem in [({"AUDIT_KMS_KEY_ID": "alias/audit"}, "bundled RustFS"), ({"AUDIT_KMS_KEY_ID": "alias/audit", "AUDIT_SIGNING_KEY": "key"}, "not both"), ({"AUDIT_KMS_KEY_ID": "transit/audit", "AUDIT_VAULT_ADDR": "https://vault:8200"}, "AUDIT_VAULT_TOKEN")]:
+            with self.subTest(problem=problem), patch.dict(os.environ, environment, clear=True):
+                with self.assertRaisesRegex(ValueError, problem):
+                    setup.generate("flow-like", "flow-like")
+
     def test_trusted_mode_uses_direct_http_for_async(self):
         docs = self.render("--set", "execution.isolationMode=trusted_shared,execution.asyncBackend=http")
         self.assertTrue(self.resource("Deployment", "executor-pool", docs))
@@ -297,11 +463,11 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(env["K8S_EXECUTOR_IMAGE"]["value"], "ghcr.io/rheosoph/flow-like-kubernetes-executor:dev")
         self.assertEqual(env["K8S_IMAGE_PULL_SECRETS"]["value"], "")
         digest = "sha256:" + "d" * 64
-        pins = ",".join(f"{key}.image.digest={digest}" for key in ["api", "web", "executor", "database.migration", "executionManager", "executionManager.queueBridge", "rustfs.bootstrap", "compiler", "signaling", "executorPool", "sinkServices"])
+        pins = ",".join(f"{key}.image.digest={digest}" for key in ["api", "audit", "web", "executor", "database.migration", "executionManager", "executionManager.queueBridge", "rustfs.bootstrap", "compiler", "signaling", "executorPool", "sinkServices"])
         docs = self.render("--set-string", pins + ",global.imageRegistry=mirror.example.com/", "--set", "compiler.enabled=true,signaling.enabled=true")
         images = {c["image"] for d in docs if d["kind"] in ("Deployment", "Job") for c in d["spec"]["template"]["spec"].get("containers", []) + d["spec"]["template"]["spec"].get("initContainers", [])}
         first_party = {i for i in images if "flow-like-" in i}
-        self.assertEqual(len(first_party), 8, first_party)
+        self.assertEqual(len(first_party), 9, first_party)
         for image in first_party:
             self.assertTrue(image.startswith("mirror.example.com/ghcr.io/rheosoph/flow-like-"), image)
             self.assertTrue(image.endswith("@" + digest), image)
@@ -311,7 +477,7 @@ class ChartTest(unittest.TestCase):
             self.assertIn("sha256:<64 hex characters>", error)
 
     def test_pull_secrets_reach_every_pod_and_the_pod_creating_controllers(self):
-        docs = self.render("--set", "global.imagePullSecrets[0].name=ghcr-pull,global.imagePullSecrets[1].name=mirror-pull,sinkServices.enabled=true")
+        docs = self.render("--set", "global.imagePullSecrets[0].name=ghcr-pull,global.imagePullSecrets[1].name=mirror-pull,sinkServices.enabled=true,audit.worker=false")
         for doc in docs:
             if doc["kind"] in ("Deployment", "Job", "StatefulSet"):
                 pod = doc["spec"]["template"]["spec"]
@@ -334,7 +500,7 @@ class ChartTest(unittest.TestCase):
         first_party = sorted(i for i in images if "flow-like-" in i)
         self.assertTrue(first_party)
         for image in first_party:
-            self.assertRegex(image, r"^registry\.example\.com/flow-like-(kubernetes|docker-compose)-[a-z-]+@sha256:[0-9a-f]{64}$")
+            self.assertRegex(image, r"^registry\.example\.com/flow-like-((kubernetes|docker-compose)-[a-z-]+|audit-worker)@sha256:[0-9a-f]{64}$")
         pod = self.resource("Deployment", "api", docs)["spec"]["template"]["spec"]
         self.assertEqual(pod["imagePullSecrets"], [{"name": "registry-credentials"}])
         self.assertEqual(self.env("execution-manager", docs)["SANDBOX_IMAGE"]["value"], self.env("api", docs)["K8S_EXECUTOR_IMAGE"]["value"])

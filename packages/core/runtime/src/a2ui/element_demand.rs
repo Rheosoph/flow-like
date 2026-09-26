@@ -13,7 +13,7 @@ use std::collections::HashSet;
 /// `glob:PATTERN`, `children:KEY`, `parent:KEY`, `values:instanceId`, ...). `dynamic` is set when
 /// at least one read pin is wired instead of literal, so the set of elements the run needs cannot
 /// be known before it executes and the client must keep on-demand reads available.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ElementDemand {
     pub selectors: Vec<String>,
     pub dynamic: bool,
@@ -636,5 +636,17 @@ mod tests {
 
         let demand = element_demand(&board);
         assert_eq!(demand.selectors, vec!["main/first", "main/second"]);
+    }
+
+    #[test]
+    fn serializes_as_the_page_bootstrap_element_demand() {
+        let demand = ElementDemand {
+            selectors: vec!["main/input".into(), "type:switch".into()],
+            dynamic: true,
+        };
+        assert_eq!(
+            flow_like_types::json::to_value(&demand).unwrap(),
+            json!({ "selectors": ["main/input", "type:switch"], "dynamic": true })
+        );
     }
 }

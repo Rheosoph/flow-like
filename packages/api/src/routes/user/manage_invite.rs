@@ -61,8 +61,7 @@ pub async fn reject_invite(
             invite.app_id,
             "team.invite.reject",
             "Invitation",
-            invite_id,
-            "Rejected an app invitation"
+            invite_id
         );
     }
 
@@ -109,6 +108,13 @@ pub async fn accept_invite(
                     .ok_or(ApiError::NOT_FOUND)?;
 
                 let app = app.ok_or(ApiError::NOT_FOUND)?;
+                if app.price > 0 {
+                    return Err(crate::payments::error(
+                        "PURCHASE_REQUIRED",
+                        "Use the owner's complimentary access action for a paid app",
+                    ));
+                }
+
                 let default_role = app.default_role_id.ok_or(ApiError::NOT_FOUND)?;
 
                 if matches!(app.visibility, Visibility::Offline | Visibility::Private) {
@@ -186,8 +192,7 @@ pub async fn accept_invite(
         app_id,
         "team.invite.accept",
         "Invitation",
-        invite_id,
-        "Accepted an app invitation"
+        invite_id
     );
 
     Ok(Json(()))

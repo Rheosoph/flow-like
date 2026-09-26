@@ -76,7 +76,8 @@ pub use types::keypoint::{
 };
 pub use types::node_image::{NodeImage, NodeImageWrapper};
 pub use types::ontology_action_schema::{
-    ontology_action_parameter_validator, validate_ontology_action_parameters,
+    RejectExternalSchemaReferences, ontology_action_parameter_validator,
+    validate_ontology_action_parameters,
 };
 pub use types::ontology_bindings::{ontology_binding_nodes, remote_ontology_binding_nodes};
 pub use types::remote_ontology::RemoteOntologyImport;

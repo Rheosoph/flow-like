@@ -71,6 +71,42 @@ fn flag(node: &Value, key: &str) -> bool {
     node.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
+const INLINE_TYPES: &[&str] = &[
+    "a",
+    "date",
+    "emoji_input",
+    "focus_node",
+    "footnoteReference",
+    "inline_equation",
+    "inline_spoiler",
+    "mention",
+    "mention_input",
+    "slash_input",
+    "user_mention",
+];
+
+/// Quotes and callouts hold their text directly in documents saved before Plate 53 and hold
+/// paragraphs, lists or nested quotes since then; Slate never mixes the two in one element.
+fn has_block_children(node: &Value) -> bool {
+    let nodes = children(node);
+    nodes.iter().all(|child| child.get("text").is_none())
+        && nodes
+            .iter()
+            .any(|child| !INLINE_TYPES.contains(&node_type(child)))
+}
+
+/// Plate 53 stores `YYYY-MM-DD` in `date` and keeps text it could not parse in `rawDate`.
+fn date_text(node: &Value) -> &str {
+    str_prop(node, "date")
+        .filter(|date| !date.is_empty())
+        .or_else(|| str_prop(node, "rawDate"))
+        .unwrap_or_default()
+}
+
+fn footnote_label(node: &Value) -> &str {
+    str_prop(node, "identifier").unwrap_or_default()
+}
+
 fn indent_of(node: &Value) -> usize {
     node.get("indent")
         .and_then(Value::as_u64)
@@ -128,6 +164,14 @@ fn caption_text(node: &Value) -> String {
 
 fn media_url(node: &Value) -> &str {
     str_prop(node, "url").unwrap_or_default()
+}
+
+/// One entry per `code_line`; a code block that holds its text directly keeps it too.
+fn code_lines(node: &Value) -> Vec<String> {
+    children(node)
+        .iter()
+        .map(|line| plain_text(std::slice::from_ref(line)))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +243,11 @@ impl MarkdownWriter {
             return;
         }
         self.list_stack.clear();
+        // Only a list item ends on a single newline; without a blank line after it the next
+        // paragraph would continue the item.
+        if self.out.ends_with('\n') && !self.out.ends_with("\n\n") {
+            self.out.push('\n');
+        }
 
         match ty {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -210,13 +259,21 @@ impl MarkdownWriter {
                 ));
             }
             "blockquote" => {
-                let body = self.inline(children(node));
+                let body = self.quote_body(node);
                 self.push_block_quote(&body, None);
             }
             "callout" => {
                 let icon = str_prop(node, "icon").unwrap_or_default();
-                let body = self.inline(children(node));
+                let body = self.quote_body(node);
                 self.push_block_quote(&body, (!icon.is_empty()).then_some(icon));
+            }
+            "footnoteDefinition" => {
+                let body = if has_block_children(node) {
+                    self.inline_blocks(children(node))
+                } else {
+                    self.inline(children(node))
+                };
+                self.push_line(&format!("[^{}]: {body}", footnote_label(node)));
             }
             "code_block" => self.code_block(node),
             "hr" => self.push_line("---"),
@@ -317,11 +374,7 @@ impl MarkdownWriter {
 
     fn code_block(&mut self, node: &Value) {
         let lang = str_prop(node, "lang").unwrap_or_default();
-        let lines: Vec<String> = children(node)
-            .iter()
-            .map(|line| plain_text(children(line)))
-            .collect();
-        let body = lines.join("\n");
+        let body = code_lines(node).join("\n");
         // A fence must be longer than the longest run of backticks it contains.
         let fence = "`".repeat(longest_backtick_run(&body).max(2) + 1);
         self.push_line(&format!("{fence}{lang}\n{body}\n{fence}"));
@@ -373,7 +426,11 @@ impl MarkdownWriter {
             let cells: Vec<String> = children(row)
                 .iter()
                 .map(|cell| {
-                    let text = self.inline_blocks(children(cell));
+                    let text = if has_block_children(cell) {
+                        self.inline_blocks(children(cell))
+                    } else {
+                        self.inline(children(cell))
+                    };
                     text.replace('|', "\\|")
                         .replace('\n', " ")
                         .trim()
@@ -407,6 +464,16 @@ impl MarkdownWriter {
             self.out.push_str(&render_row(&row, columns));
         }
         self.out.push('\n');
+    }
+
+    fn quote_body(&self, node: &Value) -> String {
+        if has_block_children(node) {
+            to_markdown(children(node), self.images)
+                .trim_end()
+                .to_string()
+        } else {
+            self.inline(children(node))
+        }
     }
 
     /// Blocks rendered as a single inline string — used for table cells, which cannot contain
@@ -446,7 +513,8 @@ impl MarkdownWriter {
                         out.push_str(&format!("${tex}$"));
                     }
                 }
-                "date" => out.push_str(str_prop(node, "date").unwrap_or_default()),
+                "date" => out.push_str(date_text(node)),
+                "footnoteReference" => out.push_str(&format!("[^{}]", footnote_label(node))),
                 "img" if self.images == ImageHandling::Keep => {
                     let url = media_url(node);
                     if !url.is_empty() {
@@ -474,18 +542,19 @@ impl MarkdownWriter {
             return;
         }
         self.ensure_block_gap();
-        let mut lines = body.split('\n').peekable();
-        let mut first = true;
-        while let Some(line) = lines.next() {
+        for (index, line) in body.split('\n').enumerate() {
+            let icon = icon.filter(|_| index == 0);
+            if line.is_empty() && icon.is_none() {
+                self.out.push_str(">\n");
+                continue;
+            }
             self.out.push_str("> ");
-            if first && let Some(icon) = icon {
+            if let Some(icon) = icon {
                 self.out.push_str(icon);
                 self.out.push(' ');
             }
             self.out.push_str(line);
             self.out.push('\n');
-            first = false;
-            let _ = lines.peek();
         }
         self.out.push('\n');
     }
@@ -559,12 +628,12 @@ fn apply_marks(node: &Value, text: &str) -> String {
     }
 
     // Emphasis markers cannot span the whitespace at the edges of a run.
-    let trimmed_start = text.len() - text.trim_start().len();
-    let trimmed_end = text.len() - text.trim_end().len();
-    let core = &text[trimmed_start..text.len() - trimmed_end];
+    let core = text.trim();
     if core.is_empty() {
         return text.to_string();
     }
+    let trimmed_start = text.len() - text.trim_start().len();
+    let trimmed_end = text.len() - text.trim_end().len();
 
     let mut wrapped = core.to_string();
     if flag(node, "strikethrough") {
@@ -671,16 +740,23 @@ impl HtmlWriter {
                     .push_str(&format!("<{ty}{}>{body}</{ty}>\n", block_attrs(node)));
             }
             "blockquote" => {
-                let body = self.inline(children(node));
+                let body = self.container_body(node);
                 self.out.push_str(&format!(
                     "<blockquote{}>{body}</blockquote>\n",
                     block_attrs(node)
                 ));
             }
+            "footnoteDefinition" => {
+                let body = self.container_body(node);
+                self.out.push_str(&format!(
+                    "<div class=\"footnote\"><sup>[{}]</sup> {body}</div>\n",
+                    escape_html(footnote_label(node))
+                ));
+            }
             "callout" => {
                 let icon = str_prop(node, "icon").unwrap_or_default();
                 let variant = str_prop(node, "variant").unwrap_or("info");
-                let body = self.inline(children(node));
+                let body = self.container_body(node);
                 self.out.push_str(&format!(
                     "<aside class=\"callout callout-{}\"{}>",
                     escape_attr(variant),
@@ -696,11 +772,7 @@ impl HtmlWriter {
             }
             "code_block" => {
                 let lang = str_prop(node, "lang").unwrap_or_default();
-                let body = children(node)
-                    .iter()
-                    .map(|line| escape_html(&plain_text(children(line))))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let body = escape_html(&code_lines(node).join("\n"));
                 let class = if lang.is_empty() {
                     String::new()
                 } else {
@@ -910,7 +982,7 @@ impl HtmlWriter {
                 {
                     attrs.push_str(&format!(" rowspan=\"{span}\""));
                 }
-                let body = self.cell_body(children(cell));
+                let body = self.cell_body(cell);
                 self.out
                     .push_str(&format!("<{tag}{attrs}>{body}</{tag}>\n"));
             }
@@ -928,13 +1000,28 @@ impl HtmlWriter {
         self.out.push_str("</table>\n");
     }
 
-    fn cell_body(&self, nodes: &[Value]) -> String {
-        nodes
-            .iter()
-            .map(|node| self.inline(children(node)))
-            .filter(|text| !text.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("<br />")
+    fn container_body(&self, node: &Value) -> String {
+        if has_block_children(node) {
+            format!("\n{}", to_html(children(node), self.images))
+        } else {
+            self.inline(children(node))
+        }
+    }
+
+    /// Plate 53 keeps a `<br/>` inside a cell as a line break in one paragraph; earlier
+    /// versions split the cell into paragraphs, or held a link directly in the cell.
+    fn cell_body(&self, cell: &Value) -> String {
+        let body = if has_block_children(cell) {
+            children(cell)
+                .iter()
+                .map(|node| self.inline(children(node)))
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("<br />")
+        } else {
+            self.inline(children(cell))
+        };
+        body.replace('\n', "<br />")
     }
 
     fn inline(&self, nodes: &[Value]) -> String {
@@ -971,7 +1058,11 @@ impl HtmlWriter {
                         ));
                     }
                 }
-                "date" => out.push_str(&escape_html(str_prop(node, "date").unwrap_or_default())),
+                "date" => out.push_str(&escape_html(date_text(node))),
+                "footnoteReference" => out.push_str(&format!(
+                    "<sup class=\"footnote-ref\">[{}]</sup>",
+                    escape_html(footnote_label(node))
+                )),
                 "img" if self.images == ImageHandling::Keep => {
                     let url = media_url(node);
                     if !url.is_empty() {
@@ -1273,6 +1364,164 @@ mod tests {
     }
 
     #[test]
+    fn blockquotes_render_in_both_plate_shapes() {
+        let flat = doc(json!([
+            {"type": "blockquote", "children": [
+                {"text": "Saved by "},
+                {"text": "Plate 49", "bold": true}
+            ]}
+        ]));
+        assert_eq!(
+            to_markdown(&flat, ImageHandling::Keep),
+            "> Saved by **Plate 49**\n"
+        );
+        assert_eq!(
+            to_html(&flat, ImageHandling::Keep),
+            "<blockquote>Saved by <strong>Plate 49</strong></blockquote>\n"
+        );
+
+        let container = doc(json!([
+            {"type": "blockquote", "children": [
+                {"type": "p", "children": [{"text": "First paragraph"}]},
+                {"type": "p", "children": [{"text": "Second paragraph"}]}
+            ]}
+        ]));
+        assert_eq!(
+            to_markdown(&container, ImageHandling::Keep),
+            "> First paragraph\n>\n> Second paragraph\n"
+        );
+        assert_eq!(
+            to_html(&container, ImageHandling::Keep),
+            "<blockquote>\n<p>First paragraph</p>\n<p>Second paragraph</p>\n</blockquote>\n"
+        );
+    }
+
+    #[test]
+    fn container_blockquotes_keep_lists_code_and_nested_quotes() {
+        let nodes = doc(json!([
+            {"type": "blockquote", "children": [
+                {"type": "p", "children": [{"text": "Intro"}]},
+                {"type": "p", "listStyleType": "disc", "indent": 1, "children": [{"text": "one"}]},
+                {"type": "p", "listStyleType": "disc", "indent": 1, "children": [{"text": "two"}]},
+                {"type": "p", "children": [{"text": "After the list"}]},
+                {"type": "code_block", "lang": "js", "children": [
+                    {"type": "code_line", "children": [{"text": "run();"}]}
+                ]},
+                {"type": "blockquote", "children": [
+                    {"type": "p", "children": [{"text": "inner"}]}
+                ]}
+            ]},
+            {"type": "p", "children": [{"text": "Outside"}]}
+        ]));
+
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "> Intro\n>\n> - one\n> - two\n>\n> After the list\n>\n> ```js\n> run();\n> ```\n>\n> > inner\n\nOutside\n"
+        );
+
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(html.starts_with("<blockquote>\n<p>Intro</p>\n<ul style=\"list-style-type:disc\">\n<li>one</li>\n<li>two</li>\n</ul>\n<p>After the list</p>\n"));
+        assert!(html.contains("<pre><code class=\"language-js\">run();</code></pre>\n"));
+        assert!(
+            html.contains(
+                "<blockquote>\n<p>inner</p>\n</blockquote>\n</blockquote>\n<p>Outside</p>"
+            )
+        );
+    }
+
+    #[test]
+    fn callouts_render_in_both_plate_shapes() {
+        let nodes = doc(json!([
+            {"type": "callout", "icon": "💡", "children": [{"text": "flat"}]},
+            {"type": "callout", "icon": "💡", "children": [
+                {"type": "p", "children": [{"text": "one"}]},
+                {"type": "p", "children": [{"text": "two"}]}
+            ]}
+        ]));
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "> 💡 flat\n\n> 💡 one\n>\n> two\n"
+        );
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(html.contains("<div>flat</div>"));
+        assert!(html.contains("<div>\n<p>one</p>\n<p>two</p>\n</div>"));
+    }
+
+    #[test]
+    fn a_list_is_closed_before_the_next_paragraph() {
+        let nodes = doc(json!([
+            {"type": "p", "listStyleType": "disc", "indent": 1, "children": [{"text": "item"}]},
+            {"type": "p", "children": [{"text": "paragraph"}]}
+        ]));
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "- item\n\nparagraph\n"
+        );
+    }
+
+    #[test]
+    fn dates_read_the_raw_value_when_plate_could_not_parse_it() {
+        let nodes = doc(json!([
+            {"type": "p", "children": [
+                {"text": "legacy "},
+                {"type": "date", "date": "Mon Jan 15 2024", "children": [{"text": ""}]},
+                {"text": " canonical "},
+                {"type": "date", "date": "2024-01-15", "children": [{"text": ""}]},
+                {"text": " raw "},
+                {"type": "date", "rawDate": "next Tuesday", "children": [{"text": ""}]}
+            ]}
+        ]));
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "legacy Mon Jan 15 2024 canonical 2024-01-15 raw next Tuesday\n"
+        );
+        assert!(to_html(&nodes, ImageHandling::Keep).contains("raw next Tuesday"));
+    }
+
+    #[test]
+    fn table_cells_keep_line_breaks_in_both_plate_shapes() {
+        let nodes = doc(json!([
+            {"type": "table", "children": [
+                {"type": "tr", "children": [
+                    {"type": "td", "children": [
+                        {"type": "p", "children": [{"text": "line1"}]},
+                        {"type": "p", "children": [{"text": "\n"}]},
+                        {"type": "p", "children": [{"text": "line2"}]}
+                    ]},
+                    {"type": "td", "children": [
+                        {"type": "p", "children": [{"text": "line1\nline2"}]}
+                    ]}
+                ]}
+            ]}
+        ]));
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert_eq!(html.matches("<td>line1<br />line2</td>").count(), 2);
+        assert!(to_markdown(&nodes, ImageHandling::Keep).contains("| line1 line2 | line1 line2 |"));
+    }
+
+    #[test]
+    fn footnotes_render_as_references_and_definitions() {
+        let nodes = doc(json!([
+            {"type": "p", "children": [
+                {"text": "A claim."},
+                {"type": "footnoteReference", "identifier": "1", "children": [{"text": ""}]}
+            ]},
+            {"type": "footnoteDefinition", "identifier": "1", "children": [
+                {"type": "p", "children": [{"text": "The source."}]}
+            ]}
+        ]));
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "A claim.[^1]\n\n[^1]: The source.\n"
+        );
+        let html = to_html(&nodes, ImageHandling::Keep);
+        assert!(html.contains("A claim.<sup class=\"footnote-ref\">[1]</sup>"));
+        assert!(
+            html.contains("<div class=\"footnote\"><sup>[1]</sup> \n<p>The source.</p>\n</div>")
+        );
+    }
+
+    #[test]
     fn unknown_block_types_degrade_to_their_text() {
         let nodes = doc(json!([
             {"type": "excalidraw", "children": [{"text": ""}]},
@@ -1280,5 +1529,87 @@ mod tests {
         ]));
         let md = to_markdown(&nodes, ImageHandling::Keep);
         assert!(md.contains("kept"));
+    }
+
+    /// Stored by Plate 49's read-only parse of corpus fixture M05.
+    const PLATE_49_QUOTES: &str = r#"plate_json::[{"children":[{"text":"single line quote"}],"type":"blockquote"},{"children":[{"text":"outer"},{"text":"\n"},{"text":"\n"},{"children":[{"text":"nested quote"}],"type":"p"}],"type":"blockquote"},{"children":[{"text":"quote with "},{"bold":true,"text":"bold"},{"text":" and a list"},{"text":"\n"},{"text":"\n"}],"type":"blockquote"}]"#;
+
+    /// Plate 53's markdown parse of the same fixture, normalized as the editor stores it.
+    const PLATE_53_QUOTES: &str = r#"plate_json::[{"children":[{"children":[{"text":"single line quote"}],"type":"p"}],"type":"blockquote"},{"children":[{"children":[{"text":"outer"}],"type":"p"},{"children":[{"children":[{"text":"nested quote"}],"type":"p"}],"type":"blockquote"}],"type":"blockquote"},{"children":[{"children":[{"text":"quote with "},{"bold":true,"text":"bold"},{"text":" and a list"}],"type":"p"},{"children":[{"text":"one"}],"type":"p","indent":1,"listStyleType":"disc"},{"children":[{"text":"two"}],"type":"p","indent":1,"listStyleType":"disc"}],"type":"blockquote"}]"#;
+
+    #[test]
+    fn plate_49_and_53_quote_documents_render() {
+        let legacy = parse_plate_document(PLATE_49_QUOTES).unwrap();
+        let md = to_markdown(&legacy, ImageHandling::Keep);
+        assert!(md.starts_with(
+            "> single line quote\n\n> outer\n>\n> nested quote\n\n> quote with **bold** and a list\n"
+        ));
+        assert_eq!(
+            to_html(&legacy, ImageHandling::Keep),
+            "<blockquote>single line quote</blockquote>\n<blockquote>outer\n\nnested quote</blockquote>\n<blockquote>quote with <strong>bold</strong> and a list\n\n</blockquote>\n"
+        );
+
+        let current = parse_plate_document(PLATE_53_QUOTES).unwrap();
+        assert_eq!(
+            to_markdown(&current, ImageHandling::Keep),
+            "> single line quote\n\n> outer\n>\n> > nested quote\n\n> quote with **bold** and a list\n>\n> - one\n> - two\n"
+        );
+        assert_eq!(
+            to_html(&current, ImageHandling::Keep),
+            "<blockquote>\n<p>single line quote</p>\n</blockquote>\n<blockquote>\n<p>outer</p>\n<blockquote>\n<p>nested quote</p>\n</blockquote>\n</blockquote>\n<blockquote>\n<p>quote with <strong>bold</strong> and a list</p>\n<ul style=\"list-style-type:disc\">\n<li>one</li>\n<li>two</li>\n</ul>\n</blockquote>\n"
+        );
+    }
+
+    #[test]
+    fn table_links_render_in_both_plate_shapes() {
+        let legacy = parse_plate_document(
+            r#"plate_json::[{"children":[{"children":[{"children":[{"children":[{"text":"Name"}],"type":"p"}],"type":"th"},{"children":[{"children":[{"text":"Docs"}],"type":"p"}],"type":"th"}],"type":"tr"},{"children":[{"children":[{"children":[{"bold":true,"text":"bold"}],"type":"p"}],"type":"td"},{"children":[{"children":[{"text":"link"}],"type":"a","url":"https://example.com"}],"type":"td"}],"type":"tr"}],"type":"table"}]"#,
+        )
+        .unwrap();
+        let current = parse_plate_document(
+            r#"plate_json::[{"children":[{"children":[{"children":[{"children":[{"text":"Name"}],"type":"p"}],"type":"th"},{"children":[{"children":[{"text":"Docs"}],"type":"p"}],"type":"th"}],"type":"tr"},{"children":[{"children":[{"children":[{"bold":true,"text":"bold"}],"type":"p"}],"type":"td"},{"children":[{"children":[{"text":""},{"children":[{"text":"link"}],"type":"a","url":"https://example.com"},{"text":""}],"type":"p"}],"type":"td"}],"type":"tr"}],"type":"table"}]"#,
+        )
+        .unwrap();
+
+        for nodes in [&legacy, &current] {
+            assert_eq!(
+                to_markdown(nodes, ImageHandling::Keep),
+                "| Name | Docs |\n| --- | --- |\n| **bold** | [link](https://example.com) |\n"
+            );
+            assert!(to_html(nodes, ImageHandling::Keep).contains(
+                "<td><strong>bold</strong></td>\n<td><a href=\"https://example.com\" target=\"_blank\" rel=\"noopener noreferrer\">link</a></td>"
+            ));
+        }
+    }
+
+    #[test]
+    fn plate_53_footnotes_from_markdown_render() {
+        let nodes = parse_plate_document(
+            r#"plate_json::[{"children":[{"text":"A claim with a footnote."},{"children":[{"text":""}],"identifier":"1","type":"footnoteReference"}],"type":"p"},{"children":[{"children":[{"text":"The footnote text."}],"type":"p"}],"identifier":"1","type":"footnoteDefinition"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "A claim with a footnote.[^1]\n\n[^1]: The footnote text.\n"
+        );
+        assert_eq!(
+            to_html(&nodes, ImageHandling::Keep),
+            "<p>A claim with a footnote.<sup class=\"footnote-ref\">[1]</sup></p>\n<div class=\"footnote\"><sup>[1]</sup> \n<p>The footnote text.</p>\n</div>\n"
+        );
+    }
+
+    #[test]
+    fn a_code_block_without_code_lines_keeps_its_text() {
+        let nodes = doc(json!([
+            {"type": "code_block", "children": [{"text": "code_block with text child"}]}
+        ]));
+        assert_eq!(
+            to_markdown(&nodes, ImageHandling::Keep),
+            "```\ncode_block with text child\n```\n"
+        );
+        assert_eq!(
+            to_html(&nodes, ImageHandling::Keep),
+            "<pre><code>code_block with text child</code></pre>\n"
+        );
     }
 }

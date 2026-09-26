@@ -10,13 +10,13 @@ use flow_like_types::async_trait;
 use gcp_credentials::GcpSharedCredentials;
 use mixed_credentials::MixedSharedCredentials;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "flow-runtime")]
 use std::sync::Arc;
 
 pub mod aws_credentials;
 pub mod azure_credentials;
 pub mod gcp_credentials;
 pub mod mixed_credentials;
+pub mod renewable;
 
 pub use aws_credentials::BucketConfig;
 
@@ -66,6 +66,9 @@ pub enum SharedCredentials {
     Azure(AzureSharedCredentials),
     Gcp(GcpSharedCredentials),
     Mixed(MixedSharedCredentials),
+    /// Runtime capability; never serialize a refresh source or its session authority.
+    #[serde(skip)]
+    Renewable(Arc<renewable::RenewableSharedCredentials>),
 }
 
 impl SharedCredentials {
@@ -75,6 +78,7 @@ impl SharedCredentials {
             SharedCredentials::Azure(azure) => azure.to_store(meta).await,
             SharedCredentials::Gcp(gcp) => gcp.to_store(meta).await,
             SharedCredentials::Mixed(mixed) => mixed.to_store(meta).await,
+            SharedCredentials::Renewable(credentials) => credentials.to_store(meta).await,
         }
     }
 
@@ -84,6 +88,9 @@ impl SharedCredentials {
             SharedCredentials::Azure(azure) => azure.to_store_type(store_type).await,
             SharedCredentials::Gcp(gcp) => gcp.to_store_type(store_type).await,
             SharedCredentials::Mixed(mixed) => mixed.to_store_type(store_type).await,
+            SharedCredentials::Renewable(credentials) => {
+                credentials.to_store_type(store_type).await
+            }
         }
     }
 
@@ -94,6 +101,7 @@ impl SharedCredentials {
             SharedCredentials::Azure(azure) => azure.to_db(app_id).await,
             SharedCredentials::Gcp(gcp) => gcp.to_db(app_id).await,
             SharedCredentials::Mixed(mixed) => mixed.to_db(app_id).await,
+            SharedCredentials::Renewable(credentials) => credentials.to_db(app_id).await,
         }
     }
 
@@ -104,6 +112,9 @@ impl SharedCredentials {
             SharedCredentials::Azure(azure) => azure.to_db_scoped(sub, app_id).await,
             SharedCredentials::Gcp(gcp) => gcp.to_db_scoped(sub, app_id).await,
             SharedCredentials::Mixed(mixed) => mixed.to_db_scoped(sub, app_id).await,
+            SharedCredentials::Renewable(credentials) => {
+                credentials.to_db_scoped(sub, app_id).await
+            }
         }
     }
 
@@ -114,6 +125,7 @@ impl SharedCredentials {
             SharedCredentials::Azure(azure) => azure.to_logs_db_builder(),
             SharedCredentials::Gcp(gcp) => gcp.to_logs_db_builder(),
             SharedCredentials::Mixed(mixed) => mixed.to_logs_db_builder(),
+            SharedCredentials::Renewable(credentials) => credentials.to_logs_db_builder(),
         }
     }
 }

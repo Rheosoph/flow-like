@@ -4,7 +4,9 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like::app::App;
 use flow_like::flow::event::{Event, ReleaseNotes};
+use futures::stream::{self, StreamExt};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -19,6 +21,10 @@ use super::get_event::map_missing_event_artifact;
 /// Bound on how many archived versions one response projects, matching the
 /// version-archive retention default. Listings past it set `truncated`.
 const TIMELINE_VERSION_CAP: usize = 200;
+/// Archived version artifacts are small object-store reads.
+const ARCHIVE_LOAD_CONCURRENCY: usize = 16;
+/// Every miss decodes a whole board, so fewer run at once.
+const BOARD_RESOLVE_CONCURRENCY: usize = 4;
 
 /// One event revision — the live head or an archived version snapshot.
 #[derive(Serialize, ToSchema)]
@@ -79,43 +85,62 @@ fn system_time_ms(time: std::time::SystemTime) -> u64 {
         .as_millis() as u64
 }
 
-type ResolutionCache = HashMap<(String, Option<(u32, u32, u32)>), Option<HashSet<String>>>;
+type BoardTarget = (String, Option<(u32, u32, u32)>);
+type ResolutionCache = HashMap<BoardTarget, Option<HashSet<String>>>;
 
-/// Preflight the revision's `(board_id, board_version, node_id)` target. Any
-/// load error is `(false, false)` — a missing board must mark the entry, never
-/// fail the listing.
-async fn target_resolution(
+/// Loads the archived versions with bounded concurrency, keeping their order.
+async fn load_archived_events(
+    app: &App,
+    event_id: &str,
+    versions: Vec<(u32, u32, u32)>,
+) -> Vec<((u32, u32, u32), flow_like_types::Result<Event>)> {
+    stream::iter(versions)
+        .map(|version| async move { (version, app.get_event(event_id, Some(version)).await) })
+        .buffered(ARCHIVE_LOAD_CONCURRENCY)
+        .collect()
+        .await
+}
+
+/// Loads each distinct target board once. A load error resolves to `None` — a
+/// missing board must mark the entry, never fail the listing.
+async fn resolve_board_targets(
     state: &AppState,
     app_id: &str,
-    cache: &mut ResolutionCache,
-    event: &Event,
-) -> (bool, bool) {
+    targets: HashSet<BoardTarget>,
+) -> ResolutionCache {
+    stream::iter(targets)
+        .map(|target| async move {
+            let nodes = match state
+                .master_board_shared(app_id, &target.0, state, target.1)
+                .await
+            {
+                Ok(cached) => Some(cached.board.nodes.keys().cloned().collect::<HashSet<_>>()),
+                Err(error) => {
+                    tracing::debug!(
+                        app_id = %app_id,
+                        board_id = %target.0,
+                        board_version = ?target.1,
+                        %error,
+                        "Timeline target board does not resolve"
+                    );
+                    None
+                }
+            };
+            (target, nodes)
+        })
+        .buffer_unordered(BOARD_RESOLVE_CONCURRENCY)
+        .collect()
+        .await
+}
+
+/// Preflight the revision's `(board_id, board_version, node_id)` target
+/// against the boards [`resolve_board_targets`] loaded.
+fn target_resolution(cache: &ResolutionCache, event: &Event) -> (bool, bool) {
     if event.board_id.is_empty() {
         return (false, false);
     }
 
-    let key = (event.board_id.clone(), event.board_version);
-    if !cache.contains_key(&key) {
-        let nodes = match state
-            .master_board_shared(app_id, &event.board_id, state, event.board_version)
-            .await
-        {
-            Ok(cached) => Some(cached.board.nodes.keys().cloned().collect::<HashSet<_>>()),
-            Err(error) => {
-                tracing::debug!(
-                    app_id = %app_id,
-                    board_id = %event.board_id,
-                    board_version = ?event.board_version,
-                    %error,
-                    "Timeline target board does not resolve"
-                );
-                None
-            }
-        };
-        cache.insert(key.clone(), nodes);
-    }
-
-    match cache.get(&key) {
+    match cache.get(&(event.board_id.clone(), event.board_version)) {
         Some(Some(nodes)) => {
             // Page events carry no node target — the entry resolves iff its
             // board does.
@@ -253,28 +278,19 @@ pub async fn get_event_timeline(
     let truncated = versions.len() > TIMELINE_VERSION_CAP;
     let live_version = live.event_version;
 
-    let mut resolution_cache: ResolutionCache = HashMap::new();
+    // The archive holds the live version only after a crash between the
+    // archive and live writes — identical content, so keep the head alone.
+    let archived_versions: Vec<(u32, u32, u32)> = versions
+        .into_iter()
+        .take(TIMELINE_VERSION_CAP)
+        .filter(|version| *version != live_version)
+        .collect();
+
     let mut skipped: u32 = 0;
-    let mut entries = Vec::with_capacity(versions.len().min(TIMELINE_VERSION_CAP) + 1);
-
-    let (board_resolves, node_resolves) =
-        target_resolution(&state, &app_id, &mut resolution_cache, &live).await;
-    entries.push(project_entry(
-        live,
-        true,
-        board_resolves,
-        node_resolves,
-        redact_board_metadata,
-    ));
-
-    for version in versions.into_iter().take(TIMELINE_VERSION_CAP) {
-        // The archive holds the live version only after a crash between the
-        // archive and live writes — identical content, so keep the head alone.
-        if version == live_version {
-            continue;
-        }
-        let event = match app.get_event(&event_id, Some(version)).await {
-            Ok(event) if event.id == event_id => event,
+    let mut archived = Vec::with_capacity(archived_versions.len());
+    for (version, loaded) in load_archived_events(&app, &event_id, archived_versions).await {
+        match loaded {
+            Ok(event) if event.id == event_id => archived.push(event),
             Ok(event) => {
                 tracing::warn!(
                     expected_event_id = %event_id,
@@ -284,7 +300,6 @@ pub async fn get_event_timeline(
                     "Archived event version carries a foreign event ID; skipping"
                 );
                 skipped += 1;
-                continue;
             }
             Err(error) => {
                 tracing::warn!(
@@ -295,15 +310,25 @@ pub async fn get_event_timeline(
                     "Failed to load archived event version; skipping"
                 );
                 skipped += 1;
-                continue;
             }
-        };
+        }
+    }
 
-        let (board_resolves, node_resolves) =
-            target_resolution(&state, &app_id, &mut resolution_cache, &event).await;
+    let targets: HashSet<BoardTarget> = std::iter::once(&live)
+        .chain(&archived)
+        .filter(|event| !event.board_id.is_empty())
+        .map(|event| (event.board_id.clone(), event.board_version))
+        .collect();
+    let resolution_cache = resolve_board_targets(&state, &app_id, targets).await;
+
+    let mut entries = Vec::with_capacity(archived.len() + 1);
+    for (event, is_live) in
+        std::iter::once((live, true)).chain(archived.into_iter().map(|event| (event, false)))
+    {
+        let (board_resolves, node_resolves) = target_resolution(&resolution_cache, &event);
         entries.push(project_entry(
             event,
-            false,
+            is_live,
             board_resolves,
             node_resolves,
             redact_board_metadata,

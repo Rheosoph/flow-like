@@ -681,6 +681,540 @@ fn overview_tiers() -> flow_like::hub::UserTiers {
     .unwrap()
 }
 
+async fn instance_quota_fixture(
+    limit_micros: i64,
+    replicas: usize,
+) -> (
+    DatabaseConnection,
+    Vec<crate::instances::VerifiedInstanceUsage>,
+) {
+    use flow_like_device_protocol::{DeviceIdentity, DeviceReceipt, SigningKey};
+
+    let db = fixture().await;
+    for migration in [
+        include_str!("../prisma/migrations/20260921120000_standalone_devices/migration.sql"),
+        include_str!("../prisma/migrations/20260921140000_instance_resources/migration.sql"),
+        include_str!("../prisma/migrations/20260922010000_instance_online_resources/migration.sql"),
+        include_str!("../prisma/migrations/20260923120000_instance_validation/migration.sql"),
+    ] {
+        for statement in migration.split(';').filter(|s| !s.trim().is_empty()) {
+            execute(&db, statement).await;
+        }
+    }
+    execute(
+        &db,
+        r#"CREATE TYPE "UserStatus" AS ENUM ('ACTIVE','INACTIVE')"#,
+    )
+    .await;
+    execute(
+        &db,
+        r#"CREATE TYPE "UserTier" AS ENUM ('FREE','ENTERPRISE')"#,
+    )
+    .await;
+    execute(
+        &db,
+        r#"CREATE TYPE "BitType" AS ENUM ('LLM','VLM','EMBEDDING','FILE')"#,
+    )
+    .await;
+    execute(&db, r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,status "UserStatus" NOT NULL,tier "UserTier" NOT NULL,"billingPeriodAnchor" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now())"#).await;
+    execute(
+        &db,
+        r#"INSERT INTO "User" (id,status,tier) VALUES ('instance-payer','ACTIVE','FREE')"#,
+    )
+    .await;
+    execute(&db, r#"CREATE TABLE "Bit" (id TEXT PRIMARY KEY,type "BitType" NOT NULL,parameters JSONB,"updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now())"#).await;
+    execute(
+        &db,
+        r#"CREATE TABLE "UsageInvocation" (id TEXT PRIMARY KEY,"appId" TEXT)"#,
+    )
+    .await;
+    let parameters = json!({
+        "context_length": 32768,
+        "model_classification": flow_like::bit::BitModelClassification::default(),
+        "provider": {"provider_name":"hosted:openrouter","model_id":"provider/model","params":{"tier":"FREE"}}
+    });
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"INSERT INTO "Bit" (id,type,parameters) VALUES ('approved-model','LLM',$1)"#,
+        [parameters.into()],
+    ))
+    .await
+    .unwrap();
+    let now = chrono::Utc::now().timestamp();
+    let identity = DeviceIdentity {
+        auth_key: SigningKey::generate().public_key(),
+        management_key: [9; 32],
+        telemetry_key: SigningKey::generate().public_key(),
+    };
+    identity.validate().unwrap();
+    let receipt = DeviceReceipt {
+        enrollment_id: "quota-enrollment".into(),
+        device_id: "quota-device".into(),
+        owner_id: "instance-payer".into(),
+        name: "Quota fixture".into(),
+        identity: identity.clone(),
+        // These persistence tests start after the enrollment verifier. Signed
+        // enrollment and instance admission have their own protocol tests.
+        manifest_jws: "verified-manifest-fixture".into(),
+        binding_jws: "verified-binding-fixture".into(),
+        registered_at: now,
+        auth_epoch: 1,
+    };
+    db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        r#"INSERT INTO "ManagedDevice" (id,"ownerId",name,status,"authEpoch",identity,receipt,"registeredAt") VALUES ('quota-device','instance-payer','Quota fixture','active',1,$1,$2,$3)"#,
+        [serde_json::to_string(&identity).unwrap().into(),serde_json::to_string(&receipt).unwrap().into(),now.into()])).await.unwrap();
+    db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        r#"INSERT INTO "PlacementResourceGrant" (id,"deviceId","placementId","deploymentId","projectId","delegatingUserId","approvedByUserId",status,"modelIds","maxInstances","expiresAt","createdAt") VALUES ('quota-grant','quota-device','quota-placement','quota-deployment','offline-project','instance-payer','instance-payer','active','["approved-model"]',100,$1,$2)"#,
+        [(now+3600).into(),now.into()])).await.unwrap();
+    db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        r#"INSERT INTO "PlacementBillingGrant" (id,"grantId","payerId","approvedByUserId",status,"limitMicros","expiresAt","createdAt") VALUES ('quota-billing','quota-grant','instance-payer','instance-payer','active',$1,$2,$3)"#,
+        [limit_micros.into(),(now+3600).into(),now.into()])).await.unwrap();
+    let mut usages = Vec::new();
+    for replica in 0..replicas {
+        let id = format!("quota-instance-{replica}");
+        let key = SigningKey::generate().public_key();
+        db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"INSERT INTO "WorkloadInstance" (id,"deviceId","grantId","billingGrantId","workloadKey","workloadKeyThumbprint","deviceAuthEpoch","grantAuthzVersion","billingAuthzVersion",status,"registeredAt","leaseExpiresAt","registrationJws") VALUES ($1,'quota-device','quota-grant','quota-billing',$2,$3,1,1,1,'active',$4,$5,'verified-registration-fixture')"#,
+            [id.clone().into(),serde_json::to_string(&key).unwrap().into(),key.thumbprint().unwrap().into(),now.into(),(now+600).into()])).await.unwrap();
+        usages.push(crate::instances::VerifiedInstanceUsage {
+            instance_id: id,
+            device_id: "quota-device".into(),
+            device_auth_epoch: 1,
+            key_epoch: 1,
+            grant_id: "quota-grant".into(),
+            authz_version: 1,
+            billing_grant_id: "quota-billing".into(),
+            billing_authz_version: 1,
+            delegated_user_id: "instance-payer".into(),
+            payer_id: "instance-payer".into(),
+            project_id: "offline-project".into(),
+            placement_id: "quota-placement".into(),
+            deployment_id: "quota-deployment".into(),
+            app_id: None,
+            model_id: "approved-model".into(),
+            request_method: "POST".into(),
+            request_path: "/instances/chat/completions".into(),
+            proof_expires_at: now + 60,
+        });
+    }
+    (db, usages)
+}
+
+fn instance_quota_request(id: &str, micros: i64) -> crate::quota::QuotaRequest {
+    crate::quota::QuotaRequest {
+        operation_id: id.into(),
+        payer_id: "caller-supplied-payer-is-ignored".into(),
+        actor_id: Some("instance-payer".into()),
+        app_id: None,
+        model_id: Some("approved-model".into()),
+        provider: Some("hosted:openrouter".into()),
+        kind: "llm".into(),
+        funding_class: "hosted".into(),
+        execution_mode: "instance_hosted_ai".into(),
+        amounts: QuotaAmounts {
+            ai_cost_micros: micros,
+            ai_calls: 1,
+            ..Default::default()
+        },
+        deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
+    }
+}
+
+async fn reserve_instance_quota(
+    db: &DatabaseConnection,
+    usage: &crate::instances::VerifiedInstanceUsage,
+    id: &str,
+    micros: i64,
+) -> Result<String, crate::error::ApiError> {
+    crate::quota::reserve_instance_with_db(
+        db,
+        DbDialect::Postgres,
+        &overview_tiers(),
+        instance_quota_request(id, micros),
+        usage,
+        "FREE",
+    )
+    .await
+}
+
+async fn instance_budget_totals(db: &DatabaseConnection) -> (i64, i64) {
+    let row=db.query_one_raw(Statement::from_string(DatabaseBackend::Postgres,
+        r#"SELECT "usedMicros","reservedMicros" FROM "PlacementBillingGrant" WHERE id='quota-billing'"#)).await.unwrap().unwrap();
+    (
+        row.try_get("", "usedMicros").unwrap(),
+        row.try_get("", "reservedMicros").unwrap(),
+    )
+}
+
+async fn instance_account_totals(db: &DatabaseConnection) -> (QuotaAmounts, QuotaAmounts) {
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT used,reserved FROM "QuotaPeriod" WHERE "payerId"='instance-payer'"#,
+        ))
+        .await
+        .unwrap();
+    row.map(|row| {
+        (
+            serde_json::from_str(&row.try_get::<String>("", "used").unwrap()).unwrap(),
+            serde_json::from_str(&row.try_get::<String>("", "reserved").unwrap()).unwrap(),
+        )
+    })
+    .unwrap_or_default()
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn instance_quota_releases_unstarted_and_retains_uncertain_provider_cost() {
+    let (db, usages) = instance_quota_fixture(1000, 1).await;
+    let usage = &usages[0];
+    assert_eq!(
+        reserve_instance_quota(&db, usage, "unstarted", 400)
+            .await
+            .unwrap(),
+        "instance-payer"
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 400));
+    for _ in 0..2 {
+        crate::quota::release_unstarted_with_db(
+            &db,
+            DbDialect::Postgres,
+            "unstarted",
+            "fixture cancellation",
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(instance_budget_totals(&db).await, (0, 0));
+    assert_eq!(
+        instance_account_totals(&db).await,
+        (QuotaAmounts::default(), QuotaAmounts::default())
+    );
+
+    reserve_instance_quota(&db, usage, "uncertain", 700)
+        .await
+        .unwrap();
+    assert!(
+        crate::quota::mark_instance_started_with_db(
+            &db,
+            DbDialect::Postgres,
+            &overview_tiers(),
+            "uncertain",
+            "instance-payer".into()
+        )
+        .await
+        .unwrap()
+    );
+    execute(
+        &db,
+        r#"UPDATE "QuotaOperation" SET deadline=0 WHERE id='uncertain'"#,
+    )
+    .await;
+    assert_eq!(flag_stale(&db, 100).await.unwrap(), 1);
+    crate::quota::release_unstarted_with_db(
+        &db,
+        DbDialect::Postgres,
+        "uncertain",
+        "expired provider response",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        recover_unstarted_releases(&db, DbDialect::Postgres, 100)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 700));
+    let partial = QuotaAmounts {
+        ai_cost_micros: 200,
+        ai_calls: 1,
+        ..Default::default()
+    };
+    for result in join_all((0..8).map(|_| {
+        settle_with_db(
+            &db,
+            DbDialect::Postgres,
+            "uncertain",
+            "partial",
+            partial,
+            false,
+            json!({}),
+        )
+    }))
+    .await
+    {
+        result.unwrap();
+    }
+    assert_eq!(instance_budget_totals(&db).await, (200, 500));
+    let (used, reserved) = instance_account_totals(&db).await;
+    assert_eq!(used, partial);
+    assert_eq!(reserved.ai_cost_micros, 500);
+    assert_eq!(reserved.ai_calls, 0);
+
+    // Revocation stops new work; it cannot discard charges already incurred.
+    execute(&db,r#"UPDATE "PlacementBillingGrant" SET status='revoked',"authzVersion"=2 WHERE id='quota-billing'"#).await;
+    let final_cost = QuotaAmounts {
+        ai_cost_micros: 250,
+        ai_calls: 1,
+        ..Default::default()
+    };
+    for revision in ["terminal", "terminal", "same-total"] {
+        settle_with_db(
+            &db,
+            DbDialect::Postgres,
+            "uncertain",
+            revision,
+            final_cost,
+            true,
+            json!({}),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(instance_budget_totals(&db).await, (250, 0));
+    assert_eq!(
+        instance_account_totals(&db).await,
+        (final_cost, QuotaAmounts::default())
+    );
+    let corrected = QuotaAmounts {
+        ai_cost_micros: 180,
+        ..final_cost
+    };
+    settle_with_db(
+        &db,
+        DbDialect::Postgres,
+        "uncertain",
+        "correction",
+        corrected,
+        true,
+        json!({"adjustment":true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(instance_budget_totals(&db).await, (180, 0));
+    assert_eq!(
+        instance_account_totals(&db).await,
+        (corrected, QuotaAmounts::default())
+    );
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn instance_quota_replicas_share_one_placement_budget() {
+    let (db, usages) = instance_quota_fixture(1000, 8).await;
+    let operations: Vec<_> = (0..usages.len())
+        .map(|i| format!("replica-operation-{i}"))
+        .collect();
+    let results = join_all(
+        usages
+            .iter()
+            .zip(&operations)
+            .map(|(usage, id)| reserve_instance_quota(&db, usage, id, 300)),
+    )
+    .await;
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 3);
+    assert!(
+        results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .all(|error| error.status() == axum::http::StatusCode::TOO_MANY_REQUESTS)
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 900));
+    let (used, reserved) = instance_account_totals(&db).await;
+    assert_eq!(used, QuotaAmounts::default());
+    assert_eq!(reserved.ai_cost_micros, 900);
+    assert_eq!(reserved.ai_calls, 3);
+    let winner = results.iter().position(|result| result.is_ok()).unwrap();
+    for result in join_all(
+        (0..8).map(|_| reserve_instance_quota(&db, &usages[winner], &operations[winner], 300)),
+    )
+    .await
+    {
+        result.unwrap();
+    }
+    assert_eq!(instance_budget_totals(&db).await, (0, 900));
+    crate::quota::release_unstarted_with_db(
+        &db,
+        DbDialect::Postgres,
+        &operations[winner],
+        "free placement capacity",
+    )
+    .await
+    .unwrap();
+    reserve_instance_quota(
+        &db,
+        &usages[(winner + 1) % usages.len()],
+        "replacement",
+        300,
+    )
+    .await
+    .unwrap();
+    assert_eq!(instance_budget_totals(&db).await, (0, 900));
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT COUNT(*) AS count FROM "InstanceUsageAdmission""#,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<i64>("", "count").unwrap(), 4);
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn instance_quota_rolls_back_budget_when_account_admission_fails() {
+    assert!(
+        crate::quota::enforcing(),
+        "Run quota enforcement tests without FLOW_LIKE_QUOTA_MODE=shadow"
+    );
+    let (db, usages) = instance_quota_fixture(20000, 1).await;
+    assert!(
+        reserve_instance_quota(&db, &usages[0], "account-denied", 11000)
+            .await
+            .is_err()
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 0));
+    assert_eq!(
+        instance_account_totals(&db).await,
+        (QuotaAmounts::default(), QuotaAmounts::default())
+    );
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT COUNT(*) AS count FROM "InstanceUsageAdmission""#,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.try_get::<i64>("", "count").unwrap(), 0);
+    // Failure has not consumed this operation's identity or its budget.
+    reserve_instance_quota(&db, &usages[0], "account-denied", 500)
+        .await
+        .unwrap();
+    assert_eq!(instance_budget_totals(&db).await, (0, 500));
+    let mut altered = instance_quota_request("wrong-model", 100);
+    altered.model_id = Some("unapproved-model".into());
+    assert!(
+        crate::quota::reserve_instance_with_db(
+            &db,
+            DbDialect::Postgres,
+            &overview_tiers(),
+            altered,
+            &usages[0],
+            "FREE"
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 500));
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn instance_queued_dispatch_rechecks_revocation_and_live_model_tier() {
+    let (db, usages) = instance_quota_fixture(1000, 1).await;
+    reserve_instance_quota(&db, &usages[0], "changed-model", 400)
+        .await
+        .unwrap();
+    execute(&db,r#"UPDATE "Bit" SET parameters=jsonb_set(parameters,'{provider,params,tier}','"ENTERPRISE"') WHERE id='approved-model'"#).await;
+    assert!(
+        crate::quota::mark_instance_started_with_db(
+            &db,
+            DbDialect::Postgres,
+            &overview_tiers(),
+            "changed-model",
+            "instance-payer".into()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 0));
+    execute(&db,r#"UPDATE "Bit" SET parameters=jsonb_set(parameters,'{provider,params,tier}','"FREE"') WHERE id='approved-model'"#).await;
+    reserve_instance_quota(&db, &usages[0], "revoked-before-start", 400)
+        .await
+        .unwrap();
+    execute(&db,r#"UPDATE "PlacementResourceGrant" SET status='revoked',"authzVersion"=2 WHERE id='quota-grant'"#).await;
+    assert!(
+        crate::quota::mark_instance_started_with_db(
+            &db,
+            DbDialect::Postgres,
+            &overview_tiers(),
+            "revoked-before-start",
+            "instance-payer".into()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(instance_budget_totals(&db).await, (0, 0));
+    assert_eq!(
+        instance_account_totals(&db).await,
+        (QuotaAmounts::default(), QuotaAmounts::default())
+    );
+    assert!(
+        reserve_instance_quota(&db, &usages[0], "after-revoke", 400)
+            .await
+            .is_err()
+    );
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn instance_dispatch_does_not_outlive_lease_while_waiting_for_model_policy() {
+    let (db, usages) = instance_quota_fixture(1000, 1).await;
+    reserve_instance_quota(&db, &usages[0], "lease-expired-at-dispatch", 400)
+        .await
+        .unwrap();
+    let expires_at = chrono::Utc::now().timestamp() + 3;
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"UPDATE "WorkloadInstance" SET "leaseExpiresAt"=$1"#,
+        [expires_at.into()],
+    ))
+    .await
+    .unwrap();
+    let held_model = db.begin().await.unwrap();
+    held_model
+        .execute_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"UPDATE "Bit" SET "updatedAt"="updatedAt" WHERE id='approved-model'"#,
+        ))
+        .await
+        .unwrap();
+    let dispatch_db = db.clone();
+    let dispatch = tokio::spawn(async move {
+        crate::quota::mark_instance_started_with_db(
+            &dispatch_db,
+            DbDialect::Postgres,
+            &overview_tiers(),
+            "lease-expired-at-dispatch",
+            "instance-payer".into(),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(
+        !dispatch.is_finished(),
+        "Dispatch must wait for the model policy row"
+    );
+    while chrono::Utc::now().timestamp() <= expires_at {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    held_model.rollback().await.unwrap();
+    assert!(dispatch.await.unwrap().is_err());
+    assert_eq!(instance_budget_totals(&db).await, (0, 0));
+    assert_eq!(
+        instance_account_totals(&db).await,
+        (QuotaAmounts::default(), QuotaAmounts::default())
+    );
+    db.close().await.unwrap();
+}
+
 #[tokio::test]
 #[ignore = "requires a disposable PostgreSQL database"]
 async fn initialized_overview_is_read_only_and_skips_history_when_requested() {

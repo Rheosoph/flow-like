@@ -16,8 +16,8 @@ import {
 	Cpu,
 	ExternalLink,
 	type LucideIcon,
-	Package,
 	Scroll,
+	Server,
 	ShieldCheck,
 	User,
 	Zap,
@@ -76,14 +76,13 @@ function buildSettingsSections(
 			label: t("extensionsAmpIntegrations", "Extensions & Integrations"),
 			cards: [
 				{
-					title: t("registry", "Registry"),
+					title: t("devices", "Devices"),
 					description: t(
-						"installedPackagesAndExploreTheMarketplace",
-						"Installed packages and explore the marketplace",
+						"devicesSettingsDescription",
+						"Manage your device fleet, deployments, health, and certificates",
 					),
-					href: "/settings/registry",
-					icon: Package,
-					devOnly: true,
+					href: "/settings/devices",
+					icon: Server,
 				},
 				{
 					title: t("sinksAmpTriggers", "Sinks & Triggers"),
@@ -187,9 +186,7 @@ export default function SettingsPage() {
 			buildSettingsSections(t)
 				.map((section) => ({
 					...section,
-					cards: developerMode
-						? section.cards
-						: section.cards.filter((card) => !card.devOnly),
+					cards: section.cards.filter((card) => developerMode || !card.devOnly),
 				}))
 				.filter((section) => section.cards.length > 0),
 		[developerMode, t],

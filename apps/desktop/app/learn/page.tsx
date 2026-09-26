@@ -5,6 +5,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
@@ -78,20 +79,20 @@ export default function LearnPage() {
 
 	const progressByCourseId = useMemo<Record<string, number>>(() => {
 		const map: Record<string, number> = {};
-		for (const e of enrollmentsQuery.data ?? []) {
+		for (const e of asArray(enrollmentsQuery.data)) {
 			map[e.course_id] = e.completed_at ? 1 : 0.05;
 		}
 		return map;
 	}, [enrollmentsQuery.data]);
 
 	const stats = useMemo(() => {
-		const enrollments = enrollmentsQuery.data ?? [];
+		const enrollments = asArray(enrollmentsQuery.data);
 		const completed = enrollments.filter((e) => e.completed_at !== null).length;
 		return {
 			enrolled: enrollments.length,
 			completed,
 			points: optInQuery.data?.total_points ?? 0,
-			certificates: certificatesQuery.data?.length ?? 0,
+			certificates: asArray(certificatesQuery.data).length,
 		};
 	}, [enrollmentsQuery.data, certificatesQuery.data, optInQuery.data]);
 
@@ -121,8 +122,8 @@ export default function LearnPage() {
 		<div className="flex-1 overflow-auto">
 			<div className="mx-auto max-w-7xl p-6 md:p-10">
 				<CourseCatalog
-					courses={coursesQuery.data ?? []}
-					paths={pathsQuery.data ?? []}
+					courses={asArray(coursesQuery.data)}
+					paths={asArray(pathsQuery.data)}
 					progressByCourseId={progressByCourseId}
 					onSelect={(c) =>
 						router.push(`/learn/course?courseId=${encodeURIComponent(c.id)}`)

@@ -9,6 +9,33 @@ import type {
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"window",
+	"document",
+	"navigator",
+	"localStorage",
+	"HTMLElement",
+	"Element",
+	"Node",
+	"MutationObserver",
+	"HTMLButtonElement",
+	"SVGElement",
+	"Event",
+	"CustomEvent",
+	"MouseEvent",
+	"PointerEvent",
+	"getComputedStyle",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"ResizeObserver",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+const actualLocales = { ...(await import("@flow-like/locales")) };
+
 function installDomGlobals() {
 	Object.assign(globalThis, {
 		window,
@@ -61,6 +88,7 @@ const translate = (
 	);
 };
 mock.module("@flow-like/locales", () => ({
+	...actualLocales,
 	useTranslation: () => ({ t: translate }),
 }));
 
@@ -89,10 +117,15 @@ function render(element: React.ReactElement): HTMLElement {
 	return container;
 }
 
-afterAll(() => {
-	act(() => {
+afterAll(async () => {
+	await act(async () => {
 		for (const root of roots) root.unmount();
 	});
+	mock.module("@flow-like/locales", () => actualLocales);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
 });
 
 function finding(
@@ -131,7 +164,7 @@ function report(findings: IQualityFinding[]): IBoardQualityReport {
 function click(element: Element | null | undefined) {
 	if (!element) throw new Error("element not found");
 	act(() => {
-		element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+		element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 	});
 }
 

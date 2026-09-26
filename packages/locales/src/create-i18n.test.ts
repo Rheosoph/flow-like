@@ -62,7 +62,13 @@ describe("locale files", () => {
 		);
 	});
 
+	/*
+	 * Beyond the source keys a locale may only carry the plural forms its own
+	 * CLDR rules need (Polish `_few`/`_many`, Spanish `_many`) for a key the
+	 * source pluralises.
+	 */
 	test("every secondary locale has exactly the source key set", () => {
+		const pluralSuffix = /^(.*)_(zero|one|two|few|many|other)$/;
 		for (const namespace of LOCALE_CONFIG.namespaces) {
 			const source = JSON.parse(
 				readFileSync(
@@ -75,20 +81,35 @@ describe("locale files", () => {
 				),
 			);
 			const sourceKeys = flatten(source).sort();
+			const sourceSet = new Set(sourceKeys);
+			const pluralBases = new Set(
+				sourceKeys.flatMap((key) => pluralSuffix.exec(key)?.[1] ?? []),
+			);
 
 			for (const language of LOCALE_CONFIG.languages) {
 				if (language === LOCALE_CONFIG.sourceLanguage) continue;
+				const categories = new Set<string>(
+					new Intl.PluralRules(language).resolvedOptions().pluralCategories,
+				);
 				const target = JSON.parse(
 					readFileSync(
 						path.join(LOCALES_DIR, language, `${namespace}.json`),
 						"utf8",
 					),
 				);
-				expect({ language, namespace, keys: flatten(target).sort() }).toEqual({
+				const targetKeys = flatten(target);
+				const unexpected = targetKeys.filter((key) => {
+					if (sourceSet.has(key)) return false;
+					const [, base, category] = pluralSuffix.exec(key) ?? [];
+					return !(base && pluralBases.has(base) && categories.has(category));
+				});
+				const targetSet = new Set(targetKeys);
+				expect({
 					language,
 					namespace,
-					keys: sourceKeys,
-				});
+					missing: sourceKeys.filter((key) => !targetSet.has(key)),
+					unexpected: unexpected.sort(),
+				}).toEqual({ language, namespace, missing: [], unexpected: [] });
 			}
 		}
 	});
@@ -251,7 +272,7 @@ describe("createI18n", () => {
 		await i18n.changeLanguage(LOCALE_CONFIG.sourceLanguage);
 		await i18n.loadNamespaces([...LOCALE_CONFIG.namespaces]);
 		expect(i18n.t("settings:theme.light")).toBe("Light");
-		expect(i18n.t("feedback.trigger")).toBe("Report Bug");
+		expect(i18n.t("cancel")).toBe("Cancel");
 	});
 
 	test("loads a secondary language through the dynamic-import backend", async () => {

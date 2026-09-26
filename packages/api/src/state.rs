@@ -393,6 +393,10 @@ pub struct State {
     jwks_refresh: flow_like_types::tokio::sync::Mutex<JwksRefreshState>,
     pub client: Client<HttpConnector, Body>,
     pub stripe_client: Option<stripe::Client>,
+    pub payments_gateway:
+        flow_like_types::tokio::sync::OnceCell<Arc<crate::stripe_connect::HttpStripeGateway>>,
+    pub legacy_payments_gateway:
+        flow_like_types::tokio::sync::OnceCell<Arc<crate::stripe_connect::HttpStripeGateway>>,
     pub mail_client: Option<DynMailClient>,
     #[cfg(feature = "aws")]
     pub aws_client: Arc<SdkConfig>,
@@ -485,10 +489,17 @@ pub struct State {
     /// are far more frequent than execution-state reads, and rebuilding a Redis
     /// connection on every call would dominate the latency the cache exists to avoid.
     pub cache: crate::cache::CacheBackendHandle,
+    /// Execution state backend (`EXECUTION_STATE_BACKEND`), built on first use and shared
+    /// by every executor callback and poll. A failed build is not memoized.
+    pub(crate) execution_state_store: flow_like_types::tokio::sync::OnceCell<
+        Arc<dyn crate::execution::state::ExecutionStateStore>,
+    >,
     /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
     pub secrets: Arc<SecretStore>,
     /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
     pub encryption_key: [u8; 32],
+    /// `AUDIT_KID`, the key id the worker signs under.
+    pub audit_kid: Option<String>,
     /// HMAC secret for signing/verifying sink trigger JWTs
     pub sink_secret: Option<String>,
     /// Dedicated bearer token accepted only by the internal maintenance API.
@@ -727,7 +738,12 @@ impl State {
             .load(&secrets)
             .await
             .unwrap_or_else(|error| panic!("{error}"));
-        let platform_config = effective_config.hub;
+        let mut platform_config = effective_config.hub;
+        if platform_config.payments.creation_enabled() {
+            platform_config.payments.validate().unwrap_or_else(|error| {
+                panic!("Payment creation configuration is invalid: {error}")
+            });
+        }
         let oauth_providers = effective_config.oauth_providers;
         let openid_validation_overrides = effective_config.openid;
         if platform_config
@@ -792,6 +808,7 @@ impl State {
         };
 
         // Initialize backend JWT keys from the secret store
+        let audit_kid: Option<String>;
         {
             let backend_key = secrets
                 .get_secret_string(&SecretRef::new("BACKEND_KEY"))
@@ -821,14 +838,54 @@ impl State {
                 backend_pub.as_deref(),
                 backend_kid.clone(),
             );
-            crate::audit::sign::init(backend_key.as_deref(), backend_kid);
-            let audit_verifying_keys = secrets
+            let entry_key = secrets
+                .get_secret_string(&SecretRef::new("AUDIT_ENTRY_KEY"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            let entry_key_source =
+                crate::audit::keys::init_entry_key(entry_key.as_deref(), backend_key.as_deref())
+                    .expect("AUDIT_ENTRY_KEY must be base64 of 32 bytes");
+            let previous_entry_key = secrets
+                .get_secret_string(&SecretRef::new("AUDIT_ENTRY_KEY_PREVIOUS"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            let previous_backend_key = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_KEY_PREVIOUS"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            crate::audit::keys::init_previous_entry_key(
+                previous_entry_key.as_deref(),
+                previous_backend_key.as_deref(),
+            )
+            .expect("AUDIT_ENTRY_KEY_PREVIOUS must be base64 of 32 bytes");
+            if platform_config.audit.enabled
+                && platform_config.audit.require_signing
+                && entry_key_source == crate::audit::keys::EntryKeySource::Ephemeral
+            {
+                panic!(
+                    "AUDIT SIGNING REQUIRED: set AUDIT_ENTRY_KEY (base64 of 32 bytes) or BACKEND_KEY \
+                     so the audit worker can verify pending records"
+                );
+            }
+            audit_kid = secrets
+                .get_secret_string(&SecretRef::new("AUDIT_KID"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string())
+                .filter(|value| !value.trim().is_empty());
+            if let Some(keys) = secrets
                 .get_secret_string(&SecretRef::new("AUDIT_VERIFYING_KEYS"))
                 .await
                 .ok()
-                .map(|value| value.expose_secret().to_string());
-            crate::audit::sign::init_verifying_keys(audit_verifying_keys.as_deref())
-                .expect("AUDIT_VERIFYING_KEYS must contain named P-256 public keys");
+                .map(|value| value.expose_secret().to_string())
+                .filter(|value| !value.trim().is_empty())
+            {
+                crate::audit::signer::register_verifying_keys_json(&keys)
+                    .expect("AUDIT_VERIFYING_KEYS must map key ids to P-256 SPKI PEM public keys");
+            }
         }
 
         let realtime_ice =
@@ -860,6 +917,10 @@ impl State {
                 .expect("Failed to create meta store from master credentials"),
         );
         let storage_identity = crate::storage_identity::from_credentials(&master_creds);
+        crate::routes::registry::widget_policy::init_widget_policy(
+            &mut platform_config,
+            &storage_identity.content,
+        );
 
         let client: Client<HttpConnector, Body> =
             hyper_util::client::legacy::Client::<(), ()>::builder(TokioExecutor::new())
@@ -897,8 +958,7 @@ impl State {
                 .await
                 .expect("STRIPE_SECRET_KEY must be set");
             let exposed = stripe_key.expose_secret();
-            let preview: String = exposed.chars().take(8).collect();
-            tracing::info!("Stripe client initialized (key starts with: {preview}…)");
+            tracing::info!("Stripe client initialized");
             let stripe_client = stripe::Client::new(exposed);
             Some(stripe_client)
         } else {
@@ -1057,6 +1117,8 @@ impl State {
             jwks: flow_like_types::tokio::sync::RwLock::new(jwks),
             jwks_refresh: flow_like_types::tokio::sync::Mutex::new(JwksRefreshState::default()),
             stripe_client,
+            payments_gateway: flow_like_types::tokio::sync::OnceCell::new(),
+            legacy_payments_gateway: flow_like_types::tokio::sync::OnceCell::new(),
             mail_client,
             #[cfg(feature = "aws")]
             aws_client,
@@ -1146,8 +1208,10 @@ impl State {
             wasm_registry,
             sink_scheduler,
             cache: cache_backend,
+            execution_state_store: flow_like_types::tokio::sync::OnceCell::new(),
             secrets,
             encryption_key,
+            audit_kid,
             sink_secret,
             maintenance_token,
             trigger_idempotency: moka::sync::Cache::builder()
@@ -1462,7 +1526,8 @@ impl State {
             ConditionalRead::Fresh(proto, meta) => (proto, meta),
         };
 
-        let board = Board::from_loaded_proto(proto, storage_root, app_state).await?;
+        let board =
+            Board::from_loaded_proto_for_version(proto, storage_root, app_state, version).await?;
         let entry = Arc::new(CachedBoard {
             e_tag: meta.e_tag.clone().unwrap_or_default(),
             board: Arc::new(board),

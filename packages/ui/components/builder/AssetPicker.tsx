@@ -4,6 +4,7 @@ import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import { AlertCircle, FolderOpen, ImageIcon, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import type { IStorageItem } from "../../lib/schema/storage/storage-item";
 import {
 	decodeStorageSegment,
@@ -158,7 +159,7 @@ export function AssetPicker({
 	// to the browsed folder itself and carry no name, so they are dropped.
 	const sortedItems = useMemo(
 		() =>
-			(items.data ?? [])
+			asArray(items.data)
 				.filter((item) => basename(item.location).length > 0)
 				.sort((a, b) => {
 					if (a.is_dir && !b.is_dir) return -1;

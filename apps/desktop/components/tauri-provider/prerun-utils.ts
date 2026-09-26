@@ -1,8 +1,11 @@
 import { IExecutionMode } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 
 type PrerunLike = {
 	can_execute_locally: boolean;
 	execution_mode: IExecutionMode;
+	runtime_variables: readonly unknown[];
+	oauth_requirements: readonly unknown[];
 };
 
 function toError(error: unknown): Error {
@@ -36,9 +39,15 @@ export async function resolveLocalFirstPrerun<T extends PrerunLike>({
 
 	if (fetchRemote) {
 		try {
-			const remoteResult = await fetchRemote();
+			const fetched = await fetchRemote();
 
-			if (remoteResult) {
+			if (isRecord(fetched)) {
+				// Older hubs may omit the lists the run dialog iterates.
+				const remoteResult = {
+					...fetched,
+					runtime_variables: asArray(fetched.runtime_variables),
+					oauth_requirements: asArray(fetched.oauth_requirements),
+				};
 				if (
 					remoteResult.can_execute_locally &&
 					remoteResult.execution_mode !== IExecutionMode.Remote

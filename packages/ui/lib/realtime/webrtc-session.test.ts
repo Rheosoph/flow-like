@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import type { IRealtimeAccess } from "./types";
 
 class FakeAwareness {
@@ -56,7 +56,16 @@ class FakeWebrtcProvider {
 	}
 }
 
-mock.module("y-webrtc", () => ({ WebrtcProvider: FakeWebrtcProvider }));
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualYWebrtc = { ...(await import("y-webrtc")) };
+mock.module("y-webrtc", () => ({
+	...actualYWebrtc,
+	WebrtcProvider: FakeWebrtcProvider,
+}));
+afterAll(() => {
+	mock.module("y-webrtc", () => actualYWebrtc);
+});
 
 const { createRealtimeSession } = await import("./webrtc");
 

@@ -9,6 +9,7 @@ import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { useInfiniteInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { useSearch } from "../../../hooks/use-search-index";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import type { IBackendRole } from "../../../state/backend-state/types";
 import { Button } from "../../ui/button";
@@ -81,7 +82,7 @@ export function RolesPage() {
 	const memberCounts = useMemo(() => {
 		if (team.isError || !team.data) return undefined;
 		const counts = new Map<string, number>();
-		for (const member of team.data.pages.flat()) {
+		for (const member of team.data.pages.flatMap((page) => asArray(page))) {
 			counts.set(member.role_id, (counts.get(member.role_id) ?? 0) + 1);
 		}
 		return counts;
@@ -96,7 +97,7 @@ export function RolesPage() {
 		enabled && (!canReadRoles || isPermissionDenied(roles.error));
 
 	const allRoles = useMemo(() => {
-		const persisted = roles.data?.[1] ?? [];
+		const persisted = asArray(roles.data?.[1]);
 		return isNewRole && draft ? [...persisted, draft] : persisted;
 	}, [roles.data, isNewRole, draft]);
 
@@ -126,7 +127,7 @@ export function RolesPage() {
 	}, [allRoles, matchedRoles, roles.data]);
 
 	const persistedRole = useMemo(
-		() => roles.data?.[1]?.find((role) => role.id === openRoleId),
+		() => asArray(roles.data?.[1]).find((role) => role.id === openRoleId),
 		[roles.data, openRoleId],
 	);
 	const isDirty = useMemo(() => {

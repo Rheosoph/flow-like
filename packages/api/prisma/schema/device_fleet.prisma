@@ -1,0 +1,24 @@
+model DeviceFleetReader {
+ deviceId String
+ userId String
+ keyId String
+ revision BigInt
+ readerJws String
+ deleted Boolean
+ @@id([deviceId, userId, keyId])
+}
+model DeviceFleetHead {
+ deviceId String @id
+ sequence BigInt
+ digest String
+}
+model DeviceFleetSnapshot {
+ deviceId String
+ streamId String
+ userId String
+ keyId String
+ manifestJws String
+ bundle String
+ updatedAt BigInt
+ @@id([deviceId, streamId])
+}

@@ -6,7 +6,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 
@@ -46,18 +46,25 @@ pub async fn get_route_by_path(
 ) -> Result<Json<Option<RouteMapping>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ListEvents);
 
-    let model = event::Entity::find()
+    let row = event::Entity::find()
         .filter(event::Column::AppId.eq(&app_id))
         .filter(event::Column::Route.eq(&params.path))
+        .select_only()
+        .columns([
+            event::Column::Id,
+            event::Column::Route,
+            event::Column::IsDefault,
+        ])
+        .into_tuple::<(String, Option<String>, bool)>()
         .one(&state.db)
         .await?;
 
-    let result = model.and_then(|e| {
-        e.route.map(|path| RouteMapping {
-            id: e.id.clone(),
+    let result = row.and_then(|(id, route, is_default)| {
+        route.map(|path| RouteMapping {
+            id: id.clone(),
             path,
-            event_id: e.id,
-            is_default: e.is_default,
+            event_id: id,
+            is_default,
         })
     });
 

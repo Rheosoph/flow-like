@@ -21,6 +21,7 @@ use std::sync::atomic::AtomicU64;
 
 fn run_meta(shadow: bool) -> RunMeta {
     RunMeta {
+        executor_payment_auth: None,
         run_id: "run-1".to_string(),
         app_id: "app-1".to_string(),
         model_usage_app_id: None,

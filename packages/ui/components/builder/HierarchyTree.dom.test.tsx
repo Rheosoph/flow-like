@@ -38,17 +38,27 @@ const previousGlobals = Object.fromEntries(
 Object.assign(globalThis, globals);
 Object.assign(window, { SyntaxError, TypeError });
 
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll.
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	widgetBuilder: { ...(await import("./WidgetBuilder")) },
+	backendState: { ...(await import("../../state/backend-state")) },
+};
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({
 		t: (key: string, fallback?: string, values?: Record<string, string>) =>
 			(fallback ?? key).replace("{{id}}", values?.id ?? ""),
 	}),
 }));
 mock.module("./WidgetBuilder", () => ({
+	...actual.widgetBuilder,
 	CONTAINER_TYPES: new Set(["row", "column", "box"]),
 	ROOT_ID: "root",
 }));
 mock.module("../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({ widgetState: {} }),
 }));
 
@@ -76,6 +86,9 @@ function context() {
 
 // Happy DOM does not lay out CSS. The hierarchy rows and their insertion zones
 // receive deterministic bounds while the real refs, sensors, and drop handlers run.
+// The prototype is shared with every later file's window, so afterAll puts it back.
+const actualGetBoundingClientRect =
+	window.HTMLElement.prototype.getBoundingClientRect;
 window.HTMLElement.prototype.getBoundingClientRect = function () {
 	const row = this.closest('[role="treeitem"]');
 	if (row) {
@@ -108,6 +121,11 @@ afterEach(async () => {
 
 afterAll(() => {
 	mock.restore();
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("./WidgetBuilder", () => actual.widgetBuilder);
+	mock.module("../../state/backend-state", () => actual.backendState);
+	window.HTMLElement.prototype.getBoundingClientRect =
+		actualGetBoundingClientRect;
 	for (const [key, descriptor] of Object.entries(previousGlobals)) {
 		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
 		else Reflect.deleteProperty(globalThis, key);

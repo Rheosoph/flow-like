@@ -109,23 +109,32 @@ impl NodeLogic for UpsertGraphNodeNode {
                 flow_like_types::anyhow!("Failed to open table '{}': {}", table_name, e)
             })?;
 
-        let rows = vec![value];
-        let batch = flow_like_storage::arrow_utils::value_to_record_batch(rows)?;
-
-        let schema = batch.schema();
-        let reader: Box<dyn flow_like_storage::arrow::record_batch::RecordBatchReader + Send> =
-            Box::new(
-                flow_like_storage::arrow::record_batch::RecordBatchIterator::new(
-                    vec![Ok(batch)],
-                    schema,
-                ),
-            );
-        let mut merger = table.merge_insert(&[&id_column]);
-        merger
-            .when_matched_update_all(None)
-            .when_not_matched_insert_all();
-        match merger.execute(reader).await {
-            Ok(_) => {}
+        let upsert = async {
+            let table_schema = table.schema().await.map_err(|e| {
+                flow_like_types::anyhow!("Failed to read schema of '{}': {}", table_name, e)
+            })?;
+            let batch = flow_like_storage::arrow_utils::value_to_record_batch_for_schema(
+                vec![value],
+                &table_schema,
+                &table_name,
+            )?;
+            let schema = batch.schema();
+            let reader: Box<dyn flow_like_storage::arrow::record_batch::RecordBatchReader + Send> =
+                Box::new(
+                    flow_like_storage::arrow::record_batch::RecordBatchIterator::new(
+                        vec![Ok(batch)],
+                        schema,
+                    ),
+                );
+            let mut merger = table.merge_insert(&[&id_column]);
+            merger
+                .when_matched_update_all(None)
+                .when_not_matched_insert_all();
+            merger.execute(reader).await?;
+            Ok::<_, flow_like_types::Error>(())
+        };
+        match upsert.await {
+            Ok(()) => {}
             Err(e) => {
                 context.log_message(
                     &format!("Database graph-node upsert failed: {e:#}"),

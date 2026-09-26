@@ -263,7 +263,6 @@ async fn audit_upload_grants(
         "file.upload.authorize",
         "Storage",
         app_id,
-        "Issued signed file upload URLs",
         serde_json::json!({
             "scope": scope,
             "granted_count": granted_count,

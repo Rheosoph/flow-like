@@ -22,9 +22,10 @@ impl NodeLogic for TryCatchNode {
         let mut node = Node::new(
             "rpa_try_catch",
             "Try Catch",
-            "Catches errors from automation actions. WARNING: This node reads error_occurred as a plain boolean input -- it does not actually intercept panics or Result::Err from downstream nodes. True try/catch semantics require executor-level support.",
+            "Executes an action branch and routes errors to Catch.",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "tryCatch");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -87,10 +88,14 @@ impl NodeLogic for TryCatchNode {
         context.deactivate_exec_pin("exec_success").await?;
         context.deactivate_exec_pin("exec_catch").await?;
 
-        context.activate_exec_pin("exec_try").await?;
+        let outcome = super::branch::run_branch(context, "exec_try", None).await?;
 
-        let error_occurred: bool = context.evaluate_pin("error_occurred").await?;
-        let error_message: String = context.evaluate_pin("error_message").await?;
+        let mut error_occurred: bool = context.evaluate_pin("error_occurred").await?;
+        let mut error_message: String = context.evaluate_pin("error_message").await?;
+        if let super::branch::BranchResult::Failed(error) = outcome {
+            error_occurred = true;
+            error_message = error;
+        }
 
         context
             .set_pin_value("message", json!(error_message))

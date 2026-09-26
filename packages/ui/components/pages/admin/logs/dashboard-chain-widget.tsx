@@ -1,21 +1,28 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQuery } from "@tanstack/react-query";
 import {
-	CheckCircle2,
+	Anchor,
+	Archive,
 	ExternalLink,
 	Fingerprint,
-	GitBranch,
-	KeyRound,
-	Link2,
+	History,
+	Hourglass,
 	ShieldAlert,
 	ShieldCheck,
 	ShieldEllipsis,
 } from "lucide-react";
 import Link from "next/link";
+import { type ReactNode, useCallback } from "react";
 import type { IProfile } from "../../../../lib/schema/profile/profile";
-import { useBackend } from "../../../../state/backend-state";
+import { cn } from "../../../../lib/utils";
+import {
+	AuditHash,
+	AuditIntegrityBadge,
+	chainIntegrity,
+	epochIntegrity,
+	isIntegrityFailure,
+} from "../../../audit";
 import {
 	Badge,
 	Button,
@@ -24,199 +31,532 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	Progress,
 	RelativeTime,
 	Skeleton,
 } from "../../../ui";
 import type { IChainStatusResponse } from "./types";
+import {
+	anchorAlertSeconds,
+	epochIntervalSeconds,
+	pendingAlertSeconds,
+	useChainStatus,
+} from "./use-chain-status";
 
 interface DashboardChainWidgetProps {
 	profile: IProfile | undefined;
 }
 
-function HashChip({ hash }: { hash?: string | null }) {
-	const { t } = useTranslation("admin");
-	if (!hash) return null;
-	const head = hash.slice(0, 8);
-	const tail = hash.slice(-6);
-	return (
-		<code
-			title={hash}
-			className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-		>{`${head}…${tail}`}</code>
-	);
+type WorkerHealth =
+	| "healthy"
+	| "behind"
+	| "notAnchoring"
+	| "attention"
+	| "held"
+	| "broken";
+
+function workerHealth(status: IChainStatusResponse, now: number): WorkerHealth {
+	if (
+		isIntegrityFailure(epochIntegrity(status.epochs)) ||
+		isIntegrityFailure(chainIntegrity(status.platform))
+	) {
+		return "broken";
+	}
+	if (status.held_chains > 0) return "held";
+	if (status.quarantined_records > 0) return "attention";
+	if (anchoringStalled(status, now)) return "notAnchoring";
+	const pendingAge = pendingAgeSeconds(status, now);
+	if (pendingAge != null && pendingAge > pendingAlertSeconds(status)) {
+		return "behind";
+	}
+	return "healthy";
 }
 
-function ChainPulse({
-	signed,
-	valid,
-	fullyAuthenticated,
-	firstBrokenAt,
-	unverifiableSignatures,
-	hasEntries,
-}: {
-	signed: boolean;
-	valid?: boolean | null;
-	fullyAuthenticated?: boolean | null;
-	firstBrokenAt?: number | null;
-	unverifiableSignatures?: number | null;
-	hasEntries: boolean;
-}) {
-	const { t } = useTranslation("admin");
-	if (!hasEntries) {
-		return (
-			<span
-				className="inline-flex h-2 w-2 rounded-full bg-muted"
-				title="empty"
-			/>
-		);
-	}
-	if (valid === false) {
-		if (firstBrokenAt == null && (unverifiableSignatures ?? 0) > 0) {
-			return (
-				<span
-					className="inline-flex h-2 w-2 rounded-full bg-amber-500"
-					title={t(
-						"verificationKeyUnavailable",
-						"Verification key unavailable",
-					)}
-				/>
-			);
-		}
-		return (
-			<span
-				className="inline-flex h-2 w-2 animate-pulse rounded-full bg-destructive shadow-[0_0_8px] shadow-destructive"
-				title={
-					firstBrokenAt != null
-						? t("chainBroken", "chain broken")
-						: t("verificationFailed", "Verification failed")
-				}
-			/>
-		);
-	}
-	if (valid === true && fullyAuthenticated === true) {
-		return (
-			<span
-				className="inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px] shadow-emerald-500/60"
-				title={t("signedVerified", "signed & verified")}
-			/>
-		);
-	}
-	if (signed) {
-		return (
-			<span
-				className="inline-flex h-2 w-2 rounded-full bg-sky-500 shadow-[0_0_8px] shadow-sky-500/60"
-				title="signed"
-			/>
-		);
-	}
-	return (
-		<span
-			className="inline-flex h-2 w-2 rounded-full bg-amber-500 shadow-[0_0_8px] shadow-amber-500/60"
-			title="unsigned"
-		/>
-	);
+function ageSeconds(since: number | null | undefined, now: number) {
+	return since ? Math.max(0, (now - since) / 1000) : null;
 }
 
-export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
-	const { t } = useTranslation("admin");
-	const backend = useBackend();
-	const status = useQuery<IChainStatusResponse>({
-		queryKey: ["admin", "logs", "chain-status", profile?.hub, profile?.id],
-		queryFn: async () => {
-			if (!profile) throw new Error("Profile not loaded");
-			return backend.apiState.get<IChainStatusResponse>(
-				profile,
-				"admin/logs/chain-status",
-			);
+function pendingAgeSeconds(
+	status: IChainStatusResponse,
+	now: number,
+): number | null {
+	return status.pending_records === 0
+		? null
+		: ageSeconds(status.oldest_pending_ms, now);
+}
+
+function unanchoredAgeSeconds(
+	status: IChainStatusResponse,
+	now: number,
+): number | null {
+	return status.unanchored_seals === 0
+		? null
+		: ageSeconds(status.oldest_unanchored_ms, now);
+}
+
+function anchoringStalled(status: IChainStatusResponse, now: number): boolean {
+	const age = unanchoredAgeSeconds(status, now);
+	return age != null && age > anchorAlertSeconds(status);
+}
+
+function ageUnit(seconds: number): { value: number; unit: string } {
+	if (seconds < 60) return { value: seconds, unit: "second" };
+	if (seconds < 3600) return { value: seconds / 60, unit: "minute" };
+	if (seconds < 86_400) return { value: seconds / 3600, unit: "hour" };
+	return { value: seconds / 86_400, unit: "day" };
+}
+
+function useFormatAge() {
+	const { i18n } = useTranslation("audit");
+	const language = i18n.resolvedLanguage;
+	return useCallback(
+		(seconds: number) => {
+			const { value, unit } = ageUnit(seconds);
+			return new Intl.NumberFormat(language, {
+				style: "unit",
+				unit,
+				unitDisplay: "short",
+				maximumFractionDigits: 0,
+			}).format(value);
 		},
-		enabled: !!profile,
-		staleTime: 60_000,
-		refetchInterval: 60_000,
-		meta: { adminDashboard: true, persist: false },
-	});
+		[language],
+	);
+}
 
+function HealthBadge({ health }: Readonly<{ health: WorkerHealth }>) {
+	const { t } = useTranslation("audit");
+	const variants: Record<
+		WorkerHealth,
+		{
+			label: string;
+			icon: ReactNode;
+			variant: "default" | "destructive" | "outline";
+			className?: string;
+		}
+	> = {
+		broken: {
+			label: t("healthBroken", "Integrity failure"),
+			icon: <ShieldAlert />,
+			variant: "destructive",
+		},
+		held: {
+			label: t("healthHeld", "Chains held"),
+			icon: <ShieldAlert />,
+			variant: "destructive",
+		},
+		attention: {
+			label: t("healthQuarantine", "Quarantined records"),
+			icon: <ShieldAlert />,
+			variant: "destructive",
+		},
+		notAnchoring: {
+			label: t("healthNotAnchoring", "Not anchoring"),
+			icon: <Anchor />,
+			variant: "outline",
+			className: "border-destructive/40 text-destructive",
+		},
+		behind: {
+			label: t("healthBehind", "Worker behind"),
+			icon: <ShieldEllipsis />,
+			variant: "outline",
+		},
+		healthy: {
+			label: t("healthHealthy", "Healthy"),
+			icon: <ShieldCheck />,
+			variant: "default",
+		},
+	};
+	const { label, icon, variant, className } = variants[health];
+	return (
+		<Badge variant={variant} className={cn("gap-1 text-[10px]", className)}>
+			{icon}
+			{label}
+		</Badge>
+	);
+}
+
+function MiniStat({
+	label,
+	value,
+	tone = "default",
+	hint,
+	className,
+}: Readonly<{
+	label: string;
+	value: ReactNode;
+	tone?: "default" | "bad";
+	hint?: ReactNode;
+	className?: string;
+}>) {
+	return (
+		<div
+			className={cn(
+				"min-w-0 rounded-lg border bg-muted/40 px-3 py-2",
+				tone === "bad" && "border-destructive/30",
+				className,
+			)}
+		>
+			<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+				{label}
+			</div>
+			<div
+				className={cn(
+					"truncate text-sm font-semibold tabular-nums",
+					tone === "bad" && "text-destructive",
+				)}
+			>
+				{value}
+			</div>
+			{hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+		</div>
+	);
+}
+
+function AgeMeter({
+	label,
+	age,
+	threshold,
+	idleLabel,
+}: Readonly<{
+	label: string;
+	age: number | null;
+	threshold: number;
+	idleLabel: string;
+}>) {
+	const { t } = useTranslation("audit");
+	const formatAge = useFormatAge();
+	const overdue = age != null && age > threshold;
+	return (
+		<div className="space-y-1">
+			<div className="flex items-center justify-between text-[11px] text-muted-foreground">
+				<span>{label}</span>
+				<span className={cn("tabular-nums", overdue && "text-destructive")}>
+					{age == null
+						? idleLabel
+						: t("ageOfThreshold", "{{age}} of {{threshold}}", {
+								age: formatAge(age),
+								threshold: formatAge(threshold),
+							})}
+				</span>
+			</div>
+			<Progress
+				value={Math.min(100, ((age ?? 0) / threshold) * 100)}
+				className={cn(
+					overdue &&
+						"bg-destructive/20 **:data-[slot=progress-indicator]:bg-destructive",
+				)}
+			/>
+		</div>
+	);
+}
+
+function Section({
+	icon,
+	title,
+	aside,
+	children,
+}: Readonly<{
+	icon: ReactNode;
+	title: string;
+	aside?: ReactNode;
+	children: ReactNode;
+}>) {
+	return (
+		<div className="rounded-lg border bg-card/50 p-3">
+			<div className="mb-2 flex items-center justify-between gap-2">
+				<div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+					{icon}
+					{title}
+				</div>
+				{aside}
+			</div>
+			{children}
+		</div>
+	);
+}
+
+function WorkerSection({
+	status,
+	now,
+}: Readonly<{ status: IChainStatusResponse; now: number }>) {
+	const { t } = useTranslation("audit");
+	const formatAge = useFormatAge();
+	const stalled = anchoringStalled(status, now);
+	const epochAge = ageSeconds(status.latest_epoch_at_ms, now);
+	const anchorTone = stalled ? "bad" : "default";
+
+	return (
+		<Section
+			icon={<Hourglass className="h-3.5 w-3.5" />}
+			title={t("worker", "Audit worker")}
+		>
+			<div className="grid gap-2 sm:grid-cols-2">
+				<MiniStat
+					label={t("latestEpoch", "Latest epoch")}
+					value={
+						epochAge == null
+							? t("none", "None yet")
+							: t("ago", "{{age}} ago", { age: formatAge(epochAge) })
+					}
+					tone={anchorTone}
+				/>
+				<MiniStat
+					label={t("quarantined", "Quarantined")}
+					value={status.quarantined_records.toLocaleString()}
+					tone={status.quarantined_records > 0 ? "bad" : "default"}
+				/>
+				<MiniStat
+					label={t("unanchoredSeals", "Unanchored seals")}
+					value={status.unanchored_seals.toLocaleString()}
+					tone={anchorTone}
+				/>
+				<MiniStat
+					label={t("pendingRecords", "Pending records")}
+					value={status.pending_records.toLocaleString()}
+				/>
+				{status.held_chains > 0 && (
+					<MiniStat
+						className="sm:col-span-2"
+						label={t("heldChains", "Held chains")}
+						value={status.held_chains.toLocaleString()}
+						tone="bad"
+						hint={t(
+							"heldChainsHint",
+							"A seal of these chains failed its hash or MAC check. They are not signed into epochs until an operator investigates; verify each chain to find the failing seal.",
+						)}
+					/>
+				)}
+			</div>
+			<div className="mt-3 space-y-3">
+				<AgeMeter
+					label={t("oldestPending", "Oldest pending record")}
+					age={pendingAgeSeconds(status, now)}
+					threshold={pendingAlertSeconds(status)}
+					idleLabel={t("nothingPending", "Nothing pending")}
+				/>
+				<AgeMeter
+					label={t("oldestUnanchored", "Oldest unanchored seal")}
+					age={unanchoredAgeSeconds(status, now)}
+					threshold={anchorAlertSeconds(status)}
+					idleLabel={
+						status.unanchored_seals > 0
+							? t("unanchoredHeldOnly", "Only held chains are waiting")
+							: t("nothingUnanchored", "Everything anchored")
+					}
+				/>
+				{stalled && (
+					<p className="text-[11px] text-destructive">
+						{t(
+							"anchoringStalledHint",
+							"Seals should be signed into an epoch every {{interval}}. Check that the audit worker is running and can use its signing key.",
+							{ interval: formatAge(epochIntervalSeconds(status)) },
+						)}
+					</p>
+				)}
+			</div>
+		</Section>
+	);
+}
+
+function TimelineSection({
+	status,
+}: Readonly<{ status: IChainStatusResponse }>) {
+	const { t } = useTranslation("audit");
+	const { epochs } = status;
+	return (
+		<Section
+			icon={<Anchor className="h-3.5 w-3.5" />}
+			title={t("epochTimeline", "Epoch timeline")}
+			aside={<AuditIntegrityBadge integrity={epochIntegrity(epochs)} />}
+		>
+			<div className="space-y-1.5 text-xs">
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("latestEpoch", "Latest epoch")}
+					</span>
+					<span className="inline-flex items-center gap-2">
+						<span className="font-mono">
+							{epochs.latest_epoch_seq == null
+								? "—"
+								: `#${epochs.latest_epoch_seq}`}
+						</span>
+						<AuditHash value={epochs.latest_epoch_hash} />
+					</span>
+				</div>
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("epochsChecked", "Epochs checked")}
+					</span>
+					<span className="font-mono">
+						{epochs.epochs_checked.toLocaleString()}
+					</span>
+				</div>
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("platformChain", "Platform chain")}
+					</span>
+					<AuditIntegrityBadge integrity={chainIntegrity(status.platform)} />
+				</div>
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("signingKey", "Signing key")}
+					</span>
+					<span className="truncate font-mono">
+						{status.signing_kid ??
+							t("signingKeyElsewhere", "Not in this process")}
+					</span>
+				</div>
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("verifyingKeys", "Verifying keys")}
+					</span>
+					<span className="truncate font-mono">
+						{status.verifying_kids.length > 0
+							? status.verifying_kids.join(", ")
+							: "—"}
+					</span>
+				</div>
+				{epochs.problem && (
+					<p className="font-mono text-destructive">{epochs.problem}</p>
+				)}
+			</div>
+		</Section>
+	);
+}
+
+function RetentionSection({
+	status,
+}: Readonly<{ status: IChainStatusResponse }>) {
+	const { t } = useTranslation("audit");
+	const archive = status.latest_archive;
+	return (
+		<Section
+			icon={<Archive className="h-3.5 w-3.5" />}
+			title={t("archiveSection", "Archive")}
+		>
+			<div className="space-y-1.5 text-xs">
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("latestArchive", "Latest archived month")}
+					</span>
+					{archive ? (
+						<span className="inline-flex items-center gap-2">
+							<span className="font-mono">{archive.period}</span>
+							<span className="text-muted-foreground">
+								{t("archiveRecords", "{{records}} records", {
+									records: archive.record_count.toLocaleString(),
+								})}
+							</span>
+							<RelativeTime
+								value={archive.created_at_ms}
+								className="text-muted-foreground"
+							/>
+						</span>
+					) : (
+						<span className="text-muted-foreground">
+							{t("noArchive", "No archive yet")}
+						</span>
+					)}
+				</div>
+				<div className="flex items-center justify-between gap-2">
+					<span className="text-muted-foreground">
+						{t("legacyExport", "Legacy export")}
+					</span>
+					{status.legacy_entries > 0 ? (
+						<span>
+							{t("legacyWaiting", "{{entries}} old entries waiting", {
+								entries: status.legacy_entries.toLocaleString(),
+							})}
+						</span>
+					) : (
+						<span className="text-muted-foreground">
+							{t("legacyDone", "Complete")}
+						</span>
+					)}
+				</div>
+			</div>
+		</Section>
+	);
+}
+
+function RecentChains({ status }: Readonly<{ status: IChainStatusResponse }>) {
+	const { t } = useTranslation("audit");
+	const chains = status.recent_chains.slice(0, 5);
+	return (
+		<Section
+			icon={<History className="h-3.5 w-3.5" />}
+			title={t("recentChains", "Recently sealed")}
+		>
+			{chains.length === 0 ? (
+				<p className="text-xs text-muted-foreground">
+					{t("noSealedChains", "No chain has been sealed yet.")}
+				</p>
+			) : (
+				<ul className="space-y-1">
+					{chains.map((chain) => (
+						<li key={chain.chain_id}>
+							<Link
+								href={`/admin/logs?tab=audit&chain=${encodeURIComponent(chain.chain_id)}`}
+								className="flex items-center gap-2 rounded-md px-1.5 py-1 text-xs hover:bg-muted/60"
+							>
+								<span className="min-w-0 flex-1 truncate font-mono">
+									{chain.chain_id}
+								</span>
+								{chain.pending > 0 && (
+									<Badge variant="outline" className="px-1 text-[10px]">
+										{t("pendingCount", "{{pending}} pending", {
+											pending: chain.pending,
+										})}
+									</Badge>
+								)}
+								<span className="font-mono text-muted-foreground">
+									{chain.latest_seal_seq == null
+										? "—"
+										: `#${chain.latest_seal_seq}`}
+								</span>
+								{chain.latest_sealed_at_ms != null && (
+									<RelativeTime
+										value={chain.latest_sealed_at_ms}
+										className="text-muted-foreground"
+									/>
+								)}
+							</Link>
+						</li>
+					))}
+				</ul>
+			)}
+		</Section>
+	);
+}
+
+export function DashboardChainWidget({
+	profile,
+}: Readonly<DashboardChainWidgetProps>) {
+	const { t } = useTranslation("audit");
+	const status = useChainStatus(profile);
 	const data = status.data;
-	const root = data?.root_chain;
-	const signedRatio =
-		data && data.total_entries > 0
-			? Math.round((data.signed_entries / data.total_entries) * 100)
-			: null;
-
-	let healthBadge: { tone: string; label: string; icon: React.ReactNode };
-	if (!data) {
-		healthBadge = { tone: "muted", label: "—", icon: <ShieldEllipsis /> };
-	} else if (root?.valid === false && root.first_broken_at != null) {
-		healthBadge = {
-			tone: "bad",
-			label: t("broken", "Broken"),
-			icon: <ShieldAlert className="h-4 w-4" />,
-		};
-	} else if (root?.valid === false && (root.unverifiable_signatures ?? 0) > 0) {
-		healthBadge = {
-			tone: "warn",
-			label: t("unverifiable", "Unverifiable"),
-			icon: <ShieldEllipsis className="h-4 w-4" />,
-		};
-	} else if (root?.valid === false) {
-		healthBadge = {
-			tone: "bad",
-			label: t("verificationFailed", "Verification failed"),
-			icon: <ShieldAlert className="h-4 w-4" />,
-		};
-	} else if (root?.valid == null && (root?.entries ?? 0) > 0) {
-		healthBadge = {
-			tone: "muted",
-			label: t("notChecked", "Not checked"),
-			icon: <ShieldEllipsis className="h-4 w-4" />,
-		};
-	} else if (!data.signing_configured) {
-		healthBadge = {
-			tone: "warn",
-			label: t("unsigned", "Unsigned"),
-			icon: <ShieldAlert className="h-4 w-4" />,
-		};
-	} else if (root?.valid === true && root.fully_authenticated === true) {
-		healthBadge = {
-			tone: "good",
-			label: t("verified", "Verified"),
-			icon: <ShieldCheck className="h-4 w-4" />,
-		};
-	} else if (root?.valid === true) {
-		healthBadge = {
-			tone: "warn",
-			label: t("hashesChecked", "Hashes checked"),
-			icon: <ShieldEllipsis className="h-4 w-4" />,
-		};
-	} else {
-		healthBadge = {
-			tone: "muted",
-			label: t("idle", "Idle"),
-			icon: <ShieldEllipsis className="h-4 w-4" />,
-		};
-	}
+	const now = status.dataUpdatedAt || Date.now();
 
 	if (status.isError) {
 		return (
 			<Card className="border-destructive/20">
 				<CardHeader>
 					<CardTitle className="text-base">
-						{t("cryptographicLogs", "Cryptographic logs")}
+						{t("auditTrail", "Audit trail")}
 					</CardTitle>
 				</CardHeader>
 				<CardContent className="flex flex-wrap items-center justify-between gap-3">
 					<output className="text-sm text-muted-foreground">
 						{t(
-							"auditStatusUnavailable",
-							"Audit status is unavailable. Retry to check the audit chains.",
+							"statusUnavailable",
+							"Audit status is unavailable. Retry to check the audit worker.",
 						)}
 					</output>
 					<Button
 						size="sm"
 						variant="outline"
 						disabled={status.isFetching}
-						onClick={() => {
-							if (status.isError) void status.refetch();
-						}}
+						onClick={() => void status.refetch()}
 					>
 						{t("retry", "Retry")}
 					</Button>
@@ -230,231 +570,54 @@ export function DashboardChainWidget({ profile }: DashboardChainWidgetProps) {
 			<CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
 				<div className="space-y-1">
 					<CardTitle className="flex items-center gap-2 text-base">
-						<Fingerprint className="h-4 w-4 text-emerald-500" />
-						{t("cryptographicLogs", "Cryptographic Logs")}
-						<Badge
-							variant={
-								healthBadge.tone === "good"
-									? "default"
-									: healthBadge.tone === "bad"
-										? "destructive"
-										: "outline"
-							}
-							className="gap-1 text-[10px]"
-						>
-							{healthBadge.icon}
-							{healthBadge.label}
-						</Badge>
+						<Fingerprint className="h-4 w-4 text-primary" />
+						{t("auditTrail", "Audit trail")}
+						{data && <HealthBadge health={workerHealth(data, now)} />}
 					</CardTitle>
 					<CardDescription>
 						{t(
-							"hashchainAuditTrailWithEs256ServerSignatures",
-							"Hash-chain audit trail with ES256 server signatures",
+							"widgetDescription",
+							"Records are sealed per chain, anchored in signed epochs and archived monthly.",
 						)}
 					</CardDescription>
 				</div>
 				<Button asChild size="sm" variant="outline">
 					<Link href="/admin/logs?tab=audit">
-						{t("inspectChain", "Inspect chain")}
+						{t("inspect", "Inspect")}
 						<ExternalLink className="ml-1 h-3 w-3" />
 					</Link>
 				</Button>
 			</CardHeader>
-			<CardContent className="space-y-4">
-				<div className="grid gap-2 sm:grid-cols-4">
-					<MiniStat
-						label="Entries"
-						value={
-							status.isLoading
-								? "…"
-								: (data?.total_entries ?? 0).toLocaleString()
-						}
-						icon={<Link2 className="h-4 w-4" />}
-					/>
-					<MiniStat
-						label={t("last24h", "Last 24h")}
-						value={
-							status.isLoading
-								? "…"
-								: (data?.last_24h_entries ?? 0).toLocaleString()
-						}
-						icon={<CheckCircle2 className="h-4 w-4" />}
-					/>
-					<MiniStat
-						label="Branches"
-						value={
-							status.isLoading
-								? "…"
-								: (data?.branch_chain_count ?? 0).toLocaleString()
-						}
-						icon={<GitBranch className="h-4 w-4" />}
-					/>
-					<MiniStat
-						label="KID"
-						value={status.isLoading ? "…" : (data?.current_kid ?? "—")}
-						icon={<KeyRound className="h-4 w-4" />}
-						mono
-					/>
-				</div>
-
-				<div className="rounded-lg border bg-card/50 p-3">
-					<div className="mb-2 flex items-center justify-between">
-						<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							{t("signatureCoverage", "Signature coverage")}
-						</div>
-						<div className="text-xs tabular-nums text-muted-foreground">
-							{signedRatio == null ? "—" : `${signedRatio}%`}
-						</div>
+			<CardContent className="space-y-3">
+				{status.isLoading || !data ? (
+					<div className="space-y-2">
+						<Skeleton className="h-14 w-full" />
+						<Skeleton className="h-28 w-full" />
+						<Skeleton className="h-20 w-full" />
 					</div>
-					<div className="h-2 overflow-hidden rounded-full bg-muted">
-						<div
-							className="h-full rounded-full bg-linear-to-r from-emerald-400 to-emerald-600"
-							style={{ width: `${signedRatio ?? 0}%` }}
-						/>
-					</div>
-					<div className="mt-2 grid grid-cols-2 text-[11px] text-muted-foreground">
-						<div className="flex items-center gap-1">
-							<span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-							Signed: {data?.signed_entries.toLocaleString() ?? "0"}
-						</div>
-						<div className="flex items-center gap-1 justify-end">
-							<span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-							Unsigned: {data?.unsigned_entries.toLocaleString() ?? "0"}
-						</div>
-					</div>
-				</div>
-
-				<div className="rounded-lg border bg-card/50 p-3">
-					<div className="mb-2 flex items-center justify-between">
-						<div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-							{t("rootChain", "Root chain")}
-						</div>
-						<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-							<ChainPulse
-								signed={Boolean(root?.signed)}
-								valid={root?.valid ?? null}
-								fullyAuthenticated={root?.fully_authenticated}
-								firstBrokenAt={root?.first_broken_at}
-								unverifiableSignatures={root?.unverifiable_signatures}
-								hasEntries={(root?.entries ?? 0) > 0}
+				) : (
+					<>
+						<div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+							<MiniStat
+								label={t("totalRecords", "Records")}
+								value={data.total_records.toLocaleString()}
 							/>
-							{root?.last_entry_at ? (
-								<RelativeTime value={root.last_entry_at} />
-							) : (
-								<span>{t("noEntries", "no entries")}</span>
-							)}
+							<MiniStat
+								label={t("totalSeals", "Seals")}
+								value={data.total_seals.toLocaleString()}
+							/>
+							<MiniStat
+								label={t("chains", "Chains")}
+								value={data.chains.toLocaleString()}
+							/>
 						</div>
-					</div>
-					{status.isLoading ? (
-						<Skeleton className="h-12 w-full" />
-					) : (
-						<div className="flex items-center justify-between gap-3 text-xs">
-							<div className="space-y-1">
-								<div className="text-muted-foreground">
-									{t("sequence", "Sequence")}{" "}
-									<span className="font-mono text-foreground">
-										#{root?.last_sequence ?? 0}
-									</span>
-								</div>
-								<div className="flex items-center gap-2">
-									<span className="text-muted-foreground">
-										{t("tail", "Tail")}
-									</span>
-									<HashChip hash={root?.last_entry_hash} />
-								</div>
-							</div>
-							<Badge
-								variant={
-									root?.valid === false
-										? "destructive"
-										: root?.valid === true
-											? "default"
-											: "outline"
-								}
-							>
-								{root?.valid === false
-									? "Broken"
-									: root?.valid === true
-										? "Chain valid"
-										: "Idle"}
-							</Badge>
-						</div>
-					)}
-				</div>
-
-				<div>
-					<div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-						{t("recentBranchChains", "Recent branch chains")}
-					</div>
-					{status.isLoading ? (
-						<div className="space-y-1.5">
-							<Skeleton className="h-7 w-full" />
-							<Skeleton className="h-7 w-full" />
-							<Skeleton className="h-7 w-full" />
-						</div>
-					) : (data?.recent_branches.length ?? 0) === 0 ? (
-						<div className="rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">
-							{t("onlyTheRootChainIsActive", "Only the root chain is active.")}
-						</div>
-					) : (
-						<ul className="space-y-1">
-							{data?.recent_branches.map((b) => (
-								<li
-									key={b.chain_id ?? b.label}
-									className="flex items-center gap-2 rounded-md border border-border/50 bg-background/50 px-2 py-1.5"
-								>
-									<ChainPulse
-										signed={b.signed}
-										valid={b.valid ?? null}
-										fullyAuthenticated={b.fully_authenticated}
-										firstBrokenAt={b.first_broken_at}
-										unverifiableSignatures={b.unverifiable_signatures}
-										hasEntries={b.entries > 0}
-									/>
-									<span className="truncate text-xs font-medium">
-										{b.label}
-									</span>
-									<span className="ml-auto inline-flex items-center gap-2 text-[11px] text-muted-foreground">
-										<span className="font-mono">#{b.last_sequence ?? 0}</span>
-										{b.last_entry_at && (
-											<RelativeTime value={b.last_entry_at} />
-										)}
-									</span>
-								</li>
-							))}
-						</ul>
-					)}
-				</div>
+						<WorkerSection status={data} now={now} />
+						<TimelineSection status={data} />
+						<RetentionSection status={data} />
+						<RecentChains status={data} />
+					</>
+				)}
 			</CardContent>
 		</Card>
-	);
-}
-
-function MiniStat({
-	label,
-	value,
-	icon,
-	mono = false,
-}: {
-	label: string;
-	value: string;
-	icon: React.ReactNode;
-	mono?: boolean;
-}) {
-	return (
-		<div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
-			<div className="text-muted-foreground">{icon}</div>
-			<div className="min-w-0 flex-1">
-				<div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-					{label}
-				</div>
-				<div
-					className={`truncate text-sm font-semibold ${mono ? "font-mono" : ""}`}
-					title={value}
-				>
-					{value}
-				</div>
-			</div>
-		</div>
 	);
 }

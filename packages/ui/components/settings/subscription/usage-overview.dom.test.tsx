@@ -1,17 +1,19 @@
 import { afterAll, expect, mock, test } from "bun:test";
-import { Window } from "happy-dom";
 import {
 	QueryClient,
 	QueryClientProvider,
 	QueryObserver,
 } from "@tanstack/react-query";
+import { Window } from "happy-dom";
 
 const client = new QueryClient({
-	defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+	defaultOptions: {
+		queries: { retry: false, gcTime: Number.POSITIVE_INFINITY },
+	},
 });
 const refetchUsage = mock(async () => ({ data: overview }));
 let usageError = false;
-import { act, type ButtonHTMLAttributes } from "react";
+import { type ButtonHTMLAttributes, act } from "react";
 import { createRoot } from "react-dom/client";
 import type { QuotaOverview } from "../../../lib/quota";
 
@@ -45,7 +47,34 @@ let overview: QuotaOverview = {
 		cloudStarts: 1,
 	})),
 };
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"window",
+	"document",
+	"HTMLElement",
+	"Node",
+	"Event",
+	"navigator",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+// Radix picks its layout effect when first imported, so the real modules load under a document.
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	invoke: { ...(await import("../../../hooks/use-invoke")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	oidc: { ...(await import("react-oidc-context")) },
+	upgradeDialogState: {
+		...(await import("../../../state/upgrade-dialog-state")),
+	},
+	usageNames: { ...(await import("./use-usage-names")) },
+	usageOperations: { ...(await import("./usage-operations")) },
+	button: { ...(await import("../../ui/button")) },
+};
 mock.module("../../../hooks/use-invoke", () => ({
+	...actual.invoke,
 	useInvoke: () => ({
 		data: overview,
 		isLoading: false,
@@ -54,6 +83,7 @@ mock.module("../../../hooks/use-invoke", () => ({
 	}),
 }));
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({
 		userState: {
 			getQuotaUsage: () => {},
@@ -63,13 +93,16 @@ mock.module("../../../state/backend-state", () => ({
 	}),
 }));
 mock.module("react-oidc-context", () => ({
+	...actual.oidc,
 	useAuth: () => ({ user: { profile: { sub: "payer-ui" } } }),
 }));
 const upgrade = mock(() => {});
 mock.module("../../../state/upgrade-dialog-state", () => ({
+	...actual.upgradeDialogState,
 	openUpgradeDialog: upgrade,
 }));
 mock.module("./use-usage-names", () => ({
+	...actual.usageNames,
 	usageFundingLabel: (value: string) =>
 		value === "hosted" ? "Flow-Like allowance" : value,
 	useUsageNames: () => ({
@@ -77,13 +110,33 @@ mock.module("./use-usage-names", () => ({
 		modelName: (id: string) => `Model ${id}`,
 	}),
 }));
-mock.module("./usage-operations", () => ({ UsageOperations: () => null }));
+mock.module("./usage-operations", () => ({
+	...actual.usageOperations,
+	UsageOperations: () => null,
+}));
 mock.module("../../ui/button", () => ({
+	...actual.button,
 	Button: (props: ButtonHTMLAttributes<HTMLButtonElement>) => (
 		<button {...props} />
 	),
 }));
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../../hooks/use-invoke", () => actual.invoke);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("react-oidc-context", () => actual.oidc);
+	mock.module(
+		"../../../state/upgrade-dialog-state",
+		() => actual.upgradeDialogState,
+	);
+	mock.module("./use-usage-names", () => actual.usageNames);
+	mock.module("./usage-operations", () => actual.usageOperations);
+	mock.module("../../ui/button", () => actual.button);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 test("usage overview paginates, filters and preserves readable quota context", async () => {
 	const window = new Window();
@@ -289,7 +342,7 @@ test("refresh updates active operation queries and invalidates only this account
 	const observer = new QueryObserver(client, {
 		queryKey: activeKey,
 		queryFn: reloadHistory,
-		staleTime: Infinity,
+		staleTime: Number.POSITIVE_INFINITY,
 	});
 	const unsubscribe = observer.subscribe(() => {});
 	const { UsageOverview } = await import("./usage-overview");

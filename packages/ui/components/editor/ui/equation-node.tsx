@@ -24,9 +24,11 @@ import {
 
 import { Button, Popover, PopoverContent, PopoverTrigger } from "../../..";
 import { cn } from "../../../lib/utils";
+import { getEquationExpression } from "./equation-expression";
 
 export function EquationElement(props: PlateElementProps<TEquationElement>) {
 	const { t } = useTranslation("common");
+	const texExpression = getEquationExpression(props.element);
 	const selected = useSelected();
 	const [open, setOpen] = React.useState(selected);
 	const katexRef = React.useRef<HTMLDivElement | null>(null);
@@ -54,15 +56,13 @@ export function EquationElement(props: PlateElementProps<TEquationElement>) {
 					<div
 						className={cn(
 							"group flex cursor-pointer items-center justify-center rounded-sm select-none hover:bg-primary/10 data-[selected=true]:bg-primary/10",
-							props.element.texExpression.length === 0
-								? "bg-muted p-3 pr-9"
-								: "px-2 py-1",
+							texExpression.length === 0 ? "bg-muted p-3 pr-9" : "px-2 py-1",
 						)}
 						data-selected={selected}
 						contentEditable={false}
 						role="button"
 					>
-						{props.element.texExpression.length > 0 ? (
+						{texExpression.length > 0 ? (
 							<span ref={katexRef} />
 						) : (
 							<div className="flex h-7 w-full items-center gap-2 text-sm whitespace-nowrap text-muted-foreground">
@@ -91,6 +91,7 @@ export function InlineEquationElement(
 ) {
 	const { t } = useTranslation("common");
 	const element = props.element;
+	const texExpression = getEquationExpression(element);
 	const katexRef = React.useRef<HTMLDivElement | null>(null);
 	const selected = useSelected();
 	const isCollapsed = useEditorSelector(
@@ -134,9 +135,9 @@ export function InlineEquationElement(
 						className={cn(
 							'after:absolute after:inset-0 after:-top-0.5 after:-left-1 after:z-1 after:h-[calc(100%)+4px] after:w-[calc(100%+8px)] after:rounded-sm after:content-[""]',
 							"h-6",
-							((element.texExpression.length > 0 && open) || selected) &&
+							((texExpression.length > 0 && open) || selected) &&
 								"after:bg-brand/15",
-							element.texExpression.length === 0 &&
+							texExpression.length === 0 &&
 								"text-muted-foreground after:bg-neutral-500/10",
 						)}
 						contentEditable={false}
@@ -144,11 +145,11 @@ export function InlineEquationElement(
 						<span
 							ref={katexRef}
 							className={cn(
-								element.texExpression.length === 0 && "hidden",
+								texExpression.length === 0 && "hidden",
 								"font-mono leading-none",
 							)}
 						/>
-						{element.texExpression.length === 0 && (
+						{texExpression.length === 0 && (
 							<span>
 								<RadicalIcon className="mr-1 inline-block h-[19px] w-4 py-[1.5px] align-text-bottom" />
 								{t("newEquation", "New equation")}

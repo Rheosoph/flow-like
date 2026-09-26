@@ -16,6 +16,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { asArray } from "../../../lib/response-shape";
 import {
 	type IListTokensResponse,
 	type IRegisterSinkRequest,
@@ -113,15 +114,17 @@ export function SinkTokensPage({
 	const [tokenName, setTokenName] = useState("");
 	const [isSubmitting, setIsSubmitting] = useState(false);
 
-	const activeTokens = useMemo(() => {
-		if (!data?.tokens) return [];
-		return data.tokens.filter((t) => !t.revoked);
-	}, [data]);
+	const tokens = useMemo(() => asArray(data?.tokens), [data]);
 
-	const revokedTokens = useMemo(() => {
-		if (!data?.tokens) return [];
-		return data.tokens.filter((t) => t.revoked);
-	}, [data]);
+	const activeTokens = useMemo(
+		() => tokens.filter((t) => !t.revoked),
+		[tokens],
+	);
+
+	const revokedTokens = useMemo(
+		() => tokens.filter((t) => t.revoked),
+		[tokens],
+	);
 
 	const handleCreateToken = useCallback(async () => {
 		if (!selectedServiceSinkType) return;
@@ -342,7 +345,7 @@ export function SinkTokensPage({
 								<Skeleton key={i} className="h-12 w-full" />
 							))}
 						</div>
-					) : !data?.tokens?.length ? (
+					) : tokens.length === 0 ? (
 						<div className="flex flex-col items-center justify-center py-12 text-center">
 							<Key className="h-12 w-12 text-muted-foreground mb-4" />
 							<h3 className="text-lg font-semibold">
@@ -373,7 +376,7 @@ export function SinkTokensPage({
 								</TableRow>
 							</TableHeader>
 							<TableBody>
-								{data.tokens.map((token) => (
+								{tokens.map((token) => (
 									<TableRow
 										key={token.jti}
 										className={token.revoked ? "opacity-60" : ""}

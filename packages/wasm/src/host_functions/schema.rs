@@ -30,6 +30,13 @@ static TYPE_SCHEMAS: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
             serde_json::to_string(&schema_for!(Bit)).unwrap_or_default(),
         ),
     ];
+    m.insert(
+        "DataFusionSession",
+        serde_json::to_string(&schema_for!(
+            flow_like_catalog_data_support::data::datafusion::session::DataFusionSession
+        ))
+        .unwrap_or_default(),
+    );
     for (name, schema) in types {
         m.insert(name, schema);
     }
@@ -42,6 +49,7 @@ static TYPE_SCHEMAS: Lazy<HashMap<&'static str, String>> = Lazy::new(|| {
 pub fn required_capability(type_name: &str) -> WasmCapabilities {
     match type_name {
         "FlowPath" => WasmCapabilities::STORAGE_READ,
+        "NodeDBConnection" | "DataFusionSession" => WasmCapabilities::DATABASE_READ,
         _ => WasmCapabilities::MODELS,
     }
 }

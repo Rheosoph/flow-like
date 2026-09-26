@@ -11,8 +11,8 @@ use chrono::Datelike;
 use flow_like_types::create_id;
 use rand::seq::IndexedRandom;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, JoinType, QueryFilter,
+    QueryOrder, QuerySelect, RelationTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -50,47 +50,33 @@ pub async fn get_current_weekly(
         .filter(weekly_challenge::Column::WeekIso.eq(&week))
         .one(&state.db)
         .await?;
-    let include_solution_payload = has_course_read_grant(&state, &user).await;
-
-    let (challenge_opt, expires_at) = if let Some(e) = entry {
-        let c = challenge::Entity::find_by_id(&e.challenge_id)
-            .one(&state.db)
-            .await?;
-        let c = if let Some(challenge) = c {
-            let lesson = lesson::Entity::find_by_id(&challenge.lesson_id)
-                .one(&state.db)
-                .await?;
-            let module = match lesson {
-                Some(lesson) => {
-                    course_module::Entity::find_by_id(&lesson.module_id)
-                        .one(&state.db)
-                        .await?
-                }
-                None => None,
-            };
-            let readable = match module {
-                Some(module) => {
-                    let course = course::Entity::find_by_id(&module.course_id)
-                        .one(&state.db)
-                        .await?;
-                    course.map(|course| course.is_published).unwrap_or(false)
-                        || include_solution_payload
-                }
-                None => false,
-            };
-            readable.then(|| ChallengeView::from_model(challenge, include_solution_payload))
-        } else {
-            None
-        };
-        (c, Some(e.expires_at.to_rfc3339()))
-    } else {
-        (None, None)
+    let Some(entry) = entry else {
+        return Ok(Json(CurrentWeekly {
+            week_iso: week,
+            challenge: None,
+            expires_at: None,
+        }));
     };
+
+    let (include_solution_payload, challenge_row) = flow_like_types::tokio::join!(
+        has_course_read_grant(&state, &user),
+        challenge::Entity::find_by_id(&entry.challenge_id)
+            .join(JoinType::InnerJoin, challenge::Relation::Lesson.def())
+            .join(JoinType::InnerJoin, lesson::Relation::CourseModule.def())
+            .join(JoinType::LeftJoin, course_module::Relation::Course.def())
+            .select_also(course::Entity)
+            .one(&state.db),
+    );
+    let challenge = challenge_row?.and_then(|(challenge, course)| {
+        let readable =
+            course.map(|course| course.is_published).unwrap_or(false) || include_solution_payload;
+        readable.then(|| ChallengeView::from_model(challenge, include_solution_payload))
+    });
 
     Ok(Json(CurrentWeekly {
         week_iso: week,
-        challenge: challenge_opt,
-        expires_at,
+        challenge,
+        expires_at: Some(entry.expires_at.to_rfc3339()),
     }))
 }
 

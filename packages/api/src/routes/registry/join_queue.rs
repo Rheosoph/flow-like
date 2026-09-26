@@ -201,7 +201,7 @@ pub async fn accept_access_request(
     let sub = user.sub()?;
     crate::ensure_wasm_permission!(state, &sub, &package_id, WasmPackagePermission::Maintainer);
 
-    state
+    let requester = state
         .transaction(|txn| {
             let sub = sub.clone();
             let package_id = package_id.clone();
@@ -233,12 +233,16 @@ pub async fn accept_access_request(
                     .await?;
                 }
 
+                let requester = request.user_id.clone();
                 let active: wasm_package_join_queue::ActiveModel = request.into();
                 active.delete(txn).await?;
-                Ok::<_, ApiError>(())
+                Ok::<_, ApiError>(requester)
             })
         })
         .await?;
+
+    state.invalidate_wasm_permission(&requester, &package_id);
+    crate::package_license::refresh_package_access(&state, &requester, &package_id).await;
 
     Ok(Json(()))
 }

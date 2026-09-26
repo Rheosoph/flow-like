@@ -13,7 +13,10 @@ const fixture = vi.hoisted(() => ({
 }));
 
 vi.mock("react-oidc-context", () => ({
-	useAuth: () => ({ user: { profile: { sub: fixture.viewer } } }),
+	useAuth: () => ({
+		isAuthenticated: true,
+		user: { profile: { sub: fixture.viewer } },
+	}),
 }));
 vi.mock("../../state/backend-state", () => ({
 	useBackendReady: () => fixture.ready,

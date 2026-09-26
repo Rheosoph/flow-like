@@ -1,6 +1,9 @@
 import { useTranslation } from "@flow-like/locales";
+import { EyeIcon, EyeOffIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import { Textarea } from "../../../components/ui/textarea";
 import type { IVariable } from "../../../lib/schema/flow/variable";
 import {
 	convertJsonToUint8Array,
@@ -11,6 +14,109 @@ import { cn } from "../../../lib/utils";
 const MIN_ROWS = 1;
 const MAX_ROWS = 15;
 const LINE_HEIGHT = 22; // px
+
+function SecretStringInput({
+	value,
+	disabled,
+	onChange,
+}: Readonly<{
+	value: string;
+	disabled?: boolean;
+	onChange: (value: string) => void;
+}>) {
+	const { t } = useTranslation("flow");
+	const [revealed, setRevealed] = useState(false);
+	const multiline = /[\r\n]/.test(value);
+	const showLabel = revealed
+		? t("hideSecretValue", "Hide secret value")
+		: t("showSecretValue", "Show secret value");
+
+	return (
+		<div className="grid w-full items-center gap-1.5">
+			<div className="relative">
+				{revealed ? (
+					<Textarea
+						autoComplete="off"
+						spellCheck={false}
+						autoCorrect="off"
+						autoCapitalize="off"
+						disabled={disabled}
+						value={value}
+						onChange={(event) => onChange(event.target.value)}
+						aria-label={t("secretValue", "Secret value")}
+						placeholder={t("enterSecretValue", "Enter secret value...")}
+						rows={multiline ? 5 : 1}
+						className="min-h-9 max-h-[330px] pr-20 font-mono"
+					/>
+				) : (
+					<Input
+						disabled={disabled}
+						type="password"
+						aria-label={t("secretValue", "Secret value")}
+						value={multiline ? "••••••••" : value}
+						readOnly={multiline}
+						onChange={(event) => onChange(event.target.value)}
+						onPaste={(event) => {
+							const pasted = event.clipboardData.getData("text/plain");
+							if (disabled || (!multiline && !/[\r\n]/.test(pasted))) return;
+							// Password inputs strip line breaks before onChange fires.
+							event.preventDefault();
+							const input = event.currentTarget;
+							onChange(
+								multiline
+									? pasted
+									: value.slice(0, input.selectionStart ?? value.length) +
+											pasted +
+											value.slice(input.selectionEnd ?? value.length),
+							);
+						}}
+						placeholder={t("enterSecretValue", "Enter secret value...")}
+						className="pr-20 font-mono"
+					/>
+				)}
+				<div className="absolute right-1 top-1 flex gap-1">
+					{value.length > 0 && (
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-7 w-7"
+							disabled={disabled}
+							aria-label={t("clearValue", "Clear value")}
+							onClick={() => onChange("")}
+						>
+							<XIcon className="h-4 w-4" />
+						</Button>
+					)}
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon"
+						className="h-7 w-7"
+						disabled={disabled}
+						aria-label={showLabel}
+						aria-pressed={revealed}
+						onClick={() => setRevealed((current) => !current)}
+					>
+						{revealed ? (
+							<EyeOffIcon className="h-4 w-4" />
+						) : (
+							<EyeIcon className="h-4 w-4" />
+						)}
+					</Button>
+				</div>
+			</div>
+			{multiline && !revealed && (
+				<p className="text-xs text-muted-foreground">
+					{t(
+						"multilineSecretHint",
+						"Multiline secret. Show to edit or paste to replace.",
+					)}
+				</p>
+			)}
+		</div>
+	);
+}
 
 export function StringVariable({
 	disabled,
@@ -38,6 +144,7 @@ export function StringVariable({
 		textarea.style.height = `${newHeight}px`;
 	}, []);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Remeasure the textarea when its content changes.
 	useEffect(() => {
 		adjustHeight();
 	}, [value, adjustHeight]);
@@ -54,21 +161,11 @@ export function StringVariable({
 
 	if (variable.secret) {
 		return (
-			<div className="grid w-full items-center gap-1.5">
-				<Input
-					autoComplete="off"
-					spellCheck="false"
-					autoCorrect="off"
-					autoCapitalize="off"
-					disabled={disabled}
-					value={value}
-					onChange={(e) => handleChange(e.target.value)}
-					type="password"
-					id="default_value"
-					placeholder={t("enterSecretValue", "Enter secret value...")}
-					className="font-mono"
-				/>
-			</div>
+			<SecretStringInput
+				disabled={disabled}
+				value={typeof value === "string" ? value : ""}
+				onChange={handleChange}
+			/>
 		);
 	}
 

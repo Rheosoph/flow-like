@@ -90,7 +90,7 @@ pub fn assignments_to_lance_updates(
                 .map_err(|error| DataFusionError::Plan(error.to_string()))?,
         ) {
             return plan_err(
-                "Geometry columns cannot be updated with SQL expressions; use validated upsert"
+                "Geometry columns cannot be updated with SQL expressions; write a GeoJSON value through the table update or upsert instead"
                     .into(),
             );
         }

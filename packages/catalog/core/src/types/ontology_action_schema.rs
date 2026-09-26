@@ -19,8 +19,11 @@ impl fmt::Display for ExternalSchemaReferenceDenied {
 
 impl std::error::Error for ExternalSchemaReferenceDenied {}
 
-#[derive(Debug, Clone, Copy)]
-struct RejectExternalSchemaReferences;
+/// A `jsonschema` retriever that refuses every non-local `$ref`. Schemas are
+/// user data; resolving them must never make the process fetch a URL or read
+/// a file, whichever crate features are compiled in.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RejectExternalSchemaReferences;
 
 impl jsonschema::Retrieve for RejectExternalSchemaReferences {
     fn retrieve(

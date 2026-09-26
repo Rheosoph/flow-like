@@ -9,12 +9,14 @@ mod dispatch;
 #[cfg(feature = "lambda")]
 pub mod dispatch_intent;
 mod jwt;
+pub(crate) use jwt::{bind_attended_payer, bind_hosted_frontend};
 mod page_action_jwt;
 mod page_action_sealer;
 pub mod payload_storage;
 pub mod queue;
 pub mod regression;
 pub mod rejection;
+pub mod run_summary;
 pub mod run_sweeper;
 mod sse_proxy;
 pub mod state;
@@ -56,6 +58,9 @@ pub(crate) use sse_proxy::update_run_on_completion_with_runtime;
 pub use sse_proxy::{
     collect_generic_result, collect_generic_result_bytes, proxy_sse_response,
     proxy_sse_response_with_page_actions, update_run_on_completion,
+};
+pub(crate) use sse_proxy::{
+    is_completed_event, parse_completed_payload, update_run_on_completed_event,
 };
 pub use state::{
     CreateEventInput, CreateRunInput, EventQuery, ExecutionEventRecord, ExecutionRunRecord,

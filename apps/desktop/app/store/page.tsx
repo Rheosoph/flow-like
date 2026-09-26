@@ -9,9 +9,13 @@ import {
 	StoreHero,
 	StoreRecommendations,
 	TextEditor,
+	exploreHref,
+	legacyAppsExploreTarget,
 	useStoreData,
 } from "@flow-like/flow-like-ui";
+import { MarketplaceCheckoutDialog } from "@flow-like/flow-like-ui/components/payments/checkout-dialog";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
@@ -23,13 +27,17 @@ export default function Page() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const id = searchParams.get("id") ?? undefined;
-	const purchaseStatus = searchParams.get("purchase");
+	const purchaseStatus =
+		searchParams.get("checkout") ?? searchParams.get("purchase");
 	const applyForkBundle = useApplyForkBundle();
 	const {
 		appData,
 		metaData,
 		isMember,
 		isPurchasing,
+		checkoutOpen,
+		setCheckoutOpen,
+		purchasingAllowed,
 		isLoading,
 		isError,
 		notFound,
@@ -44,14 +52,16 @@ export default function Page() {
 		onBuy,
 		onJoinOrRequest,
 		refetchAppData,
-		registerAppInProfile,
 	} = useStoreData(id, router, EVENT_CONFIG);
 	const handledPurchaseRef = useRef<string | null>(null);
 
 	useEffect(() => {
 		if (id) return;
-		const sort = searchParams.get("sort");
-		router.replace(`/store/explore/apps${sort ? `?sort=${sort}` : ""}`);
+		router.replace(
+			searchParams.get("sort")
+				? legacyAppsExploreTarget(searchParams)
+				: exploreHref(),
+		);
 	}, [id, searchParams, router]);
 
 	useEffect(() => {
@@ -62,27 +72,22 @@ export default function Page() {
 		if (handledPurchaseRef.current === purchaseStatus) return;
 		handledPurchaseRef.current = purchaseStatus;
 
-		if (purchaseStatus === "success") {
-			toast.success(
-				t(
-					"purchaseSuccessfulYouNowHaveAccessToThisApp",
-					"Purchase successful! You now have access to this app.",
-				),
-				{
-					duration: 5000,
-				},
+		if (purchaseStatus === "success" || purchaseStatus === "submitted") {
+			toast.info(
+				"Checkout returned. Payment is confirmed by the server; access may still be processing.",
 			);
-			void registerAppInProfile().finally(() => {
-				void refetchAppData();
-			});
+			void refetchAppData();
 		} else if (purchaseStatus === "canceled") {
-			toast.info("Purchase was canceled. You can try again anytime.");
+			toast.info(
+				"Checkout was closed. Check Purchases for its current status.",
+			);
 		}
 
 		const url = new URL(window.location.href);
 		url.searchParams.delete("purchase");
+		url.searchParams.delete("checkout");
 		router.replace(url.pathname + url.search, { scroll: false });
-	}, [purchaseStatus, refetchAppData, registerAppInProfile, router]);
+	}, [purchaseStatus, refetchAppData, router]);
 
 	if (!id) return null;
 
@@ -98,7 +103,7 @@ export default function Page() {
 		);
 	}
 
-	if (isError || notFound || !appData || !metaData) {
+	if (isError || notFound || !isRecord(appData) || !isRecord(metaData)) {
 		return (
 			<div className="flex-1 flex items-center justify-center p-6">
 				<StoreEmptyState
@@ -128,6 +133,15 @@ export default function Page() {
 			key={id}
 			className="flex-col flex grow max-h-full overflow-auto min-h-0 w-full"
 		>
+			<MarketplaceCheckoutDialog
+				key={`checkout:${id}`}
+				appId={id}
+				appName={appName}
+				amount={appData.price ?? 0}
+				open={checkoutOpen}
+				onOpenChange={setCheckoutOpen}
+				onPurchased={refetchAppData}
+			/>
 			<StoreHero
 				appId={id}
 				hasThumbnail={hasThumbnail}
@@ -143,6 +157,7 @@ export default function Page() {
 				authors={appData.authors}
 				canUseApp={canUseApp}
 				price={appData.price ?? 0}
+				purchasingAllowed={purchasingAllowed}
 				isPurchasing={isPurchasing}
 				onUse={onUse}
 				onSettings={onSettings}

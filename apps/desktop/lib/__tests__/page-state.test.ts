@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { ApiResponseError } from "../api-error";
 
 const mocks = vi.hoisted(() => {
 	const fetcher = vi.fn();
@@ -312,6 +313,20 @@ describe("desktop page lookup errors", () => {
 		expect(backend.isLocalOnly).toHaveBeenCalledWith("app-1");
 		expect(mocks.fetcher).not.toHaveBeenCalled();
 	});
+
+	test("never reports a hosted page missing when the server was not asked", async () => {
+		const nativeMiss = { error: "Page not found" };
+		mocks.invoke.mockRejectedValueOnce(nativeMiss);
+		const backend = {
+			...onlineBackend(),
+			profile: undefined,
+			auth: undefined,
+		};
+		const state = new PageState(backend as never);
+
+		await expect(state.getPage("app-1", "page-1")).rejects.toBe(nativeMiss);
+		expect(mocks.fetcher).not.toHaveBeenCalled();
+	});
 });
 
 describe("versioned page reads", () => {
@@ -508,5 +523,44 @@ describe("cached page freshness", () => {
 				{ ...remote, updatedAt: "also-not-a-date" },
 			),
 		).toBe(false);
+	});
+});
+
+describe("hosted page bootstrap", () => {
+	beforeEach(() => {
+		mocks.invoke.mockReset();
+		mocks.fetcher.mockReset();
+	});
+
+	const localBootstrap = { event: { id: "event-1" }, page: { id: "page-1" } };
+
+	test("serves the device's bootstrap when the hub does not answer", async () => {
+		mocks.fetcher.mockRejectedValueOnce(
+			new Error("Network unavailable: GET apps/app-1/pages/bootstrap"),
+		);
+		mocks.invoke.mockResolvedValueOnce(localBootstrap);
+		const state = new PageState(onlineBackend() as never);
+
+		await expect(state.getPageBootstrap("app-1", "/")).resolves.toBe(
+			localBootstrap,
+		);
+		expect(mocks.invoke).toHaveBeenCalledWith("get_local_page_bootstrap", {
+			appId: "app-1",
+			route: "/",
+			eventId: undefined,
+		});
+	});
+
+	test("keeps the hub's refusal instead of falling back", async () => {
+		const refusal = new ApiResponseError({
+			status: 403,
+			code: "FORBIDDEN",
+			message: "Forbidden",
+		});
+		mocks.fetcher.mockRejectedValueOnce(refusal);
+		const state = new PageState(onlineBackend() as never);
+
+		await expect(state.getPageBootstrap("app-1", "/")).rejects.toBe(refusal);
+		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
 });

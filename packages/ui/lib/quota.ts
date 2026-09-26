@@ -127,6 +127,7 @@ export function formatQuotaDate(value: string): string {
 }
 
 export function formatQuota(value: number, resource: string): string {
+	if (!Number.isFinite(value)) return "Not available";
 	if (value < 0) return "Unlimited";
 	if (resource === "cloud_runtime_ms") {
 		return value >= 3_600_000

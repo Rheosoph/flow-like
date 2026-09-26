@@ -55,6 +55,7 @@ impl NodeLogic for RegisterMcpToolsNode {
             auth_header: None,
             remote_app_id: None,
             remote_event_id: None,
+            oauth_provider_id: None,
             custom_headers: Default::default(),
         });
 

@@ -291,7 +291,7 @@ export function BitCard({
 		}
 	}, [bit.repository]);
 
-	if (bit.meta.en === undefined) return null;
+	if (bit.meta?.en === undefined) return null;
 
 	const isInProfile =
 		(currentProfile.data?.hub_profile.bits || []).findIndex(

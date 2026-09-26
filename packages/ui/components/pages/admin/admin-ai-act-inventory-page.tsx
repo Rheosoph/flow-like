@@ -37,6 +37,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import {
 	ConformityRecommendations,
@@ -718,7 +719,7 @@ function InventoryStats() {
 	});
 
 	const summary = useMemo(() => {
-		const rows = stats.data ?? [];
+		const rows = asArray(stats.data);
 		const assessed = rows.filter(
 			(row) => row.status.toUpperCase() !== "UNASSESSED",
 		);

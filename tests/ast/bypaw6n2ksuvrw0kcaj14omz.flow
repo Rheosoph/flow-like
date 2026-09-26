@@ -378,13 +378,13 @@ eventsGeneric writeReport(title: string, shortSummary: string, report: string, p
     } else {
         reportCreated = true
         const date3 = now()
-        let record = struct::set({ structIn: {}, field: "created", value: date3 }).structOut
-        record.title = title
-        record.report = report
-        record.description = shortSummary
-        record.report_id = reportID
+        let row = struct::set({ structIn: {}, field: "created", value: date3 }).structOut
+        row.title = title
+        row.report = report
+        row.description = shortSummary
+        row.report_id = reportID
         const database6 = open({ name: "report_overview", userScoped: true, batchSize: 1000 })
-        database6.insertOne(record)
+        database6.insertOne(row)
         user({ title: title, description: "", link: "/briefing?report_id={id}".format({ id: reportID }), showDesktop: true })
         return `Successfully created Report. You are done now!`
     }

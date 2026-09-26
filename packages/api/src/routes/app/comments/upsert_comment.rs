@@ -10,8 +10,8 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::create_id;
-use sea_orm::sea_query::Expr;
 use sea_orm::sea_query::ExprTrait;
+use sea_orm::sea_query::{Alias, Expr};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel,
     QueryFilter,
@@ -120,33 +120,29 @@ pub(super) async fn adjust_app_ratings(
     sum_delta: i64,
     count_delta: i64,
 ) -> Result<(), ApiError> {
-    app::Entity::update_many()
-        .col_expr(
-            app::Column::RatingSum,
-            Expr::col(app::Column::RatingSum).add(sum_delta),
-        )
-        .col_expr(
-            app::Column::RatingCount,
-            Expr::col(app::Column::RatingCount).add(count_delta),
-        )
+    let new_sum = Expr::col(app::Column::RatingSum).add(sum_delta);
+    let new_count = Expr::col(app::Column::RatingCount).add(count_delta);
+    let new_avg = Expr::case(
+        new_count.clone().gt(0i64),
+        new_sum
+            .clone()
+            .cast_as(Alias::new("DOUBLE PRECISION"))
+            // CockroachDB has no float / int operator and casts nothing implicitly.
+            .div(new_count.clone().cast_as(Alias::new("DOUBLE PRECISION"))),
+    )
+    .finally(Expr::null());
+
+    let result = app::Entity::update_many()
+        .col_expr(app::Column::RatingSum, new_sum)
+        .col_expr(app::Column::RatingCount, new_count)
+        .col_expr(app::Column::AvgRating, new_avg.into())
         .filter(app::Column::Id.eq(app_id))
         .exec(db)
         .await?;
 
-    let app_model = app::Entity::find_by_id(app_id)
-        .one(db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-
-    let avg = if app_model.rating_count > 0 {
-        Some(app_model.rating_sum as f64 / app_model.rating_count as f64)
-    } else {
-        None
-    };
-
-    let mut active = app_model.into_active_model();
-    active.avg_rating = Set(avg);
-    active.update(db).await?;
+    if result.rows_affected == 0 {
+        return Err(ApiError::NOT_FOUND);
+    }
 
     Ok(())
 }

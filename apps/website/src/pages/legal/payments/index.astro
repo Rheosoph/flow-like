@@ -1,0 +1,38 @@
+---
+import LegalLayout from "../../../layouts/Legal-Layout.astro";
+import {
+	paymentLegalDocuments,
+	paymentLegalPath,
+} from "../../../lib/payment-legal";
+
+const versions = [...new Set(paymentLegalDocuments.map((document) => document.version))].sort().reverse();
+---
+
+<LegalLayout
+	title="Payment agreements"
+	description="Versioned Flow-Like payment account, marketplace seller and purchase agreements."
+>
+	<p>
+		Read or download the payment agreements in English or German. The agreement
+		presented when you connect an account, become a seller or make a purchase
+		identifies the version you accept.
+	</p>
+	{versions.map((version) => (
+		<section>
+			<h2>{version}</h2>
+			{version.toLowerCase().includes("draft") && (
+				<p>Draft. This version is not approved for live payments.</p>
+			)}
+			<ul>
+				{paymentLegalDocuments.filter((document) => document.version === version).map((document) => (
+					<li>
+						<a href={paymentLegalPath(document)} lang={document.locale}>
+							{document.text.split("\n", 1)[0]}
+						</a>
+						{" "}({document.locale})
+					</li>
+				))}
+			</ul>
+		</section>
+	))}
+</LegalLayout>

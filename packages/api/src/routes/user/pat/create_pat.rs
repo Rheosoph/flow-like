@@ -87,7 +87,6 @@ pub async fn create_pat(
         "pat.create",
         "PersonalAccessToken",
         pat.id,
-        "Created a personal access token",
         serde_json::json!({
             "permissions": pat.permissions,
             "valid_until": pat.valid_until,

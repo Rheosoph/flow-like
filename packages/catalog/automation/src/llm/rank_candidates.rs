@@ -111,7 +111,7 @@ impl NodeLogic for LLMRankCandidatesNode {
         );
         node.set_flowscript_name("automation.llm", "rankCandidates");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -146,8 +146,10 @@ impl NodeLogic for LLMRankCandidatesNode {
             "candidates",
             "Candidates",
             "Array of candidate elements to rank",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<CandidateInput>()
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.add_input_pin(
             "criteria",
@@ -185,8 +187,10 @@ impl NodeLogic for LLMRankCandidatesNode {
             "ranked",
             "Ranked",
             "Candidates sorted by rank",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<RankedCandidate>()
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.set_long_running(true);
 

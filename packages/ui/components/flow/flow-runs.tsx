@@ -300,16 +300,19 @@ const FlowRunsComponent = ({
 		[appId, backend.eventState, t],
 	);
 
-	// Remote run rows never carry the recorded payload (and a canary run's row
-	// may name another variant's node), so Re-Run resolves both through the
-	// corpus payload endpoint; local rows replay their own recorded fields.
+	// Listings leave the recorded payload empty. A remote event run resolves
+	// node and input through the corpus payload endpoint (a canary run's row
+	// may name another variant's node); every other run replays its payload
+	// sidecar.
 	const handleReRun = useCallback(
 		async (run: ILogMetadata) => {
 			let nodeId = run.node_id;
-			let payload: object | undefined = parseUint8ArrayToJson(run.payload);
+			let payload: object | undefined =
+				parseUint8ArrayToJson(run.payload) ?? undefined;
 			const getCorpusPayload = backend.eventState.getCorpusPayload;
-			if (run.is_remote && run.event_id && getCorpusPayload) {
-				try {
+			const getRunPayload = backend.boardState.getRunPayload;
+			try {
+				if (run.is_remote && run.event_id && getCorpusPayload) {
 					const entry = await getCorpusPayload.call(
 						backend.eventState,
 						appId,
@@ -318,10 +321,17 @@ const FlowRunsComponent = ({
 					);
 					nodeId = entry.node_id;
 					payload = entry.payload as object;
-				} catch (error) {
-					toast.error(error instanceof Error ? error.message : String(error));
-					return;
+				} else if (payload === undefined && getRunPayload) {
+					payload = await getRunPayload.call(
+						backend.boardState,
+						appId,
+						boardId,
+						run.run_id,
+					);
 				}
+			} catch (error) {
+				toast.error(error instanceof Error ? error.message : String(error));
+				return;
 			}
 			const node = nodes[nodeId];
 			if (!node) {
@@ -330,7 +340,15 @@ const FlowRunsComponent = ({
 			}
 			await executeBoard(node, payload);
 		},
-		[appId, backend.eventState, executeBoard, nodes, t],
+		[
+			appId,
+			boardId,
+			backend.boardState,
+			backend.eventState,
+			executeBoard,
+			nodes,
+			t,
+		],
 	);
 
 	const panel = variant === "panel";

@@ -143,14 +143,6 @@ pub async fn delete_api_key(
     // Invalidate any cached auth for this key
     state.auth_cache.invalidate_all();
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "apikey.delete",
-        "ApiKey",
-        key_id,
-        "API key deleted"
-    );
+    audit_branch!(state, user, app_id, "apikey.delete", "ApiKey", key_id);
     Ok(Json(()))
 }

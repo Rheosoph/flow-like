@@ -1,6 +1,5 @@
 import { useTranslation } from "@flow-like/locales";
 import { useReactFlow } from "@xyflow/react";
-import { ChevronDown } from "lucide-react";
 import {
 	type RefObject,
 	useCallback,
@@ -16,10 +15,10 @@ import {
 	SelectGroup,
 	SelectItem,
 	SelectLabel,
-	SelectTrigger,
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand } from "../../../../lib";
+import { asArray } from "../../../../lib/response-shape";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -28,6 +27,7 @@ import {
 } from "../../../../lib/uint8";
 import type { IAccessibleApp } from "../../../../state/backend-state/types";
 import { useUndoRedo } from "../../flow-history";
+import { PinEditorRow, PinSelectTrigger } from "../pin-chrome";
 
 const REMOTE_EVENT_PIN_NAME = "_flow_remote_event";
 const REMOTE_EVENT_META_PIN_NAME = "_flow_remote_event_meta";
@@ -85,7 +85,7 @@ export function RemoteProjectSelect({
 				if (cancelled) return;
 
 				hasLoadedRef.current = true;
-				setApps(accessibleApps);
+				setApps(asArray(accessibleApps));
 			} catch {
 				if (!cancelled) setError(true);
 			} finally {
@@ -183,29 +183,20 @@ export function RemoteProjectSelect({
 	);
 
 	return (
-		<div
-			className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden"
-			onMouseDown={(e) => e.stopPropagation()}
-			onPointerDown={(e) => e.stopPropagation()}
-		>
+		<PinEditorRow>
 			<Select
 				open={open}
 				onOpenChange={handleOpenChange}
 				value={selectedAppId || undefined}
 				onValueChange={(targetAppId) => void persistSelection(targetAppId)}
 			>
-				<SelectTrigger
-					noChevron
-					size="sm"
-					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
-				>
-					<small className="text-start text-[10px] m-0! truncate">
-						{selectedAppId
+				<PinSelectTrigger
+					label={
+						selectedAppId
 							? (selectedApp?.name ?? selectedAppId)
-							: "Select project"}
-					</small>
-					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
-				</SelectTrigger>
+							: "Select project"
+					}
+				/>
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
@@ -242,6 +233,6 @@ export function RemoteProjectSelect({
 					</SelectGroup>
 				</SelectContent>
 			</Select>
-		</div>
+		</PinEditorRow>
 	);
 }

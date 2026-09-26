@@ -1,4 +1,44 @@
-import type { Children, DataScope } from "./types";
+import type { Children, DataScope, SurfaceComponent } from "./types";
+
+/** Every component id this component renders: child list, named slots, template and tab/accordion/overlay/popover content. */
+export function getComponentChildren(component?: SurfaceComponent): string[] {
+	const props = component?.component as unknown as
+		| Record<string, unknown>
+		| undefined;
+	if (!props) return [];
+	const childList = component?.component.children;
+	const children = [
+		...(childList && "explicitList" in childList ? childList.explicitList : []),
+		...[props.child, props.entryPointChild, props.contentChild].filter(
+			(id): id is string => typeof id === "string",
+		),
+	];
+	if (childList && "template" in childList)
+		children.push(childList.template.templateComponentId);
+	if (component?.component.type === "tabs")
+		children.push(
+			...(component.component.tabs ?? []).map((tab) => tab.contentComponentId),
+		);
+	if (component?.component.type === "accordion")
+		children.push(
+			...(component.component.items ?? []).map(
+				(item) => item.contentComponentId,
+			),
+		);
+	if (component?.component.type === "overlay") {
+		children.push(
+			component.component.baseComponentId,
+			...(component.component.overlays ?? []).map(
+				(overlay) => overlay.componentId,
+			),
+		);
+	}
+	if (component?.component.type === "popover")
+		children.push(component.component.contentComponentId);
+	return children.filter(
+		(id): id is string => typeof id === "string" && id.length > 0,
+	);
+}
 
 export interface ResolvedChild {
 	id: string;

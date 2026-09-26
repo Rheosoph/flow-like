@@ -238,7 +238,8 @@ pub fn infer_schema_from_json(raw: &str) -> flow_like_types::Result<String> {
         )
     })?;
 
-    let is_schema = looks_like_schema(&user_json) && jsonschema::meta::is_valid(&user_json);
+    let is_schema = looks_like_schema(&user_json)
+        && jsonschema::meta::try_is_valid(&user_json).unwrap_or(false);
     let inferred = if is_schema {
         user_json
     } else {

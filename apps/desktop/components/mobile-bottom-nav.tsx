@@ -25,7 +25,7 @@ const DESTINATIONS: readonly NavDestination[] = [
 	{ title: "Home", href: "/", icon: HomeIcon, isActive: (p) => p === "/" },
 	{
 		title: "Explore",
-		href: "/store/explore/apps",
+		href: "/store/explore",
 		icon: CompassIcon,
 		isActive: (p) => p.startsWith("/store"),
 	},

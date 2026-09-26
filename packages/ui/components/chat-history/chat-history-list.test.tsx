@@ -1,16 +1,8 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { IHistoryEntry } from "./chat-history-types";
-
-// The `lib` barrel imports back into components, so a direct unit import of the list re-enters this
-// module graph. Stub the one helper the component actually uses.
-mock.module("../../lib/utils", () => ({
-	cn: (...classes: unknown[]) => classes.filter(Boolean).join(" "),
-}));
-
-afterAll(() => mock.restore());
 
 const NOW = Date.now();
 
@@ -49,8 +41,8 @@ async function renderList(
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 	const { ChatHistoryList } = await import("./chat-history-list");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	const root = createRoot(container);
 
 	await act(async () => {

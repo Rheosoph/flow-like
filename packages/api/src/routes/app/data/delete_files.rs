@@ -79,7 +79,6 @@ pub async fn delete_files(
             "file.delete",
             "Storage",
             app_id,
-            "Deleted files under an app storage prefix",
             serde_json::json!({
                 "scope": "app",
                 "prefix_hash": blake3::hash(prefix.as_bytes()).to_hex().to_string(),
@@ -155,7 +154,6 @@ pub async fn delete_user_files(
             "file.delete",
             "Storage",
             app_id,
-            "Deleted files under a private storage prefix",
             serde_json::json!({
                 "scope": "user",
                 "prefix_hash": blake3::hash(prefix.as_bytes()).to_hex().to_string(),

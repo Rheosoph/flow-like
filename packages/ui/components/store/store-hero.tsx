@@ -12,6 +12,7 @@ import {
 import { useIsMobile } from "../../hooks/use-mobile";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { useAppCategoryLabel } from "../../lib/app-category";
+import { asArray } from "../../lib/response-shape";
 import type { IAppVisibility } from "../../lib/schema/app/app";
 import { IAppVisibility as AppVis } from "../../lib/schema/app/app";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
@@ -35,6 +36,7 @@ export function StoreHero({
 	canUseApp,
 	price,
 	isPurchasing,
+	purchasingAllowed = true,
 	onUse,
 	onSettings,
 	onBuy,
@@ -56,6 +58,7 @@ export function StoreHero({
 	canUseApp: boolean;
 	price: number;
 	isPurchasing: boolean;
+	purchasingAllowed?: boolean;
 	onUse: () => void;
 	onSettings: () => void;
 	onBuy: () => void;
@@ -66,6 +69,7 @@ export function StoreHero({
 	const categoryLabel = useAppCategoryLabel();
 	const { primaryHue, isDark } = useThemeInfo();
 	const isMobile = useIsMobile();
+	const authorList = asArray(authors);
 	const primarySize = isMobile ? "default" : "sm";
 
 	return (
@@ -129,11 +133,11 @@ export function StoreHero({
 							<span>{categoryLabel(category)}</span>
 							<span className="select-none">·</span>
 							<span className="capitalize">{visibilityLabel(visibility)}</span>
-							{authors?.length > 0 && (
+							{authorList.length > 0 && (
 								<>
 									<span className="select-none">·</span>
 									<span className="truncate max-w-50">
-										{authors.join(", ")}
+										{authorList.join(", ")}
 									</span>
 								</>
 							)}
@@ -171,6 +175,13 @@ export function StoreHero({
 									{t("settings", "Settings")}
 								</Button>
 							</>
+						) : price > 0 && !purchasingAllowed ? (
+							<p className="text-sm text-muted-foreground">
+								{t(
+									"purchaseUnavailable",
+									"Purchasing is unavailable in this app distribution.",
+								)}
+							</p>
 						) : price > 0 ? (
 							<Button
 								size={primarySize}
@@ -206,6 +217,17 @@ export function StoreHero({
 									: "Request access"}
 							</Button>
 						)}
+						{!isMember &&
+							purchasingAllowed &&
+							price > 0 &&
+							visibility === AppVis.PublicRequestAccess && (
+								<Button variant="outline" onClick={onJoinOrRequest}>
+									{t(
+										"requestAccessBeforePurchase",
+										"Request purchase approval",
+									)}
+								</Button>
+							)}
 						<div className="flex items-center gap-2 sm:contents">
 							{actionsExtra}
 							<ShareButton

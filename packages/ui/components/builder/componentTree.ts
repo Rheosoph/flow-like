@@ -1,3 +1,4 @@
+import { getComponentChildren } from "../a2ui/children";
 import type { A2UIComponent, SurfaceComponent } from "../a2ui/types";
 
 export function getExplicitChildren(component?: SurfaceComponent): string[] {
@@ -34,44 +35,7 @@ export function canAcceptComponentChildren(
 	return !children || "explicitList" in children;
 }
 
-export function getComponentChildren(component?: SurfaceComponent): string[] {
-	const props = component?.component as unknown as
-		| Record<string, unknown>
-		| undefined;
-	if (!props) return [];
-	const children = [
-		...getExplicitChildren(component),
-		...[props.child, props.entryPointChild, props.contentChild].filter(
-			(id): id is string => typeof id === "string",
-		),
-	];
-	const childTemplate = component?.component.children;
-	if (childTemplate && "template" in childTemplate)
-		children.push(childTemplate.template.templateComponentId);
-	if (component?.component.type === "tabs")
-		children.push(
-			...(component.component.tabs ?? []).map((tab) => tab.contentComponentId),
-		);
-	if (component?.component.type === "accordion")
-		children.push(
-			...(component.component.items ?? []).map(
-				(item) => item.contentComponentId,
-			),
-		);
-	if (component?.component.type === "overlay") {
-		children.push(
-			component.component.baseComponentId,
-			...(component.component.overlays ?? []).map(
-				(overlay) => overlay.componentId,
-			),
-		);
-	}
-	if (component?.component.type === "popover")
-		children.push(component.component.contentComponentId);
-	return children.filter(
-		(id): id is string => typeof id === "string" && id.length > 0,
-	);
-}
+export { getComponentChildren };
 
 export function findComponentParent(
 	components: Map<string, SurfaceComponent>,

@@ -362,6 +362,7 @@ mod node_metadata {
         depth::{DepthColorizeNode, DepthEstimationNode, DepthToPointCloudNode},
         face::{CompareFacesNode, CropFacesNode, FaceDetectionNode, FaceEmbeddingNode},
         face_id::{AnalyzeFacesNode, LoadFaceAnalyzerNode, UnloadFaceAnalyzerNode},
+        laya::LayaNode,
         ocr::{CropTextRegionsNode, TextDetectionNode, TextRecognitionNode},
     };
 
@@ -383,6 +384,262 @@ mod node_metadata {
             .values()
             .find(|pin| pin.name == name)
             .unwrap_or_else(|| panic!("Node {} is missing pin {name}", node.name))
+    }
+
+    fn laya_board() -> flow_like::flow::board::Board {
+        flow_like::flow::board::Board::new_detached(
+            None,
+            flow_like_storage::Path::from("test-laya"),
+        )
+    }
+
+    fn select_laya_mode(node: &mut flow_like::flow::node::Node, mode: &str) {
+        node.get_pin_mut_by_name("question_type")
+            .unwrap()
+            .set_default_value(Some(serde_json::json!(mode)));
+    }
+
+    #[test]
+    fn laya_is_registered_with_one_model_directory() {
+        let node = LayaNode::new().get_node();
+        assert!(
+            flow_like_catalog_onnx::get_catalog()
+                .iter()
+                .any(|logic| logic.get_node().name == node.name)
+        );
+        assert_eq!(node.version, Some(2));
+        assert!(
+            pin(&node, "model_dir")
+                .schema
+                .as_ref()
+                .unwrap()
+                .contains("FlowPath")
+        );
+        assert!(pin(&node, "model_dir").default_value.is_none());
+        for absent in [
+            "weights",
+            "tokenizer",
+            "config",
+            "cache_dir",
+            "score",
+            "noul",
+            "false_description",
+            "true_description",
+        ] {
+            assert!(
+                node.get_pin_by_name(absent).is_none(),
+                "unexpected {absent}"
+            );
+        }
+        assert_eq!(
+            pin(&node, "question_type")
+                .options
+                .as_ref()
+                .unwrap()
+                .valid_values
+                .as_ref()
+                .unwrap(),
+            &["choice", "score", "noul"]
+        );
+    }
+
+    #[tokio::test]
+    async fn laya_mode_updates_settle_without_changing_pin_ids_or_order() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        for mode in ["choice", "score", "noul"] {
+            let mut node = logic.get_node();
+            select_laya_mode(&mut node, mode);
+            logic.on_update(&mut node, &board).await;
+            for output in ["choice", "score", "noul"] {
+                assert_eq!(node.get_pin_by_name(output).is_some(), mode == output);
+            }
+            assert_eq!(node.get_pin_by_name("criteria").is_some(), mode != "noul");
+            assert_eq!(
+                node.get_pin_by_name("false_description").is_some(),
+                mode == "noul"
+            );
+            assert_eq!(
+                node.get_pin_by_name("true_description").is_some(),
+                mode == "noul"
+            );
+            let expected = serde_json::to_value(&node).unwrap();
+            for _ in 0..3 {
+                logic.on_update(&mut node, &board).await;
+                assert_eq!(serde_json::to_value(&node).unwrap(), expected);
+            }
+            for direction in [
+                flow_like::flow::pin::PinType::Input,
+                flow_like::flow::pin::PinType::Output,
+            ] {
+                let pins: Vec<_> = node
+                    .pins
+                    .values()
+                    .filter(|pin| pin.pin_type == direction)
+                    .collect();
+                let indices: std::collections::BTreeSet<_> =
+                    pins.iter().map(|pin| pin.index).collect();
+                assert_eq!(indices.len(), pins.len());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn laya_choice_to_score_keeps_criteria_and_common_connections() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        let mut node = logic.get_node();
+        let criteria_id = pin(&node, "criteria").id.clone();
+        let result_id = pin(&node, "result").id.clone();
+        let criteria = node.get_pin_mut_by_name("criteria").unwrap();
+        criteria.set_default_value(Some(serde_json::json!(["low", "high"])));
+        criteria.depends_on.insert("upstream".into());
+        node.get_pin_mut_by_name("result")
+            .unwrap()
+            .connected_to
+            .insert("print".into());
+        select_laya_mode(&mut node, "score");
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(pin(&node, "criteria").id, criteria_id);
+        assert_eq!(pin(&node, "criteria").friendly_name, "Levels");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                pin(&node, "criteria").default_value.as_ref().unwrap()
+            )
+            .unwrap(),
+            serde_json::json!(["low", "high"])
+        );
+        assert!(pin(&node, "criteria").depends_on.contains("upstream"));
+        assert_eq!(pin(&node, "result").id, result_id);
+        assert!(pin(&node, "result").connected_to.contains("print"));
+        assert!(node.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn laya_retains_wired_inactive_pins_until_disconnected() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        let mut node = logic.get_node();
+        let choice_id = pin(&node, "choice").id.clone();
+        node.get_pin_mut_by_name("choice")
+            .unwrap()
+            .connected_to
+            .insert("consumer".into());
+        select_laya_mode(&mut node, "score");
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(pin(&node, "choice").id, choice_id);
+        assert!(pin(&node, "choice").connected_to.contains("consumer"));
+        assert!(node.error.as_ref().unwrap().contains("choice"));
+        let expected = serde_json::to_value(&node).unwrap();
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(serde_json::to_value(&node).unwrap(), expected);
+        node.get_pin_mut_by_name("choice")
+            .unwrap()
+            .connected_to
+            .clear();
+        logic.on_update(&mut node, &board).await;
+        assert!(node.get_pin_by_name("choice").is_none());
+        assert!(node.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn laya_wired_selector_exposes_all_modes_and_invalid_literals_keep_pins() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        let mut node = logic.get_node();
+        select_laya_mode(&mut node, "noul");
+        node.get_pin_mut_by_name("question_type")
+            .unwrap()
+            .depends_on
+            .insert("runtime-mode".into());
+        logic.on_update(&mut node, &board).await;
+        for name in [
+            "choice",
+            "score",
+            "noul",
+            "criteria",
+            "false_description",
+            "true_description",
+        ] {
+            assert!(node.get_pin_by_name(name).is_some(), "missing {name}");
+        }
+        let ids: std::collections::BTreeSet<_> = node.pins.keys().cloned().collect();
+        node.get_pin_mut_by_name("question_type")
+            .unwrap()
+            .depends_on
+            .clear();
+        select_laya_mode(&mut node, "typo");
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(
+            node.pins
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids
+        );
+        assert!(node.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn laya_catalog_update_adopts_the_existing_directory_wire() {
+        let logic = LayaNode::new();
+        let board = laya_board();
+        let mut node = logic.get_node();
+        node.version = Some(1);
+        let directory = node.get_pin_mut_by_name("model_dir").unwrap();
+        let directory_id = directory.id.clone();
+        directory.name = "cache_dir".into();
+        directory.depends_on.insert("uploaded-directory".into());
+        for name in ["weights", "tokenizer", "config"] {
+            node.add_input_pin(
+                name,
+                name,
+                "",
+                flow_like::flow::variable::VariableType::Struct,
+            )
+            .set_default_value(Some(serde_json::json!(null)));
+        }
+        // Version 1 placed the text after the four asset pins.
+        for (name, index) in [
+            ("text", 6),
+            ("instructions", 7),
+            ("question_type", 8),
+            ("criteria", 9),
+        ] {
+            node.get_pin_mut_by_name(name).unwrap().index = index;
+        }
+        select_laya_mode(&mut node, "noul");
+        flow_like::flow::board::cleanup::sync_node_schema::sync_node_with_catalog(
+            &mut node,
+            &logic.get_node(),
+        );
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(pin(&node, "model_dir").id, directory_id);
+        assert!(
+            pin(&node, "model_dir")
+                .depends_on
+                .contains("uploaded-directory")
+        );
+        for name in [
+            "weights",
+            "tokenizer",
+            "config",
+            "cache_dir",
+            "choice",
+            "score",
+            "criteria",
+        ] {
+            assert!(node.get_pin_by_name(name).is_none(), "unexpected {name}");
+        }
+        assert!(node.error.is_none());
+        assert_eq!(pin(&node, "text").index, 3);
+        assert_eq!(pin(&node, "instructions").index, 4);
+        assert_eq!(pin(&node, "question_type").index, 5);
+        assert_eq!(pin(&node, "false_description").index, 7);
+        assert_eq!(pin(&node, "true_description").index, 8);
+        let expected = serde_json::to_value(&node).unwrap();
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(serde_json::to_value(&node).unwrap(), expected);
     }
 
     #[test]

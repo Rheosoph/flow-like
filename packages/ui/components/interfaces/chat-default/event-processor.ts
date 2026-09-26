@@ -158,6 +158,7 @@ export function mergeChatWidgets(
 	const byId = new Map(
 		(existing ?? []).map((widget) => [widget.instance_id, widget]),
 	);
+	let changed = false;
 	for (const widget of incoming ?? []) {
 		if (!widget?.instance_id) continue;
 		const prior = byId.get(widget.instance_id);
@@ -169,7 +170,11 @@ export function mergeChatWidgets(
 		// incoming widget carries nothing new.
 		if (prior && priorUpdates.length >= incomingUpdates.length) continue;
 		byId.set(widget.instance_id, widget);
+		changed = true;
 	}
+	// Same rule for the array: a re-send that adds nothing must not re-render
+	// every embedded widget list.
+	if (existing && !changed) return existing;
 	return Array.from(byId.values());
 }
 
@@ -208,46 +213,100 @@ function pathsOverlap(updated: string, bound: string): boolean {
 	);
 }
 
+interface WidgetUpdateTargets {
+	instanceIds: Set<string>;
+	childIds: Set<string>;
+	boundPaths: Set<string>;
+}
+
+/** A pushed instance id (not one of the widget's own inline children) joins the replay. */
+function notePushedInstance(
+	{ instanceIds, childIds }: WidgetUpdateTargets,
+	value: Record<string, unknown>,
+) {
+	if (value.type !== "pushChild" && value.type !== "insertChildAt") return;
+	if (typeof value.childId !== "string" || childIds.has(value.childId)) return;
+	instanceIds.add(value.childId);
+}
+
+/** Registering a tracked instance contributes its inline children and bindings. */
+function noteCreatedComponent(
+	{ instanceIds, childIds, boundPaths }: WidgetUpdateTargets,
+	elementId: unknown,
+	value: Record<string, unknown>,
+) {
+	if (value.type !== "createComponent") return;
+	if (typeof elementId !== "string" || !instanceIds.has(elementId)) return;
+	for (const id of inlineChildIds(value.component)) childIds.add(id);
+	collectBoundPaths(value.component, boundPaths);
+}
+
+/** Folds one replay entry into the target sets; order matters, so callers apply entries in sequence. */
+function extendWidgetUpdateTargets(
+	targets: WidgetUpdateTargets,
+	update: unknown,
+): WidgetUpdateTargets {
+	const record = update as Record<string, unknown>;
+	const value =
+		record.type === "upsertElement"
+			? (record.value as Record<string, unknown> | undefined)
+			: undefined;
+	if (!value) return targets;
+	notePushedInstance(targets, value);
+	noteCreatedComponent(targets, record.element_id, value);
+	return targets;
+}
+
+// Keyed by widget object: the processor replaces the object whenever its
+// updates grow, so a stale entry can never be served for new content.
+const widgetTargetsCache = new WeakMap<IChatWidget, WidgetUpdateTargets>();
+
 /**
  * Ids and binding paths a live a2ui update may legitimately target for one
  * chat widget. Mirrors the backend `ChatWidget::attach_update_log` fixpoint:
  * instances pushed into this widget's containers (and their children) belong
  * to its replay, and data-model updates are matched by bound path because
  * `Data Update` writes to a board-chosen surface id, never the instance id.
+ *
+ * Computing this walks the whole component tree plus every prior update, so
+ * it is cached per widget object and extended incrementally when an update is
+ * appended — a stream of element updates otherwise re-walked everything per
+ * event.
  */
-function widgetUpdateTargets(widget: IChatWidget): {
-	instanceIds: Set<string>;
-	childIds: Set<string>;
-	boundPaths: Set<string>;
-} {
-	const instanceIds = new Set([widget.instance_id]);
-	const childIds = new Set(inlineChildIds(widget.component));
-	const boundPaths = new Set<string>();
-	collectBoundPaths(widget.component, boundPaths);
-
+function widgetUpdateTargets(widget: IChatWidget): WidgetUpdateTargets {
+	const cached = widgetTargetsCache.get(widget);
+	if (cached) return cached;
+	const targets: WidgetUpdateTargets = {
+		instanceIds: new Set([widget.instance_id]),
+		childIds: new Set(inlineChildIds(widget.component)),
+		boundPaths: new Set<string>(),
+	};
+	collectBoundPaths(widget.component, targets.boundPaths);
 	for (const update of widget.updates ?? []) {
-		const record = update as Record<string, unknown>;
-		if (record.type !== "upsertElement") continue;
-		const value = record.value as Record<string, unknown> | undefined;
-		if (!value) continue;
-		if (
-			(value.type === "pushChild" || value.type === "insertChildAt") &&
-			typeof value.childId === "string" &&
-			!childIds.has(value.childId)
-		) {
-			instanceIds.add(value.childId);
-		}
-		if (
-			value.type === "createComponent" &&
-			typeof record.element_id === "string" &&
-			instanceIds.has(record.element_id)
-		) {
-			for (const id of inlineChildIds(value.component)) childIds.add(id);
-			collectBoundPaths(value.component, boundPaths);
-		}
+		extendWidgetUpdateTargets(targets, update);
 	}
+	widgetTargetsCache.set(widget, targets);
+	return targets;
+}
 
-	return { instanceIds, childIds, boundPaths };
+function appendWidgetUpdate(
+	widget: IChatWidget,
+	targets: WidgetUpdateTargets,
+	update: unknown,
+): IChatWidget {
+	const next = { ...widget, updates: [...(widget.updates ?? []), update] };
+	widgetTargetsCache.set(
+		next,
+		extendWidgetUpdateTargets(
+			{
+				instanceIds: new Set(targets.instanceIds),
+				childIds: new Set(targets.childIds),
+				boundPaths: new Set(targets.boundPaths),
+			},
+			update,
+		),
+	);
+	return next;
 }
 
 /**
@@ -463,14 +522,11 @@ export function processChatEvents(
 		if (!widgets?.length) return false;
 		let changed = false;
 		const next = widgets.map((widget) => {
-			const update = a2uiUpdateForWidget(
-				widget,
-				payload,
-				widgetUpdateTargets(widget),
-			);
+			const targets = widgetUpdateTargets(widget);
+			const update = a2uiUpdateForWidget(widget, payload, targets);
 			if (!update) return widget;
 			changed = true;
-			return { ...widget, updates: [...(widget.updates ?? []), update] };
+			return appendWidgetUpdate(widget, targets, update);
 		});
 		if (changed) {
 			responseMessage.widgets = next;

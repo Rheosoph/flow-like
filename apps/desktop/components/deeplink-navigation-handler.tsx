@@ -78,7 +78,9 @@ export function DeeplinkNavigationHandler({
 						`/store?id=${encodeURIComponent(appId)}`,
 						replayed,
 					);
+					return;
 				}
+				navigate("store:explore", "/store/explore", replayed);
 			},
 		);
 

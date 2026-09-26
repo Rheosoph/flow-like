@@ -101,6 +101,18 @@ export function elementValueScopeIds(
 	return [...ids];
 }
 
+/** The surface without its widget instance hosts, and so without any widget's children. */
+export function withoutWidgetHosts(
+	components: Record<string, SurfaceComponent> | undefined,
+): Record<string, SurfaceComponent> | undefined {
+	if (!components) return components;
+	return Object.fromEntries(
+		Object.entries(components).filter(
+			([, component]) => !isWidgetHost(componentData(component)),
+		),
+	);
+}
+
 function inlineWidgetComponents(
 	data: Record<string, unknown>,
 ): readonly WidgetElementComponent[] {

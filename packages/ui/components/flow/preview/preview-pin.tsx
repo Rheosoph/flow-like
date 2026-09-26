@@ -12,6 +12,7 @@ import {
 import type { INode } from "../../../lib/schema/flow/node";
 import { type IPin, IValueType } from "../../../lib/schema/flow/pin";
 import { DynamicImage } from "../../ui/dynamic-image";
+import { PIN_LABEL_CAP_SHARED } from "../flow-pin/pin-label-caps";
 import { typeToColor } from "../utils";
 import { PinPreviewEdit } from "./preview-pin-edit";
 
@@ -91,7 +92,8 @@ export function FlowPinInner({
 				pin.name !== "exec_out" &&
 				pin.name !== "var_ref" && (
 					<div
-						className={`flex flex-row items-center transition-all gap-1 max-w-40 ${pin.pin_type === "Input" ? "ml-2" : "translate-x-[-115%]"}`}
+						className={`flex flex-row items-center transition-all gap-1 shrink-0 ${pin.pin_type === "Input" ? "ml-2" : "translate-x-[-115%]"}`}
+						style={{ maxWidth: PIN_LABEL_CAP_SHARED }}
 					>
 						<PinPreviewEdit
 							pin={pin}

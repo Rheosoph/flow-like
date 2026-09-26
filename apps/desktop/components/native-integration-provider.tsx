@@ -1,5 +1,7 @@
 "use client";
 
+import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+
 import { useInvoke } from "@flow-like/flow-like-ui/hooks/use-invoke";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import {
@@ -20,7 +22,7 @@ import { useGlobalChatStore } from "@flow-like/flow-like-ui/state/global-chat/gl
 import { useQuery } from "@tanstack/react-query";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
@@ -31,6 +33,7 @@ import {
 	executeNativeEventWithResult,
 } from "../lib/native-event-execution";
 import {
+	type NativeEventCatalog,
 	type NativePendingAction,
 	type NativeSnapshot,
 	dispatchNativeAction,
@@ -53,12 +56,15 @@ import {
 	NativeMcpRunDialog,
 } from "./native-mcp-run-dialog";
 
+const FOCUS_REFRESH_MS = 60_000;
+const PERIODIC_REFRESH_MS = 10 * 60_000;
+
 export function NativeIntegrationProvider() {
 	const backend = useBackend();
 	const ready = useBackendReady();
 	const auth = useAuth();
 	const engine = useExecutionEngine();
-	const router = useRouter();
+	const router = useClientRouter();
 	const pathname = usePathname();
 	const query = useSearchParams().toString();
 	// Observe the same query as ProfileSyncer. Its pushProfile mutates the backend
@@ -207,10 +213,17 @@ export function NativeIntegrationProvider() {
 		});
 		customWidgetPublisher.start();
 		publishCurrentPage.current = publish;
-		const refresh = (): Promise<void> => {
+		let lastRefreshAt = 0;
+		const eventCatalog: NativeEventCatalog = new Map();
+		const refresh = (maxAgeMs = 0): Promise<void> => {
 			if (refreshPromise) return refreshPromise;
-			if (!current() || document.visibilityState !== "visible")
+			if (
+				!current() ||
+				document.visibilityState !== "visible" ||
+				Date.now() - lastRefreshAt < maxAgeMs
+			)
 				return Promise.resolve();
+			lastRefreshAt = Date.now();
 			refreshPromise = (async () => {
 				try {
 					let notificationSources: NativeNotificationIconSource[] = [];
@@ -223,6 +236,7 @@ export function NativeIntegrationProvider() {
 						(sources) => {
 							notificationSources = sources;
 						},
+						eventCatalog,
 					);
 					if (current()) {
 						baseSnapshot = snapshot;
@@ -484,7 +498,14 @@ export function NativeIntegrationProvider() {
 		const onFocus = () => {
 			// Native entry points stay usable while hub/widget refreshes are slow or offline.
 			void drain();
+			void refresh(FOCUS_REFRESH_MS);
+		};
+		const onRecentApps = () => {
 			void refresh();
+		};
+		const onTick = () => {
+			void drain();
+			void refresh(PERIODIC_REFRESH_MS);
 		};
 		const unlisten = listen<{ url?: string; replayed?: boolean }>(
 			"native-action",
@@ -515,9 +536,9 @@ export function NativeIntegrationProvider() {
 				void publish();
 		});
 		window.addEventListener("focus", onFocus);
-		window.addEventListener(RECENT_APPS_CHANGED, onFocus);
+		window.addEventListener(RECENT_APPS_CHANGED, onRecentApps);
 		document.addEventListener("visibilitychange", onFocus);
-		const timer = window.setInterval(onFocus, 60_000);
+		const timer = window.setInterval(onTick, 60_000);
 		onFocus();
 		return () => {
 			stopped = true;
@@ -528,7 +549,7 @@ export function NativeIntegrationProvider() {
 				publishCurrentPage.current = undefined;
 			window.clearInterval(timer);
 			window.removeEventListener("focus", onFocus);
-			window.removeEventListener(RECENT_APPS_CHANGED, onFocus);
+			window.removeEventListener(RECENT_APPS_CHANGED, onRecentApps);
 			document.removeEventListener("visibilitychange", onFocus);
 			unsubscribeRuns();
 			void unlisten.then((off) => off());

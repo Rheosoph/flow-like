@@ -109,11 +109,25 @@ Route and location result objects retain their properties for downstream nodes.
 ## Tables and SQL
 
 Create a scalar **geometry** column in Data Studio or declare `"type":"geometry"`
-in a table schema. The column stores WKB with GeoArrow WGS 84 metadata. Ordinary
-Binary columns remain byte arrays, and Struct columns remain objects. Geometry
-previews depend on the declared Arrow metadata.
+in a table schema. The column stores WKB with GeoArrow WGS 84 metadata, and reads
+return its values as GeoJSON. Geometry previews depend on that metadata.
 
-Insert or upsert validated GeoJSON into a declared geometry column. Direct Arrow
+A table without a declared schema takes its schema from the insert or upsert that
+creates it. A top-level column whose non-null values are all valid Geometry
+values, as a Geometry pin produces, becomes a geometry column, even when rows mix
+kinds such as Points and Polygons. If any value is not a valid Geometry, such as a
+Feature wrapper, a 3D position, coordinates outside the longitude/latitude range,
+or another object, the column is traced as an ordinary Struct instead. That fails
+when its rows nest `coordinates` differently.
+
+After creation, the stored schema is authoritative. Existing Struct columns remain
+objects even when they hold GeoJSON, and ordinary Binary columns remain byte
+arrays. To move such data into a geometry column, recreate the table so its first
+write infers one, or create it with a declared geometry column.
+[Column types from the first write](/topics/datascience/loading/#column-types-from-the-first-write)
+lists the other inferred types.
+
+Insert or upsert validated GeoJSON into a geometry column. Direct Arrow
 inserts require compatible GeoArrow metadata and validate the values. Native
 GeoArrow query output can be inserted into a declared WKB column. SQL INSERT into
 geometry tables, geometry UPDATE assignments, and geometry expression columns
@@ -134,6 +148,13 @@ metadata. It does not transform coordinates. `ST_GeomFromText` carries unknown C
 so its results require an explicit WGS 84 assertion before conversion to a flow
 Geometry. Bind WKT parameters as strings, for example
 `ST_Intersects(geom, flow_geomfromtext($1))`.
+
+A Geometry value bound to a query parameter is a geometry, so
+`ST_Intersects(geom, $area)` needs no import helper. SQL binds it as WGS 84 WKB,
+and `flow_geomfromtext($area)` passes it through unchanged. A database filter binds
+it as `ST_GeomFromText('<WKT>')`, or as the WKT text alone when the placeholder is
+already the argument of `ST_GeomFromText`. A parameter object whose `type` names a
+geometry kind must be a valid Geometry. Any other object is rejected.
 
 SQL spatial measurements are planar. Application SQL evaluates spatial predicates
 above the Lance scan and applies limits after filtering. Direct Lance spatial

@@ -56,14 +56,6 @@ pub async fn delete_board(
         tracing::warn!("failed to delete board score for {app_id}/{board_id}: {err:?}");
     }
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "board.delete",
-        "Board",
-        board_id,
-        "Board deleted"
-    );
+    audit_branch!(state, user, app_id, "board.delete", "Board", board_id);
     Ok(Json(()))
 }

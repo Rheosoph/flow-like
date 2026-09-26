@@ -111,6 +111,8 @@ bitflags::bitflags! {
         const STREAMING         = 0b00000000_00000000_00001000_00000000;
         const A2UI              = 0b00000000_00000000_00010000_00000000;
         const MODELS            = 0b00000000_00000000_00100000_00000000;
+        const DATABASE_READ     = 1 << 19;
+        const DATABASE_WRITE    = 1 << 20;
         const FUNCTIONS         = 0b00000000_00000000_01000000_00000000;
 
         const STORAGE_ALL   = Self::STORAGE_READ.bits() | Self::STORAGE_WRITE.bits() | Self::STORAGE_DELETE.bits();
@@ -129,7 +131,9 @@ bitflags::bitflags! {
             | Self::STREAMING.bits()
             | Self::A2UI.bits()
             | Self::MODELS.bits()
-            | Self::FUNCTIONS.bits();
+            | Self::FUNCTIONS.bits()
+            | Self::DATABASE_READ.bits()
+            | Self::DATABASE_WRITE.bits();
     }
 }
 
@@ -191,6 +195,8 @@ impl WasmCapabilities {
                 "a2ui" => Self::A2UI,
                 "models" | "llm" => Self::MODELS,
                 "functions" => Self::FUNCTIONS,
+                "database:read" | "database_read" => Self::DATABASE_READ,
+                "database:write" | "database_write" => Self::DATABASE_WRITE,
                 "standard" => Self::STANDARD,
                 "all" => Self::ALL,
                 _ => Self::NONE,

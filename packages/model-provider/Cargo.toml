@@ -32,6 +32,8 @@ nnapi = ["ort/nnapi"]
 xnnpack = ["ort/xnnpack"]
 
 [dependencies]
+bytes.workspace = true
+reqwest-rig = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls"] }
 flow-like-model-protocol.workspace = true
 flow-like-types-contracts.workspace = true
 anyhow = "1.0.97"

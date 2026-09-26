@@ -10,21 +10,13 @@ use crate::flow::execution::internal_node::{ExecutionTarget, NodeMeta};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use ahash::{AHashMap, AHashSet, AHasher};
-use context::{ExecutionContext, fresh_local_variable_scope};
+use context::{ExecutionContext, fresh_local_variable_scope, stream_prune_detached};
 use flow_like_storage::Path;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader};
 #[cfg(feature = "flow-runtime")]
-use flow_like_storage::arrow_schema::{FieldRef, SchemaRef};
+use flow_like_storage::arrow_schema::SchemaRef;
 use flow_like_storage::files::store::FlowLikeStore;
-#[cfg(feature = "flow-runtime")]
-use flow_like_storage::lancedb::Connection;
-#[cfg(feature = "flow-runtime")]
-use flow_like_storage::lancedb::index::scalar::BitmapIndexBuilder;
-#[cfg(feature = "flow-runtime")]
-use flow_like_storage::serde_arrow;
-#[cfg(feature = "flow-runtime")]
-use flow_like_storage::serde_arrow::schema::{SchemaLike, TracingOptions};
 use flow_like_types::base64::Engine;
 use flow_like_types::base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
 use flow_like_types::channel::{Channel, InProcessChannel, MAX_TTL};
@@ -42,9 +34,9 @@ use futures::future::BoxFuture;
 use internal_node::InternalNode;
 use internal_pin::InternalPin;
 use log::LogMessage;
+use log_summary::{LogSummary, LogSummaryBuilder};
 use num_cpus;
-#[cfg(feature = "flow-runtime")]
-use once_cell::sync::Lazy;
+use run_index::RunIndex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::hash::Hasher;
@@ -59,8 +51,13 @@ pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
+#[cfg(feature = "flow-runtime")]
+pub mod log_query;
+pub mod log_summary;
 pub mod rejection;
 pub mod resources;
+pub mod run_index;
+pub mod service;
 pub mod trace;
 pub mod user_context;
 
@@ -70,15 +67,6 @@ const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
 pub const DEFAULT_RUN_LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 pub const DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD: usize = 500;
-#[cfg(feature = "flow-runtime")]
-static STORED_META_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
-    Vec::<FieldRef>::from_type::<StoredLogMeta>(
-        TracingOptions::default()
-            .allow_null_fields(true)
-            .strings_as_large_utf8(false),
-    )
-    .expect("derive FieldRef for StoredLogMeta")
-});
 
 async fn wait_for_flush_tick_or_cancel(
     interval: &mut flow_like_types::tokio::time::Interval,
@@ -306,65 +294,9 @@ impl ExecutionMode {
     }
 }
 
-/// Storage struct for LanceDB - excludes runtime-only fields like is_remote
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct StoredLogMeta {
-    pub app_id: String,
-    pub run_id: String,
-    pub board_id: String,
-    pub start: u64,
-    pub end: u64,
-    pub log_level: u8,
-    pub version: String,
-    pub nodes: Option<Vec<(String, u8)>>,
-    pub logs: Option<u64>,
-    pub node_id: String,
-    pub event_version: Option<String>,
-    pub event_id: String,
-    pub payload: Vec<u8>,
-}
-
-impl From<&LogMeta> for StoredLogMeta {
-    fn from(meta: &LogMeta) -> Self {
-        StoredLogMeta {
-            app_id: meta.app_id.clone(),
-            run_id: meta.run_id.clone(),
-            board_id: meta.board_id.clone(),
-            start: meta.start,
-            end: meta.end,
-            log_level: meta.log_level,
-            version: meta.version.clone(),
-            nodes: meta.nodes.clone(),
-            logs: meta.logs,
-            node_id: meta.node_id.clone(),
-            event_version: meta.event_version.clone(),
-            event_id: meta.event_id.clone(),
-            payload: meta.payload.clone(),
-        }
-    }
-}
-
-impl From<StoredLogMeta> for LogMeta {
-    fn from(stored: StoredLogMeta) -> Self {
-        LogMeta {
-            app_id: stored.app_id,
-            run_id: stored.run_id,
-            board_id: stored.board_id,
-            start: stored.start,
-            end: stored.end,
-            log_level: stored.log_level,
-            version: stored.version,
-            nodes: stored.nodes,
-            logs: stored.logs,
-            node_id: stored.node_id,
-            event_version: stored.event_version,
-            event_id: stored.event_id,
-            payload: stored.payload,
-            is_remote: false,
-        }
-    }
-}
-
+/// One summary row per run, kept in the host's [`RunIndex`]. `payload` is the
+/// recorded event input; listings return it empty and readers fetch the
+/// sidecar written by [`run_index::write_run_payload`].
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct LogMeta {
     pub app_id: String,
@@ -385,127 +317,29 @@ pub struct LogMeta {
     pub is_remote: bool,
 }
 
-impl LogMeta {
-    #[cfg(feature = "flow-runtime")]
-    fn to_arrow(&self) -> flow_like_types::Result<RecordBatch> {
-        let fields = &*STORED_META_FIELDS;
-        let stored: StoredLogMeta = self.into();
-        let batch = serde_arrow::to_record_batch(fields, &vec![stored])?;
-        Ok(batch)
+#[derive(Clone)]
+pub struct ExecutorPaymentAuth {
+    token: String,
+    callback_url: String,
+}
+impl ExecutorPaymentAuth {
+    pub fn new(token: String, callback_url: String) -> Self {
+        Self {
+            token,
+            callback_url,
+        }
     }
-
-    #[cfg(feature = "flow-runtime")]
-    pub fn into_duckdb_types() -> String {
-        let fields = &*STORED_META_FIELDS;
-        let mut types = vec![];
-
-        for field in fields {
-            let field_type = match field.data_type() {
-                flow_like_storage::arrow_schema::DataType::Utf8 => "TEXT",
-                flow_like_storage::arrow_schema::DataType::UInt64 => "INTEGER",
-                flow_like_storage::arrow_schema::DataType::Int64 => "INTEGER",
-                flow_like_storage::arrow_schema::DataType::Boolean => "BOOLEAN",
-                _ => "TEXT",
-            };
-            types.push(format!("{} {}", field.name(), field_type));
-        }
-
-        types.join(", ")
+    pub fn token(&self) -> &str {
+        &self.token
     }
-
-    #[cfg(feature = "flow-runtime")]
-    pub async fn flush(
-        &self,
-        db: Connection,
-        write_options: Option<&flow_like_storage::lancedb::table::WriteOptions>,
-    ) -> flow_like_types::Result<()> {
-        let arrow_batch = self.to_arrow()?;
-        let schema = arrow_batch.schema();
-
-        let make_iter = || -> Box<dyn RecordBatchReader + Send> {
-            Box::new(RecordBatchIterator::new(
-                vec![arrow_batch.clone()].into_iter().map(Ok),
-                schema.clone(),
-            ))
-        };
-
-        // Try to open and add to existing table first
-        if let Ok(table) = db.open_table("runs").execute().await {
-            let mut add = table.add(make_iter());
-            if let Some(opts) = write_options {
-                add = add.write_options(opts.clone());
-            }
-            if add.execute().await.is_ok() {
-                return Ok(());
-            }
-        }
-
-        // Table doesn't exist — try to create it with data
-        let mut builder = db.create_table("runs", make_iter());
-        if let Some(opts) = write_options {
-            builder = builder.write_options(opts.clone());
-        }
-        match builder.execute().await {
-            Ok(table) => {
-                Self::create_runs_indexes(&table).await;
-                return Ok(());
-            }
-            Err(_create_err) => {
-                // Race: another flush created the table — fall back to open + add
-                let table = db.open_table("runs").execute().await?;
-                let mut add = table.add(make_iter());
-                if let Some(opts) = write_options {
-                    add = add.write_options(opts.clone());
-                }
-                add.execute().await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Best-effort scalar indexes for the `runs` table, created only at table
-    /// creation. A `runs` table that predates this call (or whose index
-    /// creation failed — every error here is swallowed) never gets indexes
-    /// retrofitted: queries on `event_id`/`node_id`/`log_level`/`start` degrade
-    /// to full scans on such legacy tables rather than erroring.
-    #[cfg(feature = "flow-runtime")]
-    async fn create_runs_indexes(table: &flow_like_storage::lancedb::Table) {
-        let _ = table
-            .create_index(
-                &["event_id"],
-                flow_like_storage::lancedb::index::Index::Bitmap(BitmapIndexBuilder {}),
-            )
-            .execute()
-            .await;
-        let _ = table
-            .create_index(
-                &["node_id"],
-                flow_like_storage::lancedb::index::Index::Bitmap(BitmapIndexBuilder {}),
-            )
-            .execute()
-            .await;
-        let _ = table
-            .create_index(
-                &["log_level"],
-                flow_like_storage::lancedb::index::Index::Bitmap(BitmapIndexBuilder {}),
-            )
-            .execute()
-            .await;
-        let _ = table
-            .create_index(
-                &["start"],
-                flow_like_storage::lancedb::index::Index::BTree(
-                    flow_like_storage::lancedb::index::scalar::BTreeIndexBuilder {},
-                ),
-            )
-            .execute()
-            .await;
+    pub fn callback_url(&self) -> &str {
+        &self.callback_url
     }
 }
 
 #[derive(Clone)]
 pub struct Run {
+    pub executor_payment_auth: Option<ExecutorPaymentAuth>,
     pub id: String,
     pub app_id: String,
     /// Server-backed app ID used for hosted-model usage attribution.
@@ -537,13 +371,18 @@ pub struct Run {
     pub event_version: Option<String>,
 
     pub visited_nodes: AHashMap<String, LogLevel>,
+    /// Counts and repeat groups of every flushed log; written as the run's summary sidecar.
+    pub log_summary: LogSummaryBuilder,
     pub log_store: Option<FlowLikeStore>,
+    pub run_index: Option<Arc<dyn RunIndex>>,
     #[cfg(feature = "flow-runtime")]
     pub log_db: Option<
         Arc<dyn Fn(Path) -> flow_like_storage::lancedb::connection::ConnectBuilder + Send + Sync>,
     >,
     #[cfg(feature = "flow-runtime")]
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
+    #[cfg(feature = "flow-runtime")]
+    pub(crate) log_table: LogTableHandle,
 }
 
 impl Run {
@@ -634,11 +473,31 @@ impl Run {
         self.logs = self.logs.saturating_add(logs.len() as u64);
         self.highest_log_level = highest;
 
+        // Oldest first within a flush, and every row carries its repeat group.
+        logs.sort_by_key(|log| log.start);
+        for log in logs.iter_mut() {
+            let level = log.log_level.to_u8();
+            let fingerprint = log_summary::fingerprint(log.node_id.as_deref(), level, &log.message);
+            let start = log
+                .start
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_micros() as u64)
+                .unwrap_or_default();
+            self.log_summary.record(
+                log.node_id.as_deref(),
+                level,
+                start,
+                &log.message,
+                Some(&fingerprint),
+            );
+            log.fingerprint = Some(fingerprint.id);
+        }
+
         // 2) build arrow batch in-memory
         let arrow_batch = LogMessage::into_arrow(logs)?;
         let schema = arrow_batch.schema();
 
-        let meta = if finalize {
+        let (meta, summary) = if finalize {
             let vs = &self.board.version;
             let version_string = format!("v{}-{}-{}", vs.0, vs.1, vs.2);
             let start_micros = self
@@ -661,8 +520,14 @@ impl Run {
                 .drain()
                 .map(|(k, v)| (k, v.to_u8()))
                 .collect::<Vec<(String, u8)>>();
+            let summary = (!self.log_summary.is_empty()).then(|| {
+                self.log_summary.finish(
+                    true,
+                    Some(visited_nodes.iter().map(|(id, _)| id.clone()).collect()),
+                )
+            });
 
-            Some(LogMeta {
+            let meta = LogMeta {
                 app_id: self.app_id.clone(),
                 run_id: self.id.clone(),
                 board_id: self.board.id.clone(),
@@ -677,9 +542,10 @@ impl Run {
                 event_version: self.event_version.clone(),
                 payload,
                 is_remote: false,
-            })
+            };
+            (Some(meta), summary)
         } else {
-            None
+            (None, None)
         };
 
         Ok(Some(PreparedFlush {
@@ -690,7 +556,11 @@ impl Run {
             schema,
             log_initialized: self.log_initialized,
             meta,
+            summary,
             write_options: self.lance_write_options.clone(),
+            log_store: self.log_store.clone(),
+            run_index: self.run_index.clone(),
+            log_table: self.log_table.clone(),
         }))
     }
 
@@ -728,7 +598,28 @@ pub(crate) struct PreparedFlush {
     schema: SchemaRef,
     log_initialized: bool,
     meta: Option<LogMeta>,
+    summary: Option<LogSummary>,
     write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
+    log_store: Option<FlowLikeStore>,
+    run_index: Option<Arc<dyn RunIndex>>,
+    log_table: LogTableHandle,
+}
+
+/// The run's open log table, shared by every flush of the run so periodic
+/// flushes append without reconnecting.
+#[cfg(feature = "flow-runtime")]
+#[derive(Clone, Default)]
+pub(crate) struct LogTableHandle(Arc<std::sync::Mutex<Option<flow_like_storage::lancedb::Table>>>);
+
+#[cfg(feature = "flow-runtime")]
+impl LogTableHandle {
+    fn get(&self) -> Option<flow_like_storage::lancedb::Table> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, table: Option<flow_like_storage::lancedb::Table>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = table;
+    }
 }
 
 #[cfg(not(feature = "flow-runtime"))]
@@ -754,7 +645,34 @@ impl PreparedFlush {
             }
 
             match self.try_write().await {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    if let (Some(meta), Some(summary), Some(store)) =
+                        (&self.meta, &self.summary, &self.log_store)
+                        && let Err(error) = log_summary::write_run_summary(
+                            store,
+                            &meta.app_id,
+                            &meta.board_id,
+                            &meta.run_id,
+                            summary,
+                        )
+                        .await
+                    {
+                        tracing::warn!(run_id = %meta.run_id, error = %error, "Failed to write run log summary sidecar");
+                    }
+                    // The log table is already written: an index failure must
+                    // not drop the meta callers report the run with, nor retry.
+                    if let Some(meta) = &self.meta
+                        && let Err(error) = run_index::record_run(
+                            meta,
+                            self.log_store.as_ref(),
+                            self.run_index.as_ref(),
+                        )
+                        .await
+                    {
+                        tracing::error!(run_id = %meta.run_id, error = %error, "Failed to record run in run index");
+                    }
+                    return Ok(result);
+                }
                 Err(err) => {
                     eprintln!(
                         "[Warn] log flush attempt {}/{} failed: {:?}",
@@ -790,16 +708,38 @@ impl PreparedFlush {
     }
 
     async fn try_write(&self) -> flow_like_types::Result<FlushResult> {
+        let created_table = match self.log_table.get() {
+            Some(table) => {
+                if let Err(error) = self.try_add(&table).await {
+                    // A stale handle must not pin every retry to the same failure.
+                    self.log_table.set(None);
+                    return Err(error);
+                }
+                false
+            }
+            None => {
+                let (table, created_table) = self.connect_and_write().await?;
+                self.log_table.set(Some(table));
+                created_table
+            }
+        };
+
+        Ok(FlushResult {
+            created_table,
+            meta: self.meta.clone(),
+        })
+    }
+
+    async fn connect_and_write(
+        &self,
+    ) -> flow_like_types::Result<(flow_like_storage::lancedb::Table, bool)> {
         let db = (self.db_fn)(self.base_path.clone()).execute().await?;
 
         // Fast path: table already exists, just append
         match db.open_table(&self.run_id).execute().await {
             Ok(table) => {
                 self.try_add(&table).await?;
-                return Ok(FlushResult {
-                    created_table: false,
-                    meta: self.meta.clone(),
-                });
+                return Ok((table, false));
             }
             Err(open_err) => {
                 tracing::debug!(run_id = %self.run_id, error = %open_err, "open_table failed, will create");
@@ -811,13 +751,8 @@ impl PreparedFlush {
         if let Some(opts) = &self.write_options {
             builder = builder.write_options(opts.clone());
         }
-        match builder.execute().await {
-            Ok(_) => {
-                return Ok(FlushResult {
-                    created_table: !self.log_initialized,
-                    meta: self.meta.clone(),
-                });
-            }
+        let table = match builder.execute().await {
+            Ok(table) => table,
             Err(create_err) => {
                 // Another concurrent flush likely created the table between our
                 // open_table and create_table calls — fall back to open + add.
@@ -828,13 +763,11 @@ impl PreparedFlush {
                     )
                 })?;
                 self.try_add(&table).await?;
+                table
             }
-        }
+        };
 
-        Ok(FlushResult {
-            created_table: !self.log_initialized,
-            meta: self.meta.clone(),
-        })
+        Ok((table, !self.log_initialized))
     }
 }
 
@@ -936,6 +869,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 /// Cached immutable fields from Run to avoid locking during hot path execution
 #[derive(Clone)]
 pub struct RunMeta {
+    pub executor_payment_auth: Option<ExecutorPaymentAuth>,
     pub run_id: String,
     pub app_id: String,
     pub model_usage_app_id: Option<String>,
@@ -1195,11 +1129,19 @@ impl InternalRun {
         };
         let execution_mode = ExecutionMode::from_event(event.as_ref());
 
+        let run_index = handler.config.read().await.callbacks.run_index.clone();
         #[cfg(feature = "flow-runtime")]
         let (log_store, db, lance_write_options) = {
             let guard = handler.config.read().await;
             let log_store = guard.stores.log_store.clone();
-            let db = guard.callbacks.build_logs_database.clone();
+            // Flushes connect through the run's Lance Session: it carries the
+            // host's store registry and keeps caches instead of a default per connect.
+            let session = handler.lance_session.clone();
+            let db = guard.callbacks.build_logs_database.clone().map(
+                |build| -> crate::credentials::LogsDbBuilder {
+                    Arc::new(move |path: Path| build(path).session(session.clone()))
+                },
+            );
             let write_opts = guard.callbacks.lance_write_options.clone();
             tracing::debug!(
                 has_log_store = log_store.is_some(),
@@ -1223,6 +1165,7 @@ impl InternalRun {
         )));
         let resources = Arc::new(resources::RunResources::default());
         let run = Run {
+            executor_payment_auth: None,
             id: run_id.clone(),
             app_id: app_id.to_string(),
             model_usage_app_id: Some(app_id.to_string()),
@@ -1251,11 +1194,15 @@ impl InternalRun {
             }),
 
             visited_nodes: AHashMap::with_capacity(board.nodes.len()),
+            log_summary: LogSummaryBuilder::default(),
             log_store,
+            run_index,
             #[cfg(feature = "flow-runtime")]
             log_db: db,
             #[cfg(feature = "flow-runtime")]
             lance_write_options,
+            #[cfg(feature = "flow-runtime")]
+            log_table: LogTableHandle::default(),
         };
 
         let run = Arc::new(Mutex::new(run));
@@ -1430,6 +1377,7 @@ impl InternalRun {
             cancellation_log_message: "Run cancelled".to_string(),
             // Cached immutable fields from Run
             meta: RunMeta {
+                executor_payment_auth: None,
                 run_id: run_id.clone(),
                 app_id: app_id.to_string(),
                 model_usage_app_id: Some(app_id.to_string()),
@@ -1473,6 +1421,11 @@ impl InternalRun {
         run.log_spill_threshold = spill_threshold;
 
         Ok(())
+    }
+
+    pub async fn set_executor_payment_auth(&mut self, auth: ExecutorPaymentAuth) {
+        self.run.lock().await.executor_payment_auth = Some(auth.clone());
+        self.meta.executor_payment_auth = Some(auth);
     }
 
     pub fn set_cancellation_token(&mut self, token: CancellationToken) {
@@ -1925,6 +1878,7 @@ impl InternalRun {
             // from callers, so include callback failures in final run status.
             errored = true;
         }
+        stream_prune_detached(&self.cache, &self.callback).await;
         self.drop_nodes().await;
         resources.shutdown().await;
         resource_guard.disarm();
@@ -2852,11 +2806,10 @@ mod tests {
                 recorded,
                 flow_like_types::json::json!({"input": "ordinary-event-value"})
             );
-            let stored = StoredLogMeta::from(&meta);
-            let serialized = flow_like_types::json::to_string(&stored).unwrap();
+            let serialized = flow_like_types::json::to_string(&meta).unwrap();
             assert!(!serialized.contains("runtime_variables"));
             assert_eq!(
-                stored.payload,
+                meta.payload,
                 flow_like_types::json::to_vec(&recorded).unwrap()
             );
         }
@@ -3251,6 +3204,111 @@ mod tests {
             .expect("flush wait should stop promptly")
             .expect("flush wait task should complete");
         assert!(!ticked);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    mod log_flush {
+        use super::*;
+        use flow_like_storage::arrow_array::Int32Array;
+        use flow_like_storage::arrow_schema::{DataType, Field, Schema};
+        use std::sync::atomic::AtomicUsize;
+
+        async fn run_with_log_db(connects: Arc<AtomicUsize>) -> (Arc<FlowLikeState>, InternalRun) {
+            let uri = format!("memory://run-logs-{}", create_id());
+            let mut config = FlowLikeConfig::new();
+            config.register_build_logs_database(Arc::new(move |_path: Path| {
+                connects.fetch_add(1, Ordering::SeqCst);
+                flow_like_storage::lancedb::connect(&uri)
+            }));
+            let state = Arc::new(FlowLikeState::new(
+                config,
+                HTTPClient::new_without_refetch(),
+            ));
+            let board = Board::new_detached(Some("log-flush".to_string()), Path::default());
+            let payload = RunPayload {
+                id: "unused-entry".to_string(),
+                payload: None,
+                runtime_variables: None,
+                filter_secrets: Some(true),
+            };
+            let run = InternalRun::new(
+                "test-app",
+                Arc::new(board),
+                None,
+                &state,
+                &Profile::default(),
+                &payload,
+                false,
+                test_intercom_callback(),
+                None,
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await
+            .expect("build run");
+            (state, run)
+        }
+
+        async fn flush(run: &InternalRun, message: &str) -> FlushResult {
+            let prepared = {
+                let mut run = run.run.lock().await;
+                run.push_node_log("node", None, message, LogLevel::Info);
+                run.prepare_flush(false)
+                    .expect("prepare flush")
+                    .expect("log database configured")
+            };
+            prepared.write().await.expect("flush logs")
+        }
+
+        async fn cached_table(run: &InternalRun) -> flow_like_storage::lancedb::Table {
+            run.run
+                .lock()
+                .await
+                .log_table
+                .get()
+                .expect("flush caches the log table")
+        }
+
+        #[tokio::test]
+        async fn flushes_append_through_one_connection_on_the_run_session() {
+            let connects = Arc::new(AtomicUsize::new(0));
+            let (state, run) = run_with_log_db(connects.clone()).await;
+
+            assert!(flush(&run, "first").await.created_table);
+            assert!(!flush(&run, "second").await.created_table);
+
+            assert_eq!(connects.load(Ordering::SeqCst), 1);
+            let table = cached_table(&run).await;
+            assert_eq!(table.count_rows(None).await.unwrap(), 2);
+            let dataset = table.dataset().unwrap().get().await.unwrap();
+            assert!(Arc::ptr_eq(&dataset.session(), &state.lance_session));
+        }
+
+        #[tokio::test]
+        async fn failed_append_on_the_cached_table_reconnects_on_retry() {
+            let connects = Arc::new(AtomicUsize::new(0));
+            let (_state, run) = run_with_log_db(connects.clone()).await;
+            let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))]).unwrap();
+            let stale =
+                flow_like_storage::lancedb::connect(&format!("memory://stale-{}", create_id()))
+                    .execute()
+                    .await
+                    .unwrap()
+                    .create_table("stale", batch)
+                    .execute()
+                    .await
+                    .unwrap();
+            run.run.lock().await.log_table.set(Some(stale));
+
+            assert!(flush(&run, "after stale handle").await.created_table);
+
+            assert_eq!(connects.load(Ordering::SeqCst), 1);
+            let table = cached_table(&run).await;
+            assert_eq!(table.name(), run.run.lock().await.id);
+            assert_eq!(table.count_rows(None).await.unwrap(), 1);
+        }
     }
 
     /// The gates in nodes and host functions key off the run's environment,
@@ -3667,6 +3725,83 @@ mod tests {
         .expect("build top-level direct run");
 
         assert_eq!(run.stack.len(), 1);
+    }
+
+    struct RerenderListLogic;
+
+    #[async_trait]
+    impl NodeLogic for RerenderListLogic {
+        fn get_node(&self) -> Node {
+            Node::new("rerender_list", "Rerender List", "", "Tests")
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            use flow_like_types::json::json;
+            context
+                .upsert_element("page/feed-list", json!({ "type": "clearChildren" }))
+                .await?;
+            context
+                .upsert_element(
+                    "page/feed-list",
+                    json!({ "type": "pushChild", "childId": "row-2" }),
+                )
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_that_detached_children_ends_with_prune_detached() {
+        let logic: Arc<dyn NodeLogic> = Arc::new(RerenderListLogic);
+        let state = state_with_node_logics(vec![logic]).await;
+        let mut board = Board::new_detached(Some("rerender".to_string()), Path::default());
+        let node = RerenderListLogic.get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        let payload = RunPayload {
+            id: node_id,
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let sink = events.clone();
+        let callback: InterComCallback = Some(Arc::new(move |event| {
+            if event.event_type == "a2ui" {
+                sink.lock().unwrap().push(event.payload);
+            }
+            Box::pin(async { Ok(()) })
+        }));
+        let mut run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            callback,
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build rerender run");
+
+        run.execute(state).await;
+
+        let events = events.lock().unwrap();
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event["type"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(kinds, ["upsertElement", "upsertElement", "pruneDetached"]);
+        assert_eq!(
+            events[2],
+            flow_like_types::json::json!({
+                "type": "pruneDetached",
+                "element_ids": ["page/feed-list"]
+            })
+        );
     }
 
     #[test]

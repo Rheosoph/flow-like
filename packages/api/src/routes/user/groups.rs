@@ -7,8 +7,10 @@ use crate::{
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use std::collections::HashSet;
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, JoinType, QueryFilter, QuerySelect, QueryTrait,
+    RelationTrait,
+};
 
 #[utoipa::path(
     get,
@@ -31,70 +33,50 @@ pub async fn get_user_groups(
     // Suites expose sibling apps' names, descriptions and artwork, so only
     // apps where the caller may actually see the team are considered. A bare
     // membership is not enough.
-    let memberships = membership::Entity::find()
+    let app_ids: Vec<String> = membership::Entity::find()
+        .select_only()
+        .column(membership::Column::AppId)
+        .column(role::Column::Permissions)
+        .join(JoinType::InnerJoin, membership::Relation::Role.def())
         .filter(membership::Column::UserId.eq(user_id))
-        .all(&state.db)
-        .await?;
-
-    if memberships.is_empty() {
-        return Ok(Json(vec![]));
-    }
-
-    let role_ids: Vec<String> = memberships.iter().map(|m| m.role_id.clone()).collect();
-    let readable_roles: HashSet<String> = role::Entity::find()
-        .filter(role::Column::Id.is_in(role_ids))
+        .into_tuple::<(String, i64)>()
         .all(&state.db)
         .await?
         .into_iter()
-        .filter(|r| {
+        .filter(|(_, permissions)| {
             has_role_permission(
-                &RolePermissions::from_bits_truncate(r.permissions),
+                &RolePermissions::from_bits_truncate(*permissions),
                 RolePermissions::ReadTeam,
             )
         })
-        .map(|r| r.id)
-        .collect();
-
-    let app_ids: Vec<String> = memberships
-        .into_iter()
-        .filter(|m| readable_roles.contains(&m.role_id))
-        .map(|m| m.app_id)
+        .map(|(app_id, _)| app_id)
         .collect();
 
     if app_ids.is_empty() {
         return Ok(Json(vec![]));
     }
 
-    let owned_group_ids: Vec<String> = app_group::Entity::find()
-        .filter(app_group::Column::OwnerAppId.is_in(app_ids.clone()))
+    let member_group_ids = app_group_member::Entity::find()
+        .select_only()
+        .column(app_group_member::Column::GroupId)
+        .filter(app_group_member::Column::AppId.is_in(app_ids.clone()))
+        .into_query();
+
+    let groups = app_group::Entity::find()
+        .filter(
+            Condition::any()
+                .add(app_group::Column::OwnerAppId.is_in(app_ids))
+                .add(app_group::Column::Id.in_subquery(member_group_ids)),
+        )
         .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|g| g.id)
-        .collect();
+        .await?;
 
-    let member_group_ids: Vec<String> = app_group_member::Entity::find()
-        .filter(app_group_member::Column::AppId.is_in(app_ids))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|m| m.group_id)
-        .collect();
-
-    let mut unique_group_ids: HashSet<String> = owned_group_ids.into_iter().collect();
-    unique_group_ids.extend(member_group_ids);
-    let group_ids: Vec<String> = unique_group_ids.into_iter().collect();
-
-    if group_ids.is_empty() {
+    if groups.is_empty() {
         return Ok(Json(vec![]));
     }
 
-    let groups = app_group::Entity::find()
-        .filter(app_group::Column::Id.is_in(group_ids.clone()))
-        .all(&state.db)
-        .await?;
     let members = app_group_member::Entity::find()
-        .filter(app_group_member::Column::GroupId.is_in(group_ids))
+        .filter(app_group_member::Column::GroupId.is_in(groups.iter().map(|g| g.id.clone())))
         .all(&state.db)
         .await?;
 

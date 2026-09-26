@@ -65,6 +65,25 @@ A Page does not own the route by itself. To expose a Page:
 Keeping routes on Events lets the same navigation model work for Pages, Chat
 UI, and other app interfaces.
 
+## Open a route
+
+Web and Desktop links put the app's route after `/use` and keep the App ID in `id`:
+
+| Destination | URL path |
+| --- | --- |
+| `/orders/123` in App `my-app` | `/use/orders/123?id=my-app` |
+| The App's `/` route | `/use/?id=my-app` |
+| An Event directly, without a route | `/use?id=my-app&eventId=event` |
+
+Existing links such as `/use?id=my-app&route=/orders/123` still work. Web and Desktop
+replace the address with the path form without adding another history entry.
+Desktop serves deep links from its bundled `/use` page and shares routed pages
+through Handoff using the same path format.
+
+Static web hosts must serve `/use.html` for `/use/*` requests so opening or
+refreshing a deep link loads the app. See
+[Static routes and API front doors](/self-hosting/containers/#static-routes-and-api-front-doors).
+
 ## Navigate between routes
 
 A2UI buttons and links can navigate to another configured path. A Flow can

@@ -46,24 +46,19 @@ describe("renameWidgetActionInComponents", () => {
 			}),
 		];
 
-		const next = renameWidgetActionInComponents(components, "old", "new");
-		const first = next[0].component as {
-			actions: { context: { actionId: string } }[];
-		};
-		const second = next[1].component as {
-			eventHandlers: Record<
-				string,
-				{ name: string; context: Record<string, unknown> }[]
-			>;
-		};
+		const [first, second] = renameWidgetActionInComponents(
+			components,
+			"old",
+			"new",
+		).map((entry) => entry.component);
 
-		expect(first.actions[0].context.actionId).toBe("new");
-		expect(second.eventHandlers.onClick[0].context.actionId).toBe("new");
-		expect(second.eventHandlers.onClick[1]).toEqual({
+		expect(first.actions?.[0].context.actionId).toBe("new");
+		expect(second.eventHandlers?.onClick[0].context.actionId).toBe("new");
+		expect(second.eventHandlers?.onClick[1]).toEqual({
 			name: "navigate_page",
 			context: { route: "/x" },
 		});
-		expect(second.eventHandlers.onLongPress[0].context.actionId).toBe("other");
+		expect(second.eventHandlers?.onLongPress[0].context.actionId).toBe("other");
 	});
 
 	test("returns the original array when nothing references the id", () => {

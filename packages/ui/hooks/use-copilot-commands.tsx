@@ -207,23 +207,56 @@ function pinsFromDefs(
 	return pins;
 }
 
+/**
+ * Add one more occurrence of a repeatable input (two or more same-named inputs, the canvas "+"):
+ * a disconnected clone of the family's last pin, inserted right after it. Mirrors
+ * `extend_repeatable_input` in `packages/core/editor/src/flow/ast/apply.rs`.
+ */
+function extendRepeatableInput(pins: Record<string, IPin>, name: string) {
+	const family = Object.values(pins)
+		.filter((pin) => pin.pin_type === IPinType.Input && pin.name === name)
+		.sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+	const last = family.at(-1);
+	if (family.length < 2 || !last) {
+		throw new Error(
+			`No repeatable input "${name}" to add another occurrence of`,
+		);
+	}
+	const index = last.index + 1;
+	for (const pin of Object.values(pins)) {
+		if (pin.pin_type === IPinType.Input && pin.index >= index) {
+			pins[pin.id] = { ...pin, index: pin.index + 1 };
+		}
+	}
+	const id = createId();
+	pins[id] = { ...last, id, index, connected_to: [], depends_on: [] };
+}
+
 function appendAdditionalNodePins(
 	node: INode,
 	pinDefs: PlaceholderPinDef[] | undefined,
 ): INode {
 	if (!pinDefs?.length) return node;
+	const repeatedInputs = pinDefs.filter(
+		(pinDef) => pinDef.pin_type === IPinType.Input,
+	);
+	const outputDefs = pinDefs.filter(
+		(pinDef) => pinDef.pin_type !== IPinType.Input,
+	);
+	const pins = { ...node.pins };
+	for (const pinDef of repeatedInputs) extendRepeatableInput(pins, pinDef.name);
+	if (!outputDefs.length) return { ...node, pins };
 	if (node.name !== GENERIC_EVENT_NODE_TYPE) {
 		throw new Error(
-			"Additional catalog-node pins are only supported on events_generic",
+			"Additional catalog-node output pins are only supported on events_generic",
 		);
 	}
 
-	const pins = { ...node.pins };
 	let outputCount = Object.values(pins).filter(
 		(pin) => pin.pin_type === IPinType.Output,
 	).length;
 
-	for (const pinDef of pinDefs) {
+	for (const pinDef of outputDefs) {
 		if (
 			pinDef.pin_type !== IPinType.Output ||
 			pinDef.data_type === IVariableType.Execution

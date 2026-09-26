@@ -1018,7 +1018,8 @@ mod tests {
         let docs = crate::a2ui::copilot::get_full_documentation();
         assert!(docs.contains("## Design Reflection (BEFORE emitting)"));
         assert!(docs.contains("Signature moment"));
-        assert!(docs.contains("NO runtime Tailwind engine"));
+        assert!(docs.contains("compiled at runtime against this theme"));
+        assert!(!docs.contains("runtime Tailwind engine"));
         assert!(docs.contains("responsiveOverrides"));
         assert!(docs.contains("## Typography (three real families already exist - use them)"));
         assert!(docs.contains("var(--primary)"));
@@ -1049,7 +1050,7 @@ mod tests {
         for family in ["var(--font-serif)", "var(--font-mono)", "var(--font-sans)"] {
             assert!(docs.contains(family), "type roles must name {family}");
         }
-        assert!(docs.contains("`text-5xl`/`text-6xl` are NOT\n  compiled"));
+        assert!(docs.contains("`text-5xl`..`text-9xl` compile"));
         assert!(docs.contains("fp-design: macro="));
     }
 

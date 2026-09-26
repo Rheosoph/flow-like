@@ -1371,8 +1371,12 @@ message Page {
   // Widget definitions referenced by widget instances on this page
   // Key is the instance ID, value is the widget definition
   map<string, Widget> widget_refs = 19;
-  // Cache the last rendered page state for instant display while onLoad runs
+  // Deprecated: pages replay their last rendered output by default (see no_cache). Kept so
+  // stored pages still decode; ignored on read and never written.
   bool cache = 20;
+  // Never replay or store the last rendered output; show a loading screen until the onLoad
+  // event renders fresh output.
+  bool no_cache = 21;
 }
 
 // Canvas settings for page styling

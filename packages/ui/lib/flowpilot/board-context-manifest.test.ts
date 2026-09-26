@@ -32,8 +32,9 @@ describe("FlowPilot board context augmentation", () => {
 									{
 										id: "heading",
 										component: {
+											id: "heading",
 											type: "text",
-											text: { literalString: "Ready" },
+											content: { literalString: "Ready" },
 										},
 									},
 								],

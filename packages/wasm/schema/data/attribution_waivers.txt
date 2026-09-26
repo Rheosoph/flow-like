@@ -1,0 +1,54 @@
+# PSL private operator blocks with at least 10 rules that have no catalog entry (spec 14.3.2).
+# One block name per line: the text of the block's first comment line before " : ".
+# A waived block keeps PSL-derived classification: every private rule is a tenant boundary
+# (one tenant host or tenant subdomains = external, the suffix itself or a wildcard over it = broad)
+# and no provider name is shown. Review a waiver when an operator's rules turn out to be
+# operator zones rather than tenant boundaries; such an operator needs a catalog entry.
+
+# Cloud services whose regional rules delimit one customer's endpoint.
+Akamai
+Amazon Cognito
+Amazon SageMaker Ground Truth
+Amazon SageMaker Notebook Instances
+Amazon SageMaker Studio
+Apple
+Fastly Inc.
+Jelastic, Inc.
+Repl.it
+Salesforce.com, Inc.
+Scaleway
+Synology, Inc.
+Thingdust AG
+Mythic Beasts
+Securepoint GmbH
+
+# Dynamic DNS services: every label below a rule belongs to one customer.
+Cloud DNS Ltd
+dnsHome
+DynDNS.com
+Dynu.com
+Future Versatile Group.
+Individual Network Berlin e.V.
+No-IP.com
+Now-DNS
+
+# Registries and second-level zones sold per label.
+CentralNic
+EU.org
+FAITID
+HOSTBIP REGISTRY
+Interlegis
+Northwest Nexus dba NuOz
+Rusnames Limited
+Smallregistry by Promopixel SARL
+
+# Site and shop builders that give each customer one subdomain.
+BASE, Inc.
+Canva Pty Ltd
+GMO Pepabo, Inc.
+Lukanet Ltd
+One.com
+SAKURA Internet Inc.
+Spreadshop (sprd.net AG)
+stereosense GmbH
+TrafficPlex GmbH

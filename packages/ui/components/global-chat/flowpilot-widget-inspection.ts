@@ -90,7 +90,7 @@ export async function inspectFlowPilotWidgetPage(
 		route: text(page.route, "page.route"),
 		updated_at: text(page.updatedAt, "page.updated_at"),
 		layout_type: page.layoutType,
-		cache: page.cache === true,
+		no_cache: page.noCache === true,
 		lifecycle: {
 			on_load_event_id: text(page.onLoadEventId, "lifecycle.on_load_event_id"),
 			on_unload_event_id: text(

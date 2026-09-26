@@ -33,7 +33,9 @@ public enum NativeSystemIntegration {
 
     static func handoffActivity(_ snapshot: NativeSnapshot) -> NSUserActivity? {
         guard snapshot.isCurrent, let page = snapshot.activePage, let url = URL(string: page.url),
-              url.path == "/use", url.user == nil, url.password == nil, url.fragment == nil,
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              NativeActivityBridge.isUsePathname(parts.percentEncodedPath),
+              url.user == nil, url.password == nil, url.fragment == nil,
               NativeActivityBridge.origin(url) == snapshot.webOrigin else { return nil }
         let activity = NSUserActivity(activityType: activityType)
         activity.title = page.title

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { type ComponentProps, act } from "react";
+import { type Root, createRoot } from "react-dom/client";
 import type { CameraViewComponent } from "../types";
 
 let runtime = true;
@@ -38,11 +38,48 @@ const resolve = (value: Record<string, unknown>) =>
 	value.literalNumber ??
 	value.literalBool ??
 	(value.literalJson ? JSON.parse(String(value.literalJson)) : undefined);
-mock.module("next/navigation", () => ({ usePathname: () => pathname }));
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"window",
+	"document",
+	"navigator",
+	"HTMLElement",
+	"Element",
+	"Node",
+	"MutationObserver",
+	"getComputedStyle",
+	"File",
+	"Blob",
+	"IS_REACT_ACT_ENVIRONMENT",
+	"IntersectionObserver",
+	"ResizeObserver",
+	"AudioContext",
+	"AudioWorkletNode",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+// Radix picks its layout effect when first imported, so the real modules load under a document.
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	nextNavigation: { ...(await import("next/navigation")) },
+	locales: { ...(await import("@flow-like/locales")) },
+	backendState: { ...(await import("../../../state/backend-state")) },
+	actionHandler: { ...(await import("../ActionHandler")) },
+	dataContext: { ...(await import("../DataContext")) },
+	styleResolver: { ...(await import("../StyleResolver")) },
+	button: { ...(await import("../../ui/button")) },
+};
+mock.module("next/navigation", () => ({
+	...actual.nextNavigation,
+	usePathname: () => pathname,
+}));
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
 mock.module("../../../state/backend-state", () => ({
+	...actual.backendState,
 	useBackend: () => ({
 		helperState: {
 			fileToTemporaryFile: upload,
@@ -51,6 +88,7 @@ mock.module("../../../state/backend-state", () => ({
 	}),
 }));
 mock.module("../ActionHandler", () => ({
+	...actual.actionHandler,
 	useActionContext: () => ({
 		appId: "app",
 		isPreviewMode: runtime,
@@ -59,14 +97,22 @@ mock.module("../ActionHandler", () => ({
 	useComponentEventTrigger: () => trigger,
 }));
 mock.module("../DataContext", () => ({
+	...actual.dataContext,
 	useData: () => ({ resolve, setByPath: setBound }),
 }));
 mock.module("../StyleResolver", () => ({
+	...actual.styleResolver,
 	resolveStyle: () => "",
 	resolveInlineStyle: () => ({}),
 }));
 mock.module("../../ui/button", () => ({
-	Button: ({ children, size: _size, variant: _variant, ...props }: any) => (
+	...actual.button,
+	Button: ({
+		children,
+		size: _size,
+		variant: _variant,
+		...props
+	}: ComponentProps<"button"> & { size?: string; variant?: string }) => (
 		<button {...props}>{children}</button>
 	),
 }));
@@ -240,7 +286,18 @@ afterEach(async () => {
 afterAll(() => {
 	URL.createObjectURL = createObjectUrl;
 	URL.revokeObjectURL = revokeObjectUrl;
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
 	mock.restore();
+	mock.module("next/navigation", () => actual.nextNavigation);
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("../../../state/backend-state", () => actual.backendState);
+	mock.module("../ActionHandler", () => actual.actionHandler);
+	mock.module("../DataContext", () => actual.dataContext);
+	mock.module("../StyleResolver", () => actual.styleResolver);
+	mock.module("../../ui/button", () => actual.button);
 });
 
 async function render(component = defaults) {
@@ -374,9 +431,9 @@ test("literal overlays apply once and expire without a render loop", async () =>
 	await render(component);
 	await start();
 	const { executeCameraCommand } = await import("../camera-session");
-	let frame: any;
+	let frame: Record<string, unknown> = {};
 	await act(async () => {
-		frame = await executeCameraCommand(
+		frame = (await executeCameraCommand(
 			"camera.capture",
 			{
 				surfaceId: "page",
@@ -388,7 +445,7 @@ test("literal overlays apply once and expire without a render loop", async () =>
 				).sessionId,
 			},
 			{ appId: "app" },
-		);
+		)) as Record<string, unknown>;
 	});
 	await render({
 		...component,

@@ -900,6 +900,7 @@ pub(crate) async fn reserve_assistant_usage(
     }
     let mut rate = crate::usage_accounting::HostedRateSnapshot {
         version: "assistant-api-2026-09-13".into(),
+        provider_pricing_available: true,
         input_micro_usd_per_million_tokens: 0,
         input_micro_usd_per_million_bytes: None,
         max_input_bytes: None,

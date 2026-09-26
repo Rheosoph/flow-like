@@ -62,6 +62,7 @@ import {
 	useInvoke,
 	useSearch,
 } from "../../..";
+import { asArray } from "../../../lib/response-shape";
 import type { IApp } from "../../../lib/schema/app/app";
 import type { IMetadata } from "../../../lib/schema/bit/bit";
 import {
@@ -133,18 +134,18 @@ export function AppConnectionManagement({
 
 	const availableRoles = useMemo(
 		() =>
-			roles.data?.[1].filter((role) => {
+			asArray(roles.data?.[1]).filter((role) => {
 				const perm = new RolePermissions(BigInt(role.permissions));
 				return (
 					!perm.contains(RolePermissions.Owner) &&
 					!perm.contains(RolePermissions.Admin)
 				);
-			}) ?? [],
+			}),
 		[roles.data],
 	);
 
-	const incoming = connections.data?.incoming ?? [];
-	const outgoing = connections.data?.outgoing ?? [];
+	const incoming = asArray(connections.data?.incoming);
+	const outgoing = asArray(connections.data?.outgoing);
 	const pendingIncoming = incoming.filter((c) => c.status === "PENDING");
 	const activeIncoming = incoming.filter((c) => c.status === "ACTIVE");
 
@@ -793,7 +794,7 @@ function AppSearchPicker({
 	);
 
 	const ownCandidates = useMemo(
-		() => (ownApps.data ?? []).filter(([app]) => app.id !== currentAppId),
+		() => asArray(ownApps.data).filter(([app]) => app.id !== currentAppId),
 		[ownApps.data, currentAppId],
 	);
 
@@ -809,7 +810,7 @@ function AppSearchPicker({
 
 		for (const entry of ownMatches) merged.set(entry[0].id, entry);
 
-		for (const entry of storeSearch.data ?? []) {
+		for (const entry of asArray(storeSearch.data)) {
 			const [app] = entry;
 			if (app.id !== currentAppId && !merged.has(app.id)) {
 				merged.set(app.id, entry);

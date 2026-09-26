@@ -1,3 +1,4 @@
+import { asArray } from "../response-shape";
 import type { IBit } from "../schema";
 import { IBitTypes } from "../schema";
 
@@ -116,7 +117,7 @@ export function filterHostableLlmModels(
 export function profileBitIds(
 	refs: readonly string[] | undefined,
 ): Set<string> {
-	return new Set((refs ?? []).map((ref) => ref.split(":").pop() ?? ref));
+	return new Set(asArray(refs).map((ref) => ref.split(":").pop() ?? ref));
 }
 
 /**
@@ -131,11 +132,12 @@ export function selectProfileLlmModels(
 ): IBit[] {
 	if (!catalogBits || !profileBitRefs) return [];
 	const ids = profileBitIds(profileBitRefs);
-	const profileModels = catalogBits.filter(
+	// Callers pass query data straight through; a restored or garbled listing is not a list.
+	const profileModels = asArray(catalogBits).filter(
 		(bit) => ids.has(bit.id) && LLM_BIT_TYPES.has(bit.type),
 	);
 	const seen = new Set(profileModels.map((bit) => bit.id));
-	const ownModels = (customBits ?? []).filter(
+	const ownModels = asArray(customBits).filter(
 		(bit) => !seen.has(bit.id) && LLM_BIT_TYPES.has(bit.type),
 	);
 	return filterHostableLlmModels(

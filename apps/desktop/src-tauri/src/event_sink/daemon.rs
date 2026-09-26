@@ -494,8 +494,8 @@ async fn load_board_marker(
     let app = App::load(app_id.to_string(), flow_like_state).await?;
     let board = app
         .open_board(board_id.to_string(), Some(false), None)
-        .await?;
-    let board = board.lock().await;
+        .await?
+        .snapshot();
     let (updated_secs, updated_nanos) = system_time_parts(board.updated_at);
 
     Ok(BoardMarker {

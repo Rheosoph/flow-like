@@ -17,5 +17,13 @@
 		"@types/bun": "latest",
 		"prisma": "^7.2.0",
 		"typescript": "^5.7.3"
+	},
+	"overrides": {
+		"@hono/node-server": "1.19.17",
+		"defu": "6.1.7",
+		"effect": "3.21.2",
+		"hono": "4.13.8",
+		"lodash": "4.18.1",
+		"valibot": "1.4.2"
 	}
 }

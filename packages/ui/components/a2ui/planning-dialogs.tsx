@@ -25,7 +25,6 @@ import {
 	UsersIcon,
 	XIcon,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import {
 	Fragment,
 	type ReactNode,
@@ -34,6 +33,8 @@ import {
 	useState,
 } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import { useClientRouter } from "../../lib/client-navigation";
+import { asArray } from "../../lib/response-shape";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -388,7 +389,7 @@ function LinkRow({
 	link,
 	onNavigate,
 }: { link: string; onNavigate: () => void }) {
-	const router = useRouter();
+	const router = useClientRouter();
 	const { appId } = useActionContext();
 
 	if (isExternalLink(link)) {
@@ -645,7 +646,7 @@ function TeamMemberPicker({ onPick }: { onPick: (sub: string) => void }) {
 	);
 	const members = useMemo(() => {
 		const seen = new Set<string>();
-		return ((team.data ?? []) as IMember[]).filter((m) => {
+		return asArray<IMember>(team.data).filter((m) => {
 			if (!m.user_id || seen.has(m.user_id)) return false;
 			seen.add(m.user_id);
 			return true;

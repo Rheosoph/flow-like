@@ -3,12 +3,13 @@ import std/[tables, strutils, strformat]
 const ABI_VERSION* = 1'u32
 
 const
+  # Host numbering: Debug = 0 through Fatal = 4. Trace shares Debug's level.
   LogLevelTrace* = 0'u8
-  LogLevelDebug* = 1'u8
-  LogLevelInfo* = 2'u8
-  LogLevelWarn* = 3'u8
-  LogLevelError* = 4'u8
-  LogLevelFatal* = 5'u8
+  LogLevelDebug* = 0'u8
+  LogLevelInfo* = 1'u8
+  LogLevelWarn* = 2'u8
+  LogLevelError* = 3'u8
+  LogLevelFatal* = 4'u8
 
 type
   PinType* = enum

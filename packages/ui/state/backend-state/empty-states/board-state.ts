@@ -11,8 +11,10 @@ import type {
 	ILog,
 	ILogLevel,
 	ILogMetadata,
+	ILogQuery,
 	INode,
 	IRunContext,
+	IRunLogSummary,
 	IRunPayload,
 	IVersionType,
 } from "../../../";
@@ -125,12 +127,33 @@ export class EmptyBoardState implements IBoardState {
 	): Promise<ILogMetadata[]> {
 		throw new Error("Method not implemented.");
 	}
+	getRunPayload(
+		appId: string,
+		boardId: string,
+		runId: string,
+	): Promise<object | undefined> {
+		return Promise.resolve(undefined);
+	}
 	queryRun(
 		logMeta: ILogMetadata,
 		query: string,
 		offset?: number,
 		limit?: number,
 	): Promise<ILog[]> {
+		throw new Error("Method not implemented.");
+	}
+	queryRunLogs(
+		logMeta: ILogMetadata,
+		query: ILogQuery,
+		offset: number,
+		limit: number,
+	): Promise<ILog[]> {
+		throw new Error("Method not implemented.");
+	}
+	countRunLogs(logMeta: ILogMetadata, query: ILogQuery): Promise<number> {
+		throw new Error("Method not implemented.");
+	}
+	getRunLogSummary(logMeta: ILogMetadata): Promise<IRunLogSummary | null> {
 		throw new Error("Method not implemented.");
 	}
 	undoBoard(

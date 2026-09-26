@@ -1,35 +1,34 @@
 ///| ABI version — must match the host runtime
 pub let abi_version : Int = 1
 
-///| Log severity levels
+///| Log severity levels. The host numbers them Debug = 0 through Fatal = 4;
+/// Trace shares level 0, so the most verbose host setting enables it too.
 pub enum LogLevel {
-  Trace = 0
-  Debug = 1
-  Info = 2
-  Warn = 3
-  Error = 4
-  Fatal = 5
+  Trace
+  Debug
+  Info
+  Warn
+  Error
+  Fatal
 } derive(Eq, Compare)
 
 pub fn LogLevel::from_int(n : Int) -> LogLevel {
   match n {
     0 => Trace
-    1 => Debug
-    2 => Info
-    3 => Warn
-    4 => Error
+    1 => Info
+    2 => Warn
+    3 => Error
     _ => Fatal
   }
 }
 
 pub fn LogLevel::to_int(self : LogLevel) -> Int {
   match self {
-    Trace => 0
-    Debug => 1
-    Info => 2
-    Warn => 3
-    Error => 4
-    Fatal => 5
+    Trace | Debug => 0
+    Info => 1
+    Warn => 2
+    Error => 3
+    Fatal => 4
   }
 }
 

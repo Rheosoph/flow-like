@@ -43,3 +43,32 @@ subjects:
     name: {{ include "flow-like.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
+{{- if and .Values.audit.worker .Values.database.migration.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "flow-like.fullname" . }}-audit-worker
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-worker
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    resourceNames:
+      - {{ include "flow-like.migrationJobName" . }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "flow-like.fullname" . }}-audit-worker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "flow-like.fullname" . }}-audit-worker
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "flow-like.fullname" . }}-audit-worker
+    namespace: {{ .Release.Namespace }}
+{{- end }}

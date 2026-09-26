@@ -52,6 +52,66 @@ export function coreChanged(before: IBit, after: IBit): boolean {
 	const { meta: _newMeta, updated: _newUpdated, ...newCore } = after;
 	return JSON.stringify(oldCore) !== JSON.stringify(newCore);
 }
+
+export const HOSTED_PRICING_FIELDS = [
+	{
+		key: "input_micro_usd_per_million_tokens",
+		label: "USD per 1M input tokens",
+		optional: false,
+	},
+	{
+		key: "output_micro_usd_per_million_tokens",
+		label: "USD per 1M output tokens",
+		optional: false,
+	},
+	{ key: "request_micro_usd", label: "USD per request", optional: true },
+] as const;
+export type HostedPricingField = (typeof HOSTED_PRICING_FIELDS)[number]["key"];
+
+export function usdToMicroUsd(text: string): number | null {
+	const match = /^(\d*)(?:\.(\d{0,6}))?$/.exec(text.trim());
+	if (!match || (!match[1] && !match[2])) return null;
+	// Parse the decimal digits directly so floating-point rounding cannot change a rate.
+	const micros = Number(`${match[1] || "0"}${(match[2] ?? "").padEnd(6, "0")}`);
+	return Number.isSafeInteger(micros) && micros >= 0 ? micros : null;
+}
+
+export function microUsdToUsd(value: unknown): string {
+	if (value == null) return "";
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+		return String(value);
+	const digits = String(value).padStart(7, "0");
+	const fraction = digits.slice(-6).replace(/0+$/, "");
+	return `${digits.slice(0, -6)}${fraction ? `.${fraction}` : ""}`;
+}
+
+export function updateBitPricingField(
+	parameters: unknown,
+	field: HostedPricingField,
+	text: string,
+): Record<string, unknown> {
+	const params = record(parameters);
+	const pricing = { ...record(params.pricing) };
+	if (!text.trim()) delete pricing[field];
+	// Keep invalid input in the draft so validation blocks saving it.
+	else pricing[field] = usdToMicroUsd(text) ?? text;
+	return { ...params, pricing };
+}
+
+export function validateBitPricing(value: unknown): string | null {
+	if (value == null) return null;
+	if (typeof value !== "object" || Array.isArray(value))
+		return "Hosted pricing must be a group of rates, or remove pricing.";
+	const pricing = record(value);
+	for (const { key, label, optional } of HOSTED_PRICING_FIELDS) {
+		const rate = pricing[key];
+		if (optional && rate === undefined) continue;
+		if (typeof rate !== "number" || !Number.isSafeInteger(rate) || rate < 0)
+			return `${label} must be a non-negative amount with up to 6 decimal places, no greater than 9007199254.740991.`;
+	}
+	return null;
+}
+
 export function validateBitDraft(
 	bit: IBit,
 	scope: "custom" | "admin",
@@ -65,6 +125,10 @@ export function validateBitDraft(
 	if (scope === "custom" && !bit.meta.en?.name.trim())
 		return "Add an English display name before saving.";
 	const params = record(bit.parameters);
+	if (scope === "admin" && [IBitTypes.Llm, IBitTypes.Vlm].includes(bit.type)) {
+		const pricingError = validateBitPricing(params.pricing);
+		if (pricingError) return pricingError;
+	}
 	if (
 		[IBitTypes.Llm, IBitTypes.Vlm].includes(bit.type) &&
 		(!original ||

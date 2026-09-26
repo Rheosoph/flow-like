@@ -21,11 +21,52 @@ use flow_like_types::reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
     redirect,
 };
+use flow_like_types::tokio::sync::oneshot;
 use flow_like_types::{Result, anyhow, tokio};
+use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::time::Duration;
 
 const MAX_REDIRECTS: usize = 10;
+
+/// Pool limits of server-side shared clients. One executor process runs every
+/// tenant's jobs and each idle socket holds a file descriptor (Lambda allows
+/// 1024). The pool is keyed by scheme + authority, so the per-host cap does not
+/// bound a flow looping over many hosts; the idle timeout does. hyper reaps
+/// once per timeout, so an idle connection closes 5-10 s after its last use.
+const SERVER_POOL_MAX_IDLE_PER_HOST: usize = 4;
+const SERVER_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Clients handed out by [`GuardedHttpClient::shared`], one per Tokio runtime
+/// and environment, and server-side one per owner.
+///
+/// Keyed by runtime because a pooled connection is driven by a task hyper
+/// spawned on the runtime that opened it: reused from another runtime it
+/// fails once that runtime is dropped ("dispatch task is gone") and stalls
+/// while an idle current-thread runtime is not being polled. The desktop app
+/// (Tauri's runtime), the executor / server binaries (`#[tokio::main]`) and
+/// Lambda run every flow on one process-lifetime runtime, so in practice this
+/// is one local client, or one per live owner server-side; tests and embedders
+/// that build a runtime per job get a pool of their own, pruned once that
+/// runtime shuts down.
+static SHARED_CLIENTS: Mutex<Vec<SharedClient>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+static SHARED_BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+struct SharedClient {
+    runtime: tokio::runtime::Id,
+    environment: ExecutionEnvironment,
+    /// Server-side only; the entry is pruned once the owner is dropped. The
+    /// weak reference keeps the owner's allocation, so its address is not
+    /// reused while the entry exists and `ptr_eq` identifies the owner.
+    owner: Option<Weak<dyn Any + Send + Sync>>,
+    client: reqwest::Client,
+    /// Closed once the sentinel task spawned on `runtime` is dropped, i.e. when
+    /// the runtime shuts down. Also guards against runtime ID reuse.
+    runtime_alive: oneshot::Sender<()>,
+}
 
 /// True for addresses on the host / hypervisor plane.
 pub fn is_blocked_ip(ip: IpAddr) -> bool {
@@ -173,6 +214,12 @@ pub fn client_builder(environment: ExecutionEnvironment) -> reqwest::ClientBuild
         .redirect(guarded_redirect_policy())
 }
 
+fn server_pool_limits(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    builder
+        .pool_max_idle_per_host(SERVER_POOL_MAX_IDLE_PER_HOST)
+        .pool_idle_timeout(SERVER_POOL_IDLE_TIMEOUT)
+}
+
 /// An HTTP client for flow-supplied URLs. Server-side it refuses host-plane
 /// destinations on the request URL, at DNS resolution and on every redirect;
 /// locally it is a plain client.
@@ -196,6 +243,83 @@ impl GuardedHttpClient {
         let client = configure(client_builder(environment))
             .build()
             .map_err(|e| anyhow!("Failed to build HTTP client: {e}"))?;
+        Ok(Self {
+            client,
+            environment,
+        })
+    }
+
+    /// Like [`Self::new`], but a clone of a cached client (see
+    /// `SHARED_CLIENTS`), so repeated calls share one connection pool instead
+    /// of paying a TCP + TLS handshake per request. Egress checks are
+    /// unchanged: [`Self::request`] still vets every URL and the server-side
+    /// client carries the guarded resolver and redirect policy. Put per-call
+    /// options such as timeouts on the `RequestBuilder`. Outside a runtime this
+    /// is just [`Self::new`].
+    ///
+    /// Locally every caller on the runtime shares the pool: the machine has one
+    /// user. Server-side, where one process runs every tenant's jobs, only
+    /// callers passing the same `owner` (a run's own resources) share it, and
+    /// the first call after `owner` is dropped releases it. Guests set
+    /// arbitrary headers, so a kept-alive connection can carry
+    /// connection-bound state (NTLM / Negotiate auth, a saturated HTTP/2
+    /// stream budget) that must not reach another run or tenant. Its idle
+    /// connections close after `SERVER_POOL_IDLE_TIMEOUT` either way.
+    pub fn shared(
+        environment: ExecutionEnvironment,
+        owner: &Arc<impl Any + Send + Sync>,
+    ) -> Result<Self> {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return Self::new(environment);
+        };
+        let id = runtime.id();
+        let server = environment == ExecutionEnvironment::Server;
+        let owner = server.then(|| Arc::downgrade(owner) as Weak<dyn Any + Send + Sync>);
+        let mut clients = SHARED_CLIENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        clients.retain(|entry| {
+            !entry.runtime_alive.is_closed()
+                && entry
+                    .owner
+                    .as_ref()
+                    .is_none_or(|weak| weak.strong_count() > 0)
+        });
+        if let Some(entry) = clients.iter().find(|entry| {
+            entry.runtime == id
+                && entry.environment == environment
+                && match (&entry.owner, &owner) {
+                    (Some(entry_owner), Some(owner)) => entry_owner.ptr_eq(owner),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }) {
+            return Ok(Self {
+                client: entry.client.clone(),
+                environment,
+            });
+        }
+        let client = if server {
+            Self::configured(environment, server_pool_limits)
+        } else {
+            Self::new(environment)
+        }?
+        .client;
+        #[cfg(test)]
+        SHARED_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (runtime_alive, sentinel) = oneshot::channel::<()>();
+        // Pending for the runtime's whole life; shutdown drops it with the
+        // runtime's other tasks, which closes `runtime_alive`.
+        runtime.spawn(async move {
+            let _ = sentinel.await;
+        });
+        clients.push(SharedClient {
+            runtime: id,
+            environment,
+            owner,
+            client: client.clone(),
+            runtime_alive,
+        });
         Ok(Self {
             client,
             environment,
@@ -305,5 +429,150 @@ mod tests {
 
         let local = GuardedHttpClient::new(ExecutionEnvironment::Desktop).unwrap();
         assert!(local.get("http://127.0.0.1:11434/").is_ok());
+    }
+
+    // The only test calling `shared`, so the build counter is not raced.
+    #[test]
+    fn shared_client_is_built_once_per_runtime_environment_and_server_owner() {
+        let runtime = || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+        };
+        let builds = || SHARED_BUILDS.load(std::sync::atomic::Ordering::SeqCst);
+        let before = builds();
+        let (first_run, second_run) = (Arc::new(()), Arc::new(()));
+
+        let first = runtime();
+        let first_id = first.block_on(async {
+            for _ in 0..3 {
+                let server =
+                    GuardedHttpClient::shared(ExecutionEnvironment::Server, &first_run).unwrap();
+                assert_eq!(server.environment(), ExecutionEnvironment::Server);
+                assert!(server.get("http://169.254.169.254/").is_err());
+                assert!(server.get("https://example.com/").is_ok());
+            }
+            for run in [&first_run, &second_run] {
+                let local = GuardedHttpClient::shared(ExecutionEnvironment::Desktop, run).unwrap();
+                assert_eq!(local.environment(), ExecutionEnvironment::Desktop);
+                assert!(local.get("http://127.0.0.1:11434/").is_ok());
+            }
+            tokio::runtime::Handle::current().id()
+        });
+        assert_eq!(builds() - before, 2, "one build per environment");
+
+        let server_pools = || {
+            SHARED_CLIENTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|entry| entry.environment == ExecutionEnvironment::Server)
+                .count()
+        };
+        let second_run_request = || {
+            first.block_on(async {
+                GuardedHttpClient::shared(ExecutionEnvironment::Server, &second_run).unwrap();
+            })
+        };
+        second_run_request();
+        assert_eq!(builds() - before, 3, "runs never share a server pool");
+        assert_eq!(server_pools(), 2);
+        drop(first_run);
+        second_run_request();
+        assert_eq!(builds() - before, 3);
+        assert_eq!(server_pools(), 1, "a dropped owner's pool is released");
+
+        drop(first);
+        runtime().block_on(async {
+            GuardedHttpClient::shared(ExecutionEnvironment::Server, &second_run).unwrap();
+        });
+        assert_eq!(builds() - before, 4, "a new runtime never reuses a pool");
+        let clients = SHARED_CLIENTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            clients.iter().all(|entry| entry.runtime != first_id),
+            "entries of a dropped runtime are pruned"
+        );
+    }
+
+    #[test]
+    fn server_pool_limits_close_surplus_and_idle_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        const CONNECTIONS: usize = SERVER_POOL_MAX_IDLE_PER_HOST + 2;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let (closed_tx, mut closed) = tokio::sync::mpsc::unbounded_channel();
+            // Answers once every request holds its own connection, then
+            // reports each connection the client closes.
+            let barrier = Arc::new(tokio::sync::Barrier::new(CONNECTIONS));
+            tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let (barrier, closed_tx) = (barrier.clone(), closed_tx.clone());
+                    tokio::spawn(async move {
+                        let (mut buf, mut request) = ([0; 1024], Vec::new());
+                        while !request.ends_with(b"\r\n\r\n") {
+                            let read = socket.read(&mut buf).await.unwrap();
+                            assert!(read > 0, "request cut short");
+                            request.extend_from_slice(&buf[..read]);
+                        }
+                        barrier.wait().await;
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                        while socket.read(&mut buf).await.is_ok_and(|read| read > 0) {}
+                        let _ = closed_tx.send(());
+                    });
+                }
+            });
+
+            // Desktop only because the server resolver refuses loopback.
+            let client =
+                server_pool_limits(client_builder(ExecutionEnvironment::Desktop).no_proxy())
+                    .build()
+                    .unwrap();
+            let requests: Vec<_> = (0..CONNECTIONS)
+                .map(|_| tokio::spawn(client.get(&url).send()))
+                .collect();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                for request in requests {
+                    let response = request.await.unwrap().unwrap();
+                    assert!(response.status().is_success());
+                    response.bytes().await.unwrap();
+                }
+            })
+            .await
+            .expect("every request is answered");
+
+            for _ in SERVER_POOL_MAX_IDLE_PER_HOST..CONNECTIONS {
+                tokio::time::timeout(Duration::from_secs(2), closed.recv())
+                    .await
+                    .expect("connections beyond the per-host cap close on return");
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(500), closed.recv())
+                    .await
+                    .is_err(),
+                "connections within the cap stay pooled"
+            );
+            let idle_limit = 2 * SERVER_POOL_IDLE_TIMEOUT + Duration::from_secs(2);
+            for _ in 0..SERVER_POOL_MAX_IDLE_PER_HOST {
+                tokio::time::timeout(idle_limit, closed.recv())
+                    .await
+                    .expect("idle connections close after the idle timeout, not reqwest's 90 s");
+            }
+            drop(client);
+        });
     }
 }

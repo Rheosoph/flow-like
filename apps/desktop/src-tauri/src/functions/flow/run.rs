@@ -2,31 +2,30 @@
 
 use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::board::format::CURRENT_BOARD_FORMAT_VERSION;
 use flow_like::flow::compiled::{
     CompiledRunTemplate, TemplateCache,
     prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
 };
 use flow_like::flow::execution::log::LogMessage;
+use flow_like::flow::execution::log_query::LogQuery;
+use flow_like::flow::execution::log_summary::LogSummary;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
+use flow_like::flow::execution::run_index::{RunQuery, read_run_payload};
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
 use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase, Select};
-use flow_like::flow_like_storage::{Path, serde_arrow};
-use flow_like::hub::Hub;
-use flow_like::state::{FlowLikeState, RunData};
+use flow_like::state::{FlowLikeState, FlowNodeRegistryInner, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
+use flow_like_types::sync::DashMap;
 use flow_like_types::tokio_util::sync::CancellationToken;
-use flow_like_types::{json, tokio};
-use futures::TryStreamExt;
-use serde::{Deserialize, Serialize};
+use flow_like_types::{Value, json, tokio};
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
 use crate::{
@@ -46,6 +45,56 @@ use crate::{
 static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
 
 const SERVER_DYNAMIC_PAGE_ACTION_ID_PREFIX: &str = "da1_";
+
+/// Gap-free phase timings of `execute_prepared`, reported with `run_initiated`
+/// so the frontend can show where the wait before a run starts goes, and
+/// logged by `execute_internal` when the run fails before it starts.
+struct PreambleTimer {
+    start: Instant,
+    last: Instant,
+    steps: Vec<(&'static str, f64)>,
+}
+
+impl PreambleTimer {
+    fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            start: now,
+            last: now,
+            steps: Vec::new(),
+        }
+    }
+
+    fn lap(&mut self, step: &'static str) {
+        let now = Instant::now();
+        self.steps
+            .push((step, now.duration_since(self.last).as_secs_f64() * 1000.0));
+        self.last = now;
+    }
+
+    fn total_ms(&self) -> f64 {
+        self.last.duration_since(self.start).as_secs_f64() * 1000.0
+    }
+
+    fn to_json(&self) -> Value {
+        let round = |ms: f64| (ms * 10.0).round() / 10.0;
+        let steps = self
+            .steps
+            .iter()
+            .map(|(step, ms)| json::json!({ "step": step, "ms": round(*ms) }))
+            .collect::<Vec<_>>();
+        json::json!({ "total_ms": round(self.total_ms()), "steps": steps })
+    }
+
+    fn summary(&self) -> String {
+        let steps = self
+            .steps
+            .iter()
+            .map(|(step, ms)| format!(" {step}={ms:.1}"))
+            .collect::<String>();
+        format!("total={:.1}ms{steps}", self.total_ms())
+    }
+}
 
 /// A Page-owned selector passed beside the caller's normal authentication.
 /// This value chooses from authority compiled out of the local Page; it never
@@ -193,6 +242,7 @@ async fn resolve_local_page_target(
     event: &flow_like::flow::event::Event,
     trigger: &PageTrigger,
     principal: LocalPagePrincipalBinding,
+    timer: &mut PreambleTimer,
 ) -> flow_like_types::Result<ResolvedLocalPageTarget> {
     if !event.active {
         return Err(flow_like_types::anyhow!("The Page Event is not active"));
@@ -206,7 +256,7 @@ async fn resolve_local_page_target(
         flow_like_types::anyhow!("Page triggers can only invoke Events that own a Page")
     })?;
 
-    let board = app
+    let (board, board_revision) = app
         .open_board(event.board_id.clone(), None, event.board_version)
         .await
         .map_err(|error| {
@@ -215,8 +265,9 @@ async fn resolve_local_page_target(
                 event.board_id,
                 error
             )
-        })?;
-    let board = board.lock().await;
+        })?
+        .snapshot_with_revision();
+    timer.lap("open_board");
     if board.id != event.board_id {
         return Err(flow_like_types::anyhow!(
             "The Page Event resolved an unexpected board"
@@ -248,6 +299,7 @@ async fn resolve_local_page_target(
             error
         )
     })?;
+    timer.lap("load_page");
     if page.id != page_id || page.board_id.as_deref().is_some_and(|id| id != board.id) {
         return Err(flow_like_types::anyhow!(
             "The Page Event configuration is invalid"
@@ -293,14 +345,19 @@ async fn resolve_local_page_target(
             "The Page action does not resolve to an executable entry"
         ));
     }
-    // Build the executable template from the same Board value that produced
-    // the Page contract. Reloading Latest through the template cache here
-    // could observe a concurrent save and execute a different revision.
+    timer.lap("page_contract");
+    // Build the executable template from the same board snapshot that produced
+    // the Page contract. Reloading Latest through the storage-backed template
+    // cache could observe a concurrent save and execute a different revision;
+    // the page cache is keyed by this snapshot's revision instead.
     let registry = state.node_registry.read().await.node_registry.clone();
-    let template = Arc::new(CompiledRunTemplate::from_board(
-        Arc::new(board.clone()),
+    let template = page_template(
+        format!("{}/{}@{:?}", app.id, board.id, event.board_version),
+        &board,
+        board_revision,
         registry.as_ref(),
-    )?);
+    )?;
+    timer.lap("compile");
 
     Ok(ResolvedLocalPageTarget {
         node_id,
@@ -315,6 +372,41 @@ struct ResolvedLocalPageTarget {
     template: Arc<flow_like::flow::compiled::CompiledRunTemplate>,
 }
 
+struct PageTemplate {
+    revision: u64,
+    fingerprint: [u8; 32],
+    template: Arc<CompiledRunTemplate>,
+}
+
+/// The template of the last board revision a Page Event ran against, per board: every page
+/// action between two edits reuses one compile instead of cloning and compiling the board.
+static PAGE_TEMPLATES: LazyLock<DashMap<String, PageTemplate>> = LazyLock::new(DashMap::new);
+
+fn page_template(
+    cache_key: String,
+    board: &Arc<flow_like::flow::board::Board>,
+    revision: u64,
+    registry: &FlowNodeRegistryInner,
+) -> flow_like_types::Result<Arc<CompiledRunTemplate>> {
+    let fingerprint = registry.fingerprint();
+    if let Some(cached) = PAGE_TEMPLATES.get(&cache_key)
+        && cached.revision == revision
+        && cached.fingerprint == fingerprint
+    {
+        return Ok(cached.template.clone());
+    }
+    let template = Arc::new(CompiledRunTemplate::from_board(board.clone(), registry)?);
+    PAGE_TEMPLATES.insert(
+        cache_key,
+        PageTemplate {
+            revision,
+            fingerprint,
+            template: template.clone(),
+        },
+    );
+    Ok(template)
+}
+
 pub(crate) async fn resolve_run_template(
     state: &Arc<flow_like::state::FlowLikeState>,
     app_id: &str,
@@ -326,123 +418,18 @@ pub(crate) async fn resolve_run_template(
         .await
 }
 
-#[derive(Serialize)]
-struct ReportRunRequest {
-    run_id: String,
-    node_id: String,
-    event_id: Option<String>,
-    version: Option<String>,
-    log_level: u8,
-    start: u64,
-    end: u64,
-    error_message: Option<String>,
-}
-
 #[derive(Default)]
 struct ExecutionOverrides {
+    require_remembered_automation_approval: bool,
     cancellation_token: Option<CancellationToken>,
     cancellation_log_level: Option<LogLevel>,
     cancellation_log_message: Option<String>,
     log_flush_interval: Option<Duration>,
     log_batch_size: Option<usize>,
     run_sub_override: Option<String>,
-}
-
-fn should_report_run_to_backend(visibility: &AppVisibility) -> bool {
-    !matches!(visibility, AppVisibility::Offline)
-}
-
-async fn report_run_to_backend(
-    app_handle: &AppHandle,
-    token: &str,
-    meta: &LogMeta,
-    visibility: &AppVisibility,
-) {
-    if !should_report_run_to_backend(visibility) {
-        return;
-    }
-
-    let hub_url = match TauriSettingsState::current_profile(app_handle).await {
-        Ok(profile) => profile.hub_profile.hub.clone(),
-        Err(_) => return,
-    };
-
-    if hub_url.is_empty() {
-        return;
-    }
-
-    let url = format!(
-        "{}/api/v1/apps/{}/board/{}/runs/report",
-        hub_url.trim_end_matches('/'),
-        meta.app_id,
-        meta.board_id,
-    );
-
-    let error_message = if meta.log_level >= 3 {
-        Some(format!(
-            "Local run failed with log_level {}",
-            meta.log_level
-        ))
-    } else {
-        None
-    };
-
-    let body = ReportRunRequest {
-        run_id: meta.run_id.clone(),
-        node_id: meta.node_id.clone(),
-        event_id: if meta.event_id.is_empty() {
-            None
-        } else {
-            Some(meta.event_id.clone())
-        },
-        version: if meta.version.is_empty() {
-            None
-        } else {
-            Some(meta.version.clone())
-        },
-        log_level: meta.log_level,
-        start: meta.start,
-        end: meta.end,
-        error_message,
-    };
-
-    let auth_val = if token.starts_with("Bearer ") {
-        token.to_string()
-    } else {
-        format!("Bearer {}", token)
-    };
-
-    let client = flow_like_types::reqwest::Client::new();
-    match client
-        .post(&url)
-        .header("Authorization", &auth_val)
-        .header(
-            "x-flow-like-board-format",
-            CURRENT_BOARD_FORMAT_VERSION.to_string(),
-        )
-        .json(&body)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            tracing::info!(run_id = %meta.run_id, "Reported local run to backend");
-        }
-        Ok(resp) => {
-            tracing::warn!(
-                run_id = %meta.run_id,
-                status = %resp.status(),
-                "Failed to report local run to backend"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                run_id = %meta.run_id,
-                error = %e,
-                "Failed to report local run to backend"
-            );
-        }
-    }
+    execution_hub: Option<String>,
+    execution_session_id: Option<String>,
+    execution_webview: Option<String>,
 }
 
 /// Update the last_node_update timestamp for a run when we see run events
@@ -471,6 +458,7 @@ fn credential_content_prefix(credentials: &SharedCredentials) -> Option<&str> {
                 .map(String::as_str)
         }),
         SharedCredentials::Mixed(mixed) => credential_content_prefix(&mixed.content),
+        SharedCredentials::Renewable(live) => credential_content_prefix(live.initial()),
     }
 }
 
@@ -485,6 +473,7 @@ fn credential_user_content_prefix(credentials: &SharedCredentials) -> Option<&st
                 .map(String::as_str)
         }),
         SharedCredentials::Mixed(mixed) => credential_user_content_prefix(&mixed.content),
+        SharedCredentials::Renewable(live) => credential_user_content_prefix(live.initial()),
     }
 }
 
@@ -574,6 +563,7 @@ async fn execute_internal(
     let recorded_event_id = event_id.clone();
     let recorded_node_id = payload.id.clone();
 
+    let mut timer = PreambleTimer::new();
     let result = execute_prepared(
         app_handle,
         app_id.clone(),
@@ -589,24 +579,34 @@ async fn execute_internal(
         oauth_tokens,
         overrides,
         started.clone(),
+        &mut timer,
     )
     .await;
 
     if let Err(error) = &result
         && !started.load(Ordering::Relaxed)
-        && let Ok(state) = TauriFlowLikeState::construct(&app_handle_for_rejection).await
     {
-        record_setup_rejection(
-            &state,
-            &app_id,
-            &recorded_board_id,
-            recorded_event_id.as_deref(),
-            &recorded_node_id,
-            requested_version,
-            recorded_payload.as_ref(),
-            error.to_string(),
-        )
-        .await;
+        timer.lap("until_error");
+        tracing::info!(
+            app_id = %app_id,
+            event_id = recorded_event_id.as_deref().unwrap_or(""),
+            error = %error,
+            preamble = %timer.summary(),
+            "run preamble failed"
+        );
+        if let Ok(state) = TauriFlowLikeState::construct(&app_handle_for_rejection).await {
+            record_setup_rejection(
+                &state,
+                &app_id,
+                &recorded_board_id,
+                recorded_event_id.as_deref(),
+                &recorded_node_id,
+                requested_version,
+                recorded_payload.as_ref(),
+                error.to_string(),
+            )
+            .await;
+        }
     }
 
     result
@@ -628,24 +628,72 @@ async fn execute_prepared(
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     overrides: ExecutionOverrides,
     started: Arc<AtomicBool>,
+    timer: &mut PreambleTimer,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let mut event = None;
     let mut page_action_sealing_context = None;
     let mut page_template = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
+    timer.lap("state");
     let mut version = requested_version;
     let Ok(app) = App::load(app_id.clone(), flow_like_state.clone()).await else {
         return Err(TauriFunctionError::new("App not found"));
     };
+    timer.lap("app_load");
 
     // Desktop execution is trusted — allow secret overrides from local runtime vars
     payload.filter_secrets = Some(false);
 
-    let profile = TauriSettingsState::current_profile(&app_handle).await?;
+    let mut profile = TauriSettingsState::current_profile(&app_handle).await?;
+    if let Some(hub) = &overrides.execution_hub {
+        profile.hub_profile.hub = hub.clone();
+    }
+    timer.lap("profile");
+
+    let request_authorizer = crate::execution_credentials::request_authorizer(
+        &profile.hub_profile.hub,
+        &app_id,
+        token.as_deref(),
+        overrides.execution_session_id.as_deref(),
+        overrides.execution_webview.as_deref(),
+    );
+
+    let credentials = if matches!(app.visibility, AppVisibility::Offline) {
+        credentials
+    } else {
+        match crate::execution_credentials::prepare(
+            &profile.hub_profile.hub,
+            &app_id,
+            token.as_deref(),
+            overrides.execution_session_id.as_deref(),
+            overrides.execution_webview.as_deref(),
+        )
+        .await
+        {
+            Ok(credentials) => Some(credentials),
+            Err(error) if crate::execution_credentials::falls_back_to_device_storage(&error) => {
+                tracing::warn!(
+                    app_id = %app_id,
+                    %error,
+                    "Hub credentials unavailable; running against device storage"
+                );
+                None
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let mut execution_state = (*flow_like_state).clone();
+    execution_state.request_authorizer = Some(request_authorizer);
+    if let Some(credentials) = &credentials {
+        crate::execution_credentials::install_registry(&mut execution_state, credentials)?;
+    }
+    let flow_like_state = Arc::new(execution_state);
+    timer.lap("renewable_credentials");
 
     if let Some(event_id) = &event_id {
         let intermediate_event = app.get_event(event_id, None).await?;
+        timer.lap("get_event");
         version = intermediate_event.board_version;
         board_id = intermediate_event.board_id.clone();
 
@@ -664,12 +712,14 @@ async fn execute_prepared(
                     error
                 ))
             })?;
+            timer.lap("page_auth");
             let target = resolve_local_page_target(
                 &flow_like_state,
                 &app,
                 &intermediate_event,
                 trigger,
                 principal,
+                timer,
             )
             .await
             .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
@@ -705,18 +755,35 @@ async fn execute_prepared(
                 error
             ))
         })?;
+        timer.lap("board_auth");
     }
 
     let template = match page_template {
         Some(template) => template,
-        None => resolve_run_template(&flow_like_state, &app_id, &board_id, version)
-            .await
-            .map_err(|e| {
-                TauriFunctionError::new(&format!("Board {} could not be resolved: {}", board_id, e))
-            })?,
+        None => {
+            let template = resolve_run_template(&flow_like_state, &app_id, &board_id, version)
+                .await
+                .map_err(|e| {
+                    TauriFunctionError::new(&format!(
+                        "Board {} could not be resolved: {}",
+                        board_id, e
+                    ))
+                })?;
+            timer.lap("template");
+            template
+        }
     };
 
     let app_handle_for_report = app_handle.clone();
+    crate::functions::automation_approval::ensure_automation_approved(
+        &app_handle,
+        &app_id,
+        &template.board,
+        event_id.as_deref(),
+        !overrides.require_remembered_automation_approval,
+        &profile.hub_profile,
+    )
+    .await?;
     crate::e2e_runtime::require_isolated_run(
         &app,
         &template.board,
@@ -728,6 +795,7 @@ async fn execute_prepared(
                 .as_ref()
                 .is_some_and(|tokens| !tokens.is_empty()),
     )?;
+    timer.lap("automation_approval");
     let token_for_report = token.clone();
     let app_visibility_for_report = app.visibility.clone();
     let channel_dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -816,6 +884,7 @@ async fn execute_prepared(
         None,
     )
     .await?;
+    timer.lap("internal_run");
 
     internal_run
         .set_usage_attribution_from_visibility(&app.visibility)
@@ -852,11 +921,19 @@ async fn execute_prepared(
     }
 
     let run_id = internal_run.run.lock().await.id.clone();
+    timer.lap("identity");
 
+    tracing::info!(
+        run_id = %run_id,
+        app_id = %app_id,
+        board_id = %board_id,
+        preamble = %timer.summary(),
+        "run preamble"
+    );
     let _send_result = buffered_sender
         .send(InterComEvent::with_type(
             "run_initiated",
-            json::json!({ "run_id": run_id.clone()}),
+            json::json!({ "run_id": run_id.clone(), "preamble": timer.to_json() }),
         ))
         .await;
 
@@ -957,52 +1034,26 @@ async fn execute_prepared(
         println!("Error flushing buffered sender: {}", err);
     }
 
-    let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
-        let (db_fn, write_options) = {
-            let guard = flow_like_state.config.read().await;
-            (
-                guard.callbacks.build_logs_database.clone(),
-                guard.callbacks.lance_write_options.clone(),
-            )
-        };
-        async {
-            let db_fn = db_fn
-                .as_ref()
-                .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-            let base_path = Path::from("runs").join(app_id).join(board_id);
-            let db = flow_like_state
-                .with_lance_session(db_fn(base_path.clone()))
-                .execute()
-                .await
-                .map_err(|e| {
-                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
-                })?;
-            meta.flush(db, write_options.as_ref()).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
-            })?;
-            Ok(())
-        }
-        .await
-    } else {
-        Ok(())
-    };
-
-    // Report online local runs so backend analytics can count executions.
-    if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
-        let app_handle = app_handle_for_report.clone();
-        let token = token.clone();
-        let meta = meta.clone();
-        let visibility = app_visibility_for_report.clone();
-        tokio::spawn(async move {
-            report_run_to_backend(&app_handle, &token, &meta, &visibility).await;
-        });
+    if let Some(meta) = &meta {
+        let status = run_arc.lock().await.status.clone();
+        crate::run_reports::enqueue(
+            &app_handle_for_report,
+            crate::run_reports::FinishedRun {
+                meta,
+                status: &status,
+                visibility: &app_visibility_for_report,
+                hub: &profile.hub_profile.hub,
+                secure: profile.hub_profile.secure,
+                token: token_for_report.as_deref(),
+            },
+        )
+        .await;
     }
 
-    // Always release the finished run from the registry, even if flushing its
-    // logs failed. Otherwise the run stays flagged "in use" and its logs can
-    // never be deleted from storage management until the app restarts.
+    // Release the finished run from the registry; otherwise it stays flagged
+    // "in use" and its logs can never be deleted from storage management
+    // until the app restarts.
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);
-    flush_result?;
 
     Ok(meta)
 }
@@ -1028,55 +1079,72 @@ pub(crate) async fn execute_daemon_event(
     let (credentials, run_sub_override) = if offline {
         (None, None)
     } else {
-        let token = token.as_deref().ok_or_else(|| {
-            TauriFunctionError::new("No token registered, cannot run online daemon event")
-        })?;
-        let profile = TauriSettingsState::current_profile(&app_handle).await?;
-        let hub_url = profile.hub_profile.hub;
-
-        if hub_url.is_empty() {
-            return Err(TauriFunctionError::new(
-                "No hub URL configured, cannot get daemon credentials",
-            ));
-        }
-
-        let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
-        let hub = Hub::new(&hub_url, http_client).await?;
-        tracing::info!(
-            app_id = %app_id,
-            event_id = %event_id,
-            token_kind = if token.starts_with("pat_") { "pat" } else { "jwt" },
-            "Fetching credentials for daemon event"
-        );
-        let shared_credentials = hub
-            .shared_credentials(token, &app_id)
-            .await
-            .map_err(|err| {
-                tracing::error!(
-                    app_id = %app_id,
-                    event_id = %event_id,
-                    error = %err,
-                    "Failed to fetch credentials for daemon event"
-                );
-                err
+        'credentials: {
+            let token = token.as_deref().ok_or_else(|| {
+                TauriFunctionError::new("No token registered, cannot run online daemon event")
             })?;
-        let content_prefix = credential_content_prefix(&shared_credentials).map(str::to_string);
-        let user_content_prefix =
-            credential_user_content_prefix(&shared_credentials).map(str::to_string);
-        let run_sub_override = if token.starts_with("pat_") {
-            daemon_sub_from_credentials(&shared_credentials, &app_id)
-        } else {
-            None
-        };
-        tracing::info!(
-            app_id = %app_id,
-            event_id = %event_id,
-            content_prefix = ?content_prefix,
-            user_content_prefix = ?user_content_prefix,
-            has_run_sub_override = run_sub_override.is_some(),
-            "Fetched credentials for daemon event"
-        );
-        (Some(shared_credentials), run_sub_override)
+            let profile = TauriSettingsState::current_profile(&app_handle).await?;
+            let hub_url = profile.hub_profile.hub;
+
+            if hub_url.is_empty() {
+                return Err(TauriFunctionError::new(
+                    "No hub URL configured, cannot get daemon credentials",
+                ));
+            }
+
+            tracing::info!(
+                app_id = %app_id,
+                event_id = %event_id,
+                token_kind = if token.starts_with("pat_") { "pat" } else { "jwt" },
+                "Fetching credentials for daemon event"
+            );
+            let shared_credentials = match crate::execution_credentials::prepare(
+                &hub_url,
+                &app_id,
+                Some(token),
+                None,
+                None,
+            )
+            .await
+            {
+                Ok(credentials) => credentials,
+                Err(err) if crate::execution_credentials::falls_back_to_device_storage(&err) => {
+                    tracing::warn!(
+                        app_id = %app_id,
+                        event_id = %event_id,
+                        error = %err,
+                        "Hub credentials unavailable; running the daemon event against device storage"
+                    );
+                    break 'credentials (None, None);
+                }
+                Err(err) => {
+                    tracing::error!(
+                        app_id = %app_id,
+                        event_id = %event_id,
+                        error = %err,
+                        "Failed to fetch credentials for daemon event"
+                    );
+                    return Err(err.into());
+                }
+            };
+            let content_prefix = credential_content_prefix(&shared_credentials).map(str::to_string);
+            let user_content_prefix =
+                credential_user_content_prefix(&shared_credentials).map(str::to_string);
+            let run_sub_override = if token.starts_with("pat_") {
+                daemon_sub_from_credentials(&shared_credentials, &app_id)
+            } else {
+                None
+            };
+            tracing::info!(
+                app_id = %app_id,
+                event_id = %event_id,
+                content_prefix = ?content_prefix,
+                user_content_prefix = ?user_content_prefix,
+                has_run_sub_override = run_sub_override.is_some(),
+                "Fetched credentials for daemon event"
+            );
+            (Some(shared_credentials), run_sub_override)
+        }
     };
 
     execute_internal(
@@ -1098,12 +1166,16 @@ pub(crate) async fn execute_daemon_event(
         token,
         oauth_tokens,
         ExecutionOverrides {
+            require_remembered_automation_approval: true,
             cancellation_token: Some(cancellation_token),
             cancellation_log_level: Some(LogLevel::Info),
             cancellation_log_message: Some("Daemon run stopped".to_string()),
             log_flush_interval: Some(log_flush_interval),
             log_batch_size: Some(log_batch_size),
             run_sub_override,
+            execution_hub: None,
+            execution_session_id: None,
+            execution_webview: None,
         },
     )
     .await
@@ -1112,6 +1184,7 @@ pub(crate) async fn execute_daemon_event(
 #[tauri::command(async)]
 pub async fn execute_board(
     app_handle: AppHandle,
+    webview: tauri::Webview,
     app_id: String,
     board_id: String,
     payload: RunPayload,
@@ -1121,6 +1194,8 @@ pub async fn execute_board(
     credentials: Option<SharedCredentials>,
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    execution_hub: Option<String>,
+    execution_session_id: Option<String>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let stream_state = stream_state.unwrap_or(true);
     execute_internal(
@@ -1136,7 +1211,12 @@ pub async fn execute_board(
         credentials,
         token,
         oauth_tokens,
-        ExecutionOverrides::default(),
+        ExecutionOverrides {
+            execution_hub,
+            execution_session_id,
+            execution_webview: Some(webview.label().to_owned()),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -1144,6 +1224,7 @@ pub async fn execute_board(
 #[tauri::command(async)]
 pub async fn execute_event(
     app_handle: AppHandle,
+    webview: tauri::Webview,
     app_id: String,
     event_id: String,
     payload: RunPayload,
@@ -1152,6 +1233,8 @@ pub async fn execute_event(
     credentials: Option<SharedCredentials>,
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
+    execution_hub: Option<String>,
+    execution_session_id: Option<String>,
     page_trigger: Option<PageTrigger>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let stream_state = stream_state.unwrap_or(false);
@@ -1168,7 +1251,12 @@ pub async fn execute_event(
         credentials,
         token,
         oauth_tokens,
-        ExecutionOverrides::default(),
+        ExecutionOverrides {
+            execution_hub,
+            execution_session_id,
+            execution_webview: Some(webview.label().to_owned()),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -1181,93 +1269,6 @@ pub async fn cancel_execution(
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let _cancel_result = flow_like_state.remove_and_cancel_run(&run_id);
     Ok(())
-}
-
-/// Open a board's local LanceDB log-store connection. Shared by the board run
-/// listing and the event timeline's run telemetry.
-pub(crate) async fn open_runs_db(
-    state: &Arc<FlowLikeState>,
-    app_id: &str,
-    board_id: &str,
-) -> flow_like_types::Result<flow_like::flow_like_storage::lancedb::Connection> {
-    let db = {
-        let guard = state.config.read().await;
-        guard.callbacks.build_logs_database.clone()
-    };
-    let db_fn = db
-        .as_ref()
-        .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-    let base_path = Path::from("runs").join(app_id).join(board_id);
-    db_fn(base_path.clone())
-        .execute()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to open database: {}", base_path))
-}
-
-/// Open a board's LanceDB `runs` summary table from the local log store.
-pub(crate) async fn open_runs_table(
-    state: &Arc<FlowLikeState>,
-    app_id: &str,
-    board_id: &str,
-) -> flow_like_types::Result<flow_like::flow_like_storage::lancedb::Table> {
-    let db = open_runs_db(state, app_id, board_id).await?;
-    db.open_table("runs")
-        .execute()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to open table: runs"))
-}
-
-/// Columns backing [`StoredRunSummary`] — everything a run listing needs except
-/// the two heavy ones (`payload`, `nodes`). Must stay in sync with the struct.
-const RUN_SUMMARY_COLUMNS: [&str; 11] = [
-    "app_id",
-    "run_id",
-    "board_id",
-    "start",
-    "end",
-    "log_level",
-    "version",
-    "logs",
-    "node_id",
-    "event_version",
-    "event_id",
-];
-
-/// A run row without `payload`/`nodes`, for callers that only aggregate.
-#[derive(Deserialize)]
-struct StoredRunSummary {
-    app_id: String,
-    run_id: String,
-    board_id: String,
-    start: u64,
-    end: u64,
-    log_level: u8,
-    version: String,
-    logs: Option<u64>,
-    node_id: String,
-    event_version: Option<String>,
-    event_id: String,
-}
-
-impl From<StoredRunSummary> for LogMeta {
-    fn from(stored: StoredRunSummary) -> Self {
-        LogMeta {
-            app_id: stored.app_id,
-            run_id: stored.run_id,
-            board_id: stored.board_id,
-            start: stored.start,
-            end: stored.end,
-            log_level: stored.log_level,
-            version: stored.version,
-            nodes: None,
-            logs: stored.logs,
-            node_id: stored.node_id,
-            event_version: stored.event_version,
-            event_id: stored.event_id,
-            payload: Vec::new(),
-            is_remote: false,
-        }
-    }
 }
 
 #[tauri::command(async)]
@@ -1284,125 +1285,54 @@ pub async fn list_runs(
     _last_meta: Option<LogMeta>,
     summary_only: Option<bool>,
 ) -> Result<Vec<LogMeta>, TauriFunctionError> {
-    let summary_only = summary_only.unwrap_or(false);
-    let limit = limit.unwrap_or(100);
-    let offset = offset.unwrap_or(0);
     let state = TauriFlowLikeState::construct(&app_handle).await?;
-    let db = open_runs_table(&state, &app_id, &board_id).await?;
+    let index = crate::run_index::registered_run_index(&state).await?;
+    // `nodes` is the per-node visit trace; aggregation callers never read it,
+    // so summary listings leave it out of the IPC payload. `payload` is never
+    // listed — Re-Run fetches the sidecar through `get_run_payload`.
+    let runs = index
+        .list(&RunQuery {
+            app_id,
+            board_ids: vec![board_id],
+            node_id,
+            event_id: None,
+            from,
+            to,
+            status,
+            limit: limit.unwrap_or(100),
+            offset: offset.unwrap_or(0),
+            include_nodes: !summary_only.unwrap_or(false),
+        })
+        .await?;
+    Ok(runs)
+}
 
-    let mut query_string = String::from("");
-
-    if let Some(node_id) = node_id {
-        query_string.push_str(&format!("node_id = '{}'", node_id));
-    }
-
-    if let Some(from) = from {
-        if !query_string.is_empty() {
-            query_string.push_str(" AND ");
-        }
-        query_string.push_str(&format!("start >= {}", from));
-    }
-
-    if let Some(to) = to {
-        if !query_string.is_empty() {
-            query_string.push_str(" AND ");
-        }
-        query_string.push_str(&format!("start <= {}", to));
-    }
-
-    if let Some(status) = status {
-        if !query_string.is_empty() {
-            query_string.push_str(" AND ");
-        }
-
-        let status = status.to_u8();
-        if status == 0 {
-            query_string.push_str("log_level <= 1");
-        } else {
-            query_string.push_str(&format!("log_level = {}", status));
-        }
-    }
-
-    let mut query = db.query();
-
-    if !query_string.is_empty() {
-        query = query.only_if(&query_string);
-    }
-
-    // `payload` carries the run's whole serialized input and `nodes` its per-node
-    // visit trace. Aggregation callers read neither, so projecting them away keeps
-    // megabytes per listing out of the IPC boundary and the JS heap.
-    if summary_only {
-        query = query.select(Select::Columns(
-            RUN_SUMMARY_COLUMNS.iter().map(|c| c.to_string()).collect(),
+/// The recorded input of a run, for Re-Run. `None` when the run had no
+/// payload or predates the sidecar.
+#[tauri::command(async)]
+pub async fn get_run_payload(
+    app_handle: AppHandle,
+    app_id: String,
+    board_id: String,
+    run_id: String,
+) -> Result<Option<Value>, TauriFunctionError> {
+    if !super::event::is_safe_id(&board_id) || !super::event::is_safe_id(&run_id) {
+        return Err(TauriFunctionError::new(
+            "IDs may only contain alphanumeric characters, '-' and '_'",
         ));
     }
-
-    let runs = query
-        .limit(limit)
-        .offset(offset)
-        .execute()
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    let log_store = FlowLikeState::stores(&state)
         .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to execute query"))?;
-    let results = runs
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|_| flow_like_types::anyhow!("Failed to collect results"))?;
-    let mut log_meta = Vec::with_capacity(results.len() * 10);
-    for result in results {
-        if summary_only {
-            let stored: Vec<StoredRunSummary> =
-                serde_arrow::from_record_batch(&result).unwrap_or_default();
-            log_meta.extend(stored.into_iter().map(LogMeta::from));
-        } else {
-            let stored: Vec<flow_like::flow::execution::StoredLogMeta> =
-                serde_arrow::from_record_batch(&result).unwrap_or_default();
-            log_meta.extend(stored.into_iter().map(LogMeta::from));
-        }
-    }
-    Ok(log_meta)
-
-    // let mut stream = db
-    //     .query()
-    //     .execute()
-    //     .await
-    //     .map_err(|_| flow_like_types::anyhow!("Failed to execute query on table: runs"))?;
-
-    // let client = ClientBuilder::new().open().await?;
-    // let out = client.conn(move |conn| {
-    //     conn.execute_batch("
-    //         CREATE TABLE runs (
-    //             start     UBIGINT,
-    //             run_id    VARCHAR,
-    //             log_level UTINYINT,
-    //             node_id   VARCHAR
-    //         )
-    //     ")?;
-    //     let mut appender = conn.appender("runs").unwrap();
-    //     let (tx, rx) = std::sync::mpsc::channel();
-    //     tokio::spawn(async move {
-    //         while let Some(item_res) = stream.next().await {
-    //             if let Ok(item) = item_res {
-    //                 let _ = tx.send(item);
-    //             }
-    //         }
-    //     });
-
-    //     for meta in rx {
-    //         appender.append_record_batch(meta)?;
-    //     }
-    //     appender.flush()?;
-    //     let mut stmt = conn.prepare("SELECT start, run_id, log_level, node_id FROM runs ORDER BY start DESC LIMIT ?, ?")?;
-    //     let mut rows = stmt.query(params![offset as i64, limit as i64])?;
-    //     let mut out = Vec::new();
-    //     while let Some(r) = rows.next()? {
-    //         let start: u64 = r.get(0)?;
-    //         println!("Row: {:?}", start);
-    //     }
-    //     Ok(out)
-    // }).await?;
-
-    // return Ok(out);
+        .log_store
+        .ok_or_else(|| flow_like_types::anyhow!("No log store configured"))?;
+    let Some(payload) = read_run_payload(&log_store, &app_id, &board_id, &run_id).await? else {
+        return Ok(None);
+    };
+    let value = json::from_slice(&payload).map_err(|error| {
+        flow_like_types::anyhow!("Run {run_id} has an unreadable payload sidecar: {error}")
+    })?;
+    Ok(Some(value))
 }
 
 #[tauri::command(async)]
@@ -1416,6 +1346,39 @@ pub async fn query_run(
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let logs = state.query_run(&log_meta, &query, limit, offset).await?;
     Ok(logs)
+}
+
+#[tauri::command(async)]
+pub async fn query_run_logs(
+    app_handle: AppHandle,
+    log_meta: LogMeta,
+    query: LogQuery,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<LogMessage>, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    Ok(state
+        .query_run_logs(&log_meta, &query, offset, limit)
+        .await?)
+}
+
+#[tauri::command(async)]
+pub async fn count_run_logs(
+    app_handle: AppHandle,
+    log_meta: LogMeta,
+    query: LogQuery,
+) -> Result<usize, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    Ok(state.count_run_logs(&log_meta, &query).await?)
+}
+
+#[tauri::command(async)]
+pub async fn get_run_log_summary(
+    app_handle: AppHandle,
+    log_meta: LogMeta,
+) -> Result<Option<LogSummary>, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    Ok(state.run_log_summary(&log_meta).await?)
 }
 
 #[cfg(test)]
@@ -1444,23 +1407,6 @@ mod tests {
                 }),
                 ..Default::default()
             },
-        }
-    }
-
-    #[test]
-    fn offline_apps_are_not_reported_to_the_backend() {
-        assert!(!should_report_run_to_backend(&AppVisibility::Offline));
-    }
-
-    #[test]
-    fn server_backed_apps_are_reported_to_the_backend() {
-        for visibility in [
-            AppVisibility::Public,
-            AppVisibility::PublicRequestAccess,
-            AppVisibility::Private,
-            AppVisibility::Prototype,
-        ] {
-            assert!(should_report_run_to_backend(&visibility));
         }
     }
 
@@ -1553,6 +1499,53 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert_eq!(removed, "The Page action is stale or invalid");
+    }
+
+    /// packages/ui/lib/run-timing.ts reads this payload shape from
+    /// `run_initiated`.
+    #[test]
+    fn preamble_timer_records_ordered_gap_free_laps_in_the_contract_shape() {
+        let mut timer = PreambleTimer::new();
+        timer.lap("state");
+        std::thread::sleep(Duration::from_millis(3));
+        timer.lap("app_load");
+        timer.lap("identity");
+
+        let names = timer
+            .steps
+            .iter()
+            .map(|(step, _)| *step)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["state", "app_load", "identity"]);
+        assert!(timer.steps[1].1 >= 3.0);
+
+        let raw_sum = timer.steps.iter().map(|(_, ms)| ms).sum::<f64>();
+        assert!((raw_sum - timer.total_ms()).abs() < 1e-6);
+
+        let json = timer.to_json();
+        let object = json.as_object().unwrap();
+        assert_eq!(object.len(), 2);
+        let total = object["total_ms"].as_f64().unwrap();
+        let steps = object["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 3);
+        for (step, name) in steps.iter().zip(names) {
+            let step = step.as_object().unwrap();
+            assert_eq!(step.len(), 2);
+            assert_eq!(step["step"].as_str(), Some(name));
+            let ms = step["ms"].as_f64().unwrap();
+            assert!(((ms * 10.0).round() - ms * 10.0).abs() < 1e-9);
+        }
+        let rounded_sum = steps
+            .iter()
+            .map(|step| step["ms"].as_f64().unwrap())
+            .sum::<f64>();
+        assert!((rounded_sum - total).abs() <= 0.05 * (steps.len() + 1) as f64 + 1e-9);
+
+        let summary = timer.summary();
+        assert!(summary.starts_with("total="));
+        assert!(summary.contains("ms state="));
+        assert!(summary.contains(" app_load="));
+        assert!(summary.contains(" identity="));
     }
 
     #[test]

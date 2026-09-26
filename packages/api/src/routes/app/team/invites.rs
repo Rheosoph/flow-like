@@ -103,8 +103,7 @@ pub async fn revoke_invite(
         app_id,
         "membership.invite.revoke",
         "Invitation",
-        invite_id,
-        "Invitation revoked"
+        invite_id
     );
     Ok(Json(()))
 }

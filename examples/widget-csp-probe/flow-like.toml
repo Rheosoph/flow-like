@@ -1,0 +1,24 @@
+manifest_version = 2
+id = "com.flowlike.example.widget-csp-probe"
+name = "Widget CSP Probe"
+version = "0.1.0"
+description = "Test package that checks, inside a real webview, that widget network grants, navigation pins, frame isolation and IPC boundaries hold. Not meant for production apps."
+license = "MIT"
+keywords = [
+    "example",
+    "widgets",
+    "security",
+    "csp",
+]
+repository = "https://github.com/Rheosoph/flow-like"
+
+widget_bundle_path = "widgets.flwb"
+
+[[authors]]
+name = "Flow-Like"
+
+# The probe widget declares network sources in its widget.config.ts `csp`.
+# Viewers approve them per widget; the package itself needs no sandbox permissions.
+[permissions]
+memory = "standard"
+timeout = "standard"

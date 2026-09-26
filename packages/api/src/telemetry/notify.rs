@@ -24,6 +24,7 @@ use crate::telemetry::alerts::{ALERT_STATUS_TRIGGERED, format_metric_value};
 pub const MAX_PUSH_RECIPIENTS: usize = 50;
 /// Where a push recipient lands when they open the notification.
 const ALERT_INBOX_LINK: &str = "/admin/telemetry/alerts";
+const ADMIN_RECIPIENTS_CACHE_KEY: &str = "telemetry:alert_push_recipients";
 
 /// Admin candidates as read back from the user table.
 #[derive(Clone, Debug, FromQueryResult)]
@@ -149,9 +150,15 @@ async fn notify_admins_by_push(
 }
 
 /// Active users holding the global Admin permission, capped at
-/// [`MAX_PUSH_RECIPIENTS`]. The bit is tested in SQL so the fan-out never reads
+/// [`MAX_PUSH_RECIPIENTS`]. The bit is tested in SQL so the fan-out never ships
 /// the whole user table, and again in Rust so the cap applies to real admins.
+/// No index can serve a bitmask, so the scan is shared through the short-lived
+/// response cache by every transition of a pass.
 async fn admin_recipients(state: &AppState) -> Result<Vec<String>, sea_orm::DbErr> {
+    if let Some(recipients) = state.get_cache::<Vec<String>>(ADMIN_RECIPIENTS_CACHE_KEY) {
+        return Ok(recipients);
+    }
+
     let rows = user::Entity::find()
         .select_only()
         .column(user::Column::Id)
@@ -164,7 +171,9 @@ async fn admin_recipients(state: &AppState) -> Result<Vec<String>, sea_orm::DbEr
         .all(&state.db)
         .await?;
 
-    Ok(cap_recipients(rows))
+    let recipients = cap_recipients(rows);
+    state.set_cache(ADMIN_RECIPIENTS_CACHE_KEY.to_string(), &recipients);
+    Ok(recipients)
 }
 
 /// `permission & <Admin bit> <> 0`, portable across the supported backends.

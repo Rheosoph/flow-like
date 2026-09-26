@@ -54,7 +54,6 @@ pub async fn upsert_model(
 
     let now = chrono::Utc::now().fixed_offset();
     let audit_slug = slug.clone();
-    let audit_name = body.name.clone();
 
     llm_model::Entity::insert(llm_model::ActiveModel {
         slug: Set(slug),
@@ -89,13 +88,6 @@ pub async fn upsert_model(
     .exec(&state.db)
     .await?;
 
-    audit!(
-        state,
-        user,
-        "admin.model.upsert",
-        "llm_model",
-        audit_slug,
-        format!("LLM model upserted: {}", audit_name)
-    );
+    audit!(state, user, "admin.model.upsert", "llm_model", audit_slug);
     Ok(Json(()))
 }

@@ -16,6 +16,7 @@ pub mod register_mcp_tools;
 pub mod register_remote_mcp_tools;
 pub mod register_thinking;
 pub mod register_tools;
+pub mod register_work_iq_tools;
 pub mod set_system_prompt;
 pub mod simple;
 pub mod stream_invoke;
@@ -47,6 +48,13 @@ pub struct McpServerConfig {
     /// the serialized `uri` is never trusted as a bearer-token destination.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_event_id: Option<String>,
+
+    /// OAuth provider whose run token authenticates this server. The token is
+    /// resolved immediately before opening the transport and the URI comes from
+    /// the provider's trusted endpoint, never from the serialized `uri`, so a
+    /// crafted agent cannot redirect the token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_provider_id: Option<String>,
 
     /// Additional headers included with every MCP request. Connected-app MCP
     /// proxies use this for registration auth while `auth_header` remains the
@@ -105,6 +113,14 @@ pub(crate) async fn mcp_transport_config_for_execution(
 ) -> flow_like_types::Result<
     rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig,
 > {
+    if let Some(provider_id) = config.oauth_provider_id.as_deref() {
+        return oauth_mcp_transport_config(
+            config,
+            provider_id,
+            context.get_oauth_access_token(provider_id),
+        );
+    }
+
     match (
         config.remote_app_id.as_deref(),
         config.remote_event_id.as_deref(),
@@ -125,7 +141,7 @@ pub(crate) async fn mcp_transport_config_for_execution(
             )
             .await?;
             let trusted_uri = session.url(&format!("events/{remote_event_id}/mcp"));
-            Ok(mcp_transport_config_with_remote_credentials(
+            Ok(mcp_transport_config_with_trusted_credentials(
                 config,
                 trusted_uri,
                 session.token,
@@ -137,8 +153,49 @@ pub(crate) async fn mcp_transport_config_for_execution(
     }
 }
 
+/// MCP endpoints that may receive an OAuth provider's run token.
 #[cfg(feature = "execute")]
-fn mcp_transport_config_with_remote_credentials(
+fn trusted_oauth_mcp_uri(provider_id: &str) -> Option<&'static str> {
+    use flow_like_catalog_data_support::work_iq::{WORK_IQ_MCP_URL, WORK_IQ_PROVIDER_ID};
+
+    match provider_id {
+        WORK_IQ_PROVIDER_ID => Some(WORK_IQ_MCP_URL),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "execute")]
+fn oauth_mcp_transport_config(
+    config: &McpServerConfig,
+    provider_id: &str,
+    access_token: Option<&str>,
+) -> flow_like_types::Result<
+    rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig,
+> {
+    if config.remote_app_id.is_some() || config.remote_event_id.is_some() {
+        return Err(flow_like_types::anyhow!(
+            "MCP server cannot combine OAuth provider '{provider_id}' with a remote project"
+        ));
+    }
+    let trusted_uri = trusted_oauth_mcp_uri(provider_id).ok_or_else(|| {
+        flow_like_types::anyhow!(
+            "No trusted MCP endpoint is registered for OAuth provider '{provider_id}'"
+        )
+    })?;
+    let access_token = access_token.ok_or_else(|| {
+        flow_like_types::anyhow!(
+            "OAuth provider '{provider_id}' is not authenticated or its token expired"
+        )
+    })?;
+    Ok(mcp_transport_config_with_trusted_credentials(
+        config,
+        trusted_uri.to_string(),
+        access_token.to_string(),
+    ))
+}
+
+#[cfg(feature = "execute")]
+fn mcp_transport_config_with_trusted_credentials(
     config: &McpServerConfig,
     trusted_uri: String,
     token: String,
@@ -526,6 +583,7 @@ mod tests {
             auth_header: None,
             remote_app_id: Some("remote-app".to_string()),
             remote_event_id: Some("remote-event".to_string()),
+            oauth_provider_id: None,
             custom_headers: HashMap::new(),
         };
 
@@ -550,6 +608,62 @@ mod tests {
         .unwrap();
         assert!(legacy.remote_app_id.is_none());
         assert!(legacy.remote_event_id.is_none());
+        assert!(legacy.oauth_provider_id.is_none());
+    }
+
+    fn oauth_mcp_config(uri: &str, provider_id: &str) -> McpServerConfig {
+        McpServerConfig {
+            uri: uri.to_string(),
+            tool_filter: None,
+            auth_header: None,
+            remote_app_id: None,
+            remote_event_id: None,
+            oauth_provider_id: Some(provider_id.to_string()),
+            custom_headers: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn oauth_mcp_config_serializes_provider_identity_without_a_bearer() {
+        let config = oauth_mcp_config("https://example.invalid/mcp", "microsoft_workiq");
+
+        let serialized = flow_like_types::json::to_value(&config).unwrap();
+        assert_eq!(serialized["oauth_provider_id"], "microsoft_workiq");
+        assert!(serialized.get("auth_header").is_none());
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn oauth_mcp_bearer_goes_only_to_the_provider_endpoint() {
+        use flow_like_catalog_data_support::work_iq::{WORK_IQ_MCP_URL, WORK_IQ_PROVIDER_ID};
+
+        let mut crafted = oauth_mcp_config("https://attacker.invalid/collect", WORK_IQ_PROVIDER_ID);
+        crafted.auth_header = Some("attacker-controlled".to_string());
+
+        let transport =
+            oauth_mcp_transport_config(&crafted, WORK_IQ_PROVIDER_ID, Some("run-token")).unwrap();
+        assert_eq!(transport.uri.as_ref(), WORK_IQ_MCP_URL);
+        assert_eq!(transport.auth_header.as_deref(), Some("run-token"));
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn oauth_mcp_rejects_unknown_providers_missing_tokens_and_remote_mixes() {
+        use flow_like_catalog_data_support::work_iq::WORK_IQ_PROVIDER_ID;
+
+        let unknown = oauth_mcp_config("https://example.invalid/mcp", "github");
+        let error = oauth_mcp_transport_config(&unknown, "github", Some("token")).unwrap_err();
+        assert!(error.to_string().contains("No trusted MCP endpoint"));
+
+        let work_iq = oauth_mcp_config("https://example.invalid/mcp", WORK_IQ_PROVIDER_ID);
+        let error = oauth_mcp_transport_config(&work_iq, WORK_IQ_PROVIDER_ID, None).unwrap_err();
+        assert!(error.to_string().contains("not authenticated"));
+
+        let mut mixed = work_iq;
+        mixed.remote_app_id = Some("remote-app".to_string());
+        let error =
+            oauth_mcp_transport_config(&mixed, WORK_IQ_PROVIDER_ID, Some("token")).unwrap_err();
+        assert!(error.to_string().contains("remote project"));
     }
 
     #[cfg(feature = "execute")]
@@ -561,10 +675,11 @@ mod tests {
             auth_header: Some("attacker-controlled".to_string()),
             remote_app_id: Some("remote-app".to_string()),
             remote_event_id: Some("remote-event".to_string()),
+            oauth_provider_id: None,
             custom_headers: HashMap::new(),
         };
 
-        let transport = mcp_transport_config_with_remote_credentials(
+        let transport = mcp_transport_config_with_trusted_credentials(
             &crafted,
             "https://hub.invalid/api/v1/apps/remote-app/events/remote-event/mcp".to_string(),
             "fresh-connection-token".to_string(),
@@ -589,6 +704,7 @@ mod tests {
             auth_header: Some("connection-token".to_string()),
             remote_app_id: None,
             remote_event_id: None,
+            oauth_provider_id: None,
             custom_headers: HashMap::from([
                 (
                     "x-flow-like-event-authorization".to_string(),

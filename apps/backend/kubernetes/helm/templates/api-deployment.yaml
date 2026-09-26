@@ -190,6 +190,8 @@ spec:
               value: {{ .Values.api.corsAllowedOrigins | join "," | quote }}
             - name: PUBLIC_API_URL
               value: {{ .Values.api.publicUrl | quote }}
+            - name: FRONTEND_BASE_URL
+              value: {{ .Values.api.frontendBaseUrl | quote }}
             - name: EXECUTION_BACKEND
               value: {{ .Values.execution.backend | quote }}
             - name: ASYNC_EXECUTION_BACKEND
@@ -343,6 +345,29 @@ spec:
             - name: COMPILER_URL
               value: {{ printf "http://%s-compiler:%d" (include "flow-like.fullname" .) (int .Values.compiler.service.port) }}
             {{- end }}
+            - name: AUDIT_WORKER
+              value: "off"
+            {{- if .Values.audit.entrySecret }}
+            - name: AUDIT_ENTRY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.entrySecret | quote }}
+                  key: AUDIT_ENTRY_KEY
+            - name: AUDIT_ENTRY_KEY_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.entrySecret | quote }}
+                  key: AUDIT_ENTRY_KEY_PREVIOUS
+                  optional: true
+            {{- end }}
+            {{- with .Values.audit.kid }}
+            - name: AUDIT_KID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.audit.verifyingKeys }}
+            - name: AUDIT_VERIFYING_KEYS
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.api.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -391,6 +416,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.database.caSecret }}
+            - name: database-ca
+              mountPath: /etc/database
+              readOnly: true
+            {{- end }}
             {{- if $mountRuntime }}
             - name: api-runtime-config
               mountPath: /etc/flow-like
@@ -424,6 +454,13 @@ spec:
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}
       volumes:
+        {{- if .Values.database.caSecret }}
+        - name: database-ca
+          secret:
+            secretName: {{ .Values.database.caSecret | quote }}
+            items:
+              - {key: ca.crt, path: ca.crt}
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi

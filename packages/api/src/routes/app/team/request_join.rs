@@ -136,6 +136,8 @@ pub async fn request_join(
                     user_id: Set(sub),
                     app_id: Set(app_id),
                     comment: Set(comment),
+                    approved_at: Set(None),
+                    approved_by: Set(None),
                     created_at: Set(chrono::Utc::now().fixed_offset()),
                     updated_at: Set(chrono::Utc::now().fixed_offset()),
                 }
@@ -146,13 +148,22 @@ pub async fn request_join(
         })
         .await?;
 
-    let (action, resource_type, summary) = match outcome {
-        JoinOutcome::AutoJoined => ("membership.join", "membership", "Auto-joined public app"),
-        JoinOutcome::RequestUpdated => ("membership.request", "join_queue", "Join request updated"),
-        JoinOutcome::RequestSubmitted => {
-            ("membership.request", "join_queue", "Join request submitted")
+    match outcome {
+        JoinOutcome::AutoJoined => {
+            audit_branch!(state, user, app_id, "membership.join", "membership", sub);
         }
-    };
-    audit_branch!(state, user, app_id, action, resource_type, sub, summary);
+        JoinOutcome::RequestUpdated | JoinOutcome::RequestSubmitted => {
+            let updated = matches!(outcome, JoinOutcome::RequestUpdated);
+            audit_branch!(
+                state,
+                user,
+                app_id,
+                "membership.request",
+                "join_queue",
+                sub,
+                serde_json::json!({ "updated": updated })
+            );
+        }
+    }
     Ok(Json(()))
 }

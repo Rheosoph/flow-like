@@ -90,6 +90,49 @@ describe("resolveEventActions", () => {
 		).toEqual(["typed"]);
 	});
 
+	test("inherited object members are never named handlers", () => {
+		for (const name of [
+			"constructor",
+			"__proto__",
+			"toString",
+			"valueOf",
+			"hasOwnProperty",
+		]) {
+			expect(resolveEventActions({}, name, undefined)).toEqual({
+				actions: [],
+				source: "none",
+			});
+			expect(
+				resolveEventActions(
+					{ save: [action("save")] },
+					name,
+					[action("legacy")],
+					{ legacyFallback: false, wildcardFallback: false },
+				),
+			).toEqual({ actions: [], source: "none" });
+			expect(firstEventAction({}, name, undefined)).toBeUndefined();
+		}
+	});
+
+	test("an inherited wildcard member is not a wildcard handler", () => {
+		const handlers = Object.create({
+			[WILDCARD_EVENT]: [action("inherited")],
+		});
+
+		expect(resolveEventActions(handlers, "constructor", undefined)).toEqual({
+			actions: [],
+			source: "none",
+		});
+	});
+
+	test("an own handler named like an object member still resolves", () => {
+		expect(
+			resolveEventActions({ toString: [action("typed")] }, "toString", [
+				action("legacy"),
+			]),
+		).toEqual({ actions: [action("typed")], source: "event" });
+	});
+
 	test("returns the first resolved action for upload target discovery", () => {
 		expect(
 			firstEventAction({ change: [action("workflow_event")] }, "change", [

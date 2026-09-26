@@ -8,6 +8,7 @@ import {
 	type IVersionType,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import {
 	MAX_OWNED_TEMPLATE_METADATA,
 	type TemplateReadOptions,
@@ -15,8 +16,50 @@ import {
 } from "@flow-like/flow-like-ui/state/backend-state/template-read";
 import { invoke } from "@tauri-apps/api/core";
 import { isEqual } from "lodash-es";
-import { fetcher } from "../../lib/api";
+import { type FetcherOptions, fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+
+type RemoteTemplateEntry = [string, string, IMetadata];
+
+function shapeOf(value: unknown): string {
+	if (value === null) return "null";
+	return Array.isArray(value) ? "array" : typeof value;
+}
+
+function expectArray(value: unknown, route: string): unknown[] {
+	if (Array.isArray(value)) return value;
+	throw new Error(`${route} returned ${shapeOf(value)} instead of an array`);
+}
+
+function expectRecord<T>(value: T, route: string): T {
+	if (isRecord(value)) return value;
+	throw new Error(`${route} returned ${shapeOf(value)} instead of an object`);
+}
+
+function isRemoteTemplateEntry(entry: unknown): entry is RemoteTemplateEntry {
+	return (
+		Array.isArray(entry) &&
+		typeof entry[0] === "string" &&
+		typeof entry[1] === "string" &&
+		isRecord(entry[2])
+	);
+}
+
+/** A garbled listing is an error, never an empty one: callers merge it into local state. */
+async function fetchRemoteTemplateEntries(
+	backend: TauriBackend,
+	route: string,
+	options?: FetcherOptions,
+): Promise<RemoteTemplateEntry[]> {
+	if (!backend.profile) throw new Error(`No profile set to fetch ${route}`);
+	const response = await fetcher<unknown>(
+		backend.profile,
+		route,
+		options,
+		backend.auth,
+	);
+	return expectArray(response, route).filter(isRemoteTemplateEntry);
+}
 
 export class TemplateState implements ITemplateState {
 	constructor(private readonly backend: TauriBackend) {}
@@ -45,11 +88,11 @@ export class TemplateState implements ITemplateState {
 		if (query.offset !== undefined) params.set("offset", String(query.offset));
 
 		try {
-			return await fetcher<ITemplateSearchHit[]>(
-				this.backend.profile,
-				`apps/templates/search?${params}`,
-				{ method: "GET" },
-			);
+			const route = `apps/templates/search?${params}`;
+			const hits = await fetcher<unknown>(this.backend.profile, route, {
+				method: "GET",
+			});
+			return expectArray(hits, route) as ITemplateSearchHit[];
 		} catch (error) {
 			if (options?.strict) throw error;
 			return [];
@@ -63,10 +106,12 @@ export class TemplateState implements ITemplateState {
 		if (!this.backend.profile) {
 			throw new Error("Profile not set. Cannot preview a template.");
 		}
-		return fetcher<ITemplatePreview>(
-			this.backend.profile,
-			`apps/${appId}/templates/${templateId}/preview`,
-			{ method: "GET" },
+		const route = `apps/${appId}/templates/${templateId}/preview`;
+		return expectRecord(
+			await fetcher<ITemplatePreview>(this.backend.profile, route, {
+				method: "GET",
+			}),
+			route,
 		);
 	}
 	async getTemplates(
@@ -97,13 +142,12 @@ export class TemplateState implements ITemplateState {
 								{
 									label: "Owned remote template metadata",
 									read: () =>
-										fetcher<[string, string, IMetadata | undefined][]>(
-											profile,
+										fetchRemoteTemplateEntries(
+											this.backend,
 											appId
 												? `apps/${appId}/templates?${params}`
 												: `user/templates?${params}`,
 											{ method: "GET" },
-											this.backend.auth,
 										),
 								},
 							]
@@ -145,11 +189,9 @@ export class TemplateState implements ITemplateState {
 
 			const promise = injectDataFunction(
 				async () => {
-					const remoteData = await fetcher<[string, string, IMetadata][]>(
-						this.backend.profile!,
+					const remoteData = await fetchRemoteTemplateEntries(
+						this.backend,
 						`apps/${appId}/templates`,
-						undefined,
-						this.backend.auth,
 					);
 
 					const mergedData = new Map<string, [string, string, IMetadata]>();
@@ -197,51 +239,63 @@ export class TemplateState implements ITemplateState {
 			return templates;
 		}
 
-		const limit = 100;
-		let offset = 0;
-		let foundAmount = 0;
-		const mergedData = new Map<string, [string, string, IMetadata]>();
-		for (const [id, templateId, meta] of templates) {
-			const key = `${id}:${templateId}`;
-			if (!mergedData.has(key) && meta) {
-				mergedData.set(key, [id, templateId, meta]);
-			}
-		}
-
-		try {
-			do {
-				const remoteData = await fetcher<[string, string, IMetadata][]>(
-					this.backend.profile,
-					`user/templates?limit=${limit}&offset=${offset}`,
-					undefined,
-					this.backend.auth,
-				);
-
-				foundAmount = remoteData.length;
-				offset += 100;
-
-				for (const [appId, templateId, metadata] of remoteData) {
-					const key = `${appId}:${templateId}`;
-					const found = mergedData.get(key);
-					if (found) {
-						if (isEqual(found[2], metadata)) {
-							// If metadata is the same, skip adding it again
-							continue;
-						}
+		// Local templates render first; a slow or hung hub only delays the merge.
+		const promise = injectDataFunction(
+			async () => {
+				const limit = 100;
+				let offset = 0;
+				let foundAmount = 0;
+				const mergedData = new Map<string, [string, string, IMetadata]>();
+				for (const [id, templateId, meta] of templates) {
+					const key = `${id}:${templateId}`;
+					if (!mergedData.has(key) && meta) {
+						mergedData.set(key, [id, templateId, meta]);
 					}
-					mergedData.set(key, [appId, templateId, metadata]);
-					await invoke("push_template_meta", {
-						appId: appId,
-						templateId: templateId,
-						metadata: metadata,
-					});
 				}
-			} while (foundAmount > 0);
-		} catch (error) {
-			console.error("Failed to fetch templates from remote:", error);
-		}
 
-		return Array.from(mergedData.values());
+				try {
+					do {
+						const remoteData = await fetchRemoteTemplateEntries(
+							this.backend,
+							`user/templates?limit=${limit}&offset=${offset}`,
+						);
+
+						foundAmount = remoteData.length;
+						offset += 100;
+
+						for (const [appId, templateId, metadata] of remoteData) {
+							const key = `${appId}:${templateId}`;
+							const found = mergedData.get(key);
+							if (found) {
+								if (isEqual(found[2], metadata)) {
+									// If metadata is the same, skip adding it again
+									continue;
+								}
+							}
+							mergedData.set(key, [appId, templateId, metadata]);
+							await invoke("push_template_meta", {
+								appId: appId,
+								templateId: templateId,
+								metadata: metadata,
+							});
+						}
+					} while (foundAmount > 0);
+				} catch (error) {
+					console.error("Failed to fetch templates from remote:", error);
+				}
+
+				return Array.from(mergedData.values());
+			},
+			this,
+			this.backend.queryClient,
+			this.getTemplates,
+			[appId, language],
+			[],
+			templates,
+		);
+		this.backend.backgroundTaskHandler(promise);
+
+		return templates;
 	}
 
 	async getTemplate(
@@ -263,6 +317,7 @@ export class TemplateState implements ITemplateState {
 			}
 		} catch (error) {
 			console.error("Error fetching template:", error);
+			if (await this.backend.isLocalOnly(appId)) throw error;
 		}
 
 		if (!this.backend.profile || !this.backend.queryClient) {
@@ -274,14 +329,14 @@ export class TemplateState implements ITemplateState {
 			);
 		}
 
+		const profile = this.backend.profile;
+		const route = `apps/${appId}/templates/${templateId}`;
 		if (template) {
 			const promise = injectDataFunction(
 				async () => {
-					const remoteData = await fetcher<IBoard>(
-						this.backend.profile!,
-						`apps/${appId}/templates/${templateId}`,
-						undefined,
-						this.backend.auth,
+					const remoteData = expectRecord(
+						await fetcher<IBoard>(profile, route, undefined, this.backend.auth),
+						route,
 					);
 
 					if (!isEqual(template, remoteData)) {
@@ -310,21 +365,17 @@ export class TemplateState implements ITemplateState {
 		}
 
 		try {
-			const remoteData = await fetcher<IBoard>(
-				this.backend.profile,
-				`apps/${appId}/templates/${templateId}`,
-				undefined,
-				this.backend.auth,
+			const remoteData = expectRecord(
+				await fetcher<IBoard>(profile, route, undefined, this.backend.auth),
+				route,
 			);
 
-			if (remoteData) {
-				await invoke("push_template_data", {
-					appId: appId,
-					templateId: templateId,
-					data: remoteData,
-					version: version,
-				});
-			}
+			await invoke("push_template_data", {
+				appId: appId,
+				templateId: templateId,
+				data: remoteData,
+				version: version,
+			});
 
 			return remoteData;
 		} catch (error) {
@@ -361,9 +412,10 @@ export class TemplateState implements ITemplateState {
 			throw new Error("No profile set for Tauri backend");
 		}
 
+		const route = `apps/${appId}/templates/${templateId ?? "new"}`;
 		const result = await fetcher<[string, [number, number, number]]>(
 			this.backend.profile,
-			`apps/${appId}/templates/${templateId ?? "new"}`,
+			route,
 			{
 				method: "PUT",
 				body: JSON.stringify({
@@ -374,6 +426,12 @@ export class TemplateState implements ITemplateState {
 			},
 			this.backend.auth,
 		);
+		// Callers key the new template's metadata by result[0].
+		if (!Array.isArray(result) || typeof result[0] !== "string") {
+			throw new Error(
+				`${route} returned ${shapeOf(result)} instead of [templateId, version]`,
+			);
+		}
 
 		await invoke("upsert_template", {
 			appId: appId,
@@ -456,14 +514,19 @@ export class TemplateState implements ITemplateState {
 			);
 		}
 
+		const profile = this.backend.profile;
+		const route = `apps/${appId}/meta?language=${language ?? "en"}&template_id=${templateId}`;
 		if (meta) {
 			const promise = injectDataFunction(
 				async () => {
-					const remoteMeta = await fetcher<IMetadata>(
-						this.backend.profile!,
-						`apps/${appId}/meta?language=${language ?? "en"}&template_id=${templateId}`,
-						undefined,
-						this.backend.auth,
+					const remoteMeta = expectRecord(
+						await fetcher<IMetadata>(
+							profile,
+							route,
+							undefined,
+							this.backend.auth,
+						),
+						route,
 					);
 
 					await invoke("push_template_meta", {
@@ -488,21 +551,17 @@ export class TemplateState implements ITemplateState {
 		}
 
 		try {
-			const remoteMeta = await fetcher<IMetadata>(
-				this.backend.profile,
-				`apps/${appId}/meta?language=${language ?? "en"}&template_id=${templateId}`,
-				undefined,
-				this.backend.auth,
+			const remoteMeta = expectRecord(
+				await fetcher<IMetadata>(profile, route, undefined, this.backend.auth),
+				route,
 			);
 
-			if (remoteMeta) {
-				await invoke("push_template_meta", {
-					appId: appId,
-					templateId: templateId,
-					metadata: remoteMeta,
-					language,
-				});
-			}
+			await invoke("push_template_meta", {
+				appId: appId,
+				templateId: templateId,
+				metadata: remoteMeta,
+				language,
+			});
 
 			return remoteMeta;
 		} catch (error) {

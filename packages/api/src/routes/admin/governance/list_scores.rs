@@ -6,8 +6,8 @@ use crate::{
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::sea_query::Expr;
 use sea_orm::sea_query::ExprTrait;
+use sea_orm::sea_query::{Alias, Expr};
 use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -69,6 +69,38 @@ pub struct ListAppScoresQuery {
     pub direction: Option<String>,
     pub page: Option<u64>,
     pub limit: Option<u64>,
+}
+
+/// English display names for the given apps, reading only the two columns
+/// needed instead of whole `Meta` rows.
+pub(super) async fn load_app_names(
+    state: &AppState,
+    app_ids: Vec<String>,
+) -> Result<HashMap<String, String>, ApiError> {
+    if app_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let names: Vec<(Option<String>, String)> = meta::Entity::find()
+        .select_only()
+        .column(meta::Column::AppId)
+        .column(meta::Column::Name)
+        .filter(meta::Column::AppId.is_in(app_ids))
+        .filter(meta::Column::Lang.eq("en"))
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+
+    Ok(names
+        .into_iter()
+        .filter_map(|(app_id, name)| app_id.map(|app_id| (app_id, name)))
+        .collect())
+}
+
+fn attach_app_names(items: &mut [AppScoreItem], names: &HashMap<String, String>) {
+    for item in items {
+        item.app_name = names.get(&item.app_id).cloned();
+    }
 }
 
 fn category_value(item: &AppScoreItem, key: &str) -> i32 {
@@ -138,11 +170,15 @@ pub async fn list_scores(
             "board_count",
         )
         .column_as(
-            Expr::col(app_board_score::Column::NodeCount).sum(),
+            Expr::col(app_board_score::Column::NodeCount)
+                .sum()
+                .cast_as(Alias::new("BIGINT")),
             "node_count",
         )
         .column_as(
-            Expr::col(app_board_score::Column::ScoredNodeCount).sum(),
+            Expr::col(app_board_score::Column::ScoredNodeCount)
+                .sum()
+                .cast_as(Alias::new("BIGINT")),
             "scored_node_count",
         )
         .group_by(app_board_score::Column::AppId)
@@ -150,25 +186,10 @@ pub async fn list_scores(
         .all(&state.db)
         .await?;
 
-    // Resolve localized (English) app names for display & search.
-    let app_ids: Vec<String> = aggregates.iter().map(|a| a.app_id.clone()).collect();
-    let names: HashMap<String, String> = if app_ids.is_empty() {
-        HashMap::new()
-    } else {
-        meta::Entity::find()
-            .filter(meta::Column::AppId.is_in(app_ids.clone()))
-            .filter(meta::Column::Lang.eq("en"))
-            .all(&state.db)
-            .await?
-            .into_iter()
-            .filter_map(|m| m.app_id.clone().map(|aid| (aid, m.name)))
-            .collect()
-    };
-
     let mut items: Vec<AppScoreItem> = aggregates
         .into_iter()
         .map(|a| AppScoreItem {
-            app_name: names.get(&a.app_id).cloned(),
+            app_name: None,
             app_id: a.app_id,
             security: a.security,
             privacy: a.privacy,
@@ -183,16 +204,22 @@ pub async fn list_scores(
         })
         .collect();
 
-    // Search filter (app id or name, case-insensitive).
-    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
-        && !search.is_empty()
-    {
+    // Search filter (app id or name, case-insensitive). Searching needs the name
+    // of every scored app; otherwise names are only resolved for the page below.
+    let search = query
+        .search
+        .as_ref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    if let Some(search) = &search {
+        let app_ids = items.iter().map(|item| item.app_id.clone()).collect();
+        attach_app_names(&mut items, &load_app_names(&state, app_ids).await?);
         items.retain(|item| {
-            item.app_id.to_lowercase().contains(&search)
+            item.app_id.to_lowercase().contains(search.as_str())
                 || item
                     .app_name
                     .as_ref()
-                    .map(|n| n.to_lowercase().contains(&search))
+                    .map(|n| n.to_lowercase().contains(search.as_str()))
                     .unwrap_or(false)
         });
     }
@@ -222,12 +249,17 @@ pub async fn list_scores(
 
     let total = items.len() as u64;
     let offset = ((page - 1) * limit) as usize;
-    let paged: Vec<AppScoreItem> = items
+    let mut paged: Vec<AppScoreItem> = items
         .into_iter()
         .skip(offset)
         .take(limit as usize)
         .collect();
     let has_more = (offset as u64) + (paged.len() as u64) < total;
+
+    if search.is_none() {
+        let app_ids = paged.iter().map(|item| item.app_id.clone()).collect();
+        attach_app_names(&mut paged, &load_app_names(&state, app_ids).await?);
+    }
 
     Ok(Json(ListAppScoresResponse {
         apps: paged,

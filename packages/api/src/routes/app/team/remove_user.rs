@@ -82,7 +82,11 @@ pub async fn remove_user(
     state
         .transaction(|txn| {
             let membership_id = membership_id.clone();
+            let app_id = app_id.clone();
+            let sub = sub.clone();
             Box::pin(async move {
+                crate::db::coordination::coordinate(txn, "payments-app", &[&app_id]).await?;
+                crate::payments::marketplace::block_entitlement(txn, &sub, &app_id).await?;
                 membership::Entity::delete_by_id(membership_id)
                     .exec(txn)
                     .await?;
@@ -91,15 +95,11 @@ pub async fn remove_user(
         })
         .await?;
 
-    audit_branch!(
-        state,
-        user,
-        app_id,
-        "membership.remove",
-        "Membership",
-        sub,
-        "User removed from team"
-    );
+    // Pins the member licensed pass to another admin or the owner who holds
+    // the package, or lapse and notify.
+    crate::package_license::refresh_app(&state, &app_id).await;
+
+    audit_branch!(state, user, app_id, "membership.remove", "Membership", sub);
     Ok(Json(()))
 }
 

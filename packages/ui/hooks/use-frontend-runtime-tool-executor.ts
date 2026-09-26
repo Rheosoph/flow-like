@@ -4,6 +4,7 @@ import { useCallback } from "react";
 
 import type { SurfaceComponent } from "../components/a2ui/types";
 import { compactJson, compactLogEvents } from "../components/flowpilot/utils";
+import type { IAttachment } from "../components/interfaces/chat-default/chat-db";
 import type { ILog, ILogMetadata, IRunPayload } from "../lib";
 import { ApiResponseError } from "../lib/api-error";
 import { runAppChatMessage } from "../lib/app-chat-run";
@@ -24,6 +25,15 @@ import {
 	summarizeUiInspectPage as summarizePage,
 } from "../lib/flowpilot/ui-page-inspection";
 import {
+	attachmentDisplayName,
+	resolveForwardFiles,
+} from "../lib/forwarded-attachments";
+import {
+	type GeoJsonImportPlan,
+	batchGeoJsonRows,
+	planGeoJsonImport,
+} from "../lib/geojson-import";
+import {
 	interactWithAppPage,
 	parseInteractActions,
 } from "../lib/interact-app-page";
@@ -31,10 +41,16 @@ import {
 	encodePackageWidgetRef,
 	listAppPackageWidgets,
 } from "../lib/package-widgets";
+import {
+	type TableColumnSummary,
+	assertRowKeysAreColumns,
+	summarizeTableColumns,
+} from "../lib/table-schema-columns";
 import { type IBackendState, useBackend } from "../state/backend-state";
 import type { IBoardState } from "../state/backend-state/board-state";
 import { parseIndexType } from "../state/backend-state/db-state";
 import type {
+	IAddColumnPayload,
 	IDatabaseSchemaField,
 	IDatabaseState,
 } from "../state/backend-state/db-state";
@@ -201,6 +217,12 @@ interface FrontendRuntimeToolExecutorOptions {
 	defaultOverlayId?: string;
 }
 
+/** Per-call host context the tool arguments cannot supply. */
+export interface FrontendRuntimeToolContext {
+	/** User files the orchestrator forwarded to this run; database_tool import_geojson reads them. */
+	attachments?: readonly IAttachment[];
+}
+
 function getArgString(
 	args: Record<string, unknown>,
 	snake: string,
@@ -272,6 +294,12 @@ function parseDatabaseSchemaFields(value: unknown): IDatabaseSchemaField[] {
 				`create_table fields[${index}].vector_size must be a positive integer.`,
 			);
 		}
+		const primaryKey = record.primary_key;
+		if (primaryKey !== undefined && typeof primaryKey !== "boolean") {
+			throw new Error(
+				`create_table fields[${index}].primary_key must be a boolean.`,
+			);
+		}
 
 		return {
 			name,
@@ -280,6 +308,7 @@ function parseDatabaseSchemaFields(value: unknown): IDatabaseSchemaField[] {
 			...(vectorSize === undefined
 				? {}
 				: { vector_size: vectorSize as number }),
+			...(primaryKey === undefined ? {} : { primary_key: primaryKey }),
 		};
 	});
 }
@@ -432,6 +461,342 @@ function explicitSchemaCreateUnavailableResult(
 			"Explicit table-schema creation is unavailable on the connected API (the first POST returned 405). This schema is retained as pending in the frontend session. Submit each other required schema once; cached requests will not call the API or ask for approval. Continue the workflow/board build now and retry pending schemas only after the matching API is deployed and the frontend is reloaded. Do not replace the workflow with a database smoke test.",
 		next_action: "continue_workflow_build",
 	};
+}
+
+const GEOJSON_IMPORT_MAX_FILE_BYTES = 50 * 1024 * 1024;
+const GEOJSON_IMPORT_MAX_REPORTED_SKIPS = 100;
+
+function errorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** Row reads that surface failures, where a host would otherwise answer an empty page. */
+function strictDatabaseReads(dbState: IDatabaseState) {
+	return {
+		listItems: (dbState.listItemsAuthoritative ?? dbState.listItems).bind(
+			dbState,
+		),
+		queryItems: (dbState.queryItemsAuthoritative ?? dbState.queryItems).bind(
+			dbState,
+		),
+		countItems: (dbState.countItemsAuthoritative ?? dbState.countItems).bind(
+			dbState,
+		),
+	};
+}
+
+/** Columns of an existing table, or undefined when its schema cannot be read (e.g. it does not exist yet). */
+async function existingTableColumns(
+	dbState: Pick<IDatabaseState, "getSchema">,
+	appId: string,
+	tableName: string,
+	userScoped: boolean,
+): Promise<TableColumnSummary[] | undefined> {
+	try {
+		const columns = summarizeTableColumns(
+			await dbState.getSchema(appId, tableName, userScoped),
+		);
+		return columns.length > 0 ? columns : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Keys that are not columns of an existing table would be dropped silently by storage. */
+export async function assertInsertKeysAreColumns(
+	dbState: Pick<IDatabaseState, "getSchema">,
+	options: {
+		appId: string;
+		tableName: string;
+		userScoped: boolean;
+		rows: readonly unknown[];
+	},
+): Promise<void> {
+	const columns = await existingTableColumns(
+		dbState,
+		options.appId,
+		options.tableName,
+		options.userScoped,
+	);
+	if (!columns) return;
+	assertRowKeysAreColumns(
+		options.tableName,
+		options.rows,
+		columns.map((column) => column.name),
+	);
+}
+
+/** SQL answers every row regardless of offset/limit, so page it here. */
+export function databaseQueryPage(
+	rows: readonly unknown[],
+	query: Record<string, unknown>,
+	offset: number,
+	limit: number,
+) {
+	if (typeof query.sql !== "string" || !query.sql.trim()) {
+		return { row_count: rows.length, rows };
+	}
+	const page = rows.slice(offset, offset + limit);
+	return {
+		row_count: page.length,
+		total_rows: rows.length,
+		truncated: offset + page.length < rows.length,
+		rows: page,
+	};
+}
+
+function forwardedImportFile(
+	attachments: readonly IAttachment[],
+	fileName: string,
+): IAttachment {
+	const selection = resolveForwardFiles(attachments, [fileName]);
+	if (selection.status === "ok" && selection.files.length === 1)
+		return selection.files[0];
+	if (
+		selection.status === "error" &&
+		selection.code === "forward_file_name_ambiguous"
+	) {
+		throw new Error(selection.message);
+	}
+	const forwarded = attachments.map(attachmentDisplayName);
+	throw new Error(
+		`import_geojson cannot read '${fileName}': it was not forwarded to this Data Studio run (${
+			forwarded.length > 0
+				? `forwarded files: ${forwarded.join(", ")}`
+				: "no files were forwarded"
+		}). The orchestrator must pass the exact attachment name in data_studio_agent forward_files before import_geojson can read it.`,
+	);
+}
+
+async function readForwardedFileText(
+	file: IAttachment,
+	fetchFile: (url: string) => Promise<Response>,
+): Promise<string> {
+	const name = attachmentDisplayName(file);
+	const tooLarge = (bytes: number) =>
+		new Error(
+			`import_geojson refuses '${name}': it is ${(bytes / 1024 / 1024).toFixed(1)} MB, above the ${GEOJSON_IMPORT_MAX_FILE_BYTES / 1024 / 1024} MB import limit. Split the file and import the parts.`,
+		);
+	const declaredSize = typeof file === "string" ? undefined : file.size;
+	if (declaredSize && declaredSize > GEOJSON_IMPORT_MAX_FILE_BYTES)
+		throw tooLarge(declaredSize);
+	const response = await fetchFile(typeof file === "string" ? file : file.url);
+	if (!response.ok) {
+		throw new Error(
+			`import_geojson could not download '${name}' (HTTP ${response.status} ${response.statusText}).`,
+		);
+	}
+	const contentLength = Number(response.headers.get("content-length"));
+	if (contentLength > GEOJSON_IMPORT_MAX_FILE_BYTES)
+		throw tooLarge(contentLength);
+	const buffer = await response.arrayBuffer();
+	if (buffer.byteLength > GEOJSON_IMPORT_MAX_FILE_BYTES)
+		throw tooLarge(buffer.byteLength);
+	return new TextDecoder().decode(buffer);
+}
+
+function assertGeoJsonImportTarget(
+	tableName: string,
+	columns: readonly TableColumnSummary[],
+	plan: GeoJsonImportPlan,
+	geometryColumn: string,
+): void {
+	const existing = new Map(columns.map((column) => [column.name, column]));
+	const missing = plan.fields.filter((field) => !existing.has(field.name));
+	if (missing.length > 0) {
+		throw new Error(
+			`Table '${tableName}' lacks column(s) this import needs: ${missing
+				.map((field) => `${field.name} (${field.type})`)
+				.join(", ")}; its columns are ${columns
+				.map((column) => column.name)
+				.join(
+					", ",
+				)}. Add them with add_column, or import into a new table_name.`,
+		);
+	}
+	const geometry = existing.get(geometryColumn);
+	if (geometry?.type !== "geometry") {
+		throw new Error(
+			`Column '${geometryColumn}' of table '${tableName}' is ${geometry?.type}, not a geometry column. Pass geometry_column naming a geometry column, or add one with add_column {type: "geometry"}.`,
+		);
+	}
+}
+
+/** Create the import table, or check that an existing one can take the planned rows. */
+async function prepareGeoJsonImportTable(
+	dbState: Pick<IDatabaseState, "getSchema" | "createTable">,
+	plan: GeoJsonImportPlan,
+	options: {
+		appId: string;
+		tableName: string;
+		geometryColumn: string;
+		userScoped: boolean;
+	},
+): Promise<{ created: boolean; warning?: string }> {
+	const { appId, tableName, geometryColumn, userScoped } = options;
+	const existing = await existingTableColumns(
+		dbState,
+		appId,
+		tableName,
+		userScoped,
+	);
+	if (existing) {
+		assertGeoJsonImportTarget(tableName, existing, plan, geometryColumn);
+		return { created: false };
+	}
+	const result = await createTableRuntime(dbState, {
+		appId,
+		tableName,
+		fields: plan.fields,
+		ifNotExists: true,
+		userScoped,
+	});
+	if (result.status === "partial") {
+		return {
+			created: false,
+			warning:
+				"Explicit table creation is unavailable on the connected API, so the first insert created the table from the rows; it has no primary key.",
+		};
+	}
+	if (!result.created) {
+		assertGeoJsonImportTarget(
+			tableName,
+			summarizeTableColumns(
+				await dbState.getSchema(appId, tableName, userScoped),
+			),
+			plan,
+			geometryColumn,
+		);
+	}
+	return { created: result.created };
+}
+
+export interface ImportGeoJsonRuntimeOptions {
+	appId: string;
+	tableName: string;
+	fileName: string;
+	geometryColumn: string;
+	keyColumn: string;
+	userScoped: boolean;
+	attachments: readonly IAttachment[];
+}
+
+function importGeoJsonOptions(
+	args: Record<string, unknown>,
+	context: Pick<
+		ImportGeoJsonRuntimeOptions,
+		"appId" | "userScoped" | "attachments"
+	> & { tableName?: string },
+): ImportGeoJsonRuntimeOptions {
+	if (!context.tableName)
+		throw new Error("import_geojson requires table_name.");
+	const fileName = getArgString(args, "file_name", "fileName");
+	if (!fileName) {
+		throw new Error(
+			"import_geojson requires file_name: the exact name of a file forwarded to this Data Studio run.",
+		);
+	}
+	return {
+		...context,
+		tableName: context.tableName,
+		fileName,
+		geometryColumn:
+			getArgString(args, "geometry_column", "geometryColumn") ?? "geometry",
+		keyColumn: getArgString(args, "key_column", "keyColumn") ?? "feature_id",
+	};
+}
+
+/**
+ * Import a forwarded GeoJSON file into a table, one row per feature. Rows are inserted in bounded
+ * batches; a failing batch stops the import with a `partial` result naming the first feature of
+ * that batch, since every earlier batch is already stored.
+ */
+export async function importGeoJsonRuntime(
+	dbState: Pick<IDatabaseState, "getSchema" | "createTable" | "addItems">,
+	options: ImportGeoJsonRuntimeOptions,
+	fetchFile: (url: string) => Promise<Response> = (url) => fetch(url),
+) {
+	const file = forwardedImportFile(options.attachments, options.fileName);
+	const fileName = attachmentDisplayName(file);
+	const text = await readForwardedFileText(file, fetchFile);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch (error) {
+		throw new Error(
+			`import_geojson could not parse '${fileName}' as JSON: ${errorText(error)}`,
+		);
+	}
+	const plan = planGeoJsonImport(parsed, {
+		geometryColumn: options.geometryColumn,
+		keyColumn: options.keyColumn,
+	});
+	if (plan.rows.length === 0) {
+		throw new Error(
+			`import_geojson found no importable feature in '${fileName}' (${plan.featureCount} feature(s)${
+				plan.skipped.length > 0
+					? `; first skip reasons: ${plan.skipped
+							.slice(0, 3)
+							.map((skip) => `#${skip.feature_index}: ${skip.reason}`)
+							.join(" | ")}`
+					: ""
+			}).`,
+		);
+	}
+
+	const tableName = normalizeDatabaseTableIdentifier(options.tableName);
+	const table = await prepareGeoJsonImportTable(dbState, plan, {
+		appId: options.appId,
+		tableName,
+		geometryColumn: options.geometryColumn,
+		userScoped: options.userScoped,
+	});
+	const warnings = [
+		...plan.warnings,
+		...(table.warning ? [table.warning] : []),
+		...(plan.skipped.length > GEOJSON_IMPORT_MAX_REPORTED_SKIPS
+			? [
+					`${plan.skipped.length} features were skipped; only the first ${GEOJSON_IMPORT_MAX_REPORTED_SKIPS} are listed.`,
+				]
+			: []),
+	];
+	const report = (rowsInserted: number) => ({
+		table_name: tableName,
+		...(tableName !== options.tableName
+			? { requested_table_name: options.tableName }
+			: {}),
+		created: table.created,
+		user_scoped: options.userScoped,
+		file_name: fileName,
+		features: plan.featureCount,
+		rows_inserted: rowsInserted,
+		key_column: options.keyColumn,
+		geometry_column: options.geometryColumn,
+		columns: plan.columns,
+		skipped: plan.skipped.slice(0, GEOJSON_IMPORT_MAX_REPORTED_SKIPS),
+		warnings,
+	});
+
+	let rowsInserted = 0;
+	for (const batch of batchGeoJsonRows(plan.rows)) {
+		try {
+			await dbState.addItems(
+				options.appId,
+				tableName,
+				batch.rows,
+				options.userScoped,
+			);
+		} catch (error) {
+			return {
+				status: "partial" as const,
+				...report(rowsInserted),
+				error: errorText(error),
+				failed_feature_index: plan.rowFeatureIndexes[batch.start],
+			};
+		}
+		rowsInserted += batch.rows.length;
+	}
+	return { status: "ok" as const, ...report(rowsInserted) };
 }
 
 function resolveToolAppId(
@@ -1316,11 +1681,13 @@ export function useFrontendRuntimeToolExecutor(
 		async (
 			toolName: FrontendRuntimeToolName,
 			args: Record<string, unknown>,
+			context?: FrontendRuntimeToolContext,
 		): Promise<unknown> => {
 			const toolAppId = resolveToolAppId(args, defaultAppId);
 
 			switch (toolName) {
 				case "database_tool": {
+					const reads = strictDatabaseReads(backend.dbState);
 					const operation = getArgString(args, "operation") ?? "list_tables";
 					const tableName = getArgString(args, "table_name", "tableName");
 					const userScoped = getArgBool(
@@ -1429,21 +1796,16 @@ export function useFrontendRuntimeToolExecutor(
 							const [schema, indices, rowCount, sample] = await Promise.all([
 								backend.dbState.getSchema(toolAppId, tableName, userScoped),
 								backend.dbState.getIndices(toolAppId, tableName, userScoped),
-								backend.dbState.countItems(toolAppId, tableName, userScoped),
+								reads.countItems(toolAppId, tableName, userScoped),
 								includeSample
-									? backend.dbState.listItems(
-											toolAppId,
-											tableName,
-											0,
-											limit,
-											userScoped,
-										)
+									? reads.listItems(toolAppId, tableName, 0, limit, userScoped)
 									: Promise.resolve(undefined),
 							]);
 							return {
 								status: "ok",
 								table_name: tableName,
 								user_scoped: userScoped,
+								columns: summarizeTableColumns(schema),
 								schema,
 								indices,
 								row_count: rowCount,
@@ -1456,7 +1818,7 @@ export function useFrontendRuntimeToolExecutor(
 								args.query && typeof args.query === "object"
 									? (args.query as Record<string, unknown>)
 									: {};
-							const rows = await backend.dbState.queryItems(
+							const rows = await reads.queryItems(
 								toolAppId,
 								tableName,
 								query,
@@ -1468,16 +1830,31 @@ export function useFrontendRuntimeToolExecutor(
 								status: "ok",
 								table_name: tableName,
 								user_scoped: userScoped,
-								row_count: rows.length,
-								rows,
+								...databaseQueryPage(rows, query, offset, limit),
 							};
 						}
+						case "import_geojson":
+							return await importGeoJsonRuntime(
+								backend.dbState,
+								importGeoJsonOptions(args, {
+									appId: toolAppId,
+									tableName,
+									userScoped,
+									attachments: context?.attachments ?? [],
+								}),
+							);
 						case "insert":
 						case "add_items": {
 							if (!tableName) throw new Error("insert requires table_name.");
 							const items = Array.isArray(args.items) ? args.items : [];
 							if (items.length === 0)
 								throw new Error("insert requires non-empty items.");
+							await assertInsertKeysAreColumns(backend.dbState, {
+								appId: toolAppId,
+								tableName,
+								userScoped,
+								rows: items,
+							});
 							await backend.dbState.addItems(
 								toolAppId,
 								tableName,
@@ -1571,14 +1948,14 @@ export function useFrontendRuntimeToolExecutor(
 							const column =
 								args.column_definition &&
 								typeof args.column_definition === "object"
-									? (args.column_definition as {
-											name: string;
-											sql_expression: string;
-										})
+									? (args.column_definition as IAddColumnPayload)
 									: undefined;
-							if (!column?.name || !column?.sql_expression) {
+							if (
+								!column?.name ||
+								Boolean(column.sql_expression) === Boolean(column.type)
+							) {
 								throw new Error(
-									"add_column requires column_definition.name and sql_expression.",
+									"add_column requires column_definition.name and exactly one of sql_expression or type.",
 								);
 							}
 							await backend.dbState.addColumn(

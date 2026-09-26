@@ -17,9 +17,11 @@ import {
 	getTtsAssetRepairPlan,
 	localTtsAssetId,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type UnlistenFn, listen } from "@tauri-apps/api/event";
+import { isEqual } from "lodash-es";
 import type { TauriBackend } from "../tauri-provider";
 
 export class BitState implements IBitState {
@@ -220,21 +222,39 @@ export class BitState implements IBitState {
 	 * user to the browser.
 	 */
 	async listCustomBits(): Promise<IBit[]> {
-		try {
-			const profile = this.backend.profile;
-			if (profile) {
-				const remote = await this.backend.apiState.get<IBit[]>(
-					profile,
-					"user/bits?include_secrets=true",
+		const local = await invoke<IBit[]>("get_custom_bits");
+		const profile = this.backend.profile;
+		if (!profile) return local;
+
+		// The local library answers at once; an unreachable hub only delays the merge.
+		this.backend.backgroundTaskHandler(
+			this.syncCustomBitsFromApi(profile).then((synced) => {
+				const queryClient = this.backend.queryClient;
+				if (!queryClient || isEqual(synced, local)) return;
+				queryClient.setQueriesData(
+					{ queryKey: [this.listCustomBits.name || "backendFn"] },
+					synced,
 				);
-				for (const bit of remote ?? []) {
-					await invoke("upsert_custom_bit", { bit });
-				}
+			}),
+		);
+		return local;
+	}
+
+	private async syncCustomBitsFromApi(profile: IProfile): Promise<IBit[]> {
+		const remote = await this.backend.apiState.get<IBit[]>(
+			profile,
+			"user/bits?include_secrets=true",
+		);
+		for (const bit of asArray(remote)) {
+			// `Bit` is `serde(default)`: an id-less entry would be stored as a blank model.
+			if (!isRecord(bit) || typeof bit.id !== "string" || !bit.id) continue;
+			try {
+				await invoke("upsert_custom_bit", { bit });
+			} catch (error) {
+				console.warn(`Custom bit ${bit.id} from API not stored locally`, error);
 			}
-		} catch (error) {
-			console.warn("Custom bit sync from API failed, using local only", error);
 		}
-		return await invoke<IBit[]>("get_custom_bits");
+		return invoke<IBit[]>("get_custom_bits");
 	}
 
 	async upsertCustomBit(

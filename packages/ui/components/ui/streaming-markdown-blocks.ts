@@ -2,6 +2,7 @@ import type { Descendant, Value } from "platejs";
 import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import {
 	RICH_REMARK_PLUGINS,
+	deserializeMarkdown,
 	safeDeserialize,
 	transformSpecialLinks,
 } from "./text-editor";
@@ -22,19 +23,6 @@ import {
  * one was validated to produce byte-identical output to a whole-document parse
  * at *every character prefix* of a corpus of cross-block constructs.
  */
-
-type PlateLikeNode = Parameters<typeof transformSpecialLinks>[0][number];
-
-type DeserializingEditor = {
-	api: {
-		markdown: {
-			deserialize: (
-				data: string,
-				options: { remarkPlugins: ReadonlyArray<unknown> },
-			) => PlateLikeNode[];
-		};
-	};
-};
 
 export type StreamingBlockEntry = {
 	readonly text: string;
@@ -187,14 +175,9 @@ function startsOrderedItem(block: string): boolean {
 	return first !== undefined && ORDERED_ITEM.test(first);
 }
 
-function parseBlock(
-	worker: DeserializingEditor,
-	text: string,
-): StreamingBlockEntry {
+function parseBlock(worker: unknown, text: string): StreamingBlockEntry {
 	try {
-		const nodes = worker.api.markdown.deserialize(text, {
-			remarkPlugins: RICH_REMARK_PLUGINS,
-		});
+		const nodes = deserializeMarkdown(worker, text, RICH_REMARK_PLUGINS);
 		// A block may legitimately yield zero nodes (a definition-only block);
 		// injecting a placeholder paragraph here would desync from a whole-document
 		// parse, so an empty result is passed through as-is.
@@ -253,8 +236,6 @@ export function parseStreamingMarkdown(
 ): StreamingParseState {
 	if (content === previous.source) return previous;
 
-	const deserializing = worker as DeserializingEditor;
-
 	if (!content) {
 		return {
 			source: content,
@@ -305,7 +286,7 @@ export function parseStreamingMarkdown(
 		firstChangedBlock += entries[i].nodes.length;
 
 	for (let i = reusedThrough; i < texts.length; i++)
-		entries.push(parseBlock(deserializing, texts[i]));
+		entries.push(parseBlock(worker, texts[i]));
 
 	const blocks = entries.flatMap((entry) => entry.nodes as Descendant[]);
 

@@ -242,7 +242,7 @@ Once your package is ready:
 1. Navigate to **Library → Packages → Publish** in Flow-Like Desktop
 2. Select your compiled `build/release.wasm` file
 3. Review and edit the manifest metadata
-4. Configure required permissions
+4. Set the resource tiers and allowed hosts (capabilities come from your nodes)
 5. Submit for review
 
 See the [Registry Documentation](https://docs.flow-like.com/dev/wasm-nodes/registry/) for details on the governance and approval process.

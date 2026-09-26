@@ -2,7 +2,11 @@
 
 import { useTranslation } from "@flow-like/locales";
 import NextLink from "next/link";
-import { useRef } from "react";
+import { useContext, useRef } from "react";
+import {
+	ClientNavigationContext,
+	useClientHref,
+} from "../../../lib/client-navigation";
 import { cn } from "../../../lib/utils";
 import {
 	useActionContext,
@@ -43,6 +47,8 @@ export function A2UILink({
 	onAction,
 }: ComponentProps<LinkComponent>) {
 	const { t } = useTranslation("common");
+	const clientNavigation = useContext(ClientNavigationContext);
+	const clientHref = useClientHref();
 	const pointerActivationAtRef = useRef(0);
 	const keyboardActivationAtRef = useRef(0);
 	const label = useResolved<string>(component.label) ?? "";
@@ -139,6 +145,8 @@ export function A2UILink({
 		resolvedHref = `${href}${separator}${params.toString()}`;
 	}
 
+	resolvedHref = clientHref(resolvedHref);
+
 	const baseClasses = cn(
 		`inline-flex items-center transition-colors cursor-pointer`,
 		variantStyles[variant],
@@ -194,6 +202,55 @@ export function A2UILink({
 					}
 				}}
 				onClick={handleClick}
+			>
+				{label}
+			</a>
+		);
+	}
+
+	if (
+		clientNavigation &&
+		resolvedHref.startsWith("/") &&
+		!resolvedHref.startsWith("//")
+	) {
+		return (
+			<a
+				ref={elementRef}
+				href={resolvedHref}
+				target={component.target}
+				rel={component.target === "_blank" ? "noopener noreferrer" : undefined}
+				className={baseClasses}
+				style={resolveInlineStyle(style)}
+				onPointerDown={() => {
+					pointerActivationAtRef.current = Date.now();
+				}}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" || event.key === " ") {
+						keyboardActivationAtRef.current = Date.now();
+					}
+				}}
+				onClick={(event) => {
+					handleClick(event);
+					if (
+						event.defaultPrevented ||
+						event.button !== 0 ||
+						event.metaKey ||
+						event.ctrlKey ||
+						event.shiftKey ||
+						event.altKey ||
+						(component.target && component.target !== "_self")
+					)
+						return;
+					const destination = new URL(resolvedHref, window.location.href);
+					if (
+						resolvedHref.includes("#") &&
+						destination.pathname === window.location.pathname &&
+						destination.search === window.location.search
+					)
+						return;
+					event.preventDefault();
+					clientNavigation.navigate(resolvedHref, false);
+				}}
 			>
 				{label}
 			</a>

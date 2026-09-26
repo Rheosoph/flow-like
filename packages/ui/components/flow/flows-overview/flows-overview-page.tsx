@@ -10,6 +10,7 @@ import {
 	type IScoreCategory,
 	SCORE_CATEGORIES,
 } from "../../../lib/board-metrics";
+import { asArray } from "../../../lib/response-shape";
 import type { IBoardSummary } from "../../../lib/schema/flow/board-summary";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
@@ -220,18 +221,18 @@ export function FlowsOverviewPage({
 	const cardRefs = useRef(new Map<string, HTMLDivElement>());
 	const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	const eventList = useMemo(() => events.data ?? [], [events.data]);
+	const eventList = useMemo(() => asArray(events.data), [events.data]);
 	const pagesByBoard = useMemo(
-		() => groupPagesByBoard(pages.data ?? []),
+		() => groupPagesByBoard(asArray(pages.data)),
 		[pages.data],
 	);
 	const routeByPage = useMemo(
-		() => buildRouteByPage(eventList, routes.data ?? []),
+		() => buildRouteByPage(eventList, asArray(routes.data)),
 		[eventList, routes.data],
 	);
 
 	const rows = useMemo(
-		() => buildFlowRows(boards.data ?? [], eventList, pagesByBoard),
+		() => buildFlowRows(asArray(boards.data), eventList, pagesByBoard),
 		[boards.data, eventList, pagesByBoard],
 	);
 

@@ -7,14 +7,21 @@ import {
 	SlidersHorizontal,
 	Trash2,
 } from "lucide-react";
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useId, useState } from "react";
+import { isHostedLlmProviderName } from "../../lib/bit/local-model-filter";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { EditorField, EditorSection, StringList } from "./bit-editor-fields";
-import { record } from "./bit-editor-model";
+import {
+	HOSTED_PRICING_FIELDS,
+	microUsdToUsd,
+	record,
+	updateBitPricingField,
+	validateBitPricing,
+} from "./bit-editor-model";
 
 const LABELS: Record<string, string> = {
 	context_length: "Context length",
@@ -265,10 +272,12 @@ function ParameterObject({
 	value,
 	onChange,
 	path,
+	hiddenKeys = [],
 }: {
 	value: Record<string, unknown>;
 	onChange: (value: unknown) => void;
 	path: string;
+	hiddenKeys?: string[];
 }) {
 	const [adding, setAdding] = useState(false);
 	const [key, setKey] = useState("");
@@ -276,34 +285,38 @@ function ParameterObject({
 	const duplicate = Object.hasOwn(value, key.trim());
 	return (
 		<div className="space-y-4">
-			{Object.entries(value).map(([key, item]) => (
-				<div key={key} className="group/field flex items-start gap-2">
-					<div className="min-w-0 flex-1">
-						<ParameterValue
-							name={key}
-							value={item}
-							path={`${path}-${key}`}
-							onChange={(next) => onChange({ ...value, [key]: next })}
-						/>
+			{Object.entries(value)
+				.filter(([key]) => !hiddenKeys.includes(key))
+				.map(([key, item]) => (
+					<div key={key} className="group/field flex items-start gap-2">
+						<div className="min-w-0 flex-1">
+							<ParameterValue
+								name={key}
+								value={item}
+								path={`${path}-${key}`}
+								onChange={(next) => onChange({ ...value, [key]: next })}
+							/>
+						</div>
+						<Button
+							disabled={[
+								"context_length",
+								"provider",
+								"provider_name",
+							].includes(key)}
+							variant="ghost"
+							size="icon"
+							className="mt-6 size-8 shrink-0 text-muted-foreground opacity-60 hover:text-destructive"
+							aria-label={`Remove ${labelFor(key)} parameter`}
+							onClick={() => {
+								const next = { ...value };
+								delete next[key];
+								onChange(next);
+							}}
+						>
+							<Trash2 className="size-3.5" />
+						</Button>
 					</div>
-					<Button
-						disabled={["context_length", "provider", "provider_name"].includes(
-							key,
-						)}
-						variant="ghost"
-						size="icon"
-						className="mt-6 size-8 shrink-0 text-muted-foreground opacity-60 hover:text-destructive"
-						aria-label={`Remove ${labelFor(key)} parameter`}
-						onClick={() => {
-							const next = { ...value };
-							delete next[key];
-							onChange(next);
-						}}
-					>
-						<Trash2 className="size-3.5" />
-					</Button>
-				</div>
-			))}
+				))}
 			{path.endsWith("-provider") && !Object.hasOwn(value, "api_surface") && (
 				<ParameterValue
 					name="api_surface"
@@ -386,6 +399,121 @@ function ParameterObject({
 		</div>
 	);
 }
+
+function PricingField({
+	label,
+	value,
+	optional,
+	onChange,
+}: {
+	label: string;
+	value: unknown;
+	optional: boolean;
+	onChange: (text: string) => void;
+}) {
+	const id = useId();
+	const [editing, setEditing] = useState<string | null>(null);
+	return (
+		<div className="space-y-2">
+			<label htmlFor={id} className="text-sm font-medium">
+				{label}
+				{optional ? " (optional)" : " *"}
+			</label>
+			<Input
+				id={id}
+				inputMode="decimal"
+				value={editing ?? microUsdToUsd(value)}
+				placeholder={optional ? "No request fee" : "Enter an amount"}
+				onFocus={() => setEditing(microUsdToUsd(value))}
+				onBlur={() => setEditing(null)}
+				onChange={(event) => {
+					setEditing(event.target.value);
+					onChange(event.target.value);
+				}}
+			/>
+		</div>
+	);
+}
+
+function HostedPricing({
+	parameters,
+	onChange,
+}: {
+	parameters: Record<string, unknown>;
+	onChange: (value: unknown) => void;
+}) {
+	const configured = parameters.pricing != null;
+	const pricing = record(parameters.pricing);
+	const error = validateBitPricing(parameters.pricing);
+	return (
+		<div className="space-y-4 rounded-xl border bg-background p-4">
+			<div className="flex items-start justify-between gap-3">
+				<div>
+					<h4 className="text-sm font-medium">Hosted model pricing</h4>
+					<p className="mt-1 text-xs text-muted-foreground">
+						These rates are saved with the bit and used to calculate hosted AI
+						usage.
+					</p>
+				</div>
+				{configured && (
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => {
+							const { pricing: _pricing, ...next } = parameters;
+							onChange(next);
+						}}
+					>
+						<Trash2 className="size-3.5" />
+						Remove pricing
+					</Button>
+				)}
+			</div>
+			{configured ? (
+				<>
+					<div className="grid gap-4 sm:grid-cols-2">
+						{HOSTED_PRICING_FIELDS.map(({ key, label, optional }) => (
+							<PricingField
+								key={key}
+								label={label}
+								optional={optional}
+								value={pricing[key]}
+								onChange={(text) =>
+									onChange(updateBitPricingField(parameters, key, text))
+								}
+							/>
+						))}
+					</div>
+					<p className="text-xs text-muted-foreground">
+						Enter amounts in USD with up to 6 decimal places. Zero is allowed.
+						Leave the request fee blank for no fee.
+					</p>
+					{error && (
+						<p role="alert" className="text-xs text-destructive">
+							{error}
+						</p>
+					)}
+				</>
+			) : (
+				<>
+					<output className="block text-sm text-amber-700 dark:text-amber-400">
+						No price is configured. Requests still run, and the server logs a
+						warning.
+					</output>
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => onChange({ ...parameters, pricing: {} })}
+					>
+						<Plus className="size-3.5" />
+						Add pricing
+					</Button>
+				</>
+			)}
+		</div>
+	);
+}
+
 export function BitParametersEditor({
 	value,
 	bitType,
@@ -410,6 +538,13 @@ export function BitParametersEditor({
 	const [mode, setMode] = useState<"form" | "json">("form");
 	const params = record(value);
 	const isModel = [IBitTypes.Llm, IBitTypes.Vlm].includes(bitType);
+	const providerName = record(params.provider).provider_name;
+	const showPricing =
+		scope === "admin" &&
+		isModel &&
+		isHostedLlmProviderName(
+			typeof providerName === "string" ? providerName : undefined,
+		);
 	return (
 		<ProviderScope.Provider value={scope}>
 			<EditorSection
@@ -481,6 +616,9 @@ export function BitParametersEditor({
 					</div>
 				) : (
 					<div className="space-y-5">
+						{showPricing && (
+							<HostedPricing parameters={params} onChange={onChange} />
+						)}
 						{isModel && !Object.hasOwn(params, "context_length") && (
 							<Button
 								variant="outline"
@@ -496,6 +634,7 @@ export function BitParametersEditor({
 								value={params}
 								onChange={onChange}
 								path="parameter"
+								hiddenKeys={showPricing ? ["pricing"] : []}
 							/>
 						) : (
 							<div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">

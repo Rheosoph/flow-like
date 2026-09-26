@@ -5,6 +5,7 @@
 //! - **User tokens**: For users to poll execution status
 //! - **Realtime tokens**: For y-webrtc collaboration
 //! - **ChannelResponder tokens**: For clients to push replies into a run's channel
+//! - **WidgetGrant tokens**: For one approved widget policy at one pinned widget document path
 //!
 //! IMPORTANT: The keypair must be injected at deploy time via environment variables
 //! to support horizontal scaling. All API instances must use the same keypair.
@@ -60,6 +61,17 @@ pub enum TokenType {
     /// Capability carried as Page-action request data. It authorizes one exact
     /// Page action target and must never be treated as an authenticated actor.
     PageAction,
+    /// Capability carried in a widget sandbox URL. It widens one widget
+    /// document to one approved policy and never authorizes access.
+    WidgetGrant,
+    /// One redemption of a controller-approved device onboarding package.
+    DeviceEnrollment,
+    /// Device control-plane access bound to a registered device auth key.
+    DeviceSession,
+    DeviceSignaling,
+    InstanceProject,
+    /// One workload's sender-bound hosted resource authority.
+    InstanceResource,
 }
 
 impl TokenType {
@@ -73,6 +85,12 @@ impl TokenType {
             TokenType::ChannelResponder => "flow-like-channel-responder",
             TokenType::AppConnection => "flow-like-app-connection",
             TokenType::PageAction => "flow-like-page-action",
+            TokenType::WidgetGrant => "flow-like-widget-grant",
+            TokenType::DeviceEnrollment => "flow-like-device-enrollment",
+            TokenType::DeviceSession => "flow-like-device-control",
+            TokenType::DeviceSignaling => "flow-like-device-signaling",
+            TokenType::InstanceProject => "flow-like-project-resources",
+            TokenType::InstanceResource => "flow-like-model-proxy",
         }
     }
 
@@ -86,6 +104,11 @@ impl TokenType {
             TokenType::ChannelResponder => 60 * 60, // 1 hour; callers pass the channel lifetime
             TokenType::AppConnection => 10 * 60,    // 10 minutes
             TokenType::PageAction => 24 * 60 * 60,  // 24 hours
+            TokenType::WidgetGrant => 60 * 60,      // 1 hour
+            TokenType::DeviceEnrollment => 24 * 60 * 60,
+            TokenType::DeviceSession => 10 * 60,
+            TokenType::DeviceSignaling | TokenType::InstanceProject => 5 * 60,
+            TokenType::InstanceResource => 5 * 60,
         }
     }
 }
@@ -179,11 +202,17 @@ pub fn is_configured() -> bool {
 ///
 /// The claims must include a `typ` field with `TokenType` and standard JWT fields.
 pub fn sign<T: Serialize>(claims: &T) -> Result<String, BackendJwtError> {
+    sign_typed(claims, "JWT")
+}
+
+/// Sign a profile whose JOSE type is checked separately from the payload's `typ`.
+pub fn sign_typed<T: Serialize>(claims: &T, jose_type: &str) -> Result<String, BackendJwtError> {
     let private_key = PRIVATE_KEY_PEM
         .get()
         .ok_or(BackendJwtError::MissingPrivateKey)?;
 
     let mut header = Header::new(Algorithm::ES256);
+    header.typ = Some(jose_type.to_string());
     header.kid = Some(get_kid().to_string());
 
     let encoding_key = EncodingKey::from_ec_pem(private_key)
@@ -191,6 +220,45 @@ pub fn sign<T: Serialize>(claims: &T) -> Result<String, BackendJwtError> {
 
     encode(&header, claims, &encoding_key)
         .map_err(|e| BackendJwtError::EncodingError(e.to_string()))
+}
+
+/// Strict profile verifier for registered devices. Existing token profiles retain
+/// their own compatibility rules through [`verify`].
+pub fn verify_typed<T: for<'de> Deserialize<'de>>(
+    token: &str,
+    expected_type: TokenType,
+    jose_type: &str,
+) -> Result<T, BackendJwtError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ProfileHeader {
+        alg: Algorithm,
+        typ: String,
+        kid: String,
+    }
+    if token.len() > 16_384 {
+        return Err(BackendJwtError::DecodingError(
+            "Device JWT exceeds size limit".into(),
+        ));
+    }
+    let encoded_header = token.split('.').next().unwrap_or_default();
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded_header)
+        .map_err(|_| BackendJwtError::DecodingError("Invalid JWT profile header".into()))?;
+    let header: ProfileHeader = serde_json::from_slice(&bytes)
+        .map_err(|_| BackendJwtError::DecodingError("Invalid JWT profile header".into()))?;
+    if header.alg != Algorithm::ES256 || header.typ != jose_type || header.kid != get_kid() {
+        return Err(BackendJwtError::DecodingError(
+            "Invalid JWT profile header".into(),
+        ));
+    }
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(&[ISSUER]);
+    validation.set_audience(&[expected_type.audience()]);
+    validation.set_required_spec_claims(&["iss", "sub", "aud", "exp", "nbf", "iat"]);
+    validation.validate_nbf = true;
+    validation.leeway = 0;
+    decode_with(token, &validation)
 }
 
 // ============================================================================
@@ -204,6 +272,31 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
     token: &str,
     expected_type: TokenType,
 ) -> Result<T, BackendJwtError> {
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(&[ISSUER]);
+    validation.set_audience(&[expected_type.audience()]);
+    decode_with(token, &validation)
+}
+
+/// Verify like [`verify`], but with an explicit clock leeway applied to both
+/// `exp` and `nbf`. A leeway of `0` rejects a token the second it expires.
+pub fn verify_with_leeway<T: for<'de> Deserialize<'de>>(
+    token: &str,
+    expected_type: TokenType,
+    leeway_seconds: u64,
+) -> Result<T, BackendJwtError> {
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(&[ISSUER]);
+    validation.set_audience(&[expected_type.audience()]);
+    validation.leeway = leeway_seconds;
+    validation.validate_nbf = true;
+    decode_with(token, &validation)
+}
+
+fn decode_with<T: for<'de> Deserialize<'de>>(
+    token: &str,
+    validation: &Validation,
+) -> Result<T, BackendJwtError> {
     let public_key = PUBLIC_KEY_PEM
         .get()
         .ok_or(BackendJwtError::MissingPublicKey)?;
@@ -211,11 +304,7 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
     let decoding_key = DecodingKey::from_ec_pem(public_key)
         .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
 
-    let mut validation = Validation::new(Algorithm::ES256);
-    validation.set_issuer(&[ISSUER]);
-    validation.set_audience(&[expected_type.audience()]);
-
-    let token_data = decode::<T>(token, &decoding_key, &validation)
+    let token_data = decode::<T>(token, &decoding_key, validation)
         .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
 
     Ok(token_data.claims)
@@ -223,21 +312,10 @@ pub fn verify<T: for<'de> Deserialize<'de>>(
 
 /// Verify a JWT without checking audience (for introspection)
 pub fn verify_any<T: for<'de> Deserialize<'de>>(token: &str) -> Result<T, BackendJwtError> {
-    let public_key = PUBLIC_KEY_PEM
-        .get()
-        .ok_or(BackendJwtError::MissingPublicKey)?;
-
-    let decoding_key = DecodingKey::from_ec_pem(public_key)
-        .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
-
     let mut validation = Validation::new(Algorithm::ES256);
     validation.set_issuer(&[ISSUER]);
     validation.validate_aud = false;
-
-    let token_data = decode::<T>(token, &decoding_key, &validation)
-        .map_err(|e| BackendJwtError::DecodingError(e.to_string()))?;
-
-    Ok(token_data.claims)
+    decode_with(token, &validation)
 }
 
 // ============================================================================

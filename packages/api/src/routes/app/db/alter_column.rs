@@ -10,6 +10,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like_storage::contracts::database::DatabaseSelector;
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 use flow_like_storage::lancedb::table::ColumnAlteration;
 use utoipa::ToSchema;
@@ -33,6 +34,7 @@ pub struct AlterColumnPayload {
     request_body = AlterColumnPayload,
     responses(
         (status = 200, description = "Column altered", body = ()),
+        (status = 400, description = "The table key column must stay required and keep its type"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -51,6 +53,7 @@ pub async fn alter_column(
     Extension(user): Extension<AppUser>,
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
+    Query(selector): Query<DatabaseSelector>,
     Json(payload): Json<AlterColumnPayload>,
 ) -> Result<Json<()>, ApiError> {
     ensure_any_permission!(
@@ -61,9 +64,10 @@ pub async fn alter_column(
         RolePermissions::WriteDatabase
     );
     validate_table_name(&table)?;
+    super::validate_writable_selector(&selector)?;
 
     let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
-    let db = LanceDBVectorStore::from_connection(connection, table).await;
+    let db = LanceDBVectorStore::from_connection_with_selector(connection, table, selector).await?;
 
     let mut alteration = ColumnAlteration::new(payload.column.clone());
 
@@ -75,7 +79,9 @@ pub async fn alter_column(
         alteration = alteration.set_nullable(nullable);
     }
 
-    db.alter_column(&[alteration]).await?;
+    db.alter_column(&[alteration])
+        .await
+        .map_err(super::table_key_error)?;
 
     Ok(Json(()))
 }

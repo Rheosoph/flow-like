@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { Shield, Trash2, UserPlus } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
 	PackagePermissionBits,
 	isMaintainer,
@@ -40,6 +40,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "../ui";
+import { UserAvatar } from "../ui/user-identity";
 import { PackageInviteDialog } from "./package-invite-dialog";
 
 interface PackageUsersTabProps {
@@ -47,7 +48,7 @@ interface PackageUsersTabProps {
 	users: PackageUser[];
 	currentUserPermission: number;
 	isLoading: boolean;
-	onInvite: (request: InviteUserRequest) => void;
+	onInvite: (request: InviteUserRequest) => Promise<boolean>;
 	onUpdatePermission: (
 		userId: string,
 		request: UpdateUserPermissionRequest,
@@ -62,25 +63,6 @@ function roleBadgeVariant(
 	if (isOwner(permission)) return "default";
 	if (isMaintainer(permission)) return "secondary";
 	return "outline";
-}
-
-function UserAvatar({ user }: { user: PackageUser }) {
-	const avatar = userAvatarUrl(user);
-	if (avatar) {
-		return (
-			<img
-				src={avatar}
-				alt={userDisplayName(user, user.userId)}
-				className="h-8 w-8 rounded-full object-cover"
-			/>
-		);
-	}
-
-	return (
-		<div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase">
-			{userInitials(user)}
-		</div>
-	);
 }
 
 function canManageUser(
@@ -180,11 +162,13 @@ function UserActions({
 	);
 }
 
+const SKELETON_ROWS = ["first", "second", "third"] as const;
+
 function LoadingSkeleton() {
 	return (
 		<div className="space-y-3">
-			{Array.from({ length: 3 }).map((_, i) => (
-				<div key={i} className="flex items-center gap-3">
+			{SKELETON_ROWS.map((row) => (
+				<div key={row} className="flex items-center gap-3">
 					<Skeleton className="h-8 w-8 rounded-full" />
 					<Skeleton className="h-4 w-32" />
 					<Skeleton className="ml-auto h-4 w-20" />
@@ -207,6 +191,10 @@ export function PackageUsersTab({
 	const { t } = useTranslation("store");
 	const [inviteOpen, setInviteOpen] = useState(false);
 	const canInvite = isMaintainer(currentUserPermission);
+	const memberIds = useMemo(
+		() => new Set(users.map((user) => user.userId)),
+		[users],
+	);
 
 	if (isLoading) return <LoadingSkeleton />;
 
@@ -262,7 +250,11 @@ export function PackageUsersTab({
 								<TableRow key={user.id}>
 									<TableCell>
 										<div className="flex items-center gap-3">
-											<UserAvatar user={user} />
+											<UserAvatar
+												avatarUrl={userAvatarUrl(user)}
+												initials={userInitials(user)}
+												label={displayName}
+											/>
 											<div className="min-w-0">
 												<p className="truncate text-sm font-medium">
 													{displayName}
@@ -306,11 +298,8 @@ export function PackageUsersTab({
 			<PackageInviteDialog
 				open={inviteOpen}
 				onOpenChange={setInviteOpen}
-				onInvite={(req) => {
-					onInvite(req);
-					setInviteOpen(false);
-				}}
-				isSubmitting={isMutating}
+				onInvite={onInvite}
+				memberIds={memberIds}
 			/>
 		</div>
 	);

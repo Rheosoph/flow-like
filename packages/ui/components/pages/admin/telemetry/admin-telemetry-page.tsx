@@ -682,7 +682,7 @@ export function AdminTelemetryPage({
 		1,
 		Math.ceil((events.data?.total ?? 0) / pageSize),
 	);
-	const topSource = overview.data?.sources[0];
+	const topSource = overview.data?.sources?.[0];
 	const ChangeIcon =
 		change == null
 			? ArrowRight
@@ -882,7 +882,7 @@ export function AdminTelemetryPage({
 						<BreakdownCard
 							title={t("topEvents", "Top events")}
 							buckets={
-								overview.data?.topEvents.map((e) => ({
+								overview.data?.topEvents?.map((e) => ({
 									key: e.name,
 									label: e.name,
 									count: e.count,
@@ -894,7 +894,7 @@ export function AdminTelemetryPage({
 						<BreakdownCard
 							title="Sources"
 							buckets={
-								overview.data?.sources.map((s) => ({
+								overview.data?.sources?.map((s) => ({
 									key: s.source,
 									label: s.source,
 									count: s.count,
@@ -910,7 +910,7 @@ export function AdminTelemetryPage({
 						<BreakdownCard
 							title="Platforms"
 							buckets={
-								overview.data?.platforms.map((p) => ({
+								overview.data?.platforms?.map((p) => ({
 									key: p.platform,
 									label: p.platform,
 									count: p.count,
@@ -921,7 +921,7 @@ export function AdminTelemetryPage({
 						<BreakdownCard
 							title="Versions"
 							buckets={
-								overview.data?.versions.map((v) => ({
+								overview.data?.versions?.map((v) => ({
 									key: v.appVersion,
 									label: v.appVersion,
 									count: v.count,
@@ -985,7 +985,7 @@ export function AdminTelemetryPage({
 									<Skeleton className="h-10 w-full" />
 									<Skeleton className="h-10 w-full" />
 								</div>
-							) : (events.data?.events.length ?? 0) === 0 ? (
+							) : (events.data?.events?.length ?? 0) === 0 ? (
 								<div className="flex h-40 items-center justify-center rounded-lg border border-dashed m-4 text-sm text-muted-foreground">
 									{t(
 										"noEventsMatchTheCurrentFilters",
@@ -1005,7 +1005,7 @@ export function AdminTelemetryPage({
 										</TableRow>
 									</TableHeader>
 									<TableBody>
-										{events.data?.events.map((event) => (
+										{events.data?.events?.map((event) => (
 											<TableRow
 												key={event.id}
 												className="cursor-pointer"

@@ -71,5 +71,10 @@ name = "ner_models"
 path = "tests/ner_models.rs"
 required-features = ["execute"]
 
+[[test]]
+name = "laya_models"
+path = "tests/laya_models.rs"
+required-features = ["execute"]
+
 [build-dependencies]
 flow-like-catalog-build-helper.workspace = true

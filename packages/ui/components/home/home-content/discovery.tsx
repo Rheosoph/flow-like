@@ -13,6 +13,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useAssetImage } from "../../../hooks/use-asset-image";
 import { useAppCategoryLabel } from "../../../lib/app-category";
+import { asArray } from "../../../lib/response-shape";
 import type { IApp, IAppCategory } from "../../../lib/schema/app/app";
 import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
 import type { IMetadata } from "../../../lib/schema/bit/bit";
@@ -21,6 +22,7 @@ import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 import { FlowPilotBubbleOrb } from "../../global-chat/flowpilot-bubble-orb";
+import { appPairs } from "../../library/library-types";
 import { AppTypeMark } from "../../ui/app-type-mark";
 import { Button } from "../../ui/button";
 import { ModelDetailSheet } from "../../ui/model-detail-sheet";
@@ -134,7 +136,7 @@ function useDiscoveryApps(
 			app.primary_category === category ||
 			app.secondary_category === category) &&
 			(!tag ||
-				meta?.tags.some(
+				asArray(meta?.tags).some(
 					(value) => value.toLowerCase() === tag.toLowerCase(),
 				)) &&
 			(!query ||
@@ -150,8 +152,8 @@ function useDiscoveryApps(
 		rows: isLibrary
 			? localRows
 			: source === "manual"
-				? (results.data ?? []).filter(matchesFilters)
-				: (results.data ?? []),
+				? appPairs(results.data).filter(matchesFilters)
+				: appPairs(results.data),
 		localRows,
 		owned: new Set((library.data ?? []).map(([app]) => app.id)),
 		ownershipLoading: library.isLoading,
@@ -268,7 +270,7 @@ export function HomeAppSpotlight({ widget, editing }: HomeContentProps) {
 		!apps.rows.length && apps.source !== "manual" && !apps.isLoading;
 	const pair = apps.rows[0] ?? (fallback ? apps.localRows[0] : undefined);
 	const [app, meta] = pair ?? [];
-	const timestamp = app?.updated_at.secs_since_epoch;
+	const timestamp = app?.updated_at?.secs_since_epoch;
 	const date =
 		typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp > 0
 			? new Date(timestamp * 1000)
@@ -916,9 +918,10 @@ export function HomeModelSpotlight({ widget, editing }: HomeContentProps) {
 	});
 	const rawBit = result.data;
 	const meta =
-		rawBit?.meta.en ?? (rawBit ? Object.values(rawBit.meta)[0] : undefined);
+		rawBit?.meta?.en ??
+		(rawBit?.meta ? Object.values(rawBit.meta)[0] : undefined);
 	const bit =
-		rawBit && !rawBit.meta.en && meta
+		rawBit && !rawBit.meta?.en && meta
 			? { ...rawBit, meta: { ...rawBit.meta, en: meta } }
 			: rawBit;
 	const contextLength = bit?.parameters?.context_length;

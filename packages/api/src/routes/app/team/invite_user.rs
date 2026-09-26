@@ -85,6 +85,13 @@ pub async fn invite_user(
                     .await?
                     .ok_or(ApiError::NOT_FOUND)?;
 
+                if app.price > 0 {
+                    return Err(crate::payments::error(
+                        "PURCHASE_REQUIRED",
+                        "Use the owner's complimentary access action for a paid app",
+                    ));
+                }
+
                 if app.default_role_id.is_none() {
                     tracing::warn!(
                         "App {} does not have a default role set, cannot invite user",
@@ -234,8 +241,7 @@ pub async fn invite_user(
         app_id,
         "membership.invite",
         "Invitation",
-        params.sub,
-        "User invited"
+        params.sub
     );
     Ok(Json(()))
 }
