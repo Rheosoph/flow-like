@@ -78,9 +78,9 @@ impl Cacheable for HyperbolicModel {
 impl ModelLogic for HyperbolicModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor {
-            inner: Box::new(self.client.clone()),
-        })
+        Ok(ModelConstructor::with_max_tokens_body_param(
+            self.client.clone(),
+        ))
     }
 
     async fn default_model(&self) -> Option<String> {

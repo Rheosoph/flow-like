@@ -37,6 +37,7 @@ import { NativeIntegrationProvider } from "../components/native-integration-prov
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
+import { OfflineWritesNotifier } from "../components/offline-writes-notifier";
 import { PendingInviteRedeemer } from "../components/pending-invite-redeemer";
 import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
@@ -139,7 +140,7 @@ export function Providers({
 	children: React.ReactNode;
 }>) {
 	return (
-		<UseNavigationProvider>
+		<UseNavigationProvider routeMode="query">
 			<IdbMigrationGate>
 				<ReactFlowProvider>
 					<QueryClientProvider client={queryClient}>
@@ -161,6 +162,7 @@ export function Providers({
 										<ToastProvider />
 										<TauriProvider>
 											<DownloadNotificationProvider />
+											<OfflineWritesNotifier />
 											<RpaPermissionProvider />
 											<LocalSinkConsentProvider />
 											<DeeplinkNavigationHandler>

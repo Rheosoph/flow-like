@@ -1,6 +1,7 @@
 "use client";
 
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 
 import {
 	CrashReportDialog,
@@ -27,6 +28,8 @@ import {
 	BookmarkPlus,
 	Bot,
 	ExternalLink,
+	Package,
+	Server,
 	Users,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -49,6 +52,7 @@ interface SpotlightWrapperProps {
 
 const DEV_ONLY_PATHS = [
 	"/developer",
+	"/store/packages",
 	"/library/config/flows",
 	"/library/config/events",
 	"/library/config/explore",
@@ -364,6 +368,21 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const additionalItems = useMemo<SpotlightItem[]>(() => {
 		const items: SpotlightItem[] = [...openBoardItems];
 
+		items.push({
+			id: "nav-devices",
+			type: "navigation",
+			label: t("devices", "Devices"),
+			description: t(
+				"devicesOverviewDescription",
+				"Manage all your devices, deployments, and certificates",
+			),
+			icon: Server,
+			group: "navigation",
+			keywords: ["devices", "fleet", "servers", "deployments", "certificates"],
+			priority: 80,
+			action: () => router.push("/settings/devices"),
+		});
+
 		if (isCurrentPageShortcut) {
 			items.push({
 				id: "action-remove-shortcut",
@@ -440,7 +459,8 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 					"exit",
 				],
 				priority: 30,
-				action: () => auth.signoutRedirect(),
+				action: () =>
+					clearPageSurfaceCache().then(() => auth.signoutRedirect()),
 			});
 
 			items.push({
@@ -504,6 +524,23 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			priority: 60,
 			action: () => router.push("/settings/profiles"),
 		});
+
+		if (developerMode) {
+			items.push({
+				id: "nav-my-packages",
+				type: "navigation",
+				label: i18next.t("myPackages", "My packages"),
+				description: i18next.t(
+					"packagesYouBuildOrMaintain",
+					"Packages you build or maintain",
+				),
+				icon: Package,
+				group: "navigation",
+				keywords: ["packages", "mine", "developer", "wasm", "nodes", "publish"],
+				priority: 83,
+				action: () => router.push("/store/packages?tab=mine"),
+			});
+		}
 
 		// Profile switching items
 		const profileValues = profiles.data ? Object.values(profiles.data) : [];
@@ -671,6 +708,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		handleProfileChange,
 		appMetadata.data,
 		developerMode,
+		t,
 	]);
 
 	const handleQuickCreateProject = useCallback(

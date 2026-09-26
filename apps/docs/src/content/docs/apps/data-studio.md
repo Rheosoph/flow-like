@@ -14,7 +14,7 @@ sidebar:
 | Tab | What it's for |
 |-----|---------------|
 | **Overview** | At-a-glance counts (ontologies, object types, actions, shared, and remote) and shortcuts into the other tabs |
-| **Explore** | Browse objects of each type in a preview table and open an object's inspector — its views and available actions |
+| **Explore** | Browse objects of each type in a preview table and open an object's inspector — its views, available actions, and editable properties |
 | **Model** | Create, rename, and delete ontologies; review object types and relationships; open the data graph |
 | **Actions** | Define governed operations that run on an object type |
 | **Sharing** | Expose ontologies to connected projects, and install ontologies published by others |
@@ -27,9 +27,29 @@ The **Explore** tab turns ontology mappings into searchable business objects. Se
 
 ![Data Studio's Explore tab showing five Customer objects from the Customer Operations ontology](../../../assets/OntologyObjects.webp)
 
+### Edit object properties
+
+You can change the stored property values of an object without leaving Data Studio:
+
+- **In the object sheet**: open an object, click **Edit**, change one or more fields, and click **Save Changes** (or press Ctrl/Cmd+Enter). A changed field is outlined and can be reverted on its own; **Set empty** (**Clear** for dates) empties a field that allows empty values. If you close the sheet with unsaved changes, Data Studio asks before discarding them. While a save is in progress, the sheet stays open until it finishes.
+- **In the ontology graph**: open an ontology's graph view, select an object, and use the pencil next to a property in the inspector to edit it in place.
+
+Relationship properties can be edited in the graph inspector too, but only for relationships stored in their own join table. A relationship that is a column on an object's table says which object stores its values and, when that object is on the graph, offers a button that opens it so you can edit those values there.
+
+Some values stay read-only, marked with a lock that explains why:
+
+- Columns that identify an object or link it to another object.
+- Geometry, binary, vector, list, and nested values.
+
+Each save checks that the fields you changed still hold the values you started from. If someone else changed one of those fields in the meantime, nothing is written: Data Studio shows a conflict message and the current values, keeps your edits, and your next save replaces the new values. Changes others made to fields you did not edit are kept.
+
+Editing needs the **Write Files** or **Write Database** permission on the project; without it the Explore tab says objects are read-only. Objects from installed remote ontologies are always read-only.
+
+Edits change the stored values directly. They do not run the ontology's governed actions or the rules those actions enforce, so use an action when a change needs that workflow.
+
 ## Native tables
 
-The **Sources** tab lists project and personal relational tables. Tables may be created directly in Data Studio or by flows that persist structured results. Open a source to inspect its rows, schema, and indexes:
+The **Sources** tab lists project and personal relational tables. Tables may be created directly in Data Studio or by flows that persist structured results. A table created by a flow takes its column types from its [first write](/topics/datascience/loading/#column-types-from-the-first-write). Open a source to inspect its rows, schema, and indexes:
 
 ![A screenshot of Flow-Like Desktop showing a preview of a custom database populated with data from flow executions](../../../assets/AppDatabases.webp)
 

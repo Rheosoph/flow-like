@@ -8,7 +8,7 @@ use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use crate::usage_accounting::{
     HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
-    settle_hosted_usage_invocation, start_usage_invocation,
+    settle_hosted_usage_invocation, start_instance_usage_invocation, start_usage_invocation,
 };
 use axum::{
     Extension, Json,
@@ -171,7 +171,12 @@ async fn fetch_embedding_provider(
         .await?
         .ok_or_else(|| anyhow!("Bit not found: {}", bit_id))?;
 
-    let bit: Bit = bit_model.into();
+    embedding_provider_for_bit(&Bit::from(bit_model))
+}
+
+pub(crate) fn embedding_provider_for_bit(
+    bit: &Bit,
+) -> Result<(EmbeddingModelProvider, RemoteExecutionConfig), ApiError> {
     let embedding_provider = bit
         .try_to_embedding()
         .ok_or_else(|| anyhow!("Bit is not an embedding model"))?;
@@ -258,6 +263,55 @@ pub async fn embed_text(
 ) -> Result<Response, ApiError> {
     let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
     let usage_context = resolve_usage_context(&state, &user, &headers).await?;
+    embed_authorized_text(
+        state,
+        payload,
+        embedding_provider,
+        remote_config,
+        usage_context,
+        None,
+    )
+    .await
+}
+
+pub async fn embed_instance_text(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EmbedRequest>,
+) -> Result<Response, ApiError> {
+    let instance = crate::instances::authenticate_model_request(
+        &state,
+        &headers,
+        "POST",
+        "/instances/embeddings/embed",
+        &payload.model,
+    )
+    .await?;
+    let (embedding_provider, remote_config) = get_cached_bit(&state, &payload.model).await?;
+    let usage_context = UsageRequestContext {
+        app_id: instance.app_id.clone(),
+        user_id: instance.delegated_user_id.clone(),
+        technical_user_id: None,
+    };
+    embed_authorized_text(
+        state,
+        payload,
+        embedding_provider,
+        remote_config,
+        usage_context,
+        Some(instance),
+    )
+    .await
+}
+
+async fn embed_authorized_text(
+    state: AppState,
+    payload: EmbedRequest,
+    embedding_provider: EmbeddingModelProvider,
+    remote_config: RemoteExecutionConfig,
+    usage_context: UsageRequestContext,
+    instance: Option<crate::instances::VerifiedInstanceUsage>,
+) -> Result<Response, ApiError> {
     let user_id = usage_context.user_id.clone();
     let rate = internal_embedding_rate();
     let prefix = match payload.embed_type {
@@ -288,22 +342,22 @@ pub async fn embed_text(
         ));
     }
     let price_estimate = rate.provider_cost_bytes(token_count_estimate)?;
-    let invocation_id = start_usage_invocation(
-        &state,
-        UsageInvocationStart {
-            kind: "embedding",
-            user_id: Some(&user_id),
-            technical_user_id: usage_context.technical_user_id.as_deref(),
-            app_id: usage_context.app_id.as_deref(),
-            provider: Some(&embedding_provider.provider.provider_name),
-            endpoint: Some("internal"),
-            model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
-            estimated_tokens: token_count_estimate,
-            estimated_cost_micro_dollars: price_estimate,
-            rate: Some(rate.clone()),
-        },
-    )
-    .await?;
+    let start = UsageInvocationStart {
+        kind: "embedding",
+        user_id: Some(&user_id),
+        technical_user_id: usage_context.technical_user_id.as_deref(),
+        app_id: usage_context.app_id.as_deref(),
+        provider: Some(&embedding_provider.provider.provider_name),
+        endpoint: Some("internal"),
+        model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),
+        estimated_tokens: token_count_estimate,
+        estimated_cost_micro_dollars: price_estimate,
+        rate: Some(rate.clone()),
+    };
+    let invocation_id = match &instance {
+        Some(instance) => start_instance_usage_invocation(&state, start, instance, "").await?,
+        None => start_usage_invocation(&state, start).await?,
+    };
 
     let id = invocation_id
         .ok_or_else(|| ApiError::internal("Hosted embedding reservation is missing"))?;

@@ -1,10 +1,10 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { SlateElementProps } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
 import { User } from "lucide-react";
-import { SlateElement } from "platejs";
+import { SlateElement } from "platejs/static";
 
 export interface TUserMentionElement {
 	type: "user_mention";

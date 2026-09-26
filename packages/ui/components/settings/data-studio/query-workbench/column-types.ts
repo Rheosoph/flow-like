@@ -10,6 +10,7 @@ import { accountIdFromValue } from "../../../../state/backend-state/user-state";
 
 export type ColumnKind =
 	| "geometry"
+	| "binary"
 	| "number"
 	| "temporal"
 	| "boolean"
@@ -31,6 +32,7 @@ export function isNumericTypeName(typeName: string): boolean {
 export function classifyColumn(column: QueryColumn): ColumnKind {
 	if (isGeometryMetadata(column.metadata)) return "geometry";
 	const type = column.type_name.toLowerCase();
+	if (/binary/.test(type)) return "binary";
 	if (/bool/.test(type)) return "boolean";
 	// A duration is a length of time and a Time32/Time64 a time of day; neither
 	// is a point in time, and both arrive as bare integers.

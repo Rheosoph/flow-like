@@ -14,6 +14,7 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
             element: *mut *const c_void,
         ) -> i32;
         fn AXUIElementCreateSystemWide() -> *const c_void;
+        fn AXUIElementSetMessagingTimeout(element: *const c_void, timeout: f32) -> i32;
         fn AXUIElementCopyAttributeValue(
             element: *const c_void,
             attribute: *const c_void,
@@ -78,6 +79,7 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
         if system_wide.is_null() {
             return None;
         }
+        AXUIElementSetMessagingTimeout(system_wide, 0.1);
 
         let mut element: *const c_void = ptr::null();
         let result =
@@ -248,14 +250,12 @@ pub fn extract_fingerprint_at(x: i32, y: i32) -> Option<RecordedFingerprint> {
     // SAFETY: CoInitializeEx/CoUninitialize are COM initialization functions.
     // We call CoInitializeEx once at start and CoUninitialize on all return paths.
     // This is safe as long as we don't call COM from other threads without initialization.
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-    }
-
+    let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
     let result = extract_fingerprint_windows_inner(x, y);
-
-    unsafe {
-        CoUninitialize();
+    if initialized {
+        unsafe {
+            CoUninitialize();
+        }
     }
 
     result
@@ -416,24 +416,90 @@ async fn extract_fingerprint_atspi(x: i32, y: i32) -> Option<RecordedFingerprint
         }
     };
 
-    // AccessibilityConnection derefs to RegistryProxy
-    // AT-SPI2 doesn't have a direct "element at point" - we'd need to traverse the tree
-    // Full implementation requires tree traversal and hit-testing each accessible's bounding box
-    tracing::debug!(
-        "AT-SPI fingerprinting at ({}, {}) - traversal not fully implemented",
-        x,
-        y
-    );
-
-    drop(conn);
-
-    Some(RecordedFingerprint {
-        id: flow_like_types::create_id(),
-        role: Some("Unknown".to_string()),
-        name: None,
-        text: None,
-        bounding_box: None,
-    })
+    use atspi::CoordType;
+    use atspi::proxies::{accessible::AccessibleProxy, component::ComponentProxy};
+    let bus = conn.inner().connection();
+    let root = AccessibleProxy::builder(bus)
+        .destination("org.a11y.atspi.Registry")
+        .ok()?
+        .path("/org/a11y/atspi/accessible/root")
+        .ok()?
+        .build()
+        .await
+        .ok()?;
+    let mut pending = root.get_children().await.ok()?;
+    let mut seen = std::collections::HashSet::new();
+    let mut best: Option<RecordedFingerprint> = None;
+    for _ in 0..256 {
+        let Some(object) = pending.pop() else {
+            break;
+        };
+        if !seen.insert(object.clone()) || object.path.as_str().ends_with("/null") {
+            continue;
+        }
+        let accessible = match AccessibleProxy::builder(bus)
+            .destination(object.name.clone())
+            .ok()?
+            .path(object.path.clone())
+            .ok()?
+            .build()
+            .await
+        {
+            Ok(proxy) => proxy,
+            Err(_) => continue,
+        };
+        if let Ok(component) = ComponentProxy::builder(bus)
+            .destination(object.name.clone())
+            .ok()?
+            .path(object.path.clone())
+            .ok()?
+            .build()
+            .await
+        {
+            if let Ok(hit) = component
+                .get_accessible_at_point(x, y, CoordType::Screen)
+                .await
+            {
+                if hit != object && !hit.path.as_str().ends_with("/null") {
+                    pending.push(hit);
+                }
+            }
+            if let Ok((left, top, width, height)) = component.get_extents(CoordType::Screen).await {
+                if width > 0
+                    && height > 0
+                    && x >= left
+                    && y >= top
+                    && x < left.saturating_add(width)
+                    && y < top.saturating_add(height)
+                {
+                    let area = width as f64 * height as f64;
+                    let previous_area = best
+                        .as_ref()
+                        .and_then(|fp| fp.bounding_box)
+                        .map(|(x1, y1, x2, y2)| (x2 - x1) * (y2 - y1))
+                        .unwrap_or(f64::INFINITY);
+                    if area < previous_area {
+                        best = Some(RecordedFingerprint {
+                            id: flow_like_types::create_id(),
+                            role: accessible.get_role_name().await.ok(),
+                            name: accessible.name().await.ok().filter(|name| !name.is_empty()),
+                            text: None,
+                            bounding_box: Some((
+                                left as f64,
+                                top as f64,
+                                left as f64 + width as f64,
+                                top as f64 + height as f64,
+                            )),
+                        });
+                    }
+                }
+            }
+        }
+        if let Ok(children) = accessible.get_children().await {
+            pending.extend(children);
+        }
+    }
+    best
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

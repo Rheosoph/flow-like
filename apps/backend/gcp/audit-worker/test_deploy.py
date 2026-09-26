@@ -19,17 +19,17 @@ ARGS = [
     "--api-service-account", "api@audit-project.iam.gserviceaccount.com",
     "--database-instance", "audit-postgres", "--database-host", "10.2.3.4", "--database-name", "flowlike",
     "--database-ca-secret", "database-ca", "--entry-key-secret", "entry-key",
-    "--encryption-secret", "sink-key", "--config-secret", "worker-config",
+    "--encryption-secret", "sink-key",
     "--network", "private", "--subnet", "database",
 ]
 WORKER = "flow-like-audit-worker@audit-project.iam.gserviceaccount.com"
 USER = WORKER.removesuffix(".gserviceaccount.com")
 INSTANCE = {
-    "databaseVersion": "POSTGRES_17", "dnsName": "private.sql.goog",
+    "databaseVersion": "POSTGRES_17",
     "ipAddresses": [{"type": "PRIVATE", "ipAddress": "10.2.3.4"}],
     "settings": {
         "databaseFlags": [{"name": "cloudsql.iam_authentication", "value": "on"}],
-        "ipConfiguration": {"sslMode": "ENCRYPTED_ONLY"},
+        "ipConfiguration": {"sslMode": "ENCRYPTED_ONLY", "serverCaMode": "GOOGLE_MANAGED_INTERNAL_CA"},
     },
 }
 
@@ -48,8 +48,9 @@ class DeployTests(unittest.TestCase):
             del args[index:index + 2]
             with self.subTest(missing=missing), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 deploy.parser().parse_args(args)
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            deploy.parser().parse_args(ARGS + ["--database-secret", "password-url"])
+        for removed in (["--database-secret", "password-url"], ["--config-secret", "worker-config"]):
+            with self.subTest(removed=removed), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                deploy.parser().parse_args(ARGS + removed)
 
     def test_job_uses_iam_env_and_shared_keys_and_preserves_single_tick(self):
         steps = deploy.plan(deploy.parser().parse_args(ARGS + [
@@ -69,6 +70,7 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(secrets["AUDIT_ENTRY_KEY_PREVIOUS"], "previous-entry-key:latest")
         self.assertNotIn("DATABASE_URL", secrets)
         self.assertNotIn("DATABASE_URL", env)
+        self.assertNotIn("FLOW_LIKE_CONFIG_JSON", secrets)
         self.assertIn("--args=--once", job)
         self.assertIn("--parallelism=1", job)
         self.assertIn("--vpc-egress=private-ranges-only", job)
@@ -85,7 +87,7 @@ class DeployTests(unittest.TestCase):
 
     def test_rejects_identity_mismatch_and_unpaired_public_keys(self):
         for extra in (["--database-user", "api@audit-project.iam"], ["--audit-kid", "timeline-1"],
-                      ["--verifying-keys-secret", "public-keys"], ["--config-secret", "entry-key"],
+                      ["--verifying-keys-secret", "public-keys"], ["--previous-entry-key-secret", "entry-key"],
                       ["--database-host", "db/?sslmode=disable"]):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 deploy.plan(deploy.parser().parse_args(ARGS + extra))
@@ -93,7 +95,6 @@ class DeployTests(unittest.TestCase):
 
     def test_database_preflight_requires_private_iam_postgres_without_client_cert(self):
         deploy.validate_database(INSTANCE, "10.2.3.4")
-        deploy.validate_database(INSTANCE, "private.sql.goog")
         variants = []
         for change in ("version", "flag", "tls", "public", "host"):
             invalid = copy.deepcopy(INSTANCE)
@@ -111,6 +112,58 @@ class DeployTests(unittest.TestCase):
         for metadata in variants:
             with self.subTest(metadata=metadata), self.assertRaises(ValueError):
                 deploy.validate_database(metadata, "10.2.3.4")
+
+    def test_raw_ip_requires_a_per_instance_ca_including_legacy_default(self):
+        for mode in (None, "CA_MODE_UNSPECIFIED", "GOOGLE_MANAGED_INTERNAL_CA"):
+            metadata = copy.deepcopy(INSTANCE)
+            if mode is None:
+                del metadata["settings"]["ipConfiguration"]["serverCaMode"]
+            else:
+                metadata["settings"]["ipConfiguration"]["serverCaMode"] = mode
+            deploy.validate_database(metadata, "10.2.3.4")
+        for mode in ("GOOGLE_MANAGED_CAS_CA", "CUSTOMER_MANAGED_CAS_CA", "NEW_CA_MODE", None):
+            metadata = copy.deepcopy(INSTANCE)
+            metadata["settings"]["ipConfiguration"]["serverCaMode"] = mode
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                deploy.validate_database(metadata, "10.2.3.4")
+
+    def test_shared_ca_uses_instance_private_dns_mapping_and_normalizes_dot(self):
+        for mode in ("GOOGLE_MANAGED_CAS_CA", "CUSTOMER_MANAGED_CAS_CA"):
+            metadata = copy.deepcopy(INSTANCE)
+            metadata["settings"]["ipConfiguration"]["serverCaMode"] = mode
+            metadata["dnsNames"] = [{"name": "instance.region.sql-psa.goog.",
+                                     "dnsScope": "INSTANCE", "connectionType": "PRIVATE_SERVICES_ACCESS"}]
+            deploy.validate_database(metadata, "INSTANCE.region.sql-psa.goog.")
+            for change in ({"connectionType": "PUBLIC"}, {"connectionType": "PRIVATE_SERVICE_CONNECT"},
+                           {"dnsScope": "CLUSTER"}, {"name": "another.region.sql-psa.goog."}):
+                invalid = copy.deepcopy(metadata)
+                invalid["dnsNames"][0].update(change)
+                invalid["dnsName"] = "instance.region.sql-psa.goog."
+                with self.subTest(mode=mode, change=change), self.assertRaises(ValueError):
+                    deploy.validate_database(invalid, "instance.region.sql-psa.goog")
+            del metadata["dnsNames"]
+            metadata["dnsName"] = "instance.region.sql-psa.goog."
+            deploy.validate_database(metadata, "instance.region.sql-psa.goog")
+        steps = deploy.plan(deploy.parser().parse_args(ARGS + ["--database-host", "INSTANCE.region.sql-psa.goog."]))
+        self.assertIn('"host": "instance.region.sql-psa.goog"', json.dumps(steps))
+        self.assertIn("GCP_POSTGRES_HOST=instance.region.sql-psa.goog,", json.dumps(steps))
+        self.assertNotIn("INSTANCE.region.sql-psa.goog.", json.dumps(steps))
+
+    def test_per_instance_ca_rejects_dns_without_private_services_access_san(self):
+        metadata = copy.deepcopy(INSTANCE)
+        metadata["dnsNames"] = [{"name": "instance.region.sql-psa.goog.",
+                                 "dnsScope": "INSTANCE", "connectionType": "PRIVATE_SERVICES_ACCESS"}]
+        with self.assertRaisesRegex(ValueError, "per-instance CA"):
+            deploy.validate_database(metadata, "instance.region.sql-psa.goog")
+
+    def test_shared_ca_raw_ip_stops_apply_before_job_creation(self):
+        metadata = copy.deepcopy(INSTANCE)
+        metadata["settings"]["ipConfiguration"]["serverCaMode"] = "GOOGLE_MANAGED_CAS_CA"
+        preflight = {"validate_database": {"host": "10.2.3.4"}, "inspect": ["inspect-instance"]}
+        with patch.object(deploy, "run", return_value=SimpleNamespace(stdout=json.dumps(metadata))) as run:
+            with self.assertRaisesRegex(ValueError, "certificate DNS hostname"):
+                deploy.apply([preflight, {"run": ["deploy-job"]}])
+            run.assert_called_once_with(["inspect-instance"])
 
     def test_database_user_mapping_requires_matching_iam_service_account(self):
         for name in (USER, WORKER):

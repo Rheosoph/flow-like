@@ -1,6 +1,10 @@
 use crate::{
-    credentials::CredentialsAccess, ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    credentials::CredentialsAccess,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::{RolePermissions, has_role_permission},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -36,16 +40,25 @@ pub async fn presign(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
 
     let sub = user.sub()?;
-
-    let mut access = CredentialsAccess::InvokeNone;
-
-    if permission.has_permission(RolePermissions::WriteFiles) {
-        access = CredentialsAccess::InvokeWrite;
-    } else if permission.has_permission(RolePermissions::ReadFiles) {
-        access = CredentialsAccess::InvokeRead;
-    }
+    let access = invoke_access(&permission.permissions).ok_or(ApiError::FORBIDDEN)?;
 
     let credentials = state.scoped_credentials(&sub, &app_id, access).await?;
     let credentials = credentials.into_shared_credentials();
     Ok(Json(credentials))
+}
+
+/// The credentials a run of this role obtains through presign; `None` when it may not run the project.
+pub(crate) fn invoke_access(permissions: &RolePermissions) -> Option<CredentialsAccess> {
+    if !has_role_permission(permissions, RolePermissions::ExecuteEvents) {
+        return None;
+    }
+    Some(
+        if has_role_permission(permissions, RolePermissions::WriteFiles) {
+            CredentialsAccess::InvokeWrite
+        } else if has_role_permission(permissions, RolePermissions::ReadFiles) {
+            CredentialsAccess::InvokeRead
+        } else {
+            CredentialsAccess::InvokeNone
+        },
+    )
 }

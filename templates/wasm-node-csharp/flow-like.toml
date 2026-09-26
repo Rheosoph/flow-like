@@ -1,6 +1,7 @@
 # Flow-Like Package Manifest
 # This file declares your package's metadata, permissions, and node entries.
-# The runtime uses this to determine capabilities and display information.
+# The runtime uses this for resource limits, the host allowlist and display
+# information, not for capabilities.
 
 manifest_version = 1
 
@@ -25,17 +26,12 @@ name = "Your Name"
 memory = "standard"
 timeout = "standard"
 
+# Capabilities (network, storage, database, models, ...) are declared on each
+# node in code. The sandbox enforces those, and the registry derives the store's
+# capability listing from them, so they are not repeated here. This file only
+# sets resource tiers, the outbound host allowlist and OAuth scopes.
 [permissions.network]
-http_enabled = false
 allowed_hosts = []
-websocket_enabled = false
-tcp_enabled = false
-udp_enabled = false
-dns_enabled = false
-
-[permissions.filesystem]
-node_storage = false
-user_storage = false
 
 # --- Nodes ---
 # Each [[nodes]] entry describes a node this package provides.

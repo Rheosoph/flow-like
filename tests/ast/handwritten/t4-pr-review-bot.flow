@@ -85,10 +85,13 @@ const dashboardCounts: any
 let reviewerPrompt = "You are a diff reviewer. Judge exactly one hunk. Answer with a single JSON object: rule_id, severity (info|warning|blocking), title, body, suggestion. Cite the repository conventions you were given. Never invent a file you were not shown."
 
 function riskBand(blocking: int, warnings: int): (band: string) {
+    let band = "clean"
     if (blocking >= blockingThreshold) {
-        return "blocking"
+        band = "blocking"
+    } else {
+        band = (warnings > 0) ? "advisory" : "clean"
     }
-    return (warnings > 0) ? "advisory" : "clean"
+    return band
 }
 
 function runKey(prNumber: int, headSha: string): (key: string) {

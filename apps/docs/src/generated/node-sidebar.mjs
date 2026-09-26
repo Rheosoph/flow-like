@@ -63,6 +63,10 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/agents/builder/agent-register-thinking"
               },
               {
+                "label": "Register Work IQ Tools",
+                "slug": "nodes/ai/agents/builder/agent-register-work-iq-tools"
+              },
+              {
                 "label": "Set Agent System Prompt",
                 "slug": "nodes/ai/agents/builder/agent-set-system-prompt"
               }
@@ -1113,6 +1117,10 @@ export const generatedNodeSidebar = [
                     "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
                   },
                   {
+                    "label": "Typed Decision (Laya)",
+                    "slug": "nodes/ai/ml/onnx/nlp/onnx-laya"
+                  },
+                  {
                     "label": "Zero-Shot NER (GLiNER)",
                     "slug": "nodes/ai/ml/onnx/nlp/onnx-gliner"
                   }
@@ -1859,6 +1867,10 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Attach to Browser",
+            "slug": "nodes/automation/browser/browser-attach"
+          },
+          {
             "label": "Close Browser",
             "slug": "nodes/automation/browser/browser-close"
           },
@@ -1867,12 +1879,64 @@ export const generatedNodeSidebar = [
             "slug": "nodes/automation/browser/browser-close-page"
           },
           {
+            "label": "Drag Element",
+            "slug": "nodes/automation/browser/browser-drag"
+          },
+          {
+            "label": "Enter Frame",
+            "slug": "nodes/automation/browser/browser-enter-frame"
+          },
+          {
+            "label": "Execute Browser Action Plan",
+            "slug": "nodes/automation/browser/browser-execute-plan"
+          },
+          {
+            "label": "Handle Browser Dialog",
+            "slug": "nodes/automation/browser/browser-handle-dialog"
+          },
+          {
+            "label": "Key Chord",
+            "slug": "nodes/automation/browser/browser-key-chord"
+          },
+          {
+            "label": "Leave Frame",
+            "slug": "nodes/automation/browser/browser-leave-frame"
+          },
+          {
+            "label": "List Tabs",
+            "slug": "nodes/automation/browser/browser-list-tabs"
+          },
+          {
             "label": "New Page",
             "slug": "nodes/automation/browser/browser-new-page"
           },
           {
             "label": "Open Browser",
             "slug": "nodes/automation/browser/browser-open"
+          },
+          {
+            "label": "Right Click Element",
+            "slug": "nodes/automation/browser/browser-right-click"
+          },
+          {
+            "label": "Select Tab",
+            "slug": "nodes/automation/browser/browser-select-tab"
+          },
+          {
+            "label": "Start Console Observer",
+            "slug": "nodes/automation/browser/browser-start-console-observer"
+          },
+          {
+            "label": "Start WebDriver",
+            "slug": "nodes/automation/browser/browser-start-driver"
+          },
+          {
+            "label": "Stop WebDriver",
+            "slug": "nodes/automation/browser/browser-stop-driver"
+          },
+          {
+            "label": "Wait For URL",
+            "slug": "nodes/automation/browser/browser-wait-for-url"
           }
         ]
       },
@@ -1891,6 +1955,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Overview",
                 "slug": "nodes/automation/computer/accessibility"
+              },
+              {
+                "label": "Act on Accessibility Element",
+                "slug": "nodes/automation/computer/accessibility/computer-accessibility-action"
               },
               {
                 "label": "Find Accessibility Element",
@@ -2061,6 +2129,14 @@ export const generatedNodeSidebar = [
               {
                 "label": "List Windows",
                 "slug": "nodes/automation/computer/window/computer-list-windows"
+              },
+              {
+                "label": "Manage Window",
+                "slug": "nodes/automation/computer/window/computer-window-operation"
+              },
+              {
+                "label": "Wait for Window",
+                "slug": "nodes/automation/computer/window/computer-wait-for-window"
               }
             ]
           }
@@ -2393,6 +2469,14 @@ export const generatedNodeSidebar = [
             "slug": "nodes/automation/vision/vision-wait-template-disappear"
           }
         ]
+      },
+      {
+        "label": "Check Automation Capability",
+        "slug": "nodes/automation/automation-check-capability"
+      },
+      {
+        "label": "Request Automation Capability",
+        "slug": "nodes/automation/automation-request-capability"
       },
       {
         "label": "Start Automation Session",
@@ -3341,6 +3425,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Make Column Optional",
                 "slug": "nodes/data/database/schema/make-column-optional-local-db"
+              },
+              {
+                "label": "Set Table Key",
+                "slug": "nodes/data/database/schema/set-primary-key-local-db"
               }
             ]
           },
@@ -3367,6 +3455,90 @@ export const generatedNodeSidebar = [
               {
                 "label": "Vector Search",
                 "slug": "nodes/data/database/search/vector-search-local-db"
+              }
+            ]
+          },
+          {
+            "label": "Update",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/database/update"
+              },
+              {
+                "label": "Update",
+                "slug": "nodes/data/database/update/update-local-db"
+              }
+            ]
+          },
+          {
+            "label": "Versioning",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/database/versioning"
+              },
+              {
+                "label": "Checkout Database",
+                "slug": "nodes/data/database/versioning/database-checkout"
+              },
+              {
+                "label": "Cleanup Database Versions",
+                "slug": "nodes/data/database/versioning/database-cleanup-versions"
+              },
+              {
+                "label": "Clone Database",
+                "slug": "nodes/data/database/versioning/database-clone"
+              },
+              {
+                "label": "Compare Database Views",
+                "slug": "nodes/data/database/versioning/database-compare"
+              },
+              {
+                "label": "Create Database Branch",
+                "slug": "nodes/data/database/versioning/database-create-branch"
+              },
+              {
+                "label": "Create Database Tag",
+                "slug": "nodes/data/database/versioning/database-create-tag"
+              },
+              {
+                "label": "Delete Database Branch",
+                "slug": "nodes/data/database/versioning/database-delete-branch"
+              },
+              {
+                "label": "Delete Database Tag",
+                "slug": "nodes/data/database/versioning/database-delete-tag"
+              },
+              {
+                "label": "Get Database Reference",
+                "slug": "nodes/data/database/versioning/database-reference"
+              },
+              {
+                "label": "List Database Branches",
+                "slug": "nodes/data/database/versioning/database-branches"
+              },
+              {
+                "label": "List Database Tags",
+                "slug": "nodes/data/database/versioning/database-tags"
+              },
+              {
+                "label": "List Database Versions",
+                "slug": "nodes/data/database/versioning/database-versions"
+              },
+              {
+                "label": "Move Database Tag",
+                "slug": "nodes/data/database/versioning/database-update-tag"
+              },
+              {
+                "label": "Restore Database Version",
+                "slug": "nodes/data/database/versioning/database-restore"
+              },
+              {
+                "label": "Snapshot Database",
+                "slug": "nodes/data/database/versioning/database-snapshot"
               }
             ]
           },
@@ -3801,6 +3973,132 @@ export const generatedNodeSidebar = [
           {
             "label": "Overview",
             "slug": "nodes/data/github"
+          },
+          {
+            "label": "Repository",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/github/repository"
+              },
+              {
+                "label": "Abort Merge",
+                "slug": "nodes/data/github/repository/data-github-abort-local-merge"
+              },
+              {
+                "label": "Add Repository Remote",
+                "slug": "nodes/data/github/repository/data-github-add-repo-remote"
+              },
+              {
+                "label": "Checkout Revision",
+                "slug": "nodes/data/github/repository/data-github-checkout-local-revision"
+              },
+              {
+                "label": "Commit Changes",
+                "slug": "nodes/data/github/repository/data-github-commit-local-repository"
+              },
+              {
+                "label": "Create Local Branch",
+                "slug": "nodes/data/github/repository/data-github-create-local-branch"
+              },
+              {
+                "label": "Create Local Tag",
+                "slug": "nodes/data/github/repository/data-github-create-local-tag"
+              },
+              {
+                "label": "Delete Local Branch",
+                "slug": "nodes/data/github/repository/data-github-delete-local-branch"
+              },
+              {
+                "label": "Delete Local Tag",
+                "slug": "nodes/data/github/repository/data-github-delete-local-tag"
+              },
+              {
+                "label": "Fetch Repository",
+                "slug": "nodes/data/github/repository/data-github-fetch-repo"
+              },
+              {
+                "label": "Init Repository",
+                "slug": "nodes/data/github/repository/data-github-init-repo"
+              },
+              {
+                "label": "List Local Branches",
+                "slug": "nodes/data/github/repository/data-github-list-local-branches"
+              },
+              {
+                "label": "List Local Tags",
+                "slug": "nodes/data/github/repository/data-github-list-local-tags"
+              },
+              {
+                "label": "List Remotes",
+                "slug": "nodes/data/github/repository/data-github-list-local-remotes"
+              },
+              {
+                "label": "List Stashes",
+                "slug": "nodes/data/github/repository/data-github-list-local-stashes"
+              },
+              {
+                "label": "Merge Branch",
+                "slug": "nodes/data/github/repository/data-github-merge-local-repository"
+              },
+              {
+                "label": "Pop Stash",
+                "slug": "nodes/data/github/repository/data-github-pop-local-stash"
+              },
+              {
+                "label": "Pull Repository",
+                "slug": "nodes/data/github/repository/data-github-pull-repo"
+              },
+              {
+                "label": "Push Repository",
+                "slug": "nodes/data/github/repository/data-github-push-repo"
+              },
+              {
+                "label": "Remove Repository Remote",
+                "slug": "nodes/data/github/repository/data-github-remove-repo-remote"
+              },
+              {
+                "label": "Repository Diff",
+                "slug": "nodes/data/github/repository/data-github-local-diff"
+              },
+              {
+                "label": "Repository Log",
+                "slug": "nodes/data/github/repository/data-github-local-log"
+              },
+              {
+                "label": "Repository Status",
+                "slug": "nodes/data/github/repository/data-github-local-status"
+              },
+              {
+                "label": "Reset Repository",
+                "slug": "nodes/data/github/repository/data-github-reset-local-repository"
+              },
+              {
+                "label": "Set Repository Remote URL",
+                "slug": "nodes/data/github/repository/data-github-set-repo-remote-url"
+              },
+              {
+                "label": "Stage Files",
+                "slug": "nodes/data/github/repository/data-github-stage-local-files"
+              },
+              {
+                "label": "Stash Changes",
+                "slug": "nodes/data/github/repository/data-github-save-local-stash"
+              },
+              {
+                "label": "Switch Branch",
+                "slug": "nodes/data/github/repository/data-github-switch-local-branch"
+              },
+              {
+                "label": "Sync Repository",
+                "slug": "nodes/data/github/repository/data-github-sync-repo"
+              },
+              {
+                "label": "Unstage Files",
+                "slug": "nodes/data/github/repository/data-github-unstage-local-files"
+              }
+            ]
           },
           {
             "label": "Workflows",
@@ -4469,6 +4767,52 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Copilot Studio",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/microsoft/copilot-studio"
+              },
+              {
+                "label": "Copilot Studio (OAuth)",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-provider-oauth"
+              },
+              {
+                "label": "Copilot Studio (Token)",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-provider-token"
+              },
+              {
+                "label": "Copilot Studio Agent",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-agent"
+              },
+              {
+                "label": "Copilot Studio Chat",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-chat"
+              },
+              {
+                "label": "Copilot Studio Direct Line Chat",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-direct-line-chat"
+              },
+              {
+                "label": "List Copilot Studio Agents",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-list-agents"
+              },
+              {
+                "label": "List Power Platform Environments",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-list-environments"
+              },
+              {
+                "label": "Send Copilot Studio Activity",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-send-activity"
+              },
+              {
+                "label": "Start Copilot Studio Conversation",
+                "slug": "nodes/data/microsoft/copilot-studio/data-microsoft-copilot-studio-start-conversation"
+              }
+            ]
+          },
+          {
             "label": "Excel",
             "collapsed": true,
             "items": [
@@ -4863,6 +5207,32 @@ export const generatedNodeSidebar = [
               {
                 "label": "Update Task",
                 "slug": "nodes/data/microsoft/to-do/data-microsoft-todo-update-task"
+              }
+            ]
+          },
+          {
+            "label": "Work IQ",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/data/microsoft/work-iq"
+              },
+              {
+                "label": "Work IQ (OAuth)",
+                "slug": "nodes/data/microsoft/work-iq/data-microsoft-workiq-provider-oauth"
+              },
+              {
+                "label": "Work IQ (Token)",
+                "slug": "nodes/data/microsoft/work-iq/data-microsoft-workiq-provider-token"
+              },
+              {
+                "label": "Work IQ Chat",
+                "slug": "nodes/data/microsoft/work-iq/data-microsoft-workiq-chat"
+              },
+              {
+                "label": "Work IQ Request",
+                "slug": "nodes/data/microsoft/work-iq/data-microsoft-workiq-request"
               }
             ]
           },
@@ -10205,6 +10575,20 @@ export const generatedNodeSidebar = [
           {
             "label": "Extract Links",
             "slug": "nodes/web/scraping/web-scrape-extract-links"
+          }
+        ]
+      },
+      {
+        "label": "Services",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/web/services"
+          },
+          {
+            "label": "Service Ready",
+            "slug": "nodes/web/services/service-ready"
           }
         ]
       },

@@ -92,7 +92,6 @@ All referenced Secrets must exist in the release namespace.
 | `audit.entrySecret` | `AUDIT_ENTRY_KEY`, optionally `AUDIT_ENTRY_KEY_PREVIOUS` |
 | `audit.existingSecret` | `AUDIT_SIGNING_KEY`, or the chosen key service's credentials |
 | `audit.bucketSecret` | `AUDIT_BUCKET_ACCESS_KEY_ID`, `AUDIT_BUCKET_SECRET_ACCESS_KEY` |
-| `audit.runtimeConfig.existingSecret` | `audit.config.json`, containing the hub's `audit` object |
 
 Setup generates these contracts together. `BACKEND_KEY` and `BACKEND_PUB`
 contain base64-encoded ES256 PEM material; Kubernetes Secret encoding is a
@@ -130,6 +129,16 @@ this chart can start its database. Preserve the database volume and existing
 credentials, provision the separate TLS and runtime-role Secrets, and review the
 rendered migration and database workloads before upgrading. Removing TLS settings
 does not restore insecure mode.
+
+The worker's audit policy is the `audit` section of the `flow-like.config.json`
+compiled into its image, from the same `FLOW_LIKE_CONFIG` build input as the API
+image (`FLOW_LIKE_BUILD_CONFIG` in `scripts/build-images.sh`). It needs no config
+Secret or mount. `api.runtimeConfig` overrides the API's configuration only and
+never reaches the worker, so a changed audit policy needs a rebuilt worker image.
+The worker waits for the migration Job of its revision before it starts; that Job
+owns and verifies the SQL boundary between the API and worker logins. To pause
+the worker, set `audit.replicaCount=0`: nothing is sealed or archived while it is
+scaled down, and grants and credentials are untouched.
 
 `audit.worker=false` stops the dedicated worker; it does not start one inside the
 API. The chart rejects `sinkServices.enabled` while the worker is enabled because

@@ -22,6 +22,9 @@ import type {
 	SubgraphNode,
 	SubgraphPayload,
 	SubgraphResult,
+	UpdateOntologyObjectPayload,
+	UpdateOntologyRelationshipPayload,
+	UpdateOntologyRowResult,
 	UpdateOverlayPayload,
 	UpsertGraphElementsPayload,
 	UpsertGraphElementsResult,
@@ -31,12 +34,26 @@ import {
 	applyOntologyActionStreamEvent,
 	normalizeGraphQueryResult,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+import { normalizeExecuteSqlResult } from "./query-state";
 
 function scopeQuery(userScoped?: boolean): string {
 	return userScoped ? "?scope=user" : "";
+}
+
+/** Callers store the overlay as view state and iterate its mappings while rendering. */
+function requireOverlay(overlay: GraphOverlay, source: string): GraphOverlay {
+	if (
+		!isRecord(overlay) ||
+		!Array.isArray(overlay.nodes) ||
+		!Array.isArray(overlay.edges)
+	) {
+		throw new Error(`${source} returned an unexpected response`);
+	}
+	return overlay;
 }
 
 export class GraphState implements IGraphState {
@@ -56,11 +73,13 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<GraphOverlay[]>(
-				this.requireProfile(),
-				`apps/${appId}/graph${scopeQuery(userScoped)}`,
-				{ method: "GET" },
-				this.backend.auth,
+			return asArray(
+				await fetcher<GraphOverlay[]>(
+					this.requireProfile(),
+					`apps/${appId}/graph${scopeQuery(userScoped)}`,
+					{ method: "GET" },
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -76,11 +95,13 @@ export class GraphState implements IGraphState {
 	): Promise<GraphOverlay[]> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || !this.backend.profile || !this.backend.auth) return [];
-		return fetcher<GraphOverlay[]>(
-			this.backend.profile,
-			`apps/${appId}/connections/${targetAppId}/ontologies`,
-			{ method: "GET" },
-			this.backend.auth,
+		return asArray(
+			await fetcher<GraphOverlay[]>(
+				this.backend.profile,
+				`apps/${appId}/connections/${targetAppId}/ontologies`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -92,11 +113,13 @@ export class GraphState implements IGraphState {
 			return invoke("graph_list_imports", { appId });
 		}
 		if (!this.backend.profile || !this.backend.auth) return [];
-		return fetcher<RemoteOntologyImport[]>(
-			this.backend.profile,
-			`apps/${appId}/graph/imports`,
-			{ method: "GET" },
-			this.backend.auth,
+		return asArray(
+			await fetcher<RemoteOntologyImport[]>(
+				this.backend.profile,
+				`apps/${appId}/graph/imports`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -146,11 +169,13 @@ export class GraphState implements IGraphState {
 		}
 		const params = new URLSearchParams({ label });
 		if (n !== undefined) params.set("n", String(n));
-		return fetcher<unknown[]>(
-			this.backend.profile,
-			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/sample?${params.toString()}`,
-			{ method: "GET" },
-			this.backend.auth,
+		return asArray(
+			await fetcher<unknown[]>(
+				this.backend.profile,
+				`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/sample?${params.toString()}`,
+				{ method: "GET" },
+				this.backend.auth,
+			),
 		);
 	}
 
@@ -163,11 +188,14 @@ export class GraphState implements IGraphState {
 		if (isOffline || !this.backend.profile || !this.backend.auth) {
 			throw new Error("Remote ontology imports require an online connection.");
 		}
-		return fetcher<ExecuteSqlResult>(
-			this.backend.profile,
-			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/query`,
-			{ method: "POST", body: JSON.stringify(payload) },
-			this.backend.auth,
+		return normalizeExecuteSqlResult(
+			await fetcher<ExecuteSqlResult>(
+				this.backend.profile,
+				`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/query`,
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			),
+			`Remote ontology import ${importId} query`,
 		);
 	}
 
@@ -316,11 +344,14 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<GraphOverlay>(
-				this.requireProfile(),
-				`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
-				{ method: "GET" },
-				this.backend.auth,
+			return requireOverlay(
+				await fetcher<GraphOverlay>(
+					this.requireProfile(),
+					`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
+					{ method: "GET" },
+					this.backend.auth,
+				),
+				`Ontology ${overlayId}`,
 			);
 		}
 
@@ -340,11 +371,14 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<GraphOverlay>(
-				this.requireProfile(),
-				`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
-				{ method: "PUT", body: JSON.stringify(payload) },
-				this.backend.auth,
+			return requireOverlay(
+				await fetcher<GraphOverlay>(
+					this.requireProfile(),
+					`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
+					{ method: "PUT", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
+				`Updating ontology ${overlayId}`,
 			);
 		}
 
@@ -412,7 +446,7 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<ValidationResult>(
+			const validation = await fetcher<ValidationResult>(
 				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/validate${scopeQuery(userScoped)}`,
 				draft
@@ -420,6 +454,12 @@ export class GraphState implements IGraphState {
 					: { method: "POST" },
 				this.backend.auth,
 			);
+			if (!isRecord(validation) || typeof validation.ok !== "boolean") {
+				throw new Error(
+					`Ontology ${overlayId} validation returned an unexpected response`,
+				);
+			}
+			return { ...validation, issues: asArray(validation.issues) };
 		}
 
 		return invoke("graph_validate_overlay", {
@@ -439,11 +479,13 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<unknown[]>(
-				this.requireProfile(),
-				`apps/${appId}/graph/${overlayId}/cypher${scopeQuery(userScoped)}`,
-				{ method: "POST", body: JSON.stringify(payload) },
-				this.backend.auth,
+			return asArray(
+				await fetcher<unknown[]>(
+					this.requireProfile(),
+					`apps/${appId}/graph/${overlayId}/cypher${scopeQuery(userScoped)}`,
+					{ method: "POST", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -478,7 +520,18 @@ export class GraphState implements IGraphState {
 					},
 					this.backend.auth,
 				);
-		return normalizeGraphQueryResult(result);
+		if (Array.isArray(result)) return normalizeGraphQueryResult(result);
+		if (!isRecord(result)) {
+			throw new Error(
+				`Cypher query on ontology ${overlayId} returned ${typeof result} instead of rows`,
+			);
+		}
+		return {
+			rows: asArray(result.rows),
+			property_metadata: isRecord(result.property_metadata)
+				? result.property_metadata
+				: {},
+		};
 	}
 
 	async sql(
@@ -490,11 +543,13 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<unknown[]>(
-				this.requireProfile(),
-				`apps/${appId}/graph/${overlayId}/sql${scopeQuery(userScoped)}`,
-				{ method: "POST", body: JSON.stringify(payload) },
-				this.backend.auth,
+			return asArray(
+				await fetcher<unknown[]>(
+					this.requireProfile(),
+					`apps/${appId}/graph/${overlayId}/sql${scopeQuery(userScoped)}`,
+					{ method: "POST", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -644,11 +699,13 @@ export class GraphState implements IGraphState {
 		const isOffline = await this.backend.isOffline(appId);
 
 		if (!isOffline) {
-			return fetcher<SubgraphNode[]>(
-				this.requireProfile(),
-				`apps/${appId}/graph/${overlayId}/search${scopeQuery(userScoped)}`,
-				{ method: "POST", body: JSON.stringify(payload) },
-				this.backend.auth,
+			return asArray(
+				await fetcher<SubgraphNode[]>(
+					this.requireProfile(),
+					`apps/${appId}/graph/${overlayId}/search${scopeQuery(userScoped)}`,
+					{ method: "POST", body: JSON.stringify(payload) },
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -675,11 +732,13 @@ export class GraphState implements IGraphState {
 			params.set("label", label);
 			if (n !== undefined) params.set("n", String(n));
 			const qs = params.toString();
-			return fetcher<unknown[]>(
-				this.requireProfile(),
-				`apps/${appId}/graph/${overlayId}/sample${qs ? `?${qs}` : ""}`,
-				{ method: "GET" },
-				this.backend.auth,
+			return asArray(
+				await fetcher<unknown[]>(
+					this.requireProfile(),
+					`apps/${appId}/graph/${overlayId}/sample${qs ? `?${qs}` : ""}`,
+					{ method: "GET" },
+					this.backend.auth,
+				),
 			);
 		}
 
@@ -735,6 +794,56 @@ export class GraphState implements IGraphState {
 		}
 
 		return invoke("graph_upsert_edges", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async updateObject(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyObjectPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<UpdateOntologyRowResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/objects${scopeQuery(userScoped)}`,
+				{ method: "PATCH", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_update_object", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async updateRelationship(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyRelationshipPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<UpdateOntologyRowResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/relationships${scopeQuery(userScoped)}`,
+				{ method: "PATCH", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_update_relationship", {
 			appId,
 			overlayId,
 			payload,

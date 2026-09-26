@@ -10,6 +10,7 @@ import {
 import { useInvoke } from "../../../../hooks";
 import { useAppPackageWidgets } from "../../../../hooks/use-app-package-widgets";
 import { encodePackageWidgetRef } from "../../../../lib/package-widgets";
+import { asArray } from "../../../../lib/response-shape";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
@@ -56,7 +57,7 @@ export function WidgetVariable({
 
 	const projectOptions = useMemo<WidgetOption[]>(
 		() =>
-			(widgets ?? []).map(([, widgetId, metadata]) => ({
+			asArray(widgets).map(([, widgetId, metadata]) => ({
 				selector: widgetId,
 				label:
 					typeof metadata?.name === "string" && metadata.name.trim()

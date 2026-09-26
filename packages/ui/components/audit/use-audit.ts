@@ -53,7 +53,7 @@ export function useAuditRecords(
 				recordsPath(chainId, filters, pageParam, limit),
 			);
 		},
-		getNextPageParam: (last) => last.next ?? undefined,
+		getNextPageParam: (last) => last?.next ?? undefined,
 		enabled: !!profile && chainId.length > 0,
 		meta: LIVE_ONLY,
 	});

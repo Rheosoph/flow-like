@@ -68,6 +68,9 @@ model AuditRecord {
   mac               Bytes?
   /// Seal id, or "invalid" for a pending record whose MAC failed
   sealId            String?
+  /// Id of the entry key that made the MAC (audit/keys.rs `entry_kid`); NULL on records
+  /// written before the column existed
+  entryKid          String?
 
   @@index([chainId, timestamp, id])
   @@index([sealId, chainId, timestamp, id])

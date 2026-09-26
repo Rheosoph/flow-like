@@ -4,10 +4,13 @@ use crate::credentials::CredentialsAccess;
 use crate::state::{AppState, State};
 #[cfg(feature = "aws")]
 use flow_like::credentials::{
-    BucketConfig, SharedCredentials, aws_credentials::AwsSharedCredentials,
+    BucketConfig, SharedCredentials,
+    aws_credentials::{AwsSharedCredentials, sse_kms_storage_options},
 };
 use flow_like::{
-    flow_like_storage::lancedb::{connect, connection::ConnectBuilder},
+    flow_like_storage::{
+        databases::vector::lancedb::connect_lance, lancedb::connection::ConnectBuilder,
+    },
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
@@ -90,6 +93,19 @@ impl From<aws_sdk_sts::types::Credentials> for AwsRuntimeCredentials {
 
 #[cfg(feature = "aws")]
 impl AwsRuntimeCredentials {
+    pub(super) fn device_storage_options(&self) -> std::collections::BTreeMap<String, String> {
+        let mut options =
+            std::collections::BTreeMap::from([("aws_region".into(), self.region.clone())]);
+        options.extend(sse_kms_storage_options(bucket_configs().content.as_ref()));
+        if options.contains_key("aws_sse_kms_key_id") {
+            // Running devices compare lease options exactly during credential refresh.
+            options
+                .entry("aws_sse_bucket_key_enabled".into())
+                .or_insert_with(|| "false".into());
+        }
+        options
+    }
+
     pub fn new(meta_bucket: &str, content_bucket: &str, logs_bucket: &str, region: &str) -> Self {
         AwsRuntimeCredentials {
             access_key_id: None,
@@ -223,6 +239,18 @@ impl AwsRuntimeCredentials {
             session_name
         };
 
+        if let CredentialsAccess::DeviceExecute { expires_at, .. } = &mode {
+            super::device_execute_expiry(*expires_at)?;
+            let config = bucket_configs().content.as_ref();
+            if sts.provider != S3StsProvider::Aws
+                || sts.endpoint.is_some()
+                || config.is_some_and(|c| c.express || c.endpoint.is_some() || c.allow_http)
+            {
+                return Err(anyhow!(
+                    "DeviceExecute requires standard AWS S3 with provider-enforced session policies"
+                ));
+            }
+        }
         let meta_express = sts.provider == S3StsProvider::Aws && meta_bucket_express_zone();
         let kms_actions = kms_session_actions(&mode, meta_express);
         let policy = match mode {
@@ -250,6 +278,15 @@ impl AwsRuntimeCredentials {
                 &user_prefix,
                 &temporary_user_prefix,
                 &temporary_global_prefix,
+            ),
+            CredentialsAccess::DeviceExecute { write, expires_at } => device_execute_policy(
+                &self.content_bucket,
+                &self.region,
+                &super::device_execute_prefixes(sub, app_id)?
+                    .into_values()
+                    .collect::<Vec<_>>(),
+                write,
+                expires_at,
             ),
             CredentialsAccess::ServerExecute => server_execute_policy(
                 self,
@@ -282,14 +319,21 @@ impl AwsRuntimeCredentials {
             .map_err(|e| flow_like_types::anyhow!("Failed to serialize policy: {}", e))?;
 
         if policy.len() > STS_POLICY_MAX_CHARS {
-            return Err(anyhow!("STS session policy exceeds the 2048-byte limit"));
+            return Err(anyhow!(
+                "STS session policy exceeds 2048 bytes; use shorter bucket/project/user identifiers or reduce duplicated KMS key configuration"
+            ));
         }
         let response = client
             .assume_role()
             .role_arn(&sts.role_arn)
             .role_session_name(session_name)
             .policy(policy)
-            .duration_seconds(sts.duration_seconds)
+            .duration_seconds(match &mode {
+                CredentialsAccess::DeviceExecute { expires_at, .. } => {
+                    (expires_at - chrono::Utc::now().timestamp()).clamp(900, 3600) as i32
+                }
+                _ => sts.duration_seconds,
+            })
             .send()
             .instrument(tracing::info_span!(
                 target: "flow_like::observability",
@@ -314,6 +358,12 @@ impl AwsRuntimeCredentials {
         {
             return Err(anyhow!("STS returned empty or expired credentials"));
         }
+        let expiration = match &mode {
+            CredentialsAccess::DeviceExecute { expires_at, .. } => {
+                expiration.min(super::device_execute_expiry(*expires_at)?)
+            }
+            _ => expiration,
+        };
         Ok(Self {
             access_key_id: Some(credentials.access_key_id().to_owned()),
             secret_access_key: Some(credentials.secret_access_key().to_owned()),
@@ -326,6 +376,214 @@ impl AwsRuntimeCredentials {
             content_path_prefix,
             user_content_path_prefix,
         })
+    }
+}
+
+fn device_execute_policy(
+    bucket: &str,
+    region: &str,
+    prefixes: &[String],
+    write: bool,
+    expires_at: i64,
+) -> serde_json::Value {
+    let bucket = format!("arn:aws:s3:::{bucket}");
+    let objects = prefixes
+        .iter()
+        .map(|prefix| format!("{bucket}/{prefix}*"))
+        .collect::<Vec<_>>();
+    let list = prefixes
+        .iter()
+        .map(|prefix| format!("{prefix}*"))
+        .collect::<Vec<_>>();
+    let expiry = chrono::DateTime::from_timestamp(expires_at, 0)
+        .expect("validated storage expiry")
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let actions = if write {
+        vec![
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts",
+        ]
+    } else {
+        vec!["s3:GetObject"]
+    };
+    let mut allowed = actions.clone();
+    allowed.extend(["s3:ListBucket", "kms:Decrypt"]);
+    if write {
+        allowed.push("kms:GenerateDataKey");
+    }
+    let mut resources = vec![bucket.clone()];
+    resources.extend(objects);
+    // Put path lists only in the explicit denies to keep the policy under the
+    // STS limit. These denies also constrain bucket policies granting directly
+    // to the assumed session, which would bypass an implicit session denial.
+    json!({"Version":"2012-10-17","Statement":[
+        {"Effect":"Allow","Action":actions,"Resource":"*"},
+        {"Effect":"Allow","Action":"s3:ListBucket","Resource":bucket},
+        {"Effect":"Deny","NotAction":allowed,"Resource":"*"},
+        {"Effect":"Deny","Action":"s3:*","NotResource":resources},
+        {"Effect":"Deny","Action":"s3:ListBucket","Resource":bucket,"Condition":{"StringNotLike":{"s3:prefix":list}}},
+        {"Effect":"Deny","Action":"kms:*","Resource":"*","Condition":{"StringNotEquals":{"kms:ViaService":format!("s3.{region}.amazonaws.com")}}},
+        {"Effect":"Deny","Action":"*","Resource":"*","Condition":{"DateGreaterThanEquals":{"aws:CurrentTime":expiry}}}
+    ]})
+}
+
+#[cfg(test)]
+mod device_policy_tests {
+    use super::*;
+    #[test]
+    fn device_policy_fits_uuid_and_auth0_scope_with_a_pinned_kms_key() {
+        let prefixes = crate::credentials::device_execute_prefixes(
+            "auth0|12345678901234567890",
+            "12345678-1234-1234-1234-123456789123",
+        )
+        .unwrap()
+        .into_values()
+        .collect::<Vec<_>>();
+        let mode = CredentialsAccess::DeviceExecute {
+            write: true,
+            expires_at: 1_800_000_000,
+        };
+        let keys = Box::leak(Box::new(KmsKeys {
+            meta: None,
+            content: Some(
+                "arn:aws:kms:eu-central-1:123456789012:key/12345678-1234-1234-1234-123456789123"
+                    .into(),
+            ),
+            logs: None,
+        }));
+        let mut policy = device_execute_policy(
+            "flow-like-content",
+            "eu-central-1",
+            &prefixes,
+            true,
+            1_800_000_000,
+        );
+        policy["Statement"]
+            .as_array_mut()
+            .unwrap()
+            .push(kms_statement(
+                keys,
+                &mode,
+                kms_session_actions(&mode, false),
+                "eu-central-1",
+                false,
+            ));
+        assert!(
+            policy.to_string().len() <= STS_POLICY_MAX_CHARS,
+            "{}",
+            policy.to_string().len()
+        );
+        let statements = policy["Statement"].as_array().unwrap();
+        assert!(statements.iter().any(|s| s["Effect"] == "Deny"
+            && s["Action"] == "s3:*"
+            && s["NotResource"].as_array().is_some_and(|r| r.len() == 5)));
+        assert!(statements.iter().any(|s| {
+            s["Effect"] == "Deny"
+                && s["Action"] == "s3:ListBucket"
+                && s["Condition"]["StringNotLike"]["s3:prefix"]
+                    .as_array()
+                    .is_some_and(|r| r.len() == 4)
+        }));
+        let read =
+            device_execute_policy("content", "eu-central-1", &prefixes, false, 1_800_000_000);
+        let permitted = &read["Statement"][2]["NotAction"];
+        assert!(
+            !permitted
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a == "s3:PutObject"
+                    || a == "s3:DeleteObject"
+                    || a == "kms:GenerateDataKey")
+        );
+    }
+
+    #[test]
+    fn device_credentials_deny_direct_kms_even_without_pinned_keys() {
+        let prefixes = crate::credentials::device_execute_prefixes("owner", "project")
+            .unwrap()
+            .into_values()
+            .collect::<Vec<_>>();
+        let keys = Box::leak(Box::new(KmsKeys {
+            meta: None,
+            content: None,
+            logs: None,
+        }));
+        for region in ["eu-central-1", "us-east-1"] {
+            for write in [false, true] {
+                let mode = CredentialsAccess::DeviceExecute {
+                    write,
+                    expires_at: 1_800_000_000,
+                };
+                let mut policy =
+                    device_execute_policy("content", region, &prefixes, write, 1_800_000_000);
+                policy["Statement"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(kms_statement(
+                        keys,
+                        &mode,
+                        kms_session_actions(&mode, false),
+                        region,
+                        false,
+                    ));
+                let deny = policy["Statement"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|statement| {
+                        statement["Effect"] == "Deny" && statement["Action"] == "kms:*"
+                    })
+                    .expect("DeviceExecute must fence common KMS permissions");
+                assert_eq!(deny["Resource"], "*");
+                assert_eq!(
+                    deny["Condition"],
+                    json!({"StringNotEquals":{"kms:ViaService":format!("s3.{region}.amazonaws.com")}})
+                );
+                // StringNotEquals also denies requests with no ViaService key,
+                // including a direct call to KMS using the session credentials.
+                assert!(policy.to_string().len() <= STS_POLICY_MAX_CHARS);
+                assert_eq!(
+                    kms_session_actions(&mode, false),
+                    if write {
+                        &["kms:Decrypt", "kms:GenerateDataKey"][..]
+                    } else {
+                        &["kms:Decrypt"][..]
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn device_credentials_exclude_metadata_logs_global_scratch_and_other_users() {
+        let prefixes = crate::credentials::device_execute_prefixes("auth0|user", "project")
+            .unwrap()
+            .into_values()
+            .collect::<Vec<_>>();
+        let policy =
+            device_execute_policy("content", "eu-central-1", &prefixes, true, 1_800_000_000);
+        assert!(policy.to_string().len() <= STS_POLICY_MAX_CHARS);
+        assert_eq!(
+            policy["Statement"][3]["NotResource"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
+        let wire = policy.to_string();
+        for forbidden in ["metadata/", "media/", "tmp/global", "runs/", "users/other/"] {
+            assert!(!wire.contains(forbidden));
+        }
+        assert!(wire.contains("DateGreaterThanEquals"));
+        let read =
+            device_execute_policy("content", "eu-central-1", &prefixes, false, 1_800_000_000)
+                .to_string();
+        assert!(!read.contains("s3:PutObject"));
+        assert!(!read.contains("s3:DeleteObject"));
     }
 }
 
@@ -346,6 +604,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { .. }
             | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
@@ -358,6 +617,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { .. }
             | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
@@ -698,6 +958,7 @@ fn kms_session_actions(mode: &CredentialsAccess, meta_express: bool) -> &'static
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { write: true, .. }
             // A shadow run may not touch app or user content, but it still
             // writes scratch and appends run logs.
             | CredentialsAccess::ShadowExecute
@@ -970,7 +1231,7 @@ fn make_s3_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
-        let mut builder = connect(&url)
+        let mut builder = connect_lance(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
             .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
             .storage_option("aws_region".to_string(), region.clone());

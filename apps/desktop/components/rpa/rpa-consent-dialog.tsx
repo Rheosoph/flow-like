@@ -11,9 +11,17 @@ import {
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
 import { MonitorCog, ShieldAlert } from "lucide-react";
-import type { RpaConsentContext, RpaConsentRememberScope } from "./rpa-consent";
+import type {
+	RpaCapability,
+	RpaConsentContext,
+	RpaConsentRememberScope,
+} from "./rpa-consent";
+import { capabilityLabels } from "./rpa-permission-dialog";
 
 type RpaConsentDialogProps = {
+	required?: RpaCapability[];
+	pending?: boolean;
+	error?: string | null;
 	boardId?: string;
 	context: RpaConsentContext;
 	eventId?: string;
@@ -24,6 +32,9 @@ type RpaConsentDialogProps = {
 
 export function RpaConsentDialog({
 	boardId,
+	required = [],
+	pending = false,
+	error,
 	context,
 	eventId,
 	onCancel,
@@ -34,19 +45,22 @@ export function RpaConsentDialog({
 	const isEventRegistration = context === "event_registration";
 	const title = isEventRegistration
 		? t("allowEventAutomation", "Allow event automation")
-		: t("allowComputerAutomation", "Allow computer automation");
+		: t("allowWorkflowAutomation", "Allow workflow automation");
 	const description = isEventRegistration
 		? t(
-				"thisEventCanRunLocalComputerAutomationWhenItIsTriggeredApproveItNowSoApiChatAndScheduledTriggersCanRunWithoutAForegroundPrompt",
-				"This event can run local computer automation when it is triggered. Approve it now so API, chat, and scheduled triggers can run without a foreground prompt.",
+				"approveEventAutomationCapabilities",
+				"This event can use the capabilities listed below when triggered. Approval allows background triggers to run this workflow revision.",
 			)
 		: t(
-				"thisWorkflowCanControlTheLocalComputerAndReadTheScreenApproveThisRunOnlyIfYouTrustTheBoard",
-				"This workflow can control the local computer and read the screen. Approve this run only if you trust the board.",
+				"approveWorkflowAutomationCapabilities",
+				"This workflow can use the capabilities listed below. Approve it only if you trust the board.",
 			);
 
 	return (
-		<Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
+		<Dialog
+			open={open}
+			onOpenChange={(nextOpen) => !nextOpen && !pending && onCancel()}
+		>
 			<DialogContent className="max-w-lg">
 				<DialogHeader>
 					<div className="flex items-center gap-2">
@@ -64,10 +78,9 @@ export function RpaConsentDialog({
 								{t("requestedCapability", "Requested capability")}
 							</p>
 							<p className="text-muted-foreground">
-								{t(
-									"mouseAndKeyboardAutomationScreenshotCaptureAndUiInspectionForLocalRpaNodes",
-									"Mouse and keyboard automation, screenshot capture, and UI inspection for local RPA nodes.",
-								)}
+								{required
+									.map((capability) => capabilityLabels[capability])
+									.join(", ")}
 							</p>
 							{eventId ? (
 								<p className="text-xs text-muted-foreground">
@@ -85,29 +98,42 @@ export function RpaConsentDialog({
 					</div>
 				</div>
 
+				{error && (
+					<p role="alert" className="text-sm text-destructive">
+						{error}
+					</p>
+				)}
 				<DialogFooter className="flex-col gap-2 sm:flex-col">
 					<div className="flex flex-wrap justify-end gap-2">
-						<Button variant="outline" onClick={onCancel}>
+						<Button disabled={pending} variant="outline" onClick={onCancel}>
 							{t("cancel", "Cancel")}
 						</Button>
 						{!isEventRegistration ? (
-							<Button variant="secondary" onClick={() => onConfirm("none")}>
+							<Button
+								disabled={pending}
+								variant="secondary"
+								onClick={() => onConfirm("none")}
+							>
 								{t("runOnce", "Run once")}
 							</Button>
 						) : null}
 						{eventId ? (
-							<Button variant="secondary" onClick={() => onConfirm("event")}>
+							<Button
+								disabled={pending}
+								variant="secondary"
+								onClick={() => onConfirm("event")}
+							>
 								{t("rememberForThisEvent", "Remember for this event")}
 							</Button>
 						) : null}
-						<Button onClick={() => onConfirm("board")}>
+						<Button disabled={pending} onClick={() => onConfirm("board")}>
 							{t("rememberForThisBoard", "Remember for this board")}
 						</Button>
 					</div>
 					<p className="text-right text-xs text-muted-foreground">
 						{t(
 							"rememberedApprovalsAreStoredLocallyOnThisDesktop",
-							"Remembered approvals are stored locally on this desktop.",
+							"Approvals are stored on this desktop for the current profile and workflow revision. Editing the workflow requires approval again.",
 						)}
 					</p>
 				</DialogFooter>

@@ -30,7 +30,7 @@ describe("camera audio configuration", () => {
 	test("new and legacy cameras keep microphone capture off by default", () => {
 		for (const component of [
 			createDefaultComponent("cameraView"),
-			normalizeComponent({ type: "cameraView" }),
+			normalizeComponent({ id: "camera", type: "cameraView" }),
 		]) {
 			expect(component).toMatchObject({
 				audioEnabled: { literalBool: false },
@@ -50,7 +50,11 @@ describe("camera audio configuration", () => {
 				audioBufferSeconds: { path: "/camera/historySeconds" },
 			},
 		]) {
-			const component = normalizeComponent({ type: "cameraView", ...settings });
+			const component = normalizeComponent({
+				id: "camera",
+				type: "cameraView",
+				...settings,
+			});
 			expect(component).toMatchObject(settings);
 			const result = validateComponents([{ id: "camera", component }]);
 			expect(result.components[0]?.component).toMatchObject(settings);

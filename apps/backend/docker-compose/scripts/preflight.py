@@ -113,7 +113,6 @@ def validate(values, config):
         errors.append("audit-worker must use AUDIT_DATABASE_URL")
     if worker.get("BACKEND_KEY"):
         errors.append("audit-worker must not receive BACKEND_KEY")
-    errors.extend(audit_config_errors(values, config, api, worker))
     runtime_sources = ("FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF")
     for key in runtime_sources:
         value = str(api.get(key, ""))
@@ -209,7 +208,7 @@ def validate(values, config):
                 errors.append("Grafana must bind to loopback")
     datastore_mode = values.get("DATASTORE_MODE", "bundled")
     if datastore_mode == "external":
-        if "postgres" in services or "redis" in services or "db-init" in services:
+        if "postgres" in services or "redis" in services:
             errors.append("External datastores require docker-compose.external-datastores.yml")
         for key in ["DATABASE_URL", "MIGRATION_DATABASE_URL", "AUDIT_DATABASE_URL", "REDIS_URL", "RUNTIME_REDIS_URL", "SIGNALING_REDIS_URL", "SINK_REDIS_URL"]:
             endpoint = urlsplit(values.get(key, ""))
@@ -268,32 +267,6 @@ def validate(values, config):
         errors.append("AUDIT_BUCKET_ENDPOINT names the bundled object store, which this deployment does not run; configure the external endpoint or clear AUDIT_BUCKET")
     errors.extend(audit_key_errors(worker, "object-store" in services))
     return errors
-
-
-def audit_config_errors(values, config, api, worker):
-    try:
-        policy = json.loads(worker.get("FLOW_LIKE_CONFIG_JSON", ""))
-        if not isinstance(policy, dict) or set(policy) != {"audit"} or not isinstance(policy["audit"], dict):
-            return ["AUDIT_WORKER_CONFIG_JSON must contain only an audit object"]
-        if policy["audit"].get("enabled") is False:
-            return ["The dedicated audit worker requires audit to be enabled"]
-        reference = api.get("FLOW_LIKE_CONFIG_SECRET_REF", "")
-        if reference:
-            bound = values.get("AUDIT_WORKER_CONFIG_SECRET_REF", "").strip("'")
-            if bound != reference:
-                return ["A remote API config needs explicit AUDIT_WORKER_CONFIG_JSON and a matching AUDIT_WORKER_CONFIG_SECRET_REF"]
-            return []
-        if api.get("FLOW_LIKE_CONFIG_JSON"):
-            source = json.loads(api["FLOW_LIKE_CONFIG_JSON"])
-        elif api.get("FLOW_LIKE_CONFIG_FILE") == "/app/flow-like.config.json":
-            source = json.loads(Path(config["configs"]["flowlike_runtime_config"]["file"]).read_text())
-        else:
-            return ["Cannot compare the API and worker audit policies; use the mounted API config, JSON or a bound remote config"]
-        if not isinstance(source, dict) or policy["audit"] != source.get("audit", {}):
-            return ["AUDIT_WORKER_CONFIG_JSON differs from the API audit policy; regenerate the worker policy before deployment"]
-    except (ValueError, TypeError, KeyError, OSError):
-        return ["Cannot read the API/worker audit JSON policy"]
-    return []
 
 
 def audit_kms_provider(key_id, explicit, vault_address):

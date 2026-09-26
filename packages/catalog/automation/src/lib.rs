@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 
+pub mod capabilities;
+
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod types;
 

@@ -1,8 +1,50 @@
 import { describe, expect, test } from "bun:test";
 import { appRouteUrl, parseAppRouteTarget } from "./app-route-url";
-import { isUsePathname, pathUseUrl, readUseRoutePath } from "./use-route-url";
+import {
+	isUsePathname,
+	pathUseUrl,
+	queryUseUrl,
+	readUseRoutePath,
+} from "./use-route-url";
 
 const at = (href: string) => new URL(href, "https://app.test");
+
+describe("native app route queries", () => {
+	test("keeps exported shell links and unrelated paths unchanged", () => {
+		for (const href of [
+			"/use?id=app&route=%2Forders&value=a%20b#details",
+			"/use?id=app&eventId=event",
+			"/users?route=%2Forders",
+		])
+			expect(queryUseUrl(at(href))).toBe(href);
+	});
+
+	test("converts deep links without losing shell or app query data", () => {
+		const url = at(
+			"/use/orders/123?id=app&route=%2Fold&route=%2Fstale&eventId=event&appQuery=id%3Dorder%26route%3D%252Fapp-owned&tag=a&tag=b#details",
+		);
+		const before = url.href;
+		const next = at(queryUseUrl(url));
+		expect(url.href).toBe(before);
+		expect(next.pathname).toBe("/use");
+		expect(next.searchParams.getAll("route")).toEqual(["/orders/123"]);
+		expect([...next.searchParams].filter(([key]) => key !== "route")).toEqual(
+			[...url.searchParams].filter(([key]) => key !== "route"),
+		);
+		expect(next.hash).toBe("#details");
+	});
+
+	test("preserves explicit root routes and decodes path segments once", () => {
+		for (const route of ["/", "/café sale/東京/50%", "/literal%2Fsegment"]) {
+			const url = at("/use?id=app&eventId=event");
+			url.searchParams.set("route", route);
+			const next = at(queryUseUrl(at(pathUseUrl(url))));
+			expect(next.pathname).toBe("/use");
+			expect(next.searchParams.get("route")).toBe(route);
+		}
+		expect(() => queryUseUrl(at("/use/a%2Fb?id=app"))).toThrow();
+	});
+});
 
 describe("web app route paths", () => {
 	test("recognizes only the use shell and its descendants", () => {

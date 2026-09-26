@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { hasPendingPageAction } from "../components/a2ui/pending-page-action";
+import type { Surface } from "../components/a2ui/types";
 import {
 	hasPageActionCapability,
 	pageSurfaceCacheKey,
@@ -6,6 +8,7 @@ import {
 	pageSurfaceRevision,
 	pageSurfaceRouteKey,
 	selectEvictions,
+	stripPageActionCapabilities,
 } from "./page-surface-cache";
 
 describe("page surface capability storage", () => {
@@ -115,6 +118,98 @@ describe("page surface capability storage", () => {
 		});
 		expect(hasPageActionCapability({ label: encodedCapability })).toBe(false);
 		expect(hasPageActionCapability({ literalJson: "not-json" })).toBe(false);
+	});
+});
+
+describe("storable page surfaces", () => {
+	const surfaceWith = (components: Record<string, unknown>): Surface =>
+		({ id: "page", rootComponentId: "root", components }) as Surface;
+
+	test("replace run-scoped actions with a pending marker and keep compiled ones", () => {
+		const surface = surfaceWith({
+			native: {
+				id: "native",
+				component: {
+					actions: [
+						{
+							name: "workflow_event",
+							context: {},
+							pageAction: { actionId: "lda1_native", manifestRevision: "r1" },
+						},
+					],
+				},
+			},
+			hosted: {
+				id: "hosted",
+				component: {
+					eventHandlers: {
+						click: [
+							{
+								name: "workflow_event",
+								context: {},
+								pageAction: {
+									actionId: "da1_hosted",
+									capabilityJwt: "signed-value",
+								},
+							},
+						],
+					},
+				},
+			},
+			compiled: {
+				id: "compiled",
+				component: {
+					actions: [
+						{
+							name: "workflow_event",
+							context: {},
+							pageAction: { actionId: "pa1_compiled", manifestRevision: "r1" },
+						},
+					],
+				},
+			},
+		});
+
+		const stored = stripPageActionCapabilities(surface);
+
+		expect(hasPageActionCapability(stored)).toBe(false);
+		expect(stored.components.native.component).toEqual({
+			actions: [
+				{ name: "workflow_event", context: {}, pendingPageAction: true },
+			],
+		} as never);
+		expect(hasPendingPageAction(stored.components.hosted)).toBe(true);
+		expect(stored.components.compiled).toEqual(surface.components.compiled);
+		expect(hasPendingPageAction(stored.components.compiled)).toBe(false);
+		expect(hasPageActionCapability(surface)).toBe(true);
+	});
+
+	test("strip run-scoped bindings inside literal JSON", () => {
+		const surface = surfaceWith({
+			widget: {
+				id: "widget",
+				component: {
+					bindings: {
+						literalJson: JSON.stringify({
+							workflow: { flowId: "node" },
+							pageAction: { actionId: "lda1_widget" },
+						}),
+					},
+				},
+			},
+		});
+
+		const stored = stripPageActionCapabilities(surface);
+
+		expect(hasPageActionCapability(stored)).toBe(false);
+		expect(hasPendingPageAction(stored.components.widget)).toBe(true);
+	});
+
+	test("store a surface without run-scoped actions as it is", () => {
+		const surface = surfaceWith({
+			text: { id: "text", component: { content: { literalString: "Hi" } } },
+		});
+		expect(stripPageActionCapabilities(surface)).toBe(surface);
 	});
 });
 

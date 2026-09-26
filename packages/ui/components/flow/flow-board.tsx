@@ -15,6 +15,7 @@ import {
 	type IsValidConnection,
 	MiniMap,
 	type Node,
+	type NodeChange,
 	type OnEdgesChange,
 	type OnNodesChange,
 	type OnSelectionChangeFunc,
@@ -27,9 +28,9 @@ import {
 	getViewportForBounds,
 	reconnectEdge,
 	useEdgesState,
-	useKeyPress,
 	useNodesState,
 	useReactFlow,
+	useStoreApi,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "@uidotdev/usehooks";
@@ -42,6 +43,7 @@ import {
 	FilesIcon,
 	FlaskConicalIcon,
 	GitBranchIcon,
+	GroupIcon,
 	HistoryIcon,
 	HouseIcon,
 	LayoutTemplateIcon,
@@ -122,6 +124,7 @@ import type {
 	FlowScriptRunMode,
 } from "../../components/flow/flowscript/flowscript-run-lens";
 import { useFlowScriptFiles } from "../../components/flow/flowscript/use-flowscript-files";
+import { useSyncCurrentRunSummary } from "../../components/flow/logs/use-log-window";
 import { MediaNode } from "../../components/flow/media-node";
 import { BoardAccountItem } from "../../components/flow/shell/board-account-item";
 import { BoardActivityRail } from "../../components/flow/shell/board-activity-rail";
@@ -150,6 +153,7 @@ import {
 	type IEditorDocument,
 	type IEditorScope,
 	type IEditorTab,
+	type IEditorTabColor,
 	deserializeTabs,
 	documentKey,
 	serializeTabs,
@@ -158,7 +162,10 @@ import {
 	withBoardTabPosition,
 	withDocumentOpened,
 	withMissingTabsDropped,
+	withPinnedFirst,
 	withTabClosed,
+	withTabColor,
+	withTabPinned,
 } from "../../components/flow/shell/editor-documents";
 import type { IBoardCommand } from "../../components/flow/shell/use-board-commands";
 import {
@@ -174,6 +181,7 @@ import { VariablesMenu } from "../../components/flow/variables/variables-menu";
 import { useBoardQualityAnalysis } from "../../hooks/use-board-quality";
 import { useCommandExecution } from "../../hooks/use-command-execution";
 import { useCopilotCommands } from "../../hooks/use-copilot-commands";
+import { useGroupSuggestions } from "../../hooks/use-group-suggestions";
 import { useExecutionPresence } from "../../hooks/use-execution-presence";
 import {
 	type FollowedEditorAnchor,
@@ -186,6 +194,7 @@ import {
 	useLayerNavigation,
 } from "../../hooks/use-layer-navigation";
 import { useMediaUpload } from "../../hooks/use-media-upload";
+import { useNodeSuggestionGhost } from "../../hooks/use-node-suggestion-ghost";
 import { usePeerUserInfo } from "../../hooks/use-peer-users";
 import { usePresenceCommands } from "../../hooks/use-presence-commands";
 import { useRealtimeChat } from "../../hooks/use-realtime-chat";
@@ -241,6 +250,12 @@ import {
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
 import {
+	type CommentDragSession,
+	followAnchor,
+	startCommentDrag,
+} from "../../lib/flow-comment-drag";
+import { buildAutoRerouteCommands } from "../../lib/flow-layout/reroute-commands";
+import {
 	FLOWSCRIPT_KEYWORDS,
 	MAIN_FILE_ID,
 	MAIN_FILE_LABEL,
@@ -254,6 +269,7 @@ import {
 } from "../../lib/flow-modules";
 import { onFlowScriptNamesTableLoaded } from "../../lib/flowscript/names";
 import { toastError, toastSuccess, toastWarning } from "../../lib/messages";
+import { useNodeSuggestionEngine } from "../../lib/node-suggestions/engine";
 import { plainTextFromRichContent } from "../../lib/plate-text";
 import { isWebkitLite } from "../../lib/platform";
 import {
@@ -262,6 +278,7 @@ import {
 	presenceByLayer,
 } from "../../lib/realtime/presence-locations";
 import type { PingEmoji } from "../../lib/realtime/presence-signals";
+import { asArray, isRecord } from "../../lib/response-shape";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IBit } from "../../lib/schema/bit/bit";
@@ -299,6 +316,7 @@ import {
 	useRuntimeVariables,
 } from "../../state/runtime-variables-context";
 import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
+import { GroupSuggestionsOverlay } from "./group-suggestions";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
 import { FlowCopilot } from "./flow-copilot";
@@ -306,6 +324,7 @@ import type { FlowScriptApplyOptions } from "./flow-copilot/types";
 import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowDragGhostsLayer } from "./flow-drag-ghosts";
+import { FlowHelperLinesLayer, useHelperLines } from "./flow-helper-lines";
 import { FlowEditorTabs, boardTabLabel } from "./flow-editor-tabs";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import {
@@ -331,6 +350,7 @@ import { FlowTests } from "./flow-tests";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
 import { LayerNode } from "./layer-node";
+import { NodeSuggestionGhost } from "./node-suggestion-ghost";
 import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
@@ -399,6 +419,7 @@ const sameIds = (previous: string[], next: string[]): boolean => {
 type ReactFlowProps = ComponentProps<typeof ReactFlow>;
 
 interface FlowCanvasProps {
+	overlay?: ReactFlowProps["children"];
 	flowRef: ReactFlowProps["ref"];
 	nodes: ReactFlowProps["nodes"];
 	edges: ReactFlowProps["edges"];
@@ -435,6 +456,7 @@ interface FlowCanvasProps {
 // menus) skip reconciling the entire React Flow canvas. All props passed in are
 // referentially stable (state arrays + useCallback handlers), so the memo holds.
 const FlowCanvas = memo(function FlowCanvas({
+	overlay,
 	flowRef,
 	nodes,
 	edges,
@@ -502,6 +524,7 @@ const FlowCanvas = memo(function FlowCanvas({
 			fitView
 			proOptions={{ hideAttribution: true }}
 		>
+			{overlay}
 			<Controls>
 				<ControlButton onClick={onScreenshot}>
 					<ShareIcon className="size-4" />
@@ -578,6 +601,7 @@ export function FlowBoard({
 	useRetainBoardHistory(appId, boardId);
 	const router = useRouter();
 	const backend = useBackend();
+	useSyncCurrentRunSummary(backend.boardState);
 	const selected = useRef(new Set<string>());
 	const hub = useHub();
 	const edgeReconnectSuccessful = useRef(true);
@@ -633,21 +657,32 @@ export function FlowBoard({
 	const [flowInstanceReady, setFlowInstanceReady] = useState(false);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
-	const shiftPressed = useKeyPress("Shift");
-
 	const { resolvedTheme } = useTheme();
 
-	const catalog: UseQueryResult<INode[]> = useInvoke(
+	const catalogQuery: UseQueryResult<INode[]> = useInvoke(
 		backend.boardState.getCatalog,
 		backend.boardState,
 		[appId],
 	);
-	const board = useInvoke(
+	// A restored cache entry can hold any shape (an outage's error envelope); only a node
+	// list or a board may reach the canvas, anything else reads as "not loaded yet".
+	const catalog: UseQueryResult<INode[]> =
+		catalogQuery.data === undefined || Array.isArray(catalogQuery.data)
+			? catalogQuery
+			: ({ ...catalogQuery, data: undefined } as unknown as UseQueryResult<
+					INode[]
+				>);
+	const boardQuery = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
 		[appId, boardId, version],
 		boardId !== "",
 	);
+	const board: typeof boardQuery =
+		boardQuery.data === undefined ||
+		(isRecord(boardQuery.data) && isRecord(boardQuery.data.nodes))
+			? boardQuery
+			: ({ ...boardQuery, data: undefined } as unknown as typeof boardQuery);
 	const boardRef = useRef<IBoard | undefined>(undefined);
 	const currentProfile = useInvoke(
 		backend.userState.getProfile,
@@ -689,9 +724,9 @@ export function FlowBoard({
 			const promise = (async () => {
 				try {
 					const [routes, events, pages] = await Promise.all([
-						backend.routeState.getRoutes(appId),
-						backend.eventState.getEvents(appId),
-						backend.pageState.getPages(appId),
+						backend.routeState.getRoutes(appId).then(asArray),
+						backend.eventState.getEvents(appId).then(asArray),
+						backend.pageState.getPages(appId).then(asArray),
 					]);
 					const eventsMap = new Map(events.map((event) => [event.id, event]));
 					const pagesById = new Map(pages.map((page) => [page.pageId, page]));
@@ -820,13 +855,15 @@ export function FlowBoard({
 					// The query cache is persisted, so it is only safe once the profile
 					// is known — an unresolved id would cache one profile's bits under a
 					// key every other profile also reads from.
-					const bits = selectorProfileId
-						? await queryClient.fetchQuery({
-								queryKey: ["getProfileBits", selectorProfileId],
-								queryFn: () => backend.bitState.getProfileBits(),
-								staleTime: force ? 0 : PROFILE_BITS_STALE_TIME,
-							})
-						: await backend.bitState.getProfileBits();
+					const bits = asArray(
+						selectorProfileId
+							? await queryClient.fetchQuery({
+									queryKey: ["getProfileBits", selectorProfileId],
+									queryFn: () => backend.bitState.getProfileBits(),
+									staleTime: force ? 0 : PROFILE_BITS_STALE_TIME,
+								})
+							: await backend.bitState.getProfileBits(),
+					);
 					if (selectorCacheKeyRef.current === cacheKey) {
 						cache.bitOptions = bits;
 						cache.bitsByRef = indexBitsByRef(bits);
@@ -859,8 +896,14 @@ export function FlowBoard({
 	selectorDataRef.current.loadBits = loadBitOptions;
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
 	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
-	const { screenToFlowPosition, getViewport, setViewport, fitView, getNodes } =
-		useReactFlow();
+	const {
+		screenToFlowPosition,
+		getViewport,
+		setViewport,
+		fitView,
+		getNodes,
+		getInternalNode,
+	} = useReactFlow();
 
 	const [nodes, setNodes] = useNodesState<any>([]);
 	const [edges, setEdges] = useEdgesState<any>([]);
@@ -975,6 +1018,8 @@ export function FlowBoard({
 		flowScriptFilesClear();
 	}, [boardId, version, flowScriptFilesClear]);
 	const [templateSelectorOpen, setTemplateSelectorOpen] = useState(false);
+	const [templateSelectorDismissedBoard, setTemplateSelectorDismissedBoard] =
+		useState<string>();
 	const [runtimeVarsPromptOpen, setRuntimeVarsPromptOpen] = useState(false);
 	const [pendingExecution, setPendingExecution] = useState<{
 		node: INode;
@@ -1235,6 +1280,19 @@ export function FlowBoard({
 		restoreTabPositionRef.current(tabByKey(result.tabs, result.key), key);
 	}, []);
 
+	const handlePinTab = useCallback((key: string, pinned: boolean) => {
+		openTabsRef.current = withTabPinned(openTabsRef.current, key, pinned);
+		setOpenTabs(openTabsRef.current);
+	}, []);
+
+	const handleColorTab = useCallback(
+		(key: string, color: IEditorTabColor | undefined) => {
+			openTabsRef.current = withTabColor(openTabsRef.current, key, color);
+			setOpenTabs(openTabsRef.current);
+		},
+		[],
+	);
+
 	const activeDocumentKindRef = useRef(activeDocument.kind);
 	activeDocumentKindRef.current = activeDocument.kind;
 
@@ -1322,7 +1380,10 @@ export function FlowBoard({
 		}
 		const withMain = restored.tabs.some((tab) => tab.key === MAIN_TAB_KEY)
 			? restored.tabs
-			: [{ key: MAIN_TAB_KEY, doc: MAIN_DOCUMENT }, ...restored.tabs];
+			: withPinnedFirst([
+					{ key: MAIN_TAB_KEY, doc: MAIN_DOCUMENT },
+					...restored.tabs,
+				]);
 		openTabsRef.current = withMain;
 		setOpenTabs(withMain);
 		const active = restored.activeKey ?? MAIN_TAB_KEY;
@@ -1652,6 +1713,12 @@ export function FlowBoard({
 		const layerCount = Object.keys(board.data.layers).length;
 		return nodeCount === 0 && commentCount === 0 && layerCount === 0;
 	}, [board.data]);
+	// An empty board opens the selector on its own, so closing it must be remembered per board.
+	const showTemplateSelector =
+		templateSelectorOpen ||
+		(isBoardEmpty &&
+			!currentLayer &&
+			templateSelectorDismissedBoard !== boardId);
 
 	// Handler for applying a template to the board
 	const handleApplyTemplate = useCallback(
@@ -2708,7 +2775,7 @@ export function FlowBoard({
 				0,
 				100,
 			);
-			return runs.find((run) => run.run_id === runId);
+			return asArray(runs).find((run) => run.run_id === runId);
 		},
 		[appId, boardId, backend, addRun, pushUpdate, removeRun],
 	);
@@ -3699,8 +3766,10 @@ export function FlowBoard({
 		[pinCache],
 	);
 
+	const helperLines = useHelperLines();
 	const onNodesChangeIntercept: OnNodesChange = useCallback(
-		(changes: any[]) =>
+		(changes: NodeChange[]) => {
+			helperLines.snap(changes);
 			setNodes((nds) =>
 				handleNodesChange({
 					changes,
@@ -3712,8 +3781,9 @@ export function FlowBoard({
 					executeCommands,
 					applyNodeChanges,
 				}),
-			),
-		[setNodes, board.data, executeCommands, version],
+			);
+		},
+		[setNodes, board.data, executeCommands, version, helperLines],
 	);
 
 	const onEdgesChange: OnEdgesChange = useCallback(
@@ -4038,14 +4108,28 @@ export function FlowBoard({
 		setClickPosition({ x: event.clientX, y: event.clientY });
 	}, []);
 
+	// A dragged comment carries the nodes it covers; ⌥ moves the comment alone.
 	// Advisory only (collab rule 3): dragging a node a teammate has selected or
 	// is editing in code proceeds, but names the overlap first. One toast per
 	// drag, rate-limited per node so a jittery drag does not stack them.
+	const commentDragRef = useRef<CommentDragSession | undefined>(undefined);
 	const collisionToastAtRef = useRef<Map<string, number>>(new Map());
 	const onNodeDragStart = useCallback(
-		(_event: unknown, node: Node, nodes: Node[]) => {
+		(event: React.MouseEvent, node: Node, nodes: Node[]) => {
+			const draggedNodes = nodes.length > 0 ? nodes : [node];
+			commentDragRef.current = event.altKey
+				? undefined
+				: startCommentDrag(node, draggedNodes, getNodes());
+			helperLines.begin(
+				event,
+				draggedNodes,
+				commentDragRef.current?.passengers.keys(),
+			);
 			if (!awareness) return;
-			const dragged = (nodes.length > 0 ? nodes : [node]).map((n) => n.id);
+			const dragged = [
+				...draggedNodes.map((n) => n.id),
+				...(commentDragRef.current?.passengers.keys() ?? []),
+			];
 			const claims = readPeerFlowScriptClaims(awareness, sub);
 			const peers = peerStatesRef.current.filter((peer) => peer.sub !== sub);
 			const nameOf = (peerSub?: string) =>
@@ -4085,7 +4169,7 @@ export function FlowBoard({
 				break;
 			}
 		},
-		[awareness, sub, peerUsers, t],
+		[awareness, sub, peerUsers, t, getNodes, helperLines],
 	);
 
 	// ⌥-click on the empty canvas drops a "look here" ping for teammates. React
@@ -4117,23 +4201,33 @@ export function FlowBoard({
 	const onNodeDragStop = useCallback(
 		async (event: any, node: any, nodes: any) => {
 			endDrag();
+			helperLines.end();
+			const commentDrag = commentDragRef.current;
+			commentDragRef.current = undefined;
 			// Don't execute commands when viewing an old version
 			if (typeof version !== "undefined") {
 				return;
 			}
 			const commands: IGenericCommand[] = [];
-			for await (const node of nodes) {
-				const command = moveNodeCommand({
-					node_id: node.id,
-					to_coordinates: [node.position.x, node.position.y, 0],
-					current_layer: currentLayer,
-				});
-
-				commands.push(command);
+			const moved = [
+				...nodes.map((dragged: Node) => ({
+					id: dragged.id,
+					...dragged.position,
+				})),
+				...(commentDrag ? followAnchor(commentDrag, nodes) : []),
+			];
+			for (const { id, x, y } of moved) {
+				commands.push(
+					moveNodeCommand({
+						node_id: id,
+						to_coordinates: [x, y, 0],
+						current_layer: currentLayer,
+					}),
+				);
 			}
 			await executeCommands(commands);
 		},
-		[boardId, executeCommands, currentLayer, version, endDrag],
+		[boardId, executeCommands, currentLayer, version, endDrag, helperLines],
 	);
 
 	const isValidConnectionCB = useCallback(
@@ -4252,58 +4346,30 @@ export function FlowBoard({
 
 	const onNodeDrag = useCallback(
 		(event: any, node: Node, nodes: Node[]) => {
-			if (shiftPressed) {
-				nodes.forEach((node) => {
-					if (node.type === "layerNode") {
-						const layerData = node.data.layer as ILayer;
-						const diffX = Math.abs(node.position.x - layerData.coordinates[0]);
-						const diffY = Math.abs(node.position.y - layerData.coordinates[1]);
-						if (diffX > diffY) {
-							node.position.y = layerData.coordinates[1];
-							return;
-						}
-						node.position.x = layerData.coordinates[0];
-						return;
-					}
-
-					if (node.type === "commentNode") {
-						const commentData = node.data.comment as IComment;
-						const diffX = Math.abs(
-							node.position.x - commentData.coordinates[0],
-						);
-						const diffY = Math.abs(
-							node.position.y - commentData.coordinates[1],
-						);
-						if (diffX > diffY) {
-							node.position.y = commentData.coordinates[1];
-							return;
-						}
-						node.position.x = commentData.coordinates[0];
-						return;
-					}
-
-					if (node.type === "node") {
-						const nodeData = node.data.node as INode;
-						if (!nodeData.coordinates) return;
-						const diffX = Math.abs(node.position.x - nodeData.coordinates[0]);
-						const diffY = Math.abs(node.position.y - nodeData.coordinates[1]);
-						if (diffX > diffY) {
-							node.position.y = nodeData.coordinates[1];
-							return;
-						}
-						node.position.x = nodeData.coordinates[0];
-					}
-				});
+			const passengers = commentDragRef.current
+				? followAnchor(commentDragRef.current, nodes)
+				: [];
+			if (passengers.length > 0) {
+				const next = new Map(passengers.map((p) => [p.id, p]));
+				setNodes((nds) =>
+					nds.map((current) => {
+						const target = next.get(current.id);
+						return target
+							? { ...current, position: { x: target.x, y: target.y } }
+							: current;
+					}),
+				);
 			}
-			broadcastDrag(
-				nodes.map((dragged) => ({
+			broadcastDrag([
+				...nodes.map((dragged) => ({
 					id: dragged.id,
 					x: dragged.position.x,
 					y: dragged.position.y,
 				})),
-			);
+				...passengers,
+			]);
 		},
-		[shiftPressed, broadcastDrag],
+		[broadcastDrag, setNodes],
 	);
 
 	const onAcceptSuggestion = useCallback(
@@ -4324,6 +4390,117 @@ export function FlowBoard({
 	);
 
 	const [autoLayoutDialogOpen, setAutoLayoutDialogOpen] = useState(false);
+	const flowStore = useStoreApi();
+	const getVisibleFlowBounds = useCallback(() => {
+		const {
+			width,
+			height,
+			transform: [x, y, zoom],
+		} = flowStore.getState();
+		if (!width || !height || !zoom) return undefined;
+		return {
+			x: -x / zoom,
+			y: -y / zoom,
+			width: width / zoom,
+			height: height / zoom,
+		};
+	}, [flowStore]);
+	const grouping = useGroupSuggestions({
+		board: board.data,
+		currentLayer,
+		readOnly: typeof version !== "undefined",
+		selectedNodeIds,
+		getNodes,
+		getInternalNode,
+		getFocusBounds: getVisibleFlowBounds,
+		executeCommands,
+		onStale: () =>
+			toastWarning(
+				t(
+					"groupSuggestionChanged",
+					"This region changed. Review the refreshed grouping suggestions.",
+				),
+				<TriangleAlertIcon className="size-4" />,
+			),
+	});
+	const { close: closeGrouping, offerAfterLayout } = grouping;
+	const previewNodes = useMemo(
+		() =>
+			grouping.previewMemberIds.size
+				? nodes.map((node) =>
+						grouping.previewMemberIds.has(node.id)
+							? { ...node, style: { ...node.style, opacity: 0.15 } }
+							: node,
+					)
+				: nodes,
+		[nodes, grouping.previewMemberIds],
+	);
+	const previewEdges = useMemo(
+		() =>
+			grouping.previewMemberIds.size
+				? edges.map((edge) =>
+						grouping.previewMemberIds.has(edge.source) ||
+						grouping.previewMemberIds.has(edge.target)
+							? { ...edge, className: cn(edge.className, "opacity-10") }
+							: edge,
+					)
+				: edges,
+		[edges, grouping.previewMemberIds],
+	);
+	const groupOverlay = grouping.open ? (
+		<GroupSuggestionsOverlay
+			suggestions={grouping.suggestions}
+			selectedId={grouping.selectedId}
+			preview={grouping.preview}
+			busy={grouping.busy}
+			scope={grouping.scope}
+			summary={grouping.summary}
+			exhausted={grouping.exhausted}
+			onSelect={grouping.select}
+			onNext={grouping.next}
+			onPrevious={grouping.previous}
+			onPreview={grouping.togglePreview}
+			onCollapse={() => void grouping.collapse()}
+			onSkip={grouping.skip}
+			onFindMore={grouping.findMore}
+			onClose={grouping.close}
+			getPinPosition={grouping.getPinPosition}
+		/>
+	) : null;
+	const suggestionEngine = useNodeSuggestionEngine({
+		sub,
+		catalog: catalog.data,
+		enabled: typeof version === "undefined",
+	});
+	const suggestionGhost = useNodeSuggestionGhost({
+		engine: suggestionEngine,
+		board: board.data,
+		catalog: catalog.data,
+		selectedNodeIds,
+		currentLayer,
+		readOnly: typeof version !== "undefined",
+		enabled: !grouping.open && !documentTab,
+		executeCommands,
+		selectNodes,
+		getInternalNode,
+	});
+	const ghostOverlay = useMemo(
+		() =>
+			suggestionGhost.view ? (
+				<NodeSuggestionGhost
+					view={suggestionGhost.view}
+					onAccept={suggestionGhost.accept}
+					onDismiss={suggestionGhost.dismiss}
+					onCycle={suggestionGhost.cycle}
+				/>
+			) : null,
+		[
+			suggestionGhost.view,
+			suggestionGhost.accept,
+			suggestionGhost.dismiss,
+			suggestionGhost.cycle,
+		],
+	);
 
 	const autoLayout = useCallback(
 		async (style: LayoutStyle = "compact") => {
@@ -4336,6 +4513,21 @@ export function FlowBoard({
 			}
 			const boardData = board.data;
 			if (!boardData) return;
+			closeGrouping();
+			const reroute =
+				style === "routed"
+					? catalog.data?.find((node) => node.name === "reroute")
+					: undefined;
+			if (style === "routed" && !reroute) {
+				toastError(
+					t(
+						"rerouteNodeUnavailable",
+						"The reroute node is not available. Wait for the node catalog to load and try again.",
+					),
+					<XIcon />,
+				);
+				return;
+			}
 
 			const layerNodes: INode[] = [];
 			for (const node of Object.values(boardData.nodes)) {
@@ -4425,7 +4617,21 @@ export function FlowBoard({
 			// widest node they contain and rows by real heights, so a mis-measured
 			// node is the difference between a clean board and overlapping nodes.
 			const nodeSizes = new Map<string, [number, number]>();
+			const pinOffsets = new Map<string, { x: number; y: number }>();
 			for (const rendered of getNodes()) {
+				if (style === "routed") {
+					const handles = getInternalNode(rendered.id)?.internals.handleBounds;
+					for (const handle of [
+						...(handles?.source ?? []),
+						...(handles?.target ?? []),
+					]) {
+						if (handle.id)
+							pinOffsets.set(handle.id, {
+								x: handle.x + handle.width / 2,
+								y: handle.y + handle.height / 2,
+							});
+					}
+				}
 				const width = rendered.measured?.width ?? rendered.width;
 				const height = rendered.measured?.height ?? rendered.height;
 				if (
@@ -4469,6 +4675,7 @@ export function FlowBoard({
 					const size = nodeSizes.get(rendered.id);
 					if (!size) continue;
 					obstacles.push({
+						id: rendered.id,
 						x: rendered.position.x,
 						y: rendered.position.y,
 						width: size[0],
@@ -4477,19 +4684,23 @@ export function FlowBoard({
 				}
 			}
 
-			const { positions, commentPositions } = computeFlowLayoutDetailed(
-				{
-					layerNodes,
-					layerEntities,
-					boardLayers: boardData.layers,
-					currentLayer,
-					nodeSizes,
-					comments: scoped ? [] : comments,
-					only,
-					obstacles,
-				},
-				style,
-			);
+			const { positions, commentPositions, routing } =
+				computeFlowLayoutDetailed(
+					{
+						layerNodes,
+						layerEntities,
+						boardLayers: boardData.layers,
+						currentLayer,
+						nodeSizes,
+						pinOffsets: style === "routed" ? pinOffsets : undefined,
+						edgePathType:
+							connectionMode === "simplebezier" ? "default" : connectionMode,
+						comments: scoped ? [] : comments,
+						only,
+						obstacles,
+					},
+					style,
+				);
 
 			const commands: IGenericCommand[] = [];
 			for (const node of layerNodes) {
@@ -4530,8 +4741,21 @@ export function FlowBoard({
 				);
 			}
 
+			if (routing && reroute) {
+				commands.push(
+					...buildAutoRerouteCommands({
+						...routing,
+						reroute,
+						currentLayer,
+						pinCache,
+					}),
+				);
+			}
+
 			if (commands.length === 0) return;
-			await executeCommands(commands);
+			const applied = await executeCommands(commands);
+			if (applied === undefined) return;
+			offerAfterLayout();
 
 			setTimeout(
 				() =>
@@ -4545,12 +4769,19 @@ export function FlowBoard({
 		},
 		[
 			board.data,
+			catalog.data,
+			closeGrouping,
+			connectionMode,
 			currentLayer,
 			executeCommands,
 			fitView,
 			getNodes,
+			getInternalNode,
+			pinCache,
+			offerAfterLayout,
 			selectedNodeIds,
 			version,
+			t,
 		],
 	);
 
@@ -4753,6 +4984,15 @@ export function FlowBoard({
 				run: () => setAutoLayoutDialogOpen(true),
 			},
 			{
+				id: "find-groups",
+				surface: "editor",
+				title: t("findGroups", "Find groups"),
+				icon: GroupIcon,
+				keywords: ["collapse", "group", "simplify", "regions"],
+				when: typeof version === "undefined",
+				run: () => (grouping.open ? grouping.close() : grouping.start()),
+			},
+			{
 				id: "layer-up",
 				surface: "rail-bottom",
 				title: t("layerUp", "Layer Up"),
@@ -4788,6 +5028,10 @@ export function FlowBoard({
 			popLayer,
 			openAssistant,
 			externalAssistant,
+			grouping.open,
+			grouping.close,
+			grouping.start,
+			version,
 		],
 	);
 	useBoardCommands(boardCommands);
@@ -4798,6 +5042,8 @@ export function FlowBoard({
 	const isCommandActive = useCallback(
 		(id: string) => {
 			switch (id) {
+				case "find-groups":
+					return grouping.open;
 				case "flowscript":
 					return shell.script;
 				case "runs":
@@ -4812,7 +5058,7 @@ export function FlowBoard({
 					return shell.sidebar === id;
 			}
 		},
-		[shell],
+		[shell, grouping.open],
 	);
 
 	const railItems = useMemo<IBoardRailItem[]>(
@@ -5362,6 +5608,8 @@ export function FlowBoard({
 							onSelect={selectTab}
 							onClose={handleCloseTab}
 							onSplit={handleSplitTab}
+							onPin={handlePinTab}
+							onColor={handleColorTab}
 							executeCommand={executeCommand}
 							readOnly={typeof version !== "undefined"}
 							reservedRoots={moduleReservedRoots}
@@ -5542,6 +5790,33 @@ export function FlowBoard({
 									<BoardStatusItem icon={<GitBranchIcon />} tone="muted">
 										{layerBreadcrumb}
 									</BoardStatusItem>
+								)}
+								{grouping.offerCount > 0 && (
+									<>
+										<BoardStatusItem
+											icon={<GroupIcon />}
+											tone="accent"
+											title={t(
+												"reviewGroupSuggestions",
+												"Review grouping suggestions",
+											)}
+											onClick={() => grouping.start(false)}
+										>
+											{t(
+												"groupSuggestionsCount",
+												"{{count}} grouping suggestions",
+												{ count: grouping.offerCount },
+											)}
+										</BoardStatusItem>
+										<BoardStatusItem
+											icon={<XIcon />}
+											title={t(
+												"dismissGroupSuggestions",
+												"Dismiss grouping suggestions",
+											)}
+											onClick={grouping.dismissOffer}
+										/>
+									</>
 								)}
 								{board.data && (
 									<BoardStatusItem
@@ -5736,9 +6011,10 @@ export function FlowBoard({
 										</h3>
 									)}
 									<FlowCanvas
+										overlay={groupOverlay ?? ghostOverlay}
 										flowRef={flowRef}
-										nodes={nodes}
-										edges={edges}
+										nodes={previewNodes}
+										edges={previewEdges}
 										nodeTypes={nodeTypes}
 										edgeTypes={edgeTypes}
 										colorMode={colorMode}
@@ -5771,6 +6047,7 @@ export function FlowBoard({
 										currentLayerPath={layerPath ?? "root"}
 										peerUsers={peerUsers}
 									/>
+									<FlowHelperLinesLayer lines={helperLines.lines} />
 									<FlowDragGhostsLayer
 										store={dragStore}
 										currentLayerPath={layerPath ?? "root"}
@@ -5840,10 +6117,13 @@ export function FlowBoard({
 				}
 				overlays={
 					<>
-						{(templateSelectorOpen || (isBoardEmpty && !currentLayer)) && (
+						{showTemplateSelector && (
 							<FlowTemplateSelector
 								onSelectTemplate={handleApplyTemplate}
-								onDismiss={() => setTemplateSelectorOpen(false)}
+								onDismiss={() => {
+									setTemplateSelectorOpen(false);
+									setTemplateSelectorDismissedBoard(boardId);
+								}}
 							/>
 						)}
 						{chatOpen && awareness && (

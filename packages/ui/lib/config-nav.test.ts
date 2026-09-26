@@ -87,6 +87,25 @@ describe("resolveNavigationItems", () => {
 		).toBeDefined();
 	});
 
+	it("folds payment settings into Monetization, which a local-only app lacks", () => {
+		const items = resolve();
+		expect(
+			items.find((item) => item.href === "/library/config/payments"),
+		).toBeUndefined();
+		expect(find(items, "/library/config/sales").label).toBe("Monetization");
+		expect(
+			resolve({ visibility: IAppVisibility.Offline }).find(
+				(item) => item.href === "/library/config/sales",
+			),
+		).toBeUndefined();
+	});
+
+	it("keeps each group contiguous so the sidebar prints every heading once", () => {
+		const groups = buildNavigationItems(t).map((item) => item.group);
+		const runs = groups.filter((group, index) => group !== groups[index - 1]);
+		expect(runs).toEqual([...new Set(groups)]);
+	});
+
 	it("locks nothing while the role is unknown", () => {
 		// `can` degrades open for an offline or local-only app, which has no
 		// permission model at all; locking it would strand its owner.
@@ -99,6 +118,67 @@ describe("resolveNavigationItems", () => {
 
 		expect(
 			find(resolve({ can: readDatabaseOnly }), "/library/config/explore").lock,
+		).toBeUndefined();
+	});
+});
+
+describe("host capabilities", () => {
+	const OFFLINE = "/library/config/offline";
+	const DESKTOP = new Set(["offlineWrites"]);
+
+	it("leaves Offline access out on a host without offline writes", () => {
+		expect(resolve().find((item) => item.href === OFFLINE)).toBeUndefined();
+		expect(
+			resolve({ hostCapabilities: new Set(["other"]) }).find(
+				(item) => item.href === OFFLINE,
+			),
+		).toBeUndefined();
+	});
+
+	it("lists Offline access in the Data group on a host with offline writes", () => {
+		const items = resolve({ hostCapabilities: DESKTOP });
+		const offline = find(items, OFFLINE);
+		expect(offline.lock).toBeUndefined();
+		expect(offline.group).toBe("Data");
+		const hrefs = items.map((item) => item.href);
+		expect(hrefs.indexOf(OFFLINE)).toBe(
+			hrefs.indexOf("/library/config/explore") + 1,
+		);
+	});
+
+	it("is not a developer tool", () => {
+		expect(
+			resolve({ hostCapabilities: DESKTOP, developerMode: false }).find(
+				(item) => item.href === OFFLINE,
+			),
+		).toBeDefined();
+	});
+
+	it("is hidden, not locked, for a local-only project", () => {
+		expect(
+			resolve({
+				hostCapabilities: DESKTOP,
+				visibility: IAppVisibility.Offline,
+			}).find((item) => item.href === OFFLINE),
+		).toBeUndefined();
+	});
+
+	it("locks behind ExecuteEvents", () => {
+		const withoutExecute = (...permissions: RolePermissions[]) =>
+			!permissions.some((p) => p.equals(RolePermissions.ExecuteEvents));
+		expect(
+			find(resolve({ hostCapabilities: DESKTOP, can: withoutExecute }), OFFLINE)
+				.lock,
+		).toEqual({
+			kind: "permission",
+			reason: "locked:Offline access",
+			missing: [RolePermissions.ExecuteEvents],
+		});
+		const executeOnly = (...permissions: RolePermissions[]) =>
+			permissions.some((p) => p.equals(RolePermissions.ExecuteEvents));
+		expect(
+			find(resolve({ hostCapabilities: DESKTOP, can: executeOnly }), OFFLINE)
+				.lock,
 		).toBeUndefined();
 	});
 });

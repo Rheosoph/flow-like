@@ -7,6 +7,8 @@
 // server's signature — when a background revalidation returns a different
 // signature, listeners are notified so the UI can prompt the user.
 
+import { isRecord } from "../../lib/response-shape";
+
 interface PrerunLike {
 	signature?: string;
 }
@@ -71,6 +73,11 @@ export async function prerunSwr<T extends PrerunLike>(
 		if (age > REVALIDATE_AFTER_MS && !entry.inflight) {
 			const inflight = fetcher()
 				.then((fresh) => {
+					if (!isRecord(fresh)) {
+						throw new Error(
+							`Prerun revalidation for ${key} returned no record`,
+						);
+					}
 					const previous = cache.get(key) as CacheEntry<T> | undefined;
 					cache.set(key, { data: fresh, fetchedAt: Date.now() });
 					if (
@@ -87,11 +94,14 @@ export async function prerunSwr<T extends PrerunLike>(
 				.catch((err) => {
 					// Transient failure — keep the existing cache entry intact,
 					// just clear the inflight marker so the next call retries.
+					// Nobody awaits this promise, so rethrowing would only surface
+					// every offline revalidation as an unhandled rejection.
 					const existing = cache.get(key) as CacheEntry<T> | undefined;
 					if (existing) {
 						cache.set(key, { ...existing, inflight: undefined });
 					}
-					throw err;
+					console.warn(`[prerunSwr] Revalidating ${key} failed:`, err);
+					return entry.data;
 				});
 			cache.set(key, { ...entry, inflight: inflight as Promise<PrerunLike> });
 		}
@@ -99,7 +109,8 @@ export async function prerunSwr<T extends PrerunLike>(
 	}
 
 	const data = await fetcher();
-	cache.set(key, { data, fetchedAt: now });
+	// A malformed answer is handed back once, never served again from cache.
+	if (isRecord(data)) cache.set(key, { data, fetchedAt: now });
 	return data;
 }
 

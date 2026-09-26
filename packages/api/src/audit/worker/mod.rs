@@ -75,6 +75,9 @@ pub struct TickReport {
     pub sealed_records: u64,
     /// Pending records whose MAC failed; marked and never sealed.
     pub quarantined: u64,
+    /// Due chains with a pending record whose MAC matched no entry key this worker
+    /// holds. Nothing of theirs was sealed or quarantined; the next tick retries.
+    pub held_chains: u64,
     pub oldest_pending_seconds: Option<i64>,
     pub epochs: u64,
     pub anchored_seals: u64,

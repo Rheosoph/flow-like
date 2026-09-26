@@ -2,14 +2,13 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { CheckIcon, CopyIcon } from "lucide-react";
+import { NodeApi, type TCodeBlockElement } from "platejs";
 import {
-	NodeApi,
 	SlateElement,
 	type SlateElementProps,
 	SlateLeaf,
 	type SlateLeafProps,
-	type TCodeBlockElement,
-} from "platejs";
+} from "platejs/static";
 import { Suspense, lazy } from "react";
 import * as React from "react";
 import { Button } from "../../..";

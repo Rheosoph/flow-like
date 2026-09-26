@@ -5,8 +5,10 @@ import { AlertCircle, SparklesIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useMemo } from "react";
 import { useInfiniteInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import { IAppSearchSort } from "../../lib/schema/app/app-search-query";
 import { useBackend } from "../../state/backend-state";
+import { appPairs } from "../library/library-types";
 import { Alert, AlertDescription } from "../ui/alert";
 import { AppCard } from "../ui/app-card";
 import { Skeleton } from "../ui/skeleton";
@@ -33,8 +35,9 @@ export const StoreRecommendations = memo(function StoreRecommendations({
 	]);
 
 	const combinedApps = useMemo(() => {
-		if (!apps) return [];
-		return apps.pages.flat().filter(([app]) => app.id !== excludeAppId);
+		return asArray(apps?.pages)
+			.flatMap((page) => appPairs(page))
+			.filter(([app]) => app.id !== excludeAppId);
 	}, [apps, excludeAppId]);
 
 	if (!combinedApps.length && !isLoading) return null;

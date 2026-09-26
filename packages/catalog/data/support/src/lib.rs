@@ -3,6 +3,7 @@
 extern crate flow_like_runtime as flow_like;
 
 pub mod remote_util;
+pub mod work_iq;
 
 #[path = "attachment.rs"]
 mod attachment_support;

@@ -22,9 +22,10 @@ impl NodeLogic for RetryLoopNode {
         let mut node = Node::new(
             "rpa_retry_loop",
             "Retry Loop",
-            "Retries an action multiple times with configurable backoff. WARNING: This node activates exec_attempt in a loop but the current executor does not re-enter downstream nodes -- the retry semantics require executor-level loop support to work correctly.",
+            "Runs an action again after an error or a retry condition, with configurable backoff.",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "retryLoop");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -78,10 +79,10 @@ impl NodeLogic for RetryLoopNode {
         node.add_input_pin(
             "should_retry",
             "Should Retry",
-            "Whether to retry (connect to condition check)",
+            "Retry even when the action succeeds (connect a condition if needed)",
             VariableType::Boolean,
         )
-        .set_default_value(Some(json!(true)));
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "exec_attempt",
@@ -114,6 +115,12 @@ impl NodeLogic for RetryLoopNode {
             "Total attempts made",
             VariableType::Integer,
         );
+        node.add_output_pin(
+            "last_error",
+            "Last Error",
+            "Most recent action failure, empty after success",
+            VariableType::String,
+        );
 
         node
     }
@@ -122,19 +129,38 @@ impl NodeLogic for RetryLoopNode {
         context.deactivate_exec_pin("exec_attempt").await?;
         context.deactivate_exec_pin("exec_success").await?;
         context.deactivate_exec_pin("exec_exhausted").await?;
+        crate::browser::selector::optional_output(context, "last_error", json!("")).await?;
+        context.set_pin_value("total_attempts", json!(0)).await?;
 
         let max_retries: i64 = context.evaluate_pin("max_retries").await?;
         let initial_delay_ms: i64 = context.evaluate_pin("initial_delay_ms").await?;
         let backoff_type: String = context.evaluate_pin("backoff_type").await?;
 
+        if max_retries < 1 || initial_delay_ms < 0 {
+            return Err(flow_like_types::anyhow!(
+                "Retry count must be positive and delay nonnegative"
+            ));
+        }
+        retry_delay(initial_delay_ms as u64, 1, &backoff_type)?;
+
         for attempt in 1..=max_retries {
+            context.check_cancelled()?;
             context.set_pin_value("attempt", json!(attempt)).await?;
 
-            context.activate_exec_pin("exec_attempt").await?;
+            let outcome = super::branch::run_branch(context, "exec_attempt", None).await?;
+            crate::browser::selector::optional_output(
+                context,
+                "last_error",
+                json!(match &outcome {
+                    super::branch::BranchResult::Failed(error) => error.as_str(),
+                    _ => "",
+                }),
+            )
+            .await?;
 
             let should_retry: bool = context.evaluate_pin("should_retry").await?;
 
-            if !should_retry {
+            if outcome == super::branch::BranchResult::Completed && !should_retry {
                 context
                     .set_pin_value("total_attempts", json!(attempt))
                     .await?;
@@ -143,14 +169,8 @@ impl NodeLogic for RetryLoopNode {
             }
 
             if attempt < max_retries {
-                let delay = match backoff_type.as_str() {
-                    "Constant" => initial_delay_ms as u64,
-                    "Linear" => (initial_delay_ms * attempt) as u64,
-                    "Exponential" => (initial_delay_ms as u64) * 2u64.pow((attempt - 1) as u32),
-                    _ => initial_delay_ms as u64,
-                };
-
-                flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                let delay = retry_delay(initial_delay_ms as u64, attempt as u32, &backoff_type)?;
+                super::branch::delay(context, std::time::Duration::from_millis(delay)).await?;
             }
         }
 
@@ -160,5 +180,30 @@ impl NodeLogic for RetryLoopNode {
         context.activate_exec_pin("exec_exhausted").await?;
 
         Ok(())
+    }
+}
+
+fn retry_delay(initial: u64, attempt: u32, strategy: &str) -> flow_like_types::Result<u64> {
+    let factor = match strategy {
+        "Constant" => 1,
+        "Linear" => attempt as u64,
+        "Exponential" => 1u64
+            .checked_shl(attempt.saturating_sub(1))
+            .ok_or_else(|| flow_like_types::anyhow!("Retry delay overflow"))?,
+        _ => return Err(flow_like_types::anyhow!("Unknown backoff strategy")),
+    };
+    initial
+        .checked_mul(factor)
+        .ok_or_else(|| flow_like_types::anyhow!("Retry delay overflow"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_delay;
+    #[test]
+    fn backoff_rejects_overflow() {
+        assert_eq!(retry_delay(100, 3, "Exponential").unwrap(), 400);
+        assert!(retry_delay(u64::MAX, 2, "Linear").is_err());
+        assert!(retry_delay(1, 65, "Exponential").is_err());
     }
 }

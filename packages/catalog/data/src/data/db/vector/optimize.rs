@@ -69,7 +69,9 @@ impl NodeLogic for OptimizeLocalDatabaseNode {
         cached_db.ensure_flushed().await?;
         let database = cached_db.db.read().await;
         let keep_versions: bool = context.evaluate_pin("keep_versions").await?;
-        database.optimize(keep_versions).await?;
+        if !super::skip_missing_table(context, &database, "optimize").await? {
+            database.optimize(keep_versions).await?;
+        }
 
         context.activate_exec_pin("exec_out").await?;
 

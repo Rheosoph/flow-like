@@ -73,10 +73,16 @@ export class WebRegistryState implements IRegistryState {
 		}
 	}
 
+	/** With `access` the caller decides the result, so a missing token or failed request throws instead of listing nothing. */
 	async getOwnedPackages(filters?: SearchFilters): Promise<SearchResults> {
+		const access = filters?.access;
+		if (access && !this.backend.auth?.user?.access_token) {
+			throw new Error(`Sign in to list your packages (access=${access})`);
+		}
 		try {
 			return await this.fetchSearch({ ...filters, ownedOnly: true });
-		} catch {
+		} catch (error) {
+			if (access) throw error;
 			return { packages: [], totalCount: 0, offset: 0, limit: 20 };
 		}
 	}
@@ -97,8 +103,11 @@ export class WebRegistryState implements IRegistryState {
 		if (filters?.offset) params.set("offset", String(filters.offset));
 		if (filters?.limit) params.set("limit", String(filters.limit));
 		if (filters?.language) params.set("language", filters.language);
-		if (filters?.ownedOnly) params.set("owned_only", "true");
-		if (!filters?.ownedOnly) params.set("include_own", "true");
+		const ownedOnly = filters?.ownedOnly || filters?.access !== undefined;
+		if (ownedOnly) params.set("owned_only", "true");
+		if (!ownedOnly) params.set("include_own", "true");
+		if (filters?.access) params.set("access", filters.access);
+		if (filters?.ids) params.set("ids", filters.ids.join(","));
 		const qs = params.toString();
 		return apiGet<SearchResults>(
 			`registry/search${qs ? `?${qs}` : ""}`,
@@ -137,15 +146,9 @@ export class WebRegistryState implements IRegistryState {
 		}
 	}
 
+	/** Packages install per machine; the web has none and the hub has no such route. */
 	async getInstalledPackages(): Promise<InstalledPackage[]> {
-		try {
-			return await apiGet<InstalledPackage[]>(
-				"registry/installed",
-				this.backend.auth,
-			);
-		} catch {
-			return [];
-		}
+		return [];
 	}
 
 	async isPackageInstalled(packageId: string): Promise<boolean> {
@@ -185,14 +188,7 @@ export class WebRegistryState implements IRegistryState {
 	}
 
 	async checkForUpdates(): Promise<PackageUpdate[]> {
-		try {
-			return await apiGet<PackageUpdate[]>(
-				"registry/updates",
-				this.backend.auth,
-			);
-		} catch {
-			return [];
-		}
+		return [];
 	}
 
 	async purchasePackage(

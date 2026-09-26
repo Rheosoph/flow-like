@@ -12,12 +12,46 @@ import {
 	apiErrorDiagnostic,
 	apiResponseError,
 	redactApiPathSecrets,
+	upstreamFailureInSuccess,
 } from "./api-error";
 import {
 	DEFAULT_CONNECT_TIMEOUT_MS,
+	DISPATCH_REQUEST_TIMEOUT_MS,
 	STREAM_HEADER_TIMEOUT_MS,
+	requestTimeoutMs,
 	withRequestDeadline,
 } from "./request-deadline";
+
+export interface FetcherOptions extends RequestInit {
+	/** Overrides the route-class deadline for one call. */
+	timeoutMs?: number;
+}
+
+const TRANSPORT_FAILURE_MARKERS = [
+	"Failed to fetch",
+	"NetworkError",
+	"Network request failed",
+	"fetch failed",
+	// plugin-http rejects with reqwest's bare error text rather than an Error.
+	"error sending request",
+	"request or response body error",
+];
+
+/**
+ * A request that produced no HTTP response. Connection failures become
+ * `Network unavailable: …` so callers can tell them apart from a server
+ * verdict; anything else keeps its own text, with the original as the cause.
+ */
+export function requestFailure(error: unknown, route: string): Error {
+	const message = error instanceof Error ? error.message : String(error);
+	if (TRANSPORT_FAILURE_MARKERS.some((marker) => message.includes(marker))) {
+		return new Error(`Network unavailable: ${route}`, { cause: error });
+	}
+	if (error instanceof Error) return error;
+	return new Error(`Error fetching data from ${route}: ${message}`, {
+		cause: error,
+	});
+}
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"payments",
@@ -168,9 +202,6 @@ function parseSSEBuffer(buffer: string): {
 				dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
 			} else if (line.startsWith("id:")) {
 				id = line.slice(3).trim();
-			} else if (line.startsWith(":")) {
-				// Comment/keep-alive, ignore
-				continue;
 			}
 		}
 
@@ -210,12 +241,37 @@ export async function streamFetcher<T>(
 
 	// For POST/PUT requests, use raw fetch streaming (more reliable with Tauri)
 	if (method === "POST" || method === "PUT") {
-		await streamFetcherRaw<T>(url, options, authHeader, onMessage);
+		const bodyBytes =
+			typeof options?.body === "string" ? options.body.length : 0;
+		await streamFetcherRaw<T>(
+			url,
+			options,
+			authHeader,
+			streamHeaderTimeoutMs(path, method, bodyBytes),
+			onMessage,
+		);
 		return;
 	}
 
 	// For GET requests, use eventsource-client
 	await streamFetcherEventSource<T>(url, options, authHeader, onMessage);
+}
+
+/**
+ * A dispatch route (event or board invoke) sends its headers only after the
+ * whole dispatch — compile, admission, executor cold start — so its stream
+ * waits as long as the route's JSON deadline. Other streams answer at once.
+ */
+function streamHeaderTimeoutMs(
+	path: string,
+	method: string,
+	bodyBytes: number,
+): number {
+	const apiPath = cleanApiPath(path);
+	if (requestTimeoutMs(apiPath, method) !== DISPATCH_REQUEST_TIMEOUT_MS) {
+		return STREAM_HEADER_TIMEOUT_MS;
+	}
+	return requestTimeoutMs(apiPath, method, bodyBytes);
 }
 
 /**
@@ -225,51 +281,67 @@ async function streamFetcherRaw<T>(
 	url: string,
 	options: RequestInit | undefined,
 	authHeader: Record<string, string>,
+	headerTimeoutMs: number,
 	onMessage?: (data: T) => void,
 ): Promise<void> {
 	const abortController = new AbortController();
-	// Bounded until headers arrive, then released — the reader below owns
-	// `abortController` and terminates the long-lived stream through it.
-	const response = await withRequestDeadline(
-		url,
-		async ({ signal, release }) => {
-			const res = await tauriFetch(url, {
-				method: options?.method ?? "POST",
-				headers: {
-					Accept: "text/event-stream",
-					"Content-Type": "application/json",
-					...((options?.headers as Record<string, string>) ?? {}),
-					...authHeader,
-				},
-				body: options?.body,
-				connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
-				signal,
-			});
-			release();
-			return res;
-		},
-		{
-			timeoutMs: STREAM_HEADER_TIMEOUT_MS,
-			signal: options?.signal,
-			controller: abortController,
-		},
-	);
+	// The caller's signal cancels the stream for its whole life, not only until
+	// headers arrive as the deadline's own forwarding does.
+	const upstream = options?.signal;
+	const forwardAbort = () => abortController.abort();
+	upstream?.addEventListener("abort", forwardAbort);
+	if (upstream?.aborted) abortController.abort();
 
-	if (!response.ok) {
-		const errorText = await response.text();
-		throw apiResponseError(response, errorText, url);
+	try {
+		// Bounded until headers arrive, then released — the reader below owns
+		// `abortController` and terminates the long-lived stream through it.
+		const response = await withRequestDeadline(
+			url,
+			async ({ signal, release }) => {
+				const res = await tauriFetch(url, {
+					method: options?.method ?? "POST",
+					headers: {
+						Accept: "text/event-stream",
+						"Content-Type": "application/json",
+						...((options?.headers as Record<string, string>) ?? {}),
+						...authHeader,
+					},
+					body: options?.body,
+					connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+					signal,
+				});
+				release();
+				return res;
+			},
+			{ timeoutMs: headerTimeoutMs, controller: abortController },
+		);
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			throw apiResponseError(response, errorText, url);
+		}
+
+		if (!response.body) {
+			throw new Error("Response body is null - streaming not supported");
+		}
+
+		console.log(
+			"[SSE Debug] Connected to SSE stream (raw fetch):",
+			redactApiPathSecrets(url),
+		);
+
+		await readSSEStream(response.body, abortController, onMessage);
+	} finally {
+		upstream?.removeEventListener("abort", forwardAbort);
 	}
+}
 
-	if (!response.body) {
-		throw new Error("Response body is null - streaming not supported");
-	}
-
-	console.log(
-		"[SSE Debug] Connected to SSE stream (raw fetch):",
-		redactApiPathSecrets(url),
-	);
-
-	const reader = response.body.getReader();
+async function readSSEStream<T>(
+	body: ReadableStream<Uint8Array>,
+	abortController: AbortController,
+	onMessage?: (data: T) => void,
+): Promise<void> {
+	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
 
@@ -281,7 +353,7 @@ async function streamFetcherRaw<T>(
 				console.log("[SSE Debug] Stream ended (done=true)");
 				// Process any remaining buffer
 				if (buffer.trim()) {
-					const { events } = parseSSEBuffer(buffer + "\n\n");
+					const { events } = parseSSEBuffer(`${buffer}\n\n`);
 					for (const event of events) {
 						processSSEEvent(event, onMessage);
 					}
@@ -493,7 +565,7 @@ export interface IConditionalResponse<T> {
 export async function fetcherConditional<T>(
 	profile: IProfile,
 	path: string,
-	options: RequestInit | undefined,
+	options: FetcherOptions | undefined,
 	auth: AuthContextProps | undefined,
 	etag?: string,
 ): Promise<IConditionalResponse<T>> {
@@ -503,7 +575,7 @@ export async function fetcherConditional<T>(
 export async function fetcher<T>(
 	profile: IProfile,
 	path: string,
-	options?: RequestInit,
+	options?: FetcherOptions,
 	auth?: AuthContextProps,
 ): Promise<T> {
 	const { data } = await requestJson<T>(profile, path, options, auth);
@@ -513,7 +585,7 @@ export async function fetcher<T>(
 async function requestJson<T>(
 	profile: IProfile,
 	path: string,
-	options?: RequestInit,
+	options?: FetcherOptions,
 	auth?: AuthContextProps,
 	ifNoneMatch?: string,
 ): Promise<IConditionalResponse<T>> {
@@ -526,7 +598,7 @@ async function requestJson<T>(
 		[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
 	};
 	if (auth?.user?.access_token) {
-		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;
+		headers.Authorization = `Bearer ${auth?.user?.access_token}`;
 	}
 	if (ifNoneMatch) {
 		headers["If-None-Match"] = ifNoneMatch;
@@ -542,78 +614,93 @@ async function requestJson<T>(
 	const url = constructUrl(profile, path);
 	const route = normalizeApiPath(methodOf(options), path);
 	if (API_STATS_ENABLED) console.log("[API DEBUG] Fetching route:", route);
+	const { timeoutMs, signal, ...init } = options ?? {};
+	const bodyBytes = typeof init.body === "string" ? init.body.length : 0;
 	try {
-		const response = await tauriFetch(url, {
-			...options,
-			headers: {
-				"Content-Type": "application/json",
-				...options?.headers,
-				...headers,
+		// The deadline spans the body read as well: `fetch_read_body` stalls on a
+		// half-open socket exactly like `fetch_send` does.
+		return await withRequestDeadline<IConditionalResponse<T>>(
+			route,
+			async (deadline) => {
+				const response = await tauriFetch(url, {
+					...init,
+					headers: {
+						"Content-Type": "application/json",
+						...init.headers,
+						...headers,
+					},
+					keepalive: true,
+					priority: "high",
+					connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+					signal: deadline.signal,
+				});
+
+				if (API_STATS_ENABLED) {
+					console.log("[API DEBUG] Response received:", {
+						status: response.status,
+						statusText: response.statusText,
+					});
+				}
+
+				const responseEtag = response.headers.get("etag") ?? undefined;
+
+				// Only a caller that offered a tag can interpret a 304; without one it would be an
+				// unexpected empty success, so it keeps falling through to the error path below.
+				if (response.status === 304 && ifNoneMatch) {
+					return { notModified: true, etag: responseEtag ?? ifNoneMatch };
+				}
+
+				if (!response.ok) {
+					if (response.status === 401 && auth) {
+						requestSilentRenew(auth, "after 401");
+					}
+					const errorText = await response.text();
+					const apiError = apiResponseError(response, errorText, path);
+					console.error(
+						`Error fetching ${route}:`,
+						apiErrorDiagnostic(apiError),
+					);
+					throw apiError;
+				}
+
+				const text = await response.text();
+				if (!text) return { notModified: false, etag: responseEtag };
+				let data: T;
+				try {
+					data = JSON.parse(text) as T;
+				} catch {
+					data = text as T;
+				}
+				const upstreamError = upstreamFailureInSuccess(response, data, path);
+				if (upstreamError) {
+					console.error(
+						`Error fetching ${route}:`,
+						apiErrorDiagnostic(upstreamError),
+					);
+					throw upstreamError;
+				}
+				return { notModified: false, data, etag: responseEtag };
 			},
-			keepalive: true,
-			priority: "high",
-		});
-
-		if (API_STATS_ENABLED) {
-			console.log("[API DEBUG] Response received:", {
-				status: response.status,
-				statusText: response.statusText,
-			});
-		}
-
-		const responseEtag = response.headers.get("etag") ?? undefined;
-
-		// Only a caller that offered a tag can interpret a 304; without one it would be an
-		// unexpected empty success, so it keeps falling through to the error path below.
-		if (response.status === 304 && ifNoneMatch) {
-			return { notModified: true, etag: responseEtag ?? ifNoneMatch };
-		}
-
-		if (!response.ok) {
-			if (response.status === 401 && auth) {
-				requestSilentRenew(auth, "after 401");
-			}
-			const errorText = await response.text();
-			const apiError = apiResponseError(response, errorText, path);
-			console.error(`Error fetching ${route}:`, apiErrorDiagnostic(apiError));
-			throw apiError;
-		}
-
-		const text = await response.text();
-		if (!text) return { notModified: false, etag: responseEtag };
-		const json = tryParseJSON<T>(text);
-		if (json === null) {
-			return { notModified: false, data: text as T, etag: responseEtag };
-		}
-		return { notModified: false, data: json, etag: responseEtag };
+			{
+				timeoutMs:
+					timeoutMs ??
+					requestTimeoutMs(cleanApiPath(path), methodOf(options), bodyBytes),
+				signal,
+			},
+		);
 	} catch (error) {
 		if (error instanceof ApiResponseError) throw error;
 		console.groupCollapsed(`API Request: ${route}`);
-		console.error(`Error fetching ${route}`);
+		console.error(`Error fetching ${route}`, error);
 		console.groupEnd();
-
-		// Better error messages for common network issues
-		if (error instanceof Error) {
-			// Network errors on mobile/desktop
-			if (
-				error.message.includes("Failed to fetch") ||
-				error.message.includes("NetworkError") ||
-				error.message.includes("Network request failed") ||
-				error.message.includes("fetch failed")
-			) {
-				throw new Error(`Network unavailable: ${route}`);
-			}
-			throw error;
-		}
-
-		throw new Error(`Error fetching data from ${route}`);
+		throw requestFailure(error, route);
 	}
 }
 
 export async function post<T>(
 	profile: IProfile,
 	path: string,
-	data?: any,
+	data?: unknown,
 	auth?: AuthContextProps,
 ): Promise<T> {
 	return fetcher<T>(
@@ -645,7 +732,7 @@ export async function get<T>(
 export async function put<T>(
 	profile: IProfile,
 	path: string,
-	data?: any,
+	data?: unknown,
 	auth?: AuthContextProps,
 ): Promise<T> {
 	return fetcher<T>(
@@ -662,7 +749,7 @@ export async function put<T>(
 export async function del<T>(
 	profile: IProfile,
 	path: string,
-	data?: any,
+	data?: unknown,
 	auth?: AuthContextProps,
 ): Promise<T> {
 	return fetcher<T>(
@@ -679,7 +766,7 @@ export async function del<T>(
 export async function patch<T>(
 	profile: IProfile,
 	path: string,
-	data?: any,
+	data?: unknown,
 	auth?: AuthContextProps,
 ): Promise<T> {
 	return fetcher<T>(

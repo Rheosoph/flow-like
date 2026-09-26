@@ -155,6 +155,16 @@
 	--pin-date: oklch(82.8% 0.189 84.429);
 	--pin-pathbuf: oklch(44.4% 0.011 73.639);
 	--pin-fn-ref: oklch(63.582% 0.18307 43.26);
+
+	/* User-picked editor tab colours: evenly spaced hues, one lightness per theme. */
+	--tab-red: oklch(0.6 0.2 25);
+	--tab-orange: oklch(0.66 0.17 55);
+	--tab-yellow: oklch(0.72 0.15 90);
+	--tab-green: oklch(0.6 0.15 150);
+	--tab-teal: oklch(0.6 0.1 195);
+	--tab-blue: oklch(0.58 0.16 255);
+	--tab-purple: oklch(0.56 0.19 295);
+	--tab-pink: oklch(0.62 0.2 350);
 }
 
 .dark,
@@ -255,6 +265,15 @@
 	--pin-date: oklch(82.8% 0.189 84.429);
 	--pin-pathbuf: oklch(44.4% 0.011 73.639);
 	--pin-fn-ref: oklch(63.582% 0.18307 43.26);
+
+	--tab-red: oklch(0.7 0.19 25);
+	--tab-orange: oklch(0.75 0.16 55);
+	--tab-yellow: oklch(0.83 0.15 90);
+	--tab-green: oklch(0.74 0.16 150);
+	--tab-teal: oklch(0.74 0.11 195);
+	--tab-blue: oklch(0.7 0.15 255);
+	--tab-purple: oklch(0.69 0.17 295);
+	--tab-pink: oklch(0.73 0.18 350);
 }
 
 .fl-chat-root {
@@ -695,6 +714,14 @@
 	--color-chart-3: var(--chart-3);
 	--color-chart-4: var(--chart-4);
 	--color-chart-5: var(--chart-5);
+	--color-tab-red: var(--tab-red);
+	--color-tab-orange: var(--tab-orange);
+	--color-tab-yellow: var(--tab-yellow);
+	--color-tab-green: var(--tab-green);
+	--color-tab-teal: var(--tab-teal);
+	--color-tab-blue: var(--tab-blue);
+	--color-tab-purple: var(--tab-purple);
+	--color-tab-pink: var(--tab-pink);
 	--color-sidebar: var(--sidebar);
 	--color-sidebar-foreground: var(--sidebar-foreground);
 	--color-sidebar-primary: var(--sidebar-primary);

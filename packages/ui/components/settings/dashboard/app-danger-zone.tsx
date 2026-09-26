@@ -1,11 +1,15 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQuery } from "@tanstack/react-query";
 import { BombIcon, LogOutIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
-import type { IOwnRole } from "../../../state/backend-state";
+import type {
+	IOfflineWritesState,
+	IOwnRole,
+} from "../../../state/backend-state";
 import { useBackend } from "../../../state/backend-state";
 import {
 	AlertDialog,
@@ -21,6 +25,10 @@ import {
 import { Button } from "../../ui/button";
 import { Skeleton } from "../../ui/skeleton";
 import { VerificationDialog } from "../../verification-dialog";
+import {
+	LIVE_ONLY,
+	offlineQueryKeys,
+} from "../offline-access/offline-access-logic";
 
 export interface DangerActions {
 	canDelete: boolean;
@@ -50,6 +58,42 @@ export function resolveDangerActions(
 	};
 }
 
+/** Offline changes that forgetting the app on this device would discard. */
+function ForgetPendingWarning({
+	appId,
+	state,
+	allAccounts,
+	className,
+}: Readonly<{
+	appId: string;
+	state: IOfflineWritesState;
+	allAccounts: boolean;
+	className: string;
+}>) {
+	const { t } = useTranslation("settings");
+	const overview = useQuery({
+		queryKey: offlineQueryKeys.overview(appId),
+		queryFn: () => state.getOverview(appId),
+		enabled: appId.length > 0,
+		meta: LIVE_ONLY,
+	});
+	const count =
+		(overview.data?.queue.pendingCount ?? 0) +
+		(allAccounts ? (overview.data?.otherAccountsPending ?? 0) : 0);
+	if (count === 0) return null;
+	return (
+		<span className={className}>
+			{t("settings:offlineAccess.forgetPendingWarning", {
+				count,
+				defaultValue_one:
+					"{{count}} offline change for this project has not synced yet and will be lost.",
+				defaultValue_other:
+					"{{count}} offline changes for this project have not synced yet and will be lost.",
+			})}
+		</span>
+	);
+}
+
 /**
  * The one place a project can be given up, showing only what this account may
  * actually do. See {@link resolveDangerActions} for how that is decided.
@@ -75,6 +119,7 @@ export function AppDangerZone({
 		[appId],
 		appId.length > 0,
 	);
+	const offlineWrites = backend.offlineWritesState;
 
 	const run = useCallback(
 		async (action: () => Promise<void> | void, fallback: string) => {
@@ -120,6 +165,14 @@ export function AppDangerZone({
 							"Removes every flow, event, page and stored file. This cannot be undone.",
 						)}
 					</p>
+					{offlineWrites && (
+						<ForgetPendingWarning
+							appId={appId}
+							state={offlineWrites}
+							allAccounts
+							className="block text-xs text-destructive"
+						/>
+					)}
 					<VerificationDialog
 						dialog="You cannot undo this action. This will permanently delete the app!"
 						onConfirm={() => {
@@ -169,6 +222,14 @@ export function AppDangerZone({
 									{t(
 										"yourMembershipEndsImmediatelyAndTheLocalCopyIsRemovedYouWillNeedANewInviteToReturn",
 										"Your membership ends immediately and the local copy is removed. You will need a new invite to return.",
+									)}
+									{offlineWrites && (
+										<ForgetPendingWarning
+											appId={appId}
+											state={offlineWrites}
+											allAccounts={false}
+											className="mt-2 block text-destructive"
+										/>
 									)}
 								</AlertDialogDescription>
 							</AlertDialogHeader>

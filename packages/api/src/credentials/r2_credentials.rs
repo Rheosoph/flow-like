@@ -13,7 +13,8 @@ use flow_like::credentials::{
 };
 use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
-use flow_like_storage::lancedb::{connect, connection::ConnectBuilder};
+use flow_like_storage::databases::vector::lancedb::connect_lance;
+use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store;
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,78 @@ impl std::fmt::Debug for R2RuntimeCredentials {
 }
 
 impl R2RuntimeCredentials {
+    async fn device_execute_credentials(
+        &self,
+        sub: &str,
+        app_id: &str,
+        write: bool,
+        expires_at: i64,
+    ) -> Result<Self> {
+        let expiry = super::device_execute_expiry(expires_at)?;
+        let prefixes = super::device_execute_prefixes(sub, app_id)?
+            .into_values()
+            .collect::<Vec<_>>();
+        let unavailable = || anyhow!("R2 could not issue bounded device credentials");
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+        let endpoint = reqwest::Url::parse(&self.endpoint).map_err(|_| unavailable())?;
+        let host = format!("{}.r2.cloudflarestorage.com", self.account_id);
+        if self.account_id.len() != 32
+            || !self.account_id.bytes().all(|b| b.is_ascii_hexdigit())
+            || endpoint.scheme() != "https"
+            || endpoint.host_str() != Some(host.as_str())
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.port().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+            || endpoint.path() != "/"
+            || self.session_token.is_some()
+        {
+            return Err(anyhow!(
+                "Instance storage requires a standard R2 account endpoint and signing credential",
+            ));
+        }
+        let access_key_id = self
+            .access_key_id
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(unavailable)?;
+        let parent_secret = self
+            .secret_access_key
+            .as_ref()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(unavailable)?;
+        // R2 verifies this JWT's directory and absolute expiry. The derived
+        // signing secret cannot be used to mint another temporary credential.
+        let claims = serde_json::json!({ "bucket": self.content_bucket,
+            "scope": if write { "object-read-write" } else { "object-read-only" },
+            "paths": { "prefixPaths": prefixes, "objectPaths": [] },
+            "sub": self.account_id, "iss": access_key_id, "aud": host,
+            "iat": chrono::Utc::now().timestamp(), "exp": expires_at });
+        let jwt = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(parent_secret.as_bytes()),
+        )
+        .map_err(|_| unavailable())?;
+        let secret_access_key = format!("{:x}", Sha256::digest(jwt.as_bytes()));
+        let session_token = base64::engine::general_purpose::STANDARD.encode(format!("jwt/{jwt}"));
+        Ok(Self {
+            access_key_id: Some(access_key_id.clone()),
+            secret_access_key: Some(secret_access_key),
+            session_token: Some(session_token),
+            meta_bucket: self.meta_bucket.clone(),
+            content_bucket: self.content_bucket.clone(),
+            logs_bucket: self.logs_bucket.clone(),
+            endpoint: self.endpoint.clone(),
+            account_id: self.account_id.clone(),
+            expiration: Some(expiry),
+            content_path_prefix: Some(format!("apps/{app_id}")),
+            user_content_path_prefix: Some(format!("users/{sub}/apps/{app_id}")),
+        })
+    }
+
     pub fn from_env() -> Self {
         let logs_bucket = std::env::var("LOG_BUCKET")
             .or_else(|_| std::env::var("LOGS_BUCKET"))
@@ -155,6 +228,12 @@ impl R2RuntimeCredentials {
         // Validate sub and app_id to prevent path traversal
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
+
+        if let CredentialsAccess::DeviceExecute { write, expires_at } = mode {
+            return self
+                .device_execute_credentials(sub, app_id, write, expires_at)
+                .await;
+        }
 
         let api_token = std::env::var("R2_API_TOKEN")
             .map_err(|_| anyhow!("R2_API_TOKEN environment variable not set"))?;
@@ -246,6 +325,7 @@ impl R2RuntimeCredentials {
                 ],
             ),
             CredentialsAccess::ReadLogs => ("object-read-only", vec![log_prefix]),
+            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
         };
 
         // Call R2 temp credentials API for each bucket
@@ -471,6 +551,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { .. }
             | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
@@ -483,6 +564,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { .. }
             | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
@@ -599,7 +681,7 @@ fn make_r2_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
-        let builder = connect(&url)
+        let builder = connect_lance(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
             .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
             .storage_option("aws_region".to_string(), "auto".to_string());
@@ -615,6 +697,76 @@ fn make_r2_builder(
 #[cfg(all(test, feature = "r2"))]
 mod tests {
     use super::*;
+
+    #[flow_like_types::tokio::test]
+    async fn instance_credentials_sign_only_the_project_directory_and_deadline() {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+        let account = "0123456789abcdef0123456789abcdef";
+        let mut credentials = R2RuntimeCredentials {
+            access_key_id: Some("public-parent-id".into()),
+            secret_access_key: Some("private-parent-secret".into()),
+            session_token: None,
+            meta_bucket: "private-meta".into(),
+            content_bucket: "content".into(),
+            logs_bucket: "private-logs".into(),
+            endpoint: format!("https://{account}.r2.cloudflarestorage.com"),
+            account_id: account.into(),
+            expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
+        };
+        let expires_at = chrono::Utc::now().timestamp() + 3590;
+        let issued = credentials
+            .device_execute_credentials("owner", "project", false, expires_at)
+            .await
+            .unwrap();
+        let access_key_id = issued.access_key_id.unwrap();
+        let secret_access_key = issued.secret_access_key.unwrap();
+        let session_token = issued.session_token.unwrap();
+        let jwt = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(session_token)
+                .unwrap(),
+        )
+        .unwrap();
+        let jwt = jwt.strip_prefix("jwt/").unwrap();
+        assert_eq!(access_key_id, "public-parent-id");
+        assert_ne!(secret_access_key, "private-parent-secret");
+        assert_eq!(
+            secret_access_key,
+            format!("{:x}", Sha256::digest(jwt.as_bytes()))
+        );
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.set_audience(&[format!("{account}.r2.cloudflarestorage.com")]);
+        let claims = jsonwebtoken::decode::<serde_json::Value>(
+            jwt,
+            &jsonwebtoken::DecodingKey::from_secret(b"private-parent-secret"),
+            &validation,
+        )
+        .unwrap()
+        .claims;
+        assert_eq!(claims["exp"], expires_at);
+        assert_eq!(claims["scope"], "object-read-only");
+        assert_eq!(claims["bucket"], "content");
+        assert_eq!(
+            claims["paths"]["prefixPaths"],
+            serde_json::json!([
+                "apps/project/upload/",
+                "apps/project/storage/",
+                "users/owner/apps/project/",
+                "tmp/user/owner/apps/project/"
+            ])
+        );
+        assert!(!claims.to_string().contains("private-meta"));
+        credentials.endpoint = "https://another.example".into();
+        assert!(
+            credentials
+                .device_execute_credentials("owner", "project", false, expires_at)
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn test_r2_invoke_none_does_not_advertise_app_content_prefix() {

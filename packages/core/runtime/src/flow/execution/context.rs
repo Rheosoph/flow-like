@@ -19,7 +19,7 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use flow_like_model_provider::provider::ModelProviderConfiguration;
-use flow_like_storage::object_store::path::Path;
+use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
 use flow_like_types::Value;
 use flow_like_types::channel::{Channel, ChannelOutcome};
 use flow_like_types::intercom::{InterComCallback, InterComEvent};
@@ -44,6 +44,26 @@ const A2UI_UPDATE_LOG_KEY: &str = "__a2ui_update_log";
 /// Backstop against high-frequency streaming loops (e.g. sprite/chart updates)
 /// retaining every payload for the whole run. Chat flows stay far below this.
 const A2UI_UPDATE_LOG_CAP: usize = 1024;
+
+fn validate_live_resource_url(
+    url: &flow_like_types::reqwest::Url,
+) -> Result<(), flow_like_types::authorization::AuthorizationError> {
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let path = url.path().to_ascii_lowercase();
+    if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.path().contains('\\')
+        || ["%2f", "%5c", "%25"]
+            .iter()
+            .any(|escape| path.contains(escape))
+    {
+        return Err(flow_like_types::authorization::AuthorizationError::InvalidRequest);
+    }
+    Ok(())
+}
 
 pub(super) fn fresh_local_variable_scope(
     function_variables: &std::collections::HashMap<String, Variable>,
@@ -261,15 +281,19 @@ impl ExecutionContextCache {
     }
 
     pub fn get_cache(&self, node: bool, user: bool) -> flow_like_types::Result<Path> {
-        let mut base = Path::from("tmp");
-
-        if user {
-            base = base.join("user").join(self.sub.clone());
+        let base = if matches!(self.stores.temporary_store, Some(FlowLikeStore::Local(_))) {
+            let base = Path::from("tmp");
+            let base = if user {
+                base.join("user").join(self.sub.clone())
+            } else {
+                base.join("global")
+            };
+            base.join("apps").join(self.app_id.clone())
         } else {
-            base = base.join("global");
-        }
-
-        base = base.join("apps").join(self.app_id.clone());
+            let (user_prefix, global_prefix) =
+                flow_like_types::storage_paths::temporary_prefixes(&self.sub, &self.app_id);
+            Path::from(if user { user_prefix } else { global_prefix })
+        };
 
         if !node {
             return Ok(base);
@@ -368,6 +392,46 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
+    /// Descendant contexts share the provider through their execution state.
+    pub fn request_authorizer(
+        &self,
+    ) -> Option<&Arc<dyn flow_like_types::authorization::RequestAuthorizer>> {
+        self.app_state.request_authorizer.as_ref()
+    }
+
+    pub async fn authorize_request(
+        &self,
+        mut request: flow_like_types::reqwest::Request,
+        audience: flow_like_types::authorization::ResourceAudience,
+    ) -> flow_like_types::Result<flow_like_types::reqwest::Request> {
+        use flow_like_types::{
+            authorization::AuthorizationRequest,
+            reqwest::header::{AUTHORIZATION, HeaderValue},
+        };
+        if let Some(provider) = self.request_authorizer() {
+            validate_live_resource_url(request.url())?;
+            request.headers_mut().remove(AUTHORIZATION);
+            request.headers_mut().remove("dpop");
+            let authorization = provider
+                .authorize(AuthorizationRequest {
+                    audience,
+                    method: request.method().as_str(),
+                    url: request.url().as_str(),
+                })
+                .await?;
+            authorization.validate()?;
+            let mut value = HeaderValue::from_str(authorization.authorization())?;
+            value.set_sensitive(true);
+            request.headers_mut().insert(AUTHORIZATION, value);
+            if let Some(proof) = authorization.dpop() {
+                let mut value = HeaderValue::from_str(proof)?;
+                value.set_sensitive(true);
+                request.headers_mut().insert("dpop", value);
+            }
+        }
+        Ok(request)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
@@ -1841,6 +1905,68 @@ fn append_trace_deduplicating_empty(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloud_user_paths_match_credentials_and_local_scratch_paths_stay_unchanged() {
+        let mut cache = ExecutionContextCache {
+            stores: FlowLikeStores::default(),
+            app_id: "project".into(),
+            model_usage_app_id: None,
+            board_dir: Path::from("apps/project"),
+            board_id: "board".into(),
+            node_id: Arc::from("node"),
+            sub: "auth0|delegating-user".into(),
+            shadow: false,
+        };
+        let (user, global) =
+            flow_like_types::storage_paths::temporary_prefixes(&cache.sub, &cache.app_id);
+        assert_eq!(cache.get_cache(false, true).unwrap().as_ref(), user);
+        assert_eq!(
+            cache.get_cache(true, true).unwrap().as_ref(),
+            format!("{user}/node")
+        );
+        assert_eq!(cache.get_cache(false, false).unwrap().as_ref(), global);
+        assert_eq!(
+            cache.get_user_dir(false).unwrap().join("db").as_ref(),
+            "users/auth0%7Cdelegating-user/apps/project/db"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        cache.stores.temporary_store = Some(FlowLikeStore::Local(Arc::new(
+            flow_like_storage::files::store::local_store::LocalObjectStore::new(
+                directory.path().to_path_buf(),
+            )
+            .unwrap(),
+        )));
+        assert_eq!(
+            cache.get_cache(false, true).unwrap().as_ref(),
+            "tmp/user/auth0%7Cdelegating-user/apps/project"
+        );
+    }
+
+    #[test]
+    fn live_project_requests_require_tls_or_explicit_loopback() {
+        for url in [
+            "https://api.example.test/api/v1/apps/project/connections/target/token",
+            "http://localhost:3000/api/v1",
+            "http://127.0.0.1:3000/api/v1",
+            "http://[::1]:3000/api/v1",
+        ] {
+            assert!(
+                validate_live_resource_url(&flow_like_types::reqwest::Url::parse(url).unwrap())
+                    .is_ok()
+            );
+        }
+        for url in [
+            "http://api.example.test/api/v1",
+            "https://user:password@api.example.test/api/v1",
+            "https://api.example.test/api/v1/..%2fadmin",
+        ] {
+            assert!(
+                validate_live_resource_url(&flow_like_types::reqwest::Url::parse(url).unwrap())
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn empty_traces_are_retained_once_per_node() {

@@ -19,8 +19,8 @@ use flow_like_wasm::widget_policy::{
 use flow_like_wasm::{
     client::RegistryClient,
     registry::{
-        CachedPackage, InstalledPackage, PackageSource, RegistryConfig, SearchFilters,
-        SearchResults,
+        CachedPackage, InstalledPackage, PackageAccessFilter, PackageSource, RegistryConfig,
+        SearchFilters, SearchResults,
     },
 };
 use futures::future::join_all;
@@ -117,7 +117,7 @@ async fn refresh_open_board_definitions(
 
     for board in &boards {
         board
-            .lock()
+            .write()
             .await
             .refresh_node_definitions(flow_state.clone())
             .await;
@@ -274,6 +274,10 @@ pub struct SearchFiltersInput {
     pub offset: Option<usize>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub access: Option<PackageAccessFilter>,
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
 }
 
 impl From<SearchFiltersInput> for SearchFilters {
@@ -301,6 +305,8 @@ impl From<SearchFiltersInput> for SearchFilters {
             sort_desc: input.sort_desc.unwrap_or(true),
             offset: input.offset.unwrap_or(0),
             limit: input.limit.unwrap_or(20),
+            access: input.access,
+            ids: input.ids,
         }
     }
 }
@@ -333,16 +339,26 @@ pub async fn registry_install_package(
     package_id: String,
     version: Option<String>,
     token: Option<String>,
+    app_id: Option<String>,
 ) -> Result<CachedPackage, TauriFunctionError> {
     emit_package_status(&app_handle, &package_id, "downloading");
     let registry_client = get_client_with_token(&app_handle, token.clone()).await?;
-    let installed = registry_client
-        .install(&package_id, version.as_deref(), token.as_deref())
-        .await
-        .inspect_err(|error| {
-            log_registry_package_error("registry_install_package", &package_id, error);
-            emit_package_status(&app_handle, &package_id, "error");
-        })?;
+    let installed = match app_id.as_deref() {
+        Some(app_id) => {
+            registry_client
+                .install_for_app(&package_id, version.as_deref(), token.as_deref(), app_id)
+                .await
+        }
+        None => {
+            registry_client
+                .install(&package_id, version.as_deref(), token.as_deref())
+                .await
+        }
+    };
+    let installed = installed.inspect_err(|error| {
+        log_registry_package_error("registry_install_package", &package_id, error);
+        emit_package_status(&app_handle, &package_id, "error");
+    })?;
 
     load_installed_package_nodes(&app_handle, &registry_client, &package_id, true)
         .await

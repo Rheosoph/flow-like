@@ -20,6 +20,7 @@ import {
 } from "../a2ui/micro-widget-policy";
 import { WidgetSourceLevelBadge } from "../a2ui/micro-widget-purpose-card";
 import { Button } from "../ui/button";
+import { DropdownMenuItem } from "../ui/dropdown-menu";
 import { RelativeTime } from "../ui/relative-time";
 import {
 	Sheet,
@@ -540,16 +541,11 @@ export function WidgetConsentStatus({
 	);
 }
 
-/** Installed packages: forget every widget decision for one package on this device. */
-export function ClearWidgetPermissionsButton({
-	packageId,
-	packageName,
-	className,
-}: {
-	packageId: string;
-	packageName: string;
-	className?: string;
-}) {
+/** Forget every widget decision for one package on this device, with the outcome as a toast. */
+export function useClearWidgetPermissions(
+	packageId: string,
+	packageName: string,
+) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const [busy, setBusy] = useState(false);
@@ -598,6 +594,24 @@ export function ClearWidgetPermissionsButton({
 		}
 	}, [backend, packageId, packageName, t]);
 
+	return { clear, busy, label };
+}
+
+/** Installed packages: forget every widget decision for one package on this device. */
+export function ClearWidgetPermissionsButton({
+	packageId,
+	packageName,
+	className,
+}: {
+	packageId: string;
+	packageName: string;
+	className?: string;
+}) {
+	const { clear, busy, label } = useClearWidgetPermissions(
+		packageId,
+		packageName,
+	);
+
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -621,5 +635,32 @@ export function ClearWidgetPermissionsButton({
 			</TooltipTrigger>
 			<TooltipContent>{label}</TooltipContent>
 		</Tooltip>
+	);
+}
+
+/** The same action inside a `DropdownMenuContent`, where roving focus and Enter/Space select it. */
+export function ClearWidgetPermissionsMenuItem({
+	packageId,
+	packageName,
+}: {
+	packageId: string;
+	packageName: string;
+}) {
+	const { clear, busy, label } = useClearWidgetPermissions(
+		packageId,
+		packageName,
+	);
+
+	return (
+		<DropdownMenuItem
+			data-clear-widget-permissions
+			disabled={busy}
+			onSelect={() => {
+				void clear();
+			}}
+		>
+			{busy ? <Loader2 className="animate-spin" /> : <ShieldOff />}
+			{label}
+		</DropdownMenuItem>
 	);
 }

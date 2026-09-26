@@ -114,31 +114,8 @@ impl NodeLogic for QueryRemoteOntologyChildrenNode {
         let object_type: String = context.evaluate_pin("object_type").await?;
         let node_id: flow_like_types::Value = context.evaluate_pin("node_id").await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(100);
-        let execution = context
-            .execution_cache
-            .clone()
-            .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
-        let app_id = execution.app_id.clone();
-
-        let database = if let Some(credentials) = &context.credentials {
-            credentials.to_db(&app_id).await?
-        } else {
-            let path = execution.get_storage(false)?.join("db");
-            context
-                .app_state
-                .config
-                .read()
-                .await
-                .callbacks
-                .build_project_database
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No database builder found"))?(path)
-        };
-        let connection = context
-            .app_state
-            .with_lance_session(database)
-            .execute()
-            .await?;
+        let connection =
+            crate::data::db::vector::connection::open_shared(context, false).await?;
         let import = match lancegraph::load_ontology_import(&connection, &binding_id).await {
             Ok(import) => import,
             Err(error) => return fail(context, error).await,

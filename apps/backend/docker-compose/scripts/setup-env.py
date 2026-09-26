@@ -69,39 +69,6 @@ def audit_key_values(audit_kms):
     return audit_kms
 
 
-def audit_worker_config(runtime):
-    """Copy only audit policy into the worker, never the API's provider configuration."""
-    supplied = runtime.get("AUDIT_WORKER_CONFIG_JSON", "")
-    reference = runtime.get("FLOW_LIKE_CONFIG_SECRET_REF", "")
-    try:
-        explicit = json.loads(supplied, object_pairs_hook=unique_json_keys) if supplied else None
-        if explicit is not None and (not isinstance(explicit, dict) or set(explicit) != {"audit"} or not isinstance(explicit["audit"], dict)):
-            raise ValueError()
-        if reference:
-            if explicit is None:
-                raise ValueError("A remote API config needs explicit AUDIT_WORKER_CONFIG_JSON containing only its audit policy")
-            audit = explicit["audit"]
-        else:
-            if runtime.get("FLOW_LIKE_CONFIG_JSON"):
-                source = json.loads(runtime["FLOW_LIKE_CONFIG_JSON"], object_pairs_hook=unique_json_keys)
-            else:
-                path = Path(runtime.get("FLOW_LIKE_RUNTIME_CONFIG_FILE") or ROOT / "flow-like.config.example.json")
-                if not path.is_absolute():
-                    path = ROOT / path
-                source = json.loads(path.read_text(), object_pairs_hook=unique_json_keys)
-            if not isinstance(source, dict) or not isinstance(source.get("audit", {}), dict):
-                raise ValueError()
-            audit = source.get("audit", {})
-            if explicit is not None and explicit["audit"] != audit:
-                raise ValueError("AUDIT_WORKER_CONFIG_JSON must match the API audit policy")
-        if audit.get("enabled") is False:
-            raise ValueError("The dedicated audit worker requires audit to be enabled")
-        return {"AUDIT_WORKER_CONFIG_JSON": json.dumps({"audit": audit}, separators=(",", ":")),
-                "AUDIT_WORKER_CONFIG_SECRET_REF": reference}
-    except (json.JSONDecodeError, TypeError, OSError):
-        raise ValueError("Cannot derive the worker audit policy; use a readable JSON API config or explicit AUDIT_WORKER_CONFIG_JSON for a remote source") from None
-
-
 def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=None, audit_kms=None, stripe=None):
     values = {}
     for key in STRIPE_SETTINGS:
@@ -129,7 +96,6 @@ def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=No
         runtime_config["FLOW_LIKE_CONFIG_JSON"] = json.dumps(parsed, separators=(",", ":"))
     if any(key in sources for key in ("FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF")):
         runtime_config["FLOW_LIKE_CONFIG_FILE"] = ""
-    runtime_config.update(audit_worker_config(runtime_config))
     # Single-quoted dotenv values preserve dollar signs and JSON quotes as data.
     values.update({key: "'" + value.replace("'", "\\'") + "'" if value else "" for key, value in runtime_config.items()})
     for key in ["POSTGRES_PASSWORD", "REDIS_API_PASSWORD", "REDIS_RUNTIME_PASSWORD",
@@ -182,7 +148,7 @@ def main():
             parser.error("URLs must be HTTP(S) origins without credentials, query, or path")
     if args.output.exists() or args.output.is_symlink():
         parser.error("Output already exists; refusing to replace deployment secrets")
-    runtime_config = {key: os.environ[key] for key in ("FLOW_LIKE_RUNTIME_CONFIG_FILE", "FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF", "AUDIT_WORKER_CONFIG_JSON") if key in os.environ}
+    runtime_config = {key: os.environ[key] for key in ("FLOW_LIKE_RUNTIME_CONFIG_FILE", "FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF") if key in os.environ}
     audit_kms = {key: os.environ[key] for key in AUDIT_KMS_SETTINGS if key in os.environ}
     stripe = {key: os.environ[key] for key in STRIPE_SETTINGS if key in os.environ}
     try:

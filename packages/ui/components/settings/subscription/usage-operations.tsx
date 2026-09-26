@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { formatQuota } from "../../../lib/quota";
+import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import {
@@ -25,7 +26,8 @@ export function UsageOperations() {
 		open && !!auth.user?.profile.sub,
 		[auth.user?.profile.sub],
 	);
-	const names = useUsageNames(open ? (query.data?.items ?? []) : []);
+	const items = asArray(query.data?.items);
+	const names = useUsageNames(open ? items : []);
 	return (
 		<details
 			className="group rounded-xl border"
@@ -71,7 +73,7 @@ export function UsageOperations() {
 									</tr>
 								</thead>
 								<tbody>
-									{query.data?.items.map((item) => (
+									{items.map((item) => (
 										<tr key={item.id} className="border-t">
 											<td className="p-2 whitespace-nowrap">
 												{new Date(item.createdAt).toLocaleDateString(
@@ -147,7 +149,7 @@ export function UsageOperations() {
 									))}
 								</tbody>
 							</table>
-							{query.data?.items.length === 0 && (
+							{query.data && items.length === 0 && (
 								<p className="py-8 text-center text-sm text-muted-foreground">
 									No cloud operations recorded yet.
 								</p>

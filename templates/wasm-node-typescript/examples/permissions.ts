@@ -18,7 +18,7 @@ import {
 } from "@flow-like/wasm-sdk-typescript";
 
 // ============================================================================
-// Node definition — note `nd.addPermission("http")`
+// Node definition — note `nd.addPermission("network:http")`
 // ============================================================================
 
 export function getDefinition(): NodeDefinition {
@@ -29,7 +29,7 @@ export function getDefinition(): NodeDefinition {
 		"Examples/HTTP",
 	);
 
-	nd.addPermission("http");
+	nd.addPermission("network:http");
 
 	nd.addPin(PinDefinition.inputExec("exec"));
 	nd.addPin(

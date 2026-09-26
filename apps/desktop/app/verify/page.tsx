@@ -7,6 +7,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { Trans, useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -60,7 +61,11 @@ export default function VerifyPage() {
 		return <LoadingScreen />;
 	}
 
-	if (certQuery.isError || !certQuery.data) {
+	if (
+		certQuery.isError ||
+		!isRecord(certQuery.data) ||
+		typeof certQuery.data.hash !== "string"
+	) {
 		const reason =
 			certQuery.error instanceof Error
 				? certQuery.error.message

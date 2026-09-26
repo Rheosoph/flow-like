@@ -1,5 +1,4 @@
 {{- if .Values.audit.worker }}
-{{- $runtime := .Values.audit.runtimeConfig }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -53,6 +52,31 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.database.migration.enabled }}
+      initContainers:
+        - name: wait-for-database-migration
+          image: {{ include "flow-like.image" (dict "image" .Values.database.migration.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.database.migration.image.pullPolicy | default "Always" }}
+          command: ["bun", "/usr/local/bin/wait-for-migration.ts"]
+          env:
+            - name: MIGRATION_JOB_NAME
+              value: {{ include "flow-like.migrationJobName" . | quote }}
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: migration-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests: {cpu: "10m", memory: "64Mi"}
+            limits: {cpu: "100m", memory: "128Mi"}
+      {{- end }}
       containers:
         - name: audit-worker
           image: {{ include "flow-like.image" (dict "image" .Values.audit.image "global" .Values.global) | quote }}
@@ -74,8 +98,6 @@ spec:
                   name: {{ .Values.audit.entrySecret | quote }}
                   key: AUDIT_ENTRY_KEY_PREVIOUS
                   optional: true
-            - name: FLOW_LIKE_CONFIG_PATH
-              value: /etc/audit/audit.config.json
             - name: AUDIT_HEALTH_FILE
               value: /tmp/audit-worker-health
             - name: AUDIT_BUCKET
@@ -129,9 +151,6 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            - name: audit-config
-              mountPath: /etc/audit
-              readOnly: true
             {{- if .Values.database.caSecret }}
             - name: database-ca
               mountPath: /etc/database
@@ -162,17 +181,25 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {sizeLimit: 256Mi}
-        - name: audit-config
-          {{- if $runtime.existingSecret }}
-          secret:
-            secretName: {{ $runtime.existingSecret | quote }}
-          {{- else }}
-          configMap:
-            name: {{ $runtime.existingConfigMap | quote }}
-          {{- end }}
-            items:
-              - key: {{ $runtime.key | quote }}
-                path: audit.config.json
+        {{- if .Values.database.migration.enabled }}
+        - name: migration-api-access
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
+        {{- end }}
         {{- if .Values.database.caSecret }}
         - name: database-ca
           secret:

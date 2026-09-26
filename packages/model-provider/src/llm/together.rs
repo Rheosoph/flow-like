@@ -1,6 +1,7 @@
 use std::any::Any;
 
-use super::ModelLogic;
+use super::{ModelLogic, OPENROUTER_ONLY, ParamDialect, merge_additional_params};
+use crate::history::{History, HistoryThinking};
 use crate::provider::random_provider;
 use crate::{
     llm::ModelConstructor,
@@ -9,6 +10,27 @@ use crate::{
 use anyhow::Result;
 use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
+use serde_json::{Value, json};
+
+const TOGETHER: ParamDialect = ParamDialect {
+    provider: "together",
+    renames: &[],
+    unsupported: &OPENROUTER_ONLY,
+    rig_owned: &[],
+};
+
+/// Together documents `reasoning_effort` (low/medium/high) for GPT-OSS; hybrid models use a
+/// per-model toggle this layer cannot detect from the name.
+fn reasoning(model: &str, thinking: HistoryThinking) -> Option<Value> {
+    model.to_ascii_lowercase().contains("gpt-oss").then(|| {
+        let effort = match thinking {
+            HistoryThinking::Off | HistoryThinking::Low => "low",
+            HistoryThinking::Mid => "medium",
+            HistoryThinking::High => "high",
+        };
+        json!({ "reasoning_effort": effort })
+    })
+}
 
 pub struct TogetherModel {
     client: rig::providers::together::Client,
@@ -78,12 +100,43 @@ impl Cacheable for TogetherModel {
 impl ModelLogic for TogetherModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor {
-            inner: Box::new(self.client.clone()),
-        })
+        Ok(ModelConstructor::with_max_tokens_body_param(
+            self.client.clone(),
+        ))
     }
 
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
+    }
+
+    fn additional_params(&self, history: &Option<History>) -> Option<Value> {
+        let history = history.as_ref()?;
+        let model = self.default_model.as_deref().unwrap_or(&history.model);
+        merge_additional_params(
+            Some(TOGETHER.params(history)),
+            history
+                .thinking
+                .and_then(|thinking| reasoning(model, thinking)),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_effort_only_for_gpt_oss() {
+        assert_eq!(
+            reasoning("openai/gpt-oss-120b", HistoryThinking::High),
+            Some(json!({"reasoning_effort": "high"}))
+        );
+        assert_eq!(
+            reasoning(
+                "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                HistoryThinking::High
+            ),
+            None
+        );
     }
 }

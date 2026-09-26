@@ -29,7 +29,7 @@ GCP_ARGS = {
     "key_version": "projects/audit-project/locations/europe-west1/keyRings/audit/cryptoKeys/timeline/cryptoKeyVersions/1",
     "api_service_account": "api@app-project.iam.gserviceaccount.com",
     "database_instance": "audit-db", "database_host": "10.0.0.2", "database_name": "flow_like", "database_user": None,
-    "entry_key_secret": "audit-entry-key", "config_secret": "audit-config", "network": "private", "subnet": "database",
+    "entry_key_secret": "audit-entry-key", "network": "private", "subnet": "database",
     "name": "flow-like-audit-worker", "encryption_secret": "audit-sink-key", "database_ca_secret": "cloud-sql-ca", "retention_days": 1461,
     "previous_entry_key_secret": None, "audit_kid": None, "verifying_keys_secret": None,
 }
@@ -43,7 +43,6 @@ AZURE_ARGS = {
     "secrets_vault_id": f"{SCOPE}/providers/Microsoft.KeyVault/vaults/secrets",
     "database_secret_uri": "https://secrets.vault.azure.net/secrets/database/version1",
     "entry_key_secret_uri": "https://secrets.vault.azure.net/secrets/entry-key/version1",
-    "config_secret_uri": "https://secrets.vault.azure.net/secrets/config/version1",
     "name": "flow-like-audit-worker", "container": "audit", "retention_days": 1461,
     "encryption_secret_uri": "https://secrets.vault.azure.net/secrets/encryption/version1",
     "database_user": "audit-worker", "kid": "audit-v1", "verifying_keys_file": None,

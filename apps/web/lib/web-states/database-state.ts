@@ -99,6 +99,18 @@ export class WebDatabaseState implements IDatabaseState {
 		);
 	}
 
+	private pageParams(
+		offset?: number,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): URLSearchParams {
+		const params = databaseQueryParams(userScoped, selector);
+		if (offset !== undefined) params.set("offset", offset.toString());
+		if (limit !== undefined) params.set("limit", limit.toString());
+		return params;
+	}
+
 	async listItems(
 		appId: string,
 		tableName: string,
@@ -107,19 +119,33 @@ export class WebDatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const params = databaseQueryParams(userScoped, selector);
-		if (offset !== undefined) params.set("offset", offset.toString());
-		if (limit !== undefined) params.set("limit", limit.toString());
-
 		try {
-			return await apiGet<any[]>(
-				`apps/${appId}/db/${encodeURIComponent(tableName)}?${params}`,
-				this.backend.auth,
+			return await this.listItemsAuthoritative(
+				appId,
+				tableName,
+				offset,
+				limit,
+				userScoped,
+				selector,
 			);
 		} catch (error) {
 			if (selector) throw error;
 			return [];
 		}
+	}
+
+	async listItemsAuthoritative(
+		appId: string,
+		tableName: string,
+		offset?: number,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<unknown[]> {
+		return apiGet<unknown[]>(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}?${this.pageParams(offset, limit, userScoped, selector)}`,
+			this.backend.auth,
+		);
 	}
 
 	async queryItems(
@@ -131,20 +157,36 @@ export class WebDatabaseState implements IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<any[]> {
-		const params = databaseQueryParams(userScoped, selector);
-		if (offset !== undefined) params.set("offset", offset.toString());
-		if (limit !== undefined) params.set("limit", limit.toString());
-
 		try {
-			return await apiPost<any[]>(
-				`apps/${appId}/db/${encodeURIComponent(tableName)}/query?${params}`,
-				{ ...query },
-				this.backend.auth,
+			return await this.queryItemsAuthoritative(
+				appId,
+				tableName,
+				query,
+				offset,
+				limit,
+				userScoped,
+				selector,
 			);
 		} catch (error) {
 			if (selector) throw error;
 			return [];
 		}
+	}
+
+	async queryItemsAuthoritative(
+		appId: string,
+		tableName: string,
+		query: IQueryTablePayload,
+		offset?: number,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<unknown[]> {
+		return apiPost<unknown[]>(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/query?${this.pageParams(offset, limit, userScoped, selector)}`,
+			{ ...query },
+			this.backend.auth,
+		);
 	}
 
 	async countItems(
@@ -154,15 +196,29 @@ export class WebDatabaseState implements IDatabaseState {
 		selector?: IDatabaseSelector,
 	): Promise<number> {
 		try {
-			const result = await apiGet<number>(
-				`apps/${appId}/db/${encodeURIComponent(tableName)}/count${this.scopeQuery(userScoped, selector)}`,
-				this.backend.auth,
+			return await this.countItemsAuthoritative(
+				appId,
+				tableName,
+				userScoped,
+				selector,
 			);
-			return result ?? 0;
 		} catch (error) {
 			if (selector) throw error;
 			return 0;
 		}
+	}
+
+	async countItemsAuthoritative(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<number> {
+		const result = await apiGet<number>(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/count${this.scopeQuery(userScoped, selector)}`,
+			this.backend.auth,
+		);
+		return result ?? 0;
 	}
 
 	async getSchema(
@@ -321,6 +377,20 @@ export class WebDatabaseState implements IDatabaseState {
 		await apiPut(
 			`apps/${appId}/db/${encodeURIComponent(tableName)}/columns${this.scopeQuery(userScoped, selector)}`,
 			{ column, nullable },
+			this.backend.auth,
+		);
+	}
+
+	async setPrimaryKey(
+		appId: string,
+		tableName: string,
+		column: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<void> {
+		await apiPut(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}/primary-key${this.scopeQuery(userScoped, selector)}`,
+			{ column },
 			this.backend.auth,
 		);
 	}

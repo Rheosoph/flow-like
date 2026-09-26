@@ -3,8 +3,8 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder
 use serde_json::{Value, json};
 
 use super::{
-    Offer, SOURCE, coordinate_entitlement, error, load_order, now, operations, order_scope, outbox,
-    sql, stripe_error,
+    ItemKind, Offer, SOURCE, coordinate_entitlement, error, load_order, now, operations,
+    order_scope, outbox, sql, stripe_error,
 };
 use crate::{
     entity::{
@@ -261,7 +261,12 @@ async fn settle_paid(
                 async move { settle_paid_txn(txn, order, attempt, charge, intent, snapshot).await },
             )
         })
-        .await
+        .await?;
+    if ItemKind::of(order) == ItemKind::Package {
+        state.invalidate_wasm_permission(&order.user_id, &order.item_id);
+        crate::package_license::refresh_package_access(state, &order.user_id, &order.item_id).await;
+    }
+    Ok(())
 }
 
 fn checkout_tax_amount(
@@ -359,13 +364,25 @@ async fn settle_paid_txn(
     intent: PaymentIntent,
     snapshot: Value,
 ) -> Result<(), ApiError> {
+    let kind = ItemKind::of(&order);
     crate::db::coordination::coordinate(txn, "payments-owner", &[&order.payee_user_id]).await?;
-    crate::db::coordination::coordinate(txn, "payments-app", &[&order.item_id]).await?;
+    crate::db::coordination::coordinate(txn, kind.lock(), &[&order.item_id]).await?;
     crate::db::coordination::coordinate(txn, "payments-charge", &[&attempt.id]).await?;
-    coordinate_entitlement(txn, &order.user_id, &order.item_id).await?;
+    coordinate_entitlement(txn, &order.user_id, kind, &order.item_id).await?;
     let current = load_order(txn, &order.id).await?;
     let offer: Offer = serde_json::from_value(current.snapshot.clone())?;
-    let product_available=txn.query_one_raw(sql(r#"SELECT id FROM "App" WHERE id=$1 AND visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS')"#,vec![order.item_id.clone().into()])).await?.is_some();
+    let available_sql = match kind {
+        ItemKind::App => {
+            r#"SELECT id FROM "App" WHERE id=$1 AND visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS')"#
+        }
+        ItemKind::Package => {
+            r#"SELECT id FROM "WasmPackage" WHERE id=$1 AND visibility='PUBLIC' AND status='ACTIVE'"#
+        }
+    };
+    let product_available = txn
+        .query_one_raw(sql(available_sql, vec![order.item_id.clone().into()]))
+        .await?
+        .is_some();
     let buyer_exists = txn
         .query_one_raw(sql(
             r#"SELECT id FROM "User" WHERE id=$1"#,
@@ -373,10 +390,16 @@ async fn settle_paid_txn(
         ))
         .await?
         .is_some();
-    let blocked=txn.query_one_raw(sql(r#"SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND blocked=true"#,vec![order.user_id.clone().into(),order.item_id.clone().into()])).await?.is_some();
+    let blocked=txn.query_one_raw(sql(r#"SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"=$3 AND "itemId"=$2 AND blocked=true"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),kind.as_str().into()])).await?.is_some();
+    let access_sql = match kind {
+        ItemKind::App => r#"SELECT id FROM "Membership" WHERE "userId"=$1 AND "appId"=$2"#,
+        ItemKind::Package => {
+            r#"SELECT id FROM "WasmPackageUser" WHERE "userId"=$1 AND "packageId"=$2"#
+        }
+    };
     let member = txn
         .query_one_raw(sql(
-            r#"SELECT id FROM "Membership" WHERE "userId"=$1 AND "appId"=$2"#,
+            access_sql,
             vec![order.user_id.clone().into(), order.item_id.clone().into()],
         ))
         .await?
@@ -433,10 +456,24 @@ async fn settle_paid_txn(
         // Already delivered charges keep their original recipient after permission changes.
         true
     } else {
-        let owner_matches = txn.query_one_raw(sql(
-            r#"SELECT a.id FROM "App" a JOIN "Membership" m ON m."appId"=a.id AND m."roleId"=a."ownerRoleId" JOIN "User" u ON u.id=m."userId" WHERE a.id=$1 AND m."userId"=$2 AND (SELECT COUNT(*) FROM "Membership" owners WHERE owners."appId"=a.id AND owners."roleId"=a."ownerRoleId")=1 AND NOT EXISTS (SELECT 1 FROM "PaymentsBlock" p WHERE p."userId"=$2) AND NOT EXISTS (SELECT 1 FROM "AppPaymentSettings" s WHERE s."appId"=$1 AND s."adminBlockedAt" IS NOT NULL)"#,
-            vec![order.item_id.clone().into(), order.payee_user_id.clone().into()],
-        )).await?.is_some();
+        let owner_sql = match kind {
+            ItemKind::App => {
+                r#"SELECT a.id FROM "App" a JOIN "Membership" m ON m."appId"=a.id AND m."roleId"=a."ownerRoleId" JOIN "User" u ON u.id=m."userId" WHERE a.id=$1 AND m."userId"=$2 AND (SELECT COUNT(*) FROM "Membership" owners WHERE owners."appId"=a.id AND owners."roleId"=a."ownerRoleId")=1 AND NOT EXISTS (SELECT 1 FROM "PaymentsBlock" p WHERE p."userId"=$2) AND NOT EXISTS (SELECT 1 FROM "AppPaymentSettings" s WHERE s."appId"=$1 AND s."adminBlockedAt" IS NOT NULL)"#
+            }
+            ItemKind::Package => {
+                r#"SELECT w.id FROM "WasmPackageUser" w JOIN "User" u ON u.id=w."userId" WHERE w."packageId"=$1 AND w."userId"=$2 AND (w.permission & 1)=1 AND (SELECT COUNT(*) FROM "WasmPackageUser" owners WHERE owners."packageId"=$1 AND (owners.permission & 1)=1)=1 AND NOT EXISTS (SELECT 1 FROM "PaymentsBlock" p WHERE p."userId"=$2)"#
+            }
+        };
+        let owner_matches = txn
+            .query_one_raw(sql(
+                owner_sql,
+                vec![
+                    order.item_id.clone().into(),
+                    order.payee_user_id.clone().into(),
+                ],
+            ))
+            .await?
+            .is_some();
         let is_admin = if owner_matches {
             crate::payments::accounts::is_platform_admin(txn, &order.payee_user_id).await?
         } else {
@@ -534,10 +571,44 @@ async fn settle_paid_txn(
             confirmed_offer["confirmed_at"] = json!(confirmed_at);
         }
         let grant_id = format!("purchase:{}", order.id);
-        txn.execute_raw(sql(r#"INSERT INTO "AccessGrant" (id,"userId","itemKind","itemId","sourceType","sourceId","createdAt","updatedAt") VALUES ($1,$2,'APP',$3,'PURCHASE',$4,$5,$5) ON CONFLICT DO NOTHING"#,vec![grant_id.into(),order.user_id.clone().into(),order.item_id.clone().into(),order.id.clone().into(),now().into()])).await?;
-        txn.execute_raw(sql(r#"INSERT INTO "Membership" (id,"userId","appId","roleId","joinedVia","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,$6)"#,vec![flow_like_types::create_id().into(),order.user_id.clone().into(),order.item_id.clone().into(),offer.role_id.into(),format!("payment:{}",order.id).into(),Utc::now().fixed_offset().into()])).await?;
+        txn.execute_raw(sql(r#"INSERT INTO "AccessGrant" (id,"userId","itemKind","itemId","sourceType","sourceId","createdAt","updatedAt") VALUES ($1,$2,$6,$3,'PURCHASE',$4,$5,$5) ON CONFLICT DO NOTHING"#,vec![grant_id.into(),order.user_id.clone().into(),order.item_id.clone().into(),order.id.clone().into(),now().into(),kind.as_str().into()])).await?;
+        let granted_via = format!("payment:{}", order.id);
+        match kind {
+            ItemKind::App => {
+                txn.execute_raw(sql(r#"INSERT INTO "Membership" (id,"userId","appId","roleId","joinedVia","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,$6)"#,vec![flow_like_types::create_id().into(),order.user_id.clone().into(),order.item_id.clone().into(),offer.role_id.clone().into(),granted_via.into(),Utc::now().fixed_offset().into()])).await?;
+            }
+            ItemKind::Package => {
+                txn.execute_raw(sql(r#"INSERT INTO "WasmPackageUser" (id,"packageId","userId",permission,"grantedBy","grantedAt") VALUES ($1,$2,$3,$4,$5,$6)"#,vec![flow_like_types::create_id().into(),order.item_id.clone().into(),order.user_id.clone().into(),crate::permission::wasm_package_permission::WasmPackagePermission::Buyer.bits().into(),granted_via.into(),Utc::now().fixed_offset().into()])).await?;
+            }
+        }
         txn.execute_raw(sql(r#"UPDATE "PaymentOrder" SET status='COMPLETED',"acceptedAttemptId"=$2,"openKey"=NULL,snapshot=$4,revision=revision+1,"updatedAt"=$3 WHERE id=$1"#,vec![order.id.clone().into(),attempt.id.clone().into(),confirmed_at.into(),confirmed_offer.into()])).await?;
-        txn.execute_raw(sql(r#"INSERT INTO "AppPurchase" (id,"paymentOrderId","chargeType","userId","appId","pricePaid","originalPrice","discountAmount",currency,"stripeSessionId","stripePaymentIntentId",status,"completedAt","createdAt","updatedAt") VALUES ($1,$1,$9,$2,$3,$4,$4,0,$5,$6,$7,'COMPLETED',$8,$8,$8) ON CONFLICT (id) DO NOTHING"#,vec![order.id.clone().into(),order.user_id.clone().into(),order.item_id.clone().into(),order.amount.into(),order.currency.clone().into(),attempt.stripe_session_id.clone().into(),charge.payment_intent.as_ref().map(|id|id.id().to_owned()).into(),Utc::now().fixed_offset().into(),current.charge_type.clone().into()])).await?;
+        let purchase_sql = match kind {
+            ItemKind::App => {
+                r#"INSERT INTO "AppPurchase" (id,"paymentOrderId","chargeType","userId","appId","pricePaid","originalPrice","discountAmount",currency,"stripeSessionId","stripePaymentIntentId",status,"completedAt","createdAt","updatedAt") VALUES ($1,$1,$9,$2,$3,$4,$4,0,$5,$6,$7,'COMPLETED',$8,$8,$8) ON CONFLICT (id) DO NOTHING"#
+            }
+            ItemKind::Package => {
+                r#"INSERT INTO "WasmPackagePurchase" (id,"paymentOrderId","chargeType","userId","packageId","pricePaid","originalPrice","discountAmount",currency,"stripeSessionId","stripePaymentIntentId",status,"completedAt","createdAt","updatedAt") VALUES ($1,$1,$9,$2,$3,$4,$4,0,$5,$6,$7,'COMPLETED',$8,$8,$8) ON CONFLICT (id) DO NOTHING"#
+            }
+        };
+        txn.execute_raw(sql(
+            purchase_sql,
+            vec![
+                order.id.clone().into(),
+                order.user_id.clone().into(),
+                order.item_id.clone().into(),
+                order.amount.into(),
+                order.currency.clone().into(),
+                attempt.stripe_session_id.clone().into(),
+                charge
+                    .payment_intent
+                    .as_ref()
+                    .map(|id| id.id().to_owned())
+                    .into(),
+                Utc::now().fixed_offset().into(),
+                current.charge_type.clone().into(),
+            ],
+        ))
+        .await?;
         outbox::enqueue(
             txn,
             &format!("mkt:{}:paid", order.id),
@@ -1052,12 +1123,17 @@ async fn observe_refund_txn(
             .ok_or(ApiError::NOT_FOUND)?;
         if order.accepted_attempt_id.as_deref() == Some(&attempt.id) && current.refunded_amount > 0
         {
-            txn.execute_raw(sql(r#"UPDATE "AppPurchase" SET status=$2,"refundedAt"=CASE WHEN $3 THEN COALESCE("refundedAt",$4) ELSE "refundedAt" END,"refundReason"='stripe_refund',"updatedAt"=$4 WHERE "paymentOrderId"=$1"#,vec![order.id.clone().into(),if current.refunded_amount>=current.captured_amount{"REFUNDED"}else{"PARTIALLY_REFUNDED"}.into(),(current.refunded_amount>=current.captured_amount).into(),Utc::now().fixed_offset().into()])).await?;
+            let purchase_table = match ItemKind::of(&order) {
+                ItemKind::App => "AppPurchase",
+                ItemKind::Package => "WasmPackagePurchase",
+            };
+            txn.execute_raw(sql(&format!(r#"UPDATE "{purchase_table}" SET status=$2,"refundedAt"=CASE WHEN $3 THEN COALESCE("refundedAt",$4) ELSE "refundedAt" END,"refundReason"='stripe_refund',"updatedAt"=$4 WHERE "paymentOrderId"=$1"#),vec![order.id.clone().into(),if current.refunded_amount>=current.captured_amount{"REFUNDED"}else{"PARTIALLY_REFUNDED"}.into(),(current.refunded_amount>=current.captured_amount).into(),Utc::now().fixed_offset().into()])).await?;
         }
         if current.refunded_amount >= current.captured_amount
             && order.accepted_attempt_id.as_deref() == Some(&attempt.id)
         {
-            coordinate_entitlement(txn, &order.user_id, &order.item_id).await?;
+            coordinate_entitlement(txn, &order.user_id, ItemKind::of(&order), &order.item_id)
+                .await?;
             revoke_grant(txn, &order, "full_refund").await?;
         }
         outbox::enqueue(
@@ -1088,7 +1164,24 @@ pub(super) async fn revoke_grant<C: ConnectionTrait>(
 ) -> Result<(), ApiError> {
     db.execute_raw(sql(r#"UPDATE "AccessGrant" SET status='REVOKED',reason=$2,revision=revision+1,"updatedAt"=$3 WHERE "sourceType"='PURCHASE' AND "sourceId"=$1"#,vec![order.id.clone().into(),reason.into(),now().into()])).await?;
     let offer: Offer = serde_json::from_value(order.snapshot.clone())?;
-    db.execute_raw(sql(r#"DELETE FROM "Membership" WHERE "userId"=$1 AND "appId"=$2 AND "roleId"=$3 AND "joinedVia"=$4 AND NOT EXISTS (SELECT 1 FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE')"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),offer.role_id.into(),format!("payment:{}",order.id).into()])).await?;
+    match ItemKind::of(order) {
+        ItemKind::App => {
+            db.execute_raw(sql(r#"DELETE FROM "Membership" WHERE "userId"=$1 AND "appId"=$2 AND "roleId"=$3 AND "joinedVia"=$4 AND NOT EXISTS (SELECT 1 FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE')"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),offer.role_id.into(),format!("payment:{}",order.id).into()])).await?;
+        }
+        ItemKind::Package => {
+            db.execute_raw(sql(r#"DELETE FROM "WasmPackageUser" WHERE "userId"=$1 AND "packageId"=$2 AND "grantedBy"=$3 AND NOT EXISTS (SELECT 1 FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='PACKAGE' AND "itemId"=$2 AND status='ACTIVE')"#,vec![order.user_id.clone().into(),order.item_id.clone().into(),format!("payment:{}",order.id).into()])).await?;
+            // Projects the buyer licensed the package for must pass it on or lapse.
+            outbox::enqueue(
+                db,
+                &format!("mkt:{}:package-access:{reason}", order.id),
+                "package_access_changed",
+                "WASM_PACKAGE",
+                &order.item_id,
+                json!({"userId": order.user_id}),
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -1404,7 +1497,7 @@ async fn observe_dispute(
         let mut snapshot=current.snapshot;snapshot["dispute"]=json!({"id":dispute.id,"status":dispute.status,"outstanding":outstanding,"evidence":dispute.evidence_details});
         txn.execute_raw(sql(r#"UPDATE "PaymentAttempt" SET snapshot=$2,revision=revision+1,"updatedAt"=$3 WHERE id=$1"#,vec![attempt.id.clone().into(),snapshot.into(),now().into()])).await?;
         for movement in &dispute.balance_transactions{ledger(txn,&attempt,&movement.id,"DISPUTE_CASH","PLATFORM",movement.amount).await?;}
-        if dispute.status=="lost"{let order=load_order(txn,&attempt.source_id).await?;if order.accepted_attempt_id.as_deref()==Some(&attempt.id){coordinate_entitlement(txn,&order.user_id,&order.item_id).await?;revoke_grant(txn,&order,"lost_dispute").await?;}}
+        if dispute.status=="lost"{let order=load_order(txn,&attempt.source_id).await?;if order.accepted_attempt_id.as_deref()==Some(&attempt.id){coordinate_entitlement(txn,&order.user_id,ItemKind::of(&order),&order.item_id).await?;revoke_grant(txn,&order,"lost_dispute").await?;}}
         outbox::enqueue(txn,&format!("dispute:{}:{}:{outstanding}",dispute.id,dispute.status),"marketplace_adjustments","PAYMENT_ATTEMPT",&attempt.id,json!({})).await?;
         let audit=crate::audit::AuditRecordInput::system("stripe","marketplace.dispute.updated","PaymentAttempt",&format!("{}:{}:{outstanding}",dispute.id,dispute.status)).on_scope(attempt.app_id.as_deref().unwrap_or("platform")).with_details(json!({"attemptId":attempt.id,"status":dispute.status}));
         crate::audit::record::write(txn,audit,crate::audit::WriteMode::Once).await?;Ok(())
@@ -1448,7 +1541,8 @@ async fn record_dispute_currency_review_txn(
     if dispute.status == "lost" {
         let order = load_order(txn, &attempt.source_id).await?;
         if order.accepted_attempt_id.as_deref() == Some(&attempt.id) {
-            coordinate_entitlement(txn, &order.user_id, &order.item_id).await?;
+            coordinate_entitlement(txn, &order.user_id, ItemKind::of(&order), &order.item_id)
+                .await?;
             revoke_grant(txn, &order, "lost_dispute").await?;
         }
     }
@@ -2195,7 +2289,7 @@ async fn finish_adjustment(
 }
 
 async fn deliver_notice(state: &AppState, effect: &str, id: &str) -> Result<(), ApiError> {
-    let (user_id, app_id, title, description) = if effect == "marketplace_comp" {
+    let (user_id, scope, title, description) = if effect == "marketplace_comp" {
         let grant = crate::entity::access_grant::Entity::find_by_id(id)
             .one(&state.db)
             .await?
@@ -2208,11 +2302,15 @@ async fn deliver_notice(state: &AppState, effect: &str, id: &str) -> Result<(), 
         )
     } else {
         let order = load_order(&state.db, id).await?;
+        let scope = match ItemKind::of(&order) {
+            ItemKind::App => order.item_id.clone(),
+            ItemKind::Package => crate::audit::record::package_scope(&order.item_id),
+        };
         let offer: Offer = serde_json::from_value(order.snapshot)?;
         if effect == "marketplace_withdrawal" {
             (
                 order.user_id,
-                order.item_id,
+                scope,
                 "Withdrawal received".to_owned(),
                 format!(
                     "Your withdrawal for {} was received. Repayment is being processed. Order: {id}",
@@ -2222,7 +2320,7 @@ async fn deliver_notice(state: &AppState, effect: &str, id: &str) -> Result<(), 
         } else {
             (
                 order.user_id,
-                order.item_id,
+                scope,
                 format!("Purchase complete: {}", offer.title),
                 format!("You now have access to {}. Order: {id}", offer.title),
             )
@@ -2240,7 +2338,7 @@ async fn deliver_notice(state: &AppState, effect: &str, id: &str) -> Result<(), 
         "PaymentOrder",
         id,
     )
-    .on_scope(&app_id)
+    .on_scope(&scope)
     .with_details(json!({"userId":user_id}));
     crate::audit::record::write(&state.db, audit, crate::audit::WriteMode::Once).await?;
     if crate::entity::user::Entity::find_by_id(&user_id)

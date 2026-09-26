@@ -28,6 +28,7 @@ pub mod aws_credentials;
 pub mod azure_credentials;
 #[cfg(feature = "gcp")]
 pub mod gcp_credentials;
+pub(crate) mod instance_storage;
 pub mod local_credentials;
 pub mod mixed_credentials;
 #[cfg(feature = "r2")]
@@ -59,81 +60,46 @@ pub fn validate_path_component(value: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Longest segment this function will ever emit.
-const MAX_STORAGE_PATH_SEGMENT_CHARS: usize = 80;
-/// Hex characters of the disambiguating digest appended to a lossy segment.
-/// Twelve hex characters is 48 bits, which is far more than the number of
-/// distinct subjects any deployment holds and short enough to stay readable.
-const STORAGE_PATH_SEGMENT_DIGEST_CHARS: usize = 12;
+pub use flow_like_types::storage_paths::{storage_path_segment, temporary_prefixes};
 
-/// Collapses an identifier into a single storage path segment.
-///
-/// The scratch directory `tmp/user/{sub}/apps/{app_id}` has five consumers that
-/// must agree character for character, or the credential covers a directory
-/// nobody writes to: the `/tmp` presign route, the HTTP-sink request offload,
-/// the Azure directory SAS issuer, the AWS session policy and the GCP credential
-/// access boundary. They share this function rather than each carrying a copy.
-///
-/// A segment that survives sanitisation unchanged is returned verbatim, which
-/// keeps opaque IDs (`app_id`, and any subject the IdP already emits in this
-/// alphabet) readable and stable. A segment that had to be rewritten — because
-/// `validate_path_component` deliberately admits `|` and `:`, because it was
-/// longer than the ceiling, or because it trimmed to nothing — carries a digest
-/// of the *original* value. Without it `auth0|123`, `auth0:123` and `auth0_123`
-/// would all collapse onto one directory, and a credential scoped to that
-/// directory would reach another subject's scratch space.
-pub fn storage_path_segment(value: &str, fallback: &str) -> String {
-    let mut sanitized = String::with_capacity(value.len().min(MAX_STORAGE_PATH_SEGMENT_CHARS));
-    let mut lossy = value.chars().count() > MAX_STORAGE_PATH_SEGMENT_CHARS;
-    for ch in value.chars().take(MAX_STORAGE_PATH_SEGMENT_CHARS) {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-            sanitized.push(ch);
-        } else {
-            sanitized.push('_');
-            lossy = true;
-        }
+/// Prefixes shared by the issuer and the device protocol. Each has a directory boundary.
+pub fn device_execute_prefixes(
+    sub: &str,
+    app_id: &str,
+) -> Result<std::collections::BTreeMap<flow_like_device_protocol::StoragePurpose, String>> {
+    use flow_like_device_protocol::StoragePurpose;
+    if sub.is_empty() || app_id.is_empty() {
+        return Err(flow_like_types::anyhow!("Sub or App ID cannot be empty"));
     }
-
-    let trimmed = sanitized.trim_matches(|ch| ch == '.' || ch == '_');
-    lossy |= trimmed.len() != sanitized.len();
-
-    if !lossy {
-        return if trimmed.is_empty() {
-            fallback.to_string()
-        } else {
-            trimmed.to_string()
-        };
-    }
-
-    let digest = blake3::hash(value.as_bytes()).to_hex();
-    let digest = &digest[..STORAGE_PATH_SEGMENT_DIGEST_CHARS];
-    let base = if trimmed.is_empty() {
-        fallback
-    } else {
-        trimmed
-    };
-    let base: String = base
-        .chars()
-        .take(MAX_STORAGE_PATH_SEGMENT_CHARS - STORAGE_PATH_SEGMENT_DIGEST_CHARS - 1)
-        .collect();
-    let base = base.trim_end_matches(['.', '_']);
-    let base = if base.is_empty() { fallback } else { base };
-    format!("{base}-{digest}")
+    validate_path_component(sub, "sub")?;
+    validate_path_component(app_id, "app_id")?;
+    Ok(std::collections::BTreeMap::from([
+        (StoragePurpose::Files, format!("apps/{app_id}/upload/")),
+        (StoragePurpose::Storage, format!("apps/{app_id}/storage/")),
+        (
+            StoragePurpose::User,
+            // Match get_user_dir and SharedCredentials::db_path_from_base.
+            format!(
+                "{}/",
+                flow_like_storage::Path::from(format!("users/{sub}/apps/{app_id}"))
+            ),
+        ),
+        (
+            StoragePurpose::Temporary,
+            format!("{}/", temporary_prefixes(sub, app_id).0),
+        ),
+    ]))
 }
 
-/// The scratch prefixes every scoped credential must authorise, built from the
-/// same segments the writers use. Returned as a pair so no caller can sanitise
-/// one and forget the other.
-pub fn temporary_prefixes(sub: &str, app_id: &str) -> (String, String) {
-    let app_segment = storage_path_segment(app_id, "app");
-    (
-        format!(
-            "tmp/user/{}/apps/{}",
-            storage_path_segment(sub, "user"),
-            app_segment
-        ),
-        format!("tmp/global/apps/{}", app_segment),
-    )
+pub(super) fn device_execute_expiry(expires_at: i64) -> Result<chrono::DateTime<chrono::Utc>> {
+    let remaining = expires_at - chrono::Utc::now().timestamp();
+    if remaining <= 0 || remaining > flow_like_device_protocol::MAX_INSTANCE_STORAGE_LEASE_SECONDS {
+        return Err(flow_like_types::anyhow!(
+            "Device storage authorization expired"
+        ));
+    }
+    chrono::DateTime::from_timestamp(expires_at, 0)
+        .ok_or_else(|| flow_like_types::anyhow!("Invalid device credential expiry"))
 }
 
 #[async_trait]
@@ -195,6 +161,11 @@ pub enum CredentialsAccess {
     /// They include app content read/write for workflow storage and read-only
     /// app metadata so the executor can load the board/event definition.
     ServerExecute,
+    /// Device data access excludes project metadata, logs, and global scratch.
+    DeviceExecute {
+        write: bool,
+        expires_at: i64,
+    },
     /// Shadow/replay execution credentials: `ServerExecute` with writes to the
     /// app and user content prefixes dropped (reads/lists kept). Scratch
     /// (`tmp/*`) stays writable and run logs stay append-only so the shadow
@@ -220,6 +191,13 @@ impl Display for CredentialsAccess {
             CredentialsAccess::InvokeRead => write!(f, "invoke_read"),
             CredentialsAccess::InvokeWrite => write!(f, "invoke_write"),
             CredentialsAccess::ServerExecute => write!(f, "server_execute"),
+            CredentialsAccess::DeviceExecute { write, expires_at } => {
+                write!(
+                    f,
+                    "device_execute:{}:{expires_at}",
+                    if *write { "rw" } else { "ro" }
+                )
+            }
             CredentialsAccess::ShadowExecute => write!(f, "shadow_execute"),
             CredentialsAccess::ReadLogs => write!(f, "read_logs"),
         }
@@ -347,6 +325,15 @@ impl RuntimeCredentials {
         state: &State,
         mode: CredentialsAccess,
     ) -> Result<Self> {
+        if matches!(mode, CredentialsAccess::DeviceExecute { .. }) {
+            let master = Self::master_credentials().await?;
+            let mut content = &master;
+            while let RuntimeCredentials::Mixed(mixed) = content {
+                content = &mixed.content;
+            }
+            return mixed_credentials::scope_inner(content, sub, app_id, state, mode).await;
+        }
+
         // Check for mixed-provider configuration first (runtime detection).
         // When per-bucket providers differ, scope each independently.
         if let Some(mixed) = mixed_credentials::MixedRuntimeCredentials::detect_from_env() {
@@ -478,10 +465,53 @@ impl RuntimeCredentials {
 
 #[cfg(test)]
 mod storage_path_segment_tests {
-    use super::{storage_path_segment, temporary_prefixes, validate_path_component};
+    use super::{
+        CredentialsAccess, device_execute_prefixes, storage_path_segment, temporary_prefixes,
+        validate_path_component,
+    };
 
     /// The overwhelmingly common shape — an opaque ID — must survive untouched,
     /// or every existing scratch object moves the day this lands.
+    #[test]
+    fn device_user_prefix_matches_existing_server_object_keys() {
+        use flow_like_device_protocol::StoragePurpose;
+        for sub in ["owner", "auth0|owner", "sink:actor", "josé"] {
+            let prefix = device_execute_prefixes(sub, "project")
+                .unwrap()
+                .remove(&StoragePurpose::User)
+                .unwrap();
+            let user_directory = flow_like_storage::Path::from(format!("users/{sub}/apps/project"));
+            assert_eq!(prefix, format!("{user_directory}/"));
+            let database = flow_like_storage::Path::from(format!("users/{sub}/apps/project/db"));
+            assert_eq!(format!("{prefix}db"), database.to_string());
+        }
+        assert_eq!(
+            device_execute_prefixes("auth0|owner", "project").unwrap()[&StoragePurpose::User],
+            "users/auth0%7Cowner/apps/project/"
+        );
+    }
+
+    #[test]
+    fn device_credential_cache_keys_include_access_and_expiry() {
+        let read = CredentialsAccess::DeviceExecute {
+            write: false,
+            expires_at: 100,
+        }
+        .to_string();
+        let write = CredentialsAccess::DeviceExecute {
+            write: true,
+            expires_at: 100,
+        }
+        .to_string();
+        let earlier = CredentialsAccess::DeviceExecute {
+            write: false,
+            expires_at: 50,
+        }
+        .to_string();
+        assert_ne!(read, write);
+        assert_ne!(read, earlier);
+    }
+
     #[test]
     fn already_safe_segments_are_returned_verbatim() {
         for value in ["app-1", "user_1", "01JABCDEF0123456789", "a.b-c_d"] {

@@ -207,6 +207,7 @@ impl NodeLogic for BrowserScreenshotElementNode {
         )
         .set_schema::<NodeImage>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
@@ -214,18 +215,20 @@ impl NodeLogic for BrowserScreenshotElementNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use flow_like_types::base64::Engine;
         use flow_like_types::image;
-        use thirtyfour::prelude::*;
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
 
         let screenshot_bytes = element
             .screenshot_as_png()

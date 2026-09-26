@@ -102,8 +102,11 @@ export interface IPage {
 	onIntervalSeconds?: number;
 	/** Widget definitions referenced by widget instances on this page. Key is instance ID */
 	widgetRefs?: Record<string, IWidgetRef>;
-	/** When true, cache the last rendered state and show it instantly while onLoad runs */
-	cache?: boolean;
+	/**
+	 * Pages with an onLoad event replay their last rendered output while it refreshes. When true,
+	 * that output is neither replayed nor stored, and a loading screen shows until onLoad renders.
+	 */
+	noCache?: boolean;
 }
 
 export interface PageListItem {

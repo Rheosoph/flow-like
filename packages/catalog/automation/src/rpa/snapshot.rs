@@ -26,6 +26,7 @@ impl NodeLogic for TakeSnapshotNode {
             "Captures a screen snapshot and saves to file",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "takeSnapshot");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -84,15 +85,19 @@ impl NodeLogic for TakeSnapshotNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
+        session.ensure_active(context).await?;
         let file_path: FlowPath = context.evaluate_pin("file_path").await?;
-        let _monitor: i64 = context.evaluate_pin("monitor").await?;
+        let monitor_index: i64 = context.evaluate_pin("monitor").await?;
 
-        let autogui = session.get_autogui(context).await?;
-        let mut gui = autogui.lock().await;
-
-        let runtime = file_path.to_runtime(context).await?;
-        let actual_path = runtime.path.to_string();
-        let success = gui.save_screenshot(&actual_path).is_ok();
+        let monitors = xcap::Monitor::all()?;
+        let monitor = monitors
+            .get(usize::try_from(monitor_index)?)
+            .ok_or_else(|| flow_like_types::anyhow!("Monitor index is unavailable"))?;
+        let screenshot = crate::types::screen_match::capture_monitor(&monitor)?;
+        let mut bytes = Vec::new();
+        screenshot.write_with_encoder(image::codecs::png::PngEncoder::new(&mut bytes))?;
+        file_path.put(context, bytes, false).await?;
+        let success = true;
 
         context.set_pin_value("success", json!(success)).await?;
         context.activate_exec_pin("exec_out").await?;

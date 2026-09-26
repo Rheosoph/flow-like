@@ -108,7 +108,7 @@ impl NodeLogic for DropTableLocalDatabaseNode {
         let existed = db.inner().ensure_can_drop_table().await?;
         let discarded_writes = db.is_dirty();
 
-        let connection = db.inner().connection().clone();
+        let connection = db.inner().connection()?.clone();
         db.inner_mut().drop_table().await?;
         if discarded_writes {
             db.discard_buffer();

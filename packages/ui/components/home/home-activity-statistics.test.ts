@@ -97,6 +97,23 @@ describe("home execution activity", () => {
 		expect(activity.attentionCapped).toBe(false);
 	});
 
+	it("reads a garbled response as an empty period instead of throwing", () => {
+		const activity = normalizeHomeActivity({
+			days: 7,
+			errorType: "Runtime.ExitError",
+			buckets: { day: "2026-09-11" },
+			apps: "unavailable",
+			attention: [null],
+		} as unknown as IExecutionActivity);
+		expect(activity.buckets).toEqual([]);
+		expect(activity.apps).toEqual([]);
+		expect(activity.attention).toEqual([]);
+		expect(activity.total).toBe(0);
+		expect(activity.attentionTotal).toBe(0);
+		expect(activity.averageMicroseconds).toBeNull();
+		expect(homeActivitySourceLabel(activity)).toContain("0 records");
+	});
+
 	it("describes a counted period rather than a sampled one", () => {
 		const coverage = homeActivityCoverage(normalizeHomeActivity(response()));
 		expect(coverage).toContain("Last 7 days (UTC)");
@@ -134,5 +151,6 @@ describe("home execution activity", () => {
 		expect(hasAttentionSeverity("Fatal")).toBe(true);
 		expect(hasAttentionSeverity("Warn")).toBe(false);
 		expect(hasAttentionSeverity("success")).toBe(false);
+		expect(hasAttentionSeverity(undefined as unknown as string)).toBe(false);
 	});
 });

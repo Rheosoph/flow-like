@@ -20,7 +20,9 @@ id = "my_custom_node"
 name = "My Custom Node"
 
 # Resource limits for the package sandbox (memory & timeout).
-# Permissions are declared per-node in Rust code via `node.add_permission(NodePermission::*)`.
+# Capabilities are declared per node in Rust via `node.add_permission(NodePermission::*)`.
+# The sandbox enforces those, and the store lists them from the compiled nodes,
+# so they are not repeated here.
 [permissions]
 memory = "standard"
 timeout = "standard"

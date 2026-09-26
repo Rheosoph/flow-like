@@ -1,4 +1,5 @@
-//! App marketplace orders retain their offer and financial payee through servicing.
+//! Marketplace orders for apps and registry packages retain their offer and
+//! financial payee through servicing.
 
 use axum::{
     Extension, Json, Router,
@@ -14,10 +15,14 @@ use utoipa::ToSchema;
 
 use super::{
     accounts, connect_scope, domain, ensure_app_owner, error, operations, outbox, payee_for_app,
-    sql, stripe_error,
+    payee_for_package, sql, stripe_error,
 };
 use crate::{
-    entity::{app, connected_account, legal_consent, payment_attempt, payment_order},
+    entity::{
+        app, connected_account, legal_consent, payment_attempt, payment_order,
+        sea_orm_active_enums::{WasmPackageStatus, WasmPackageVisibility},
+        wasm_package,
+    },
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
@@ -34,13 +39,56 @@ pub use settlement::{
 
 pub const SOURCE: &str = "MARKETPLACE";
 
+/// What a marketplace order sells. Stored as `PaymentOrder.kind` and the
+/// `itemKind` of entitlements and grants.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ItemKind {
+    #[default]
+    App,
+    Package,
+}
+
+impl ItemKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::App => "APP",
+            Self::Package => "PACKAGE",
+        }
+    }
+
+    pub(crate) fn of(order: &payment_order::Model) -> Self {
+        if order.kind == "PACKAGE" {
+            Self::Package
+        } else {
+            Self::App
+        }
+    }
+
+    /// Serialises checkout and settlement per product.
+    pub(crate) fn lock(self) -> &'static str {
+        match self {
+            Self::App => "payments-app",
+            Self::Package => "payments-package",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::Package => "package",
+        }
+    }
+}
+
 #[cfg(test)]
 mod checkout_tests {
     use super::*;
 
     fn offer(platform_owned: bool) -> Offer {
         Offer {
-            app_id: "app".into(),
+            kind: ItemKind::App,
+            item_id: "app".into(),
             buyer: "buyer".into(),
             buyer_email: Some("buyer@example.com".into()),
             payee: "owner".into(),
@@ -200,7 +248,12 @@ pub struct PurchaseQuery {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Offer {
-    pub app_id: String,
+    #[serde(default)]
+    pub kind: ItemKind,
+    /// The app or package id. Serialised as `app_id`, which is what snapshots
+    /// written before packages were sold carry.
+    #[serde(rename = "app_id")]
+    pub item_id: String,
     pub buyer: String,
     #[serde(default)]
     pub buyer_email: Option<String>,
@@ -216,6 +269,8 @@ pub(super) struct Offer {
     pub fee_basis: PaymentFeeBasis,
     pub tax_mode: PaymentTaxMode,
     pub title: String,
+    /// The buyer role of an app; empty for packages.
+    #[serde(default)]
     pub role_id: String,
     pub terms_version: String,
     pub terms_hash: String,
@@ -307,12 +362,100 @@ fn legal_text(
         .map_err(|message| error("PAYMENT_TERMS_REQUIRED", &message))
 }
 
+/// What the buyer is about to pay for, read fresh at checkout.
+struct Listing {
+    price: i64,
+    payee: String,
+    title: String,
+    role_id: String,
+}
+
+async fn listing(
+    state: &AppState,
+    kind: ItemKind,
+    item_id: &str,
+    locale: &str,
+) -> Result<Listing, ApiError> {
+    match kind {
+        ItemKind::App => {
+            let product = app::Entity::find_by_id(item_id)
+                .one(&state.db)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            let payee = payee_for_app(&state.db, item_id).await?;
+            let title = state.db.query_one_raw(sql(r#"SELECT name FROM "Meta" WHERE "appId"=$1 ORDER BY CASE WHEN lang=$2 THEN 0 ELSE 1 END LIMIT 1"#, vec![item_id.into(),locale.into()])).await?.and_then(|row| row.try_get::<String>("", "name").ok()).unwrap_or_else(|| "App access".into());
+            Ok(Listing {
+                price: product.price,
+                payee,
+                title,
+                role_id: product
+                    .default_role_id
+                    .ok_or_else(|| error("LISTING_UNAVAILABLE", "The app has no buyer role"))?,
+            })
+        }
+        ItemKind::Package => {
+            let product = wasm_package::Entity::find_by_id(item_id)
+                .one(&state.db)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            if product.visibility == WasmPackageVisibility::PublicRequestAccess {
+                return Err(error(
+                    "APPROVAL_REQUIRED",
+                    "The package maintainers grant access to this package. Request access instead.",
+                ));
+            }
+            if product.visibility != WasmPackageVisibility::Public
+                || product.status != WasmPackageStatus::Active
+            {
+                return Err(error("LISTING_UNAVAILABLE", "This package is not for sale"));
+            }
+            let payee = payee_for_package(&state.db, item_id).await?;
+            let title = state.db.query_one_raw(sql(r#"SELECT name FROM "Meta" WHERE "wasmPackageId"=$1 ORDER BY CASE WHEN lang=$2 THEN 0 ELSE 1 END LIMIT 1"#, vec![item_id.into(),locale.into()])).await?.and_then(|row| row.try_get::<String>("", "name").ok()).unwrap_or(product.name);
+            Ok(Listing {
+                price: product.price,
+                payee,
+                title,
+                role_id: String::new(),
+            })
+        }
+    }
+}
+
 #[utoipa::path(post, path="/apps/{app_id}/marketplace/checkout", tag="payments", request_body=CheckoutInput, responses((status=200,description="Persisted marketplace order")))]
 pub async fn checkout(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
     Json(input): Json<CheckoutInput>,
+) -> Result<Json<Value>, ApiError> {
+    start_checkout(state, user, ItemKind::App, app_id, input).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/registry/package/{package_id}/marketplace/checkout",
+    tag = "payments",
+    description = "Buy a package. The package owner is paid through their payout account, minus the platform fee.",
+    params(("package_id" = String, Path, description = "Package ID")),
+    request_body = CheckoutInput,
+    responses((status = 200, description = "Persisted marketplace order")),
+    security(("bearer_auth" = []))
+)]
+pub async fn checkout_package(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(package_id): Path<String>,
+    Json(input): Json<CheckoutInput>,
+) -> Result<Json<Value>, ApiError> {
+    start_checkout(state, user, ItemKind::Package, package_id, input).await
+}
+
+async fn start_checkout(
+    state: AppState,
+    user: AppUser,
+    kind: ItemKind,
+    item_id: String,
+    input: CheckoutInput,
 ) -> Result<Json<Value>, ApiError> {
     let buyer = payer(&user)?;
     let config = &state.platform_config.payments;
@@ -374,13 +517,13 @@ pub async fn checkout(
     };
     let locale = input.locale.clone().unwrap_or_else(|| "en".into());
     let terms = legal_text(&state, "PURCHASE_TERMS", &input.terms_version, &locale)?;
-    let product = app::Entity::find_by_id(&app_id)
-        .one(&state.db)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    let payee = payee_for_app(&state.db, &app_id).await?;
+    let product = listing(&state, kind, &item_id, &locale).await?;
+    let payee = product.payee.clone();
     if buyer == payee {
-        return Err(error("SELF_PURCHASE", "You cannot purchase your own app"));
+        return Err(error(
+            "SELF_PURCHASE",
+            &format!("You cannot purchase your own {}", kind.noun()),
+        ));
     }
     let recipient = accounts::require_can_sell(&state, &payee).await?;
     let platform_owned = matches!(recipient, accounts::PaymentRecipient::Platform);
@@ -429,9 +572,9 @@ pub async fn checkout(
         }
     }
     let scope = connect_scope(&state).await?;
-    let title = state.db.query_one_raw(sql(r#"SELECT name FROM "Meta" WHERE "appId"=$1 ORDER BY CASE WHEN lang=$2 THEN 0 ELSE 1 END LIMIT 1"#, vec![app_id.clone().into(),locale.clone().into()])).await?.and_then(|row| row.try_get::<String>("", "name").ok()).unwrap_or_else(|| "App access".into());
     let offer = Offer {
-        app_id: app_id.clone(),
+        kind,
+        item_id: item_id.clone(),
         buyer: buyer.clone(),
         buyer_email,
         payee,
@@ -455,10 +598,8 @@ pub async fn checkout(
         },
         fee_basis: config.marketplace_fee_basis.clone(),
         tax_mode: config.marketplace_tax_mode.clone(),
-        title,
-        role_id: product
-            .default_role_id
-            .ok_or_else(|| error("LISTING_UNAVAILABLE", "The app has no buyer role"))?,
+        title: product.title,
+        role_id: product.role_id,
         terms_version: input.terms_version,
         terms_hash: blake3::hash(terms.as_bytes()).to_hex().to_string(),
         terms_text: terms,
@@ -493,17 +634,21 @@ pub async fn checkout(
         )
         .await?;
     }
-    let open_key = blake3::hash(
-        serde_json::to_vec(&json!([
+    // App keys predate packages and keep their shape; package keys name the kind
+    // so an app and a package with the same id never share an open order.
+    let open_key_parts = match kind {
+        ItemKind::App => json!([scope.platform_account_id, scope.livemode, buyer, item_id]),
+        ItemKind::Package => json!([
             scope.platform_account_id,
             scope.livemode,
             buyer,
-            app_id
-        ]))?
-        .as_slice(),
-    )
-    .to_hex()
-    .to_string();
+            kind.as_str(),
+            item_id
+        ]),
+    };
+    let open_key = blake3::hash(serde_json::to_vec(&open_key_parts)?.as_slice())
+        .to_hex()
+        .to_string();
     if let Some(existing) = payment_order::Entity::find()
         .filter(payment_order::Column::OpenKey.eq(&open_key))
         .one(&state.db)
@@ -532,12 +677,15 @@ pub async fn checkout(
             .ok_or_else(|| error("PAYMENTS_DISABLED", "Payment return URL is not configured"))?,
     )
     .map_err(|_| ApiError::internal("Invalid payment return URL"))?;
-    success.set_path("/store");
+    success.set_path(match kind {
+        ItemKind::App => "/store",
+        ItemKind::Package => "/store/packages",
+    });
     success.set_query(None);
     success.set_fragment(None);
     success
         .query_pairs_mut()
-        .append_pair("id", &app_id)
+        .append_pair("id", &item_id)
         .append_pair("order", &id);
     let success_url = success.to_string();
     success.query_pairs_mut().append_pair("canceled", "1");
@@ -552,8 +700,8 @@ pub async fn checkout(
     let admission_config = config.clone();
     let saved_id = state.transaction(|txn| { let (offer, scope, id, attempt_id, consent_id, open_key, request)=(offer.clone(),scope.clone(),id.clone(),attempt_id.clone(),consent_id.clone(),open_key.clone(),request.clone()); let admission_config=admission_config.clone(); Box::pin(async move {
         crate::db::coordination::coordinate(txn,"payments-owner",&[&offer.payee]).await?;
-        crate::db::coordination::coordinate(txn,"payments-app",&[&offer.app_id]).await?;
-        coordinate_entitlement(txn,&offer.buyer,&offer.app_id).await?;
+        crate::db::coordination::coordinate(txn,offer.kind.lock(),&[&offer.item_id]).await?;
+        coordinate_entitlement(txn,&offer.buyer,offer.kind,&offer.item_id).await?;
         if let Some(existing)=payment_order::Entity::find().filter(payment_order::Column::OpenKey.eq(&open_key)).one(txn).await? { return Ok::<_,ApiError>(existing.id); }
         validate_admission(txn,&offer).await?;
         if let Some(account_row_id) = &offer.account_row_id {
@@ -562,8 +710,12 @@ pub async fn checkout(
         reserve_limit(txn,&scope,&offer.payee,&id,offer.amount,daily_cap,expires).await?;
         let operation_id=operations::prepare(txn,SOURCE,&id,"checkout_create",&request).await?;
         txn.execute_raw(sql(r#"INSERT INTO "LegalConsent" (id,"userId",kind,"subjectType","subjectId","textVersion","textHash",locale,accepted,evidence,"createdAt") VALUES ($1,$2,'PURCHASE_TERMS','PAYMENT_ORDER',$3,$4,$5,$6,true,$7,$8)"#,vec![consent_id.clone().into(),offer.buyer.clone().into(),id.clone().into(),offer.terms_version.clone().into(),offer.terms_hash.clone().into(),offer.locale.clone().into(),json!({"text":offer.terms_text,"withdrawalWaiver":false}).into(),created.into()])).await?;
-        txn.execute_raw(sql(r#"INSERT INTO "PaymentOrder" (id,kind,"userId","itemId","payeeUserId","connectedAccountId","platformAccountId",livemode,"openKey",status,"chargeType",amount,currency,"applicationFeeAmount","feeBps",snapshot,"consentId","expiresAt","nextCheckAt","createdAt","updatedAt") VALUES ($1,'APP',$2,$3,$4,$5,$6,$7,$8,'OPENING',$16,$9,'eur',$10,$11,$12,$13,$14,$15,$15,$15)"#,vec![id.clone().into(),offer.buyer.clone().into(),offer.app_id.clone().into(),offer.payee.clone().into(),offer.account_id.clone().into(),scope.platform_account_id.clone().into(),scope.livemode.into(),open_key.into(),offer.amount.into(),offer.fee.into(),i32::from(offer.fee_bps).into(),serde_json::to_value(&offer)?.into(),consent_id.into(),expires.into(),created.into(),if offer.platform_owned { "PLATFORM" } else { "DESTINATION" }.into()])).await?;
-        txn.execute_raw(sql(r#"INSERT INTO "PaymentAttempt" (id,"sourceType","sourceId",attempt,"platformAccountId","scopeKey",livemode,"operationId","payerUserId","payeeUserId","appId",amount,currency,"applicationFeeAmount","feeBps",snapshot,"expiresAt","nextCheckAt","createdAt","updatedAt") VALUES ($1,'MARKETPLACE',$2,1,$3,'platform',$4,$5,$6,$7,$8,$9,'eur',$10,$11,$12,$13,$14,$14,$14)"#,vec![attempt_id.into(),id.clone().into(),scope.platform_account_id.into(),scope.livemode.into(),operation_id.into(),offer.buyer.clone().into(),offer.payee.clone().into(),offer.app_id.clone().into(),offer.amount.into(),offer.fee.into(),i32::from(offer.fee_bps).into(),serde_json::to_value(&offer)?.into(),expires.into(),created.into()])).await?;
+        txn.execute_raw(sql(r#"INSERT INTO "PaymentOrder" (id,kind,"userId","itemId","payeeUserId","connectedAccountId","platformAccountId",livemode,"openKey",status,"chargeType",amount,currency,"applicationFeeAmount","feeBps",snapshot,"consentId","expiresAt","nextCheckAt","createdAt","updatedAt") VALUES ($1,$17,$2,$3,$4,$5,$6,$7,$8,'OPENING',$16,$9,'eur',$10,$11,$12,$13,$14,$15,$15,$15)"#,vec![id.clone().into(),offer.buyer.clone().into(),offer.item_id.clone().into(),offer.payee.clone().into(),offer.account_id.clone().into(),scope.platform_account_id.clone().into(),scope.livemode.into(),open_key.into(),offer.amount.into(),offer.fee.into(),i32::from(offer.fee_bps).into(),serde_json::to_value(&offer)?.into(),consent_id.into(),expires.into(),created.into(),if offer.platform_owned { "PLATFORM" } else { "DESTINATION" }.into(),offer.kind.as_str().into()])).await?;
+        let (app_column, package_column) = match offer.kind {
+            ItemKind::App => (Some(offer.item_id.clone()), None),
+            ItemKind::Package => (None, Some(offer.item_id.clone())),
+        };
+        txn.execute_raw(sql(r#"INSERT INTO "PaymentAttempt" (id,"sourceType","sourceId",attempt,"platformAccountId","scopeKey",livemode,"operationId","payerUserId","payeeUserId","appId","packageId",amount,currency,"applicationFeeAmount","feeBps",snapshot,"expiresAt","nextCheckAt","createdAt","updatedAt") VALUES ($1,'MARKETPLACE',$2,1,$3,'platform',$4,$5,$6,$7,$8,$15,$9,'eur',$10,$11,$12,$13,$14,$14,$14)"#,vec![attempt_id.into(),id.clone().into(),scope.platform_account_id.into(),scope.livemode.into(),operation_id.into(),offer.buyer.clone().into(),offer.payee.clone().into(),app_column.into(),offer.amount.into(),offer.fee.into(),i32::from(offer.fee_bps).into(),serde_json::to_value(&offer)?.into(),expires.into(),created.into(),package_column.into()])).await?;
         outbox::enqueue(txn,&format!("mkt:{id}:open"),"marketplace_reconcile",SOURCE,&id,json!({})).await?;
         Ok(id)
     }) }).await?;
@@ -653,7 +805,8 @@ async fn reconcile_for_view(state: &AppState, id: &str) -> Result<(), ApiError> 
 }
 
 fn same_offer(one: &Offer, two: &Offer) -> bool {
-    one.app_id == two.app_id
+    one.kind == two.kind
+        && one.item_id == two.item_id
         && one.buyer == two.buyer
         && one.payee == two.payee
         && one.platform_owned == two.platform_owned
@@ -674,13 +827,15 @@ fn same_offer(one: &Offer, two: &Offer) -> bool {
 pub(crate) async fn coordinate_entitlement(
     txn: &sea_orm::DatabaseTransaction,
     user: &str,
-    app: &str,
+    kind: ItemKind,
+    item: &str,
 ) -> Result<(), ApiError> {
-    crate::db::coordination::coordinate(txn, "payments-entitlement", &[user, "APP", app]).await?;
-    let id = blake3::hash(serde_json::to_vec(&json!([user, "APP", app]))?.as_slice())
+    let kind = kind.as_str();
+    crate::db::coordination::coordinate(txn, "payments-entitlement", &[user, kind, item]).await?;
+    let id = blake3::hash(serde_json::to_vec(&json!([user, kind, item]))?.as_slice())
         .to_hex()
         .to_string();
-    txn.execute_raw(sql(r#"INSERT INTO "PaymentEntitlement" (id,"userId","itemKind","itemId","createdAt","updatedAt") VALUES ($1,$2,'APP',$3,$4,$4) ON CONFLICT DO NOTHING"#,vec![id.clone().into(),user.into(),app.into(),now().into()])).await?;
+    txn.execute_raw(sql(r#"INSERT INTO "PaymentEntitlement" (id,"userId","itemKind","itemId","createdAt","updatedAt") VALUES ($1,$2,$5,$3,$4,$4) ON CONFLICT DO NOTHING"#,vec![id.clone().into(),user.into(),item.into(),now().into(),kind.into()])).await?;
     txn.execute_raw(sql(
         r#"UPDATE "PaymentEntitlement" SET revision=revision+1,"updatedAt"=$2 WHERE id=$1"#,
         vec![id.into(), now().into()],
@@ -694,7 +849,7 @@ pub(crate) async fn block_entitlement(
     user: &str,
     app: &str,
 ) -> Result<(), ApiError> {
-    coordinate_entitlement(txn, user, app).await?;
+    coordinate_entitlement(txn, user, ItemKind::App, app).await?;
     txn.execute_raw(sql(r#"UPDATE "PaymentEntitlement" SET blocked=true,revision=revision+1,"updatedAt"=$3 WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2"#,vec![user.into(),app.into(),now().into()])).await?;
     txn.execute_raw(sql(r#"UPDATE "AccessGrant" SET status='REVOKED',reason='membership_removed',revision=revision+1,"updatedAt"=$3 WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE'"#,vec![user.into(),app.into(),now().into()])).await?;
     let orders=txn.query_all_raw(sql(r#"UPDATE "PaymentOrder" SET "cancelRequested"=true,status='CANCEL_PENDING',revision=revision+1,"updatedAt"=$3 WHERE "userId"=$1 AND kind='APP' AND "itemId"=$2 AND "acceptedAttemptId" IS NULL AND "openKey" IS NOT NULL RETURNING id"#,vec![user.into(),app.into(),now().into()])).await?;
@@ -739,32 +894,73 @@ async fn reserve_limit<C: ConnectionTrait>(
     Ok(())
 }
 
+/// The product still matches the offer. Returns whether an app listing needs an
+/// approved join request before purchase.
+async fn validate_listing(
+    txn: &sea_orm::DatabaseTransaction,
+    offer: &Offer,
+) -> Result<bool, ApiError> {
+    let changed = || {
+        error(
+            "LISTING_UNAVAILABLE",
+            &format!(
+                "This offer changed. Reload the {} before buying",
+                offer.kind.noun()
+            ),
+        )
+    };
+    match offer.kind {
+        ItemKind::App => {
+            use crate::entity::sea_orm_active_enums::Visibility;
+            let product = app::Entity::find_by_id(&offer.item_id)
+                .one(txn)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            if product.price != offer.amount
+                || !matches!(
+                    product.visibility,
+                    Visibility::Public | Visibility::PublicRequestAccess
+                )
+                || payee_for_app(txn, &offer.item_id).await? != offer.payee
+            {
+                return Err(changed());
+            }
+            Ok(product.visibility == Visibility::PublicRequestAccess)
+        }
+        ItemKind::Package => {
+            let product = wasm_package::Entity::find_by_id(&offer.item_id)
+                .one(txn)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            if product.price != offer.amount
+                || product.visibility != WasmPackageVisibility::Public
+                || product.status != WasmPackageStatus::Active
+                || payee_for_package(txn, &offer.item_id).await? != offer.payee
+            {
+                return Err(changed());
+            }
+            Ok(false)
+        }
+    }
+}
+
 async fn validate_admission(
     txn: &sea_orm::DatabaseTransaction,
     offer: &Offer,
 ) -> Result<(), ApiError> {
-    let product = app::Entity::find_by_id(&offer.app_id)
-        .one(txn)
-        .await?
-        .ok_or(ApiError::NOT_FOUND)?;
-    use crate::entity::sea_orm_active_enums::Visibility;
-    if product.price != offer.amount
-        || !matches!(
-            product.visibility,
-            Visibility::Public | Visibility::PublicRequestAccess
-        )
-        || payee_for_app(txn, &offer.app_id).await? != offer.payee
-    {
-        return Err(error(
-            "LISTING_UNAVAILABLE",
-            "This offer changed. Reload the app before buying",
-        ));
-    }
-    if txn.query_one_raw(sql(r#"SELECT id FROM "LegacyCheckout" WHERE kind='app_purchase' AND "userId"=$1 AND "itemId"=$2 AND "openKey" IS NOT NULL"#,vec![offer.buyer.clone().into(),offer.app_id.clone().into()])).await?.is_some(){return Err(error("PAYMENT_OPERATION_PENDING","Your previous checkout must finish before a new order can open"));}
+    let needs_approval = validate_listing(txn, offer).await?;
+    let legacy_kind = match offer.kind {
+        ItemKind::App => "app_purchase",
+        ItemKind::Package => "wasm_purchase",
+    };
+    if txn.query_one_raw(sql(r#"SELECT id FROM "LegacyCheckout" WHERE kind=$3 AND "userId"=$1 AND "itemId"=$2 AND "openKey" IS NOT NULL"#,vec![offer.buyer.clone().into(),offer.item_id.clone().into(),legacy_kind.into()])).await?.is_some(){return Err(error("PAYMENT_OPERATION_PENDING","Your previous checkout must finish before a new order can open"));}
     if accounts::is_platform_admin(txn, &offer.payee).await? != offer.platform_owned {
         return Err(error(
             "LISTING_UNAVAILABLE",
-            "The payment recipient changed. Reload the app before buying",
+            &format!(
+                "The payment recipient changed. Reload the {} before buying",
+                offer.kind.noun()
+            ),
         ));
     }
     if !offer.platform_owned {
@@ -794,9 +990,26 @@ async fn validate_admission(
             ));
         }
     }
-    if txn.query_one_raw(sql(r#"SELECT "userId" FROM "PaymentsBlock" WHERE "userId"=$1 UNION ALL SELECT "ownerUserId" FROM "AppPaymentSettings" WHERE "appId"=$2 AND "adminBlockedAt" IS NOT NULL"#,vec![offer.payee.clone().into(),offer.app_id.clone().into()])).await?.is_some() {return Err(error("LISTING_UNAVAILABLE","Payments are paused"));}
-    if txn.query_one_raw(sql(r#"SELECT id FROM "Membership" WHERE "userId"=$1 AND "appId"=$2 UNION ALL SELECT id FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE' UNION ALL SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND blocked=true"#,vec![offer.buyer.clone().into(),offer.app_id.clone().into()])).await?.is_some() {return Err(error("ALREADY_OWNED","The app is already available or access is restricted"));}
-    if product.visibility==Visibility::PublicRequestAccess && txn.query_one_raw(sql(r#"SELECT id FROM "JoinQueue" WHERE "userId"=$1 AND "appId"=$2 AND "approvedAt" IS NOT NULL"#,vec![offer.buyer.clone().into(),offer.app_id.clone().into()])).await?.is_none() {return Err(error("APPROVAL_REQUIRED","The owner must approve your request before purchase"));}
+    match offer.kind {
+        ItemKind::App => {
+            if txn.query_one_raw(sql(r#"SELECT "userId" FROM "PaymentsBlock" WHERE "userId"=$1 UNION ALL SELECT "ownerUserId" FROM "AppPaymentSettings" WHERE "appId"=$2 AND "adminBlockedAt" IS NOT NULL"#,vec![offer.payee.clone().into(),offer.item_id.clone().into()])).await?.is_some() {return Err(error("LISTING_UNAVAILABLE","Payments are paused"));}
+            if txn.query_one_raw(sql(r#"SELECT id FROM "Membership" WHERE "userId"=$1 AND "appId"=$2 UNION ALL SELECT id FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND status='ACTIVE' UNION ALL SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND blocked=true"#,vec![offer.buyer.clone().into(),offer.item_id.clone().into()])).await?.is_some() {return Err(error("ALREADY_OWNED","The app is already available or access is restricted"));}
+            if needs_approval && txn.query_one_raw(sql(r#"SELECT id FROM "JoinQueue" WHERE "userId"=$1 AND "appId"=$2 AND "approvedAt" IS NOT NULL"#,vec![offer.buyer.clone().into(),offer.item_id.clone().into()])).await?.is_none() {return Err(error("APPROVAL_REQUIRED","The owner must approve your request before purchase"));}
+        }
+        ItemKind::Package => {
+            if txn
+                .query_one_raw(sql(
+                    r#"SELECT "userId" FROM "PaymentsBlock" WHERE "userId"=$1"#,
+                    vec![offer.payee.clone().into()],
+                ))
+                .await?
+                .is_some()
+            {
+                return Err(error("LISTING_UNAVAILABLE", "Payments are paused"));
+            }
+            if txn.query_one_raw(sql(r#"SELECT id FROM "WasmPackageUser" WHERE "userId"=$1 AND "packageId"=$2 UNION ALL SELECT id FROM "AccessGrant" WHERE "userId"=$1 AND "itemKind"='PACKAGE' AND "itemId"=$2 AND status='ACTIVE' UNION ALL SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"='PACKAGE' AND "itemId"=$2 AND blocked=true"#,vec![offer.buyer.clone().into(),offer.item_id.clone().into()])).await?.is_some() {return Err(error("ALREADY_OWNED","You already have this package or access to it is restricted"));}
+        }
+    }
     Ok(())
 }
 
@@ -810,7 +1023,7 @@ pub(super) async fn order_view(state: &AppState, id: &str) -> Result<Value, ApiE
         .await?;
     let offer: Offer = serde_json::from_value(order.snapshot.clone())?;
     Ok(
-        json!({"id":order.id,"orderId":order.id,"platformOwned":offer.platform_owned,"appId":order.item_id,"itemId":order.item_id,"itemName":offer.title,"amountMinor":order.amount,"receiptUrl":attempt.as_ref().and_then(|a|a.snapshot.get("receiptUrl")).and_then(Value::as_str),"refundableRemaining":attempt.as_ref().map(|a|a.captured_amount-a.refunded_amount-a.reserved_refund_amount).unwrap_or(0),"status":order.status,"amount":order.amount,"currency":order.currency,"checkoutUrl":attempt.as_ref().filter(|a|a.status=="OPEN" && !order.cancel_requested).and_then(|a|a.checkout_url.clone()),"refundedAmount":attempt.as_ref().map(|a|a.refunded_amount).unwrap_or(0),"pendingRefundAmount":attempt.as_ref().map(|a|a.reserved_refund_amount).unwrap_or(0),"refundReviewRequired":attempt.as_ref().and_then(|a|a.snapshot.get("refundReviewRequired")).and_then(Value::as_bool).unwrap_or(false),"withdrawable":order.accepted_attempt_id.is_some() && order.withdrawn_at.is_none() && !offer.withdrawal_waiver && now()<=offer.withdrawal_deadline,"withdrawDeadline":offer.withdrawal_deadline}),
+        json!({"id":order.id,"orderId":order.id,"platformOwned":offer.platform_owned,"appId":order.item_id,"itemId":order.item_id,"itemKind":ItemKind::of(&order).as_str(),"itemName":offer.title,"amountMinor":order.amount,"receiptUrl":attempt.as_ref().and_then(|a|a.snapshot.get("receiptUrl")).and_then(Value::as_str),"refundableRemaining":attempt.as_ref().map(|a|a.captured_amount-a.refunded_amount-a.reserved_refund_amount).unwrap_or(0),"status":order.status,"amount":order.amount,"currency":order.currency,"checkoutUrl":attempt.as_ref().filter(|a|a.status=="OPEN" && !order.cancel_requested).and_then(|a|a.checkout_url.clone()),"refundedAmount":attempt.as_ref().map(|a|a.refunded_amount).unwrap_or(0),"pendingRefundAmount":attempt.as_ref().map(|a|a.reserved_refund_amount).unwrap_or(0),"refundReviewRequired":attempt.as_ref().and_then(|a|a.snapshot.get("refundReviewRequired")).and_then(Value::as_bool).unwrap_or(false),"withdrawable":order.accepted_attempt_id.is_some() && order.withdrawn_at.is_none() && !offer.withdrawal_waiver && now()<=offer.withdrawal_deadline,"withdrawDeadline":offer.withdrawal_deadline}),
     )
 }
 
@@ -999,7 +1212,8 @@ pub async fn withdraw(
     state.transaction(|txn| {
         let (order, body) = (order.clone(), body.clone());
         Box::pin(async move {
-            coordinate_entitlement(txn, &order.user_id, &order.item_id).await?;
+            coordinate_entitlement(txn, &order.user_id, ItemKind::of(&order), &order.item_id)
+                .await?;
             let current = load_order(txn, &order.id).await?;
             // A retry must keep the original declaration, recipient and receipt time.
             if current.withdrawn_at.is_some() {
@@ -1075,6 +1289,44 @@ pub async fn accept_seller_terms(
 ) -> Result<Json<Value>, ApiError> {
     let sub = payer(&user)?;
     ensure_app_owner(&state.db, &app_id, &sub).await?;
+    record_seller_terms(&state, &sub, "APP", &app_id, input).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/registry/package/{package_id}/marketplace/terms",
+    tag = "payments",
+    description = "Accept the seller terms so the package can be sold. Only the package owner can accept them.",
+    params(("package_id" = String, Path, description = "Package ID")),
+    request_body = CheckoutInput,
+    responses(
+        (status = 200, description = "Seller terms accepted"),
+        (status = 403, description = "Only the package owner can accept the seller terms")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn accept_package_seller_terms(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(package_id): Path<String>,
+    Json(input): Json<CheckoutInput>,
+) -> Result<Json<Value>, ApiError> {
+    let sub = payer(&user)?;
+    if payee_for_package(&state.db, &package_id).await? != sub {
+        return Err(ApiError::forbidden(
+            "Only the package owner can accept the seller terms",
+        ));
+    }
+    record_seller_terms(&state, &sub, "WASM_PACKAGE", &package_id, input).await
+}
+
+async fn record_seller_terms(
+    state: &AppState,
+    sub: &str,
+    subject_type: &str,
+    subject_id: &str,
+    input: CheckoutInput,
+) -> Result<Json<Value>, ApiError> {
     if !input.terms_accepted
         || state
             .platform_config
@@ -1089,9 +1341,9 @@ pub async fn accept_seller_terms(
         ));
     }
     let locale = input.locale.unwrap_or_else(|| "en".into());
-    let text = legal_text(&state, "SELLER_TERMS", &input.terms_version, &locale)?;
+    let text = legal_text(state, "SELLER_TERMS", &input.terms_version, &locale)?;
     let id = flow_like_types::create_id();
-    state.db.execute_raw(sql(r#"INSERT INTO "LegalConsent" (id,"userId",kind,"subjectType","subjectId","textVersion","textHash",locale,accepted,evidence,"createdAt") VALUES ($1,$2,'SELLER_TERMS','APP',$3,$4,$5,$6,true,$7,$8)"#,vec![id.clone().into(),sub.into(),app_id.into(),input.terms_version.into(),blake3::hash(text.as_bytes()).to_hex().to_string().into(),locale.into(),json!({"text":text}).into(),now().into()])).await?;
+    state.db.execute_raw(sql(r#"INSERT INTO "LegalConsent" (id,"userId",kind,"subjectType","subjectId","textVersion","textHash",locale,accepted,evidence,"createdAt") VALUES ($1,$2,'SELLER_TERMS',$9,$3,$4,$5,$6,true,$7,$8)"#,vec![id.clone().into(),sub.into(),subject_id.into(),input.terms_version.into(),blake3::hash(text.as_bytes()).to_hex().to_string().into(),locale.into(),json!({"text":text}).into(),now().into(),subject_type.into()])).await?;
     Ok(Json(json!({"consentId":id})))
 }
 
@@ -1122,7 +1374,7 @@ pub async fn comp(
         return Err(ApiError::bad_request("Confirm free access"));
     }
     let grant_id = flow_like_types::create_id();
-    state.transaction(|txn|{let (app_id,user_id,owner,grant_id)=(app_id.clone(),user_id.clone(),owner.clone(),grant_id.clone());Box::pin(async move{crate::db::coordination::coordinate(txn,"payments-app",&[&app_id]).await?;ensure_app_owner(txn,&app_id,&owner).await?;coordinate_entitlement(txn,&user_id,&app_id).await?;if txn.query_one_raw(sql(r#"SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND blocked=true"#,vec![user_id.clone().into(),app_id.clone().into()])).await?.is_some(){return Err(error("ACCESS_RESTRICTED","Access is blocked for this app"));}
+    state.transaction(|txn|{let (app_id,user_id,owner,grant_id)=(app_id.clone(),user_id.clone(),owner.clone(),grant_id.clone());Box::pin(async move{crate::db::coordination::coordinate(txn,"payments-app",&[&app_id]).await?;ensure_app_owner(txn,&app_id,&owner).await?;coordinate_entitlement(txn,&user_id,ItemKind::App,&app_id).await?;if txn.query_one_raw(sql(r#"SELECT id FROM "PaymentEntitlement" WHERE "userId"=$1 AND "itemKind"='APP' AND "itemId"=$2 AND blocked=true"#,vec![user_id.clone().into(),app_id.clone().into()])).await?.is_some(){return Err(error("ACCESS_RESTRICTED","Access is blocked for this app"));}
         if crate::entity::user::Entity::find_by_id(&user_id).one(txn).await?.is_none(){return Err(ApiError::NOT_FOUND);}
         let product=app::Entity::find_by_id(&app_id).one(txn).await?.ok_or(ApiError::NOT_FOUND)?;let role=product.default_role_id.ok_or_else(||error("LISTING_UNAVAILABLE","The app has no buyer role"))?;
         txn.execute_raw(sql(r#"INSERT INTO "AccessGrant" (id,"userId","itemKind","itemId","sourceType","sourceId","grantedBy","createdAt","updatedAt") VALUES ($1,$2,'APP',$3,'COMP',$1,$4,$5,$5)"#,vec![grant_id.clone().into(),user_id.clone().into(),app_id.clone().into(),owner.into(),now().into()])).await?;

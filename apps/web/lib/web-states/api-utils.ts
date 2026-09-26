@@ -3,12 +3,17 @@ import {
 	apiErrorDiagnostic,
 	apiResponseError,
 	redactApiPathSecrets,
+	upstreamFailureInSuccess,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import {
 	BOARD_FORMAT_HEADER,
 	CURRENT_BOARD_FORMAT_VERSION,
 } from "@flow-like/flow-like-ui/lib/board-format";
+import {
+	requestTimeoutMs,
+	withRequestDeadline,
+} from "@flow-like/flow-like-ui/lib/request-deadline";
 import type { AuthContextProps } from "react-oidc-context";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
@@ -137,7 +142,8 @@ export async function apiFetch<T>(
 	options?: RequestInit,
 	auth?: AuthContextProps,
 ): Promise<T> {
-	ensureProtectedAppRouteAuth(path, auth, methodOf(options));
+	const method = methodOf(options);
+	ensureProtectedAppRouteAuth(path, auth, method);
 	const headers: HeadersInit = {
 		"Content-Type": "application/json",
 		[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
@@ -148,36 +154,60 @@ export async function apiFetch<T>(
 	}
 
 	const url = constructApiUrl(path);
-	const response = await fetch(url, {
-		...options,
-		headers: {
-			...headers,
-			...options?.headers,
+	const safePath = redactApiPathSecrets(path) ?? path;
+	const { signal, ...init } = options ?? {};
+	const bodyBytes = typeof init.body === "string" ? init.body.length : 0;
+	// The deadline spans the body read too: a stalled body parks the caller as
+	// surely as stalled headers do.
+	return withRequestDeadline<T>(
+		safePath,
+		async (deadline) => {
+			const response = await fetch(url, {
+				...init,
+				headers: {
+					...headers,
+					...init.headers,
+				},
+				signal: deadline.signal,
+			});
+
+			if (!response.ok) {
+				if (response.status === 401 && auth) {
+					requestSilentRenew(auth, "after 401");
+				}
+				const errorText = await response.text();
+				const error = apiResponseError(response, errorText, path);
+				console.error(
+					`API error ${response.status} for ${safePath}:`,
+					apiErrorDiagnostic(error),
+				);
+				throw error;
+			}
+
+			const text = await response.text();
+			if (!text) return undefined as T;
+
+			let data: unknown;
+			try {
+				data = JSON.parse(text);
+			} catch {
+				data = text;
+			}
+			const upstreamError = upstreamFailureInSuccess(response, data, path);
+			if (upstreamError) {
+				console.error(
+					`API error for ${safePath}:`,
+					apiErrorDiagnostic(upstreamError),
+				);
+				throw upstreamError;
+			}
+			return data as T;
 		},
-	});
-
-	if (!response.ok) {
-		if (response.status === 401 && auth) {
-			requestSilentRenew(auth, "after 401");
-		}
-		const errorText = await response.text();
-		const safePath = redactApiPathSecrets(path);
-		const error = apiResponseError(response, errorText, path);
-		console.error(
-			`API error ${response.status} for ${safePath}:`,
-			apiErrorDiagnostic(error),
-		);
-		throw error;
-	}
-
-	const text = await response.text();
-	if (!text) return undefined as T;
-
-	try {
-		return JSON.parse(text) as T;
-	} catch {
-		return text as T;
-	}
+		{
+			timeoutMs: requestTimeoutMs(cleanApiPath(path), method, bodyBytes),
+			signal,
+		},
+	);
 }
 
 export async function apiGet<T>(

@@ -7,6 +7,40 @@ use flow_like::flow::{
 use flow_like_catalog_core::FlowPath;
 use flow_like_types::{async_trait, json::json};
 
+#[cfg(any(feature = "execute", test))]
+fn filename_matches(pattern: &str, name: &str) -> bool {
+    let name: Vec<char> = name.chars().collect();
+    let mut matches = vec![false; name.len() + 1];
+    matches[0] = true;
+    for character in pattern.chars() {
+        if character == '*' {
+            for index in 1..=name.len() {
+                matches[index] |= matches[index - 1];
+            }
+        } else {
+            for index in (1..=name.len()).rev() {
+                matches[index] =
+                    matches[index - 1] && (character == '?' || character == name[index - 1]);
+            }
+            matches[0] = false;
+        }
+    }
+    matches[name.len()]
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+    #[test]
+    fn download_patterns_match_complete_names() {
+        assert!(filename_matches("*.pdf", "invoice.pdf"));
+        assert!(filename_matches("*invoice*.pdf", "2026-invoice-paid.pdf"));
+        assert!(filename_matches("invoice-?.pdf", "invoice-ä.pdf"));
+        assert!(!filename_matches("*.pdf", "invoice.pdf.crdownload"));
+        assert!(!filename_matches("invoice.pdf", "old-invoice.pdf"));
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct BrowserUploadFileNode {}
@@ -82,23 +116,23 @@ impl NodeLogic for BrowserUploadFileNode {
         )
         .set_schema::<AutomationSession>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::By;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_error").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let file_path: String = context.evaluate_pin("file_path").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = match driver.find(By::Css(&selector)).await {
+        let element = match super::selector::find(&driver, &locator).await {
             Ok(el) => el,
             Err(_) => {
                 context.set_pin_value("session_out", json!(session)).await?;
@@ -182,8 +216,9 @@ impl NodeLogic for BrowserUploadMultipleFilesNode {
             "file_paths",
             "File Paths",
             "Array of absolute paths to the files to upload",
-            VariableType::Generic,
-        );
+            VariableType::String,
+        )
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.add_output_pin("exec_out", "▶", "Success", VariableType::Execution);
         node.add_output_pin(
@@ -208,23 +243,23 @@ impl NodeLogic for BrowserUploadMultipleFilesNode {
             VariableType::Integer,
         );
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::By;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_error").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let file_paths: Vec<String> = context.evaluate_pin("file_paths").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = match driver.find(By::Css(&selector)).await {
+        let element = match super::selector::find(&driver, &locator).await {
             Ok(el) => el,
             Err(_) => {
                 context.set_pin_value("session_out", json!(session)).await?;
@@ -333,8 +368,9 @@ impl NodeLogic for BrowserSetDownloadDirNode {
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let runtime = download_path.to_runtime(context).await?;
-        let path_str = runtime.path.to_string();
+        let directory = native_directory(context, &download_path).await?;
+        std::fs::create_dir_all(&directory)?;
+        let path_str = directory.to_string_lossy().into_owned();
 
         let dev_tools = ChromeDevTools::new(driver.handle.clone());
         dev_tools
@@ -348,6 +384,7 @@ impl NodeLogic for BrowserSetDownloadDirNode {
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to set download directory: {}", e))?;
 
+        arm_download(context, &session, directory).await?;
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
@@ -459,7 +496,6 @@ impl NodeLogic for BrowserWaitForDownloadNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use std::path::PathBuf;
         use std::time::{Duration, Instant};
 
         context.deactivate_exec_pin("exec_out").await?;
@@ -469,22 +505,26 @@ impl NodeLogic for BrowserWaitForDownloadNode {
         let download_dir: FlowPath = context.evaluate_pin("download_dir").await?;
         let file_pattern: String = context.evaluate_pin("file_pattern").await?;
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
+        if timeout_ms < 0 {
+            return Err(flow_like_types::anyhow!(
+                "Download timeout must be nonnegative"
+            ));
+        }
+        session.ensure_active(context).await?;
+        context
+            .set_pin_value("downloaded_file", json!(null))
+            .await?;
 
-        let runtime = download_dir.to_runtime(context).await?;
-        let dir_path = PathBuf::from(runtime.path.to_string());
+        let dir_path = native_directory(context, &download_dir).await?;
 
         let start = Instant::now();
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
 
-        let initial_files: std::collections::HashSet<_> = if dir_path.exists() {
-            std::fs::read_dir(&dir_path)
-                .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-                .unwrap_or_default()
-        } else {
-            std::collections::HashSet::new()
-        };
+        let initial_files = download_baseline(context, &session, &dir_path).await?;
+        let mut observed = std::collections::HashMap::new();
 
         loop {
+            context.check_cancelled()?;
             if start.elapsed() > timeout {
                 context.set_pin_value("session_out", json!(session)).await?;
                 context.activate_exec_pin("exec_timeout").await?;
@@ -496,7 +536,13 @@ impl NodeLogic for BrowserWaitForDownloadNode {
             {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
-                    if path.is_file() && !initial_files.contains(&path) {
+                    let signature = file_signature(&path);
+                    if path.is_file() && signature.as_ref() != initial_files.get(&path) {
+                        let Some(signature) = signature else { continue };
+                        let stable = observed.insert(path.clone(), signature) == Some(signature);
+                        if !stable {
+                            continue;
+                        }
                         let file_name = path.file_name().unwrap_or_default().to_string_lossy();
 
                         if file_name.ends_with(".crdownload")
@@ -506,16 +552,8 @@ impl NodeLogic for BrowserWaitForDownloadNode {
                             continue;
                         }
 
-                        let matches = if file_pattern.is_empty() {
-                            true
-                        } else if let Some(suffix) = file_pattern.strip_prefix('*') {
-                            file_name.ends_with(suffix)
-                        } else if file_pattern.ends_with('*') {
-                            let prefix = &file_pattern[..file_pattern.len() - 1];
-                            file_name.starts_with(prefix)
-                        } else {
-                            file_name.contains(&file_pattern)
-                        };
+                        let matches =
+                            file_pattern.is_empty() || filename_matches(&file_pattern, &file_name);
 
                         if matches {
                             let result_path = FlowPath::from_pathbuf(path, context).await?;
@@ -530,7 +568,7 @@ impl NodeLogic for BrowserWaitForDownloadNode {
                 }
             }
 
-            flow_like_types::tokio::time::sleep(Duration::from_millis(500)).await;
+            crate::rpa::branch::delay(context, Duration::from_millis(500)).await?;
         }
     }
 
@@ -609,22 +647,22 @@ impl NodeLogic for BrowserTriggerDownloadNode {
         )
         .set_schema::<AutomationSession>();
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::By;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_error").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = match driver.find(By::Css(&selector)).await {
+        let element = match super::selector::find(&driver, &locator).await {
             Ok(el) => el,
             Err(_) => {
                 context.set_pin_value("session_out", json!(session)).await?;
@@ -633,6 +671,7 @@ impl NodeLogic for BrowserTriggerDownloadNode {
             }
         };
 
+        rearm_download(context, &session).await?;
         element
             .click()
             .await
@@ -650,4 +689,98 @@ impl NodeLogic for BrowserTriggerDownloadNode {
             "Browser automation requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+type FileSignature = (u64, std::time::SystemTime);
+#[cfg(feature = "execute")]
+struct DownloadBaseline {
+    directory: std::path::PathBuf,
+    files: std::collections::HashMap<std::path::PathBuf, FileSignature>,
+}
+#[cfg(feature = "execute")]
+impl flow_like_types::Cacheable for DownloadBaseline {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+#[cfg(feature = "execute")]
+fn file_signature(path: &std::path::Path) -> Option<FileSignature> {
+    let metadata = path.metadata().ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+#[cfg(feature = "execute")]
+async fn native_directory(
+    context: &mut ExecutionContext,
+    path: &FlowPath,
+) -> flow_like_types::Result<std::path::PathBuf> {
+    let runtime = path.to_runtime(context).await?;
+    match runtime.store.as_ref() {
+        flow_like_storage::files::store::FlowLikeStore::Local(store) => {
+            Ok(store.path_to_filesystem(&runtime.path)?)
+        }
+        _ => Err(flow_like_types::anyhow!(
+            "Browser downloads require a local directory on the WebDriver host"
+        )),
+    }
+}
+#[cfg(feature = "execute")]
+fn download_key(session: &AutomationSession) -> String {
+    format!("automation:download:{}", session.session_ref)
+}
+#[cfg(feature = "execute")]
+async fn arm_download(
+    context: &mut ExecutionContext,
+    session: &AutomationSession,
+    directory: std::path::PathBuf,
+) -> flow_like_types::Result<()> {
+    let files = std::fs::read_dir(&directory)?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| file_signature(&e.path()).map(|signature| (e.path(), signature)))
+        .collect();
+    context.cache.write().await.insert(
+        download_key(session),
+        std::sync::Arc::new(DownloadBaseline { directory, files }),
+    );
+    Ok(())
+}
+#[cfg(feature = "execute")]
+async fn rearm_download(
+    context: &mut ExecutionContext,
+    session: &AutomationSession,
+) -> flow_like_types::Result<()> {
+    let directory = {
+        let cache = context.cache.read().await;
+        cache
+            .get(&download_key(session))
+            .and_then(|entry| entry.as_any().downcast_ref::<DownloadBaseline>())
+            .map(|state| state.directory.clone())
+    }
+    .ok_or_else(|| {
+        flow_like_types::anyhow!("Set Download Directory before triggering a download")
+    })?;
+    arm_download(context, session, directory).await
+}
+#[cfg(feature = "execute")]
+async fn download_baseline(
+    context: &ExecutionContext,
+    session: &AutomationSession,
+    directory: &std::path::Path,
+) -> flow_like_types::Result<std::collections::HashMap<std::path::PathBuf, FileSignature>> {
+    let cache = context.cache.read().await;
+    let baseline = cache
+        .get(&download_key(session))
+        .and_then(|entry| entry.as_any().downcast_ref::<DownloadBaseline>())
+        .ok_or_else(|| {
+            flow_like_types::anyhow!("Set Download Directory before triggering a download")
+        })?;
+    if baseline.directory != directory {
+        return Err(flow_like_types::anyhow!(
+            "Download directory differs from the armed directory"
+        ));
+    }
+    Ok(baseline.files.clone())
 }

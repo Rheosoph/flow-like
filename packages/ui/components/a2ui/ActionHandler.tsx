@@ -56,7 +56,10 @@ import {
 	resolveWidgetInstanceEventRoute,
 	useWidgetInstance,
 } from "./layout/A2UIWidgetInstance";
-import { notifyLivePageRun } from "./live-page-registry";
+import {
+	type LivePageRunRecord,
+	notifyLivePageRun,
+} from "./live-page-registry";
 import {
 	type A2UINavigationMessageInterceptor,
 	createNavigateToMessage,
@@ -157,6 +160,49 @@ function showPageChangedToast() {
 			"Refreshing it now — try that again in a moment.",
 		),
 	});
+}
+
+/**
+ * No metadata AND no run_initiated means nothing executed (e.g. the execution service resolved
+ * undefined after a declined consent) — that must never read as a successful run. A run that
+ * dispatched but logged Error/Fatal is reported as failed, not ok.
+ */
+function settledRunRecord(
+	runMeta: ILogMetadata | undefined,
+	capturedRunId: string | undefined,
+	origin: Pick<
+		LivePageRunRecord,
+		"componentId" | "nodeId" | "appId" | "boardId"
+	>,
+): LivePageRunRecord {
+	const runStarted = runMeta !== undefined || capturedRunId !== undefined;
+	return {
+		status: !runStarted
+			? "not_executed"
+			: (runMeta?.log_level ?? 0) >= 3
+				? "failed"
+				: "ok",
+		runId: runMeta?.run_id ?? capturedRunId,
+		...origin,
+		logMeta: runMeta,
+		...(runStarted
+			? {}
+			: {
+					errorMessage:
+						"The workflow run did not start (execution was declined or unavailable).",
+				}),
+		endedAtMs: Date.now(),
+	};
+}
+
+/** A control replayed from the surface cache runs once the load run has rebound its action. */
+function notifyPendingPageAction() {
+	toast.info(
+		i18next.t(
+			"thisPageIsStillLoadingTryThatAgainInAMoment",
+			"This page is still loading — try that again in a moment.",
+		),
+	);
 }
 
 /** Stable empty state for provider-less consumers, so hook deps stay steady. */
@@ -1270,6 +1316,11 @@ export function useExecuteAction() {
 						const rawBoardActionAllowed =
 							mayDispatchRawPageBoardAction(governedPage);
 
+						if (!pageAction && action.pendingPageAction) {
+							notifyPendingPageAction();
+							break;
+						}
+
 						if (!pageAction && !rawBoardActionAllowed) {
 							console.warn(
 								"[A2UI] Refusing a raw workflow_event route on a governed Page",
@@ -1330,23 +1381,27 @@ export function useExecuteAction() {
 									hasWidgetScope: Boolean(widgetScope),
 								});
 
+								// Diagnostics only: a board read that has to reach the server must not delay the run.
 								if (!pageAction && effectiveBoardId) {
-									try {
-										const currentBoard = await backend.boardState.getBoard(
+									void backend.boardState
+										.getBoard(
 											effectiveAppId,
 											effectiveBoardId,
 											inheritedBoardVersion,
-										);
-										console.log("[A2UI] workflow_event board diagnostics", {
-											pageCount: currentBoard.page_ids.length,
-											nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
-											layerCount: Object.keys(currentBoard.layers ?? {}).length,
+										)
+										.then((currentBoard) => {
+											console.log("[A2UI] workflow_event board diagnostics", {
+												pageCount: currentBoard.page_ids.length,
+												nodeCount: Object.keys(currentBoard.nodes ?? {}).length,
+												layerCount: Object.keys(currentBoard.layers ?? {})
+													.length,
+											});
+										})
+										.catch(() => {
+											console.warn(
+												"[A2UI] Failed to fetch current board for workflow_event diagnostics",
+											);
 										});
-									} catch {
-										console.warn(
-											"[A2UI] Failed to fetch current board for workflow_event diagnostics",
-										);
-									}
 								}
 
 								// Always fetch the current element demand in preview mode.
@@ -1447,32 +1502,15 @@ export function useExecuteAction() {
 										handleA2UIEvents,
 									);
 								}
-								// No metadata AND no run_initiated means nothing executed (e.g. the
-								// execution service resolved undefined after a declined consent) —
-								// that must never read as a successful run. A run that dispatched but
-								// logged Error/Fatal is reported as failed, not ok.
-								const runStarted =
-									runMeta !== undefined || capturedRunId !== undefined;
-								notifyLivePageRun(surfaceId, {
-									status: !runStarted
-										? "not_executed"
-										: (runMeta?.log_level ?? 0) >= 3
-											? "failed"
-											: "ok",
-									runId: runMeta?.run_id ?? capturedRunId,
-									componentId: triggeringComponentId ?? undefined,
-									nodeId: invocationId,
-									appId: effectiveAppId,
-									boardId: effectiveBoardId,
-									logMeta: runMeta,
-									...(runStarted
-										? {}
-										: {
-												errorMessage:
-													"The workflow run did not start (execution was declined or unavailable).",
-											}),
-									endedAtMs: Date.now(),
-								});
+								notifyLivePageRun(
+									surfaceId,
+									settledRunRecord(runMeta, capturedRunId, {
+										componentId: triggeringComponentId ?? undefined,
+										nodeId: invocationId,
+										appId: effectiveAppId,
+										boardId: effectiveBoardId,
+									}),
+								);
 							} catch (error) {
 								console.error("Failed to execute workflow event");
 								// A Page whose Board moved under it fails for a reason the
@@ -1593,6 +1631,11 @@ export function useExecuteAction() {
 						const rawBoardActionAllowed =
 							mayDispatchRawPageBoardAction(governedPage);
 
+						if (!pageAction && binding.pendingPageAction) {
+							notifyPendingPageAction();
+							break;
+						}
+
 						if (!pageAction && !rawBoardActionAllowed) {
 							console.warn(
 								"[A2UI] Refusing a raw widget workflow binding on a governed Page",
@@ -1692,13 +1735,18 @@ export function useExecuteAction() {
 									? basePayload
 									: withBoardVersion(basePayload, inheritedBoardVersion);
 
+								let capturedRunId: string | undefined;
+								const captureRunId = (id: string) => {
+									capturedRunId = id;
+								};
+								let runMeta: ILogMetadata | undefined;
 								if (pageAction) {
 									if (!eventId) {
 										throw new Error(
 											"Governed widget action is missing its Event id.",
 										);
 									}
-									await (
+									runMeta = await (
 										executionService?.executeEvent ??
 										backend.eventState.executeEvent.bind(backend.eventState)
 									)(
@@ -1706,7 +1754,7 @@ export function useExecuteAction() {
 										eventId,
 										payload,
 										false,
-										undefined,
+										captureRunId,
 										handleA2UIEvents,
 										undefined,
 										pageTrigger,
@@ -1715,7 +1763,7 @@ export function useExecuteAction() {
 									if (!effectiveBoardId) {
 										throw new Error("Widget action is missing its Board id.");
 									}
-									await (
+									runMeta = await (
 										executionService?.executeBoard ??
 										backend.boardState.executeBoard
 									)(
@@ -1723,12 +1771,37 @@ export function useExecuteAction() {
 										effectiveBoardId,
 										payload,
 										false,
-										undefined,
+										captureRunId,
 										handleA2UIEvents,
 									);
 								}
+								notifyLivePageRun(
+									surfaceId,
+									settledRunRecord(runMeta, capturedRunId, {
+										componentId: triggeringComponentId ?? undefined,
+										nodeId: invocationId,
+										appId: effectiveAppId,
+										boardId: effectiveBoardId,
+									}),
+								);
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event");
+								const description = failureDescription(
+									error,
+									i18next.t(
+										"theWidgetWorkflowCouldNotBeStarted",
+										"The widget workflow could not be started.",
+									),
+								);
+								notifyLivePageRun(surfaceId, {
+									status: "error",
+									componentId: triggeringComponentId ?? undefined,
+									nodeId: invocationId,
+									appId: effectiveAppId,
+									boardId: effectiveBoardId,
+									errorMessage: description,
+									endedAtMs: Date.now(),
+								});
 								// Same as workflow_event: the transports already asked the
 								// Page to refetch, so a contract failure is not the widget's.
 								if (pageAction && classifyPageContractError(error)) {
@@ -1740,15 +1813,7 @@ export function useExecuteAction() {
 											"Widget action '{{actionId}}' failed",
 											{ actionId },
 										),
-										{
-											description: failureDescription(
-												error,
-												i18next.t(
-													"theWidgetWorkflowCouldNotBeStarted",
-													"The widget workflow could not be started.",
-												),
-											),
-										},
+										{ description },
 									);
 								}
 							}

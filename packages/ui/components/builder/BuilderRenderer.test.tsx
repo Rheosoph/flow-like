@@ -49,24 +49,47 @@ const builder = {
 	widgetRefs: {},
 };
 
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll.
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	builderContext: { ...(await import("./BuilderContext")) },
+	microWidgetReload: { ...(await import("./use-micro-widget-reload")) },
+	widgetBuilder: { ...(await import("./WidgetBuilder")) },
+	builderDnd: { ...(await import("./BuilderDndContext")) },
+	dndKit: { ...(await import("@dnd-kit/core")) },
+	runtimeTailwind: { ...(await import("../../lib/use-runtime-tailwind")) },
+	actionHandler: { ...(await import("../a2ui/ActionHandler")) },
+	tooltip: { ...(await import("../ui/tooltip")) },
+	componentRegistry: { ...(await import("../a2ui/ComponentRegistry")) },
+};
+
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({
 		t: (key: string, fallback?: string) => fallback ?? key,
 	}),
 }));
-mock.module("./BuilderContext", () => ({ useBuilder: () => builder }));
+mock.module("./BuilderContext", () => ({
+	...actual.builderContext,
+	useBuilder: () => builder,
+}));
 mock.module("./use-micro-widget-reload", () => ({
+	...actual.microWidgetReload,
 	useMicroWidgetReload: () => null,
 }));
 mock.module("./WidgetBuilder", () => ({
+	...actual.widgetBuilder,
 	CONTAINER_TYPES: new Set(["row", "column", "box"]),
 	ROOT_ID: "root",
 }));
 mock.module("./BuilderDndContext", () => ({
+	...actual.builderDnd,
 	COMPONENT_MOVE_TYPE: "a2ui-component-move",
 	useBuilderDnd: () => dragState,
 }));
 mock.module("@dnd-kit/core", () => ({
+	...actual.dndKit,
 	useDraggable: () => ({
 		attributes: {},
 		listeners: {},
@@ -77,17 +100,21 @@ mock.module("@dnd-kit/core", () => ({
 	useDroppable: () => ({ setNodeRef: noop }),
 }));
 mock.module("../../lib/use-runtime-tailwind", () => ({
+	...actual.runtimeTailwind,
 	useRuntimeTailwindStyles: noop,
 }));
 mock.module("../a2ui/ActionHandler", () => ({
+	...actual.actionHandler,
 	ActionProvider: ({ children }: { children: ReactNode }) => children,
 }));
 mock.module("../ui/tooltip", () => ({
+	...actual.tooltip,
 	Tooltip: ({ children }: { children: ReactNode }) => children,
 	TooltipTrigger: ({ children }: { children: ReactNode }) => children,
 	TooltipContent: () => null,
 }));
 mock.module("../a2ui/ComponentRegistry", () => ({
+	...actual.componentRegistry,
 	getComponentRenderer: (type: string) => {
 		const renderers = {
 			row: A2UIRow,
@@ -102,7 +129,19 @@ mock.module("../a2ui/ComponentRegistry", () => ({
 	},
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("./BuilderContext", () => actual.builderContext);
+	mock.module("./use-micro-widget-reload", () => actual.microWidgetReload);
+	mock.module("./WidgetBuilder", () => actual.widgetBuilder);
+	mock.module("./BuilderDndContext", () => actual.builderDnd);
+	mock.module("@dnd-kit/core", () => actual.dndKit);
+	mock.module("../../lib/use-runtime-tailwind", () => actual.runtimeTailwind);
+	mock.module("../a2ui/ActionHandler", () => actual.actionHandler);
+	mock.module("../ui/tooltip", () => actual.tooltip);
+	mock.module("../a2ui/ComponentRegistry", () => actual.componentRegistry);
+});
 
 let root: Root | undefined;
 let restoreGlobals: (() => void) | undefined;

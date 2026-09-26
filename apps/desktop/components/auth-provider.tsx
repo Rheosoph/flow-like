@@ -7,6 +7,9 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IProfile } from "@flow-like/flow-like-ui";
 import { createAccountTokenProvider } from "@flow-like/flow-like-ui/components/account/account-session";
+import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -24,8 +27,21 @@ import {
 	type UserManagerSettings,
 	WebStorageStateStore,
 } from "oidc-client-ts";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { AuthProvider, useAuth } from "react-oidc-context";
+import {
+	Fragment,
+	createContext,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
+import {
+	AuthContext,
+	type AuthContextProps,
+	AuthProvider,
+	useAuth,
+} from "react-oidc-context";
 import { get } from "../lib/api";
 import { ProfileSyncer, TauriBackend } from "./tauri-provider";
 
@@ -36,6 +52,43 @@ function emitAuthChanged() {
 }
 
 const UserManagerContext = createContext<UserManager | null>(null);
+
+interface OpenIdConfigResponse extends UserManagerSettings {
+	cognito?: { readonly user_pool_id: string };
+	userManager?: UserManager;
+}
+
+const OPEN_ID_CONFIG_CACHE_PREFIX = "flow-like.openid-config:";
+
+/**
+ * The last configuration the hub served. Without one an offline start builds no
+ * UserManager, so the stored session is never loaded and the app runs signed out
+ * for the whole session.
+ */
+function readCachedOpenIdConfig(hub: string): OpenIdConfigResponse | undefined {
+	try {
+		const raw = localStorage.getItem(`${OPEN_ID_CONFIG_CACHE_PREFIX}${hub}`);
+		const parsed: unknown = raw ? JSON.parse(raw) : undefined;
+		return isRecord(parsed) &&
+			typeof parsed.authority === "string" &&
+			typeof parsed.client_id === "string"
+			? (parsed as unknown as OpenIdConfigResponse)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function writeCachedOpenIdConfig(hub: string, config: OpenIdConfigResponse) {
+	try {
+		localStorage.setItem(
+			`${OPEN_ID_CONFIG_CACHE_PREFIX}${hub}`,
+			JSON.stringify(config),
+		);
+	} catch {
+		// Best effort: only an offline start benefits from the copy.
+	}
+}
 
 export class OIDCTokenProvider implements TokenProvider {
 	private readonly provider;
@@ -82,12 +135,46 @@ class TauriRedirectNavigator implements INavigator {
 	}
 }
 
+interface AuthConfigState {
+	readonly settings: UserManagerSettings;
+	readonly userManager: UserManager;
+	readonly scope: number;
+	readonly hub: string;
+}
+
+interface LiftedAuth {
+	readonly auth: AuthContextProps;
+	readonly providerKey: string;
+	readonly scope: number;
+}
+
+function AuthContextBridge({
+	providerKey,
+	scope,
+	onChange,
+}: Readonly<{
+	providerKey: string;
+	scope: number;
+	onChange: (lifted: LiftedAuth) => void;
+}>) {
+	const auth = useAuth();
+	useLayoutEffect(() => {
+		onChange({ auth, providerKey, scope });
+	}, [auth, providerKey, scope, onChange]);
+	return null;
+}
+
 export function DesktopAuthProvider({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
-	const [openIdAuthConfig, setOpenIdAuthConfig] =
-		useState<UserManagerSettings>();
-	const [userManager, setUserManager] = useState<UserManager>();
+	const [authConfig, setAuthConfig] = useState<AuthConfigState>();
+	const [lifted, setLifted] = useState<LiftedAuth>();
+	const openIdAuthConfig = authConfig?.settings;
+	const userManager = authConfig?.userManager;
+	const scope = authConfig?.scope ?? 0;
+	const providerKey = authConfig
+		? `${authConfig.hub}|${authConfig.settings.authority}|${authConfig.settings.client_id}`
+		: "loading-auth-config";
 	const backend = useBackend();
 	const currentProfile = useInvoke(
 		backend.userState.getProfile,
@@ -107,51 +194,110 @@ export function DesktopAuthProvider({
 			updated: new Date().toISOString(),
 			name: "default",
 		} as IProfile;
+		let cancelled = false;
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		let retryDelayMs = 5_000;
+		let cachedConfig: OpenIdConfigResponse | undefined;
+		const hub = getApiOrigin(effectiveProfile);
 
-		(async () => {
+		const configure = (response: OpenIdConfigResponse) => {
+			if (process.env.NEXT_PUBLIC_REDIRECT_URL)
+				response.redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URL;
+			if (process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL)
+				response.post_logout_redirect_uri =
+					process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL;
+			const store = new WebStorageStateStore({
+				store: localStorage,
+			});
+			response.userStore = store;
+			response.automaticSilentRenew = true;
+			const navigator = new TauriRedirectNavigator();
+			const userManagerInstance = new UserManager(response, navigator);
+			response.userManager = userManagerInstance;
+			const tokenProvider = new OIDCTokenProvider(userManagerInstance);
+			if (response.cognito)
+				Amplify.configure(
+					{
+						Auth: {
+							Cognito: {
+								userPoolClientId: response.client_id,
+								userPoolId: response.cognito.user_pool_id,
+							},
+						},
+					},
+					{
+						Auth: {
+							tokenProvider: tokenProvider,
+						},
+					},
+				);
+			console.log("[DESKTOPAUTH] Setting openIdAuthConfig and userManager");
+			setAuthConfig((previous) => ({
+				settings: response,
+				userManager: userManagerInstance,
+				hub,
+				scope:
+					previous &&
+					(previous.settings.client_id !== response.client_id ||
+						previous.settings.authority !== response.authority ||
+						previous.hub !== hub)
+						? previous.scope + 1
+						: (previous?.scope ?? 0),
+			}));
+		};
+
+		const loadConfig = async () => {
 			try {
-				const response = await get<any>(effectiveProfile, "auth/openid");
+				const response = await get<OpenIdConfigResponse | undefined>(
+					effectiveProfile,
+					"auth/openid",
+				);
+				if (cancelled) return;
 				if (response) {
-					if (process.env.NEXT_PUBLIC_REDIRECT_URL)
-						response.redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URL;
-					if (process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL)
-						response.post_logout_redirect_uri =
-							process.env.NEXT_PUBLIC_REDIRECT_LOGOUT_URL;
-					const store = new WebStorageStateStore({
-						store: localStorage,
-					});
-					response.userStore = store;
-					response.automaticSilentRenew = true;
-					const navigator = new TauriRedirectNavigator();
-					const userManagerInstance = new UserManager(response, navigator);
-					response.userManager = userManagerInstance;
-					const tokenProvider = new OIDCTokenProvider(userManagerInstance);
-					if (response.cognito)
-						Amplify.configure(
-							{
-								Auth: {
-									Cognito: {
-										userPoolClientId: response.client_id,
-										userPoolId: response.cognito.user_pool_id,
-									},
-								},
-							},
-							{
-								Auth: {
-									tokenProvider: tokenProvider,
-								},
-							},
-						);
-					console.log("[DESKTOPAUTH] Setting openIdAuthConfig and userManager");
-					setUserManager(userManagerInstance);
-					setOpenIdAuthConfig(response);
+					writeCachedOpenIdConfig(hub, response);
+					// The provider keeps the UserManager it mounted with, so a matching
+					// fresh copy must not replace the one built from the cache.
+					const unchanged =
+						cachedConfig?.authority === response.authority &&
+						cachedConfig.client_id === response.client_id;
+					if (!unchanged) configure(response);
 				} else {
 					console.warn("OpenID response was falsy, not configuring auth");
 				}
 			} catch (error) {
 				console.error("Failed to fetch OpenID config:", error);
+				// Without a config sign-in stays impossible until restart, so an
+				// unreachable or failing hub is retried; a 4xx refusal is final.
+				if (
+					!cancelled &&
+					!(error instanceof ApiResponseError && error.status < 500)
+				) {
+					const cached = cachedConfig ? undefined : readCachedOpenIdConfig(hub);
+					if (cached) {
+						cachedConfig = cached;
+						configure(cached);
+					}
+					retryTimer = setTimeout(() => {
+						retryTimer = undefined;
+						void loadConfig();
+					}, retryDelayMs);
+					retryDelayMs = Math.min(retryDelayMs * 2, 300_000);
+				}
 			}
-		})();
+		};
+		const retryNow = () => {
+			if (retryTimer === undefined) return;
+			clearTimeout(retryTimer);
+			retryTimer = undefined;
+			void loadConfig();
+		};
+		window.addEventListener("online", retryNow);
+		void loadConfig();
+		return () => {
+			cancelled = true;
+			clearTimeout(retryTimer);
+			window.removeEventListener("online", retryNow);
+		};
 	}, [hubUrl, hubSecure]);
 
 	useEffect(() => {
@@ -309,28 +455,49 @@ export function DesktopAuthProvider({
 		};
 	}, [userManager, openIdAuthConfig]);
 
-	if (!openIdAuthConfig)
-		return <AuthProvider key="loading-auth-config">{children}</AuthProvider>;
-
 	return (
 		<UserManagerContext.Provider value={userManager ?? null}>
-			<AuthProvider
-				key={openIdAuthConfig.client_id}
-				{...openIdAuthConfig}
-				automaticSilentRenew={true}
-				userStore={
-					new WebStorageStateStore({
-						store: localStorage,
-					})
-				}
-			>
-				<AuthInner>{children}</AuthInner>
-			</AuthProvider>
+			{openIdAuthConfig ? (
+				<AuthProvider
+					key={providerKey}
+					{...openIdAuthConfig}
+					automaticSilentRenew={true}
+					userStore={
+						new WebStorageStateStore({
+							store: localStorage,
+						})
+					}
+				>
+					<AuthContextBridge
+						providerKey={providerKey}
+						scope={scope}
+						onChange={setLifted}
+					/>
+				</AuthProvider>
+			) : (
+				<AuthProvider key={providerKey}>
+					<AuthContextBridge
+						providerKey={providerKey}
+						scope={scope}
+						onChange={setLifted}
+					/>
+				</AuthProvider>
+			)}
+			<AuthContext.Provider value={lifted?.auth}>
+				{lifted?.scope === scope && (
+					<Fragment key={scope}>
+						{authConfig && lifted.providerKey === providerKey && (
+							<AuthInner hub={authConfig.hub} />
+						)}
+						{children}
+					</Fragment>
+				)}
+			</AuthContext.Provider>
 		</UserManagerContext.Provider>
 	);
 }
 
-function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
+function AuthInner({ hub }: Readonly<{ hub: string }>) {
 	const auth = useAuth();
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
@@ -368,12 +535,13 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
 		return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
 	}, [userManager]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: The backend gets the auth context when the session changes, not on every new auth context identity.
 	useEffect(() => {
 		if (!auth) return;
 
 		if (backend instanceof TauriBackend) {
 			console.log("Pushing auth context to backend");
-			backend.pushAuthContext(auth);
+			backend.pushAuthContext(auth, hub);
 		}
 
 		if (!auth.isAuthenticated) return;
@@ -392,8 +560,10 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		auth?.user?.access_token,
 		auth?.user?.id_token,
 		backend,
+		hub,
 	]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Expired-session recovery runs once per signed-in subject, not on every auth state change.
 	useEffect(() => {
 		if (!auth) return;
 
@@ -430,6 +600,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 		})();
 	}, [auth.user?.profile?.sub]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: The signed-in subject is a refetch trigger; another account must reload hub-backed queries.
 	useEffect(() => {
 		if (!(backend instanceof TauriBackend)) return;
 
@@ -471,14 +642,11 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	]);
 
 	return (
-		<>
-			<ProfileSyncer
-				auth={{
-					isAuthenticated: auth.isAuthenticated,
-					accessToken: auth.user?.access_token,
-				}}
-			/>
-			{children}
-		</>
+		<ProfileSyncer
+			auth={{
+				isAuthenticated: auth.isAuthenticated,
+				accessToken: auth.user?.access_token,
+			}}
+		/>
 	);
 }

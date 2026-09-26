@@ -15,6 +15,8 @@ import { PaymentError, PaymentPage } from "./payment-parts";
 import {
 	type PurchaseOrder,
 	type WithdrawalRequest,
+	orderItemHref,
+	orderItemName,
 	paymentMoney,
 	paymentUrl,
 	pendingOrder,
@@ -172,10 +174,10 @@ export function PurchaseCard({ order }: { order: PurchaseOrder }) {
 				<div className="flex flex-wrap items-start justify-between gap-3">
 					<div>
 						<Link
-							href={`/store?id=${encodeURIComponent(order.appId)}`}
+							href={orderItemHref(order)}
 							className="font-medium underline-offset-4 hover:underline"
 						>
-							{order.itemName ?? order.appId}
+							{orderItemName(order)}
 						</Link>
 						<p className="mt-1 text-xs text-muted-foreground">
 							{t("orderReference", "Order {{id}}", { id: order.orderId })}
@@ -357,7 +359,7 @@ export function PurchasesPage() {
 		legacyPurchases?: LegacyPurchasePage;
 	}>("user/purchases", true, poll);
 	const pending =
-		purchases.data?.orders.some(
+		purchases.data?.orders?.some(
 			(order) => pendingOrder(order.status) || order.pendingRefundAmount > 0,
 		) ?? false;
 	useEffect(() => {
@@ -381,7 +383,7 @@ export function PurchasesPage() {
 				{t("refreshStatus", "Refresh status")}
 			</Button>
 			{purchases.isLoading && <output>{t("loading", "Loading…")}</output>}
-			{purchases.data?.orders.length === 0 && (
+			{purchases.data?.orders?.length === 0 && (
 				<p className="rounded-lg border p-6 text-sm text-muted-foreground">
 					{t("noPurchases", "No marketplace purchases yet.")}
 				</p>
@@ -393,7 +395,7 @@ export function PurchasesPage() {
 				{t("manageAccount", "Manage your payment account")}
 			</Link>
 			<div className="space-y-4">
-				{purchases.data?.orders.map((order) => (
+				{purchases.data?.orders?.map((order) => (
 					<PurchaseCard key={order.orderId} order={order} />
 				))}
 			</div>

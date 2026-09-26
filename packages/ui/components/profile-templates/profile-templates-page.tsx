@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
+import { asArray } from "../../lib/response-shape";
 import type { IProfile } from "../../lib/schema/profile/profile";
 import {
 	AlertDialog,
@@ -47,7 +48,7 @@ function ProfileTemplatesContent({
 	const [busy, setBusy] = useState(false);
 	const [deleteError, setDeleteError] = useState<string | null>(null);
 	const profiles = filterProfileTemplates(
-		context.templates.data ?? [],
+		asArray(context.templates.data),
 		search,
 		sort,
 	);
@@ -61,8 +62,10 @@ function ProfileTemplatesContent({
 				context.profile.data,
 				`admin/profiles/${encodeURIComponent(deleting.id)}`,
 			);
-			client.setQueryData<IProfile[]>(context.queryKey, (current) =>
-				current?.filter((item) => item.id !== deleting.id),
+			client.setQueryData<IProfile[]>(
+				context.queryKey,
+				(current) =>
+					current && asArray(current).filter((item) => item.id !== deleting.id),
 			);
 			setDeleting(null);
 			toast.success("Starter profile deleted");

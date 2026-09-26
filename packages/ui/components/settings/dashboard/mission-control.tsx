@@ -105,9 +105,11 @@ function useProjectSpend(
 		},
 	});
 
-	const dollars = query.data
-		? (query.data.totalLlmCost + query.data.totalEmbeddingCost) /
-			MICRO_DOLLARS_PER_DOLLAR
+	const micros = query.data
+		? query.data.totalLlmCost + query.data.totalEmbeddingCost
+		: Number.NaN;
+	const dollars = Number.isFinite(micros)
+		? micros / MICRO_DOLLARS_PER_DOLLAR
 		: null;
 
 	return {
@@ -585,7 +587,7 @@ export function MissionControl({
 								<div className="grid grid-cols-3 gap-2 pt-1">
 									<div>
 										<div className="text-base font-semibold tabular-nums">
-											{app.download_count.toLocaleString()}
+											{(app.download_count ?? 0).toLocaleString()}
 										</div>
 										<div className="text-[11px] text-muted-foreground">
 											{t("downloads", "Downloads")}
@@ -593,7 +595,7 @@ export function MissionControl({
 									</div>
 									<div>
 										<div className="text-base font-semibold tabular-nums">
-											{app.interactions_count.toLocaleString()}
+											{(app.interactions_count ?? 0).toLocaleString()}
 										</div>
 										<div className="text-[11px] text-muted-foreground">
 											{t("interactions", "Interactions")}

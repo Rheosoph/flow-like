@@ -34,15 +34,20 @@ import type {
 	IPageState,
 } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import type { IRegistryState } from "@flow-like/flow-like-ui/state/backend-state/registry-state";
-import type { IPrerunEventResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
+import type {
+	IPrerunEventResponse,
+	IStorageItemActionResult,
+} from "@flow-like/flow-like-ui/state/backend-state/types";
 import type { IWidgetState } from "@flow-like/flow-like-ui/state/backend-state/widget-state";
 import {
 	type HostedTarget,
 	hostedApiPath,
 	hostedSessionId,
 } from "./hosted-route";
-import type { HostedKind } from "./hosted-route";
 import { consumeHostedStream } from "./hosted-stream";
+
+/** The interface a route serves: `u` a custom page, `c` a chat, `f` a form. */
+export type HostedKind = "c" | "f" | "u";
 
 export interface HostedRoute {
 	path: string;
@@ -53,6 +58,7 @@ export interface HostedRoute {
 
 export interface HostedBootstrap {
 	app_id: string;
+	kind: HostedKind;
 	auth_proxy: boolean;
 	bootstrap: IPageBootstrap;
 }
@@ -77,6 +83,7 @@ export function createHostedRequest(
 		if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 		if (init.body) headers.set("Content-Type", "application/json");
 		const url = new URL(`${endpoint}${suffix}`);
+		url.searchParams.set("route", target.route);
 		if (target.variant) url.searchParams.set("__variant", target.variant);
 		const response = await fetch(url, {
 			...init,
@@ -84,22 +91,27 @@ export function createHostedRequest(
 			cache: "no-store",
 			credentials: "omit",
 		});
-		if (!response.ok) {
-			const body = await response.text();
-			let message = body;
-			try {
-				const parsed = JSON.parse(body);
-				message = parsed.message ?? parsed.error ?? body;
-			} catch {}
+		if (!response.ok)
 			throw new HostedHttpError(
 				response.status,
-				typeof message === "string" && message
-					? message
-					: `Request failed (${response.status})`,
+				hostedErrorMessage(response.status, await response.text()),
 			);
-		}
 		return response;
 	};
+}
+
+/** The API answers `{"error":{"code","message"}}`; a 404 means the link itself is not live. */
+export function hostedErrorMessage(status: number, body: string): string {
+	if (status === 404)
+		return "This link is not published, or it has changed. Ask the owner for a new link.";
+	let message: unknown = body;
+	try {
+		const parsed = JSON.parse(body);
+		message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+	} catch {}
+	return typeof message === "string" && message
+		? message
+		: `Request failed (${status})`;
 }
 
 type HostedRequest = ReturnType<typeof createHostedRequest>;
@@ -169,6 +181,8 @@ function publicWidgetRegistry(): IRegistryState {
 }
 
 class HostedEventState extends EmptyEventState {
+	private readonly runs = new Map<string, AbortController>();
+
 	constructor(
 		private readonly data: HostedBootstrap,
 		private readonly request: HostedRequest,
@@ -234,20 +248,68 @@ class HostedEventState extends EmptyEventState {
 			);
 		}
 		beforeDispatch?.();
-		const response = await this.request("/invoke", {
-			method: "POST",
-			body: JSON.stringify({
-				payload: payload.payload,
-				page_trigger: activeTrigger
-					? serializePageTrigger(activeTrigger)
-					: undefined,
-			}),
-		});
-		if (!response.body)
-			throw new Error("The server did not return an execution stream.");
-		await consumeHostedStream(response.body, onEvents, onRunId);
-		return undefined;
+		const controller = new AbortController();
+		let runId: string | undefined;
+		try {
+			const response = await this.request("/invoke", {
+				method: "POST",
+				body: JSON.stringify({
+					payload: payload.payload,
+					page_trigger: activeTrigger
+						? serializePageTrigger(activeTrigger)
+						: undefined,
+				}),
+				signal: controller.signal,
+			});
+			if (!response.body)
+				throw new Error("The server did not return an execution stream.");
+			await consumeHostedStream(response.body, onEvents, (id) => {
+				if (!runId) {
+					runId = id;
+					this.runs.set(id, controller);
+				}
+				onRunId?.(id);
+			});
+			return undefined;
+		} finally {
+			if (runId) this.runs.delete(runId);
+		}
 	};
+	// The hosted surface has no cancel route; closing the stream stops this client listening.
+	async cancelExecution(runId: string): Promise<void> {
+		this.runs.get(runId)?.abort();
+	}
+}
+
+/** Matches `MAX_PREFIXES` in packages/api/src/routes/app/data/batch.rs. */
+const ASSET_BATCH_LIMIT = 100;
+
+/** Signs only files the published interface itself shows; the server enforces that. */
+class HostedStorageState extends EmptyStorageState {
+	constructor(
+		private readonly appId: string,
+		private readonly request: HostedRequest,
+	) {
+		super();
+	}
+	async downloadStorageItems(
+		appId: string,
+		prefixes: string[],
+	): Promise<IStorageItemActionResult[]> {
+		if (appId !== this.appId)
+			throw new Error("These files belong to another app.");
+		const results: IStorageItemActionResult[] = [];
+		for (let start = 0; start < prefixes.length; start += ASSET_BATCH_LIMIT) {
+			const response = await this.request("/assets", {
+				method: "POST",
+				body: JSON.stringify({
+					prefixes: prefixes.slice(start, start + ASSET_BATCH_LIMIT),
+				}),
+			});
+			results.push(...((await response.json()) as IStorageItemActionResult[]));
+		}
+		return results;
+	}
 }
 
 class HostedHelperState extends EmptyHelperState {
@@ -306,7 +368,7 @@ export function createHostedBackend(
 		boardState: new EmptyBoardState(),
 		teamState: new EmptyTeamState(),
 		roleState: new EmptyRoleState(),
-		storageState: new EmptyStorageState(),
+		storageState: new HostedStorageState(data.app_id, request),
 		templateState: new EmptyTemplateState(),
 		aiState: new EmptyAIState(),
 		dbState: new EmptyDatabaseState(),

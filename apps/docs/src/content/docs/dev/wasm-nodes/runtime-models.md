@@ -46,9 +46,10 @@ enables TCP, UDP, and DNS lookup separately when their capabilities are granted;
 the explicit `allow_wasi_network` override enables all three. Socket address
 checks also apply the execution configuration's host allowlist and block
 server-side destinations covered by the execution environment's egress policy.
-Package manifest host restrictions are not merged into the installed node's
-execution configuration; enforce destination restrictions at the executor or
-network-policy layer.
+The desktop loader for installed packages copies the manifest's
+`allowed_hosts` into the node's execution configuration; the server executor
+does not. The Flow-Like HTTP host function does not consult the list, so
+enforce destination restrictions at the executor or network-policy layer.
 
 An enabled network category is not blanket filesystem or process access.
 

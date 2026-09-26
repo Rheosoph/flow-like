@@ -5,7 +5,7 @@ use flow_like::flow::oauth::OAuthToken;
 use flow_like::state::FlowLikeState;
 use flow_like_types::intercom::BufferedInterComHandler;
 use futures::future::join_all;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -445,6 +445,28 @@ impl EventSinkManager {
         RegistrationStorage { conn: db }.list_registrations()
     }
 
+    /// The PAT an online registration of `app_id` runs with right now. Work
+    /// that outlives a run reads it here instead of keeping its own copy, so a
+    /// re-saved token replaces it and a removed registration takes it along.
+    pub(crate) fn access_token(
+        db: DbConnection,
+        app_id: &str,
+        event_id: &str,
+    ) -> Result<Option<String>> {
+        let conn = db
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Event sink database lock poisoned"))?;
+        let token = conn
+            .query_row(
+                "SELECT personal_access_token FROM event_registrations
+                 WHERE event_id = ?1 AND app_id = ?2 AND offline = 0",
+                params![event_id, app_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        Ok(token.flatten())
+    }
+
     /// Check if a sink type has been started, and mark it as started if not
     async fn ensure_sink_started(
         &self,
@@ -874,6 +896,25 @@ impl EventSinkManager {
                 return Ok(());
             }
         };
+
+        let state = crate::state::TauriFlowLikeState::construct(app_handle).await?;
+        let template = crate::functions::flow::run::resolve_run_template(
+            &state,
+            app_id,
+            &event.board_id,
+            event.board_version,
+        )
+        .await?;
+        let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
+        crate::functions::automation_approval::ensure_automation_approved(
+            app_handle,
+            app_id,
+            &template.board,
+            Some(&event.id),
+            false,
+            &profile.hub_profile,
+        )
+        .await?;
 
         // New credentials win; otherwise those of the existing registration or,
         // after a decline, the stashed ones carry over.

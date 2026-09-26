@@ -93,24 +93,20 @@ node.add_input_pin("config", "Config", "Configuration", VariableType::Struct)
 ## LanceDB and DataFusion
 
 Use matching host and SDK builds with database capability support. Database access
-requires package permissions, node permissions, and a wired `Struct` input with
-`NodeDBConnection` or `DataFusionSession` schema. Configure connections in upstream
-nodes. Copying a cache key into a default or retaining it in a package global does
-not grant access on the next invocation.
+requires a node permission and a wired `Struct` input with `NodeDBConnection` or
+`DataFusionSession` schema. Configure connections in upstream nodes. Copying a cache
+key into a default or retaining it in a package global does not grant access on the
+next invocation.
 
-Declare package permissions in the manifest:
+Database permissions are declared on the node, not in `flow-like.toml`. The sandbox
+enforces them per node, and the registry derives the store's capability listing from
+the compiled node definitions.
 
-```toml
-[permissions.database]
-read = true
-# Enable write only for nodes that insert, upsert or delete rows.
-write = false
-```
-
-Declare the corresponding pins and permission in `get_node()`:
+Declare the permission and the corresponding pins in `get_node()`:
 
 ```rust
-node.add_permission(NodePermission::DatabaseRead);
+node.add_permission(NodePermission::DatabaseRead); // "database:read"
+// Add DatabaseWrite ("database:write") only on nodes that insert, upsert or delete rows.
 node.add_input_pin("database", "Database", "LanceDB connection", VariableType::Struct)
     .set_schema::<NodeDBConnection>();
 node.add_input_pin("session", "Session", "Optional existing SQL session", VariableType::Struct)
@@ -150,7 +146,7 @@ values as GeoJSON. Table functions, file URLs, DDL and DML are unavailable. Quer
 results are limited to 10,000 rows and 8 MiB; failed or unauthorized calls return
 `None` or `false`. `NodeDBConnection` also supports list, count, vector, text and
 hybrid search. Its `insert`, `upsert` and `delete` methods additionally require
-`NodePermission::DatabaseWrite` and `permissions.database.write = true`.
+`NodePermission::DatabaseWrite` on the node.
 
 ## Multi-Node Package
 

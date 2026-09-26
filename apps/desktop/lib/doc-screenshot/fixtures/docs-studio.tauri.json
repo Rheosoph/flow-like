@@ -1867,6 +1867,689 @@
 				"nanos_since_epoch": 0
 			}
 		},
+		"sync_board": {
+			"manifest": {
+				"meta": "workflow-render-meta-v1",
+				"variables": "workflow-render-variables-v1",
+				"comments": "workflow-render-comments-v1",
+				"layers": {
+					"docs-layer": "workflow-render-layer-docs-layer",
+					"docs-placeholder-layer": "workflow-render-layer-docs-placeholder-layer"
+				},
+				"segments": {
+					"__root__": "workflow-render-segment-__root__",
+					"docs-layer": "workflow-render-segment-docs-layer"
+				}
+			},
+			"meta": {
+				"id": "docs-board",
+				"name": "Customer Support Automation",
+				"description": "Classifies support requests, drafts helpful replies, and keeps a human in control.",
+				"viewport": [0, 0, 1],
+				"version": [1, 0, 0],
+				"stage": "Dev",
+				"log_level": "Debug",
+				"execution_mode": "Local",
+				"page_ids": [],
+				"hash": null,
+				"created_at": {
+					"secs_since_epoch": 1785300000,
+					"nanos_since_epoch": 0
+				},
+				"updated_at": {
+					"secs_since_epoch": 1785301200,
+					"nanos_since_epoch": 0
+				}
+			},
+			"variables": {
+				"docs-confidence": {
+					"id": "docs-confidence",
+					"name": "Confidence",
+					"description": "Minimum confidence required before a reply is suggested.",
+					"data_type": "Float",
+					"value_type": "Normal",
+					"default_value": [48, 46, 55, 53],
+					"editable": true,
+					"exposed": false,
+					"secret": false,
+					"runtime_configured": false,
+					"category": null,
+					"schema": null,
+					"hash": 40001
+				},
+				"docs-customer-name": {
+					"id": "docs-customer-name",
+					"name": "Customer Name",
+					"description": "Name used to personalize the response.",
+					"data_type": "String",
+					"value_type": "Normal",
+					"default_value": [
+						34, 65, 118, 101, 114, 121, 32, 77, 111, 114, 103, 97, 110, 34
+					],
+					"editable": true,
+					"exposed": true,
+					"secret": false,
+					"runtime_configured": false,
+					"category": null,
+					"schema": null,
+					"hash": 40002
+				},
+				"docs-escalation-enabled": {
+					"id": "docs-escalation-enabled",
+					"name": "Escalation Enabled",
+					"description": "Routes uncertain replies to a human reviewer.",
+					"data_type": "Boolean",
+					"value_type": "Normal",
+					"default_value": [116, 114, 117, 101],
+					"editable": true,
+					"exposed": true,
+					"secret": false,
+					"runtime_configured": false,
+					"category": null,
+					"schema": null,
+					"hash": 40003
+				},
+				"docs-tags": {
+					"id": "docs-tags",
+					"name": "Routing Tags",
+					"description": "Labels used by the support routing policy.",
+					"data_type": "String",
+					"value_type": "Array",
+					"default_value": [
+						91, 34, 112, 114, 105, 111, 114, 105, 116, 121, 34, 44, 34, 98, 105,
+						108, 108, 105, 110, 103, 34, 93
+					],
+					"editable": true,
+					"exposed": false,
+					"secret": false,
+					"runtime_configured": false,
+					"category": null,
+					"schema": null,
+					"hash": 40004
+				}
+			},
+			"comments": {
+				"docs-label-listen": {
+					"id": "docs-label-listen",
+					"author": "Flow-Like Documentation",
+					"content": "plate_json::[{\"children\":[{\"text\":\"1 · Listen for requests\",\"bold\":true}],\"type\":\"p\",\"id\":\"docs-label-listen-p\"}]",
+					"comment_type": "Text",
+					"timestamp": {
+						"secs_since_epoch": 1785301200,
+						"nanos_since_epoch": 0
+					},
+					"coordinates": [120, -130, 0],
+					"width": 220,
+					"height": 44,
+					"layer": null,
+					"color": "#3b82f622",
+					"z_index": 1,
+					"hash": 30010,
+					"is_locked": true
+				},
+				"docs-label-draft": {
+					"id": "docs-label-draft",
+					"author": "Flow-Like Documentation",
+					"content": "plate_json::[{\"children\":[{\"text\":\"2 · Draft with AI\",\"bold\":true}],\"type\":\"p\",\"id\":\"docs-label-draft-p\"}]",
+					"comment_type": "Text",
+					"timestamp": {
+						"secs_since_epoch": 1785301200,
+						"nanos_since_epoch": 0
+					},
+					"coordinates": [430, -130, 0],
+					"width": 220,
+					"height": 44,
+					"layer": null,
+					"color": "#3de39d22",
+					"z_index": 1,
+					"hash": 30011,
+					"is_locked": true
+				},
+				"docs-label-approve": {
+					"id": "docs-label-approve",
+					"author": "Flow-Like Documentation",
+					"content": "plate_json::[{\"children\":[{\"text\":\"3 · Approve and send\",\"bold\":true}],\"type\":\"p\",\"id\":\"docs-label-approve-p\"}]",
+					"comment_type": "Text",
+					"timestamp": {
+						"secs_since_epoch": 1785301200,
+						"nanos_since_epoch": 0
+					},
+					"coordinates": [820, -130, 0],
+					"width": 240,
+					"height": 44,
+					"layer": null,
+					"color": "#f59e0b22",
+					"z_index": 1,
+					"hash": 30012,
+					"is_locked": true
+				},
+				"docs-layer-note": {
+					"id": "docs-layer-note",
+					"author": "Flow-Like Documentation",
+					"content": "plate_json::[{\"children\":[{\"text\":\"Inside the collapsed layer\",\"bold\":true}],\"type\":\"p\",\"id\":\"docs-layer-title\"},{\"children\":[{\"text\":\"Normalize the request, then draft a helpful reply.\"}],\"type\":\"p\",\"id\":\"docs-layer-copy\"}]",
+					"comment_type": "Text",
+					"timestamp": {
+						"secs_since_epoch": 1785301200,
+						"nanos_since_epoch": 0
+					},
+					"coordinates": [210, 40, 0],
+					"width": 470,
+					"height": 85,
+					"layer": "docs-layer",
+					"color": "#3de39d33",
+					"z_index": 2,
+					"hash": 30001,
+					"is_locked": true
+				}
+			},
+			"layers": {
+				"docs-layer": {
+					"id": "docs-layer",
+					"parent_id": null,
+					"name": "Prepare Support Reply",
+					"type": "Collapsed",
+					"nodes": {},
+					"variables": {},
+					"comments": {},
+					"coordinates": [430, 60, 0],
+					"in_coordinates": [35, 190, 0],
+					"out_coordinates": [760, 190, 0],
+					"pins": {
+						"docs-layer-in": {
+							"id": "docs-layer-in",
+							"name": "exec_in",
+							"friendly_name": "Request",
+							"description": "",
+							"pin_type": "Input",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": ["docs-event-exec-out"],
+							"connected_to": [],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						},
+						"docs-layer-message-in": {
+							"id": "docs-layer-message-in",
+							"name": "request",
+							"friendly_name": "Message",
+							"description": "",
+							"pin_type": "Input",
+							"data_type": "String",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": ["docs-event-request-out"],
+							"connected_to": [],
+							"default_value": null,
+							"index": 2,
+							"options": null
+						},
+						"docs-layer-out": {
+							"id": "docs-layer-out",
+							"name": "exec_out",
+							"friendly_name": "Done",
+							"description": "",
+							"pin_type": "Output",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": ["docs-placeholder-in"],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						},
+						"docs-layer-message-out": {
+							"id": "docs-layer-message-out",
+							"name": "reply",
+							"friendly_name": "Reply",
+							"description": "",
+							"pin_type": "Output",
+							"data_type": "String",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": ["docs-send-body-in"],
+							"default_value": null,
+							"index": 2,
+							"options": null
+						}
+					},
+					"comment": "Two implementation steps are grouped into one reusable layer.",
+					"error": null,
+					"color": "#3de39d",
+					"hash": 20001
+				},
+				"docs-placeholder-layer": {
+					"id": "docs-placeholder-layer",
+					"parent_id": null,
+					"name": "Human Review",
+					"type": "Collapsed",
+					"nodes": {},
+					"variables": {},
+					"comments": {},
+					"coordinates": [820, 60, 0],
+					"in_coordinates": [35, 180, 0],
+					"out_coordinates": [620, 180, 0],
+					"pins": {
+						"docs-placeholder-in": {
+							"id": "docs-placeholder-in",
+							"name": "exec_in",
+							"friendly_name": "Draft",
+							"description": "",
+							"pin_type": "Input",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": ["docs-layer-out"],
+							"connected_to": [],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						},
+						"docs-placeholder-out": {
+							"id": "docs-placeholder-out",
+							"name": "exec_out",
+							"friendly_name": "Approved",
+							"description": "",
+							"pin_type": "Output",
+							"data_type": "Execution",
+							"schema": null,
+							"value_type": "Normal",
+							"depends_on": [],
+							"connected_to": ["docs-send-exec-in"],
+							"default_value": null,
+							"index": 1,
+							"options": null
+						}
+					},
+					"comment": "Prototype a future review step before implementing its internals.",
+					"error": null,
+					"color": "#f59e0b",
+					"hash": 20002
+				}
+			},
+			"refs": {},
+			"segments": {
+				"__root__": {
+					"hash": "workflow-render-segment-__root__",
+					"nodes": {
+						"docs-event-node": {
+							"id": "docs-event-node",
+							"name": "events_simple",
+							"friendly_name": "Incoming Support Request",
+							"description": "Starts the workflow when a new support request arrives.",
+							"coordinates": [120, 60, 0],
+							"category": "Events",
+							"scores": null,
+							"pins": {
+								"docs-event-exec-out": {
+									"id": "docs-event-exec-out",
+									"name": "exec_out",
+									"friendly_name": "Start",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": ["docs-layer-in"],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-event-request-out": {
+									"id": "docs-event-request-out",
+									"name": "request",
+									"friendly_name": "Request",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": ["docs-layer-message-in"],
+									"default_value": "IldoZXJlIGlzIG15IG9yZGVyPyI=",
+									"index": 2,
+									"options": null
+								}
+							},
+							"start": true,
+							"icon": "/flow/icons/workflow.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": null,
+							"hash": 10001,
+							"h": false
+						},
+						"docs-string-source": {
+							"id": "docs-string-source",
+							"name": "string_template",
+							"friendly_name": "Customer Message",
+							"description": "Produces a typed String value for the generic input.",
+							"coordinates": [430, 320, 0],
+							"category": "Text",
+							"scores": null,
+							"pins": {
+								"docs-string-out": {
+									"id": "docs-string-out",
+									"name": "value",
+									"friendly_name": "Message",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": ["docs-generic-in"],
+									"default_value": "IlN1bW1hcml6ZSB0aGUgY3VzdG9tZXIgcmVxdWVzdCI=",
+									"index": 1,
+									"options": null
+								},
+								"docs-string-draft-out": {
+									"id": "docs-string-draft-out",
+									"name": "draft",
+									"friendly_name": "Draft",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": "IkRyYWZ0IGEgY3VzdG9tZXIgcmVwbHki",
+									"index": 2,
+									"options": null
+								}
+							},
+							"start": false,
+							"icon": "/flow/icons/text.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": null,
+							"hash": 10002,
+							"h": false
+						},
+						"docs-generic-target": {
+							"id": "docs-generic-target",
+							"name": "transform_generic",
+							"friendly_name": "Format Generic Value",
+							"description": "Accepts a generically typed value and returns it unchanged.",
+							"coordinates": [790, 320, 0],
+							"category": "Transformation",
+							"scores": null,
+							"pins": {
+								"docs-generic-in": {
+									"id": "docs-generic-in",
+									"name": "value",
+									"friendly_name": "Generic Value",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "Generic",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": ["docs-string-out"],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-generic-out": {
+									"id": "docs-generic-out",
+									"name": "value_out",
+									"friendly_name": "Value",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Generic",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								}
+							},
+							"start": false,
+							"icon": "/flow/icons/convert.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": null,
+							"hash": 10003,
+							"h": false
+						},
+						"docs-send-node": {
+							"id": "docs-send-node",
+							"name": "mail_send",
+							"friendly_name": "Send Reply",
+							"description": "Delivers the approved reply to the customer.",
+							"coordinates": [1170, 60, 0],
+							"category": "Email",
+							"scores": null,
+							"pins": {
+								"docs-send-exec-in": {
+									"id": "docs-send-exec-in",
+									"name": "exec_in",
+									"friendly_name": "Send",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": ["docs-placeholder-out"],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-send-body-in": {
+									"id": "docs-send-body-in",
+									"name": "body",
+									"friendly_name": "Body",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": ["docs-layer-message-out"],
+									"connected_to": [],
+									"default_value": null,
+									"index": 2,
+									"options": null
+								},
+								"docs-send-exec-out": {
+									"id": "docs-send-exec-out",
+									"name": "exec_out",
+									"friendly_name": "Sent",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								}
+							},
+							"start": false,
+							"icon": "/flow/icons/mail.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": null,
+							"hash": 10006,
+							"h": false
+						}
+					}
+				},
+				"docs-layer": {
+					"hash": "workflow-render-segment-docs-layer",
+					"nodes": {
+						"docs-layer-child": {
+							"id": "docs-layer-child",
+							"name": "text_normalize",
+							"friendly_name": "Normalize Request",
+							"description": "Cleans and normalizes the incoming customer request.",
+							"coordinates": [235, 180, 0],
+							"category": "Text",
+							"scores": null,
+							"pins": {
+								"docs-layer-child-in": {
+									"id": "docs-layer-child-in",
+									"name": "exec_in",
+									"friendly_name": "Input",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-layer-child-out": {
+									"id": "docs-layer-child-out",
+									"name": "exec_out",
+									"friendly_name": "Output",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": ["docs-transform-in"],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-layer-child-text-out": {
+									"id": "docs-layer-child-text-out",
+									"name": "text",
+									"friendly_name": "Clean Text",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": ["docs-transform-text-in"],
+									"default_value": null,
+									"index": 2,
+									"options": null
+								}
+							},
+							"start": false,
+							"icon": null,
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": "docs-layer",
+							"hash": 10004,
+							"h": false
+						},
+						"docs-transform-node": {
+							"id": "docs-transform-node",
+							"name": "ai_draft_reply",
+							"friendly_name": "Draft Helpful Reply",
+							"description": "Drafts a concise response using the normalized request.",
+							"coordinates": [505, 180, 0],
+							"category": "AI/Generative",
+							"scores": null,
+							"pins": {
+								"docs-transform-in": {
+									"id": "docs-transform-in",
+									"name": "exec_in",
+									"friendly_name": "Input",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": ["docs-layer-child-out"],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-transform-text-in": {
+									"id": "docs-transform-text-in",
+									"name": "request",
+									"friendly_name": "Request",
+									"description": "",
+									"pin_type": "Input",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": ["docs-layer-child-text-out"],
+									"connected_to": [],
+									"default_value": null,
+									"index": 2,
+									"options": null
+								},
+								"docs-transform-out": {
+									"id": "docs-transform-out",
+									"name": "exec_out",
+									"friendly_name": "Done",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "Execution",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": null,
+									"index": 1,
+									"options": null
+								},
+								"docs-transform-text-out": {
+									"id": "docs-transform-text-out",
+									"name": "reply",
+									"friendly_name": "Reply",
+									"description": "",
+									"pin_type": "Output",
+									"data_type": "String",
+									"schema": null,
+									"value_type": "Normal",
+									"depends_on": [],
+									"connected_to": [],
+									"default_value": null,
+									"index": 2,
+									"options": null
+								}
+							},
+							"start": false,
+							"icon": "/flow/icons/message.svg",
+							"comment": null,
+							"long_running": null,
+							"error": null,
+							"docs": null,
+							"event_callback": null,
+							"layer": "docs-layer",
+							"hash": 10005,
+							"h": false
+						}
+					}
+				}
+			}
+		},
 		"get_catalog": [
 			{
 				"id": "docs-catalog-event",

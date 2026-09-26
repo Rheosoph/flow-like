@@ -1,13 +1,10 @@
 "use client";
 
-import type {
-	SlateElementProps,
-	TCaptionProps,
-	TImageElement,
-	TResizableProps,
-} from "platejs";
+import type { TCaptionProps, TImageElement, TResizableProps } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
-import { NodeApi, SlateElement } from "platejs";
+import { NodeApi } from "platejs";
+import { SlateElement } from "platejs/static";
 
 import { cn } from "../../../lib/utils";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";

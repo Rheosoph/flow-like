@@ -5,6 +5,7 @@
 use crate::abi::{WasmExecutionInput, WasmNodeDefinition, WasmPinDefinition};
 use crate::engine::WasmEngine;
 use crate::error::WasmResult;
+use crate::host_functions::storage::StorageStore;
 use crate::host_functions::{ExecutionMetadata, HostState, ModelContext, StorageContext};
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::module::WasmModule;
@@ -17,6 +18,7 @@ use flow_like::flow::node::{Node, NodeLogic, NodeScores, NodeWasm};
 use flow_like::flow::pin::{Pin, PinOptions, PinType, ValueType};
 use flow_like::flow::variable::VariableType;
 use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::normalize_object_path;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::{tokio::sync::RwLock, Cacheable, Value};
 use parking_lot::RwLock as ParkingRwLock;
@@ -303,30 +305,30 @@ async fn register_wasm_flowpath_stores(
     Ok(())
 }
 
-fn collect_flow_path_store_refs(value: &Value, refs: &mut BTreeSet<String>) {
+fn collect_flow_path_store_roots(value: &Value, refs: &mut HashMap<String, Vec<Path>>) {
     match value {
         Value::Object(object) => {
-            let is_flow_path = object.get("path").and_then(Value::as_str).is_some()
-                && object.get("store_ref").and_then(Value::as_str).is_some();
-
-            if is_flow_path {
-                if let Some(store_ref) = object.get("store_ref").and_then(Value::as_str) {
-                    refs.insert(store_ref.to_string());
-                }
-
-                if let Some(cache_store_ref) = object.get("cache_store_ref").and_then(Value::as_str)
-                {
-                    refs.insert(cache_store_ref.to_string());
+            if let (Some(path), Some(store_ref)) = (
+                object.get("path").and_then(Value::as_str),
+                object.get("store_ref").and_then(Value::as_str),
+            ) {
+                let root = normalize_object_path(path);
+                let cache_store_ref = object.get("cache_store_ref").and_then(Value::as_str);
+                for store_ref in std::iter::once(store_ref).chain(cache_store_ref) {
+                    let roots = refs.entry(store_ref.to_string()).or_default();
+                    if !roots.contains(&root) {
+                        roots.push(root.clone());
+                    }
                 }
             }
 
             for child in object.values() {
-                collect_flow_path_store_refs(child, refs);
+                collect_flow_path_store_roots(child, refs);
             }
         }
         Value::Array(values) => {
             for child in values {
-                collect_flow_path_store_refs(child, refs);
+                collect_flow_path_store_roots(child, refs);
             }
         }
         _ => {}
@@ -336,14 +338,14 @@ fn collect_flow_path_store_refs(value: &Value, refs: &mut BTreeSet<String>) {
 async fn resolve_input_flowpath_stores(
     context: &ExecutionContext,
     inputs: &serde_json::Map<String, Value>,
-) -> HashMap<String, FlowLikeStore> {
-    let mut refs = BTreeSet::new();
+) -> HashMap<String, StorageStore> {
+    let mut refs = HashMap::new();
     for value in inputs.values() {
-        collect_flow_path_store_refs(value, &mut refs);
+        collect_flow_path_store_roots(value, &mut refs);
     }
 
     let mut stores = HashMap::new();
-    for store_ref in refs {
+    for (store_ref, roots) in refs {
         let Some(cacheable) = context.get_cache(&store_ref).await else {
             tracing::debug!("[wasm] FlowPath input store_ref not found in cache: {store_ref}");
             continue;
@@ -354,7 +356,13 @@ async fn resolve_input_flowpath_stores(
             continue;
         };
 
-        stores.insert(store_ref, store.clone());
+        stores.insert(
+            store_ref,
+            StorageStore {
+                store: store.clone(),
+                roots,
+            },
+        );
     }
 
     stores
@@ -834,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_flow_path_store_refs_from_nested_inputs() {
+    fn test_collect_flow_path_store_roots_from_nested_inputs() {
         let value = serde_json::json!({
             "virtual": {
                 "path": "",
@@ -853,17 +861,102 @@ mod tests {
             ]
         });
 
-        let mut refs = BTreeSet::new();
-        collect_flow_path_store_refs(&value, &mut refs);
+        let mut refs = HashMap::new();
+        collect_flow_path_store_roots(&value, &mut refs);
 
         assert_eq!(
             refs,
-            BTreeSet::from([
-                "cache_dirs__storage_app".to_string(),
-                "s3_store".to_string(),
-                "virtual_dir_/virtual".to_string(),
+            HashMap::from([
+                (
+                    "cache_dirs__storage_app".to_string(),
+                    vec![Path::from("nested/file.txt")],
+                ),
+                ("s3_store".to_string(), vec![Path::from("nested/file.txt")]),
+                ("virtual_dir_/virtual".to_string(), vec![Path::default()]),
             ])
         );
+    }
+
+    #[test]
+    fn test_collect_flow_path_store_roots_keeps_separate_grants_for_one_store() {
+        let value = serde_json::json!([
+            {
+                "path": "allowed/first.txt",
+                "store_ref": "shared_store",
+                "cache_store_ref": "shared_cache"
+            },
+            [{
+                "path": "allowed/second.txt",
+                "store_ref": "shared_store",
+                "cache_store_ref": "shared_cache"
+            }],
+            {
+                "path": "allowed/first.txt",
+                "store_ref": "shared_store",
+                "cache_store_ref": "shared_store"
+            }
+        ]);
+        let mut refs = HashMap::new();
+        collect_flow_path_store_roots(&value, &mut refs);
+
+        let expected = vec![
+            Path::from("allowed/first.txt"),
+            Path::from("allowed/second.txt"),
+        ];
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs["shared_store"], expected);
+        assert_eq!(refs["shared_cache"], expected);
+    }
+
+    #[test]
+    fn test_collect_flow_path_store_roots_requires_an_explicit_path() {
+        let value = serde_json::json!([
+            { "store_ref": "missing_path", "cache_store_ref": "cache_without_path" },
+            { "path": null, "store_ref": "null_path" },
+            { "path": 42, "store_ref": "numeric_path" },
+            { "path": "allowed", "cache_store_ref": "cache_without_primary" },
+            { "path": "allowed/file.txt", "store_ref": "restricted_store" },
+            { "path": "", "store_ref": "explicit_root" }
+        ]);
+        let mut refs = HashMap::new();
+        collect_flow_path_store_roots(&value, &mut refs);
+
+        assert_eq!(
+            refs,
+            HashMap::from([
+                (
+                    "restricted_store".to_string(),
+                    vec![Path::from("allowed/file.txt")],
+                ),
+                ("explicit_root".to_string(), vec![Path::default()]),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_collect_flow_path_store_roots_normalizes_encoded_paths() {
+        let expected = Path::from("allowed").join("Übersicht (2)#1.pdf");
+        let value = serde_json::json!([
+            {
+                "path": "allowed/Übersicht (2)#1.pdf",
+                "store_ref": "store",
+                "cache_store_ref": "cache"
+            },
+            {
+                "path": expected.as_ref(),
+                "store_ref": "store",
+                "cache_store_ref": "cache"
+            },
+            { "path": "allowed/a%2Fb", "store_ref": "encoded_separator" },
+            { "path": "allowed/%2E%2E/other", "store_ref": "encoded_parent" }
+        ]);
+        let mut refs = HashMap::new();
+        collect_flow_path_store_roots(&value, &mut refs);
+
+        assert_eq!(refs["store"], vec![expected.clone()]);
+        assert_eq!(refs["cache"], vec![expected]);
+        assert_eq!(refs["encoded_separator"][0].as_ref(), "allowed/a%2Fb");
+        assert_eq!(refs["encoded_parent"][0].as_ref(), "allowed/%2E%2E/other");
     }
 
     #[test]

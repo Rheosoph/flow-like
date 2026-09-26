@@ -18,6 +18,7 @@ export type PinEditorKind =
 	| "remoteOntologyObject"
 	| "remoteOntologyAction"
 	| "widget"
+	| "taxCode"
 	| "boolean"
 	| "enum"
 	| "bit"
@@ -83,6 +84,8 @@ export function resolvePinEditorKind(
 			pin.name === "widget_selector"
 		)
 			return "widget";
+		if (nodeName === "request_payment" && pin.name === "product_tax_code")
+			return "taxCode";
 	}
 	if (pin.data_type === IVariableType.Boolean) return "boolean";
 	if (

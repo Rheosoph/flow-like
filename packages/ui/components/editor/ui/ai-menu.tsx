@@ -48,6 +48,7 @@ import {
 	PopoverContent,
 } from "../../..";
 import { cn } from "../../../lib/utils";
+import { submitEditorAI } from "../ai-prompt";
 import { useChat } from "../use-chat";
 
 import { AIChatEditor } from "./ai-chat-editor";
@@ -61,25 +62,26 @@ export function AIMenu() {
 	const isSelecting = useIsSelecting();
 
 	const [value, setValue] = React.useState("");
+	const [input, setInput] = React.useState("");
 
-	const chat = useChat();
-
-	const { input, messages, setInput, status } = chat;
+	const { messages, status } = useChat();
 	const [anchorElement, setAnchorElement] = React.useState<HTMLElement | null>(
 		null,
 	);
 
-	const content = useLastAssistantMessage()?.content;
+	const content = useLastAssistantMessage()?.parts.find(
+		(part) => part.type === "text",
+	)?.text;
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the anchor is looked up once when streaming starts.
 	React.useEffect(() => {
-		if (streaming) {
-			const anchor = api.aiChat.node({ anchor: true });
-			setTimeout(() => {
-				const anchorDom = editor.api.toDOMNode(anchor![0])!;
-				setAnchorElement(anchorDom);
-			}, 0);
-		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
+		if (!streaming) return;
+		const anchor = api.aiChat.node({ anchor: true });
+		if (!anchor) return;
+		setTimeout(() => {
+			const anchorDom = editor.api.toDOMNode(anchor[0]);
+			if (anchorDom) setAnchorElement(anchorDom);
+		}, 0);
 	}, [streaming]);
 
 	const setOpen = (open: boolean) => {
@@ -96,7 +98,6 @@ export function AIMenu() {
 	};
 
 	useEditorChat({
-		chat,
 		onOpenBlockSelection: (blocks: NodeEntry[]) => {
 			show(editor.api.toDOMNode(blocks.at(-1)![0])!);
 		},
@@ -124,9 +125,6 @@ export function AIMenu() {
 
 	useHotkeys("esc", () => {
 		api.aiChat.stop();
-
-		// remove when you implement the route /api/ai/command
-		chat._abortFakeStream();
 	});
 
 	const isLoading = status === "streaming" || status === "submitted";
@@ -181,7 +179,8 @@ export function AIMenu() {
 								}
 								if (isHotkey("enter")(e) && !e.shiftKey && !value) {
 									e.preventDefault();
-									void api.aiChat.submit();
+									submitEditorAI(editor, input);
+									setInput("");
 								}
 							}}
 							onValueChange={setInput}
@@ -193,7 +192,7 @@ export function AIMenu() {
 
 					{!isLoading && (
 						<CommandList>
-							<AIMenuItems setValue={setValue} />
+							<AIMenuItems setInput={setInput} setValue={setValue} />
 						</CommandList>
 					)}
 				</Command>
@@ -225,19 +224,20 @@ const aiChatItems = {
 		onSelect: ({ editor }) => {
 			const ancestorNode = editor.api.block({ highest: true });
 
-			if (!ancestorNode) return;
+			if (!ancestorNode) return false;
 
 			const isEmpty = NodeApi.string(ancestorNode[0]).trim().length === 0;
 
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				mode: "insert",
-				prompt: isEmpty
+			return submitEditorAI(
+				editor,
+				isEmpty
 					? `<Document>
 {editor}
 </Document>
 Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 					: "Continue writing AFTER <Block> ONLY ONE SENTENCE. DONT REPEAT THE TEXT.",
-			});
+				{ mode: "insert" },
+			);
 		},
 	},
 	discard: {
@@ -255,9 +255,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Emojify",
 		value: "emojify",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Emojify",
-			});
+			return submitEditorAI(editor, "Emojify");
 		},
 	},
 	explain: {
@@ -265,11 +263,9 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Explain",
 		value: "explain",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: {
-					default: "Explain {editor}",
-					selecting: "Explain",
-				},
+			return submitEditorAI(editor, {
+				default: "Explain {editor}",
+				selecting: "Explain",
 			});
 		},
 	},
@@ -278,9 +274,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Fix spelling & grammar",
 		value: "fixSpelling",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Fix spelling and grammar",
-			});
+			return submitEditorAI(editor, "Fix spelling and grammar");
 		},
 	},
 	summarizeInBullets: {
@@ -288,9 +282,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Summarize in bullets",
 		value: "summarizeInBullets",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Summarize this content as bullet points",
-			});
+			return submitEditorAI(editor, "Summarize this content as bullet points");
 		},
 	},
 	improveWriting: {
@@ -298,9 +290,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Improve writing",
 		value: "improveWriting",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Improve the writing",
-			});
+			return submitEditorAI(editor, "Improve the writing");
 		},
 	},
 	insertBelow: {
@@ -316,9 +306,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Make longer",
 		value: "makeLonger",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Make longer",
-			});
+			return submitEditorAI(editor, "Make longer");
 		},
 	},
 	makeShorter: {
@@ -326,9 +314,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Make shorter",
 		value: "makeShorter",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Make shorter",
-			});
+			return submitEditorAI(editor, "Make shorter");
 		},
 	},
 	replace: {
@@ -344,10 +330,7 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Simplify language",
 		value: "simplifyLanguage",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				prompt: "Simplify the language",
-				system: "You are a helpful assistant that simplifies language.",
-			});
+			return submitEditorAI(editor, "Simplify the language");
 		},
 	},
 	summarize: {
@@ -355,13 +338,14 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		label: "Add a summary",
 		value: "summarize",
 		onSelect: ({ editor }) => {
-			void editor.getApi(AIChatPlugin).aiChat.submit({
-				mode: "insert",
-				prompt: {
+			return submitEditorAI(
+				editor,
+				{
 					default: "Summarize {editor}",
 					selecting: "Summarize",
 				},
-			});
+				{ mode: "insert" },
+			);
 		},
 	},
 	tryAgain: {
@@ -382,13 +366,14 @@ Start writing a new paragraph AFTER <Document> ONLY ONE SENTENCE`
 		filterItems?: boolean;
 		items?: { label: string; value: string }[];
 		shortcut?: string;
+		/** Returns `true` when it sent a request, which clears the typed input. */
 		onSelect?: ({
 			aiEditor,
 			editor,
 		}: {
 			aiEditor: SlateEditor;
 			editor: PlateEditor;
-		}) => void;
+		}) => unknown;
 	}
 >;
 
@@ -439,8 +424,10 @@ const menuStateItems: Record<
 };
 
 export const AIMenuItems = ({
+	setInput,
 	setValue,
 }: {
+	setInput: (input: string) => void;
 	setValue: (value: string) => void;
 }) => {
 	const editor = useEditorRef();
@@ -478,10 +465,8 @@ export const AIMenuItems = ({
 							className="[&_svg]:text-muted-foreground"
 							value={menuItem.value}
 							onSelect={() => {
-								menuItem.onSelect?.({
-									aiEditor,
-									editor: editor,
-								});
+								if (menuItem.onSelect?.({ aiEditor, editor }) === true)
+									setInput("");
 							}}
 						>
 							{menuItem.icon}

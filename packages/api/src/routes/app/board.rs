@@ -19,11 +19,13 @@ pub mod prerun_board;
 pub mod query_logs;
 pub mod realtime;
 pub mod report_run;
+pub mod run_logs;
 pub mod scoring;
 pub mod secrets;
 pub mod summaries;
 pub mod sync_board;
 pub mod undo_redo_board;
+pub mod upload_run_logs;
 pub mod upsert_board;
 pub mod version_board;
 pub mod workspace;
@@ -40,6 +42,9 @@ use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 /// exceed axum's 2MB default body limit. Clients cap their payloads well below
 /// this value and fail fast instead of hitting a raw 413.
 const BOARD_COMMAND_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+
+/// A local run uploads all of its logs (at most 10,000 messages) in one request.
+const RUN_LOGS_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Board invocation, prerun, and realtime access all take an arbitrary board
 /// id and either execute it or disclose its full definition. Human/API
@@ -103,10 +108,21 @@ pub fn routes() -> Router<AppState> {
         .route("/{board_id}/runs", get(get_runs::get_runs))
         .route("/{board_id}/runs/report", post(report_run::report_run))
         .route(
+            "/{board_id}/runs/{run_id}/logs",
+            post(upload_run_logs::upload_run_logs)
+                .layer(DefaultBodyLimit::max(RUN_LOGS_BODY_LIMIT_BYTES)),
+        )
+        .route(
             "/{board_id}/runs/{run_id}/payload",
             get(get_run_payload::get_run_payload),
         )
         .route("/{board_id}/logs", get(query_logs::query_logs))
+        .route("/{board_id}/logs/query", post(run_logs::query_run_logs))
+        .route("/{board_id}/logs/count", post(run_logs::count_run_logs))
+        .route(
+            "/{board_id}/logs/summary",
+            get(run_logs::get_run_log_summary),
+        )
         .route(
             "/{board_id}/elements",
             get(get_execution_elements::get_execution_elements),

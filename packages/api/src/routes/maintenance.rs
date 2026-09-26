@@ -132,6 +132,9 @@ async fn run_maintenance_job(
             crate::usage_accounting::reconcile_hosted_invocations(&state, 15).await?;
             crate::routes::chat::hosted_worker::recover_queued(&state).await?;
             crate::rolling_usage::maintain(&state).await?;
+            if let Err(error) = crate::package_license::sweep(&state).await {
+                tracing::warn!(error = %error, "Package licence sweep failed");
+            }
             let config = RunSweeperConfig::from_env();
             let swept = sweep_runs_once(
                 &crate::audit::ExecutionAuditContext::from(&state),
@@ -152,6 +155,10 @@ async fn run_maintenance_job(
                 "Maintenance run sweep completed"
             );
 
+            if let Err(error) = crate::devices::certificates::sweep(&state).await {
+                tracing::warn!(error = %error, "Device certificate reminder pass incomplete");
+            }
+
             Ok(Json(MaintenanceRunResponse::RunSweep(
                 RunSweepMaintenanceResult {
                     swept,
@@ -161,6 +168,16 @@ async fn run_maintenance_job(
             )))
         }
         MaintenanceRunRequest::StateCleanup => {
+            if state.platform_config.standalone.enabled {
+                match crate::devices::archives::sweep_expired(&state).await {
+                    Ok(deleted) => {
+                        tracing::info!(deleted, "Expired encrypted device history removed")
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "Device history retention cleanup failed")
+                    }
+                }
+            }
             // Storage-accounting tombstones are SQL rows rather than execution
             // state, but they expire on a daily horizon and no deployment
             // should need a second trigger for them, the way the channel sweep

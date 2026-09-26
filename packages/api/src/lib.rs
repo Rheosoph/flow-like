@@ -39,10 +39,14 @@ pub(crate) use flow_like_azure_data::cosmos;
 pub mod credentials;
 pub mod db;
 pub mod deletion;
+pub(crate) mod devices;
+pub use devices::certificates::spawn_sweeper as spawn_device_certificate_sweeper;
 pub mod error;
+pub(crate) mod instances;
 pub mod mail;
 pub mod model_tier;
 pub mod notification_images;
+pub mod package_license;
 pub mod payments;
 pub mod permission;
 pub mod publication;
@@ -175,6 +179,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/bit", routes::bit::routes())
         .nest("/store", routes::store::routes())
         .nest("/auth", routes::auth::routes())
+        .nest("/devices", routes::devices::routes())
+        .nest("/instances", routes::instances::routes())
         .nest("/oauth", routes::oauth::routes())
         .nest("/chat", routes::chat::routes())
         // Root-level: Rig's Responses client posts to `{base_url}/responses`,

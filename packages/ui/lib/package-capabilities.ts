@@ -17,9 +17,11 @@ import type { PackageWidgetEntry } from "./schema/wasm";
 
 /**
  * Capability tags come off `PackageSummary.capabilities`, derived server-side
- * from the manifest permissions. `elevated` marks the ones that let a package
- * reach beyond its sandbox — network, OAuth, model budget, user storage — so
- * listing surfaces can keep those visible when they truncate.
+ * from the permissions the package's nodes declare; the manifest only authors
+ * resource tiers, the host allowlist and OAuth scopes. `elevated` marks the
+ * ones that let a package reach beyond its sandbox — network, OAuth, model
+ * budget, user storage — so listing surfaces can keep those visible when they
+ * truncate.
  */
 export type CapabilitySeverity = "elevated" | "standard";
 

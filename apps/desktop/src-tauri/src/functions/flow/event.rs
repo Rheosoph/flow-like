@@ -125,8 +125,7 @@ async fn target_resolution(app: &App, cache: &mut ResolutionCache, event: &Event
         {
             Ok(board) => Some(
                 board
-                    .lock()
-                    .await
+                    .snapshot()
                     .nodes
                     .keys()
                     .cloned()

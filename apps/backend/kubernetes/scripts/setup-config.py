@@ -306,15 +306,6 @@ def generate(namespace, release, image_pull_secrets=()):
     else:
         values["storage"]["s3"].update({"internalEndpoint": origin(required("S3_INTERNAL_ENDPOINT"), "S3_INTERNAL_ENDPOINT"), "stsEndpoint": origin(required("STS_ENDPOINT_URL"), "STS_ENDPOINT_URL"), "runtimeCredentialsProvider": os.environ.get("S3_STS_PROVIDER", "rustfs")})
     audit = audit_values(bundled, secret)
-    audit_config = json.loads(hub_json).get("audit", {}) if hub_json is not None else {}
-    if os.environ.get("AUDIT_CONFIG_JSON"):
-        try:
-            audit_config = json.loads(os.environ["AUDIT_CONFIG_JSON"], object_pairs_hook=unique_json_keys)
-            if not isinstance(audit_config, dict):
-                raise ValueError()
-        except ValueError:
-            raise ValueError("AUDIT_CONFIG_JSON must contain an audit configuration object") from None
-    audit["runtimeConfig"] = {"existingSecret": secret("audit-config", {"audit.config.json": json.dumps({"audit": audit_config})}), "key": "audit.config.json"}
     values["database"], audit_database = database_values(namespace, release, secret)
     audit["database"] = {"existingSecret": audit_database}
     audit["exportSecret"] = system

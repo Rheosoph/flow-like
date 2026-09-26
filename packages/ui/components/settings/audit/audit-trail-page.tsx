@@ -59,7 +59,8 @@ export function AuditTrailPage() {
 	const profile = canRead ? settingsProfile.data?.hub_profile : undefined;
 	const activityChain = activityChainOf(appId);
 	const activityProbe = useAuditRecords(profile, appId ? activityChain : "");
-	const hasActivity = (activityProbe.data?.pages[0]?.records.length ?? 0) > 0;
+	const hasActivity =
+		(activityProbe.data?.pages?.[0]?.records?.length ?? 0) > 0;
 	const [tab, setTab] = useState("records");
 
 	if (!appId) return null;

@@ -11,7 +11,10 @@ import {
 
 describe("geolocation Event configuration", () => {
 	test("uses a Point center in longitude-latitude order while preserving the sink wire format", () => {
-		const point = { type: "Point", coordinates: [13.405, 52.52] };
+		const point: GeoJSON.Point = {
+			type: "Point",
+			coordinates: [13.405, 52.52],
+		};
 		expect(geofenceCenterFields(point)).toEqual({
 			latitude: 52.52,
 			longitude: 13.405,

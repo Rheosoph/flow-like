@@ -477,7 +477,7 @@ A widget update that adds a capability or a source, or a source whose level rise
 
 Approvals belong to one viewer on one device. Project admins cannot approve sources on behalf of their users.
 
-To revoke an approval, use the provenance header of the widget in the Inspector or the **Widget permissions** sheet on the app's packages page. **Clear widget permissions on this device** under **Settings → Registry** (developer mode) revokes every approval at once. Revoking unmounts the widget in every open tab.
+To revoke an approval, use the provenance header of the widget in the Inspector or the **Widget permissions** sheet on the app's packages page. In developer mode, a package's **⋯** menu under **Packages › Library** has **Clear widget permissions on this device**, which revokes every approval for that package's widgets at once. Revoking unmounts the widget in every open tab.
 
 | | Desktop | Web |
 | --- | --- | --- |
@@ -493,7 +493,7 @@ Before install, the store shows each widget's network summary on its card and th
 
 ### Previews run without network access
 
-Widget previews, such as the live widget cards in the store, have `csp`, runtime inputs, `media` and `microphone` stripped on the server before a grant is issued. A preview never reaches the network, even if the viewer approved the same widget in an app. Local `data:` and `blob:` bytes still work. Test network features in a real mount: a page, or **Developer → Test Widgets** on desktop.
+Widget previews, such as the live widget cards in the store, have `csp`, runtime inputs, `media` and `microphone` stripped on the server before a grant is issued. A preview never reaches the network, even if the viewer approved the same widget in an app. Local `data:` and `blob:` bytes still work. Test network features in a real mount: a page, or the **Test** tab of the package workspace on desktop (**Packages › Mine**, then open the package).
 
 ### How the policy is enforced
 

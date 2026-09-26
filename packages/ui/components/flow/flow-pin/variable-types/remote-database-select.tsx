@@ -8,6 +8,7 @@ import {
 	SelectItem,
 	SelectLabel,
 } from "../../../../components/ui/select";
+import { asArray } from "../../../../lib/response-shape";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -80,7 +81,7 @@ export function RemoteDatabaseSelect({
 
 				if (cancelled) return;
 
-				setLoadedTables({ targetAppId, tables: remoteTables });
+				setLoadedTables({ targetAppId, tables: asArray(remoteTables) });
 			} catch {
 				if (!cancelled) setError(true);
 			} finally {

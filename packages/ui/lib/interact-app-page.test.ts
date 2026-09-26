@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
 	type LivePageHandle,
 	isLivePageComponentEffectivelyHidden,
@@ -541,6 +541,62 @@ describe("interactWithAppPage", () => {
 		} finally {
 			unregisterSelected();
 			unregisterReplacement();
+		}
+	});
+
+	test("refuses to act on a page whose onLoad outlasts the settle budget", async () => {
+		const surface: Surface = {
+			id: "surface",
+			rootComponentId: "field",
+			components: {
+				field: {
+					id: "field",
+					component: {
+						id: "field",
+						type: "textField",
+						value: { literalString: "" },
+					},
+				},
+			},
+		};
+		const writes: unknown[] = [];
+		const unregister = registerLivePage(
+			liveHandle(surface, {
+				isLoading: () => true,
+				setElementValue: (_id, value) => writes.push(value),
+			}),
+		);
+		let clock = Date.now();
+		const now = spyOn(Date, "now").mockImplementation(() => {
+			clock += 20_000;
+			return clock;
+		});
+
+		try {
+			const result = await interactWithAppPage(
+				{} as Parameters<typeof interactWithAppPage>[0],
+				{
+					appId: "app",
+					eventId: "page-event",
+					captureScreenshots: false,
+					actions: [
+						{
+							action: "set_value",
+							component_id: "field",
+							value: "late",
+							hasValue: true,
+						},
+					],
+				},
+			);
+
+			expect(result.status).toBe("error");
+			expect(result.code).toBe("page_loading");
+			expect(result.retryable).toBe(true);
+			expect(writes).toEqual([]);
+		} finally {
+			now.mockRestore();
+			unregister();
 		}
 	});
 });

@@ -37,7 +37,7 @@ describe("web event trigger status", () => {
 				status: 503,
 			});
 			mocks.apiGet
-				.mockRejectedValueOnce({ status: 404 })
+				.mockRejectedValueOnce({ status: 404, code: "NOT_FOUND" })
 				.mockRejectedValueOnce(failure);
 			const state = new State(backend);
 			await expect(state.isEventSinkActive("event-1")).resolves.toBe(false);

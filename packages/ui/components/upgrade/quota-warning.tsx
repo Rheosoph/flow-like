@@ -50,8 +50,9 @@ function showQuotaNotice(
 
 export function QuotaWarnings({ overview }: { overview?: QuotaOverview }) {
 	useEffect(() => {
-		if (!overview) return;
-		if (overview.warnings) {
+		// Mounted app-wide: a restored or partial usage answer must not take the shell down.
+		if (!overview || !Array.isArray(overview.resources)) return;
+		if (Array.isArray(overview.warnings)) {
 			for (const notice of overview.warnings) {
 				if (warned.has(notice.id)) continue;
 				warned.add(notice.id);

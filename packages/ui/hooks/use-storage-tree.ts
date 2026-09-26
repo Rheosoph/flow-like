@@ -2,6 +2,7 @@
 
 import { useQueries } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
+import { asArray } from "../lib/response-shape";
 import type { IStorageItem } from "../lib/schema/storage/storage-item";
 import {
 	type IStorageScope,
@@ -114,7 +115,7 @@ export function useStorageTree({
 				return {
 					prefix,
 					entries: sortStorageEntries(
-						(result.data ?? []).map((item) =>
+						asArray(result.data).map((item) =>
 							storageTreeEntry(item, prefix, scope),
 						),
 					),

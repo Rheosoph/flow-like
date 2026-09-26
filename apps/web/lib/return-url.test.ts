@@ -6,9 +6,9 @@ describe("post-login return URLs", () => {
 		for (const path of [
 			"/library",
 			"/join?appId=app-1&token=invite%2Ftoken#accept",
-			"/c/support?message=hello%20world&sessionId=chat#reply",
-			"/f?event=contact&ref=site#form",
-			"/u/dashboard?returnTo=https%3A%2F%2Fexample.com",
+			"/a/app-1/support?message=hello%20world&sessionId=chat#reply",
+			"/a?app=app-1&route=%2Fcontact&ref=site#form",
+			"/a/app-1/dashboard?returnTo=https%3A%2F%2Fexample.com",
 			"/store?q=%5C%0A%2F%2Fevil.example",
 		]) {
 			expect(sanitizeReturnUrl(path)).toBe(path);
@@ -26,16 +26,16 @@ describe("post-login return URLs", () => {
 			"library",
 			"https://evil.example",
 			"javascript:alert(1)",
-			"//evil.example/c/support",
-			"/\\evil.example/c/support",
-			"/c/\\evil.example",
+			"//evil.example/a/app-1/support",
+			"/\\evil.example/a/app-1/support",
+			"/a/app-1/\\evil.example",
 			"/\tevil.example",
-			"/c/support\n",
-			"/c/support?message=hello world",
-			"/c/support#\u0000",
-			"/c/support#\u007f",
-			"/c/support#\u0085",
-			"/c/support#\u00a0",
+			"/a/app-1/support\n",
+			"/a/app-1/support?message=hello world",
+			"/a/app-1/support#\u0000",
+			"/a/app-1/support#\u007f",
+			"/a/app-1/support#\u0085",
+			"/a/app-1/support#\u00a0",
 		]) {
 			expect(sanitizeReturnUrl(value)).toBeNull();
 		}
@@ -44,7 +44,7 @@ describe("post-login return URLs", () => {
 	it("rejects paths that become protocol-relative after dot-segment normalization", () => {
 		for (const path of [
 			"/.//evil.example",
-			"/account/..//evil.example/c/support",
+			"/account/..//evil.example/a/app-1/support",
 			"/%2e//evil.example",
 			"/account/%2e%2e//evil.example",
 		]) {

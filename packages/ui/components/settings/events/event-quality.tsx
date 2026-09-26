@@ -26,6 +26,7 @@ import { discoverBoardTests } from "../../../lib/board-tests";
 import { formatRelativeTime } from "../../../lib/date";
 import { logLevelToNumber } from "../../../lib/log-level";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import type { INode } from "../../../lib/schema/flow/board";
 import type { IEvent } from "../../../lib/schema/flow/event";
 import type { ILog } from "../../../lib/schema/flow/log";
@@ -306,7 +307,7 @@ export function EventQuality({
 				loading={corpusQuery.isLoading}
 				error={corpusQuery.isError ? messageOf(corpusQuery.error) : null}
 				locked={!canReadCorpus}
-				canPromote={canWriteEvents}
+				canPromote={canWriteEvents && canReadLogs}
 				writeDeniedMessage={writeDeniedMessage}
 				suiteExists={suite !== null}
 				nodeName={nodeName}
@@ -341,7 +342,7 @@ export function EventQuality({
 				appId={appId}
 				event={event}
 				suite={suite}
-				runs={runsQuery.data ?? []}
+				runs={asArray(runsQuery.data)}
 				runsLoading={runsQuery.isLoading}
 				canExecute={canExecuteSuite}
 				canReadRunDetail={canReadCorpus}
@@ -1321,7 +1322,7 @@ function RunPanelCard({
 		Boolean(appId && boardId && suite !== null && canReadBoards),
 	);
 	const versionOptions = useMemo(() => {
-		const versions = [...(versionsQuery.data ?? [])];
+		const versions = [...asArray(versionsQuery.data)];
 		versions.sort((a, b) => b[0] - a[0] || b[1] - a[1] || b[2] - a[2]);
 		return versions.map((version) => version.join("."));
 	}, [versionsQuery.data]);

@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+	HOSTING_BLOCKER_FIX,
 	getHostedFrontendKind,
 	getHostedFrontendUrl,
+	getHostedRoute,
+	getHostingBlockers,
 	parseFrontendHosting,
 } from "./frontend-hosting";
+import { IEventExecutionMode, IEventExposure } from "./schema/flow/event";
 
 describe("hosted frontend access configuration", () => {
 	test("does not enable hosting for existing or malformed configuration", () => {
@@ -84,12 +88,63 @@ describe("hosted frontend access configuration", () => {
 		}
 	});
 
-	test("keeps the alias or ID within one URL path segment", () => {
+	test("addresses the app and puts the route in the path", () => {
+		expect(getHostedFrontendUrl("https://api.example.com/", "app-1", "/")).toBe(
+			"https://api.example.com/a/app-1",
+		);
 		expect(
-			getHostedFrontendUrl("https://api.example.com/", "c", "my-chat"),
-		).toBe("https://api.example.com/c/my-chat");
+			getHostedFrontendUrl("https://api.example.com", "app-1", "topic/"),
+		).toBe("https://api.example.com/a/app-1/topic");
 		expect(
-			getHostedFrontendUrl("http://localhost:8080", "f", "event/id?next=a"),
-		).toBe("http://localhost:8080/f/event%2Fid%3Fnext%3Da");
+			getHostedFrontendUrl("http://localhost:8080", "app/1", "/a b/c?x=1#y"),
+		).toBe("http://localhost:8080/a/app%2F1/a%20b/c");
+	});
+
+	test("reads the route an Event answers like the server does", () => {
+		expect(getHostedRoute({ route: "/config/" })).toBe("/config");
+		expect(getHostedRoute({ route: "feed", is_default: true })).toBe("/feed");
+		expect(getHostedRoute({ route: " ", is_default: true })).toBe("/");
+		expect(getHostedRoute({ route: null, is_default: false })).toBeNull();
+		expect(getHostedRoute({})).toBeNull();
+	});
+
+	test("names every requirement the server checks before serving a hosted link", () => {
+		const live = {
+			active: true,
+			execution_mode: IEventExecutionMode.Remote,
+			exposure: IEventExposure.Public,
+		};
+		expect(getHostingBlockers(live, "/")).toEqual([]);
+		expect(getHostingBlockers({ ...live, exposure: undefined }, "/x")).toEqual(
+			[],
+		);
+		expect(getHostingBlockers(live, null)).toEqual(["no_route"]);
+		expect(
+			getHostingBlockers(
+				{ ...live, execution_mode: IEventExecutionMode.Local },
+				"/",
+			),
+		).toEqual(["local_execution"]);
+		expect(
+			getHostingBlockers({ ...live, execution_mode: undefined }, "/"),
+		).toEqual(["local_execution"]);
+		const broken = {
+			active: false,
+			execution_mode: IEventExecutionMode.Local,
+			exposure: IEventExposure.Internal,
+		};
+		const blockers = getHostingBlockers(broken, null);
+		expect(blockers).toEqual([
+			"no_route",
+			"inactive",
+			"local_execution",
+			"internal_exposure",
+		]);
+		expect(HOSTING_BLOCKER_FIX.no_route).toBeUndefined();
+		const fixed = Object.assign(
+			{ ...broken },
+			...blockers.map((blocker) => HOSTING_BLOCKER_FIX[blocker] ?? {}),
+		);
+		expect(getHostingBlockers(fixed, "/")).toEqual([]);
 	});
 });

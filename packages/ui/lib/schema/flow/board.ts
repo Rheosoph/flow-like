@@ -136,6 +136,8 @@ export interface INode {
 	receiver?: null | string;
 	/** Editor-only: unconnected data pins are hidden behind the node latch. */
 	pins_collapsed?: boolean | null;
+	/** The editor generated this reroute and may replace it during automatic layout. */
+	auto_reroute?: boolean | null;
 	[property: string]: any;
 }
 

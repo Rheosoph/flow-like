@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, Plus, Route, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { CourseListItem, LearningPath } from "../../../lib/learn/types";
+import { asArray } from "../../../lib/response-shape";
 import type { IProfile } from "../../../types";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -131,7 +132,7 @@ export function LearningPathsAdmin({
 		},
 	});
 
-	const paths = pathsQuery.data ?? [];
+	const paths = asArray(pathsQuery.data);
 
 	return (
 		<div className="space-y-3">

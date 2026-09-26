@@ -181,10 +181,19 @@ describe("Hugging Face MLX repository inspection", () => {
 			),
 		).toBe(true);
 
-		const draft = {
+		const draft: IBit = {
 			id: "root",
 			type: IBitTypes.Llm,
-			meta: { en: { name: "", description: "", tags: [] } },
+			meta: {
+				en: {
+					name: "",
+					description: "",
+					tags: [],
+					preview_media: [],
+					created_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+					updated_at: { secs_since_epoch: 0, nanos_since_epoch: 0 },
+				},
+			},
 			authors: [],
 			repository: "",
 			download_link: "",
@@ -202,7 +211,7 @@ describe("Hugging Face MLX repository inspection", () => {
 			dependency_tree_hash: "",
 			created: "",
 			updated: "",
-		} as IBit;
+		};
 		const root = applyHuggingFaceMlxImportToBit(draft, imported);
 		expect(root).toMatchObject({
 			type: IBitTypes.Vlm,

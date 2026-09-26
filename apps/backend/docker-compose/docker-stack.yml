@@ -81,7 +81,6 @@ services:
     image: ${AUDIT_WORKER_IMAGE:-ghcr.io/rheosoph/flow-like-audit-worker:${FLOW_LIKE_IMAGE_TAG:-dev}}
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-      FLOW_LIKE_CONFIG_JSON: ${AUDIT_WORKER_CONFIG_JSON:?Generate the audit worker policy from the API config}
       DATABASE_URL: ${AUDIT_DATABASE_URL:?Configure the audit worker database URL}
       SINK_TOKEN_ENCRYPTION_KEY: ${SINK_TOKEN_ENCRYPTION_KEY:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}

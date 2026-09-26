@@ -1,6 +1,7 @@
 use flow_like::flow_like_storage::object_store::ObjectStoreExt;
 use std::{
     io::Cursor,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -24,11 +25,13 @@ use image::ImageReader;
 use serde::Deserialize;
 use serde_json::Value;
 use tauri::AppHandle;
+pub mod duplicate;
 pub mod flowpilot_builds;
 pub mod fork;
 pub mod graph;
 pub mod saved_queries;
 pub mod sharing;
+pub mod device_export;
 pub mod tables;
 
 async fn presign_meta(
@@ -175,7 +178,7 @@ pub async fn upsert_board(
     if app.boards.contains(&board_id) {
         let board = app.open_board(board_id.clone(), None, None).await;
         if let Ok(board) = board {
-            let mut board = board.lock().await;
+            let mut board = board.write().await;
             board.name = name;
             board.description = description;
             if let Some(log_level) = log_level {
@@ -231,7 +234,7 @@ pub async fn upsert_board(
             .open_board(new_board.board_id, Some(false), None)
             .await?;
         drop(app);
-        let mut board = board.lock().await;
+        let mut board = board.write().await;
         board.name = name;
         board.description = description;
         board.log_level = board_data.log_level;
@@ -257,7 +260,7 @@ pub async fn upsert_board(
     let board = app.open_board(created.board_id, Some(false), None).await?;
     app.save().await?;
 
-    let mut board = board.lock().await;
+    let mut board = board.write().await;
     board.name = name;
     board.description = description;
     if let Some(log_level) = log_level {
@@ -671,7 +674,7 @@ pub async fn delete_app(app_handle: AppHandle, app_id: String) -> Result<(), Tau
 pub async fn get_app_boards(
     app_handle: AppHandle,
     app_id: String,
-) -> Result<Vec<Board>, TauriFunctionError> {
+) -> Result<Vec<Arc<Board>>, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
 
     let mut boards = vec![];
@@ -679,7 +682,7 @@ pub async fn get_app_boards(
         for board_id in app.boards.iter() {
             let board = app.open_board(board_id.clone(), Some(false), None).await;
             if let Ok(board) = board {
-                boards.push(board.lock().await.clone());
+                boards.push(board.snapshot());
             }
         }
     }
@@ -778,7 +781,7 @@ pub async fn get_app_board_summaries(
         for board_id in app.boards.iter() {
             if let Ok(board) = app.open_board(board_id.clone(), Some(false), None).await {
                 summaries.push(local_board_summary(
-                    &*board.lock().await,
+                    &board.snapshot(),
                     with_node_types,
                     with_metrics,
                 ));
@@ -810,7 +813,7 @@ pub async fn get_app_board_variables(
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         for board_id in app.boards.iter() {
             if let Ok(board) = app.open_board(board_id.clone(), Some(false), None).await {
-                let board = board.lock().await;
+                let board = board.snapshot();
                 let (variables, refs) = board.public_variables();
                 result.push(LocalBoardVariables {
                     board_id: board.id.clone(),
@@ -831,14 +834,14 @@ pub async fn get_app_board(
     app_id: String,
     board_id: String,
     push_to_registry: bool,
-) -> Result<Board, TauriFunctionError> {
+) -> Result<Arc<Board>, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
 
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app
             .open_board(board_id, Some(push_to_registry), None)
             .await?;
-        return Ok(board.lock().await.clone());
+        return Ok(board.snapshot());
     }
 
     Err(TauriFunctionError::new("Board not found"))
@@ -856,7 +859,7 @@ pub async fn set_app_config(
 
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), None).await?;
-        let mut board = board.lock().await;
+        let mut board = board.write().await;
         if let Some(variable) = board.variables.get_mut(&variable_id) {
             variable.default_value = Some(serde_json::to_vec(&default_value).unwrap());
             board.mark_changed();

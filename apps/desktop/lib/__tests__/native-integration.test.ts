@@ -105,7 +105,7 @@ function context(backend: IBackendState): NativeDispatchContext {
 	};
 }
 describe("native app paths", () => {
-	test("opens the chosen app path with structured raw query values and duplicate names", async () => {
+	test("opens the exported use page with an app route and structured query values", async () => {
 		const backend = fixture([event({ route: "/orders/123" })]);
 		const ctx = context(backend);
 		await dispatchNativeAction(
@@ -125,10 +125,10 @@ describe("native app paths", () => {
 			vi.mocked(ctx.navigate).mock.calls[0][0],
 			"https://app.test",
 		);
-		expect(url.pathname).toBe("/use/orders/123");
+		expect(url.pathname).toBe("/use");
 		expect(url.searchParams.get("id")).toBe("app");
 		expect(url.searchParams.get("eventId")).toBeNull();
-		expect(url.searchParams.get("route")).toBeNull();
+		expect(url.searchParams.get("route")).toBe("/orders/123");
 		expect(appQueryContext(url.search)).toMatchObject({
 			_query_params: {
 				id: "wrong",
@@ -237,12 +237,12 @@ describe("native app paths", () => {
 				"app",
 				"event",
 			);
-			expect(
-				readUseRoutePath(
-					new URL(vi.mocked(ctx.navigate).mock.calls[0][0], "https://app.test")
-						.pathname,
-				),
-			).toBe(path);
+			const url = new URL(
+				vi.mocked(ctx.navigate).mock.calls[0][0],
+				"https://app.test",
+			);
+			expect(url.pathname).toBe("/use");
+			expect(url.searchParams.get("route")).toBe(path);
 		}
 	});
 

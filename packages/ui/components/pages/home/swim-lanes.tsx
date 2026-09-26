@@ -15,6 +15,7 @@ import {
 	CATEGORY_ICONS,
 	categoryColor,
 } from "../../../lib/category-meta";
+import { asArray } from "../../../lib/response-shape";
 import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
 import { type IBackendState, useBackend } from "../../../state/backend-state";
 import { sortAppPairsByRecency } from "../../library/library-types";
@@ -125,11 +126,11 @@ export function HomeSwimlanes() {
 	const router = useRouter();
 	const { data, error } = useSwimlanes();
 	const ownedIds = useMemo(
-		() => new Set((apps.data ?? []).map(([app]) => app.id)),
+		() => new Set(asArray(apps.data).map(([app]) => app.id)),
 		[apps.data],
 	);
 	const recentLibraryApps = useMemo(
-		() => sortAppPairsByRecency(apps.data ?? []).slice(0, 6),
+		() => sortAppPairsByRecency(asArray(apps.data)).slice(0, 6),
 		[apps.data],
 	);
 
@@ -158,7 +159,7 @@ export function HomeSwimlanes() {
 
 				{!error && !data && <LanesSkeleton />}
 
-				{data?.map((swimlane) => (
+				{asArray(data).map((swimlane) => (
 					<SwimlaneSection
 						key={swimlane.id}
 						swimlane={swimlane}
@@ -356,7 +357,8 @@ function LatestUserAppsSection({
 	router: AppRouterInstance;
 }>) {
 	const { t } = useTranslation("common");
-	if (!latestApps.data?.length) {
+	const apps = asArray(latestApps.data);
+	if (apps.length === 0) {
 		if (!latestApps.isFetching) {
 			return null;
 		}
@@ -393,7 +395,7 @@ function LatestUserAppsSection({
 				href="/store/explore/apps?sort=newest"
 			/>
 			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-				{latestApps.data.map(([app, metadata]) => {
+				{apps.map(([app, metadata]) => {
 					const isOwned = ownedIds.has(app.id);
 					const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
 
@@ -625,13 +627,14 @@ function SpotlightAppLoading({
 	router: AppRouterInstance;
 }>) {
 	const app = useInvoke(backend.appState.searchApps, backend.appState, [appId]);
+	const [entry] = asArray(app.data);
 
-	if (!app.data || app.data.length === 0) {
+	if (!entry) {
 		if (!app.isFetching) return null;
 		return <Skeleton className="h-61 w-full rounded-2xl" />;
 	}
 
-	const [data, meta] = app.data[0];
+	const [data, meta] = entry;
 	const isOwned = ownedIds.has(data.id);
 	const href = isOwned ? `/use?id=${data.id}` : `/store?id=${data.id}`;
 
@@ -662,11 +665,12 @@ function SpotlightSearch({
 		if (!results.isFetching) return null;
 		return <Skeleton className="h-61 w-full rounded-2xl" />;
 	}
-	if (results.data.length === 0) return null;
+	const apps = asArray(results.data);
+	if (apps.length === 0) return null;
 
 	return (
 		<>
-			{results.data.map(([app, metadata]) => {
+			{apps.map(([app, metadata]) => {
 				const isOwned = ownedIds.has(app.id);
 				const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
 				return (
@@ -785,12 +789,13 @@ function RankedColumn({
 		);
 	}
 
-	if (results.data.length === 0) return null;
+	const apps = asArray(results.data);
+	if (apps.length === 0) return null;
 
 	return (
 		<div className="flex flex-col gap-2">
 			<RankedColumnHeader searchQuery={searchQuery} />
-			{results.data.map(([app, metadata], index) => {
+			{apps.map(([app, metadata], index) => {
 				const isOwned = ownedIds.has(app.id);
 				const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
 				return (
@@ -861,11 +866,12 @@ function SearchCards({
 		);
 	}
 
-	if (results.data.length === 0) return null;
+	const apps = asArray(results.data);
+	if (apps.length === 0) return null;
 
 	return (
 		<ScrollRail>
-			{results.data.map(([app, metadata]) => {
+			{apps.map(([app, metadata]) => {
 				const isOwned = ownedIds.has(app.id);
 				const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
 				return (
@@ -1041,7 +1047,7 @@ function BitCardLoading({
 		hub,
 	]);
 
-	if (!bit.data) {
+	if (!bit.data?.meta) {
 		if (!bit.isFetching) return null;
 		return <Skeleton className="h-full min-h-[210px] w-full rounded-xl" />;
 	}
@@ -1063,8 +1069,9 @@ function AppCardLoading({
 	router: AppRouterInstance;
 }>) {
 	const app = useInvoke(backend.appState.searchApps, backend.appState, [appId]);
+	const [entry] = asArray(app.data);
 
-	if (!app.data || app.data.length === 0) {
+	if (!entry) {
 		// A missing app (deleted/unpublished) is terminal — don't animate forever.
 		if (!app.isFetching) return null;
 		return (
@@ -1074,7 +1081,7 @@ function AppCardLoading({
 		);
 	}
 
-	const [data, meta] = app.data[0];
+	const [data, meta] = entry;
 	const isOwned = ownedIds.has(data.id);
 	const href = isOwned ? `/use?id=${data.id}` : `/store?id=${data.id}`;
 

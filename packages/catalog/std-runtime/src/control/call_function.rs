@@ -81,6 +81,9 @@ impl CallFunctionNode {
         } else {
             Some(overrides.clone())
         };
+        // Resolved by direction: an input may share an output's name, and a by-name lookup
+        // would write the return value into that input.
+        let output_pins = Self::output_data_pins(context);
 
         for layer_pin in layer.pins.values() {
             if layer_pin.pin_type != PinType::Output
@@ -88,6 +91,12 @@ impl CallFunctionNode {
             {
                 continue;
             }
+            let Some(output_pin) = output_pins
+                .iter()
+                .find(|pin| pin.name.as_ref() == layer_pin.name)
+            else {
+                continue;
+            };
 
             for dep_pin_id in &layer_pin.depends_on {
                 // Find the InternalPin for this dependency
@@ -106,7 +115,7 @@ impl CallFunctionNode {
                 // while checking overrides at each step. This correctly handles
                 // bridge pins, relay pins, and prevents stale shared pin reads.
                 if let Ok(value) = evaluate_pin_value(pin, &overrides_opt).await {
-                    let _ = context.set_pin_value(&layer_pin.name, value).await;
+                    let _ = context.set_pin_ref_value(output_pin, value).await;
                     break;
                 }
             }
@@ -763,9 +772,15 @@ impl NodeLogic for CallFunctionNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow::pin::ValueType;
-    use flow_like_types::json::json;
-    use std::collections::BTreeSet;
+    use ahash::AHashMap;
+    use flow_like::{
+        flow::{board::ExecutionStage, execution::Run, pin::ValueType, variable::Variable},
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_types::{Cacheable, json::json, sync::Mutex};
+    use std::{collections::BTreeSet, sync::Weak};
 
     fn pin(name: &str, pin_type: PinType, data_type: VariableType, index: u16) -> Pin {
         Pin {
@@ -863,6 +878,132 @@ mod tests {
             ordered_pin_names(&node, PinType::Output),
             vec!["out_second", "out_first"]
         );
+    }
+
+    fn internal_node(node: Node) -> Arc<InternalNode> {
+        let mut pins = AHashMap::new();
+        let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+        for pin in node.pins.values() {
+            let internal_pin = Arc::new(InternalPin::new(pin, false));
+            name_cache
+                .entry(pin.name.clone())
+                .or_default()
+                .push(internal_pin.clone());
+            pins.insert(pin.id.clone(), internal_pin);
+        }
+        // Only pins are read in these tests, so the logic is never run.
+        let logic: Arc<dyn NodeLogic> = Arc::new(CallFunctionNode::new());
+        let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
+        for pin in internal.pins.iter() {
+            pin.init_node(Arc::downgrade(&internal));
+            pin.init_connected_to(Vec::new());
+            pin.init_depends_on(Vec::new());
+        }
+        internal
+    }
+
+    async fn context_for(
+        call: &Arc<InternalNode>,
+        others: Vec<Arc<InternalNode>>,
+    ) -> ExecutionContext {
+        let nodes = Arc::new(AHashMap::from_iter(
+            std::iter::once(call.clone())
+                .chain(others)
+                .map(|node| (node.node_id().to_string(), node)),
+        ));
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let variables = Arc::new(Mutex::new(AHashMap::<String, Variable>::new()));
+        let cache = Arc::new(RwLock::new(AHashMap::<String, Arc<dyn Cacheable>>::new()));
+        let run: Weak<Mutex<Run>> = Weak::new();
+        ExecutionContext::new(
+            nodes,
+            &run,
+            &state,
+            call,
+            &variables,
+            &cache,
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn read_outputs_writes_the_output_pin_when_an_input_shares_its_name() {
+        let mut producer = Node::new("test_producer", "Producer", "", "Tests");
+        let producer_pin_id = producer
+            .add_output_pin("value", "Value", "", VariableType::Integer)
+            .id
+            .clone();
+        let producer = internal_node(producer);
+        producer
+            .get_pin_by_id(&producer_pin_id)
+            .unwrap()
+            .set_value(json!(42))
+            .await;
+
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Example Function".to_string(),
+            LayerType::Function,
+        );
+        let mut payload_in = pin("payload", PinType::Input, VariableType::Integer, 1);
+        payload_in.id = "payload_in_id".to_string();
+        let mut payload_out = pin("payload", PinType::Output, VariableType::Integer, 3);
+        payload_out.id = "payload_out_id".to_string();
+        payload_out.depends_on.insert(producer_pin_id);
+        // Outputs ahead of it push the mirrored output behind the input in the name lookup.
+        let first = pin("first", PinType::Output, VariableType::Integer, 1);
+        let second = pin("second", PinType::Output, VariableType::Integer, 2);
+        for layer_pin in [payload_in, payload_out, first, second] {
+            layer.pins.insert(layer_pin.id.clone(), layer_pin);
+        }
+
+        let board = board_with_layer(layer);
+        let logic = CallFunctionNode::new();
+        let mut node = logic.get_node();
+        node.get_pin_mut_by_name("function_layer_id")
+            .unwrap()
+            .set_default_value(Some(json!("function-layer")));
+        logic.on_update(&mut node, &board).await;
+
+        let call = internal_node(node);
+        let mut context = context_for(&call, vec![producer]).await;
+        assert_eq!(
+            context.get_pin_by_name("payload").await.unwrap().pin_type,
+            PinType::Input
+        );
+
+        logic
+            .read_outputs(
+                &mut context,
+                board.layers.get("function-layer").unwrap(),
+                &BTreeMap::new(),
+            )
+            .await;
+
+        let payload = |pin_type: PinType| {
+            call.pins
+                .iter()
+                .find(|pin| pin.name.as_ref() == "payload" && pin.pin_type == pin_type)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(
+            payload(PinType::Output).get_raw_value().await,
+            Some(json!(42))
+        );
+        assert_eq!(payload(PinType::Input).get_raw_value().await, None);
     }
 
     fn inputs(pairs: &[(&str, Value)]) -> HashMap<String, Value> {

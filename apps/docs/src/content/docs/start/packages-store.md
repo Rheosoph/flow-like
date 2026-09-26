@@ -39,15 +39,19 @@ Open a package to review:
 - **Overview** — description, README, author, links, usage, and publication
   information supplied by the maintainer.
 - **Nodes** — the nodes exported by the package.
-- **Permissions** — declared resource limits and host capabilities.
+- **Permissions** — resource tiers, allowed hosts, and OAuth scopes from the
+  manifest, and the capabilities derived from the package's nodes.
 - **Versions** — available, installed, yanked, disabled, or review versions.
 - **Reviews** — user reviews and ratings.
 
-Permissions can include network access, scoped storage, OAuth scopes, runtime
-variables, cache, streaming, A2UI, or model access. Network declarations can
-also constrain allowed hosts and protocol families. Requesting a permission
-does not mean the package should receive it blindly—compare the declaration
-with what the nodes are supposed to do.
+Capabilities can include network access, storage, database access, runtime
+variables, cache, streaming, A2UI, or model access. Authors do not enter them
+in the manifest: each node declares its permissions in code, the sandbox
+enforces them per node, and the registry derives this listing from the compiled
+node definitions. The manifest adds the memory and timeout tiers, a
+package-wide allowed-host list, and OAuth scopes with their reasons. A listed
+capability does not mean the package should receive it blindly—compare the
+listing with what the nodes are supposed to do.
 
 :::caution[Verification is not a security warranty]
 A verified badge records registry review state. It does not make third-party
@@ -74,6 +78,33 @@ Installation and App linkage are separate:
 For online Apps, the App's **Packages** screen can enable automatic updates.
 Offline Apps keep an explicit linked version. Review available updates before
 changing a production App's package version.
+
+## Paid packages and project licences
+
+A paid package shows its price on the detail page. Select the price to buy it.
+The package unlocks for installing once the payment is confirmed. Your
+purchases are listed under **Account → Purchases**.
+
+Paid, private and access-request packages are licensed per App. An admin or
+the owner who has the package adds it to the App and holds its licence. Every
+member of the App can then use it, including on Desktop, without buying it
+themselves. The **Add Package** dialog marks the packages you own. For one you
+don't have yet, it sends you to the store to get it first.
+
+If the licence holder leaves the App or loses the package, the licence passes to
+another admin or the owner who has the package. If nobody else has it:
+
+- The package's licence lapses. Updates and version changes stop right away.
+- Admins and the owner get a notification. The **Packages** screen shows a
+  countdown to the day the package stops working.
+- The package keeps working for **30 days**. Reminders go out a week and a day
+  before it is disabled.
+- After 30 days the package is disabled in that App. Cloud runs and Desktop
+  downloads no longer load it, and flows that use its nodes stop running.
+
+As soon as an admin or the owner gets the package, the licence moves to them
+and the package works again. You can also select **Reactivate** on the
+**Packages** screen after getting it.
 
 ## Remove or update
 

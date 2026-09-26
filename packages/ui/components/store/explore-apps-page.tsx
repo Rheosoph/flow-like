@@ -30,6 +30,7 @@ import {
 	formatAppCategory,
 } from "../../lib/app-category";
 import { APP_CATEGORY_ORDER, categoryColor } from "../../lib/category-meta";
+import { asArray } from "../../lib/response-shape";
 import type { IApp } from "../../lib/schema/app/app";
 import {
 	IAppCategory,
@@ -38,7 +39,7 @@ import {
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
-import { CARD_MIN_W_DESKTOP } from "../library/library-types";
+import { CARD_MIN_W_DESKTOP, appPairs } from "../library/library-types";
 import { Alert, AlertDescription } from "../ui/alert";
 import { AppCard } from "../ui/app-card";
 import { Button } from "../ui/button";
@@ -211,7 +212,9 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	const combinedApps = useMemo(() => {
 		const seen = new Set<string>();
 		const deduped: AppEntry[] = [];
-		for (const entry of searchResults?.pages.flat() ?? []) {
+		for (const entry of asArray(searchResults?.pages).flatMap((page) =>
+			appPairs(page),
+		)) {
 			if (seen.has(entry[0].id)) continue;
 			seen.add(entry[0].id);
 			deduped.push(entry);
@@ -220,7 +223,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	}, [searchResults]);
 
 	const userAppIds = useMemo(
-		() => new Set(userApps.data?.map(([app]) => app.id) ?? []),
+		() => new Set(appPairs(userApps.data).map(([app]) => app.id)),
 		[userApps.data],
 	);
 
@@ -243,12 +246,12 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 				backend.routeState.getRoutes(appId, true).catch(() => []),
 				backend.eventState.getEvents(appId, true).catch(() => []),
 			]);
-			const activeEvents = events.filter((event) => event.active);
+			const activeEvents = asArray(events).filter((event) => event.active);
 			const activeEventsById = new Map(
 				activeEvents.map((event) => [event.id, event] as const),
 			);
 
-			const hasUsableRoute = routes.some((route) => {
+			const hasUsableRoute = asArray(routes).some((route) => {
 				const routeEvent = activeEventsById.get(route.eventId);
 				return Boolean(
 					routeEvent?.default_page_id ||

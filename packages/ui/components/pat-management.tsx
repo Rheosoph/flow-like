@@ -15,6 +15,7 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../hooks/use-invoke";
 import { parseDateValue } from "../lib/date";
+import { asArray } from "../lib/response-shape";
 import { cn } from "../lib/utils";
 import { useBackend } from "../state/backend-state";
 import { Badge } from "./ui/badge";
@@ -481,8 +482,7 @@ export function PatManagement() {
 	);
 
 	const sortedPats = useMemo(() => {
-		if (!pats.data) return [];
-		return [...pats.data].sort((a, b) => {
+		return [...asArray(pats.data)].sort((a, b) => {
 			const aExpired = isExpired(a.valid_until);
 			const bExpired = isExpired(b.valid_until);
 			if (aExpired !== bExpired) return aExpired ? 1 : -1;

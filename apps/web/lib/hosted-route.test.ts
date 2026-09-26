@@ -4,91 +4,212 @@ import {
 	hostedNavigationPath,
 	hostedReturnPath,
 	isHostedFrontendPath,
+	isHostedQueryPath,
 	parseHostedTarget,
 } from "./hosted-route";
 
+const parse = (path: string) =>
+	parseHostedTarget(new URL(path, "https://example.com"));
+
 describe("hosted interface routes", () => {
-	it("only bypasses app providers for the bounded hosted route prefixes", () => {
-		for (const path of [
-			"/c",
-			"/f",
-			"/u",
-			"/c/support",
-			"/f/contact/",
-			"/u/dashboard",
-		])
+	it("only bypasses app providers for the app-scoped hosted prefix", () => {
+		for (const path of ["/a", "/a/", "/a/app-1", "/a/app-1/support/"])
 			expect(isHostedFrontendPath(path)).toBe(true);
 		for (const path of [
 			null,
 			"/",
-			"/chat",
+			"/about",
+			"/account",
+			"/admin",
+			"/ai",
+			"/app",
+			"/c/support",
+			"/f/contact",
+			"/u/dashboard",
 			"/callback",
 			"/use",
-			"/custom",
-			"/forms",
-			"/users",
 		])
 			expect(isHostedFrontendPath(path)).toBe(false);
+		expect(isHostedQueryPath("/a")).toBe(true);
+		expect(isHostedQueryPath("/a/")).toBe(true);
+		expect(isHostedQueryPath("/a/app-1")).toBe(false);
 	});
-	for (const kind of ["c", "f", "u"] as const) {
-		it(`resolves ${kind} event IDs and aliases without static dynamic routes`, () => {
-			expect(
-				parseHostedTarget(
-					new URL(`https://example.com/${kind}/my-alias?sessionId=chat#reply`),
-				),
-			).toEqual({ kind, slug: "my-alias" });
-			expect(
-				parseHostedTarget(
-					new URL(`https://example.com/${kind}?event=event_123`),
-				),
-			).toEqual({ kind, slug: "event_123" });
-			expect(hostedApiPath({ kind, slug: "event_123" })).toBe(
-				`frontend/${kind}/event_123`,
-			);
+
+	it("reads the app and route from the path form", () => {
+		expect(parse("/a/app-1")).toEqual({ app: "app-1", route: "/" });
+		expect(parse("/a/app-1/")).toEqual({ app: "app-1", route: "/" });
+		expect(parse("/a/app-1/support?sessionId=chat#reply")).toEqual({
+			app: "app-1",
+			route: "/support",
 		});
-	}
-	it("preserves the full hosted return path across sign-in", () => {
-		expect(
-			hostedReturnPath("/c/help?sessionId=abc&message=hello%20world#reply"),
-		).toBe("/c/help?sessionId=abc&message=hello%20world#reply");
-		expect(hostedReturnPath("/f?event=feedback&ref=site#form")).toBe(
-			"/f?event=feedback&ref=site#form",
+		expect(parse("/a/app_1/support/demo//")).toEqual({
+			app: "app_1",
+			route: "/support/demo",
+		});
+		expect(parse("/a/app-1/my%20page/%C3%BCber")).toEqual({
+			app: "app-1",
+			route: "/my page/über",
+		});
+		expect(parse("/a/app-1/Config")).toEqual({
+			app: "app-1",
+			route: "/Config",
+		});
+		expect(parse("/a/%61pp-1/x")).toEqual({ app: "app-1", route: "/x" });
+	});
+
+	it("reads the app and route from the query form", () => {
+		expect(parse("/a?app=app-1&route=%2Fcontact&ref=site")).toEqual({
+			app: "app-1",
+			route: "/contact",
+		});
+		expect(parse("/a/?app=app-1&route=contact/")).toEqual({
+			app: "app-1",
+			route: "/contact",
+		});
+		expect(parse("/a?app=app-1")).toEqual({ app: "app-1", route: "/" });
+		expect(parse("/a?app=app-1&route=")).toEqual({ app: "app-1", route: "/" });
+	});
+
+	it("keeps the served variant", () => {
+		expect(parse("/a/app-1/support?__variant=beta")).toEqual({
+			app: "app-1",
+			route: "/support",
+			variant: "beta",
+		});
+		expect(parse("/a?app=app-1&route=%2F&__variant=beta")).toEqual({
+			app: "app-1",
+			route: "/",
+			variant: "beta",
+		});
+	});
+
+	it("rejects malformed app ids and routes", () => {
+		for (const path of [
+			"/a",
+			"/a?route=%2Fcontact",
+			"/a//support",
+			"/a/app.1",
+			"/a/app%201",
+			`/a/${"x".repeat(129)}`,
+			"/a/%2f%2fevil.test",
+			"/a/%ZZ",
+			"/a/app-1/%ZZ",
+			"/a/app-1/a%2Fb",
+			"/a/app-1/a%5Cb",
+			"/a/app-1/a%3Fb",
+			"/a/app-1/a%23b",
+			"/a/app-1/a%00b",
+			"/a?app=app-1&route=%2Fa%5Cb",
+			"/a?app=bad%20app&route=%2F",
+			"/c/support",
+			"/use?id=app-1&route=%2Fsupport",
+		])
+			expect(parse(path)).toBeNull();
+	});
+
+	it("addresses the runtime API by app", () => {
+		expect(hostedApiPath({ app: "app-1", route: "/support" })).toBe(
+			"frontend/a/app-1",
 		);
 	});
+
+	it("preserves the full hosted return path across sign-in", () => {
+		expect(
+			hostedReturnPath(
+				"/a/app-1/help?sessionId=abc&message=hello%20world#reply",
+			),
+		).toBe("/a/app-1/help?sessionId=abc&message=hello%20world#reply");
+		expect(hostedReturnPath("/a/app-1")).toBe("/a/app-1");
+		expect(
+			hostedReturnPath("/a?app=app-1&route=%2Ffeedback&ref=site#form"),
+		).toBe("/a?app=app-1&route=%2Ffeedback&ref=site#form");
+	});
+
 	it("rejects off-origin and non-hosted auth return targets", () => {
 		for (const value of [
-			"https://evil.test/c/alias",
-			"//evil.test/c/alias",
-			"/\\evil.test/c/alias",
-			"/c/a\n",
-			"/c/%2f%2fevil.test",
-			"/c/%ZZ",
+			"https://evil.test/a/app-1",
+			"//evil.test/a/app-1",
+			"/\\evil.test/a/app-1",
+			"/a/app-1\n",
+			"/a/%2f%2fevil.test",
+			"/a/app-1/%2f%2fevil.test",
+			"/a/%ZZ",
+			"/a",
+			"/c/help",
 			"/callback",
-			"/c/a/extra",
 			"/admin",
 			"javascript:alert(1)",
 		])
 			expect(hostedReturnPath(value)).toBeNull();
 	});
-	it("only navigates to routes returned by the hosting API", () => {
+
+	it("navigates within the same app to routes returned by the hosting API", () => {
 		const routes = [
+			{ path: "/", event_id: "chat_123", kind: "c" as const },
 			{ path: "/contact", event_id: "form_123", kind: "f" as const },
+			{ path: "/my page", event_id: "page_123", kind: "u" as const },
 		];
-		expect(hostedNavigationPath("/contact?source=chat#details", routes)).toBe(
-			"/f/form_123?source=chat#details",
+		expect(
+			hostedNavigationPath("app-1", "/contact?source=chat#details", routes),
+		).toBe("/a/app-1/contact?source=chat#details");
+		expect(hostedNavigationPath("app-1", "/contact/", routes)).toBe(
+			"/a/app-1/contact",
+		);
+		expect(hostedNavigationPath("app-1", "contact", routes)).toBe(
+			"/a/app-1/contact",
+		);
+		expect(hostedNavigationPath("app-1", "/", routes)).toBe("/a/app-1");
+		expect(hostedNavigationPath("app-1", "/my%20page", routes)).toBe(
+			"/a/app-1/my%20page",
 		);
 		expect(
 			hostedNavigationPath(
-				"/use?id=app&route=%2Fcontact",
+				"app-1",
+				"/use?id=app-1&route=%2Fcontact&eventId=x&sessionId=s&app=y&keep=1",
 				routes,
 				{ source: "chat" },
+			),
+		).toBe("/a/app-1/contact?keep=1&source=chat");
+		expect(hostedNavigationPath("app-1", "/use/contact?id=app-1", routes)).toBe(
+			"/a/app-1/contact",
+		);
+	});
+
+	it("keeps query routing on the /a entry point", () => {
+		const routes = [{ path: "/contact" }];
+		expect(
+			hostedNavigationPath(
+				"app-1",
+				"/use?id=app-1&route=%2Fcontact",
+				routes,
+				{ source: "chat", route: "/other", app: "other" },
 				true,
 			),
-		).toBe("/f?source=chat&event=form_123");
-		expect(() => hostedNavigationPath("/private", routes)).toThrow(
+		).toBe("/a?app=app-1&route=%2Fcontact&source=chat");
+		expect(
+			parse(hostedNavigationPath("app-1", "/contact#form", routes, {}, true)),
+		).toEqual({ app: "app-1", route: "/contact" });
+	});
+
+	it("refuses routes that are not published on this link", () => {
+		const routes = [{ path: "/contact" }];
+		expect(() => hostedNavigationPath("app-1", "/private", routes)).toThrow(
+			"The page /private has not been published on this link.",
+		);
+		expect(() => hostedNavigationPath("app-1", "/Contact", routes)).toThrow(
 			"not been published",
 		);
-		expect(() => hostedNavigationPath("//evil.test/contact", routes)).toThrow();
-		expect(hostedNavigationPath("/contact/", routes)).toBe("/f/form_123");
+		expect(() =>
+			hostedNavigationPath("app-1", "//evil.test/contact", routes),
+		).toThrow();
+		expect(() =>
+			hostedNavigationPath("app-1", "https://evil.test/contact", routes),
+		).toThrow();
+		expect(() => hostedNavigationPath("app-1", "/contact%3Fx", routes)).toThrow(
+			"does not point to a published app route",
+		);
+		expect(() => hostedNavigationPath("app-1", "/%ZZ", routes)).toThrow(
+			"does not point to a published app route",
+		);
 	});
 });

@@ -1,11 +1,13 @@
-import type {
-	ICreateDiscountRequest,
-	IDiscount,
-	IPurchasesResponse,
-	ISalesOverview,
-	ISalesState,
-	ISalesStats,
-	IUpdateDiscountRequest,
+import {
+	type ICreateDiscountRequest,
+	type IDiscount,
+	type IFlowPaymentsReport,
+	type IPurchasesResponse,
+	type ISalesOverview,
+	type ISalesState,
+	type ISalesStats,
+	type IUpdateDiscountRequest,
+	flowPaymentsPath,
 } from "@flow-like/flow-like-ui";
 import {
 	type WebBackendRef,
@@ -41,6 +43,18 @@ export class WebSalesState implements ISalesState {
 			? `apps/${appId}/sales/stats?${query}`
 			: `apps/${appId}/sales/stats`;
 		return await apiGet<ISalesStats>(url, this.backend.auth);
+	}
+
+	async getFlowPayments(
+		appId: string,
+		startDate?: string,
+		endDate?: string,
+		limit?: number,
+	): Promise<IFlowPaymentsReport> {
+		return await apiGet<IFlowPaymentsReport>(
+			flowPaymentsPath(appId, startDate, endDate, limit),
+			this.backend.auth,
+		);
 	}
 
 	async listPurchases(

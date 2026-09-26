@@ -12,6 +12,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
 	ArrowDown,
 	ArrowUp,
+	Binary,
 	Braces,
 	Calendar,
 	ChevronsUpDown,
@@ -59,6 +60,7 @@ interface ColumnMeta {
 
 const KIND_ICON: Record<ColumnKind, typeof Hash> = {
 	geometry: MapPinIcon,
+	binary: Binary,
 	number: Hash,
 	temporal: Calendar,
 	boolean: ToggleLeft,
@@ -71,7 +73,7 @@ const KIND_ICON: Record<ColumnKind, typeof Hash> = {
 function sizeForKind(kind: ColumnKind): number {
 	if (kind === "number" || kind === "boolean") return 130;
 	if (kind === "temporal" || kind === "user") return 190;
-	if (kind === "file" || kind === "geometry") return 240;
+	if (kind === "file" || kind === "geometry" || kind === "binary") return 240;
 	return 200;
 }
 
@@ -230,6 +232,7 @@ export function QueryResultTable({
 					minSize: 72,
 					maxSize: 640,
 					sortUndefined: "last",
+					enableSorting: kind !== "binary",
 					sortingFn:
 						kind === "number"
 							? (a, b, id) => {
@@ -331,9 +334,10 @@ export function QueryResultTable({
 											kind={meta.kind}
 											typeName={meta.typeName}
 											sorted={sorted}
-											onSort={(event) =>
-												header.column.toggleSorting(undefined, event.shiftKey)
-											}
+											onSort={(event) => {
+												if (!header.column.getCanSort()) return;
+												header.column.toggleSorting(undefined, event.shiftKey);
+											}}
 											onCopyColumn={() => copyColumn(header.column.id)}
 											canResize={header.column.getCanResize()}
 											onResizeStart={header.getResizeHandler()}

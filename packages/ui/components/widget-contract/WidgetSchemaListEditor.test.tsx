@@ -2,7 +2,29 @@ import { afterAll, describe, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { type ReactNode, act } from "react";
 
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll.
+const globalDescriptors = [
+	"document",
+	"Element",
+	"Event",
+	"HTMLElement",
+	"HTMLInputElement",
+	"InputEvent",
+	"MouseEvent",
+	"Node",
+	"navigator",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+// Radix picks its layout effect when first imported, so the real module loads under a document.
+Object.assign(globalThis, { document: new Window().document });
+const actualDialog = { ...(await import("../ui/dialog")) };
+
 mock.module("../ui/dialog", () => ({
+	...actualDialog,
 	Dialog: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 	DialogBody: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 	DialogContent: ({ children }: { children?: ReactNode }) => (
@@ -20,23 +42,30 @@ mock.module("../ui/dialog", () => ({
 	DialogTitle: ({ children }: { children?: ReactNode }) => <h2>{children}</h2>,
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../ui/dialog", () => actualDialog);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
-function setInputValue(window: Window, input: HTMLInputElement, value: string) {
+function setInputValue(input: HTMLInputElement, value: string) {
 	const valueSetter = Object.getOwnPropertyDescriptor(
-		window.HTMLInputElement.prototype,
+		HTMLInputElement.prototype,
 		"value",
 	)?.set;
 	if (!valueSetter) throw new Error("Input value setter is unavailable");
 	valueSetter.call(input, value);
 	input.dispatchEvent(
-		new window.InputEvent("input", {
+		new InputEvent("input", {
 			bubbles: true,
 			data: value,
 			inputType: "insertText",
 		}),
 	);
-	input.dispatchEvent(new window.Event("change", { bubbles: true }));
+	input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 describe("WidgetSchemaListEditor", () => {
@@ -58,8 +87,8 @@ describe("WidgetSchemaListEditor", () => {
 		});
 		const { createRoot } = await import("react-dom/client");
 		const { WidgetSchemaListEditor } = await import("./WidgetSchemaListEditor");
-		const container = window.document.createElement("div");
-		window.document.body.append(container);
+		const container = document.createElement("div");
+		document.body.append(container);
 		const root = createRoot(container);
 		const changes: unknown[][] = [];
 		const schema = {
@@ -102,8 +131,8 @@ describe("WidgetSchemaListEditor", () => {
 		if (!label || !amount)
 			throw new Error("Typed item fields were not rendered");
 		await act(async () => {
-			setInputValue(window, label, "Feb");
-			setInputValue(window, amount, "25");
+			setInputValue(label, "Feb");
+			setInputValue(amount, "25");
 		});
 
 		const addDialog = [...container.querySelectorAll("button")].find(
@@ -137,7 +166,7 @@ describe("WidgetSchemaListEditor", () => {
 		const editedLabel =
 			container.querySelector<HTMLInputElement>("#rows-item-label");
 		if (!editedLabel) throw new Error("Edit fields were not rendered");
-		await act(async () => setInputValue(window, editedLabel, "March"));
+		await act(async () => setInputValue(editedLabel, "March"));
 		const saveChanges = [...container.querySelectorAll("button")].find(
 			(button) => button.textContent?.trim() === "Save changes",
 		);

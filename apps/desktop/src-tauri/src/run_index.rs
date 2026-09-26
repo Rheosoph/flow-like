@@ -64,9 +64,7 @@ impl SqliteRunIndex {
     }
 
     fn with_connection(conn: Connection) -> rusqlite::Result<Self> {
-        conn.busy_timeout(Duration::from_secs(10))?;
-        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_row| Ok(()))?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        configure_connection(&conn)?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -88,6 +86,14 @@ impl SqliteRunIndex {
         .await
         .map_err(|error| flow_like_types::anyhow!("Run index {operation} task failed: {error}"))?
     }
+}
+
+/// Every connection to `runs.db` shares the file with other connections, so
+/// each waits on locks and writes through the same WAL journal.
+pub(crate) fn configure_connection(conn: &Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(Duration::from_secs(10))?;
+    conn.pragma_update_and_check(None, "journal_mode", "WAL", |_row| Ok(()))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
 }
 
 fn micros(value: u64) -> i64 {

@@ -28,7 +28,7 @@ use crate::flow::execution::ExecutionEnvironment;
 use crate::flow::execution::{LogMeta, log::LogMessage};
 
 #[cfg(feature = "flow-metadata")]
-use crate::flow::board::Board;
+use crate::flow::board::BoardCell;
 #[cfg(feature = "flow-metadata")]
 use crate::flow::node::Node;
 #[cfg(feature = "flow-metadata")]
@@ -54,8 +54,43 @@ pub struct FlowLikeStores {
     pub log_store: Option<FlowLikeStore>,
 }
 
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseFuture<T> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = flow_like_types::Result<T>> + Send + 'static>,
+>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseStoreDecorator = Arc<
+    dyn Fn(
+            Path,
+            flow_like_storage::databases::vector::lancedb::LanceDBVectorStore,
+        )
+            -> DatabaseFuture<flow_like_storage::databases::vector::lancedb::LanceDBVectorStore>
+        + Send
+        + Sync,
+>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseTableNames = Arc<dyn Fn(Path) -> DatabaseFuture<Vec<String>> + Send + Sync>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseTableIsManaged = Arc<dyn Fn(&Path, &str) -> bool + Send + Sync>;
+
+#[cfg(feature = "flow-runtime")]
+pub type DatabaseTableNotice = Arc<dyn Fn(&Path, &str) -> Option<String> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct FlowLikeCallbacks {
+    /// Optional logical database adapter. Hosts own its durability and local view.
+    #[cfg(feature = "flow-runtime")]
+    pub decorate_database: Option<DatabaseStoreDecorator>,
+    #[cfg(feature = "flow-runtime")]
+    pub database_table_names: Option<DatabaseTableNames>,
+    #[cfg(feature = "flow-runtime")]
+    pub database_table_is_managed: Option<DatabaseTableIsManaged>,
+    /// Host warning that Open Database logs for a table, e.g. a stale offline copy.
+    #[cfg(feature = "flow-runtime")]
+    pub database_table_notice: Option<DatabaseTableNotice>,
     #[cfg(feature = "flow-runtime")]
     pub build_project_database: Option<Arc<dyn (Fn(Path) -> ConnectBuilder) + Send + Sync>>,
     #[cfg(feature = "flow-runtime")]
@@ -73,6 +108,14 @@ pub struct FlowLikeCallbacks {
 impl Default for FlowLikeCallbacks {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "flow-runtime")]
+            decorate_database: None,
+            #[cfg(feature = "flow-runtime")]
+            database_table_names: None,
+            #[cfg(feature = "flow-runtime")]
+            database_table_is_managed: None,
+            #[cfg(feature = "flow-runtime")]
+            database_table_notice: None,
             #[cfg(feature = "flow-runtime")]
             build_project_database: None,
             #[cfg(feature = "flow-runtime")]
@@ -95,6 +138,26 @@ pub struct FlowLikeConfig {
 }
 
 impl FlowLikeConfig {
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_decorator(&mut self, callback: DatabaseStoreDecorator) {
+        self.callbacks.decorate_database = Some(callback);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_table_names(&mut self, callback: DatabaseTableNames) {
+        self.callbacks.database_table_names = Some(callback);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_table_is_managed(&mut self, callback: DatabaseTableIsManaged) {
+        self.callbacks.database_table_is_managed = Some(callback);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub fn register_database_table_notice(&mut self, callback: DatabaseTableNotice) {
+        self.callbacks.database_table_notice = Some(callback);
+    }
+
     pub fn new() -> Self {
         FlowLikeConfig {
             callbacks: FlowLikeCallbacks::default(),
@@ -479,11 +542,32 @@ impl RunData {
     }
 }
 
+#[cfg(feature = "flow-runtime")]
+const RETAINED_LANCE_INDEX_CACHE_BYTES: usize =
+    if cfg!(any(target_os = "ios", target_os = "android")) {
+        256 * 1024 * 1024
+    } else {
+        1024 * 1024 * 1024
+    };
+#[cfg(feature = "flow-runtime")]
+const RETAINED_LANCE_METADATA_CACHE_BYTES: usize =
+    if cfg!(any(target_os = "ios", target_os = "android")) {
+        64 * 1024 * 1024
+    } else {
+        256 * 1024 * 1024
+    };
+
 // TODO: implement dashmap
 #[derive(Clone)]
 pub struct FlowLikeState {
     pub config: Arc<RwLock<FlowLikeConfig>>,
     pub http_client: Arc<HTTPClient>,
+    /// Shared authority resolves a fresh resource lease for each cloud request.
+    /// Persistent contexts retain this provider instead of a startup token.
+    pub request_authorizer: Option<Arc<dyn flow_like_types::authorization::RequestAuthorizer>>,
+    pub service_tls_provider: Option<Arc<dyn crate::flow::execution::service::ServiceTlsProvider>>,
+    /// Shared with every execution run derived from this state: its caches
+    /// outlive the run and its store registry scopes which databases runs open.
     #[cfg(feature = "flow-runtime")]
     pub lance_session: Arc<LanceSession>,
 
@@ -507,7 +591,7 @@ pub struct FlowLikeState {
     #[cfg(feature = "flow-metadata")]
     pub node_registry: Arc<RwLock<FlowNodeRegistry>>,
     #[cfg(feature = "flow-metadata")]
-    pub board_registry: Arc<DashMap<String, Arc<Mutex<Board>>>>, // TODO: should board be wrapped in RWLock or Mutex?
+    pub board_registry: Arc<DashMap<String, Arc<BoardCell>>>,
     #[cfg(feature = "flow-runtime")]
     pub board_run_registry: Arc<DashMap<String, Arc<RunData>>>,
 
@@ -550,6 +634,8 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            request_authorizer: None,
+            service_tls_provider: None,
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
             #[cfg(feature = "flow-metadata")]
@@ -595,6 +681,8 @@ impl FlowLikeState {
         FlowLikeState {
             config: Arc::new(RwLock::new(config)),
             http_client: Arc::new(client),
+            request_authorizer: None,
+            service_tls_provider: None,
             #[cfg(feature = "flow-runtime")]
             lance_session: Arc::new(LanceSession::default()),
             #[cfg(feature = "flow-metadata")]
@@ -670,6 +758,31 @@ impl FlowLikeState {
         builder.session(self.lance_session.clone())
     }
 
+    #[cfg(feature = "flow-runtime")]
+    pub fn set_lance_store_registry(
+        &mut self,
+        registry: Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>,
+    ) {
+        self.lance_session = Arc::new(LanceSession::new(
+            flow_like_storage::lance::dataset::DEFAULT_INDEX_CACHE_SIZE,
+            flow_like_storage::lance::dataset::DEFAULT_METADATA_CACHE_SIZE,
+            registry,
+        ));
+    }
+
+    /// A session the desktop keeps across runs. Lance's defaults (6 GiB index,
+    /// 1 GiB metadata) would stay resident long after the run that filled them.
+    #[cfg(feature = "flow-runtime")]
+    pub fn retained_lance_session(
+        registry: Option<Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>>,
+    ) -> Arc<LanceSession> {
+        Arc::new(LanceSession::new(
+            RETAINED_LANCE_INDEX_CACHE_BYTES,
+            RETAINED_LANCE_METADATA_CACHE_BYTES,
+            registry.unwrap_or_default(),
+        ))
+    }
+
     /// Persist a trigger that never became a run, so it still shows up in the
     /// board's run history with the reason attached.
     #[cfg(feature = "flow-runtime")]
@@ -711,8 +824,10 @@ impl FlowLikeState {
         FlowLikeState {
             config: self.config.clone(),
             http_client: self.http_client.clone(),
+            request_authorizer: self.request_authorizer.clone(),
+            service_tls_provider: self.service_tls_provider.clone(),
             #[cfg(feature = "flow-runtime")]
-            lance_session: Arc::new(LanceSession::default()),
+            lance_session: self.lance_session.clone(),
             #[cfg(feature = "flow-metadata")]
             execution_environment: self.execution_environment,
 
@@ -751,7 +866,7 @@ impl FlowLikeState {
     }
 
     #[cfg(feature = "flow-metadata")]
-    pub fn board_registry(&self) -> Arc<DashMap<String, Arc<Mutex<Board>>>> {
+    pub fn board_registry(&self) -> Arc<DashMap<String, Arc<BoardCell>>> {
         self.board_registry.clone()
     }
 
@@ -760,7 +875,7 @@ impl FlowLikeState {
         &self,
         board_id: &str,
         version: Option<(u32, u32, u32)>,
-    ) -> flow_like_types::Result<Arc<Mutex<Board>>> {
+    ) -> flow_like_types::Result<Arc<BoardCell>> {
         let key = if let Some(version) = version {
             format!("{}-{}-{}-{}", board_id, version.0, version.1, version.2)
         } else {
@@ -782,7 +897,7 @@ impl FlowLikeState {
         &self,
         template_id: &str,
         version: Option<(u32, u32, u32)>,
-    ) -> flow_like_types::Result<Arc<Mutex<Board>>> {
+    ) -> flow_like_types::Result<Arc<BoardCell>> {
         let key = if let Some(version) = version {
             format!("{}-{}-{}-{}", template_id, version.0, version.1, version.2)
         } else {
@@ -800,10 +915,7 @@ impl FlowLikeState {
     }
 
     #[cfg(feature = "flow-metadata")]
-    pub fn remove_board(
-        &self,
-        board_id: &str,
-    ) -> flow_like_types::Result<Option<Arc<Mutex<Board>>>> {
+    pub fn remove_board(&self, board_id: &str) -> flow_like_types::Result<Option<Arc<BoardCell>>> {
         let removed = self.board_registry.remove(board_id);
 
         match removed {
@@ -816,7 +928,7 @@ impl FlowLikeState {
     pub fn register_board(
         &self,
         board_id: &str,
-        board: Arc<Mutex<Board>>,
+        board: Arc<BoardCell>,
         version: Option<(u32, u32, u32)>,
     ) -> flow_like_types::Result<()> {
         let key = if let Some(version) = version {
@@ -932,6 +1044,88 @@ impl FlowLikeState {
         }
 
         Ok(log_messages)
+    }
+
+    /// The run's log table, or `None` when the run never flushed a log.
+    #[cfg(feature = "flow-runtime")]
+    async fn open_run_log_table(
+        &self,
+        meta: &LogMeta,
+    ) -> flow_like_types::Result<Option<flow_like_storage::lancedb::Table>> {
+        use flow_like_types::anyhow;
+
+        let db_fn = {
+            let guard = self.config.read().await;
+            guard.callbacks.build_logs_database.clone()
+        }
+        .ok_or_else(|| anyhow!("No log database configured"))?;
+        let base_path =
+            crate::flow::execution::run_index::runs_base_path(&meta.app_id, &meta.board_id);
+        let db = db_fn(base_path).execute().await?;
+        let names = db.table_names().execute().await?;
+        if !names.iter().any(|name| name == &meta.run_id) {
+            return Ok(None);
+        }
+        Ok(Some(db.open_table(&meta.run_id).execute().await?))
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub async fn query_run_logs(
+        &self,
+        meta: &LogMeta,
+        query: &crate::flow::execution::log_query::LogQuery,
+        offset: usize,
+        limit: usize,
+    ) -> flow_like_types::Result<Vec<LogMessage>> {
+        match self.open_run_log_table(meta).await? {
+            Some(table) => {
+                crate::flow::execution::log_query::query_log_page(&table, query, offset, limit)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    pub async fn count_run_logs(
+        &self,
+        meta: &LogMeta,
+        query: &crate::flow::execution::log_query::LogQuery,
+    ) -> flow_like_types::Result<usize> {
+        match self.open_run_log_table(meta).await? {
+            Some(table) => crate::flow::execution::log_query::count_logs(&table, query).await,
+            None => Ok(0),
+        }
+    }
+
+    /// The summary recorded with the run, else one computed from its log table.
+    #[cfg(feature = "flow-runtime")]
+    pub async fn run_log_summary(
+        &self,
+        meta: &LogMeta,
+    ) -> flow_like_types::Result<Option<crate::flow::execution::log_summary::LogSummary>> {
+        let log_store = self.config.read().await.stores.log_store.clone();
+        if let Some(store) = &log_store
+            && let Some(summary) = crate::flow::execution::log_summary::read_run_summary(
+                store,
+                &meta.app_id,
+                &meta.board_id,
+                &meta.run_id,
+            )
+            .await?
+        {
+            return Ok(Some(summary));
+        }
+        let Some(table) = self.open_run_log_table(meta).await? else {
+            return Ok(None);
+        };
+        let visited = meta
+            .nodes
+            .as_ref()
+            .map(|nodes| nodes.iter().map(|(id, _)| id.clone()).collect());
+        Ok(Some(
+            crate::flow::execution::log_query::scan_log_summary(&table, visited).await?,
+        ))
     }
 
     #[inline]
@@ -1222,6 +1416,66 @@ mod tests {
 
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn execution_states_share_live_authority() {
+        use flow_like_types::authorization::{
+            AuthorizationError, AuthorizationRequest, RequestAuthorization, RequestAuthorizer,
+        };
+        struct Denied;
+        impl RequestAuthorizer for Denied {
+            fn authorize<'a>(
+                &'a self,
+                _: AuthorizationRequest<'a>,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn Future<Output = Result<RequestAuthorization, AuthorizationError>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async { Err(AuthorizationError::Denied) })
+            }
+        }
+        let provider: Arc<dyn RequestAuthorizer> = Arc::new(Denied);
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        );
+        state.request_authorizer = Some(provider.clone());
+        let run_state = state.for_execution_run();
+        assert!(Arc::ptr_eq(
+            run_state.request_authorizer.as_ref().unwrap(),
+            &provider
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "flow-runtime")]
+    fn execution_runs_share_the_lance_session_and_its_scoped_registry() {
+        let mut state = FlowLikeState::new(
+            FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                flow_like_storage::object_store::memory::InMemory::new(),
+            ))),
+            HTTPClient::new_without_refetch(),
+        );
+        let registry =
+            Arc::new(flow_like_storage::lance_io::object_store::ObjectStoreRegistry::empty());
+        state.set_lance_store_registry(registry.clone());
+        let first = state.for_execution_run();
+        let second = state.for_execution_run();
+        assert!(Arc::ptr_eq(&state.lance_session, &first.lance_session));
+        assert!(Arc::ptr_eq(&first.lance_session, &second.lance_session));
+        assert!(Arc::ptr_eq(
+            &registry,
+            &first.lance_session.store_registry()
+        ));
+
+        let retained = FlowLikeState::retained_lance_session(Some(registry.clone()));
+        assert!(Arc::ptr_eq(&registry, &retained.store_registry()));
+    }
 
     #[test]
     fn object_store_path_serialization() {

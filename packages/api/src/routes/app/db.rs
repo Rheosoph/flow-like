@@ -3,6 +3,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use flow_like_storage::databases::table_summary::{TableSummary, summarize_tables};
+use flow_like_storage::databases::vector::schema::{PrimaryKeyRejected, TableInputRejected};
 use flow_like_storage::lancedb::Connection;
 
 use crate::{
@@ -30,6 +31,7 @@ pub mod optimize;
 pub mod presign_db_access;
 pub mod references;
 pub mod saved_queries;
+pub mod set_primary_key;
 pub mod table_view;
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -137,6 +139,35 @@ pub fn validate_writable_selector(
         ));
     }
     Ok(())
+}
+
+/// The caller-facing message of the first table input or table key rejection among `causes`.
+pub fn table_rejection_message<'a>(
+    mut causes: impl Iterator<Item = &'a (dyn std::error::Error + 'static)>,
+) -> Option<String> {
+    causes.find_map(|cause| {
+        cause
+            .downcast_ref::<TableInputRejected>()
+            .map(ToString::to_string)
+            .or_else(|| {
+                cause
+                    .downcast_ref::<PrimaryKeyRejected>()
+                    .map(ToString::to_string)
+            })
+    })
+}
+
+/// Rejected row values, column names and table key rules are the caller's to fix, wherever
+/// they sit in the error chain; any other failure stays internal.
+pub fn table_input_error(error: flow_like_types::Error) -> ApiError {
+    match table_rejection_message(error.chain()) {
+        Some(message) => ApiError::bad_request(message),
+        None => ApiError::from(error),
+    }
+}
+
+pub fn table_key_error(error: flow_like_types::Error) -> ApiError {
+    table_input_error(error)
 }
 
 /// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
@@ -252,6 +283,10 @@ pub fn routes() -> Router<AppState> {
                 .put(alter_column::alter_column)
                 .delete(drop_columns::drop_columns),
         )
+        .route(
+            "/{table}/primary-key",
+            put(set_primary_key::set_primary_key),
+        )
         .route("/{table}/index", post(build_index::build_index))
         .route(
             "/{table}/index/{index_name}",
@@ -262,4 +297,65 @@ pub fn routes() -> Router<AppState> {
         .route("/{table}/count", get(db_count::db_count))
         .route("/{table}/indices", get(get_indices::get_db_indices))
         .route("/{table}/view", get(table_view::table_view))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{table_input_error, table_key_error};
+    use axum::http::StatusCode;
+    use flow_like_storage::databases::vector::schema::{PrimaryKeyRejected, TableInputRejected};
+    use flow_like_types::{Context, anyhow};
+
+    const REJECTION: &str =
+        "Column 'geometry' row 3: Unknown geometry kind: Feature. Store the Feature's geometry.";
+
+    #[test]
+    fn table_input_rejection_behind_context_is_a_bad_request_with_its_own_message() {
+        let error = Err::<(), _>(TableInputRejected(REJECTION.to_string()))
+            .context("Failed to convert rows for table 'sites'")
+            .context("Insert into table 'sites' failed")
+            .unwrap_err();
+
+        let api_error = table_input_error(error);
+
+        assert_eq!(api_error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(api_error.public_message(), Some(REJECTION));
+    }
+
+    #[test]
+    fn table_input_rejection_raised_as_anyhow_error_is_a_bad_request() {
+        let error = flow_like_types::Error::new(TableInputRejected(REJECTION.to_string()))
+            .context("Insert into table 'sites' failed");
+
+        let api_error = table_input_error(error);
+
+        assert_eq!(api_error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(api_error.public_message(), Some(REJECTION));
+    }
+
+    #[test]
+    fn table_input_error_keeps_primary_key_rejections_as_bad_requests() {
+        let message = "Column 'feature_id' is the table key and cannot be null";
+        let error = flow_like_types::Error::new(PrimaryKeyRejected(message.to_string()))
+            .context("Upsert into table 'sites' failed");
+
+        for api_error in [
+            table_input_error(anyhow!(PrimaryKeyRejected(message.to_string()))),
+            table_key_error(error),
+        ] {
+            assert_eq!(api_error.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(api_error.public_message(), Some(message));
+        }
+    }
+
+    #[test]
+    fn table_input_error_keeps_unrelated_failures_internal() {
+        let error = anyhow!("object store request to bucket 'apps-prod' timed out")
+            .context("Insert into table 'sites' failed");
+
+        let api_error = table_input_error(error);
+
+        assert_eq!(api_error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(api_error.public_message(), None);
+    }
 }

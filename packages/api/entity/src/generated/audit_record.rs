@@ -54,6 +54,8 @@ pub struct Model {
     pub mac: Option<Vec<u8>>,
     #[sea_orm(column_name = "sealId", column_type = "Text", nullable)]
     pub seal_id: Option<String>,
+    #[sea_orm(column_name = "entryKid", column_type = "Text", nullable)]
+    pub entry_kid: Option<String>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

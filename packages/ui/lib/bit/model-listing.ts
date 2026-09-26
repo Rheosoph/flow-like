@@ -27,6 +27,12 @@ export async function searchAllBits(
 			limit: PAGE_SIZE,
 			offset: page * PAGE_SIZE,
 		});
+		// A garbled page must fail the listing, not end it early or spread a string into it.
+		if (!Array.isArray(rows)) {
+			throw new Error(
+				`Bit search page ${page} returned ${typeof rows} instead of a list`,
+			);
+		}
 		bits.push(...rows);
 		if (rows.length < PAGE_SIZE) break;
 	}

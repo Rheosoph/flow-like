@@ -3,8 +3,8 @@
 # link works in a browser when the app is not installed.
 /store/packages/:id  /store/packages?id=:id  302
 
-# Event aliases are resolved by the API after the static interface loads.
-/c/*  /c.html  200
-/f/*  /f.html  200
-/u/*  /u.html  200
-/use/*  /use.html  200
+# Hosted app routes (/a/<app>/<route>) are resolved by the API after the static interface loads.
+# Pages 308s any *.html request to its extensionless path, and a 200 rewrite hands that redirect
+# to the browser, dropping the slug. Rewrite to the clean URL instead.
+/a/*  /a  200
+/use/*  /use  200

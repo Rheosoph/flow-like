@@ -155,7 +155,7 @@ impl NodeLogic for TcpServerNode {
         };
 
         let local_addr = listener.local_addr()?.to_string();
-        let tls_acceptor = match crate::web::tls::server_acceptor(&config.tls) {
+        let tls_acceptor = match crate::web::tls::ServiceAcceptor::new(context, &config.tls).await {
             Ok(acceptor) => acceptor,
             Err(err) => {
                 context.log_message(
@@ -239,19 +239,15 @@ impl NodeLogic for TcpServerNode {
             }
 
             let remote_addr = remote_addr.to_string();
-            let (reader, writer) = if let Some(acceptor) = &tls_acceptor {
-                match acceptor.accept(stream).await {
-                    Ok(stream) => crate::web::tls::boxed_split(stream),
-                    Err(err) => {
-                        context.log_message(
-                            &format!("TCP TLS handshake failed: {}", err),
-                            LogLevel::Error,
-                        );
-                        continue;
-                    }
+            let (reader, writer) = match tls_acceptor.accept(stream).await {
+                Ok(stream) => crate::web::tls::boxed_split(stream),
+                Err(err) => {
+                    context.log_message(
+                        &format!("TCP TLS handshake failed: {}", err),
+                        LogLevel::Error,
+                    );
+                    continue;
                 }
-            } else {
-                crate::web::tls::boxed_split(stream)
             };
             active_connections.fetch_add(1, Ordering::Relaxed);
             let ref_id = format!("tcp_{}", flow_like_types::create_id());
@@ -454,6 +450,93 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    struct ManagedCertificate(tokio_rustls::TlsAcceptor);
+
+    impl flow_like::flow::execution::service::ServiceTlsProvider for ManagedCertificate {
+        fn validate(&self) -> flow_like::flow::execution::service::ServiceTlsFuture<'_, ()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn accept(
+            &self,
+            stream: tokio::net::TcpStream,
+        ) -> flow_like::flow::execution::service::ServiceTlsFuture<'_, crate::web::tls::BoxedIo>
+        {
+            Box::pin(async move {
+                Ok(Box::new(self.0.accept(stream).await?) as crate::web::tls::BoxedIo)
+            })
+        }
+    }
+
+    struct UnavailableCertificate;
+
+    impl flow_like::flow::execution::service::ServiceTlsProvider for UnavailableCertificate {
+        fn validate(&self) -> flow_like::flow::execution::service::ServiceTlsFuture<'_, ()> {
+            Box::pin(async { Err(flow_like_types::anyhow!("Certificate is unavailable")) })
+        }
+        fn accept(
+            &self,
+            _: tokio::net::TcpStream,
+        ) -> flow_like::flow::execution::service::ServiceTlsFuture<'_, crate::web::tls::BoxedIo>
+        {
+            panic!("Unvalidated listener must never accept connections")
+        }
+    }
+
+    fn managed_context(
+        context: &mut ExecutionContext,
+        provider: Arc<dyn flow_like::flow::execution::service::ServiceTlsProvider>,
+    ) {
+        let mut state = flow_like::state::FlowLikeState::new(
+            flow_like::state::FlowLikeConfig::new(),
+            flow_like::utils::http::HTTPClient::new_without_refetch(),
+        );
+        state.service_tls_provider = Some(provider);
+        context.app_state = Arc::new(state);
+    }
+
+    #[tokio::test]
+    async fn managed_certificate_failure_prevents_readiness_for_tcp_websocket_and_mqtt() {
+        let nodes: Vec<Box<dyn NodeLogic>> = vec![
+            Box::new(TcpServerNode::new()),
+            Box::new(super::super::listen::TcpListenNode::new()),
+            Box::new(crate::web::websocket::server::WebSocketServerNode::new()),
+            Box::new(crate::web::mqtt::broker::MqttBrokerNode::new()),
+        ];
+        for logic in nodes {
+            let port = free_tcp_port();
+            let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+            let mut node = logic.get_node();
+            let name = node.name.clone();
+            node.fn_refs
+                .as_mut()
+                .unwrap()
+                .fn_refs
+                .push(handler.node_id().to_string());
+            let mut context = test_context(internal_node(node), vec![handler]).await;
+            managed_context(&mut context, Arc::new(UnavailableCertificate));
+            context.set_pin_value("config", json!({"host":"127.0.0.1","port":port,"timeout_seconds":1,"max_connections":8,"path":null,"tls":{"secure":false}})).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), logic.run(&mut context))
+                .await
+                .expect("TLS validation must return before accepting")
+                .unwrap();
+            assert_eq!(
+                output_value(&context, "on_listening").await,
+                Some(json!(false)),
+                "{name} reported listening without its required managed certificate"
+            );
+            assert_eq!(
+                output_value(&context, "exec_error").await,
+                Some(json!(true))
+            );
+            assert!(
+                tokio::net::TcpStream::connect(("127.0.0.1", port))
+                    .await
+                    .is_err(),
+                "{name} retained a listener after failed validation"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn tcp_server_e2e_delivers_utf8_chunk_to_payload_handler() {
         let port = free_tcp_port();
@@ -558,6 +641,15 @@ mod tests {
 
     #[tokio::test]
     async fn tcp_server_tls_e2e_delivers_utf8_chunk_to_payload_handler() {
+        tcp_certificate_payload(false).await;
+    }
+
+    #[tokio::test]
+    async fn managed_certificate_overrides_plain_tcp_node_configuration() {
+        tcp_certificate_payload(true).await;
+    }
+
+    async fn tcp_certificate_payload(managed: bool) {
         let ca = crate::web::tls::create_ca_certificate("FlowLike TCP Test CA").unwrap();
         let leaf = crate::web::tls::create_signed_certificate(
             &ca,
@@ -576,6 +668,19 @@ mod tests {
             .push(handler.node_id().to_string());
         let parent = internal_node(node);
         let mut context = test_context(parent, vec![handler.clone()]).await;
+        let inline = crate::web::tls::TlsConfig {
+            secure: true,
+            certificate: Some(leaf),
+            ..Default::default()
+        };
+        if managed {
+            managed_context(
+                &mut context,
+                Arc::new(ManagedCertificate(
+                    crate::web::tls::server_acceptor(&inline).unwrap().unwrap(),
+                )),
+            );
+        }
         context
             .set_pin_value(
                 "config",
@@ -584,11 +689,7 @@ mod tests {
                     port,
                     timeout_seconds: 1,
                     max_connections: 8,
-                    tls: crate::web::tls::TlsConfig {
-                        secure: true,
-                        certificate: Some(leaf),
-                        ..Default::default()
-                    },
+                    tls: if managed { Default::default() } else { inline },
                 }),
             )
             .await

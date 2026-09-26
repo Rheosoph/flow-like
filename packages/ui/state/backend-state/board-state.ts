@@ -12,8 +12,10 @@ import type {
 	ILog,
 	ILogLevel,
 	ILogMetadata,
+	ILogQuery,
 	INode,
 	IRunContext,
+	IRunLogSummary,
 	IRunPayload,
 	IVersionType,
 } from "../../lib";
@@ -41,7 +43,11 @@ import type {
 } from "../../lib/schema/flow/board-summary";
 import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IElementDemand } from "../../lib/schema/flow/element-demand";
-import type { IPrerunBoardResponse } from "./types";
+import type {
+	IOAuthRequirement,
+	IPrerunBoardResponse,
+	IRuntimeVariable,
+} from "./types";
 
 export interface IApplyFlowScriptResponse {
 	commands: IGenericCommand[];
@@ -97,6 +103,18 @@ export interface IScopedFlowScriptResponse {
 	flowscript: string;
 	/** Anchors (event entry node id / function layer id) of the rendered events/functions. */
 	scope_anchors: string[];
+}
+
+/** Pre-run facts of one board revision: prerun, consent, OAuth and package checks need nothing else. */
+export interface IBoardRunRequirements {
+	runtime_variables: IRuntimeVariable[];
+	oauth_requirements: IOAuthRequirement[];
+	/** A node only runs on this device (computer automation), so the run needs RPA consent. */
+	requires_local_execution: boolean;
+	execution_mode: IExecutionMode;
+	wasm_package_ids: string[];
+	wasm_package_permissions: Record<string, string[]>;
+	instantiates_widgets: boolean;
 }
 
 /** One queued batch, described well enough for a user to decide whether to discard it. */
@@ -186,6 +204,16 @@ export interface IBoardState {
 		boardId: string,
 		version?: [number, number, number],
 	): Promise<IBoard>;
+	/**
+	 * Read one board for background analysis without opening it: no editor registry entry and no
+	 * sync cache keeps it alive afterwards. Hosts without it fall back to `getBoard`.
+	 */
+	getBoardSnapshot?(appId: string, boardId: string): Promise<IBoard>;
+	/**
+	 * List boards for background analysis without side effects: unlike `getBoardSummaries`, a host
+	 * never hydrates remote boards from here. The desktop lists only what is already on the device.
+	 */
+	getBoardSummariesSnapshot?(appId: string): Promise<IBoardSummary[]>;
 
 	// Realtime collaboration
 	getRealtimeAccess(appId: string, boardId: string): Promise<IRealtimeAccess>;
@@ -205,8 +233,17 @@ export interface IBoardState {
 	getBoardSettings(): Promise<IConnectionMode>;
 	ensureAppPackagesInstalledForExecution?(
 		appId: string,
-		board?: IBoard,
+		requirements?: IBoardRunRequirements,
 	): Promise<void>;
+	/**
+	 * What a local run must check before dispatch, derived by the host from the board it will run,
+	 * so the board itself never crosses the bridge. Throws when this device cannot read the board.
+	 */
+	getBoardRunRequirements?(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoardRunRequirements>;
 
 	/** Undelivered local edits for one board. Absent on backends without an offline queue. */
 	getBoardSyncStatus?(
@@ -284,6 +321,16 @@ export interface IBoardState {
 		offset?: number,
 		limit?: number,
 	): Promise<ILog[]>;
+	/** One page of a run's logs, oldest first, matching a structured filter. */
+	queryRunLogs(
+		logMeta: ILogMetadata,
+		query: ILogQuery,
+		offset: number,
+		limit: number,
+	): Promise<ILog[]>;
+	countRunLogs(logMeta: ILogMetadata, query: ILogQuery): Promise<number>;
+	/** Per-level and per-node counts plus repeat groups; `null` when the run has no logs. */
+	getRunLogSummary(logMeta: ILogMetadata): Promise<IRunLogSummary | null>;
 
 	/**
 	 * Replay the inverse of a recorded batch. A backend that can hand back the resulting board

@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import {
+	AlertTriangle,
 	ArrowLeftRight,
 	ArrowRight,
 	Box,
@@ -27,6 +28,7 @@ import {
 	Play,
 	Plus,
 	RefreshCw,
+	RotateCcw,
 	Search,
 	Share2,
 	ShieldCheck,
@@ -34,22 +36,61 @@ import {
 	Workflow,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type KeyboardEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
+import {
+	ApiResponseError,
+	apiErrorMessage,
+	isMissingResourceError,
+} from "../../../lib/api-error";
+import { getErrorMessage } from "../../../lib/error-message";
+import {
+	type ColumnLock,
+	type EditableIdentity,
+	type EditableProperty,
+	type ObjectEditField,
+	type PropertyDraft,
+	type PropertyDraftError,
+	type PropertyEditability,
+	StaleObjectError,
+	buildObjectUpdate,
+	changedProperties,
+	draftFromValue,
+	effectiveIdentityColumn,
+	isEditableProperty,
+	lockedObjectColumns,
+	objectTypeKey,
+	parsePropertyDraft,
+	propertyEditability,
+	resolveObjectIdentity,
+} from "../../../lib/ontology-object-edit";
+import { asArray } from "../../../lib/response-shape";
 import type { IBoardSummary } from "../../../lib/schema/flow/board-summary";
 import { IVersionType } from "../../../lib/schema/flow/version-type";
+import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	EdgeLabelMapping,
 	GraphOverlay,
+	GraphSchema,
 	InvokeOntologyActionPayload,
 	NodeLabelMapping,
 	OntologyActionDefinition,
 	OntologyActionRun,
 	RemoteOntologyImport,
+	UpdateOntologyObjectPayload,
+	UpdateOntologyRowResult,
 } from "../../../state/backend-state/graph-state";
 import type { IAppConnection } from "../../../state/backend-state/types";
+import { Alert, AlertDescription } from "../../ui/alert";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -81,10 +122,19 @@ import {
 } from "../../ui/dropdown-menu";
 import {
 	CopyButton,
+	PropertyStorageScope,
 	PropertyValue,
+	type PropertyValueContext,
+	type ValueKind,
 	inferValueKind,
+	usePropertyStorageAppId,
 } from "../../ui/graph/graph-node-inspector";
 import { getGraphIcon } from "../../ui/graph/icons";
+import {
+	OntologyPropertyEditor,
+	PropertyLockHint,
+} from "../../ui/graph/ontology-property-editor";
+import { useObjectEditFields } from "../../ui/graph/use-object-edit-fields";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { ScrollArea } from "../../ui/scroll-area";
@@ -105,8 +155,14 @@ import {
 } from "../../ui/sheet";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { OntologySchemaGraph, useRevealTarget } from "./ontology-schema-graph";
+import { externalTargetKey } from "./ontology-schema-model";
+import type { ColumnKind } from "./query-workbench/column-types";
+import { ResultCellValue } from "./query-workbench/result-value";
 import {
 	AddRelationshipForm,
+	type RelationshipPrefill,
 	type WizardEdge,
 	isValidGraphIdentifier,
 	nodeToEndpoint,
@@ -126,8 +182,20 @@ export function humanizeIdentifier(value: string): string {
 		.replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function objectKey(object: NodeLabelMapping): string {
-	return object.id ?? object.api_name ?? object.label;
+const objectKey: (object: NodeLabelMapping) => string = objectTypeKey;
+
+function objectTitleProperty(
+	ontology: GraphOverlay | undefined,
+	objectType: NodeLabelMapping | undefined,
+): string | undefined {
+	if (!objectType) return undefined;
+	const key = objectKey(objectType);
+	return (
+		ontology?.object_views?.find((view) => view.object_type === key)
+			?.title_property ??
+		objectType.display_column ??
+		objectType.id_column
+	);
 }
 
 function EmptyStudioState({
@@ -385,7 +453,74 @@ interface ExplorerSource {
 	sourceLabel?: string;
 }
 
+/**
+ * What the ontology knows about each property besides its value. The live
+ * schema carries the Arrow metadata that marks a geometry column; the declared
+ * columns are the fallback, and all a remote contract has.
+ */
+function propertyFields(
+	objectType: NodeLabelMapping | undefined,
+	schema: GraphSchema | undefined,
+): ReadonlyMap<string, PropertyValueContext> {
+	const fields = new Map<string, PropertyValueContext>(
+		(objectType?.property_columns ?? []).map((column) => [
+			column.name,
+			{ typeName: column.data_type },
+		]),
+	);
+	const live = schema?.node_labels.find(
+		(label) => label.label === objectType?.label,
+	);
+	for (const property of live?.properties ?? []) {
+		fields.set(property.name, {
+			typeName: property.data_type,
+			metadata: property.metadata,
+		});
+	}
+	return fields;
+}
+
+const CELL_KINDS: Record<ValueKind, ColumnKind> = {
+	geometry: "geometry",
+	binary: "binary",
+	file: "file",
+	user: "user",
+	date: "temporal",
+	number: "number",
+	boolean: "boolean",
+	vector: "json",
+	array: "json",
+	object: "json",
+	string: "text",
+	unknown: "text",
+};
+
+/** The same one-line reading the query workbench gives a result cell. */
+function ObjectCellValue({
+	name,
+	value,
+	field,
+	appId,
+}: Readonly<{
+	name: string;
+	value: unknown;
+	field?: PropertyValueContext;
+	appId?: string;
+}>) {
+	const { kind } = inferValueKind(value, name, { ...field, appId });
+	return (
+		<ResultCellValue
+			value={value}
+			kind={CELL_KINDS[kind]}
+			name={name}
+			appId={appId}
+			metadata={field?.metadata}
+		/>
+	);
+}
+
 export function ObjectExplorerPanel({
+	appId,
 	ontologies,
 	remoteImports,
 	initialSourceValue,
@@ -393,9 +528,11 @@ export function ObjectExplorerPanel({
 	onSample,
 	onSampleRemote,
 	onInvokeAction,
+	onUpdateObject,
 	resolveSourceName,
 }: Readonly<
 	StudioPanelBaseProps & {
+		appId?: string;
 		remoteImports?: RemoteOntologyImport[];
 		initialSourceValue?: string;
 		onSample: (
@@ -414,6 +551,12 @@ export function ObjectExplorerPanel({
 			payload: InvokeOntologyActionPayload,
 			onStatus?: (run: OntologyActionRun) => void,
 		) => Promise<OntologyActionRun>;
+		/** Edits a local object's stored properties; without it objects are read-only. */
+		onUpdateObject?: (
+			ontologyId: string,
+			objectType: NodeLabelMapping,
+			payload: UpdateOntologyObjectPayload,
+		) => Promise<UpdateOntologyRowResult>;
 		resolveSourceName?: (targetAppId: string) => string;
 	}
 >) {
@@ -464,6 +607,29 @@ export function ObjectExplorerPanel({
 			) ?? ontology?.nodes[0],
 		[ontology, selectedObjectKey],
 	);
+	// A remote object's paths name its source app's storage, which this app
+	// cannot open, and its schema is not ours to read.
+	const storageAppId = source?.remoteImportId ? undefined : appId;
+	const backend = useBackend();
+	const schema = useInvoke(
+		backend.graphState.getSchema,
+		backend.graphState,
+		[storageAppId ?? "", source?.overlay.id ?? ""],
+		Boolean(storageAppId && source),
+	);
+	const fields = useMemo(
+		() => propertyFields(objectType, schema.data),
+		[objectType, schema.data],
+	);
+	const canEdit = Boolean(
+		onUpdateObject && storageAppId && !source?.remoteImportId,
+	);
+	const editFields = useObjectEditFields(
+		storageAppId,
+		objectType ? [objectType.table] : [],
+		false,
+		canEdit,
+	);
 
 	useEffect(() => {
 		if (!source) return;
@@ -508,12 +674,14 @@ export function ObjectExplorerPanel({
 					typeof row === "object" && row !== null && !Array.isArray(row),
 			);
 			setRows(nextRows);
+			const identityColumn =
+				effectiveIdentityColumn(source.overlay, objectType.label) ??
+				objectType.id_column;
 			setSelectedRow((current) => {
 				if (!current) return current;
-				const currentId = current[objectType.id_column];
+				const currentId = current[identityColumn];
 				return (
-					nextRows.find((row) => row[objectType.id_column] === currentId) ??
-					null
+					nextRows.find((row) => row[identityColumn] === currentId) ?? null
 				);
 			});
 		} catch (loadError) {
@@ -531,11 +699,88 @@ export function ObjectExplorerPanel({
 		} finally {
 			if (generation === loadGeneration.current) setLoading(false);
 		}
-	}, [activeSelectionKey, objectType, onSample, onSampleRemote, source]);
+	}, [activeSelectionKey, objectType, onSample, onSampleRemote, source, t]);
 
 	useEffect(() => {
 		loadObjects();
 	}, [loadObjects]);
+
+	/** Patches the saved row in place and drops any sample that predates the save. */
+	const handleObjectSaved = useCallback(
+		(
+			selectionKey: string,
+			identityValue: unknown,
+			identityColumn: string,
+			saved: Record<string, unknown>,
+		) => {
+			if (selectionKey !== activeSelectionRef.current) return;
+			loadGeneration.current += 1;
+			setLoading(false);
+			const patch = (row: Record<string, unknown>) =>
+				row[identityColumn] === identityValue ? { ...row, ...saved } : row;
+			setRows((current) => current.map(patch));
+			setSelectedRow((current) => (current ? patch(current) : current));
+		},
+		[],
+	);
+
+	const saveObject = useCallback(
+		async (
+			updates: Record<string, unknown>,
+			baseline: Record<string, unknown>,
+		) => {
+			const identity =
+				ontology && objectType && selectedRow
+					? resolveObjectIdentity(ontology, objectType.label, selectedRow)
+					: null;
+			if (
+				!canEdit ||
+				!onUpdateObject ||
+				!ontology ||
+				!objectType ||
+				!identity?.ok
+			) {
+				throw new Error(
+					t(
+						"common:objectNotEditableHere",
+						"This object can't be edited here.",
+					),
+				);
+			}
+			const selectionKey = activeSelectionKey;
+			const result = await onUpdateObject(
+				ontology.id,
+				objectType,
+				buildObjectUpdate(identity, baseline, updates),
+			);
+			handleObjectSaved(
+				selectionKey,
+				identity.id,
+				identity.identityColumn,
+				result.row,
+			);
+			if (result.outcome === "stale") throw new StaleObjectError(result.row);
+			const saved = { ...selectedRow, ...result.row };
+			toast.success(
+				t("objectSaved", "Saved {{title}}", {
+					title: String(
+						saved[objectTitleProperty(ontology, objectType) ?? ""] ??
+							identity.id,
+					),
+				}),
+			);
+		},
+		[
+			activeSelectionKey,
+			canEdit,
+			handleObjectSaved,
+			objectType,
+			onUpdateObject,
+			ontology,
+			selectedRow,
+			t,
+		],
+	);
 
 	const visibleRows = useMemo(() => {
 		const normalized = query.trim().toLowerCase();
@@ -649,7 +894,10 @@ export function ObjectExplorerPanel({
 						<p className="text-xs text-muted-foreground">
 							{source?.remoteImportId
 								? t("remoteObjectReadonly", "Remote object · read-only")
-								: t("standardObjectView", "Standard object view")}{" "}
+								: t("standardObjectView", "Standard object view")}
+							{!source?.remoteImportId && !canEdit && (
+								<> · {t("readonly", "Read-only")}</>
+							)}{" "}
 							{t("source2", "· source")} {objectType?.table}
 						</p>
 					</div>
@@ -735,9 +983,12 @@ export function ObjectExplorerPanel({
 												key={column}
 												className="max-w-64 truncate px-4 py-2.5"
 											>
-												{typeof row[column] === "object"
-													? JSON.stringify(row[column])
-													: String(row[column] ?? "—")}
+												<ObjectCellValue
+													name={column}
+													value={row[column]}
+													field={fields.get(column)}
+													appId={storageAppId}
+												/>
 											</td>
 										))}
 										<td className="pr-3">
@@ -766,14 +1017,26 @@ export function ObjectExplorerPanel({
 				</div>
 			</section>
 
-			<ObjectViewSheet
-				ontology={ontology}
-				objectType={objectType}
-				row={selectedRow}
-				onClose={() => setSelectedRow(null)}
-				onInvokeAction={onInvokeAction}
-				onActionApplied={loadObjects}
-			/>
+			<PropertyStorageScope value={storageAppId}>
+				<ObjectViewSheet
+					ontology={ontology}
+					objectType={objectType}
+					fields={fields}
+					row={selectedRow}
+					onClose={() => setSelectedRow(null)}
+					onInvokeAction={onInvokeAction}
+					onActionApplied={loadObjects}
+					canEdit={canEdit}
+					editFields={
+						objectType ? editFields.byTable.get(objectType.table) : undefined
+					}
+					editFieldsFailed={
+						objectType ? editFields.failed.has(objectType.table) : false
+					}
+					onSave={saveObject}
+					onRefresh={loadObjects}
+				/>
+			</PropertyStorageScope>
 		</div>
 	);
 }
@@ -802,35 +1065,564 @@ function CopyChip({ text, label }: Readonly<{ text: string; label: string }>) {
 	);
 }
 
-function ObjectFieldCard({
-	label,
-	value,
-}: Readonly<{ label: string; value: unknown }>) {
+interface ObjectFieldEdit {
+	editability: PropertyEditability;
+	draft: PropertyDraft;
+	dirty: boolean;
+	error?: PropertyDraftError | string | null;
+	disabled: boolean;
+	autoFocus: boolean;
+	relationshipLabel?: string;
+	onChange(draft: PropertyDraft): void;
+	onRevert(): void;
+}
+
+function ObjectFieldEditStatus({
+	name,
+	edit,
+}: Readonly<{ name: string; edit: ObjectFieldEdit }>) {
+	const { t } = useTranslation("settings");
+	if (!isEditableProperty(edit.editability)) {
+		return (
+			<PropertyLockHint
+				reason={edit.editability.locked}
+				kind={edit.editability.kind}
+				relationshipLabel={edit.relationshipLabel}
+			/>
+		);
+	}
+	if (!edit.dirty) return null;
 	return (
-		<div className="min-w-0 rounded-xl border bg-muted/30 p-3">
+		<Button
+			type="button"
+			variant="ghost"
+			size="icon"
+			className="size-5 text-muted-foreground"
+			onClick={edit.onRevert}
+			disabled={edit.disabled}
+			aria-label={`${t("revertField", "Revert")}: ${humanizeIdentifier(name)}`}
+		>
+			<RotateCcw className="h-3 w-3" />
+		</Button>
+	);
+}
+
+function ObjectFieldCard({
+	name,
+	value,
+	field,
+	edit,
+}: Readonly<{
+	name: string;
+	value: unknown;
+	field?: PropertyValueContext;
+	edit?: ObjectFieldEdit;
+}>) {
+	const appId = usePropertyStorageAppId();
+	const kindLabel = (
+		<span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground/50">
+			{inferValueKind(value, name, { ...field, appId }).kind}
+		</span>
+	);
+	return (
+		<div
+			className={cn(
+				"min-w-0 rounded-xl border bg-muted/30 p-3",
+				edit?.dirty && "border-primary/60",
+			)}
+		>
 			<div className="mb-1 flex items-center justify-between gap-2">
 				<p className="truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-					{label}
+					{humanizeIdentifier(name)}
 				</p>
-				<span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground/50">
-					{inferValueKind(value).kind}
-				</span>
+				{edit ? (
+					<div className="flex shrink-0 items-center gap-1">
+						{kindLabel}
+						<ObjectFieldEditStatus name={name} edit={edit} />
+					</div>
+				) : (
+					kindLabel
+				)}
 			</div>
-			<PropertyValue value={value} propKey={label} />
+			{edit ? (
+				<div className="min-w-0 space-y-2">
+					<PropertyValue
+						value={value}
+						propKey={name}
+						metadata={field?.metadata}
+						typeName={field?.typeName}
+						compact
+					/>
+					<OntologyPropertyEditor
+						editability={edit.editability}
+						draft={edit.draft}
+						onChange={edit.onChange}
+						name={name}
+						disabled={edit.disabled}
+						autoFocus={edit.autoFocus}
+						error={edit.error}
+						compact
+					/>
+				</div>
+			) : (
+				<PropertyValue
+					value={value}
+					propKey={name}
+					metadata={field?.metadata}
+					typeName={field?.typeName}
+				/>
+			)}
 		</div>
 	);
+}
+
+const NO_LOCKS: ReadonlyMap<string, ColumnLock> = new Map();
+const NO_DRAFT: PropertyDraft = { text: "", isNull: true };
+
+interface ObjectSaveFailure {
+	message: string;
+	/** The object is gone; a refresh shows what is left. */
+	missing: boolean;
+}
+
+/** Hub errors carry a status and code; Tauri rejects with the storage message only. */
+function isMissingObjectError(error: unknown): boolean {
+	if (error instanceof ApiResponseError) return isMissingResourceError(error);
+	return /was not found; it may have been deleted/i.test(
+		getErrorMessage(error),
+	);
+}
+
+function sameDraft(left: PropertyDraft, right: PropertyDraft): boolean {
+	return left.text === right.text && left.isNull === right.isNull;
+}
+
+function keepDrafts(
+	drafts: Readonly<Record<string, PropertyDraft>>,
+	keep: (key: string) => boolean,
+): Record<string, PropertyDraft> {
+	return Object.fromEntries(
+		Object.entries(drafts).filter(([key]) => keep(key)),
+	);
+}
+
+interface ObjectEditReview {
+	updates: Record<string, unknown>;
+	invalid: ReadonlyMap<string, PropertyDraftError>;
+}
+
+/** A draft that still reads as its baseline value is not a change. */
+function reviewDrafts(
+	editable: ReadonlyMap<string, EditableProperty>,
+	baseline: Record<string, unknown>,
+	drafts: Readonly<Record<string, PropertyDraft>>,
+): ObjectEditReview {
+	const parsed: Record<string, unknown> = {};
+	const invalid = new Map<string, PropertyDraftError>();
+	for (const [key, draft] of Object.entries(drafts)) {
+		const editability = editable.get(key);
+		if (
+			!editability ||
+			sameDraft(draft, draftFromValue(editability, baseline[key]))
+		)
+			continue;
+		const result = parsePropertyDraft(editability, draft);
+		if (result.ok) parsed[key] = result.value;
+		else invalid.set(key, result.error);
+	}
+	return { updates: changedProperties(baseline, parsed), invalid };
+}
+
+function useObjectEditSession({
+	row,
+	locked,
+	editFields,
+	onSave,
+}: {
+	row: Record<string, unknown> | null;
+	locked: ReadonlyMap<string, ColumnLock>;
+	editFields?: ReadonlyMap<string, ObjectEditField>;
+	onSave?: (
+		updates: Record<string, unknown>,
+		baseline: Record<string, unknown>,
+	) => Promise<void>;
+}) {
+	const [baseline, setBaseline] = useState<Record<string, unknown> | null>(
+		null,
+	);
+	const [drafts, setDrafts] = useState<Record<string, PropertyDraft>>({});
+	const [saving, setSaving] = useState(false);
+	const [failure, setFailure] = useState<ObjectSaveFailure | null>(null);
+	const [stale, setStale] = useState(false);
+	const [confirmDiscard, setConfirmDiscard] = useState(false);
+
+	const editabilities = useMemo(
+		() =>
+			new Map<string, PropertyEditability>(
+				Object.entries(baseline ?? {}).map(([key, value]) => [
+					key,
+					propertyEditability(key, value, editFields?.get(key), locked),
+				]),
+			),
+		[baseline, editFields, locked],
+	);
+	const editable = useMemo(() => {
+		const entries = new Map<string, EditableProperty>();
+		for (const [key, editability] of editabilities) {
+			if (isEditableProperty(editability)) entries.set(key, editability);
+		}
+		return entries;
+	}, [editabilities]);
+	const review = useMemo(
+		() => reviewDrafts(editable, baseline ?? {}, drafts),
+		[baseline, drafts, editable],
+	);
+	const editing = baseline !== null;
+	const updateCount = Object.keys(review.updates).length;
+	const changedCount = updateCount + review.invalid.size;
+	const canSave =
+		editing && !saving && review.invalid.size === 0 && updateCount > 0;
+
+	// A save that resolves after its session was discarded must not touch the next one.
+	const generation = useRef(0);
+	const inFlight = useRef(false);
+
+	const reset = useCallback(() => {
+		generation.current += 1;
+		inFlight.current = false;
+		setBaseline(null);
+		setDrafts({});
+		setSaving(false);
+		setFailure(null);
+		setStale(false);
+		setConfirmDiscard(false);
+	}, []);
+
+	const start = useCallback(() => {
+		if (!row) return;
+		reset();
+		setBaseline(row);
+	}, [reset, row]);
+
+	const draftOf = useCallback(
+		(key: string): PropertyDraft => {
+			const editability = editable.get(key);
+			if (!editability) return NO_DRAFT;
+			return drafts[key] ?? draftFromValue(editability, baseline?.[key]);
+		},
+		[baseline, drafts, editable],
+	);
+
+	// A save resets every draft once it lands, so none may change while it is sent.
+	const change = useCallback((key: string, draft: PropertyDraft) => {
+		if (inFlight.current) return;
+		setDrafts((current) => ({ ...current, [key]: draft }));
+	}, []);
+
+	const revert = useCallback((key: string) => {
+		if (inFlight.current) return;
+		setDrafts((current) => keepDrafts(current, (name) => name !== key));
+	}, []);
+
+	const save = useCallback(async () => {
+		if (!canSave || !baseline || !onSave || inFlight.current) return;
+		const run = generation.current;
+		inFlight.current = true;
+		setSaving(true);
+		setFailure(null);
+		setConfirmDiscard(false);
+		try {
+			await onSave(review.updates, baseline);
+			if (run === generation.current) reset();
+		} catch (error) {
+			if (run !== generation.current) return;
+			if (error instanceof StaleObjectError) {
+				const pending = new Set(Object.keys(review.updates));
+				setDrafts((current) => keepDrafts(current, (key) => pending.has(key)));
+				setBaseline((current) => ({ ...current, ...error.current }));
+				setStale(true);
+			} else {
+				setStale(false);
+				setFailure({
+					message: apiErrorMessage(error, getErrorMessage(error)),
+					missing: isMissingObjectError(error),
+				});
+			}
+		} finally {
+			if (run === generation.current) {
+				inFlight.current = false;
+				setSaving(false);
+			}
+		}
+	}, [baseline, canSave, onSave, reset, review.updates]);
+
+	return {
+		editing,
+		editabilities,
+		review,
+		changedCount,
+		dirty: editing && changedCount > 0,
+		canSave,
+		saving,
+		failure,
+		stale,
+		confirmDiscard,
+		setConfirmDiscard,
+		draftOf,
+		change,
+		revert,
+		start,
+		reset,
+		save,
+	};
+}
+
+type ObjectEditSession = ReturnType<typeof useObjectEditSession>;
+
+function ObjectEditFooter({
+	session,
+	onDiscardAndClose,
+	onRefresh,
+}: Readonly<{
+	session: ObjectEditSession;
+	onDiscardAndClose: () => void;
+	onRefresh?: () => Promise<void>;
+}>) {
+	const { t } = useTranslation("settings");
+	return (
+		<div className="sticky bottom-0 space-y-3 border-t bg-background/80 p-4 backdrop-blur">
+			{session.stale && (
+				<Alert className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
+					<AlertTriangle />
+					<AlertDescription className="text-xs text-current">
+						{t(
+							"common:objectChangedWhileEditing",
+							"Someone changed this value after you opened it. It now shows the current value; save again to replace it.",
+						)}
+					</AlertDescription>
+				</Alert>
+			)}
+			{session.failure && (
+				<div
+					role="alert"
+					className="flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+				>
+					<p className="min-w-0 wrap-anywhere">
+						{session.failure.missing
+							? t(
+									"common:objectNoLongerExists",
+									"This object no longer exists. Refresh to see the current data.",
+								)
+							: session.failure.message}
+					</p>
+					{session.failure.missing && onRefresh && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="h-7 shrink-0 gap-1.5 px-2.5 text-xs"
+							onClick={onRefresh}
+						>
+							<RefreshCw className="h-3.5 w-3.5" />
+							{t("refresh", "Refresh")}
+						</Button>
+					)}
+				</div>
+			)}
+			{session.confirmDiscard && !session.saving && (
+				<div
+					role="alert"
+					className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+				>
+					<span>
+						{t("discardUnsavedChangesPrompt", "Discard your unsaved changes?")}
+					</span>
+					<div className="flex items-center gap-2">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="h-7"
+							onClick={() => session.setConfirmDiscard(false)}
+						>
+							{t("keepEditing", "Keep editing")}
+						</Button>
+						<Button
+							type="button"
+							variant="destructive"
+							size="sm"
+							className="h-7"
+							onClick={onDiscardAndClose}
+						>
+							{t("discard", "Discard")}
+						</Button>
+					</div>
+				</div>
+			)}
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-xs text-muted-foreground">
+					{t("unsavedChangesCount", "{{count}} unsaved changes", {
+						count: session.changedCount,
+					})}
+				</span>
+				<div className="flex items-center gap-2">
+					<Button
+						type="button"
+						variant="ghost"
+						size="sm"
+						onClick={session.reset}
+						disabled={session.saving}
+					>
+						{t("discard", "Discard")}
+					</Button>
+					<Button
+						type="button"
+						size="sm"
+						className="gap-1.5"
+						onClick={session.save}
+						disabled={!session.canSave}
+					>
+						{session.saving ? (
+							<>
+								<Loader2 className="h-4 w-4 animate-spin" />
+								{t("common:saving", "Saving...")}
+							</>
+						) : (
+							<>
+								<Check className="h-4 w-4" />
+								{t("saveChanges", "Save Changes")}
+							</>
+						)}
+					</Button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function ObjectActionList({
+	actions,
+	blocked,
+	onSelect,
+}: Readonly<{
+	actions: readonly OntologyActionDefinition[];
+	blocked: boolean;
+	onSelect: (action: OntologyActionDefinition) => void;
+}>) {
+	const { t } = useTranslation("settings");
+	const list = (
+		<div className="space-y-1.5">
+			{actions.map((action) => (
+				<button
+					key={action.id}
+					type="button"
+					aria-disabled={blocked || undefined}
+					onClick={() => {
+						if (!blocked) onSelect(action);
+					}}
+					className={cn(
+						"group flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-accent",
+						blocked &&
+							"cursor-not-allowed opacity-60 hover:border-border hover:bg-card",
+					)}
+				>
+					<span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+						<Workflow className="h-4 w-4" />
+					</span>
+					<span className="min-w-0 flex-1">
+						<span className="block truncate text-sm font-medium">
+							{action.name}
+						</span>
+						{action.description && (
+							<span className="block truncate text-xs text-muted-foreground">
+								{action.description}
+							</span>
+						)}
+					</span>
+					<ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+				</button>
+			))}
+		</div>
+	);
+	if (!blocked) return list;
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>{list}</TooltipTrigger>
+			<TooltipContent>
+				{t("finishEditingBeforeActions", "Save or discard your changes first")}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+function objectSelectionKey(
+	ontology: GraphOverlay | undefined,
+	identity: Extract<EditableIdentity, { ok: true }>,
+): string {
+	return [
+		ontology?.id ?? "",
+		objectKey(identity.mapping),
+		typeof identity.id,
+		String(identity.id),
+	].join("\u0000");
+}
+
+function firstEditableKey(
+	keys: readonly string[],
+	editabilities: ReadonlyMap<string, PropertyEditability>,
+): string | undefined {
+	return keys.find((key) => {
+		const editability = editabilities.get(key);
+		return editability !== undefined && isEditableProperty(editability);
+	});
+}
+
+/** The field an edit opens on, fixed for that edit so a later change never pulls focus. */
+function useEditEntryField(
+	editing: boolean,
+	firstEditable: string | undefined,
+): string | undefined {
+	const [entry, setEntry] = useState<{ key?: string } | null>(null);
+	if (editing && !entry) setEntry({ key: firstEditable });
+	if (!editing && entry) setEntry(null);
+	return editing ? (entry ?? { key: firstEditable }).key : undefined;
+}
+
+/**
+ * Puts focus back on the Edit button once an edit ends and took the focused
+ * control with it, unless the user has already moved focus somewhere else.
+ */
+function useFocusAfterObjectEdit(editing: boolean) {
+	const editButtonRef = useRef<HTMLButtonElement>(null);
+	const wasEditing = useRef(editing);
+	useEffect(() => {
+		const ended = wasEditing.current && !editing;
+		wasEditing.current = editing;
+		const button = editButtonRef.current;
+		if (!ended || !button) return;
+		const active = button.ownerDocument.activeElement;
+		if (!active?.isConnected || active.contains(button)) button.focus();
+	}, [editing]);
+	return editButtonRef;
 }
 
 function ObjectViewSheet({
 	ontology,
 	objectType,
+	fields,
 	row,
 	onClose,
 	onInvokeAction,
 	onActionApplied,
+	canEdit = false,
+	editFields,
+	editFieldsFailed = false,
+	onSave,
+	onRefresh,
 }: Readonly<{
 	ontology?: GraphOverlay;
 	objectType?: NodeLabelMapping;
+	fields: ReadonlyMap<string, PropertyValueContext>;
 	row: Record<string, unknown> | null;
 	onClose: () => void;
 	onInvokeAction: (
@@ -840,16 +1632,88 @@ function ObjectViewSheet({
 		onStatus?: (run: OntologyActionRun) => void,
 	) => Promise<OntologyActionRun>;
 	onActionApplied: () => Promise<void>;
+	canEdit?: boolean;
+	/** Column types of the backing table; undefined while they load. */
+	editFields?: ReadonlyMap<string, ObjectEditField>;
+	editFieldsFailed?: boolean;
+	/** Rejects with StaleObjectError when the stored values moved on. */
+	onSave?: (
+		updates: Record<string, unknown>,
+		baseline: Record<string, unknown>,
+	) => Promise<void>;
+	onRefresh?: () => Promise<void>;
 }>) {
 	const { t } = useTranslation("settings");
 	const [selectedAction, setSelectedAction] =
 		useState<OntologyActionDefinition | null>(null);
 	const [showAllProperties, setShowAllProperties] = useState(false);
-	const [lastRow, setLastRow] = useState(row);
-	if (row !== lastRow) {
-		setLastRow(row);
+	const identity = useMemo(
+		() =>
+			ontology && objectType && row
+				? resolveObjectIdentity(ontology, objectType.label, row)
+				: null,
+		[ontology, objectType, row],
+	);
+	const locked = useMemo(
+		() =>
+			ontology && objectType
+				? lockedObjectColumns(ontology, objectType)
+				: NO_LOCKS,
+		[ontology, objectType],
+	);
+	const relationshipLabels = useMemo(
+		() =>
+			new Map(
+				(ontology?.edges ?? [])
+					.filter((edge) => edge.table === objectType?.table)
+					.flatMap((edge) => [
+						[edge.src_column, edge.label] as const,
+						[edge.dst_column, edge.label] as const,
+					]),
+			),
+		[ontology, objectType],
+	);
+	const session = useObjectEditSession({ row, locked, editFields, onSave });
+	const editButtonRef = useFocusAfterObjectEdit(session.editing);
+	// Parent re-samples hand in new row objects for the same object; only a
+	// different object may drop an edit in progress.
+	const selection: unknown = identity?.ok
+		? objectSelectionKey(ontology, identity)
+		: row;
+	const [lastSelection, setLastSelection] = useState(selection);
+	if (selection !== lastSelection) {
+		setLastSelection(selection);
 		setShowAllProperties(false);
+		session.reset();
 	}
+	const identityKey = identity?.ok ? String(identity.id) : "";
+	const canStartEdit = Boolean(canEdit && onSave && identity?.ok && editFields);
+	// A sent save cannot be discarded, so closing waits until it settles.
+	const requestClose = () => {
+		if (session.saving) return;
+		if (session.dirty) session.setConfirmDiscard(true);
+		else onClose();
+	};
+	const guardDismiss = (event: Event) => {
+		if (!session.saving && !session.dirty) return;
+		event.preventDefault();
+		if (!session.saving) session.setConfirmDiscard(true);
+	};
+	const discardAndClose = () => {
+		session.reset();
+		onClose();
+	};
+	const handleEditKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+		if (
+			!session.editing ||
+			event.key !== "Enter" ||
+			!(event.metaKey || event.ctrlKey) ||
+			event.nativeEvent.isComposing
+		)
+			return;
+		event.preventDefault();
+		session.save();
+	};
 	const emptyType: NodeLabelMapping = {
 		label: "",
 		table: "",
@@ -861,8 +1725,7 @@ function ObjectViewSheet({
 	const view = ontology?.object_views?.find(
 		(item) => item.object_type === activeKey,
 	);
-	const titleProperty =
-		view?.title_property ?? objectType?.display_column ?? objectType?.id_column;
+	const titleProperty = objectTitleProperty(ontology, objectType);
 	const prominent =
 		view?.prominent_properties ??
 		objectType?.property_columns.slice(0, 4).map((property) => property.name) ??
@@ -880,23 +1743,56 @@ function ObjectViewSheet({
 		? Object.entries(row).filter(([key]) => !prominentSet.has(key))
 		: [];
 	const hasProminent = prominentEntries.length > 0;
-	const restCollapsed = hasProminent && !showAllProperties;
+	const restCollapsed = hasProminent && !showAllProperties && !session.editing;
 	const totalFields = prominentEntries.length + restEntries.length;
+	const entryField = useEditEntryField(
+		session.editing,
+		session.editing
+			? firstEditableKey(
+					[...prominentKeys, ...restEntries.map(([key]) => key)],
+					session.editabilities,
+				)
+			: undefined,
+	);
+	const fieldEdit = (key: string): ObjectFieldEdit | undefined => {
+		const editability = session.editing
+			? session.editabilities.get(key)
+			: undefined;
+		if (!editability) return undefined;
+		return {
+			editability,
+			draft: session.draftOf(key),
+			dirty: key in session.review.updates || session.review.invalid.has(key),
+			error: session.review.invalid.get(key) ?? null,
+			disabled: session.saving,
+			autoFocus: key === entryField,
+			relationshipLabel:
+				locked.get(key) === "relationship"
+					? relationshipLabels.get(key)
+					: undefined,
+			onChange: (draft) => session.change(key, draft),
+			onRevert: () => session.revert(key),
+		};
+	};
 
 	const accentColor = objectType?.style?.color || "hsl(var(--primary))";
 	const TypeIcon = getGraphIcon(objectType?.style?.icon ?? "database");
 	const titleValue = String(
 		row?.[titleProperty ?? ""] ??
 			row?.[objectType?.id_column ?? ""] ??
-			"Object",
+			t("object", "Object"),
 	);
 	const idRaw = row?.[objectType?.id_column ?? ""];
 	const idValue = idRaw === undefined || idRaw === null ? "" : String(idRaw);
 	const showIdChip = idValue !== "" && idValue !== titleValue;
 
 	return (
-		<Sheet open={Boolean(row)} onOpenChange={(open) => !open && onClose()}>
-			<SheetContent className="w-full p-0 sm:max-w-xl">
+		<Sheet open={Boolean(row)} onOpenChange={(open) => !open && requestClose()}>
+			<SheetContent
+				className="w-full p-0 sm:max-w-xl"
+				onEscapeKeyDown={guardDismiss}
+				onInteractOutside={guardDismiss}
+			>
 				<div className="flex h-full min-h-0 flex-col">
 					<SheetHeader className="gap-0 space-y-0 border-b p-5 pr-12 text-left">
 						<div className="flex items-start gap-3.5">
@@ -911,7 +1807,7 @@ function ObjectViewSheet({
 							</div>
 							<div className="min-w-0 flex-1">
 								<p className="truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-									{objectType?.label || "Object"}
+									{objectType?.label || t("object", "Object")}
 								</p>
 								<SheetTitle className="mt-0.5 truncate text-xl leading-tight">
 									{titleValue}
@@ -926,15 +1822,60 @@ function ObjectViewSheet({
 									</div>
 								)}
 							</div>
+							{session.editing ? (
+								<Badge variant="secondary" className="mt-0.5 shrink-0 gap-1">
+									<Pencil className="h-3 w-3" />
+									{t("editingObject", "Editing")}
+								</Badge>
+							) : (
+								canStartEdit && (
+									<Button
+										ref={editButtonRef}
+										type="button"
+										variant="outline"
+										size="sm"
+										className="shrink-0 gap-1.5"
+										onClick={session.start}
+									>
+										<Pencil className="h-3.5 w-3.5" />
+										{t("edit", "Edit")}
+									</Button>
+								)
+							)}
 						</div>
+						{canEdit && identity && !identity.ok && (
+							<p className="mt-3 text-xs text-muted-foreground">
+								{t(
+									"common:objectNotEditableHere",
+									"This object can't be edited here.",
+								)}
+							</p>
+						)}
+						{canEdit && editFieldsFailed && (
+							<p className="mt-3 text-xs text-muted-foreground">
+								{t(
+									"couldNotLoadColumnTypesEditingOff",
+									"Couldn't load column types, so editing is off.",
+								)}
+							</p>
+						)}
 						<SheetDescription className="sr-only">
-							{objectType?.label || "Object"} {`details from ontology`}{" "}
-							{ontology?.name ?? ""}
+							{t(
+								"typeDetailsFromOntologyName",
+								"{{type}} details from ontology {{name}}",
+								{
+									type: objectType?.label || t("object", "Object"),
+									name: ontology?.name ?? "",
+								},
+							)}
 						</SheetDescription>
 					</SheetHeader>
 
 					{row && (
-						<div className="relative min-h-0 flex-1 overflow-y-auto">
+						<div
+							className="relative min-h-0 flex-1 overflow-y-auto"
+							onKeyDown={handleEditKeyDown}
+						>
 							<div className="space-y-6 p-5">
 								{actions.length > 0 && (
 									<section>
@@ -942,31 +1883,11 @@ function ObjectViewSheet({
 											<Workflow className="h-3.5 w-3.5" />
 											{t("actions", "Actions")}
 										</p>
-										<div className="space-y-1.5">
-											{actions.map((action) => (
-												<button
-													key={action.id}
-													type="button"
-													onClick={() => setSelectedAction(action)}
-													className="group flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-accent"
-												>
-													<span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-														<Workflow className="h-4 w-4" />
-													</span>
-													<span className="min-w-0 flex-1">
-														<span className="block truncate text-sm font-medium">
-															{action.name}
-														</span>
-														{action.description && (
-															<span className="block truncate text-xs text-muted-foreground">
-																{action.description}
-															</span>
-														)}
-													</span>
-													<ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-												</button>
-											))}
-										</div>
+										<ObjectActionList
+											actions={actions}
+											blocked={session.editing}
+											onSelect={setSelectedAction}
+										/>
 									</section>
 								)}
 
@@ -975,12 +1896,19 @@ function ObjectViewSheet({
 										<p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
 											{t("highlights", "Highlights")}
 										</p>
-										<div className="grid grid-cols-2 gap-2.5">
+										<div
+											className={cn(
+												"grid gap-2.5",
+												session.editing ? "grid-cols-1" : "grid-cols-2",
+											)}
+										>
 											{prominentEntries.map(([key, value]) => (
 												<ObjectFieldCard
-													key={key}
-													label={humanizeIdentifier(key)}
+													key={`${identityKey}:${key}`}
+													name={key}
 													value={value}
+													field={fields.get(key)}
+													edit={fieldEdit(key)}
 												/>
 											))}
 										</div>
@@ -991,7 +1919,9 @@ function ObjectViewSheet({
 									<section>
 										<div className="mb-2.5 flex items-center justify-between">
 											<p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-												{hasProminent ? "More properties" : "Properties"}
+												{hasProminent
+													? t("moreProperties", "More properties")
+													: t("properties", "Properties")}
 											</p>
 											<span className="text-[10px] text-muted-foreground">
 												{t("totalfieldsFields", "{{totalFields}} fields", {
@@ -1003,14 +1933,16 @@ function ObjectViewSheet({
 											<div className="space-y-1.5">
 												{restEntries.map(([key, value]) => (
 													<ObjectFieldCard
-														key={key}
-														label={humanizeIdentifier(key)}
+														key={`${identityKey}:${key}`}
+														name={key}
 														value={value}
+														field={fields.get(key)}
+														edit={fieldEdit(key)}
 													/>
 												))}
 											</div>
 										)}
-										{hasProminent && (
+										{hasProminent && !session.editing && (
 											<Button
 												variant="ghost"
 												size="sm"
@@ -1023,7 +1955,7 @@ function ObjectViewSheet({
 													className={`h-3.5 w-3.5 transition-transform ${showAllProperties ? "rotate-180" : ""}`}
 												/>
 												{showAllProperties
-													? "Show fewer"
+													? t("showFewer", "Show fewer")
 													: t(
 															"showAllLengthFields",
 															"Show all {{length}} fields",
@@ -1044,21 +1976,29 @@ function ObjectViewSheet({
 								)}
 							</div>
 
-							<div className="sticky bottom-0 flex items-center justify-between gap-3 border-t bg-background/80 p-4 backdrop-blur">
-								<div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-									<Database className="h-3.5 w-3.5 shrink-0" />
-									<span className="truncate">
-										<span className="text-foreground">
-											{objectType?.table || "—"}
-										</span>
-										{ontology?.name ? ` · ${ontology.name}` : ""}
-									</span>
-								</div>
-								<CopyChip
-									text={JSON.stringify(row, null, 2)}
-									label={t("copyJson", "Copy JSON")}
+							{session.editing ? (
+								<ObjectEditFooter
+									session={session}
+									onDiscardAndClose={discardAndClose}
+									onRefresh={onRefresh}
 								/>
-							</div>
+							) : (
+								<div className="sticky bottom-0 flex items-center justify-between gap-3 border-t bg-background/80 p-4 backdrop-blur">
+									<div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+										<Database className="h-3.5 w-3.5 shrink-0" />
+										<span className="truncate">
+											<span className="text-foreground">
+												{objectType?.table || "—"}
+											</span>
+											{ontology?.name ? ` · ${ontology.name}` : ""}
+										</span>
+									</div>
+									<CopyChip
+										text={JSON.stringify(row, null, 2)}
+										label={t("copyJson", "Copy JSON")}
+									/>
+								</div>
+							)}
 						</div>
 					)}
 				</div>
@@ -1416,13 +2356,14 @@ function OntologyActionDialog({
 	const [run, setRun] = useState<OntologyActionRun | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [idempotencyKey] = useState(createId);
-	const titleProperty =
-		ontology?.object_views?.find(
-			(view) => view.object_type === (objectType ? objectKey(objectType) : ""),
-		)?.title_property ??
-		objectType?.display_column ??
-		objectType?.id_column;
-	const objectId = row?.[objectType?.id_column ?? ""];
+	const titleProperty = objectTitleProperty(ontology, objectType);
+	// The server loads action targets by the effective id, not the mapping's own.
+	const identityColumn =
+		ontology && objectType
+			? (effectiveIdentityColumn(ontology, objectType.label) ??
+				objectType.id_column)
+			: objectType?.id_column;
+	const objectId = row?.[identityColumn ?? ""];
 	const succeeded = Boolean(run && actionSucceeded(run.status));
 	const failed = Boolean(
 		run &&
@@ -1487,6 +2428,7 @@ function OntologyActionDialog({
 		onInvokeAction,
 		ontology,
 		parameters,
+		t,
 	]);
 
 	return (
@@ -1663,7 +2605,7 @@ function OntologyLifecycleMenu({
 		} finally {
 			setBusy(false);
 		}
-	}, [appId, backend.graphState, nameDraft, ontology, refreshOverlays]);
+	}, [appId, backend.graphState, nameDraft, ontology, refreshOverlays, t]);
 
 	const remove = useCallback(async () => {
 		setBusy(true);
@@ -1681,7 +2623,7 @@ function OntologyLifecycleMenu({
 		} finally {
 			setBusy(false);
 		}
-	}, [appId, backend.graphState, ontology.id, refreshOverlays]);
+	}, [appId, backend.graphState, ontology.id, refreshOverlays, t]);
 
 	return (
 		<>
@@ -1826,9 +2768,7 @@ function OntologyLifecycleMenu({
 }
 
 function encodeEdgeTarget(edge: EdgeLabelMapping): string {
-	if (edge.dst_ontology) return `local:${edge.dst_ontology}`;
-	if (edge.dst_binding_id) return `remote:${edge.dst_binding_id}`;
-	return "self";
+	return externalTargetKey(edge) ?? "self";
 }
 
 function decodeEdgeTarget(value: string): Partial<EdgeLabelMapping> {
@@ -1844,6 +2784,8 @@ function decodeEdgeTarget(value: string): Partial<EdgeLabelMapping> {
 function RelationshipRow({
 	edge,
 	index,
+	domId,
+	highlighted,
 	otherOntologies,
 	installedOntologies,
 	takenLabels,
@@ -1853,6 +2795,8 @@ function RelationshipRow({
 }: Readonly<{
 	edge: EdgeLabelMapping;
 	index: number;
+	domId?: string;
+	highlighted?: boolean;
 	otherOntologies: GraphOverlay[];
 	installedOntologies: RemoteOntologyImport[];
 	takenLabels: Set<string>;
@@ -1884,12 +2828,20 @@ function RelationshipRow({
 		</div>
 	);
 
+	const frame = `rounded-lg border transition-shadow duration-300${
+		highlighted ? " ring-2 ring-primary/60" : ""
+	}`;
+
 	if (!onChange) {
-		return <div className="rounded-lg border px-3 py-2">{summary}</div>;
+		return (
+			<div id={domId} className={`${frame} px-3 py-2`}>
+				{summary}
+			</div>
+		);
 	}
 
 	return (
-		<div className="space-y-2.5 rounded-lg border px-3 py-2.5">
+		<div id={domId} className={`${frame} space-y-2.5 px-3 py-2.5`}>
 			<div className="flex items-start justify-between gap-2">
 				<div className="min-w-0 flex-1">{summary}</div>
 				<div className="flex items-center">
@@ -2045,13 +2997,20 @@ export function OntologyModelPanel({
 	const { t } = useTranslation("settings");
 	const [selectedId, setSelectedId] = useState(ontologies[0]?.id ?? "");
 	const [addingEdge, setAddingEdge] = useState(false);
+	const [edgePrefill, setEdgePrefill] = useState<RelationshipPrefill | null>(
+		null,
+	);
 	const selected =
 		ontologies.find((ontology) => ontology.id === selectedId) ?? ontologies[0];
 	useEffect(() => {
 		if (selected) setSelectedId(selected.id);
 	}, [selected]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: closes the add form when the user switches ontology
-	useEffect(() => setAddingEdge(false), [selectedId]);
+	useEffect(() => {
+		setAddingEdge(false);
+		setEdgePrefill(null);
+	}, [selectedId]);
+	const { reveal, domId, revealedKey } = useRevealTarget();
 	const [edgesDraft, setEdgesDraft] = useState<EdgeLabelMapping[]>(
 		() => ontologies[0]?.edges ?? [],
 	);
@@ -2197,8 +3156,57 @@ export function OntologyModelPanel({
 		(edge: WizardEdge) => {
 			commitEdges([...edgesDraftRef.current, toEdgeMapping(edge)]);
 			setAddingEdge(false);
+			setEdgePrefill(null);
 		},
 		[commitEdges],
+	);
+
+	const openAddRelationship = useCallback(
+		(prefill: RelationshipPrefill | null) => {
+			setEdgePrefill(prefill);
+			setAddingEdge(true);
+			reveal("add-relationship");
+		},
+		[reveal],
+	);
+
+	const externalTargets = useMemo(
+		() =>
+			new Map<string, string>([
+				...otherOntologies.map((ontology): [string, string] => [
+					`local:${ontology.id}`,
+					ontology.name,
+				]),
+				...(installedOntologies ?? []).map((imported): [string, string] => [
+					`remote:${imported.id}`,
+					t("remoteName", "Remote: {{name}}", {
+						name: imported.contract.name,
+					}),
+				]),
+			]),
+		[installedOntologies, otherOntologies, t],
+	);
+
+	const revealObject = useCallback(
+		(object: NodeLabelMapping) => {
+			const index = selected?.nodes.indexOf(object) ?? -1;
+			if (index >= 0) reveal(`object-${index}`);
+		},
+		[reveal, selected?.nodes],
+	);
+
+	const revealRelationship = useCallback(
+		(index: number) => reveal(`relationship-${index}`),
+		[reveal],
+	);
+
+	const linkFromDiagram = useCallback(
+		(source: NodeLabelMapping, target: NodeLabelMapping) =>
+			openAddRelationship({
+				sourceId: nodeToEndpoint(source).id,
+				targetId: nodeToEndpoint(target).id,
+			}),
+		[openAddRelationship],
 	);
 
 	// Saved nodes carry every column in `property_columns`, so a relationship can
@@ -2321,20 +3329,63 @@ export function OntologyModelPanel({
 					</div>
 					<Separator />
 					<div>
+						<div className="mb-3">
+							<h3 className="text-sm font-medium">
+								{t("schemaDiagram", "Schema diagram")}
+							</h3>
+							<p className="text-xs text-muted-foreground">
+								{onSaveEdges
+									? t(
+											"howObjectTypesConnectClickToJumpToDetailsDragBetweenObjectsToLinkThem",
+											"How object types connect. Click to jump to details, drag from one object to another to link them.",
+										)
+									: t(
+											"howObjectTypesConnectClickToJumpToDetails",
+											"How object types connect. Click to jump to details.",
+										)}
+							</p>
+						</div>
+						<OntologySchemaGraph
+							key={selected.id}
+							title={selected.name}
+							nodes={selected.nodes}
+							edges={edgesDraft}
+							externalTargets={externalTargets}
+							onSelectObject={revealObject}
+							onSelectRelationship={revealRelationship}
+							onConnect={
+								onSaveEdges && endpoints.length > 0
+									? linkFromDiagram
+									: undefined
+							}
+						/>
+					</div>
+					<div>
 						<div className="mb-3 flex items-center justify-between">
 							<div>
 								<h3 className="text-sm font-medium">
 									{t("objectTypes", "Object types")}
 								</h3>
 								<p className="text-xs text-muted-foreground">
-									{`Business objects compiled from native tables`}
+									{t(
+										"businessObjectsCompiledFromNativeTables",
+										"Business objects compiled from native tables",
+									)}
 								</p>
 							</div>
 							<Badge variant="secondary">{selected.nodes.length}</Badge>
 						</div>
 						<div className="grid gap-3 md:grid-cols-2">
-							{selected.nodes.map((object) => (
-								<div key={objectKey(object)} className="rounded-xl border p-4">
+							{selected.nodes.map((object, objectIndex) => (
+								<div
+									key={objectKey(object)}
+									id={domId(`object-${objectIndex}`)}
+									className={`rounded-xl border p-4 transition-shadow duration-300${
+										revealedKey === `object-${objectIndex}`
+											? " ring-2 ring-primary/60"
+											: ""
+									}`}
+								>
 									<div className="flex items-start gap-3">
 										<span
 											className="mt-1 h-3 w-3 rounded-full"
@@ -2389,7 +3440,7 @@ export function OntologyModelPanel({
 									<Button
 										size="sm"
 										variant="outline"
-										onClick={() => setAddingEdge(true)}
+										onClick={() => openAddRelationship(null)}
 										disabled={endpoints.length === 0}
 									>
 										<Plus className="h-4 w-4" />
@@ -2400,12 +3451,23 @@ export function OntologyModelPanel({
 						</div>
 						<div className="space-y-2">
 							{addingEdge && (
-								<AddRelationshipForm
-									endpoints={endpoints}
-									takenLabels={takenLabels}
-									onAdd={handleEdgeAdd}
-									onCancel={() => setAddingEdge(false)}
-								/>
+								<div id={domId("add-relationship")}>
+									<AddRelationshipForm
+										key={
+											edgePrefill
+												? `${edgePrefill.sourceId}>${edgePrefill.targetId ?? ""}`
+												: "blank"
+										}
+										endpoints={endpoints}
+										takenLabels={takenLabels}
+										prefill={edgePrefill}
+										onAdd={handleEdgeAdd}
+										onCancel={() => {
+											setAddingEdge(false);
+											setEdgePrefill(null);
+										}}
+									/>
+								</div>
 							)}
 							{edgesDraft.length === 0 && !addingEdge && (
 								<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
@@ -2424,6 +3486,8 @@ export function OntologyModelPanel({
 									}
 									edge={edge}
 									index={index}
+									domId={domId(`relationship-${index}`)}
+									highlighted={revealedKey === `relationship-${index}`}
 									otherOntologies={otherOntologies}
 									installedOntologies={installedOntologies ?? []}
 									takenLabels={takenLabels}
@@ -2507,7 +3571,9 @@ export function OntologyActionsPanel({
 	const board = selectedBoard.data;
 	const startNodes = useMemo(
 		() =>
-			board ? Object.values(board.nodes).filter((node) => node.start) : [],
+			board
+				? Object.values(board.nodes ?? {}).filter((node) => node.start)
+				: [],
 		[board],
 	);
 	const startNode = startNodes.find((node) => node.id === startNodeId);
@@ -2632,7 +3698,7 @@ export function OntologyActionsPanel({
 		} finally {
 			setPublishingVersion(false);
 		}
-	}, [appId, boardId, backend.boardState]);
+	}, [appId, boardId, backend.boardState, t]);
 
 	const boardsRequestedRef = useRef(false);
 	useEffect(() => {
@@ -2727,6 +3793,7 @@ export function OntologyActionsPanel({
 		ontology,
 		resetActionEditor,
 		startNodeId,
+		t,
 	]);
 
 	const repairActionBindings = useCallback(
@@ -2748,7 +3815,7 @@ export function OntologyActionsPanel({
 				setRepairingOntologyId(null);
 			}
 		},
-		[onSaveActions],
+		[onSaveActions, t],
 	);
 	const removeAction = useCallback(
 		async (owner: GraphOverlay, actionId: string) => {
@@ -2772,7 +3839,7 @@ export function OntologyActionsPanel({
 				setRepairingOntologyId(null);
 			}
 		},
-		[onSaveActions],
+		[onSaveActions, t],
 	);
 
 	if (ontologies.length === 0)
@@ -3083,7 +4150,10 @@ export function OntologyActionsPanel({
 												{t("publishing", "Publishing…")}
 											</span>
 										) : (
-											`Publish current as new version`
+											t(
+												"publishCurrentAsNewVersion",
+												"Publish current as new version",
+											)
 										)}
 									</button>
 								)}
@@ -3152,7 +4222,10 @@ export function OntologyActionsPanel({
 							{inferredParameterSchema && (
 								<p className="mt-2 flex items-center gap-1.5 font-medium text-foreground">
 									<CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-									{`Typed parameters detected from this entry node.`}
+									{t(
+										"typedParametersDetectedFromThisEntryNode",
+										"Typed parameters detected from this entry node.",
+									)}
 								</p>
 							)}
 						</div>
@@ -3205,7 +4278,10 @@ export function OntologyActionsPanel({
 									)}
 								</Label>
 								<p className="text-xs text-muted-foreground">
-									{`Off hides this action from connected projects; it still runs locally`}
+									{t(
+										"offHidesThisActionFromConnectedProjectsItStillRunsLocally",
+										"Off hides this action from connected projects; it still runs locally",
+									)}
 								</p>
 							</div>
 							<Switch
@@ -3380,7 +4456,7 @@ export function OntologySharingPanel({
 				setSavingOntologyIds(new Set(savingOntologyIdsRef.current));
 			}
 		},
-		[onUpdateOntology],
+		[onUpdateOntology, t],
 	);
 	const installedStateUnavailable =
 		installedOntologiesLoading || Boolean(installedOntologiesError);
@@ -3404,7 +4480,7 @@ export function OntologySharingPanel({
 				if (remoteLoadGenerationRef.current[connection.id] === generation) {
 					setRemoteOntologies((current) => ({
 						...current,
-						[connection.id]: contracts,
+						[connection.id]: asArray(contracts),
 					}));
 				}
 			} catch (error) {
@@ -3427,7 +4503,7 @@ export function OntologySharingPanel({
 				}
 			}
 		},
-		[onLoadRemoteOntologies],
+		[onLoadRemoteOntologies, t],
 	);
 	const mutateImport = useCallback(
 		async (
@@ -3457,7 +4533,7 @@ export function OntologySharingPanel({
 				setMutatingImportId(null);
 			}
 		},
-		[onInstallRemoteOntology, onUninstallRemoteOntology],
+		[onInstallRemoteOntology, onUninstallRemoteOntology, t],
 	);
 	return (
 		<div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
@@ -3476,7 +4552,10 @@ export function OntologySharingPanel({
 				{ontologies.length === 0 && (
 					<EmptyStudioState
 						title={t("nothingToExposeYet", "Nothing to expose yet")}
-						description={`Set up a local ontology, or install a contract from a connected project.`}
+						description={t(
+							"setUpALocalOntologyOrInstallAContractFromAConnectedProject",
+							"Set up a local ontology, or install a contract from a connected project.",
+						)}
 						onCreate={onCreateOntology}
 					/>
 				)}
@@ -3574,7 +4653,10 @@ export function OntologySharingPanel({
 						{connections.filter((connection) => connection.status === "ACTIVE")
 							.length === 0 ? (
 							<div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
-								{`No active app connections. Create one from Team → Connections.`}
+								{t(
+									"noActiveAppConnectionsCreateOneFromTeamConnections",
+									"No active app connections. Create one from Team → Connections.",
+								)}
 							</div>
 						) : (
 							connections

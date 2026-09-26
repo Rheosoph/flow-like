@@ -12,8 +12,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
+import { isMissingResourceError } from "../../lib/api-error";
 import { addNodeCommand } from "../../lib/command/generic-command";
 import { parseDateValue } from "../../lib/date";
+import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type {
 	IPage,
@@ -38,6 +40,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
 import { WidgetBuilder } from "./WidgetBuilder";
+import { PageNoCacheSetting } from "./page-no-cache-setting";
 import {
 	type CreateWorkflowEventRequest,
 	WORKFLOW_EVENT_NODE_NAMES,
@@ -218,11 +221,10 @@ export function PageBuilderSurface({
 
 	// Build action context for the widget builder (pages, workflow events, behavior hooks)
 	const actionContext = useMemo(() => {
-		const pages =
-			allPages.data?.map((pageInfo) => ({
-				id: pageInfo.pageId,
-				name: pageInfo.name || pageInfo.pageId,
-			})) ?? [];
+		const pages = asArray(allPages.data).map((pageInfo) => ({
+			id: pageInfo.pageId,
+			name: pageInfo.name || pageInfo.pageId,
+		}));
 
 		const workflowEvents = getPageWorkflowEvents(
 			boardNodes,
@@ -283,7 +285,20 @@ export function PageBuilderSurface({
 				lastSavedWidgetRefsRef.current = JSON.stringify(
 					loadedPage.widgetRefs ?? {},
 				);
-			} catch {
+			} catch (error) {
+				// Only a confirmed miss may become a blank page. After any other failure (server
+				// unreachable, payload not on this device) a stand-in would autosave over the
+				// real page.
+				const confirmedMiss =
+					isMissingResourceError(error) ||
+					(error instanceof Error &&
+						error.message.startsWith("Page not found"));
+				if (!confirmedMiss) {
+					console.error("Failed to load page", error);
+					setPage(null);
+					pageRef.current = null;
+					return;
+				}
 				const newPage: IPage = {
 					id: pageId,
 					name: t("newPage", "New Page"),
@@ -813,6 +828,12 @@ function PageSettingsPanel({
 							"Executes when the page first loads",
 						)}
 					</p>
+					{page.onLoadEventId && (
+						<PageNoCacheSetting
+							noCache={page.noCache === true}
+							onChange={(noCache) => onUpdatePage("noCache", noCache)}
+						/>
+					)}
 				</div>
 
 				<div className="space-y-2">

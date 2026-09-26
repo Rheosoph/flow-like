@@ -128,44 +128,55 @@ class DeploymentTest(unittest.TestCase):
                     self.assertEqual(env["FLOW_LIKE_CONFIG_FILE"], "")
                     self.assertEqual(env[source], value)
 
-    def test_preflight_rejects_conflicting_api_runtime_sources(self):
+    def test_preflight_accepts_one_api_runtime_source_and_rejects_conflicts(self):
         values, config = self.render({"FLOW_LIKE_CONFIG_JSON": "{}"})
         self.assertTrue(any("Select one API runtime config source" in error for error in preflight.validate(values, config)))
-        values, config = self.render({"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"})
-        self.assertTrue(any("explicit AUDIT_WORKER_CONFIG_JSON" in error for error in preflight.validate(values, config)))
-        values, config = self.render({"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference", "AUDIT_WORKER_CONFIG_SECRET_REF": "hub-reference"})
-        self.assertEqual(preflight.validate(values, config), [])
+        for changes in ({"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_JSON": "{}"},
+                        {"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"},
+                        {"FLOW_LIKE_CONFIG_FILE": ""}):
+            values, config = self.render(changes)
+            self.assertEqual(preflight.validate(values, config), [], changes)
 
     def test_generator_switches_source_and_preserves_json_as_literal_data(self):
         template = (ROOT / ".env.example").read_text()
-        for source, value in (("FLOW_LIKE_CONFIG_JSON", "{\"name\":\"Runtime's $PUBLIC_API_URL\"}"), ("FLOW_LIKE_CONFIG_SECRET_REF", "hub-reference")):
-            self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {source: value, **({"AUDIT_WORKER_CONFIG_JSON": '{"audit":{}}'} if source == "FLOW_LIKE_CONFIG_SECRET_REF" else {})})
-            _, config = self.render()
-            env = config["services"]["api"]["environment"]
-            self.assertEqual(env["FLOW_LIKE_CONFIG_FILE"], "")
-            # `compose config` escapes literal dollars for reloading its output.
-            self.assertEqual(env[source], value.replace("$", "$$"))
+        value = "{\"name\":\"Runtime's $PUBLIC_API_URL\"}"
+        self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {"FLOW_LIKE_CONFIG_JSON": value})
+        _, config = self.render()
+        env = config["services"]["api"]["environment"]
+        self.assertEqual(env["FLOW_LIKE_CONFIG_FILE"], "")
+        # `compose config` escapes literal dollars for reloading its output.
+        self.assertEqual(env["FLOW_LIKE_CONFIG_JSON"], value.replace("$", "$$"))
+        self.assertNotIn("FLOW_LIKE_CONFIG_JSON", config["services"]["audit-worker"]["environment"])
         with self.assertRaisesRegex(ValueError, "Select only one"):
             setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {"FLOW_LIKE_CONFIG_FILE": "/app/config", "FLOW_LIKE_CONFIG_JSON": "{}"})
+        self.text = setup.generate(template, "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {"FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"})
+        _, config = self.render()
+        env = config["services"]["api"]["environment"]
+        self.assertEqual(env["FLOW_LIKE_CONFIG_FILE"], "")
+        self.assertEqual(env["FLOW_LIKE_CONFIG_SECRET_REF"], "hub-reference")
 
-    def test_worker_policy_excludes_api_credentials_and_rejects_source_drift(self):
-        source = {"name": "Private API", "authentication": {"client_secret": "must-not-reach-worker"},
-                  "audit": {"retention": {"seal_after_seconds": 321}}}
+    def test_worker_embeds_the_api_build_config_and_receives_no_runtime_config(self):
         runtime = Path(self.tmp.name) / "runtime.json"
-        runtime.write_text(json.dumps(source))
-        for supplied in ({"FLOW_LIKE_RUNTIME_CONFIG_FILE": str(runtime)}, {"FLOW_LIKE_CONFIG_JSON": json.dumps(source)}):
-            self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", supplied)
-            self.text = self.text.replace("SANDBOX_IMAGE=", "SANDBOX_IMAGE=sha256:" + "a" * 64).replace("SANDBOX_GATEWAY_IMAGE=", "SANDBOX_GATEWAY_IMAGE=sha256:" + "b" * 64)
-            values, config = self.render()
-            worker = config["services"]["audit-worker"]
-            self.assertFalse(worker.get("configs"))
-            self.assertEqual(json.loads(worker["environment"]["FLOW_LIKE_CONFIG_JSON"]), {"audit": source["audit"]})
-            self.assertNotIn("must-not-reach-worker", json.dumps(worker))
-            self.assertEqual(preflight.validate(values, config), [])
-            values, config = self.render({"AUDIT_WORKER_CONFIG_JSON": '{"audit":{}}'})
-            self.assertTrue(any("differs from the API audit policy" in error for error in preflight.validate(values, config)))
-        with self.assertRaisesRegex(ValueError, "explicit AUDIT_WORKER_CONFIG_JSON"):
-            setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", {"FLOW_LIKE_CONFIG_SECRET_REF": "remote-config"})
+        runtime.write_text(json.dumps({"name": "Private API", "audit": {"level": "verbose"}}))
+        runtime_sources = ({}, {"FLOW_LIKE_RUNTIME_CONFIG_FILE": str(runtime)},
+                           {"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_JSON": "{}"},
+                           {"FLOW_LIKE_CONFIG_FILE": "", "FLOW_LIKE_CONFIG_SECRET_REF": "hub-reference"})
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            for changes in runtime_sources:
+                with self.subTest(compose_file=compose_file, changes=changes):
+                    _, config = self.render(changes, compose_file=compose_file)
+                    worker = config["services"]["audit-worker"]
+                    self.assertNotIn("configs", worker)
+                    for key in ("FLOW_LIKE_CONFIG_PATH", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_FILE",
+                                "FLOW_LIKE_CONFIG_SECRET_REF", "AUDIT_WORKER_PAUSED", "AUDIT_API_DATABASE_ROLE", "BACKEND_KEY"):
+                        self.assertNotIn(key, worker["environment"])
+        for build_config in ("apps/backend/docker-compose/flow-like.config.example.json", "apps/backend/custom.config.json"):
+            with self.subTest(build_config=build_config):
+                _, config = self.render({"FLOW_LIKE_CONFIG": build_config})
+                for name in ("api", "audit-worker"):
+                    self.assertEqual(config["services"][name]["build"]["args"]["FLOW_LIKE_CONFIG"], build_config, name)
+        values, config = self.render()
+        self.assertEqual(preflight.validate(values, config), [])
 
     def test_generator_rejects_whitespace_and_duplicate_json_keys(self):
         template = (ROOT / ".env.example").read_text()
@@ -428,11 +439,20 @@ class DeploymentTest(unittest.TestCase):
         self.assertNotIn("object-store-init", config["services"]["api"].get("depends_on", {}))
 
     def test_external_store_and_datastores_compose_together(self):
-        values, config = self.render({"OBJECT_STORE_MODE": "external", "DATASTORE_MODE": "external", "COMPOSE_FILE": "docker-compose.yml:docker-compose.external-store.yml:docker-compose.external-datastores.yml", "S3_INTERNAL_ENDPOINT": "https://s3.example.test", "AUDIT_BUCKET_ENDPOINT": "https://s3.example.test", "S3_PUBLIC_ENDPOINT": "https://s3.example.test", "STS_ENDPOINT_URL": "https://sts.example.test", "S3_STS_PROVIDER": "aws", "EXECUTION_OBJECT_STORE_TLS_GATEWAY": "true", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://s3.example.test", "METRICS_REDIS_URL": "redis://metrics@redis.example.test:6379", "DATABASE_URL": "postgresql://api:api-password@db.example.test/database", "MIGRATION_DATABASE_URL": "postgresql://owner:owner-password@db.example.test/database", "AUDIT_DATABASE_URL": "postgresql://audit:audit-password@db.example.test/database", "REDIS_URL": "rediss://api@redis.example.test:6379", "RUNTIME_REDIS_URL": "rediss://runtime@redis.example.test:6379", "SIGNALING_REDIS_URL": "rediss://signaling@redis.example.test:6379", "SINK_REDIS_URL": "rediss://sink@redis.example.test:6379"})
+        external = {"OBJECT_STORE_MODE": "external", "DATASTORE_MODE": "external", "COMPOSE_FILE": "docker-compose.yml:docker-compose.external-store.yml:docker-compose.external-datastores.yml", "S3_INTERNAL_ENDPOINT": "https://s3.example.test", "AUDIT_BUCKET_ENDPOINT": "https://s3.example.test", "S3_PUBLIC_ENDPOINT": "https://s3.example.test", "STS_ENDPOINT_URL": "https://sts.example.test", "S3_STS_PROVIDER": "aws", "EXECUTION_OBJECT_STORE_TLS_GATEWAY": "true", "COMPILER_ALLOWED_STORAGE_HOSTS": "https://s3.example.test", "METRICS_REDIS_URL": "redis://metrics@redis.example.test:6379", "DATABASE_URL": "postgresql://api:api-password@db.example.test/database", "MIGRATION_DATABASE_URL": "postgresql://owner:owner-password@db.example.test/database", "AUDIT_DATABASE_URL": "postgresql://audit:audit-password@db.example.test/database", "REDIS_URL": "rediss://api@redis.example.test:6379", "RUNTIME_REDIS_URL": "rediss://runtime@redis.example.test:6379", "SIGNALING_REDIS_URL": "rediss://signaling@redis.example.test:6379", "SINK_REDIS_URL": "rediss://sink@redis.example.test:6379"}
+        values, config = self.render(external)
         self.assertEqual(preflight.validate(values, config), [])
-        for service in ["object-store", "object-store-init", "object-gateway", "postgres", "redis", "db-init"]:
+        for service in ["object-store", "object-store-init", "object-gateway", "postgres", "redis"]:
             self.assertNotIn(service, config["services"])
-        self.assertFalse(config["services"]["api"].get("depends_on"))
+        # db-init stays in the default profile: every `up` re-applies the schema and
+        # the audit boundary before the API and the worker start.
+        db_init = config["services"]["db-init"]
+        self.assertNotIn("profiles", db_init)
+        self.assertFalse(db_init.get("depends_on"))
+        self.assertEqual(set(db_init["networks"]), {"app"})
+        for name in ("api", "audit-worker"):
+            self.assertEqual(set(config["services"][name]["depends_on"]), {"db-init"}, name)
+            self.assertEqual(config["services"][name]["depends_on"]["db-init"]["condition"], "service_completed_successfully")
 
     def test_audit_credentials_are_confined_to_worker(self):
         for compose_file in ("docker-compose.yml", "docker-stack.yml"):

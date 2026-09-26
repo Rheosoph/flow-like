@@ -1,4 +1,5 @@
 import MiniSearch, { type SearchOptions } from "minisearch";
+import { asArray } from "./response-shape";
 
 export interface SearchIndexOptions<T> {
 	/**
@@ -91,7 +92,8 @@ export function buildSearchIndex<T>(
 		prefix = true,
 	} = options;
 
-	const list = items ?? [];
+	// Callers hand query data straight in, which a restored cache or an older hub can mis-shape.
+	const list = asArray(items);
 	const searchOptions: SearchOptions = {
 		prefix,
 		combineWith,

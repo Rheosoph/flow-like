@@ -1,0 +1,36 @@
+model DeviceManagementPolicy {
+  deviceId String
+  version BigInt
+  digest String
+  policyJws String
+  expiresAt BigInt
+  createdAt BigInt
+  @@id([deviceId, version])
+}
+
+model DeviceManagementRecipient {
+  deviceId String
+  version BigInt
+  grantId String
+  userId String
+  expiresAt BigInt
+  @@id([deviceId, version, grantId])
+  @@index([userId, expiresAt])
+}
+
+model DeviceManagementApplied {
+  deviceId String @id
+  version BigInt
+  digest String
+  appliedAt BigInt
+}
+
+model DeviceControllerVault {
+  userId String
+  keyId String
+  publicKey String
+  ciphertext String
+  revision BigInt
+  updatedAt BigInt
+  @@id([userId, keyId])
+}

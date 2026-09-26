@@ -24,6 +24,7 @@ import {
 	useInvoke,
 } from "../../../";
 import { apiErrorMessage } from "../../../lib/api-error";
+import { asArray } from "../../../lib/response-shape";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -65,7 +66,7 @@ export function TeamJoinManagement({ appId }: Readonly<{ appId: string }>) {
 		access.canAdminister && !access.isLoading,
 	);
 
-	const requests = requestsPages?.pages.flat() ?? [];
+	const requests = requestsPages?.pages.flatMap((page) => asArray(page)) ?? [];
 
 	if (!access.canAdminister && !access.isLoading) {
 		return (

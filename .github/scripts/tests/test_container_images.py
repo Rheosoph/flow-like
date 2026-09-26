@@ -118,8 +118,15 @@ class MatrixTests(unittest.TestCase):
                 self.assertEqual(entries[target_id]["context"], ".")
                 inputs = containers.record(target_id, OWNER, SOURCE_SHA, DIGEST, RUN_ID, RUN_ATTEMPT)["build_inputs"]
                 self.assertEqual(inputs["audit_features"], feature)
-                self.assertEqual(inputs["runtime_config"], "audit-worker-env-v1")
-                self.assertNotIn("flow_like_config_sha256", inputs)
+                self.assertEqual(inputs["runtime_config"], "compiled-audit-section-v1")
+                config = "flow-like.config.json" if cloud in ("azure", "gcp") else "apps/backend/docker-compose/flow-like.config.example.json"
+                self.assertEqual(inputs["flow_like_config_sha256"],
+                                 hashlib.sha256((containers.REPOSITORY_ROOT / config).read_bytes()).hexdigest())
+                recipe_text = (containers.REPOSITORY_ROOT / recipe).read_text()
+                if cloud in ("azure", "gcp"):
+                    self.assertIn("--mount=type=secret,id=flow_like_config,", recipe_text)
+                else:
+                    self.assertIn(f"ARG FLOW_LIKE_CONFIG={config}\n", recipe_text)
                 if cloud in ("azure", "gcp"):
                     launcher = containers.REPOSITORY_ROOT / f"apps/backend/{cloud}/audit-worker/entrypoint.py"
                     self.assertEqual(inputs["entrypoint_sha256"], hashlib.sha256(launcher.read_bytes()).hexdigest())
@@ -127,6 +134,11 @@ class MatrixTests(unittest.TestCase):
                     self.assertFalse((containers.REPOSITORY_ROOT / (recipe + ".dockerignore")).exists())
                 else:
                     self.assertNotIn("database_auth", inputs)
+
+    def test_self_hosted_examples_share_the_generic_worker_audit_policy(self):
+        policies = [json.loads((containers.REPOSITORY_ROOT / f"apps/backend/{cloud}/flow-like.config.example.json").read_text()).get("audit")
+                    for cloud in ("docker-compose", "kubernetes")]
+        self.assertEqual(policies[0], policies[1])
 
     def test_self_hosted_selectors_cover_both_native_architectures(self):
         self.assertEqual([len(containers.matrix(cloud)["include"]) for cloud in ("self-hosted", "docker-compose", "kubernetes")], [32, 20, 22])

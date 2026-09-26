@@ -25,6 +25,7 @@ impl NodeLogic for StartSessionNode {
             "Starts a unified automation session for desktop, browser, and RPA automation",
             "Automation",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation", "startSession");
         node.add_icon("/flow/icons/automation.svg");
 
@@ -87,6 +88,11 @@ impl NodeLogic for StartSessionNode {
         let click_delay_ms: i64 = context.evaluate_pin("click_delay_ms").await?;
         let debug_mode: bool = context.evaluate_pin("debug_mode").await?;
 
+        if !(0..=60_000).contains(&default_delay_ms) || !(0..=5_000).contains(&click_delay_ms) {
+            return Err(flow_like_types::anyhow!(
+                "Session delays must be nonnegative, with default delay at most 60000 ms and click delay at most 5000 ms"
+            ));
+        }
         let session = AutomationSession::new(
             context,
             default_delay_ms as u64,
@@ -128,6 +134,7 @@ impl NodeLogic for StopSessionNode {
             "Stops an automation session and releases all resources",
             "Automation",
         );
+        node.set_version(1);
         node.set_flowscript_name("automation", "stopSession");
         node.add_icon("/flow/icons/automation.svg");
 

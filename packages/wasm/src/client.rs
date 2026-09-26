@@ -337,8 +337,14 @@ impl RegistryClient {
             };
             params.append_pair("sort_by", sort_str);
             params.append_pair("sort_desc", &filters.sort_desc.to_string());
-            if include_own {
+            if let Some(access) = filters.access {
+                params.append_pair("owned_only", "true");
+                params.append_pair("access", access.as_str());
+            } else if include_own {
                 params.append_pair("include_own", "true");
+            }
+            if let Some(ids) = &filters.ids {
+                params.append_pair("ids", &ids.join(","));
             }
         }
 
@@ -407,12 +413,132 @@ impl RegistryClient {
         existing
     }
 
+    /// Fetch the exact portable node package for a deployment without changing
+    /// the desktop's installed version or downloading host-specific code.
+    pub async fn export_package_version(
+        &self,
+        package_id: &str,
+        version: &str,
+        maximum_bytes: usize,
+    ) -> Result<(PackageManifest, Vec<u8>)> {
+        anyhow::ensure!(
+            maximum_bytes > 0 && maximum_bytes <= 64 * 1024 * 1024,
+            "Deployment package byte limit is invalid"
+        );
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(120))
+            .build()?;
+        let request = DownloadRequest {
+            package_id: package_id.to_owned(),
+            version: Some(version.to_owned()),
+            target_platform: None,
+            app_id: None,
+        };
+        let mut request = client
+            .post(format!("{}/download", self.config.default_registry))
+            .json(&request);
+        if let Some(token) = &self.config.auth_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.map_err(reqwest::Error::without_url)?;
+        let bytes =
+            Self::bounded_export_response(response, maximum_bytes.div_ceil(3) * 4 + 1024 * 1024)
+                .await?;
+        let download: DownloadResponse = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow!("Registry returned invalid deployment package metadata"))?;
+        anyhow::ensure!(
+            download.package_id == package_id
+                && download.version == version
+                && download.manifest.id == package_id
+                && download.manifest.version == version,
+            "Registry returned a different package version than the project pin"
+        );
+        download
+            .manifest
+            .validate()
+            .map_err(|_| anyhow!("Registry returned an invalid package manifest"))?;
+        let wasm = if let Some(url) = &download.download_url {
+            let url =
+                reqwest::Url::parse(url).map_err(|_| anyhow!("Invalid package download URL"))?;
+            anyhow::ensure!(
+                url.scheme() == "https"
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.fragment().is_none(),
+                "Deployment package downloads require HTTPS without embedded credentials"
+            );
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .map_err(reqwest::Error::without_url)?;
+            Self::bounded_export_response(response, maximum_bytes).await?
+        } else {
+            let bytes = base64_decode(&download.wasm_base64)
+                .map_err(|_| anyhow!("Registry returned invalid portable WASM bytes"))?;
+            anyhow::ensure!(
+                bytes.len() <= maximum_bytes,
+                "Deployment package exceeds its byte limit"
+            );
+            bytes
+        };
+        anyhow::ensure!(
+            wasm.starts_with(b"\0asm"),
+            "Package must contain portable WASM bytes"
+        );
+        Ok((download.manifest, wasm))
+    }
+
+    async fn bounded_export_response(
+        mut response: reqwest::Response,
+        maximum: usize,
+    ) -> Result<Vec<u8>> {
+        anyhow::ensure!(
+            response.status().is_success(),
+            "Deployment dependency request failed ({})",
+            response.status()
+        );
+        anyhow::ensure!(
+            response
+                .content_length()
+                .is_none_or(|size| size <= maximum as u64),
+            "Deployment package exceeds its byte limit"
+        );
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(reqwest::Error::without_url)?
+        {
+            anyhow::ensure!(
+                chunk.len() <= maximum.saturating_sub(bytes.len()),
+                "Deployment package exceeds its byte limit"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
     /// Download and cache a package
     pub async fn download_package(
         &self,
         package_id: &str,
         version: Option<&str>,
         auth_token: Option<&str>,
+    ) -> Result<CachedPackage> {
+        self.download_package_for(package_id, version, auth_token, None)
+            .await
+    }
+
+    /// Download and cache a package; with `app_id` the registry authorizes the
+    /// download through that project's license instead of the caller's own access.
+    async fn download_package_for(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        auth_token: Option<&str>,
+        app_id: Option<&str>,
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
@@ -462,6 +588,7 @@ impl RegistryClient {
             package_id: package_id.to_string(),
             version: version.map(String::from),
             target_platform: Self::target_platform_for_download(),
+            app_id: app_id.map(String::from),
         };
 
         let url = format!("{}/download", self.config.default_registry);
@@ -667,6 +794,19 @@ impl RegistryClient {
         auth_token: Option<&str>,
     ) -> Result<CachedPackage> {
         self.download_package(package_id, version, auth_token).await
+    }
+
+    /// Install the version a project pins, downloading through the project's
+    /// licence so members need not hold the package themselves.
+    pub async fn install_for_app(
+        &self,
+        package_id: &str,
+        version: Option<&str>,
+        auth_token: Option<&str>,
+        app_id: &str,
+    ) -> Result<CachedPackage> {
+        self.download_package_for(package_id, version, auth_token, Some(app_id))
+            .await
     }
 
     pub async fn install_version(
@@ -1182,7 +1322,7 @@ impl RegistryClient {
             .map(|def| {
                 let node_security =
                     crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
-                        .bounded_by_manifest(&manifest_security);
+                        .with_package_settings(&manifest_security);
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
@@ -1241,7 +1381,7 @@ impl RegistryClient {
             .map(|def| {
                 let node_security =
                     crate::WasmSecurityConfig::from_node_permissions(&def.permissions)
-                        .bounded_by_manifest(&manifest_security);
+                        .with_package_settings(&manifest_security);
                 crate::WasmNodeLogic::from_loaded_with_target(
                     loaded.clone(),
                     engine.clone(),
@@ -1466,6 +1606,44 @@ mod tests {
             ..Default::default()
         };
         RegistryClient::new(config).unwrap()
+    }
+
+    fn search_pairs(
+        filters: &SearchFilters,
+        include_own: bool,
+    ) -> std::collections::HashMap<String, String> {
+        let temp = tempfile::tempdir().unwrap();
+        let url = test_client(temp.path()).build_search_url(filters, include_own);
+        reqwest::Url::parse(&url)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect()
+    }
+
+    #[test]
+    fn test_search_url_forwards_access_as_owned_only() {
+        let pairs = search_pairs(
+            &SearchFilters {
+                access: Some(crate::registry::PackageAccessFilter::Maintainer),
+                ids: Some(vec!["a".into(), "b".into()]),
+                ..Default::default()
+            },
+            true,
+        );
+        assert_eq!(pairs.get("access").map(String::as_str), Some("maintainer"));
+        assert_eq!(pairs.get("owned_only").map(String::as_str), Some("true"));
+        assert_eq!(pairs.get("ids").map(String::as_str), Some("a,b"));
+        assert!(!pairs.contains_key("include_own"));
+    }
+
+    #[test]
+    fn test_search_url_without_access_keeps_include_own() {
+        let pairs = search_pairs(&SearchFilters::default(), true);
+        assert_eq!(pairs.get("include_own").map(String::as_str), Some("true"));
+        assert!(!pairs.contains_key("access"));
+        assert!(!pairs.contains_key("owned_only"));
+        assert!(!pairs.contains_key("ids"));
     }
 
     #[test]
@@ -1793,6 +1971,91 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deployment_export_authenticates_exact_pins_and_bounds_portable_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (returned_version, wasm, limit, accepted) in [
+            ("1.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], 16, true),
+            ("2.0.0", vec![0, b'a', b's', b'm', 1, 0, 0, 0], 16, false),
+            ("1.0.0", vec![0; 32], 16, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let package_id = "com.example.deployment";
+            let response = serde_json::to_vec(&DownloadResponse {
+                package_id: package_id.into(),
+                version: returned_version.into(),
+                manifest: PackageManifest::new(
+                    package_id,
+                    "Deployment",
+                    returned_version,
+                    "Deployment test",
+                ),
+                wasm_base64: base64_encode(&wasm),
+                download_url: None,
+                metadata: None,
+                cwasm_download_url: None,
+                cwasm_checksum: None,
+                widget_bundle_download_url: None,
+            })
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let length = stream.read(&mut chunk).await.unwrap();
+                    assert!(length > 0);
+                    request.extend_from_slice(&chunk[..length]);
+                    assert!(request.len() <= 8192);
+                    if let Some(end) = request.windows(4).position(|value| value == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&request[..end]);
+                        let length: usize = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|size| size.trim().parse().unwrap())
+                            })
+                            .unwrap();
+                        if request.len() < end + 4 + length {
+                            continue;
+                        }
+                        assert!(head
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer selected-account"));
+                        let body: DownloadRequest =
+                            serde_json::from_slice(&request[end + 4..]).unwrap();
+                        assert_eq!(body.package_id, package_id);
+                        assert_eq!(body.version.as_deref(), Some("1.0.0"));
+                        assert_eq!(body.target_platform, None);
+                        break;
+                    }
+                }
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            response.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                stream.write_all(&response).await.unwrap();
+            });
+            let temporary = tempfile::tempdir().unwrap();
+            let mut client = registry_client(temporary.path(), &base);
+            client.set_auth_token(Some("selected-account".into()));
+            let result = client
+                .export_package_version(package_id, "1.0.0", limit)
+                .await;
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            server.await.unwrap();
+            assert!(client.list_installed().await.unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

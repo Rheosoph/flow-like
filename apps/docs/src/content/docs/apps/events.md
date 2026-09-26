@@ -93,40 +93,43 @@ proxy and does not expose a public endpoint.
 
 ### Publish a hosted chat, form or page
 
-Chat UI, Generic Form, Quick Action and Page-target Events can open directly
-from a link in the existing Flow-Like web application, including its static
-export. Workflow execution runs on the Flow-Like server. Hosting starts disabled.
-Turning it on requires visitors to sign in by default.
+An App's chats, forms and pages can open from one link in the existing Flow-Like
+web application, including its static export: `/a/<app-id>/<route>`. The route
+selects the interface, the same way it does inside the App, so `/a/<app-id>/`
+opens the App's default route and `/a/<app-id>/orders` opens the Event whose
+route is `/orders`. Workflow execution runs on the Flow-Like server.
 
-1. Open the Event and select **Hosting**.
-2. Turn on **Enable static hosting**.
+Each route is published separately. Hosting starts disabled, and turning it on
+requires visitors to sign in by default.
+
+1. Give the Event a **Route Path** under **Identity**. Chat UI, Generic Form,
+   Quick Action and Page-target Events have one; the App's default Event
+   answers `/`.
+2. Select **Hosting** and turn on **Enable static hosting**.
 3. To accept anonymous visitors, separately turn on **Allow anonymous access**
    and confirm the warning: anyone with the link can execute workflows, and the
    App owner pays for their usage. Leave this off to require sign-in.
 4. Set execution to **Remote**, exposure to **Public**, and activate the Event.
-   If the Flow fixes the execution location, change it in the Flow first.
-5. Save the Event, then copy its **Direct link** or save a **Public alias**.
+   The Hosting section lists each requirement that is still missing, with a
+   button to fix it. If the Flow fixes the execution location, change it in the
+   Flow first.
+5. Save the Event, then copy **Link to this route**.
 
-| Interface | Direct link | Alias example |
-| --- | --- | --- |
-| Chat UI | `/c/<event-id>` | `/c/support` |
-| Generic Form or Quick Action | `/f/<event-id>` | `/f/contact` |
-| Custom page | `/u/<event-id>` | `/u/customer-portal` |
+The editor includes the API host in the link. With separate API and web hosts,
+the API redirects visitors to the same path on the existing web application.
+With a shared host, the path opens directly in the web application.
 
-The editor includes the API host in each link. With separate API and web hosts,
-it redirects visitors to the existing web application. With a shared host,
-these paths open directly in the web application. Chat, form and page aliases use separate
-namespaces. A Page attached to a REST or MCP Event retains that Event's service
-alias; use its direct link if the same alias names several such Pages.
-Changing an alias takes effect immediately and stops the
-previous alias link from working; the Event's direct link remains available.
+Navigation between pages keeps visitors on the same App link and changes only
+the route. A navigation target works when its Event is published too and uses
+the same sign-in setting as the current page; otherwise visitors see that the
+page has not been published on this link.
 
 When sign-in is required, a visitor follows the installation's Flow-Like login
 flow and returns to the same frontend. The workflow receives the authenticated
 user's identity. **Public** exposure allows the hosted route to exist;
 **Allow anonymous access** separately controls anonymous use.
-Disabling hosting, deactivating the Event or changing it to Local or Internal
-removes hosted access. Disabling hosting also clears the anonymous choice in
+Disabling hosting, removing the route, deactivating the Event or changing it to
+Local or Internal removes hosted access for that route. Disabling hosting also clears the anonymous choice in
 the editor, so enabling it again starts with sign-in required. Save the Event
 to apply these changes.
 

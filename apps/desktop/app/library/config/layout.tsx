@@ -59,7 +59,6 @@ import {
 } from "@flow-like/flow-like-ui/lib/config-nav";
 import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
-import { useHub } from "@flow-like/flow-like-ui/hooks/use-hub";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -149,6 +148,8 @@ export default function Id({
 		queryKey: ["app-publication-requests", id],
 		queryFn: async () => {
 			if (!settingsProfile.data) throw new Error("Profile not loaded");
+			// A local-only app has never been submitted, and the hub does not know it.
+			if (id && (await backend.isLocalOnly?.(id))) return [];
 			return backend.apiState.get<RawAppPublicationRequestItem[]>(
 				settingsProfile.data.hub_profile,
 				`apps/${id}/publication`,
@@ -184,25 +185,23 @@ export default function Id({
 		[t],
 	);
 
+	const hostCapabilities = useMemo(
+		() => (backend.offlineWritesState ? new Set(["offlineWrites"]) : undefined),
+		[backend.offlineWritesState],
+	);
+
 	// Nav items visible for this app's visibility, paywall and role — shared by
 	// the desktop sidebar and the mobile bottom-sheet switcher (no double
 	// filtering). Items behind a gate stay in the list carrying a `lock`.
-	const { hub: paymentHub } = useHub();
-	const paymentsEnabled = !!(
-		paymentHub?.payments?.onboarding_enabled ||
-		paymentHub?.payments?.marketplace_enabled ||
-		paymentHub?.payments?.node_payments_enabled ||
-		paymentHub?.payments?.servicing_enabled
-	);
 	const visibleNavItems = useMemo(
 		() =>
 			resolveNavigationItems(buildNavigationItems(t), {
 				visibility,
-				paymentsEnabled,
 				developerMode,
 				isPaid: app.data?.price != null && app.data.price > 0,
 				can: permissions.can,
 				permissionLockReason,
+				hostCapabilities,
 			}),
 		[
 			visibility,
@@ -211,6 +210,7 @@ export default function Id({
 			t,
 			permissions.can,
 			permissionLockReason,
+			hostCapabilities,
 		],
 	);
 

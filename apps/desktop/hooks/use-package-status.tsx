@@ -16,7 +16,7 @@ interface PackageStatusEvent {
 	status: CompileStatus;
 }
 
-const statusMap = new Map<string, CompileStatus>();
+let statusMap = new Map<string, CompileStatus>();
 const listeners = new Set<() => void>();
 
 function notifyListeners() {
@@ -42,11 +42,14 @@ function ensureListener() {
 		"package-status",
 		(event: Event<PackageStatusEvent>) => {
 			const { packageId, status } = event.payload;
+			if ((statusMap.get(packageId) ?? "idle") === status) return;
+			const next = new Map(statusMap);
 			if (status === "idle") {
-				statusMap.delete(packageId);
+				next.delete(packageId);
 			} else {
-				statusMap.set(packageId, status);
+				next.set(packageId, status);
 			}
+			statusMap = next;
 			notifyListeners();
 		},
 	);

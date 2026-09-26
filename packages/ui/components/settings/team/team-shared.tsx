@@ -9,6 +9,7 @@ import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { useInfiniteInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { apiErrorMessage } from "../../../lib/api-error";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import { asArray } from "../../../lib/response-shape";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { Input } from "../../ui/input";
@@ -273,8 +274,8 @@ export function useTeamOverview(appId: string): ITeamOverview {
 	);
 
 	return useMemo(() => {
-		const members = team.data?.pages.flat() ?? [];
-		const roleList = roles.data?.[1] ?? [];
+		const members = team.data?.pages.flatMap((page) => asArray(page)) ?? [];
+		const roleList = asArray(roles.data?.[1]);
 		const writableRoleIds = new Set(
 			roleList
 				.filter((role) => {
@@ -287,8 +288,8 @@ export function useTeamOverview(appId: string): ITeamOverview {
 			writableRoleIds.has(member.role_id),
 		).length;
 
-		const incoming = connections.data?.incoming ?? [];
-		const outgoing = connections.data?.outgoing ?? [];
+		const incoming = asArray(connections.data?.incoming);
+		const outgoing = asArray(connections.data?.outgoing);
 		const pendingAppRequestCount = incoming.filter(
 			(connection) => connection.status === "PENDING",
 		).length;
@@ -296,9 +297,10 @@ export function useTeamOverview(appId: string): ITeamOverview {
 			incoming.filter((connection) => connection.status === "ACTIVE").length +
 			outgoing.filter((connection) => connection.status === "ACTIVE").length;
 
-		const keys = apiKeys.data ?? [];
+		const keys = asArray(apiKeys.data);
 		const now = Date.now();
-		const joinRequestCount = joinRequests.data?.pages.flat().length ?? 0;
+		const joinRequestCount =
+			joinRequests.data?.pages.flatMap((page) => asArray(page)).length ?? 0;
 
 		return {
 			memberCount: members.length,
@@ -306,7 +308,7 @@ export function useTeamOverview(appId: string): ITeamOverview {
 			editorCount,
 			viewerCount: Math.max(members.length - editorCount, 0),
 			joinRequestCount,
-			inviteLinkCount: links.data?.length ?? 0,
+			inviteLinkCount: asArray(links.data).length,
 			apiKeyCount: keys.length,
 			expiredKeyCount: keys.filter(
 				(key) => key.valid_until && key.valid_until * 1000 < now,

@@ -40,6 +40,10 @@ execution_run	mode	crate::sea_orm_active_enums::RunMode
 execution_run	run_variant	crate::sea_orm_active_enums::RunVariant
 execution_run	status	crate::sea_orm_active_enums::RunStatus
 execution_usage_tracking	status	crate::sea_orm_active_enums::ExecutionStatus
+explore_placement	audience	crate::json_types::StringList
+explore_placement	kind	crate::sea_orm_active_enums::ExplorePlacementKind
+explore_placement_item	item_kind	crate::sea_orm_active_enums::ExploreItemKind
+explore_slot	area	crate::sea_orm_active_enums::ExploreSlotArea
 lesson_app_ref	kind	crate::sea_orm_active_enums::LessonAppRefKind
 meta	preview_media	crate::json_types::StringList
 meta	tags	crate::json_types::StringList

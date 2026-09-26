@@ -10,12 +10,12 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	AnimatedBrainIcon,
-	AnimatedCodeIcon,
 	AnimatedDashboardIcon,
 	AnimatedExploreAppsIcon,
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
 	AnimatedLibraryIcon,
+	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
@@ -76,6 +76,7 @@ import {
 	useClientHref,
 	useClientRouter,
 } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { clearPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { isUsePathname } from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useTranslation } from "@flow-like/locales";
@@ -92,6 +93,7 @@ import {
 	Edit3Icon,
 	type LucideIcon,
 	Plus,
+	Server,
 	SidebarOpenIcon,
 	Trash2Icon,
 } from "lucide-react";
@@ -141,7 +143,7 @@ function useNavData() {
 				},
 				{
 					title: t("explore", "Explore"),
-					url: "/store/explore/apps",
+					url: "/store/explore",
 					icon: AnimatedExploreAppsIcon,
 					isActive: false,
 					permission: false,
@@ -160,6 +162,14 @@ function useNavData() {
 					title: t("myApps", "My Apps"),
 					url: "/library",
 					icon: AnimatedLibraryIcon,
+					isActive: false,
+					permission: false,
+					items: [],
+				},
+				{
+					title: t("devices", "Devices"),
+					url: "/settings/devices",
+					icon: Server,
 					isActive: false,
 					permission: false,
 					items: [],
@@ -192,10 +202,11 @@ function useNavData() {
 			],
 			navDev: [
 				{
-					title: t("developerTools", "Developer Tools"),
-					url: "/developer",
-					icon: AnimatedCodeIcon,
+					title: t("packages", "Packages"),
+					url: "/store/packages?tab=mine",
+					icon: AnimatedPackageIcon,
 					isActive: false,
+					activePaths: ["/developer", "/store/package-workspace"],
 				},
 			],
 		}),
@@ -772,6 +783,7 @@ interface INavItem {
 	isActive?: boolean;
 	permission?: boolean;
 	devOnly?: boolean;
+	activePaths?: string[];
 	items?: {
 		title: string;
 		url: string;
@@ -824,15 +836,16 @@ const iconVariants = {
 	},
 };
 
+function isWithinPath(pathname: string, path: string): boolean {
+	return pathname === path || pathname.startsWith(`${path}/`);
+}
+
 function isItemActive(item: INavItem, pathname: string): boolean {
-	if (pathname === item.url) return true;
-	if (
-		item.items?.some(
-			(sub) => pathname === sub.url || pathname.startsWith(`${sub.url}/`),
-		)
-	)
+	const itemPath = item.url.split(/[?#]/, 1)[0];
+	if (isWithinPath(pathname, itemPath)) return true;
+	if (item.activePaths?.some((path) => isWithinPath(pathname, path)))
 		return true;
-	return pathname.startsWith(`${item.url}/`);
+	return item.items?.some((sub) => isWithinPath(pathname, sub.url)) ?? false;
 }
 
 function NavFlatItem({
@@ -1189,17 +1202,22 @@ export function NavUser({
 				profile.data
 					? async () => {
 							if (!profile.data) return;
-							const urlRequest = await fetcher<{ url: string }>(
-								profile.data,
-								"user/billing",
-								{ method: "GET" },
-								auth,
-							);
-							await openUrl(urlRequest.url);
+							try {
+								const urlRequest = await fetcher<{ url: string }>(
+									profile.data,
+									"user/billing",
+									{ method: "GET" },
+									auth,
+								);
+								await openUrl(urlRequest.url);
+							} catch (err) {
+								toast.error(`${err}`);
+							}
 						}
 					: undefined
 			}
 			onSignOut={async () => {
+				await clearPageSurfaceCache();
 				await auth?.signoutRedirect();
 			}}
 			onSignIn={async () => {

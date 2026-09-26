@@ -6,6 +6,7 @@ import {
 	resolveTemporalCell,
 	resolveUserCell,
 } from "./lance-viewer";
+import { describeField } from "./table-schema-dialog";
 
 const schema = arrowToLanceSchema({
 	fields: [
@@ -68,7 +69,7 @@ describe("arrowToLanceSchema", () => {
 		expect(embedding.indexKind).toBeUndefined();
 	});
 
-	test("preserves binary column identity for index selection", () => {
+	test("types binary columns as bytes, not text, and keeps their index identity", () => {
 		for (const data_type of [
 			"Binary",
 			"LargeBinary",
@@ -78,8 +79,27 @@ describe("arrowToLanceSchema", () => {
 			const [field] = arrowToLanceSchema({
 				fields: [{ name: "payload", data_type }],
 			}).fields;
-			expect(field.indexKind).toBe("binary");
+			expect(field).toMatchObject({ kind: "binary", indexKind: "binary" });
 		}
+	});
+
+	test("labels byte columns binary and WKB geometry columns geometry", () => {
+		const [payload, shape] = arrowToLanceSchema({
+			fields: [
+				{ name: "payload", data_type: "Binary" },
+				{
+					name: "shape",
+					data_type: "Binary",
+					metadata: {
+						"ARROW:extension:name": "geoarrow.wkb",
+						"ARROW:extension:metadata": '{"crs":"OGC:CRS84"}',
+					},
+				},
+			],
+		}).fields;
+		expect(describeField(payload)).toBe("binary");
+		expect(shape).toMatchObject({ kind: "geometry", indexKind: "geometry" });
+		expect(describeField(shape)).toBe("geometry");
 	});
 
 	test("maps timestamp and date columns to the date kind with their unit", () => {

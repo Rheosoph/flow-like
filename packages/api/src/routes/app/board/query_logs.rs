@@ -39,6 +39,7 @@ pub struct QueryLogsRequest {
     responses(
         (status = 200, description = "Log messages for the run", body = Vec<Object>),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: requires both ReadBoards and ReadLogs"),
         (status = 500, description = "Failed to query logs")
     )
 )]
@@ -52,53 +53,22 @@ pub async fn query_logs(
     Path((app_id, board_id)): Path<(String, String)>,
     Query(params): Query<QueryLogsRequest>,
 ) -> Result<Json<Vec<LogMessage>>, ApiError> {
-    let _permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    let _permission = ensure_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadBoards | RolePermissions::ReadLogs
+    );
 
     let sub = user.sub()?;
     let limit = params.limit.unwrap_or(100);
     let offset = params.offset.unwrap_or(0);
     let query = params.query.unwrap_or_default();
 
-    // Get scoped credentials with read access to logs
-    let credentials = state
-        .scoped_credentials(&sub, &app_id, CredentialsAccess::ReadLogs)
-        .await?;
-
-    // Convert to SharedCredentials and build the logs database connection
-    let shared_credentials = credentials.into_shared_credentials();
-    let logs_db_builder = shared_credentials.to_logs_db_builder().map_err(|e| {
-        ApiError::internal_error(anyhow!("Failed to create logs db builder: {}", e))
-    })?;
-
-    let base_path = StoragePath::from("runs")
-        .join(app_id.as_str())
-        .join(board_id.as_str());
-
-    let db = logs_db_builder(base_path.clone())
-        .execute()
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, path = %base_path, "Failed to open log database");
-            ApiError::internal_error(anyhow!("Failed to open log database: {}", e))
-        })?;
-
-    // A run row is created before its executor has emitted the first log. If
-    // setup fails (for example, because a pinned board object is missing), no
-    // per-run table is ever created. Treat that state like an empty log stream
-    // instead of turning an otherwise inspectable run into a 500 response.
-    let table_names = db.table_names().execute().await.map_err(|e| {
-        tracing::error!(error = %e, path = %base_path, "Failed to list run tables");
-        ApiError::internal_error(anyhow!("Failed to list run tables: {}", e))
-    })?;
-    if !table_names.iter().any(|name| name == &params.run_id) {
-        tracing::debug!(run_id = %params.run_id, "Run has no log table yet");
+    let Some(table) = open_run_log_table(&state, &sub, &app_id, &board_id, &params.run_id).await?
+    else {
         return Ok(Json(Vec::new()));
-    }
-
-    let table = db.open_table(&params.run_id).execute().await.map_err(|e| {
-        tracing::error!(error = %e, run_id = %params.run_id, "Failed to open run table");
-        ApiError::internal_error(anyhow!("Failed to open run table: {}", e))
-    })?;
+    };
 
     let mut q = table.query();
 
@@ -140,4 +110,52 @@ pub async fn query_logs(
     );
 
     Ok(Json(log_messages))
+}
+
+/// The run's log table under read-only log credentials, or `None` when the run
+/// never flushed a log.
+pub(crate) async fn open_run_log_table(
+    state: &AppState,
+    sub: &str,
+    app_id: &str,
+    board_id: &str,
+    run_id: &str,
+) -> Result<Option<flow_like_storage::lancedb::Table>, ApiError> {
+    let credentials = state
+        .scoped_credentials(sub, app_id, CredentialsAccess::ReadLogs)
+        .await?;
+
+    let shared_credentials = credentials.into_shared_credentials();
+    let logs_db_builder = shared_credentials.to_logs_db_builder().map_err(|e| {
+        ApiError::internal_error(anyhow!("Failed to create logs db builder: {}", e))
+    })?;
+
+    let base_path = StoragePath::from("runs").join(app_id).join(board_id);
+
+    let db = logs_db_builder(base_path.clone())
+        .execute()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, path = %base_path, "Failed to open log database");
+            ApiError::internal_error(anyhow!("Failed to open log database: {}", e))
+        })?;
+
+    // A run row is created before its executor has emitted the first log. If
+    // setup fails (for example, because a pinned board object is missing), no
+    // per-run table is ever created. Treat that state like an empty log stream
+    // instead of turning an otherwise inspectable run into a 500 response.
+    let table_names = db.table_names().execute().await.map_err(|e| {
+        tracing::error!(error = %e, path = %base_path, "Failed to list run tables");
+        ApiError::internal_error(anyhow!("Failed to list run tables: {}", e))
+    })?;
+    if !table_names.iter().any(|name| name == run_id) {
+        tracing::debug!(run_id = %run_id, "Run has no log table yet");
+        return Ok(None);
+    }
+
+    let table = db.open_table(run_id).execute().await.map_err(|e| {
+        tracing::error!(error = %e, run_id = %run_id, "Failed to open run table");
+        ApiError::internal_error(anyhow!("Failed to open run table: {}", e))
+    })?;
+    Ok(Some(table))
 }

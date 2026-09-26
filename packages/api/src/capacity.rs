@@ -640,6 +640,67 @@ pub async fn reserve_uploads(
     if uploads.is_empty() {
         return Ok(());
     }
+    let reservation =
+        prepare_upload_reservation(state, app_id, fallback_payer, uploads, expires_at).await?;
+    state
+        .transaction(|txn| {
+            let reservation = reservation.clone();
+            Box::pin(async move { reservation.reserve(txn).await })
+        })
+        .await
+}
+
+/// Prepared outside the transaction; the plan, payer and available bytes are
+/// fenced again when the replay receipt and reservation are committed together.
+#[derive(Clone)]
+pub(crate) struct PreparedUploadReservation {
+    payer_id: String,
+    app_id: String,
+    uploads: Vec<(String, String, u64)>,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+    plan: String,
+    max_total_size: i64,
+}
+
+impl PreparedUploadReservation {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        payer_id: &str,
+        app_id: &str,
+        upload: (String, String, u64),
+        max_total_size: i64,
+    ) -> Self {
+        Self {
+            payer_id: payer_id.into(),
+            app_id: app_id.into(),
+            uploads: vec![upload],
+            expires_at: (chrono::Utc::now() + chrono::Duration::minutes(5)).fixed_offset(),
+            plan: "FREE".into(),
+            max_total_size,
+        }
+    }
+
+    pub(crate) async fn reserve(&self, txn: &DatabaseTransaction) -> Result<(), ApiError> {
+        reserve_uploads_in(
+            txn,
+            &self.payer_id,
+            &self.app_id,
+            self.uploads.clone(),
+            self.expires_at,
+            &self.plan,
+            self.max_total_size,
+        )
+        .await
+    }
+}
+
+pub(crate) async fn prepare_upload_reservation(
+    state: &AppState,
+    app_id: &str,
+    fallback_payer: &str,
+    uploads: Vec<(String, String, u64)>,
+    expires_at: chrono::DateTime<chrono::FixedOffset>,
+) -> Result<PreparedUploadReservation, ApiError> {
     let StorageAccount {
         payer_id,
         plan,
@@ -649,26 +710,14 @@ pub async fn reserve_uploads(
     if usage.is_none() {
         prepare_account(state, &payer_id).await?;
     }
-    state
-        .transaction(|txn| {
-            let payer_id = payer_id.clone();
-            let app_id = app_id.to_owned();
-            let uploads = uploads.clone();
-            let plan = plan.clone();
-            Box::pin(async move {
-                reserve_uploads_in(
-                    txn,
-                    &payer_id,
-                    &app_id,
-                    uploads,
-                    expires_at,
-                    &plan,
-                    max_total_size,
-                )
-                .await
-            })
-        })
-        .await
+    Ok(PreparedUploadReservation {
+        payer_id,
+        app_id: app_id.into(),
+        uploads,
+        expires_at,
+        plan,
+        max_total_size,
+    })
 }
 
 async fn reserve_uploads_in(

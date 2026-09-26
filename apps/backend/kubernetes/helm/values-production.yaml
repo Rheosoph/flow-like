@@ -107,8 +107,6 @@ audit:
   retentionYears: 4
   database:
     existingSecret: flow-like-database-audit
-  runtimeConfig:
-    existingSecret: flow-like-audit-config
   image:
     repository: flow-like-audit-worker
     tag: "1.0.0"

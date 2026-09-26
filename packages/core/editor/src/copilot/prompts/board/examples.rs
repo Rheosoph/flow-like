@@ -34,8 +34,8 @@ pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
   itself — write `const digest = content.md5()`, never `const { hash: digest } = content.md5()`.
   `const x = call()` binds the default output.
 - Top-level `const name = "literal"` infers `string | int | float | bool` (JSON object → `Struct`,
-  array → `any[]`; a JSON `{…}`/`[…]` initializer must be compact canonical JSON — double-quoted
-  keys, no spaces); `const name: Type = …` is still required for anything else. Operators:
+  array → `any[]`; a `{…}`/`[…]` initializer may hold only literals); `const name: Type = …`
+  is still required for anything else. Operators:
   `+ - * / % **`, comparisons, `&& || !`, unary `-x`, `+= -= *= /=`, ternary `c ? a : b`.
   `'single quotes'` and trailing `;` are accepted and render as double quotes without `;`.
 

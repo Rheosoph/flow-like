@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { apiErrorMessage } from "../../lib/api-error";
+import { asArray } from "../../lib/response-shape";
 import type { IProfile } from "../../lib/schema/profile/profile";
 import { cn } from "../../lib/utils";
 import { Alert, AlertDescription } from "../ui/alert";
@@ -315,7 +316,7 @@ export function AuditRecordList({
 	const rows = useMemo(
 		() =>
 			(pages ?? []).flatMap((page) =>
-				page.records.map((record) => ({
+				asArray(page?.records).map((record) => ({
 					record,
 					sentence: describe(record),
 				})),
@@ -323,7 +324,7 @@ export function AuditRecordList({
 		[pages, describe],
 	);
 	const lastPageEmpty =
-		records.hasNextPage && pages?.[pages.length - 1]?.records.length === 0;
+		records.hasNextPage && pages?.[pages.length - 1]?.records?.length === 0;
 	const filtered = Object.values(debouncedFilters).some((value) =>
 		value?.trim(),
 	);

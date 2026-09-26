@@ -1402,6 +1402,7 @@ Side-effecting; requires approval."#,
                         "on_load_event_id": { "type": "string", "description": "Board NODE id (events_simple) to run when the page opens. From a flowpilot_board result's `event_nodes`." },
                         "on_interval_event_id": { "type": "string", "description": "Optional: node id to run on a timer." },
                         "on_interval_seconds": { "type": "number", "description": "Optional: interval in seconds for on_interval_event_id." },
+                        "no_cache": { "type": "boolean", "description": "true: loading screen until onLoad renders, no replay of the last output. Omit to keep." },
                         "board_id": { "type": "string", "description": "The page's board id (optional)." }
                     },
                     "required": ["app_id", "page_id", "on_load_event_id"]
@@ -1422,14 +1423,20 @@ pass the exact app_id, optional overlay_id, and complete question/change. Prefer
 already performs the requested action; this is not a restriction on this tool. Never bypass a failed,
 declined, timed-out or approval-blocked Event through raw data. Returns answers and query/action/chart
 evidence. Reads need no approval; nested mutations ask separately and report effects. Disclose unavailable
-or declined optional setup, continue independent board work, and never retry it in a loop."#,
+or declined optional setup, continue independent board work, and never retry it in a loop.
+It reads attachments only via `forward_files`: forward a GeoJSON file and ask for `import_geojson`."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations). State the intended change in full for a mutation." },
                         "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
-                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." },
+                        "forward_files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Exact FILES ATTACHED THIS TURN names it may read, e.g. GeoJSON to import. Omitted/[] forwards none."
+                        }
                     },
                     "required": ["instruction"]
                 })
@@ -2104,8 +2111,8 @@ pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 pub const READ_ONLY_DATABASE_OPERATIONS: &[&str] = &["list_tables", "describe_table", "query"];
 
 /// Database operations the Data Studio specialist may call. It owns the app's tables, so this is
-/// the only surface holding `create_table`, the row mutations, the index/column operations and the
-/// irreversible `delete_table`.
+/// the only surface holding `create_table`, the row mutations and file imports, the index/column
+/// operations and the irreversible `delete_table`.
 pub const READ_WRITE_DATABASE_OPERATIONS: &[&str] = &[
     "list_tables",
     "create_table",
@@ -2113,6 +2120,7 @@ pub const READ_WRITE_DATABASE_OPERATIONS: &[&str] = &[
     "query",
     "insert",
     "add_items",
+    "import_geojson",
     "delete",
     "remove_items",
     "update",
@@ -2139,6 +2147,7 @@ const CREATE_TABLE_FIELD_TYPES: &[&str] = &[
     "float32",
     "float64",
     "binary",
+    "geometry",
     "date32",
     "timestamp:ms:UTC",
     "vector",
@@ -2161,12 +2170,15 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
                 "enum": operations
             },
             "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-            "table_name": { "type": "string", "description": "Table name for table operations." },
+            "table_name": { "type": "string", "description": "Table name for table operations. import_geojson creates it when absent, normalized like create_table." },
             "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
             "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true. Use false for bounded schema-only discovery." },
+            "file_name": { "type": "string", "description": "For import_geojson: exact name of a file listed under FILES FORWARDED FOR IMPORT. Only files the orchestrator forwarded to this run through data_studio_agent forward_files are readable." },
+            "geometry_column": { "type": "string", "description": "For import_geojson: geometry column that receives each Feature.geometry (2D lon/lat; Z/M dropped). Defaults to \"geometry\"." },
+            "key_column": { "type": "string", "description": "For import_geojson: non-null string primary-key column filled with Feature.id, else \"feature-<1-based index>\", de-duplicated. Defaults to \"feature_id\"." },
             "fields": {
                 "type": "array",
-                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32 (calendar-only), timestamp:ms:UTC (FlowLike Date/date-time instant), vector. Legacy timestamp/datetime/timestamp_ms spellings remain accepted for replay compatibility but MUST NOT be used in new calls. Vector fields require vector_size.",
+                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, geometry (native WKB, WGS84 lon/lat; written as GeoJSON geometry objects), date32 (calendar-only), timestamp:ms:UTC (FlowLike Date/date-time instant), vector. Legacy timestamp/datetime/timestamp_ms spellings remain accepted for replay compatibility but MUST NOT be used in new calls. Vector fields require vector_size.",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -2178,19 +2190,44 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
                             "description": "Use timestamp:ms:UTC for a FlowLike Date or any real date-time instant. Legacy timestamp/datetime/timestamp_ms spellings are accepted only for replay compatibility. Use date32 only for a calendar-only value without a time or timezone."
                         },
                         "nullable": { "type": "boolean", "description": "Defaults to true." },
-                        "vector_size": { "type": "integer", "minimum": 1 }
+                        "vector_size": { "type": "integer", "minimum": 1 },
+                        "primary_key": { "type": "boolean", "description": "Make this column the table key so concurrent upserts on it never create duplicate rows. At most one column; it must set nullable to false and be a string, int32, int64, uint32, uint64 or binary column. The key can never be changed. Defaults to false." }
                     },
                     "required": ["name", "type"]
                 }
             },
             "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
             "confirm_table_name": { "type": "string", "description": "Required for delete_table: repeat table_name exactly. A mismatch rejects the call and deletes nothing." },
-            "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
+            "query": {
+                "type": "object",
+                "description": "Query payload. `sql` wins over the other modes; otherwise `filter`, `fts_term` and/or `vector_query` select rows.",
+                "properties": {
+                    "sql": { "type": "string", "description": "One read-only SELECT FROM the table's name (DataFusion SQL, spatial ST_* functions available). Results are cut to offset/limit and report total_rows/truncated." },
+                    "sql_params": { "type": "object", "description": "Values for the sql's \"$name\" placeholders, keyed by name without \"$\". A GeoJSON geometry object binds as a WGS84 geometry." },
+                    "filter": { "type": "string", "description": "Lance SQL predicate. Backtick mixed-case columns; geometry literals use ST_GeomFromText('WKT')." },
+                    "fts_term": { "type": "string", "description": "Full-text search term." },
+                    "vector_query": {
+                        "type": "object",
+                        "description": "Nearest-neighbour search: {column, vector}. column names the vector column (required on local tables).",
+                        "properties": {
+                            "column": { "type": "string" },
+                            "vector": { "type": "array", "items": { "type": "number" } }
+                        },
+                        "required": ["column", "vector"]
+                    },
+                    "rerank": { "type": "boolean", "description": "Rerank a hybrid (vector + fts_term) search. Defaults to true." },
+                    "select": { "type": "array", "items": { "type": "string" }, "description": "Columns to return for filter/FTS/vector queries." }
+                }
+            },
             "offset": { "type": "integer" },
             "limit": { "type": "integer" },
-            "items": { "type": "array", "items": { "type": "object" } },
+            "items": {
+                "type": "array",
+                "items": { "type": "object" },
+                "description": "Rows for insert/add_items. On an existing table every key must be a column (unknown keys are rejected; add_column first). Geometry columns take a GeoJSON geometry object, a Feature (its geometry), GeoJSON or WKT text, or null — 2D WGS84 lon/lat only; a FeatureCollection is rejected (one row per feature). String columns store objects/arrays as compact JSON text."
+            },
             "filter": { "type": "string", "description": "Delete/update filter expression." },
-            "updates": { "type": "object" },
+            "updates": { "type": "object", "description": "For update: {column: value} for existing columns, applied to rows matching filter. Values follow the items rules; null clears a geometry." },
             "column": { "type": "string" },
             "columns": { "type": "array", "items": { "type": "string" } },
             "index_type": {
@@ -2205,7 +2242,17 @@ pub fn database_tool_schema(operations: &[&str]) -> Value {
                 "description": "Defaults to true. False prunes versions older than seven days after compaction and index maintenance."
             },
             "nullable": { "type": "boolean" },
-            "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
+            "column_definition": {
+                "type": "object",
+                "description": "For add_column: {name, sql_expression} computes the column from existing columns; {name, type, vector_size?} adds an empty nullable column of a create_table type. Geometry columns must use {name, type: \"geometry\"}.",
+                "properties": {
+                    "name": { "type": "string" },
+                    "sql_expression": { "type": "string" },
+                    "type": { "type": "string", "enum": CREATE_TABLE_FIELD_TYPES },
+                    "vector_size": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["name"]
+            }
         },
         "required": ["operation"]
     })
@@ -2222,6 +2269,10 @@ fn database_tool_message(args: &Value) -> String {
         return format!(
             "FlowPilot wants to PERMANENTLY DROP table '{table_name}', including every row and the table schema. This cannot be undone, and ontology overlays referencing the table are pruned."
         );
+    }
+    if operation == "import_geojson" {
+        let file_name = spec_arg_str(args, "file_name", "fileName");
+        return format!("FlowPilot wants to import '{file_name}' into table '{table_name}'.");
     }
     format!(
         "FlowPilot wants to run database operation '{operation}'{}.",
@@ -2249,7 +2300,9 @@ Read operations do not ask for approval. Mutating operations show an approval di
 
 Operations:
 - list_tables: return project and user-scoped tables.
-- create_table: create an empty table from explicit fields [{name,type,nullable?,vector_size?}].
+- create_table: create an empty table from explicit fields [{name,type,nullable?,vector_size?,primary_key?}].
+  Give the ID column that upserts will use `nullable: false` and `primary_key: true`; a nullable
+  ID column cannot be the key, so concurrent upserts could duplicate new rows.
   Physical names allow letters, numbers, `_`, `-`, and `.`. Human-facing labels with spaces or
   punctuation are normalized to stable snake_case identifiers (for example `Library Files` becomes
   `library_files`); the result returns both `requested_table_name` and the authoritative
@@ -2265,10 +2318,20 @@ Operations:
   a blocker: report the pending setup and keep building. The workflow creates the table on its first
   write — for embedding tables that write derives the true vector width, which create_table can only
   guess — and builds its own indices with the Build Index node after that write.
-- describe_table: schema, indices, and row count. Set `include_sample: false` for bounded schema
-  discovery that an immutable FlowPilot manifest can satisfy; omitted/true also reads sample rows.
-- query: SQL/filter/vector/FTS query via the existing database query API.
-- insert/add_items, delete/remove_items, update.
+- describe_table: schema, `columns` (create_table types), indices, and row count. Set
+  `include_sample: false` for bounded schema discovery that an immutable FlowPilot manifest can
+  satisfy; omitted/true also reads sample rows.
+- query: SQL/filter/vector/FTS query (see the `query` payload). SQL results are capped at `limit`
+  rows and report `total_rows`/`truncated`: aggregate or add LIMIT instead of paging everything.
+- insert/add_items, delete/remove_items, update. On an existing table, row keys that are not
+  columns are rejected; add_column or rename them first.
+- import_geojson: load a GeoJSON file listed under FILES FORWARDED FOR IMPORT by exact
+  `file_name` into `table_name` (created when absent): one row per Feature, string primary key
+  `key_column` (default `feature_id`, from Feature.id), each property as a typed snake_case
+  column, geometry in `geometry_column` (default `geometry`). An existing table must already hold
+  every planned column. Returns `columns`, `rows_inserted`, `skipped`, `warnings`; `partial`
+  carries the error and first failed feature (indices are 0-based file positions). Rows before it
+  stay stored, so never re-run the whole import into the same table; it would append duplicates.
 - build_index, drop_index, optimize, add_column, drop_columns, alter_column.
 - delete_table: PERMANENTLY drop a whole table — every row AND the table schema are destroyed.
   This is IRREVERSIBLE: there is no undo, no restore, and no version history to roll back to.
@@ -2279,7 +2342,25 @@ Operations:
   first. The result reports the cascade: `ontologies_pruned` (graph overlays whose node/edge
   mappings referenced the table and were pruned), `saved_queries_referencing` (stored queries whose
   SQL still names the table — they are NOT deleted and will fail until edited), and `warnings`.
-  Always relay that cascade to the user."#,
+  Always relay that cascade to the user.
+
+GeoJSON and geometry:
+- A `geometry` column stores WGS84 lon/lat WKB. Declare it in create_table, or add it with
+  add_column {name, type: "geometry"} — an sql_expression cannot carry geometry metadata. Build an
+  RTree index on it for large tables.
+- A forwarded GeoJSON file: use import_geojson. Never retype coordinates from a file you cannot read.
+- Manual path: create_table FIRST with a non-null string key column (`primary_key: true`), the union
+  of property keys across ALL features as ASCII snake_case columns, and one `geometry` column. One
+  row per Feature; the geometry column takes Feature.geometry (bare 2D lon/lat; Features and
+  GeoJSON/WKT text are accepted too); drop Z. Nested arrays/objects go into `string` columns and are
+  stored as JSON text. Insert in batches of <= 200 rows, then verify with a count.
+- Reads return geometry columns as GeoJSON objects. Spatial SQL goes in `query.sql`:
+  ST_Intersects/Contains/Within/Distance/Area/Centroid/Envelope/X/Y, ST_AsText (WKT),
+  ST_AsGeoJSON, ST_GeomFromText, ST_GeomFromGeoJSON, ST_Point, flow_geomfromtext. Pass GeoJSON
+  literals through `sql_params`; in `query.filter` (Lance) use ST_GeomFromText('WKT').
+- ST_Area/ST_Distance/ST_Length are planar degrees on lon/lat: never report them as metres or
+  compare them to metre thresholds.
+- In `query.sql` double-quote mixed-case columns ("physicalSiteId"); in filters use backticks."#,
         schema: data_studio_database_schema,
         approval: ToolApprovalSpec::Mutating {
             title: "Approve database change",
@@ -2555,6 +2636,30 @@ pub fn find_scout_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 mod tests {
     use super::*;
 
+    /// Data Studio can only store native geometry when the schema it sees offers the type in both
+    /// places that declare columns.
+    #[test]
+    fn data_studio_can_declare_geometry_in_create_table_and_add_column() {
+        let schema = data_studio_database_schema();
+        let field_types = &schema["properties"]["fields"]["items"]["properties"]["type"]["enum"];
+        let column_types = &schema["properties"]["column_definition"]["properties"]["type"]["enum"];
+        for types in [field_types, column_types] {
+            assert!(
+                types
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == "geometry"),
+                "{types}"
+            );
+        }
+        assert!(
+            data_studio_database_tool_spec()
+                .description
+                .contains("add_column {name, type: \"geometry\"}")
+        );
+    }
+
     /// The Data Studio database tool multiplexes reads and writes over one name, so its approval
     /// policy has to be resolved per call — and a `delete_table` approval must not become a licence
     /// to drop every other table for the rest of the session.
@@ -2604,6 +2709,80 @@ mod tests {
             .filter_map(|value| value.as_str().map(str::to_string))
             .collect::<Vec<_>>();
         assert_eq!(advertised, READ_WRITE_DATABASE_OPERATIONS);
+    }
+
+    #[test]
+    fn geojson_import_is_advertised_to_data_studio_and_approval_gated() {
+        let spec = data_studio_database_tool_spec();
+        let schema = (spec.schema)();
+        assert!(
+            schema["properties"]["operation"]["enum"]
+                .as_array()
+                .expect("operation enum")
+                .contains(&json!("import_geojson"))
+        );
+        for property in ["file_name", "geometry_column", "key_column"] {
+            assert!(
+                schema["properties"][property]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("import_geojson")),
+                "{property} must document import_geojson"
+            );
+        }
+        for property in [
+            "sql",
+            "sql_params",
+            "filter",
+            "fts_term",
+            "vector_query",
+            "rerank",
+            "select",
+        ] {
+            assert!(
+                schema["properties"]["query"]["properties"][property].is_object(),
+                "query payload is missing {property}"
+            );
+        }
+        assert_eq!(
+            schema["properties"]["query"]["properties"]["vector_query"]["required"],
+            json!(["column", "vector"])
+        );
+        assert!(spec.description.contains("import_geojson"));
+        assert!(spec.description.contains("FILES FORWARDED FOR IMPORT"));
+        assert!(spec.description.contains("never report them as metres"));
+        assert!(!READ_ONLY_DATABASE_OPERATIONS.contains(&"import_geojson"));
+
+        let args = json!({
+            "operation": "import_geojson",
+            "table_name": "sites",
+            "file_name": "sites.geojson"
+        });
+        assert_eq!(resolve_tool_effect(&spec, &args), ToolEffect::Mutating);
+        let approval = resolve_tool_approval(&spec, &args);
+        assert_eq!(approval.kind, "mutating");
+        assert_eq!(approval.session_key, "database:import_geojson");
+        assert_eq!(
+            approval.description,
+            "FlowPilot wants to import 'sites.geojson' into table 'sites'."
+        );
+    }
+
+    #[test]
+    fn data_studio_agent_forwards_attachments_only_on_request() {
+        let spec = find_global_tool_spec("data_studio_agent").expect("data studio spec");
+        let schema = (spec.schema)();
+        assert_eq!(
+            schema["properties"]["forward_files"]["items"]["type"],
+            json!("string")
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .expect("required fields")
+                .contains(&json!("forward_files"))
+        );
+        assert!(spec.description.contains("`forward_files`"));
+        assert!(spec.description.contains("`import_geojson`"));
     }
 
     /// One batched shape only. Every gap of a build is asked in a single card, so intake is one
@@ -3445,9 +3624,11 @@ mod tests {
         let total: usize = specs.iter().map(|spec| spec.description.len()).sum();
         // Reviewed 2026-08-17: +~0.4 KB on `ask_user`, which now carries the batched BUILD intake
         // contract (one card, ordering, recommended defaults, user-vocabulary phrasing).
+        // Reviewed 2026-09-26: +~0.1 KB on `data_studio_agent`: attachments reach Data Studio only
+        // through `forward_files`, and without saying so the orchestrator never forwards them.
         assert!(
-            total <= 15_500,
-            "global tool descriptions grew beyond the reviewed 15.5 KB budget: {total} bytes"
+            total <= 15_600,
+            "global tool descriptions grew beyond the reviewed 15.6 KB budget: {total} bytes"
         );
         for spec in specs {
             assert!(
@@ -3471,7 +3652,9 @@ mod tests {
         // measured 34,119, still inside its budget).
         // Reviewed 2026-09-06: +~0.2 KB for the narrow `flowpilot_home` delegation contract.
         // +~0.2 KB the same day for `list_apps.query`, which makes its 250-item cap recoverable.
-        for (memory_enabled, budget) in [(false, 34_000usize), (true, 35_200usize)] {
+        // Reviewed 2026-09-26: +~0.3 KB for the optional `data_studio_agent.forward_files` and its
+        // description clause, the only path from an attached GeoJSON file to `import_geojson`.
+        for (memory_enabled, budget) in [(false, 34_300usize), (true, 35_200usize)] {
             let specs = global_assistant_tool_specs(memory_enabled);
             let total: usize = specs
                 .iter()

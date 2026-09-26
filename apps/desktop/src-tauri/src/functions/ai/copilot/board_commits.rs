@@ -424,7 +424,7 @@ pub async fn flowpilot_flow_ir_commit_disposition(
             .try_state::<TauriFlowLikeState>()
             .and_then(|state| state.0.get_board(&token.board_id, None).ok());
         let _live_board_guard = match dismiss_live_board.as_ref() {
-            Some(live_board) => Some(live_board.lock().await),
+            Some(live_board) => Some(live_board.write().await),
             None => None,
         };
         return if store.release_commit_if_matches(
@@ -463,7 +463,7 @@ pub async fn flowpilot_flow_ir_commit_disposition(
             "The review board is not open in this desktop process; the review was not resolved.",
         );
     };
-    let board = live_board.lock().await;
+    let board = live_board.snapshot();
     match disposition {
         FlowIrCommitDisposition::Preflight => {
             if store.pending_commit_is_current(
@@ -580,7 +580,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
         );
     };
     {
-        let board = live_board.lock().await;
+        let board = live_board.write().await;
         if let Some(receipt) = replay_flow_ir_applied_receipt_from_board(&board, &app_id, &token) {
             retain_flow_ir_applied_receipt(&app_id, &token, &receipt);
             return receipt;
@@ -667,7 +667,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
         Some((recovered.board_commands.clone(), recovered.replacement_mode))
     };
 
-    let mut board = live_board.lock().await;
+    let mut board = live_board.write().await;
     let Some((mut board_commands, replacement_mode)) = resolve_exact_batch(&board) else {
         return ApplyFlowIrCommitResult::empty(
             "stale",
@@ -698,7 +698,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
             );
         }
 
-        board = live_board.lock().await;
+        board = live_board.write().await;
         let Some((revalidated_commands, revalidated_replacement_mode)) =
             resolve_exact_batch(&board)
         else {
@@ -727,7 +727,6 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
         board_commands = revalidated_commands;
     }
 
-    let original_board = board.clone();
     let retained_commands = board_commands.clone();
     let apply_result = match flow_like::flow::ast::apply_board_commands_to_board(
         &mut board,
@@ -740,9 +739,9 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
     {
         Ok(result) => result,
         Err(error) => {
-            // Core rolls back every executed prefix. Restore the exact snapshot as a final host
-            // guard so an unexpected planner/rollback defect cannot leak a partial live mutation.
-            *board = original_board;
+            // Core rolls back every executed prefix. Discarding the draft is the final host guard
+            // so an unexpected planner/rollback defect cannot leak a partial live mutation.
+            board.discard();
             return ApplyFlowIrCommitResult::apply_error(
                 "IR_COMMIT_APPLY_FAILED",
                 format!(
@@ -755,7 +754,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
     };
 
     if apply_result.commands.is_empty() || !apply_result.diagnostics.is_empty() {
-        *board = original_board;
+        board.discard();
         let diagnostics = if apply_result.diagnostics.is_empty() {
             vec!["The exact compiled workflow batch produced no executed commands.".to_string()]
         } else {
@@ -772,7 +771,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
     let persisted_board_fingerprint = match persisted_board_graph_fingerprint(&board) {
         Ok(fingerprint) => fingerprint,
         Err(error) => {
-            *board = original_board;
+            board.discard();
             return ApplyFlowIrCommitResult::apply_error(
                 "IR_COMMIT_FINGERPRINT_FAILED",
                 "The compiled workflow was rolled back because its persisted graph could not be fingerprinted.",
@@ -799,7 +798,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
         &result,
         !matches!(app.visibility, AppVisibility::Offline),
     ) {
-        *board = original_board;
+        board.discard();
         return ApplyFlowIrCommitResult::empty(
             "stale",
             "IR_COMMIT_DELIVERY_TOO_LARGE",
@@ -811,7 +810,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
     if let Err(error) =
         retain_flow_ir_applied_receipt_on_board(&mut board, &app_id, &token, &result)
     {
-        *board = original_board;
+        board.discard();
         return ApplyFlowIrCommitResult::apply_error(
             "IR_COMMIT_RECEIPT_PERSISTENCE_FAILED",
             "The compiled workflow was rolled back because its crash-recovery receipt could not be prepared.",
@@ -826,7 +825,7 @@ pub(super) async fn flowpilot_apply_flow_ir_commit_with_recovery(
             .await
             .err()
             .map(|error| error.to_string());
-        *board = original_board;
+        board.discard();
         let restore_error = board
             .save(Some(project_store.clone()))
             .await

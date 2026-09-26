@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { asArray, isRecord } from "../../../lib/response-shape";
 import {
 	type IBeginOfflineForkResponse,
 	type IForkPreviewResponse,
@@ -156,6 +157,11 @@ export function ForkAppDialog({
 		loadPreview()
 			.then((p) => {
 				if (cancelled) return;
+				if (!isRecord(p)) {
+					throw new Error(
+						t("couldntLoadForkPreview", "Couldn't load fork preview"),
+					);
+				}
 				setPreview(p);
 				setStage("preview");
 			})
@@ -175,12 +181,14 @@ export function ForkAppDialog({
 
 	const replaceableSites = useMemo(() => {
 		if (!preview) return [];
-		return preview.remote_token_sites.filter(isTokenReplaceable);
+		return asArray(preview.remote_token_sites).filter(isTokenReplaceable);
 	}, [preview]);
 
 	const reauthSites = useMemo(() => {
 		if (!preview) return [];
-		return preview.remote_token_sites.filter((s) => !isTokenReplaceable(s));
+		return asArray(preview.remote_token_sites).filter(
+			(s) => !isTokenReplaceable(s),
+		);
 	}, [preview]);
 
 	const tokenRequired = target === "online" && replaceableSites.length > 0;
@@ -212,17 +220,21 @@ export function ForkAppDialog({
 				remote_event_token: tokenRequired ? token.trim() : undefined,
 			};
 			const res = await beginFork(body);
+			if (!isRecord(res)) {
+				throw new Error(t("failedToStartFork", "Failed to start fork"));
+			}
 			setResponse(res);
 			setStage("done");
 			onForkStarted?.(res);
 			if (isOfflineForkResponse(res)) {
+				const blobCount = asArray(res.meta_blobs).length;
 				toast.success(
 					t(
 						"forkReadyLengthMetaArtifactvalInlineContentPulledViaSignedPrefix",
 						"Fork ready — {{length}} meta artifact{{val}} inline, content pulled via signed prefix",
 						{
-							length: res.meta_blobs.length,
-							val: res.meta_blobs.length === 1 ? "" : "s",
+							length: blobCount,
+							val: blobCount === 1 ? "" : "s",
 						},
 					),
 				);
@@ -239,6 +251,9 @@ export function ForkAppDialog({
 			toast.error(message);
 		}
 	}, [preview, tokenRequired, token, beginFork, onForkStarted]);
+
+	const skipped = asArray(response?.report?.skipped);
+	const warnings = asArray(response?.report?.warnings);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -357,7 +372,7 @@ export function ForkAppDialog({
 										"This deployment caps forks at",
 									)}{" "}
 									{formatBytes(preview.max_size_bytes)} /{" "}
-									{preview.max_file_count.toLocaleString()} files.
+									{preview.max_file_count?.toLocaleString()} files.
 								</AlertDescription>
 							</Alert>
 						)}
@@ -446,8 +461,10 @@ export function ForkAppDialog({
 							</p>
 							{isOfflineForkResponse(response) && (
 								<p>
-									{response.meta_blobs.length}{" "}
-									{response.meta_blobs.length === 1 ? "artifact" : "artifacts"}{" "}
+									{asArray(response.meta_blobs).length}{" "}
+									{asArray(response.meta_blobs).length === 1
+										? "artifact"
+										: "artifacts"}{" "}
 									{t(
 										"shippedInlineContentPulledFrom",
 										"shipped inline, content pulled from",
@@ -462,7 +479,7 @@ export function ForkAppDialog({
 									.
 								</p>
 							)}
-							{response.report.skipped.length > 0 && (
+							{skipped.length > 0 && (
 								<div className="space-y-1">
 									<p>
 										{t("countItemsWereSkippedSeeTheDestinationAppForDetails", {
@@ -470,7 +487,7 @@ export function ForkAppDialog({
 												"{{count}} item was skipped — see the destination App for details.",
 											defaultValue_other:
 												"{{count}} items were skipped — see the destination App for details.",
-											count: response.report.skipped.length,
+											count: skipped.length,
 										})}
 									</p>
 									{/* Reasons are server-authored English; the dialog is the only
@@ -480,7 +497,7 @@ export function ForkAppDialog({
 									    can be arbitrarily long and are wrapped rather than allowed
 									    to stretch the dialog. */}
 									<ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-muted-foreground wrap-break-word">
-										{response.report.skipped.map((item, index) => (
+										{skipped.map((item, index) => (
 											<li key={`${index}:${item.source_id}`}>
 												<code className="text-[10px] break-all">
 													{item.source_id}
@@ -491,9 +508,9 @@ export function ForkAppDialog({
 									</ul>
 								</div>
 							)}
-							{response.report.warnings.length > 0 && (
+							{warnings.length > 0 && (
 								<ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-muted-foreground">
-									{response.report.warnings.map((warning, index) => (
+									{warnings.map((warning, index) => (
 										<li key={`${index}:${warning}`}>{warning}</li>
 									))}
 								</ul>
@@ -554,6 +571,7 @@ function ForkPreviewSummary({
 	appId,
 }: Readonly<{ preview: IForkPreviewResponse; appId: string }>) {
 	const { t } = useTranslation("settings");
+	const sites = asArray(preview.remote_token_sites);
 	return (
 		<div className="grid grid-cols-2 gap-3 rounded-md border p-4 text-sm">
 			<div className="flex items-center gap-2">
@@ -570,26 +588,28 @@ function ForkPreviewSummary({
 			</div>
 			<div className="text-muted-foreground">{t("files", "Files")}</div>
 			<div className="text-right font-medium">
-				{preview.selected_object_count.toLocaleString()}
+				{(
+					preview.selected_object_count ?? preview.total_object_count
+				)?.toLocaleString()}
 			</div>
 			<div className="text-muted-foreground">{t("cap", "Cap")}</div>
 			<div className="text-right text-xs text-muted-foreground">
 				{formatBytes(preview.max_size_bytes)} /{" "}
-				{preview.max_file_count.toLocaleString()} files
+				{preview.max_file_count?.toLocaleString()} files
 			</div>
-			{preview.remote_token_sites.length > 0 && (
+			{sites.length > 0 && (
 				<>
 					<div className="text-muted-foreground">
 						{t("tokenSites", "Token sites")}
 					</div>
 					<div className="text-right">
-						{preview.remote_token_sites.length}
+						{sites.length}
 						<div className="text-xs text-muted-foreground">
-							{preview.remote_token_sites
+							{sites
 								.slice(0, 3)
 								.map((s) => siteEventId(s))
 								.join(", ")}
-							{preview.remote_token_sites.length > 3 && "…"}
+							{sites.length > 3 && "…"}
 						</div>
 					</div>
 				</>
@@ -610,9 +630,13 @@ function ForkContentsSummary({
 }: Readonly<{ preview: IForkPreviewResponse }>) {
 	const { t } = useTranslation("settings");
 	const policy = preview.fork_policy;
-	const sizes = preview.size_breakdown;
+	// Hubs that predate fork policies send neither field.
+	if (!isRecord(policy)) return null;
+	const sizes = isRecord(preview.size_breakdown)
+		? preview.size_breakdown
+		: undefined;
 	const databaseSize =
-		policy.databases === "with_data" ? sizeHint(sizes.databases) : undefined;
+		policy.databases === "with_data" ? sizeHint(sizes?.databases) : undefined;
 	const databaseDetail =
 		policy.databases === "with_data"
 			? [t("tablesAndData", "Tables and data"), databaseSize]
@@ -628,12 +652,12 @@ function ForkContentsSummary({
 		{
 			label: t("flows", "Flows"),
 			included: policy.flows,
-			detail: sizeHint(sizes.flows),
+			detail: sizeHint(sizes?.flows),
 		},
 		{
 			label: t("files", "Files"),
 			included: policy.files,
-			detail: sizeHint(sizes.files),
+			detail: sizeHint(sizes?.files),
 		},
 		{
 			label: t("databases", "Databases"),
@@ -643,12 +667,12 @@ function ForkContentsSummary({
 		{
 			label: t("widgets", "Widgets"),
 			included: policy.widgets,
-			detail: sizeHint(sizes.widgets),
+			detail: sizeHint(sizes?.widgets),
 		},
 		{
 			label: t("templates", "Templates"),
 			included: policy.templates,
-			detail: sizeHint(sizes.templates),
+			detail: sizeHint(sizes?.templates),
 		},
 		{ label: t("roles", "Roles"), included: policy.roles },
 	];
@@ -701,8 +725,8 @@ function ForkContentsSummary({
 	);
 }
 
-function sizeHint(size: { bytes: number }): string | undefined {
-	return size.bytes > 0 ? formatBytes(size.bytes) : undefined;
+function sizeHint(size?: { bytes: number }): string | undefined {
+	return size && size.bytes > 0 ? formatBytes(size.bytes) : undefined;
 }
 
 function formatBytes(bytes: number): string {

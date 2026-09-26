@@ -22,6 +22,9 @@ import type {
 	SubgraphNode,
 	SubgraphPayload,
 	SubgraphResult,
+	UpdateOntologyObjectPayload,
+	UpdateOntologyRelationshipPayload,
+	UpdateOntologyRowResult,
 	UpdateOverlayPayload,
 	UpsertGraphElementsPayload,
 	UpsertGraphElementsResult,
@@ -36,6 +39,7 @@ import {
 	type WebBackendRef,
 	apiDelete,
 	apiGet,
+	apiPatch,
 	apiPost,
 	apiPut,
 } from "./api-utils";
@@ -387,6 +391,32 @@ export class WebGraphState implements IGraphState {
 	): Promise<UpsertGraphElementsResult> {
 		return apiPost<UpsertGraphElementsResult>(
 			`apps/${appId}/graph/${overlayId}/edges${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async updateObject(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyObjectPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult> {
+		return apiPatch<UpdateOntologyRowResult>(
+			`apps/${appId}/graph/${overlayId}/objects${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async updateRelationship(
+		appId: string,
+		overlayId: string,
+		payload: UpdateOntologyRelationshipPayload,
+		userScoped?: boolean,
+	): Promise<UpdateOntologyRowResult> {
+		return apiPatch<UpdateOntologyRowResult>(
+			`apps/${appId}/graph/${overlayId}/relationships${scopeQuery(userScoped)}`,
 			payload,
 			this.backend.auth,
 		);

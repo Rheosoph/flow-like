@@ -3,7 +3,9 @@ use crate::entity::sea_orm_active_enums::{
     WasmCompilationStatus, WasmPackageStatus, WasmPackageVisibility,
 };
 use crate::entity::{wasm_package, wasm_package_version};
-use crate::routes::registry::server::with_current_wasmtime_version;
+use crate::routes::registry::server::{
+    permissions_with_node_capabilities, with_current_wasmtime_version,
+};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -153,6 +155,14 @@ pub async fn handle_compilation_callback(
         )
     })?;
 
+    // The store lists capabilities from the compiled nodes, so they follow the
+    // node definitions onto the package row.
+    let derived_permissions = package
+        .as_ref()
+        .zip(nodes.as_ref())
+        .filter(|_| compiled_ok)
+        .and_then(|(pkg, nodes)| permissions_with_node_capabilities(&pkg.permissions, nodes));
+
     // Promote version data to parent package for private auto-approved packages
     if auto_approve && let Some(pkg) = &package {
         let now = chrono::Utc::now().fixed_offset();
@@ -171,6 +181,9 @@ pub async fn handle_compilation_callback(
         if let Some(ref nodes) = nodes {
             pkg_update.nodes = Set(nodes.clone());
         }
+        if let Some(ref permissions) = derived_permissions {
+            pkg_update.permissions = Set(permissions.clone());
+        }
         if let Err(e) = pkg_update.update(db.as_ref()).await {
             tracing::warn!(
                 package_id = %result.package_id,
@@ -184,8 +197,15 @@ pub async fn handle_compilation_callback(
     {
         // Recheck the current version in the update so a concurrent approval
         // cannot receive node definitions from an older version.
-        wasm_package::Entity::update_many()
-            .col_expr(wasm_package::Column::Nodes, Expr::value(nodes.clone()))
+        let mut update = wasm_package::Entity::update_many()
+            .col_expr(wasm_package::Column::Nodes, Expr::value(nodes.clone()));
+        if let Some(ref permissions) = derived_permissions {
+            update = update.col_expr(
+                wasm_package::Column::Permissions,
+                Expr::value(permissions.clone()),
+            );
+        }
+        update
             .filter(wasm_package::Column::Id.eq(&result.package_id))
             .filter(wasm_package::Column::Version.eq(&result.version))
             .exec(db.as_ref())

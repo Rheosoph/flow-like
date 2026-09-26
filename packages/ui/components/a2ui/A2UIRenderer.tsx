@@ -30,6 +30,10 @@ import {
 	useSurfaceComponent,
 } from "./component-store";
 import type { A2UINavigationMessageInterceptor } from "./navigation-message";
+import {
+	PENDING_PAGE_ACTION_ATTRIBUTE,
+	hasPendingPageAction,
+} from "./pending-page-action";
 import { resolveHidden } from "./resolve-hidden";
 import type {
 	A2UIClientMessage,
@@ -135,14 +139,16 @@ const A2UIComponentNode = memo(function A2UIComponentNode({
 	const { store, surfaceId, appId, boardId, handleAction } = useSurfaceRender();
 	const surfaceComponent = useSurfaceComponent(store, componentId);
 	const { resolve } = useData();
+	const actionPending = hasPendingPageAction(surfaceComponent?.component);
 	const elementRef = useCallback(
 		(element: HTMLElement | SVGElement | null) => {
 			element?.setAttribute(
 				"data-a2ui-element-ref",
 				`${surfaceId}/${componentId}`,
 			);
+			element?.toggleAttribute(PENDING_PAGE_ACTION_ATTRIBUTE, actionPending);
 		},
-		[surfaceId, componentId],
+		[surfaceId, componentId, actionPending],
 	);
 	const renderChild = useCallback<RenderChildFn>(
 		(childId, childScope) =>
@@ -316,7 +322,11 @@ export function A2UIRenderer({
 					/>
 					<div
 						ref={canvasRef}
-						className={cn(backgroundClass, className)}
+						className={cn(
+							"**:data-a2ui-action-pending:pointer-events-none **:data-a2ui-action-pending:opacity-50",
+							backgroundClass,
+							className,
+						)}
 						data-surface-canvas-id={canvasId}
 						style={canvasStyle}
 					>

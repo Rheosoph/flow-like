@@ -40,6 +40,7 @@ import {
 	useSearch,
 	useSetQueryParams,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import {
 	Calendar,
@@ -352,7 +353,7 @@ export default function TemplatesPage() {
 												</div>
 											) : (
 												<>
-													{versions.data?.map((version) => (
+													{asArray(versions.data).map((version) => (
 														<SelectItem
 															key={version.join(".")}
 															value={version.join(".")}

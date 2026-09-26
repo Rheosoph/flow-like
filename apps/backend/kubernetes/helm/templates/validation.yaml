@@ -82,9 +82,6 @@
 {{- if not (or .Values.audit.kmsKeyId .Values.audit.existingSecret) }}
 {{- fail "audit.existingSecret with AUDIT_SIGNING_KEY or audit.kmsKeyId is required" }}
 {{- end }}
-{{- if eq (empty .Values.audit.runtimeConfig.existingSecret) (empty .Values.audit.runtimeConfig.existingConfigMap) }}
-{{- fail "audit.runtimeConfig requires exactly one existingSecret or existingConfigMap" }}
-{{- end }}
 {{- if not .Values.networkPolicy.enabled }}
 {{- fail "audit.worker requires networkPolicy.enabled" }}
 {{- end }}
@@ -119,7 +116,7 @@
 {{- end }}
 {{- end }}
 {{- range .Values.audit.env }}
-{{- if has .name (list "DATABASE_URL" "AUDIT_ENTRY_KEY" "AUDIT_ENTRY_KEY_PREVIOUS" "FLOW_LIKE_CONFIG_PATH" "FLOW_LIKE_CONFIG_JSON" "AUDIT_HEALTH_FILE" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "AUDIT_BUCKET_ACCESS_KEY_ID" "AUDIT_BUCKET_SECRET_ACCESS_KEY" "AWS_REGION" "AWS_USE_PATH_STYLE" "AUDIT_KMS_KEY_ID" "AUDIT_KMS_PROVIDER" "AUDIT_KMS_REGION" "AUDIT_VAULT_ADDR" "AUDIT_VAULT_TOKEN_FILE" "AUDIT_KID" "AUDIT_VERIFYING_KEYS") }}
+{{- if has .name (list "DATABASE_URL" "AUDIT_ENTRY_KEY" "AUDIT_ENTRY_KEY_PREVIOUS" "AUDIT_HEALTH_FILE" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "AUDIT_BUCKET_ACCESS_KEY_ID" "AUDIT_BUCKET_SECRET_ACCESS_KEY" "AWS_REGION" "AWS_USE_PATH_STYLE" "AUDIT_KMS_KEY_ID" "AUDIT_KMS_PROVIDER" "AUDIT_KMS_REGION" "AUDIT_VAULT_ADDR" "AUDIT_VAULT_TOKEN_FILE" "AUDIT_KID" "AUDIT_VERIFYING_KEYS") }}
 {{- fail "audit.env cannot override chart-managed worker configuration" }}
 {{- end }}
 {{- end }}

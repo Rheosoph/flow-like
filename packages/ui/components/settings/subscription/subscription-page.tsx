@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { formatQuotaDate } from "../../../lib/quota";
+import { asArray, isRecord } from "../../../lib/response-shape";
 import {
 	formatRuntimeSeconds,
 	getRuntimeSample,
@@ -92,9 +93,12 @@ function SubscriptionPageContent({
 			setBillingLoading(false);
 		}
 	}, [onManageBilling]);
+	const tiers: IPricingResponse["tiers"] = isRecord(pricing.tiers)
+		? pricing.tiers
+		: {};
 	const sortedTiers = useMemo(
 		() =>
-			Object.entries(pricing.tiers).sort(([a], [b]) => {
+			Object.entries(tiers).sort(([a], [b]) => {
 				const aIndex = TIER_ORDER.indexOf(a);
 				const bIndex = TIER_ORDER.indexOf(b);
 				return (
@@ -102,11 +106,17 @@ function SubscriptionPageContent({
 					(bIndex < 0 ? TIER_ORDER.length : bIndex)
 				);
 			}),
-		[pricing.tiers],
+		[tiers],
 	);
-	const current = pricing.tiers[pricing.current_tier];
+	const current = tiers[pricing.current_tier];
 	const runtimeSample = useMemo(
-		() => getRuntimeSample(usage.data),
+		() =>
+			isRecord(usage.data)
+				? getRuntimeSample({
+						usage: asArray(usage.data.usage),
+						usageTruncated: usage.data.usageTruncated,
+					})
+				: null,
 		[usage.data],
 	);
 	const currentName =
@@ -292,9 +302,9 @@ function SubscriptionPageContent({
 								cloudStarts: tier.max_remote_executions,
 							}))}
 					/>
-					<TierComparison tiers={pricing.tiers} />
+					<TierComparison tiers={tiers} />
 					<FreeUseTips />
-					{pricing.tiers.ENTERPRISE && (
+					{tiers.ENTERPRISE && (
 						<div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border p-5">
 							<div className="flex items-start gap-3">
 								<Building2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
@@ -308,7 +318,7 @@ function SubscriptionPageContent({
 								</div>
 							</div>
 							<Button asChild variant="outline">
-								<a href={pricing.tiers.ENTERPRISE.contact_url}>
+								<a href={tiers.ENTERPRISE.contact_url}>
 									Talk to sales <ArrowUpRight className="h-4 w-4" />
 								</a>
 							</Button>

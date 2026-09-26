@@ -83,33 +83,51 @@ impl NodeLogic for BrowserWaitForNode {
             VariableType::Boolean,
         );
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use std::time::Duration;
-        use thirtyfour::prelude::*;
 
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
+        if timeout_ms < 0 {
+            return Err(flow_like_types::anyhow!("Wait timeout must be nonnegative"));
+        }
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let result = tokio::time::timeout(Duration::from_millis(timeout_ms.max(0) as u64), async {
+        let token = context.get_cancellation_token();
+        let operation = tokio::time::timeout(Duration::from_millis(timeout_ms as u64), async {
             loop {
-                if let Ok(_elem) = driver.find(By::Css(&selector)).await {
-                    return true;
+                context.check_cancelled()?;
+                match super::selector::find(&driver, &locator).await {
+                    Ok(_) => return Ok::<(), flow_like_types::Error>(()),
+                    Err(error) if error.downcast_ref::<thirtyfour::error::WebDriverError>().is_some_and(|error| matches!(error.as_inner(), thirtyfour::error::WebDriverErrorInner::NoSuchElement(_) | thirtyfour::error::WebDriverErrorInner::StaleElementReference(_))) => {}
+                    Err(error) => return Err(error),
                 }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                crate::rpa::branch::delay(context, Duration::from_millis(100)).await?;
             }
-        })
-        .await;
+        });
+        let result = tokio::select! {
+            biased;
+            _ = async { if let Some(token) = token { token.cancelled().await } else { std::future::pending::<()>().await } } => return Err(flow_like_types::anyhow!("Execution was cancelled")),
+            result = operation => result,
+        };
 
-        let found = result.is_ok();
+        let found = match result {
+            Ok(result) => {
+                result?;
+                true
+            }
+            Err(_) => false,
+        };
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("found", json!(found)).await?;
@@ -199,8 +217,11 @@ impl NodeLogic for BrowserWaitForDelayNode {
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let delay_ms: i64 = context.evaluate_pin("delay_ms").await?;
-
-        tokio::time::sleep(Duration::from_millis(delay_ms.max(0) as u64)).await;
+        if delay_ms < 0 {
+            return Err(flow_like_types::anyhow!("Delay must be nonnegative"));
+        }
+        session.ensure_active(context).await?;
+        crate::rpa::branch::delay(context, Duration::from_millis(delay_ms as u64)).await?;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;

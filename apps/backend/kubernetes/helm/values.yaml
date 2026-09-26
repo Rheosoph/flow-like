@@ -372,7 +372,10 @@ storage:
 # Audit Trail
 # =============================================================================
 # A separate worker seals, signs, archives and prunes. API pods only ingest and
-# verify records. Disabling this Deployment stops sealing and signing.
+# verify records. Disabling this Deployment stops sealing and signing. The worker
+# takes its audit policy from the `audit` section of the flow-like.config.json
+# its image was built with; api.runtimeConfig does not reach it. Like the API, it
+# waits for the database migration Job before starting.
 audit:
   worker: true
   image:
@@ -380,16 +383,14 @@ audit:
     tag: dev
     digest: ""
     pullPolicy: Always
+  # 0 pauses the worker: nothing is sealed or archived, grants and credentials
+  # are untouched.
   replicaCount: 1
   entrySecret: ""
   bucketSecret: ""
   exportSecret: ""
   database:
     existingSecret: ""
-  runtimeConfig:
-    existingSecret: ""
-    existingConfigMap: ""
-    key: audit.config.json
   serviceAccount:
     annotations: {}
   podAnnotations: {}
@@ -630,13 +631,7 @@ ingress:
   #       - path: /frontend
   #         pathType: Prefix
   #         service: api
-  #       - path: /c
-  #         pathType: Prefix
-  #         service: web
-  #       - path: /f
-  #         pathType: Prefix
-  #         service: web
-  #       - path: /u
+  #       - path: /a
   #         pathType: Prefix
   #         service: web
   #       - path: /r

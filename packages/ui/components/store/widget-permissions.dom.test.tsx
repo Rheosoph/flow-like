@@ -26,8 +26,15 @@ beforeEach(async () => {
 		Node: window.Node,
 		MutationObserver: window.MutationObserver,
 		Event: window.Event,
+		CustomEvent: window.CustomEvent,
+		KeyboardEvent: window.KeyboardEvent,
+		FocusEvent: window.FocusEvent,
 		MouseEvent: window.MouseEvent,
 		PointerEvent: window.PointerEvent,
+		NodeFilter: window.NodeFilter,
+		ResizeObserver: window.ResizeObserver,
+		requestAnimationFrame: window.requestAnimationFrame.bind(window),
+		cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
 		getComputedStyle: window.getComputedStyle.bind(window),
 		IS_REACT_ACT_ENVIRONMENT: true,
 	};
@@ -360,6 +367,103 @@ describe("project widget permissions list", () => {
 			expect(host.querySelector("[data-widget-permissions-empty]")).not.toBe(
 				null,
 			);
+		},
+		COLD_IMPORT_TIMEOUT_MS,
+	);
+});
+
+describe("clear widget permissions menu item", () => {
+	async function press(key: string) {
+		const { act } = await import("react");
+		const target = window.document.activeElement;
+		await act(async () => {
+			target?.dispatchEvent(
+				new window.KeyboardEvent("keydown", {
+					key,
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+	}
+
+	test(
+		"is a labelled menu item reached with ArrowDown and run with Enter",
+		async () => {
+			const { act } = await import("react");
+			const { grantMicroWidgetConsent } = await import(
+				"../a2ui/micro-widget-capability-consent"
+			);
+			const { useBackendStore } = await import("../../state/backend-state");
+			const {
+				DropdownMenu,
+				DropdownMenuContent,
+				DropdownMenuItem,
+				DropdownMenuTrigger,
+			} = await import("../ui/dropdown-menu");
+			const { ClearWidgetPermissionsMenuItem, listWidgetConsentEntries } =
+				await import("./widget-permissions");
+			grantMicroWidgetConsent(target("app-1", "live-map"), MAP_POLICY, "app");
+			grantMicroWidgetConsent(target("app-2", "legend"), MAP_POLICY, "app");
+			const revokeWidgetGrants = mock(async (_p: string, _w?: string) => {});
+			const previous = useBackendStore.getState().backend;
+			useBackendStore
+				.getState()
+				.setBackend({ registryState: { revokeWidgetGrants } } as never);
+
+			try {
+				await act(async () =>
+					root.render(
+						<DropdownMenu>
+							<DropdownMenuTrigger asChild>
+								<button type="button" data-menu-trigger>
+									More
+								</button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent>
+								<DropdownMenuItem>View store page</DropdownMenuItem>
+								<ClearWidgetPermissionsMenuItem
+									packageId="maps"
+									packageName="Maps"
+								/>
+							</DropdownMenuContent>
+						</DropdownMenu>,
+					),
+				);
+				const trigger = host.querySelector<HTMLButtonElement>(
+					"[data-menu-trigger]",
+				);
+				await act(async () => trigger?.focus());
+				await press("Enter");
+
+				const item = window.document.body.querySelector(
+					"[data-clear-widget-permissions]",
+				);
+				expect(item?.getAttribute("role")).toBe("menuitem");
+				expect(item?.textContent).toBe(
+					"Clear widget permissions on this device",
+				);
+				expect(window.document.activeElement?.textContent).toBe(
+					"View store page",
+				);
+
+				await press("ArrowDown");
+				expect(window.document.activeElement).toBe(item as never);
+
+				await press("Enter");
+				await act(async () => {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+				});
+
+				expect(listWidgetConsentEntries({ packageId: "maps" })).toEqual([]);
+				expect(revokeWidgetGrants.mock.calls).toEqual([["maps"]]);
+				expect(
+					window.document.body.querySelector("[data-clear-widget-permissions]"),
+				).toBe(null);
+			} finally {
+				useBackendStore.getState().setBackend(previous as never);
+			}
 		},
 		COLD_IMPORT_TIMEOUT_MS,
 	);

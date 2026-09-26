@@ -859,7 +859,16 @@ impl AppUser {
     }
 }
 
-async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiError> {
+    fresh_pat_permissions(user, state).await.map(|_| ())
+}
+
+/// Return the current permission mask from the same lookup that checks the
+/// token secret, owner and expiry. Cached authentication cannot widen this mask.
+pub(crate) async fn fresh_pat_permissions(
+    user: &PATUser,
+    state: &AppState,
+) -> Result<i64, ApiError> {
     let cache_key = hash_token(&user.pat);
     let Some((pat_id, secret_hash)) = pat_lookup_parts(&user.pat) else {
         state.auth_cache.invalidate(&cache_key);
@@ -875,13 +884,12 @@ async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiE
         .one(&state.db)
         .await?;
     let now = chrono::Utc::now().fixed_offset();
-    let is_current = current.is_some_and(|pat| pat_is_current(&pat, &user.sub, now));
-    if !is_current {
+    let Some(current) = current.filter(|pat| pat_is_current(pat, &user.sub, now)) else {
         state.auth_cache.invalidate(&cache_key);
         return Err(ApiError::unauthorized("PAT is no longer valid"));
-    }
+    };
 
-    Ok(())
+    Ok(current.permissions)
 }
 
 fn pat_is_current(
@@ -997,6 +1005,22 @@ fn permission_cache_lookup<T>(
     lookup: impl FnOnce() -> Option<T>,
 ) -> Option<T> {
     allow_cached_value.then(lookup).flatten()
+}
+
+/// Resolve current project authority without constructing a human principal or
+/// consulting the permission cache. Workload grants call this within admission.
+pub(crate) async fn fresh_user_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    app_id: &str,
+) -> Result<RolePermissions, ApiError> {
+    let row = db.query_one_raw(sea_orm::Statement::from_sql_and_values(
+        sea_orm::DatabaseBackend::Postgres,
+        r#"SELECT r.permissions FROM "Membership" m JOIN "Role" r ON r.id = m."roleId" AND r."appId" = m."appId" JOIN "App" a ON a.id = m."appId" WHERE m."userId" = $1 AND m."appId" = $2 AND a.status = 'ACTIVE'"#,
+        [sub.into(), app_id.into()],
+    )).await?.ok_or(ApiError::FORBIDDEN)?;
+    RolePermissions::from_bits(row.try_get::<i64>("", "permissions")?)
+        .ok_or_else(|| ApiError::internal("Invalid role permission bits"))
 }
 
 async fn user_app_permission_uncached(
@@ -1207,6 +1231,10 @@ pub async fn jwt_middleware(
     Ok(next.run(request).await)
 }
 
+fn reserved_credential_principal(token: &str) -> Option<AppUser> {
+    crate::devices::jwt::is_device_credential(token).then_some(AppUser::Unauthorized)
+}
+
 #[tracing::instrument(
     target = "flow_like::observability",
     name = "auth.authenticate",
@@ -1230,6 +1258,12 @@ async fn authenticate_request(
     {
         let token = token.strip_prefix("Bearer ").unwrap_or(token);
         let token = token.trim();
+        // Device credentials have a separate principal and request proof. Never
+        // reinterpret them as a human, even when an OIDC issuer shares our keys.
+        if let Some(principal) = reserved_credential_principal(token) {
+            request.extensions_mut().insert::<AppUser>(principal);
+            return Ok(request);
+        }
         let cache_key = hash_token(token);
 
         // Check cache first
@@ -1610,6 +1644,34 @@ async fn authenticate_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_tokens_never_expose_their_attributed_subject_to_ordinary_routes() {
+        crate::backend_jwt::init_for_tests();
+        for (header_type, payload_type) in [
+            ("flow-like-device-enrollment+jwt", "device_enrollment"),
+            ("flow-like-device-session+jwt", "device_session"),
+            ("flow-like-device-future+jwt", "future_profile"),
+            ("JWT", "instance_resource"),
+            ("JWT", "device_future_profile"),
+        ] {
+            let token = crate::backend_jwt::sign_typed(
+                &serde_json::json!({"sub":"attributed-account-owner","typ":payload_type}),
+                header_type,
+            )
+            .unwrap();
+            for credential in [token.clone(), format!("DPoP {token}")] {
+                let principal = reserved_credential_principal(&credential)
+                    .expect("reserved device credential is rejected before the user-auth cache");
+                assert!(matches!(principal, AppUser::Unauthorized));
+                assert!(principal.sub().is_err());
+                assert!(principal.executor_scoped_sub().is_err());
+                assert!(principal.effective_user_id().is_err());
+                assert!(principal.entity().is_err());
+            }
+        }
+        assert!(reserved_credential_principal("pat_ordinary.secret").is_none());
+    }
 
     #[test]
     fn forwarded_ip_counts_trusted_hops_from_the_right() {

@@ -83,7 +83,7 @@ interface IPage {
   onUnloadEventId?: string;
   onIntervalEventId?: string;
   onIntervalSeconds?: number;
-  cache?: boolean;
+  noCache?: boolean;
 
   title?: string;
   meta?: PageMeta;
@@ -116,7 +116,7 @@ A Page can invoke Simple Event nodes from its connected Flow:
 | **On Page Unload** | When the user navigates away |
 | **On Interval** | Repeatedly at a positive interval in seconds |
 
-If an On Load event is configured, **Cache Page** can show the last rendered state immediately while the load event refreshes it.
+A Page with an On Load event renders its layout immediately, together with the last output its load event rendered for the same user, route and query. The load event then refreshes that output in place, and a thin progress bar shows until it renders. Turn on **No cache** to show only fresh output: the Page then displays a loading screen until the load event renders.
 
 The settings panel only lists `events_simple` nodes from the connected board. If the list is empty, add a Simple Event node to that Flow.
 

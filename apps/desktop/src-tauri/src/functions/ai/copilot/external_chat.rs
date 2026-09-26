@@ -47,7 +47,8 @@ use flow_like::{
     flow::{
         board::Board,
         copilot::{
-            flowscript_workspace_envelope, memory::AssistantMemory, workflow_authoring_tool_allowed,
+            WebResearchCapability, flowscript_workspace_envelope, memory::AssistantMemory,
+            tool_spec::RESEARCH_AGENT_TOOL, workflow_authoring_tool_allowed,
         },
         node::Node,
     },
@@ -88,11 +89,8 @@ pub(super) async fn external_code_agent_chat_internal(
 ) -> Result<UnifiedCopilotResponse, String> {
     let global_agent = global.is_some();
     let live_board = live_board_handle(&app_handle, board);
-    let live_board_snapshot = match live_board.as_ref() {
-        Some(live_board) => Some(live_board.lock().await.clone()),
-        None => None,
-    };
-    let authoritative_board = live_board_snapshot.as_ref().or(board);
+    let live_board_snapshot = live_board.as_ref().map(|live_board| live_board.snapshot());
+    let authoritative_board = live_board_snapshot.as_deref().or(board);
     let public_user_prompt = tool_context
         .as_ref()
         .and_then(|context| context.source_user_prompt.as_deref())
@@ -114,6 +112,7 @@ pub(super) async fn external_code_agent_chat_internal(
         &request_identity_prompt,
         host_context_guidance.as_deref(),
         global.as_deref(),
+        backend.web_research(),
         tool_context
             .as_ref()
             .and_then(|context| context.board_context_manifest.as_ref()),
@@ -172,6 +171,9 @@ pub(super) async fn external_code_agent_chat_internal(
         // tools removes the strongest attractors for code-agent search loops and keeps the exposed
         // MCP surface focused on one declaration batch plus iterative text edits.
         tools.retain(|(tool, _)| workflow_authoring_tool_allowed(&tool.name));
+    }
+    if global_agent && backend.web_research() == WebResearchCapability::Native {
+        tools.retain(|(tool, _)| tool.name != RESEARCH_AGENT_TOOL);
     }
     super::workflow_benchmark::observe_tools(board, &mut tools);
     let tool_names = tools
@@ -291,6 +293,7 @@ pub(super) async fn external_code_agent_chat_internal(
             &mcp_url,
             prompt,
             tool_names.clone(),
+            global_agent,
             current_images.as_deref().unwrap_or_default(),
             next_phase_resume.take().as_deref(),
             claude_role_appendix.as_deref(),

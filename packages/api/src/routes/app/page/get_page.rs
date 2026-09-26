@@ -54,8 +54,8 @@ pub(crate) async fn load_event_bound_page(app: &App, event: &Event) -> Result<Pa
     let board = app
         .open_board(event.board_id.clone(), None, event.board_version)
         .await
-        .map_err(|_| ApiError::NOT_FOUND)?;
-    let board = board.lock().await;
+        .map_err(|_| ApiError::NOT_FOUND)?
+        .snapshot();
 
     match event.board_version {
         Some(version) => board
@@ -182,7 +182,7 @@ pub async fn get_page(
         let page_id = &page_id;
         async move {
             let board = app.open_board(board_id, None, version_opt).await.ok()?;
-            let board_guard = board.lock().await;
+            let board_guard = board.snapshot();
             match version_opt {
                 Some(v) => board_guard.load_versioned_page(page_id, v, None).await.ok(),
                 None => board_guard.load_page(page_id, None).await.ok(),

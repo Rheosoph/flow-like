@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
+import { asArray } from "../../../lib/response-shape";
 import {
 	type IBoard,
 	IExecutionMode,
@@ -405,7 +406,7 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 									})
 								: t("latest", "Latest")}
 						</SelectItem>
-						{(versions.data ?? []).map((entry) => (
+						{asArray(versions.data).map((entry) => (
 							<SelectItem key={entry.join(".")} value={entry.join(".")}>
 								{entry.join(".")}
 							</SelectItem>

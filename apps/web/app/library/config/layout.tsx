@@ -61,7 +61,6 @@ import {
 	resolveNavigationItems,
 } from "@flow-like/flow-like-ui/lib/config-nav";
 import { configRouteFillsHeight } from "@flow-like/flow-like-ui/lib/config-route";
-import { useHub } from "@flow-like/flow-like-ui/hooks/use-hub";
 import { useTranslation } from "@flow-like/locales";
 import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -191,25 +190,16 @@ export default function Id({
 	// Nav items visible for this app's visibility, paywall, dev-mode and role —
 	// shared by the sidebar card and the mobile nav dialog (no double filtering).
 	// Items behind a gate stay in the list carrying a `lock`.
-	const { hub: paymentHub } = useHub();
-	const paymentsEnabled = !!(
-		paymentHub?.payments?.onboarding_enabled ||
-		paymentHub?.payments?.marketplace_enabled ||
-		paymentHub?.payments?.node_payments_enabled ||
-		paymentHub?.payments?.servicing_enabled
-	);
 	const visibleNavItems = useMemo(
 		() =>
 			resolveNavigationItems(buildNavigationItems(t), {
 				visibility,
-				paymentsEnabled,
 				developerMode,
 				isPaid: app.data?.price != null && app.data.price > 0,
 				can: permissions.can,
 				permissionLockReason,
 			}),
 		[
-			paymentsEnabled,
 			developerMode,
 			visibility,
 			app.data?.price,

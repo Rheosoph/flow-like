@@ -341,13 +341,13 @@ export function DashboardErrorWidget({ profile }: DashboardErrorWidgetProps) {
 							<Skeleton className="h-8 w-full" />
 							<Skeleton className="h-8 w-full" />
 						</div>
-					) : (stats.data?.recent.length ?? 0) === 0 ? (
+					) : (stats.data?.recent?.length ?? 0) === 0 ? (
 						<div className="flex items-center justify-center rounded-lg border border-dashed py-6 text-sm text-muted-foreground">
 							{t("allClearInTheLast24Hours", "All clear in the last 24 hours.")}
 						</div>
 					) : (
 						<div className="space-y-1">
-							{stats.data?.recent.slice(0, 5).map((err) => {
+							{stats.data?.recent?.slice(0, 5).map((err) => {
 								const tone = statusCodeTone(err.status_code);
 								return (
 									<Link

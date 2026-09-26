@@ -1634,91 +1634,7 @@ impl NodeLogic for CopilotChatNode {
         )
         .set_schema::<MicrosoftGraphProvider>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_input_pin(
-            "prompt",
-            "Prompt",
-            "User message to send to Copilot",
-            VariableType::String,
-        );
-        node.add_input_pin(
-            "additional_context",
-            "Additional Context",
-            "Extra grounding context (e.g., document excerpts, facts) to provide to Copilot",
-            VariableType::String,
-        )
-        .set_value_type(ValueType::Array)
-        .set_default_value(Some(json!([])));
-        node.add_input_pin(
-            "file_urls",
-            "File URLs",
-            "OneDrive/SharePoint file URLs to include as context (full URLs like https://contoso.sharepoint.com/...)",
-            VariableType::String,
-        )
-        .set_value_type(ValueType::Array)
-        .set_default_value(Some(json!([])));
-        node.add_input_pin(
-            "web_grounding",
-            "Web Search",
-            "Enable web search grounding for real-time information",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(json!(true)));
-        node.add_input_pin(
-            "timezone",
-            "Timezone",
-            "User timezone in IANA format (e.g., America/New_York, Europe/London). Auto-detected from system if empty.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            "conversation_id",
-            "Conversation ID",
-            "Optional conversation ID to continue a chat (leave empty for new conversation)",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-
-        node.add_output_pin(
-            "on_stream",
-            "On Stream",
-            "Triggers on streaming output",
-            VariableType::Execution,
-        );
-        node.add_output_pin("chunk", "Chunk", "Streaming chunk", VariableType::Struct)
-            .set_schema::<ResponseChunk>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_output_pin("done", "Done", "Completed", VariableType::Execution);
-        node.add_output_pin("error", "Error", "", VariableType::Execution);
-        node.add_output_pin(
-            "result",
-            "Result",
-            "Complete response with annotations from citations",
-            VariableType::Struct,
-        )
-        .set_schema::<Response>()
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
-        node.add_output_pin(
-            "response",
-            "RAW Response",
-            "Full Copilot response with attributions and adaptive cards",
-            VariableType::Struct,
-        )
-        .set_schema::<CopilotChatResponse>();
-        node.add_output_pin(
-            "attachments",
-            "Attachments",
-            "Attachments created from Copilot's attributions (citations and references)",
-            VariableType::Struct,
-        )
-        .set_value_type(ValueType::Array)
-        .set_schema::<Attachment>();
-        node.add_output_pin(
-            "new_conversation_id",
-            "Conversation ID",
-            "Conversation ID for follow-up messages",
-            VariableType::String,
-        );
-        node.add_output_pin("error_message", "Error", "", VariableType::String);
+        add_copilot_chat_pins(&mut node);
 
         // Official permissions required for Copilot Chat API
         // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotconversation-chatoverstream
@@ -1743,426 +1659,526 @@ impl NodeLogic for CopilotChatNode {
         context.deactivate_exec_pin("error").await?;
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
-        let prompt: String = context.evaluate_pin("prompt").await?;
-        let additional_context: Vec<String> = context
-            .evaluate_pin("additional_context")
-            .await
-            .unwrap_or_default();
-        let file_urls: Vec<String> = context.evaluate_pin("file_urls").await.unwrap_or_default();
-        let web_grounding: bool = context.evaluate_pin("web_grounding").await.unwrap_or(true);
-        let timezone_input: String = context.evaluate_pin("timezone").await.unwrap_or_default();
-        let timezone = normalize_timezone(&timezone_input).unwrap_or_else(get_system_timezone);
-        let mut conversation_id: String = context
-            .evaluate_pin("conversation_id")
-            .await
-            .unwrap_or_default();
+        let endpoint = CopilotChatEndpoint {
+            conversations_url: graph_version_url(&provider, "beta", "/copilot/conversations"),
+            access_token: provider.access_token,
+            model: "microsoft-copilot",
+            log_label: "Invoking Microsoft 365 Copilot Chat",
+        };
+        run_copilot_chat(context, endpoint).await
+    }
 
-        let on_stream = context.get_pin_by_name("on_stream").await?;
-        context.activate_exec_pin_ref(&on_stream).await?;
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        normalize_timezone_pin(node);
+    }
+}
 
-        let connected_nodes = Arc::new(DashMap::new());
-        let connected = on_stream.get_connected_nodes();
-        for node in connected {
-            let sub_ctx = Arc::new(Mutex::new(context.create_sub_context(&node).await));
-            connected_nodes.insert(node.node.lock().await.id.clone(), sub_ctx);
+/// Where a Copilot Chat conversation is hosted. Microsoft Graph (beta) and Work IQ expose the same
+/// conversation contract under different roots and token audiences.
+pub(crate) struct CopilotChatEndpoint {
+    pub conversations_url: String,
+    pub access_token: String,
+    pub model: &'static str,
+    pub log_label: &'static str,
+}
+
+/// Pins shared by every Copilot Chat node, added after the node's own provider pin.
+pub(crate) fn add_copilot_chat_pins(node: &mut Node) {
+    node.add_input_pin(
+        "prompt",
+        "Prompt",
+        "User message to send to Copilot",
+        VariableType::String,
+    );
+    node.add_input_pin(
+        "additional_context",
+        "Additional Context",
+        "Extra grounding context (e.g., document excerpts, facts) to provide to Copilot",
+        VariableType::String,
+    )
+    .set_value_type(ValueType::Array)
+    .set_default_value(Some(json!([])));
+    node.add_input_pin(
+        "file_urls",
+        "File URLs",
+        "OneDrive/SharePoint file URLs to include as context (full URLs like https://contoso.sharepoint.com/...)",
+        VariableType::String,
+    )
+    .set_value_type(ValueType::Array)
+    .set_default_value(Some(json!([])));
+    node.add_input_pin(
+        "web_grounding",
+        "Web Search",
+        "Enable web search grounding for real-time information",
+        VariableType::Boolean,
+    )
+    .set_default_value(Some(json!(true)));
+    node.add_input_pin(
+        "timezone",
+        "Timezone",
+        "User timezone in IANA format (e.g., America/New_York, Europe/London). Auto-detected from system if empty.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+    node.add_input_pin(
+        "conversation_id",
+        "Conversation ID",
+        "Optional conversation ID to continue a chat (leave empty for new conversation)",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+
+    node.add_output_pin(
+        "on_stream",
+        "On Stream",
+        "Triggers on streaming output",
+        VariableType::Execution,
+    );
+    node.add_output_pin("chunk", "Chunk", "Streaming chunk", VariableType::Struct)
+        .set_schema::<ResponseChunk>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+    node.add_output_pin("done", "Done", "Completed", VariableType::Execution);
+    node.add_output_pin("error", "Error", "", VariableType::Execution);
+    node.add_output_pin(
+        "result",
+        "Result",
+        "Complete response with annotations from citations",
+        VariableType::Struct,
+    )
+    .set_schema::<Response>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build());
+    node.add_output_pin(
+        "response",
+        "RAW Response",
+        "Full Copilot response with attributions and adaptive cards",
+        VariableType::Struct,
+    )
+    .set_schema::<CopilotChatResponse>();
+    node.add_output_pin(
+        "attachments",
+        "Attachments",
+        "Attachments created from Copilot's attributions (citations and references)",
+        VariableType::Struct,
+    )
+    .set_value_type(ValueType::Array)
+    .set_schema::<Attachment>();
+    node.add_output_pin(
+        "new_conversation_id",
+        "Conversation ID",
+        "Conversation ID for follow-up messages",
+        VariableType::String,
+    );
+    node.add_output_pin("error_message", "Error", "", VariableType::String);
+}
+
+pub(crate) fn normalize_timezone_pin(node: &mut Node) {
+    if let Some(pin) = node.get_pin_mut_by_name("timezone")
+        && let Some(ref value_bytes) = pin.default_value
+        && let Ok(value) = flow_like_types::json::from_slice::<Value>(value_bytes)
+        && let Some(input) = value.as_str()
+        && let Some(normalized) = normalize_timezone(input)
+        && normalized != input
+    {
+        pin.set_default_value(Some(json!(normalized)));
+    }
+}
+
+/// Creates the conversation when needed, streams the reply over SSE and writes the chat output pins.
+/// Callers deactivate `done`/`error` before evaluating their provider pin.
+pub(crate) async fn run_copilot_chat(
+    context: &mut ExecutionContext,
+    endpoint: CopilotChatEndpoint,
+) -> flow_like_types::Result<()> {
+    let prompt: String = context.evaluate_pin("prompt").await?;
+    let additional_context: Vec<String> = context
+        .evaluate_pin("additional_context")
+        .await
+        .unwrap_or_default();
+    let file_urls: Vec<String> = context.evaluate_pin("file_urls").await.unwrap_or_default();
+    let web_grounding: bool = context.evaluate_pin("web_grounding").await.unwrap_or(true);
+    let timezone_input: String = context.evaluate_pin("timezone").await.unwrap_or_default();
+    let timezone = normalize_timezone(&timezone_input).unwrap_or_else(get_system_timezone);
+    let mut conversation_id: String = context
+        .evaluate_pin("conversation_id")
+        .await
+        .unwrap_or_default();
+
+    let on_stream = context.get_pin_by_name("on_stream").await?;
+    context.activate_exec_pin_ref(&on_stream).await?;
+
+    let connected_nodes = Arc::new(DashMap::new());
+    let connected = on_stream.get_connected_nodes();
+    for node in connected {
+        let sub_ctx = Arc::new(Mutex::new(context.create_sub_context(&node).await));
+        connected_nodes.insert(node.node.lock().await.id.clone(), sub_ctx);
+    }
+
+    let parent_node_id = context.node.node.lock().await.id.clone();
+    let callback_count = Arc::new(AtomicUsize::new(0));
+    let client = reqwest::Client::new();
+
+    // Step 1: Create or use existing conversation
+    // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotroot-post-conversations
+    if conversation_id.is_empty() {
+        let create_response = client
+            .post(&endpoint.conversations_url)
+            .header("Authorization", format!("Bearer {}", endpoint.access_token))
+            .header("Content-Type", "application/json")
+            .json(&json!({}))
+            .send()
+            .await;
+
+        match create_response {
+            Ok(resp) if resp.status().is_success() => {
+                let body: Value = resp.json().await?;
+                conversation_id = body["id"].as_str().unwrap_or("").to_string();
+                if conversation_id.is_empty() {
+                    context
+                        .set_pin_value(
+                            "error_message",
+                            json!("Failed to create conversation: no ID returned"),
+                        )
+                        .await?;
+                    context.activate_exec_pin("error").await?;
+                    return Ok(());
+                }
+            }
+            Ok(resp) => {
+                let error = resp.text().await.unwrap_or_default();
+                context
+                    .set_pin_value(
+                        "error_message",
+                        json!(format!("Failed to create conversation: {}", error)),
+                    )
+                    .await?;
+                context.activate_exec_pin("error").await?;
+                return Ok(());
+            }
+            Err(e) => {
+                context
+                    .set_pin_value(
+                        "error_message",
+                        json!(format!("Failed to create conversation: {}", e)),
+                    )
+                    .await?;
+                context.activate_exec_pin("error").await?;
+                return Ok(());
+            }
+        }
+    }
+
+    // Step 2: Build chatOverStream request
+    // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotconversation-chatoverstream
+    let mut request_body = json!({
+        "message": {
+            "text": prompt
+        },
+        "locationHint": {
+            "timeZone": timezone
+        }
+    });
+
+    // Add additional context if provided
+    if !additional_context.is_empty() {
+        let context_messages: Vec<Value> = additional_context
+            .iter()
+            .map(|text| json!({ "text": text }))
+            .collect();
+        request_body["additionalContext"] = json!(context_messages);
+    }
+
+    // Add contextual resources (files and web grounding)
+    let has_files = !file_urls.is_empty();
+    let needs_web_config = !web_grounding;
+
+    if has_files || needs_web_config {
+        let mut contextual_resources = json!({});
+
+        if has_files {
+            let files: Vec<Value> = file_urls.iter().map(|url| json!({ "uri": url })).collect();
+            contextual_resources["files"] = json!(files);
         }
 
-        let parent_node_id = context.node.node.lock().await.id.clone();
-        let callback_count = Arc::new(AtomicUsize::new(0));
-        let client = reqwest::Client::new();
+        if needs_web_config {
+            contextual_resources["webContext"] = json!({
+                "isWebEnabled": false
+            });
+        }
 
-        // Step 1: Create or use existing conversation
-        // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotroot-post-conversations
-        if conversation_id.is_empty() {
-            let create_response = client
-                .post(graph_version_url(
-                    &provider,
-                    "beta",
-                    "/copilot/conversations",
-                ))
-                .header("Authorization", format!("Bearer {}", provider.access_token))
-                .header("Content-Type", "application/json")
-                .json(&json!({}))
-                .send()
-                .await;
+        request_body["contextualResources"] = contextual_resources;
+    }
 
-            match create_response {
-                Ok(resp) if resp.status().is_success() => {
-                    let body: Value = resp.json().await?;
-                    conversation_id = body["id"].as_str().unwrap_or("").to_string();
-                    if conversation_id.is_empty() {
+    let chat_url = format!(
+        "{}/{}/chatOverStream",
+        endpoint.conversations_url.trim_end_matches('/'),
+        urlencoding::encode(&conversation_id)
+    );
+
+    let response = client
+        .post(&chat_url)
+        .header("Authorization", format!("Bearer {}", endpoint.access_token))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await;
+
+    let mut message = LogMessage::new(endpoint.log_label, LogLevel::Info, None);
+    let mut full_content = String::new();
+    let mut all_messages: Vec<CopilotConversationMessage> = Vec::new();
+    let mut all_attributions: Vec<CopilotAttribution> = Vec::new();
+    let mut response_id = conversation_id.clone();
+    let mut turn_count = 0;
+    let mut state = "active".to_string();
+    let mut last_created_date_time: Option<String> = None;
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            let mut stream = resp.bytes_stream();
+            let mut buffer = String::new();
+
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(chunk) => {
+                        let text = String::from_utf8_lossy(&chunk);
+                        buffer.push_str(&text);
+
+                        // Process complete SSE events
+                        while let Some(data_start) = buffer.find("data: ") {
+                            let data_content = &buffer[data_start + 6..];
+
+                            // Find end of JSON object (next "id:" or "data:" line)
+                            let end_pos = data_content
+                                .find("\nid:")
+                                .or_else(|| data_content.find("\ndata:"))
+                                .unwrap_or(data_content.len());
+
+                            let json_str = data_content[..end_pos].trim();
+
+                            if json_str.is_empty() {
+                                buffer = buffer[data_start + 6 + end_pos..].to_string();
+                                continue;
+                            }
+
+                            // Try to parse the JSON
+                            match flow_like_types::json::from_str::<Value>(json_str) {
+                                Ok(parsed) => {
+                                    // Extract conversation metadata
+                                    if let Some(id) = parsed["id"].as_str() {
+                                        response_id = id.to_string();
+                                    }
+                                    if let Some(tc) = parsed["turnCount"].as_i64() {
+                                        turn_count = tc as i32;
+                                    }
+                                    if let Some(s) = parsed["state"].as_str() {
+                                        state = s.to_string();
+                                    }
+                                    if let Some(dt) = parsed["createdDateTime"].as_str() {
+                                        last_created_date_time = Some(dt.to_string());
+                                    }
+
+                                    // Process messages in this SSE event
+                                    if let Some(messages_arr) = parsed["messages"].as_array() {
+                                        for msg_value in messages_arr {
+                                            // Only process response messages (AI responses)
+                                            let odata_type =
+                                                msg_value["@odata.type"].as_str().unwrap_or("");
+                                            if !odata_type.contains("ResponseMessage") {
+                                                continue;
+                                            }
+
+                                            if let Some(copilot_msg) =
+                                                parse_copilot_message(msg_value)
+                                            {
+                                                // Check if this is new content
+                                                let msg_text = &copilot_msg.text;
+                                                if !msg_text.is_empty()
+                                                    && !full_content.contains(msg_text)
+                                                {
+                                                    // Calculate the delta (new content)
+                                                    let delta = if full_content.is_empty() {
+                                                        msg_text.clone()
+                                                    } else if msg_text.starts_with(&full_content) {
+                                                        msg_text[full_content.len()..].to_string()
+                                                    } else {
+                                                        msg_text.clone()
+                                                    };
+
+                                                    if !delta.is_empty() {
+                                                        full_content = msg_text.clone();
+
+                                                        // Stream the chunk
+                                                        let chunk = ResponseChunk::from_text(
+                                                            &delta,
+                                                            endpoint.model,
+                                                        );
+
+                                                        context
+                                                            .set_pin_value("chunk", json!(chunk))
+                                                            .await?;
+                                                        callback_count
+                                                            .fetch_add(1, Ordering::SeqCst);
+
+                                                        let mut recursion_guard = AHashSet::new();
+                                                        recursion_guard
+                                                            .insert(parent_node_id.clone());
+
+                                                        for entry in connected_nodes.iter() {
+                                                            let (id, sub_context) = entry.pair();
+                                                            let mut sub_context =
+                                                                sub_context.lock().await;
+                                                            let mut log_msg = LogMessage::new(
+                                                                &format!(
+                                                                    "Streaming chunk: {} chars",
+                                                                    delta.len()
+                                                                ),
+                                                                LogLevel::Debug,
+                                                                None,
+                                                            );
+                                                            let run = InternalNode::trigger(
+                                                                &mut sub_context,
+                                                                &mut Some(recursion_guard.clone()),
+                                                                true,
+                                                            )
+                                                            .await;
+                                                            log_msg.end();
+                                                            sub_context.log(log_msg);
+                                                            sub_context.end_trace();
+                                                            if run.is_err() {
+                                                                context.log_message(
+                                                                        &format!("Error running stream node {}", id),
+                                                                        LogLevel::Warn,
+                                                                    );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Collect attributions
+                                                for attr in &copilot_msg.attributions {
+                                                    if !all_attributions.iter().any(|a| {
+                                                        a.see_more_web_url == attr.see_more_web_url
+                                                    }) {
+                                                        all_attributions.push(attr.clone());
+                                                    }
+                                                }
+
+                                                // Store the message
+                                                if !all_messages
+                                                    .iter()
+                                                    .any(|m| m.id == copilot_msg.id)
+                                                {
+                                                    all_messages.push(copilot_msg);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    buffer = buffer[data_start + 6 + end_pos..].to_string();
+                                }
+                                Err(_) => {
+                                    // Incomplete JSON, wait for more data
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
                         context
-                            .set_pin_value(
-                                "error_message",
-                                json!("Failed to create conversation: no ID returned"),
-                            )
+                            .set_pin_value("error_message", json!(e.to_string()))
                             .await?;
                         context.activate_exec_pin("error").await?;
                         return Ok(());
                     }
                 }
-                Ok(resp) => {
-                    let error = resp.text().await.unwrap_or_default();
-                    context
-                        .set_pin_value(
-                            "error_message",
-                            json!(format!("Failed to create conversation: {}", error)),
-                        )
-                        .await?;
-                    context.activate_exec_pin("error").await?;
-                    return Ok(());
-                }
-                Err(e) => {
-                    context
-                        .set_pin_value(
-                            "error_message",
-                            json!(format!("Failed to create conversation: {}", e)),
-                        )
-                        .await?;
-                    context.activate_exec_pin("error").await?;
-                    return Ok(());
-                }
-            }
-        }
-
-        // Step 2: Build chatOverStream request
-        // https://learn.microsoft.com/en-us/microsoft-365-copilot/extensibility/api/ai-services/chat/copilotconversation-chatoverstream
-        let mut request_body = json!({
-            "message": {
-                "text": prompt
-            },
-            "locationHint": {
-                "timeZone": timezone
-            }
-        });
-
-        // Add additional context if provided
-        if !additional_context.is_empty() {
-            let context_messages: Vec<Value> = additional_context
-                .iter()
-                .map(|text| json!({ "text": text }))
-                .collect();
-            request_body["additionalContext"] = json!(context_messages);
-        }
-
-        // Add contextual resources (files and web grounding)
-        let has_files = !file_urls.is_empty();
-        let needs_web_config = !web_grounding;
-
-        if has_files || needs_web_config {
-            let mut contextual_resources = json!({});
-
-            if has_files {
-                let files: Vec<Value> = file_urls.iter().map(|url| json!({ "uri": url })).collect();
-                contextual_resources["files"] = json!(files);
             }
 
-            if needs_web_config {
-                contextual_resources["webContext"] = json!({
-                    "isWebEnabled": false
-                });
+            message.end();
+            message.put_stats(LogStat::new(
+                None,
+                Some(callback_count.load(Ordering::SeqCst) as u64),
+                None,
+            ));
+            context.log(message);
+
+            for entry in connected_nodes.iter() {
+                let (_, sub_context) = entry.pair();
+                let mut sub_context = sub_context.lock().await;
+                context.push_sub_context(&mut sub_context);
             }
 
-            request_body["contextualResources"] = contextual_resources;
-        }
+            // Build the Copilot response
+            let copilot_response = CopilotChatResponse {
+                id: response_id.clone(),
+                content: full_content.clone(),
+                created_date_time: last_created_date_time,
+                turn_count,
+                state,
+                messages: all_messages,
+            };
 
-        let chat_url = graph_version_url(
-            &provider,
-            "beta",
-            &format!("/copilot/conversations/{}/chatOverStream", conversation_id),
-        );
-
-        let response = client
-            .post(&chat_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await;
-
-        let mut message =
-            LogMessage::new("Invoking Microsoft 365 Copilot Chat", LogLevel::Info, None);
-        let mut full_content = String::new();
-        let mut all_messages: Vec<CopilotConversationMessage> = Vec::new();
-        let mut all_attributions: Vec<CopilotAttribution> = Vec::new();
-        let mut response_id = conversation_id.clone();
-        let mut turn_count = 0;
-        let mut state = "active".to_string();
-        let mut last_created_date_time: Option<String> = None;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let mut stream = resp.bytes_stream();
-                let mut buffer = String::new();
-
-                while let Some(chunk_result) = stream.next().await {
-                    match chunk_result {
-                        Ok(chunk) => {
-                            let text = String::from_utf8_lossy(&chunk);
-                            buffer.push_str(&text);
-
-                            // Process complete SSE events
-                            while let Some(data_start) = buffer.find("data: ") {
-                                let data_content = &buffer[data_start + 6..];
-
-                                // Find end of JSON object (next "id:" or "data:" line)
-                                let end_pos = data_content
-                                    .find("\nid:")
-                                    .or_else(|| data_content.find("\ndata:"))
-                                    .unwrap_or(data_content.len());
-
-                                let json_str = data_content[..end_pos].trim();
-
-                                if json_str.is_empty() {
-                                    buffer = buffer[data_start + 6 + end_pos..].to_string();
-                                    continue;
-                                }
-
-                                // Try to parse the JSON
-                                match flow_like_types::json::from_str::<Value>(json_str) {
-                                    Ok(parsed) => {
-                                        // Extract conversation metadata
-                                        if let Some(id) = parsed["id"].as_str() {
-                                            response_id = id.to_string();
-                                        }
-                                        if let Some(tc) = parsed["turnCount"].as_i64() {
-                                            turn_count = tc as i32;
-                                        }
-                                        if let Some(s) = parsed["state"].as_str() {
-                                            state = s.to_string();
-                                        }
-                                        if let Some(dt) = parsed["createdDateTime"].as_str() {
-                                            last_created_date_time = Some(dt.to_string());
-                                        }
-
-                                        // Process messages in this SSE event
-                                        if let Some(messages_arr) = parsed["messages"].as_array() {
-                                            for msg_value in messages_arr {
-                                                // Only process response messages (AI responses)
-                                                let odata_type =
-                                                    msg_value["@odata.type"].as_str().unwrap_or("");
-                                                if !odata_type.contains("ResponseMessage") {
-                                                    continue;
-                                                }
-
-                                                if let Some(copilot_msg) =
-                                                    parse_copilot_message(msg_value)
-                                                {
-                                                    // Check if this is new content
-                                                    let msg_text = &copilot_msg.text;
-                                                    if !msg_text.is_empty()
-                                                        && !full_content.contains(msg_text)
-                                                    {
-                                                        // Calculate the delta (new content)
-                                                        let delta = if full_content.is_empty() {
-                                                            msg_text.clone()
-                                                        } else if msg_text
-                                                            .starts_with(&full_content)
-                                                        {
-                                                            msg_text[full_content.len()..]
-                                                                .to_string()
-                                                        } else {
-                                                            msg_text.clone()
-                                                        };
-
-                                                        if !delta.is_empty() {
-                                                            full_content = msg_text.clone();
-
-                                                            // Stream the chunk
-                                                            let chunk = ResponseChunk::from_text(
-                                                                &delta,
-                                                                "microsoft-copilot",
-                                                            );
-
-                                                            context
-                                                                .set_pin_value(
-                                                                    "chunk",
-                                                                    json!(chunk),
-                                                                )
-                                                                .await?;
-                                                            callback_count
-                                                                .fetch_add(1, Ordering::SeqCst);
-
-                                                            let mut recursion_guard =
-                                                                AHashSet::new();
-                                                            recursion_guard
-                                                                .insert(parent_node_id.clone());
-
-                                                            for entry in connected_nodes.iter() {
-                                                                let (id, sub_context) =
-                                                                    entry.pair();
-                                                                let mut sub_context =
-                                                                    sub_context.lock().await;
-                                                                let mut log_msg = LogMessage::new(
-                                                                    &format!(
-                                                                        "Streaming chunk: {} chars",
-                                                                        delta.len()
-                                                                    ),
-                                                                    LogLevel::Debug,
-                                                                    None,
-                                                                );
-                                                                let run = InternalNode::trigger(
-                                                                    &mut sub_context,
-                                                                    &mut Some(
-                                                                        recursion_guard.clone(),
-                                                                    ),
-                                                                    true,
-                                                                )
-                                                                .await;
-                                                                log_msg.end();
-                                                                sub_context.log(log_msg);
-                                                                sub_context.end_trace();
-                                                                if run.is_err() {
-                                                                    context.log_message(
-                                                                        &format!("Error running stream node {}", id),
-                                                                        LogLevel::Warn,
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-
-                                                    // Collect attributions
-                                                    for attr in &copilot_msg.attributions {
-                                                        if !all_attributions.iter().any(|a| {
-                                                            a.see_more_web_url
-                                                                == attr.see_more_web_url
-                                                        }) {
-                                                            all_attributions.push(attr.clone());
-                                                        }
-                                                    }
-
-                                                    // Store the message
-                                                    if !all_messages
-                                                        .iter()
-                                                        .any(|m| m.id == copilot_msg.id)
-                                                    {
-                                                        all_messages.push(copilot_msg);
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        buffer = buffer[data_start + 6 + end_pos..].to_string();
-                                    }
-                                    Err(_) => {
-                                        // Incomplete JSON, wait for more data
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            context
-                                .set_pin_value("error_message", json!(e.to_string()))
-                                .await?;
-                            context.activate_exec_pin("error").await?;
-                            return Ok(());
-                        }
-                    }
-                }
-
-                message.end();
-                message.put_stats(LogStat::new(
-                    None,
-                    Some(callback_count.load(Ordering::SeqCst) as u64),
-                    None,
-                ));
-                context.log(message);
-
-                for entry in connected_nodes.iter() {
-                    let (_, sub_context) = entry.pair();
-                    let mut sub_context = sub_context.lock().await;
-                    context.push_sub_context(&mut sub_context);
-                }
-
-                // Build the Copilot response
-                let copilot_response = CopilotChatResponse {
-                    id: response_id.clone(),
-                    content: full_content.clone(),
-                    created_date_time: last_created_date_time,
-                    turn_count,
-                    state,
-                    messages: all_messages,
+            // Build Response with annotations from attributions
+            let annotations = attributions_to_annotations(&all_attributions);
+            let mut result = Response::from_text(&full_content, endpoint.model);
+            if let Some(choice) = result.choices.first_mut() {
+                choice.message.annotations = if annotations.is_empty() {
+                    None
+                } else {
+                    Some(annotations)
                 };
+            }
 
-                // Build Response with annotations from attributions
-                let annotations = attributions_to_annotations(&all_attributions);
-                let mut result = Response::from_text(&full_content, "microsoft-copilot");
-                if let Some(choice) = result.choices.first_mut() {
-                    choice.message.annotations = if annotations.is_empty() {
-                        None
-                    } else {
-                        Some(annotations)
-                    };
-                }
-
-                // Convert attributions to Attachment objects
-                let attachments: Vec<Attachment> = all_attributions
-                    .iter()
-                    .filter_map(|attr| {
-                        attr.see_more_web_url.as_ref().map(|url| {
-                            Attachment::Complex(ComplexAttachment {
-                                url: url.clone(),
-                                preview_text: attr.provider_display_name.clone(),
-                                thumbnail_url: attr.image_web_url.clone(),
-                                name: attr.provider_display_name.clone(),
-                                size: None,
-                                r#type: Some(attr.attribution_type.clone()),
-                                anchor: None,
-                                page: None,
-                            })
+            // Convert attributions to Attachment objects
+            let attachments: Vec<Attachment> = all_attributions
+                .iter()
+                .filter_map(|attr| {
+                    attr.see_more_web_url.as_ref().map(|url| {
+                        Attachment::Complex(ComplexAttachment {
+                            url: url.clone(),
+                            preview_text: attr.provider_display_name.clone(),
+                            thumbnail_url: attr.image_web_url.clone(),
+                            name: attr.provider_display_name.clone(),
+                            size: None,
+                            r#type: Some(attr.attribution_type.clone()),
+                            anchor: None,
+                            page: None,
                         })
                     })
-                    .collect();
+                })
+                .collect();
 
-                context.set_pin_value("result", json!(result)).await?;
-                context
-                    .set_pin_value("response", json!(copilot_response))
-                    .await?;
-                context
-                    .set_pin_value("attachments", json!(attachments))
-                    .await?;
-                context
-                    .set_pin_value("new_conversation_id", json!(response_id))
-                    .await?;
-                context.deactivate_exec_pin("on_stream").await?;
-                context.activate_exec_pin("done").await?;
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                let error = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("HTTP {}: {}", status, error)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
-            Err(e) => {
-                context
-                    .set_pin_value("error_message", json!(e.to_string()))
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
+            context.set_pin_value("result", json!(result)).await?;
+            context
+                .set_pin_value("response", json!(copilot_response))
+                .await?;
+            context
+                .set_pin_value("attachments", json!(attachments))
+                .await?;
+            context
+                .set_pin_value("new_conversation_id", json!(response_id))
+                .await?;
+            context.deactivate_exec_pin("on_stream").await?;
+            context.activate_exec_pin("done").await?;
         }
-
-        Ok(())
-    }
-
-    async fn on_update(&self, node: &mut Node, _board: &Board) {
-        // Validate and normalize the timezone input
-        if let Some(pin) = node.get_pin_mut_by_name("timezone")
-            && let Some(ref value_bytes) = pin.default_value
-            && let Ok(value) = flow_like_types::json::from_slice::<Value>(value_bytes)
-            && let Some(input) = value.as_str()
-            && let Some(normalized) = normalize_timezone(input)
-            && normalized != input
-        {
-            pin.set_default_value(Some(json!(normalized)));
+        Ok(resp) => {
+            let status = resp.status();
+            let error = resp.text().await.unwrap_or_default();
+            context
+                .set_pin_value(
+                    "error_message",
+                    json!(format!("HTTP {}: {}", status, error)),
+                )
+                .await?;
+            context.activate_exec_pin("error").await?;
+        }
+        Err(e) => {
+            context
+                .set_pin_value("error_message", json!(e.to_string()))
+                .await?;
+            context.activate_exec_pin("error").await?;
         }
     }
+
+    Ok(())
 }
 
 // =============================================================================

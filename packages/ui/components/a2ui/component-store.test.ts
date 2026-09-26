@@ -4,7 +4,7 @@ import type { SurfaceComponent } from "./types";
 
 const text = (id: string, value: string): SurfaceComponent => ({
 	id,
-	component: { type: "text", content: { literalString: value } },
+	component: { id, type: "text", content: { literalString: value } },
 });
 
 function surface(...components: SurfaceComponent[]) {

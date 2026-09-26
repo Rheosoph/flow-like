@@ -25,6 +25,7 @@ impl NodeLogic for WaitForTemplateNode {
             "Waits for a template to appear on screen",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "waitForTemplate");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -57,6 +58,14 @@ impl NodeLogic for WaitForTemplateNode {
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "template",
+            "Template",
+            "Template image from any FlowPath store; preferred over a local path",
+            VariableType::Struct,
+        )
+        .set_schema::<flow_like_catalog_core::FlowPath>();
 
         node.add_input_pin(
             "confidence",
@@ -103,38 +112,37 @@ impl NodeLogic for WaitForTemplateNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use rustautogui::MatchMode;
         use std::time::{Duration, Instant};
 
         context.deactivate_exec_pin("exec_found").await?;
         context.deactivate_exec_pin("exec_timeout").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
-        let template_path: String = context.evaluate_pin("template_path").await?;
+        session.ensure_active(context).await?;
+        let template_bytes = crate::types::screen_match::load_template(context).await?;
         let confidence: f64 = context.evaluate_pin("confidence").await?;
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
         let poll_interval_ms: i64 = context.evaluate_pin("poll_interval_ms").await?;
 
-        let autogui = session.get_autogui(context).await?;
         let start = Instant::now();
-        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-        let poll_interval = Duration::from_millis(poll_interval_ms.max(0) as u64);
+        let timeout = Duration::from_millis(u64::try_from(timeout_ms)?.min(3_600_000));
+        let poll_interval = Duration::from_millis(poll_interval_ms.clamp(10, 10_000) as u64);
 
         loop {
-            {
-                let mut gui = autogui.lock().await;
-
-                gui.prepare_template_from_file(&template_path, None, MatchMode::Segmented)
-                    .map_err(|e| flow_like_types::anyhow!("Failed to prepare template: {}", e))?;
-
-                if let Ok(Some(matches)) = gui.find_image_on_screen(confidence as f32)
-                    && let Some((x, y, _conf)) = matches.first()
-                {
-                    context.set_pin_value("x", json!(*x as i64)).await?;
-                    context.set_pin_value("y", json!(*y as i64)).await?;
-                    context.activate_exec_pin("exec_found").await?;
-                    return Ok(());
-                }
+            context.check_cancelled()?;
+            session.ensure_active(context).await?;
+            let matches = crate::types::screen_match::match_desktop_async(
+                template_bytes.clone(),
+                confidence,
+                -2,
+            )
+            .await?;
+            if let Some(&(px, py, _)) = matches.first() {
+                let (x, y) = (px, py);
+                context.set_pin_value("x", json!(x)).await?;
+                context.set_pin_value("y", json!(y)).await?;
+                context.activate_exec_pin("exec_found").await?;
+                return Ok(());
             }
 
             if start.elapsed() >= timeout {
@@ -144,7 +152,7 @@ impl NodeLogic for WaitForTemplateNode {
                 return Ok(());
             }
 
-            tokio::time::sleep(poll_interval).await;
+            super::branch::delay(context, poll_interval).await?;
         }
     }
 
@@ -175,6 +183,7 @@ impl NodeLogic for WaitForColorNode {
             "Waits for a specific color to appear at a position",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "waitForColor");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -265,43 +274,32 @@ impl NodeLogic for WaitForColorNode {
         context.deactivate_exec_pin("exec_timeout").await?;
 
         let _session: AutomationSession = context.evaluate_pin("session").await?;
+        _session.ensure_active(context).await?;
         let x: i64 = context.evaluate_pin("x").await?;
         let y: i64 = context.evaluate_pin("y").await?;
         let target_r: i64 = context.evaluate_pin("red").await?;
         let target_g: i64 = context.evaluate_pin("green").await?;
         let target_b: i64 = context.evaluate_pin("blue").await?;
         let tolerance: i64 = context.evaluate_pin("tolerance").await?;
+        if [target_r, target_g, target_b, tolerance]
+            .iter()
+            .any(|v| !(0..=255).contains(v))
+        {
+            return Err(flow_like_types::anyhow!(
+                "Color channels and tolerance must be between 0 and 255"
+            ));
+        }
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
 
-        use xcap::Monitor;
-
         let start = Instant::now();
-        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+        let timeout = Duration::from_millis(u64::try_from(timeout_ms)?.min(3_600_000));
 
         loop {
-            let color_matches = {
-                let monitors = Monitor::all()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to enumerate monitors: {}", e))?;
-                let monitor = monitors
-                    .first()
-                    .ok_or_else(|| flow_like_types::anyhow!("No monitors found"))?;
-                let image = monitor
-                    .capture_image()
-                    .map_err(|e| flow_like_types::anyhow!("Failed to capture screen: {}", e))?;
-
-                if x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() {
-                    let pixel = image.get_pixel(x as u32, y as u32);
-                    let r = pixel[0] as i64;
-                    let g = pixel[1] as i64;
-                    let b = pixel[2] as i64;
-
-                    (r - target_r).abs() <= tolerance
-                        && (g - target_g).abs() <= tolerance
-                        && (b - target_b).abs() <= tolerance
-                } else {
-                    false
-                }
-            };
+            context.check_cancelled()?;
+            let [r, g, b] = crate::types::screen_match::capture_pixel(x, y)?;
+            let color_matches = (r as i64 - target_r).abs() <= tolerance
+                && (g as i64 - target_g).abs() <= tolerance
+                && (b as i64 - target_b).abs() <= tolerance;
 
             if color_matches {
                 context.activate_exec_pin("exec_found").await?;
@@ -313,7 +311,7 @@ impl NodeLogic for WaitForColorNode {
                 return Ok(());
             }
 
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            super::branch::delay(context, Duration::from_millis(500)).await?;
         }
     }
 
@@ -344,6 +342,7 @@ impl NodeLogic for DelayNode {
             "Pauses execution for a specified duration",
             "Automation/RPA",
         );
+        node.set_version(1);
         node.set_flowscript_name("rpa", "wait");
         node.add_icon("/flow/icons/rpa.svg");
 
@@ -379,10 +378,16 @@ impl NodeLogic for DelayNode {
 
         let duration_ms: i64 = context.evaluate_pin("duration_ms").await?;
 
-        flow_like_types::tokio::time::sleep(std::time::Duration::from_millis(
-            duration_ms.max(0) as u64
-        ))
-        .await;
+        if !(0..=3_600_000).contains(&duration_ms) {
+            return Err(flow_like_types::anyhow!(
+                "Duration must be between 0 and 3600000 ms"
+            ));
+        }
+        super::branch::delay(
+            context,
+            std::time::Duration::from_millis(duration_ms as u64),
+        )
+        .await?;
 
         context.activate_exec_pin("exec_out").await?;
 

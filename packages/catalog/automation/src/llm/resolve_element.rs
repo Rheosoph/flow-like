@@ -101,7 +101,7 @@ impl NodeLogic for LLMResolveElementNode {
         );
         node.set_flowscript_name("automation.llm", "resolveElement");
         node.add_icon("/flow/icons/bot-search.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -136,8 +136,10 @@ impl NodeLogic for LLMResolveElementNode {
             "candidates",
             "Candidates",
             "Array of element candidates to choose from",
-            VariableType::Generic,
-        );
+            VariableType::Struct,
+        )
+        .set_schema::<ElementCandidate>()
+        .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node.add_input_pin(
             "intent",

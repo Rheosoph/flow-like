@@ -12,6 +12,7 @@ import {
 	toUploadTasks,
 	uploadToSignedUrl,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { stabilizeSignedUrls } from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -141,7 +142,7 @@ export class StorageState implements IStorageState {
 			this.backend.auth,
 		);
 
-		return items;
+		return asArray(items);
 	}
 	async listStorageItemsUser(
 		appId: string,
@@ -179,7 +180,7 @@ export class StorageState implements IStorageState {
 			this.backend.auth,
 		);
 
-		return items;
+		return asArray(items);
 	}
 	async deleteStorageItems(appId: string, prefixes: string[]): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
@@ -518,19 +519,24 @@ export class StorageState implements IStorageState {
 			});
 
 			if (path && file.url) {
+				// Fetch before truncating, so a failed download never empties the target file.
+				const fileStream = await fetch(file.url);
+				if (!fileStream.ok) {
+					throw new Error(
+						`Downloading ${file.prefix} failed with HTTP ${fileStream.status}`,
+					);
+				}
+				const reader = fileStream.body?.getReader();
+				if (!reader) {
+					console.error(`Failed to read file stream for ${file.prefix}`);
+					continue;
+				}
+
 				const fileHandle = await open(path, {
 					create: true,
 					write: true,
 					truncate: true,
 				});
-
-				const fileStream = await fetch(file.url);
-				const reader = fileStream.body?.getReader();
-				if (!reader) {
-					console.error(`Failed to read file stream for ${file.prefix}`);
-					await fileHandle.close();
-					continue;
-				}
 
 				try {
 					while (true) {

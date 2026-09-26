@@ -72,18 +72,78 @@ pub fn schema_covers(output: &str, input: &str) -> bool {
     if output == input {
         return true;
     }
-    let (Ok(output), Ok(input)) = (
+    let (Ok(mut output), Ok(mut input)) = (
         flow_like_types::json::from_str::<Value>(output),
         flow_like_types::json::from_str::<Value>(input),
     ) else {
         return false;
     };
+    split_type_unions(&mut output);
+    split_type_unions(&mut input);
     Coverage {
         output_root: &output,
         input_root: &input,
         assumed: HashSet::new(),
     }
     .covers(&output, &input, 0)
+}
+
+/// Keywords holding one sub-schema that coverage compares structurally.
+const SUBSCHEMA_KEYWORDS: &[&str] = &["additionalProperties", "items"];
+/// Keywords holding a map of sub-schemas that coverage compares structurally.
+const SUBSCHEMA_MAP_KEYWORDS: &[&str] = &["properties", "$defs", "definitions"];
+/// Keywords holding a list of sub-schemas that coverage compares structurally.
+const SUBSCHEMA_LIST_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf"];
+
+/// Rewrite every `{type: [A, B, …], ..rest}` into `{anyOf: [{type: A, ..rest}, {type: B, ..rest}]}`.
+///
+/// A `type` list is a union, but coverage only splits explicit `anyOf`/`oneOf` outputs. Without
+/// this, serde's `Option<Vec<T>>` (`{type: ["array", "null"], items: …}`) is never covered by the
+/// `anyOf: [{type: array, …}, {type: null}]` the very same field projects to through FlowScript.
+/// Annotations — `$defs` among them — stay on the outer object, so `$ref`s keep resolving. Both
+/// roots are rewritten, so keywords compared verbatim still compare like with like; only
+/// structurally compared sub-schemas are visited.
+fn split_type_unions(schema: &mut Value) {
+    match schema {
+        Value::Object(fields) => {
+            for (key, value) in fields.iter_mut() {
+                let key = key.as_str();
+                if SUBSCHEMA_KEYWORDS.contains(&key) && value.is_object() {
+                    split_type_unions(value);
+                } else if SUBSCHEMA_MAP_KEYWORDS.contains(&key)
+                    && let Value::Object(members) = value
+                {
+                    members.values_mut().for_each(split_type_unions);
+                } else if SUBSCHEMA_LIST_KEYWORDS.contains(&key)
+                    && let Value::Array(members) = value
+                {
+                    members.iter_mut().for_each(split_type_unions);
+                }
+            }
+            let Some(Value::Array(kinds)) = fields.get("type") else {
+                return;
+            };
+            if kinds.len() < 2 {
+                return;
+            }
+            let kinds = kinds.clone();
+            let (annotations, rest): (Schema, Schema) = std::mem::take(fields)
+                .into_iter()
+                .filter(|(key, _)| key != "type")
+                .partition(|(key, _)| ANNOTATIONS.contains(&key.as_str()));
+            *fields = annotations;
+            let variants = kinds
+                .into_iter()
+                .map(|kind| {
+                    let mut variant = rest.clone();
+                    variant.insert("type".to_string(), kind);
+                    Value::Object(variant)
+                })
+                .collect();
+            fields.insert("anyOf".to_string(), Value::Array(variants));
+        }
+        _ => {}
+    }
 }
 
 struct Coverage<'a> {
@@ -695,5 +755,30 @@ mod tests {
             schema::<crate::bit::Bit>(),
             schema::<CachedEmbeddingModel>()
         ));
+    }
+
+    /// serde renders `Option<Vec<u8>>` as a type list; FlowScript interfaces project the same
+    /// field as `anyOf`. A variable typed with the rendered `Bit` interface must accept a `Bit`.
+    #[test]
+    fn a_type_list_output_is_covered_by_the_equivalent_any_of() {
+        let nullable_bytes = json!({"type": ["array", "null"], "items": {"type": "integer"}});
+        let projection = json!({"anyOf": [
+            {"type": "array", "items": {"type": "integer"}},
+            {"type": "null"}
+        ]});
+        assert!(covers(nullable_bytes.clone(), projection));
+        assert!(!covers(
+            nullable_bytes,
+            json!({"type": "array", "items": {"type": "integer"}})
+        ));
+        assert!(covers(
+            json!({"type": ["string", "null"], "enum": ["a", null]}),
+            json!({"type": ["string", "null"]})
+        ));
+        // Verbatim-compared keywords are left exactly as written.
+        let tuple = json!({"type": "array", "prefixItems": [{"type": "string"}, {"type": ["integer", "null"]}]});
+        let mut described = tuple.clone();
+        described["description"] = json!("a pair");
+        assert!(covers(tuple, described));
     }
 }

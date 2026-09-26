@@ -20,11 +20,16 @@ function page(): IPage {
 		components: [
 			{
 				id: "root",
-				component: { type: "column", children: { explicitList: ["submit"] } },
+				component: {
+					id: "root",
+					type: "column",
+					children: { explicitList: ["submit"] },
+				},
 			},
 			{
 				id: "submit",
 				component: {
+					id: "submit",
 					type: "button",
 					label: { literalString: "Submit" },
 					eventHandlers: {

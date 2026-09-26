@@ -68,12 +68,13 @@ pub async fn app_wasm_nodes_cached(
     Ok(entry)
 }
 
-/// The app's pinned, non-stale packages. This is the cheap half of a catalog resolve; the
-/// expensive half is [`wasm_nodes_for_packages`], which the cache is there to skip.
+/// The app's pinned packages whose licence has not expired. This is the cheap half of a
+/// catalog resolve; the expensive half is [`wasm_nodes_for_packages`], which the cache is
+/// there to skip. An expiring pin leaves the set, so the pin epoch moves with it.
 async fn app_packages(state: &AppState, app_id: &str) -> Result<Vec<app_package::Model>, ApiError> {
     Ok(app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
-        .filter(app_package::Column::Stale.eq(false))
+        .filter(crate::package_license::usable_pins(chrono::Utc::now()))
         .all(&state.db)
         .await?)
 }
@@ -215,6 +216,7 @@ fn package_node_to_node(entry: &PackageNodeEntry, package_id: &str) -> Node {
         alias: None,
         receiver: None,
         pins_collapsed: None,
+        auto_reroute: None,
     };
     node.ensure_flowscript_names();
     node

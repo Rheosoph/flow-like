@@ -3,6 +3,11 @@ FROM rust:1.97.1-bookworm AS builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
+# The worker compiles the audit section of this document and accepts no runtime
+# override. Build it with the same FLOW_LIKE_CONFIG as the sibling API image;
+# the Compose and Kubernetes examples carry the same audit policy.
+ARG FLOW_LIKE_CONFIG=apps/backend/docker-compose/flow-like.config.example.json
+RUN cp "$FLOW_LIKE_CONFIG" /app/flow-like.config.json
 ARG AUDIT_FEATURES=aws,azure,gcp
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}

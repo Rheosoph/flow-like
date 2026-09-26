@@ -30,6 +30,8 @@ pub struct Model {
     #[sea_orm(column_name = "autoUpdate")]
     pub auto_update: bool,
     pub stale: bool,
+    #[sea_orm(column_name = "staleSince")]
+    pub stale_since: Option<DateTimeWithTimeZone>,
     #[sea_orm(
         belongs_to,
         from = "app_id",

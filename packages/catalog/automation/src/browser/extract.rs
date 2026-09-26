@@ -75,23 +75,25 @@ impl NodeLogic for BrowserGetTextNode {
             VariableType::String,
         );
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
 
         let text = element
             .text()
@@ -190,24 +192,26 @@ impl NodeLogic for BrowserGetAttributeNode {
             VariableType::String,
         );
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let attribute: String = context.evaluate_pin("attribute").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-        })?;
+        let element = super::selector::find(&driver, &locator)
+            .await
+            .map_err(|e| {
+                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+            })?;
 
         let value = element.attr(&attribute).await.map_err(|e| {
             flow_like_types::anyhow!("Failed to get attribute '{}': {}", attribute, e)
@@ -302,30 +306,32 @@ impl NodeLogic for BrowserGetHtmlNode {
 
         node.add_output_pin("html", "HTML", "HTML content", VariableType::String);
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::prelude::*;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
         let outer_html: bool = context.evaluate_pin("outer_html").await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let html = if selector.is_empty() {
+        let html = if locator.value.is_empty() {
             driver
                 .source()
                 .await
                 .map_err(|e| flow_like_types::anyhow!("Failed to get page source: {}", e))?
         } else {
-            let element = driver.find(By::Css(&selector)).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
-            })?;
+            let element = super::selector::find(&driver, &locator)
+                .await
+                .map_err(|e| {
+                    flow_like_types::anyhow!("Failed to find element '{}': {}", selector, e)
+                })?;
 
             if outer_html {
                 element

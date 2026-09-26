@@ -286,8 +286,13 @@ impl NodeLogic for MLPredictNode {
                     let (refreshed_input, generation) =
                         node_database.load_with_generation(context).await?;
                     if generation != source_generation {
-                        let connection =
-                            refreshed_input.db.read().await.inner().connection().clone();
+                        let connection = refreshed_input
+                            .db
+                            .read()
+                            .await
+                            .inner()
+                            .connection()?
+                            .clone();
                         database = database.reopen(connection).await?;
                         source_generation = generation;
                     }

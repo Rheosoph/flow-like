@@ -1,0 +1,5 @@
+@source "../**/*.{ts,tsx}";
+body {
+	margin: 0;
+	font-family: system-ui, sans-serif;
+}

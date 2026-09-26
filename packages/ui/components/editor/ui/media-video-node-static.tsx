@@ -1,14 +1,11 @@
 "use client";
 
-import type {
-	SlateElementProps,
-	TCaptionElement,
-	TResizableProps,
-	TVideoElement,
-} from "platejs";
+import type { TCaptionElement, TResizableProps, TVideoElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
 import { parseVideoUrl } from "@platejs/media";
-import { NodeApi, SlateElement } from "platejs";
+import { NodeApi } from "platejs";
+import { SlateElement } from "platejs/static";
 import LiteYouTubeEmbed from "react-lite-youtube-embed";
 import ReactPlayer from "react-player";
 import { cn } from "../../../lib";

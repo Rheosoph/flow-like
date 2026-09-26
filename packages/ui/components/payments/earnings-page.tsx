@@ -9,6 +9,7 @@ import { PaymentError, PaymentPage } from "./payment-parts";
 import {
 	type PurchaseOrder,
 	amountInput,
+	orderItemName,
 	parseEuroAmount,
 	paymentMoney,
 } from "./types";
@@ -56,7 +57,7 @@ function SaleRefund({ order }: { order: PurchaseOrder }) {
 		<div className="space-y-3 border-t pt-3">
 			<div className="flex flex-wrap justify-between gap-3">
 				<div>
-					<p className="text-sm font-medium">{order.itemName ?? order.appId}</p>
+					<p className="text-sm font-medium">{orderItemName(order)}</p>
 					<p className="text-xs text-muted-foreground">{order.orderId}</p>
 				</div>
 				<p className="text-sm">{paymentMoney(order.amount, order.currency)}</p>
@@ -285,12 +286,12 @@ function EarningsPageContent() {
 							</div>
 						</div>
 					))}
-					{earnings.data?.entries.length === 0 && previous.length === 0 && (
+					{earnings.data?.entries?.length === 0 && previous.length === 0 && (
 						<p className="text-sm text-muted-foreground">
 							{t("noEarnings", "No payments yet.")}
 						</p>
 					)}
-					{earnings.data?.nextBefore && earnings.data.entries.length >= 50 && (
+					{earnings.data?.nextBefore && earnings.data.entries?.length >= 50 && (
 						<Button
 							variant="outline"
 							disabled={earnings.isFetching}
@@ -311,7 +312,7 @@ function EarningsPageContent() {
 					<CardTitle>{t("saleRefunds", "Marketplace refunds")}</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-4">
-					{sales.data?.orders.map((order) => (
+					{sales.data?.orders?.map((order) => (
 						<div key={order.orderId} className="space-y-2">
 							<p className="text-xs text-muted-foreground">
 								{order.platformOwned
@@ -324,7 +325,7 @@ function EarningsPageContent() {
 							<SaleRefund order={order} />
 						</div>
 					))}
-					{sales.data?.orders.length === 0 && (
+					{sales.data?.orders?.length === 0 && (
 						<p className="text-sm text-muted-foreground">
 							{t("noSales", "No marketplace sales yet.")}
 						</p>

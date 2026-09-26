@@ -3,7 +3,7 @@ use crate::state::FlowLikeState;
 use crate::utils::compression::{compress_to_file_json, from_compressed_json};
 use crate::utils::download::download_bit;
 use flow_like_model_provider::history::History;
-use flow_like_model_provider::llm::{CompletionClientDyn, CompletionModelHandle};
+use flow_like_model_provider::llm::{AgentSettings, CompletionClientDyn, CompletionModelHandle};
 use flow_like_model_provider::provider::{
     EmbeddingModelProvider, ImageEmbeddingModelProvider, ModelProvider,
 };
@@ -1747,12 +1747,18 @@ impl Bit {
         context: &mut ExecutionContext,
         history: &Option<History>,
     ) -> flow_like_types::Result<AgentBuilder<CompletionModelHandle<'a>>> {
-        let (model_name, additional_params, completion_client) =
+        let (model_name, settings, completion_client) =
             self.completion_model(context, history).await?;
         let mut agent_builder = completion_client.agent(&model_name);
 
-        if let Some(additional_params) = additional_params {
-            agent_builder = agent_builder.additional_params(additional_params);
+        if let Some(params) = settings.params {
+            agent_builder = agent_builder.additional_params(params);
+        }
+        if let Some(temperature) = settings.temperature {
+            agent_builder = agent_builder.temperature(temperature);
+        }
+        if let Some(max_tokens) = settings.max_tokens {
+            agent_builder = agent_builder.max_tokens(max_tokens);
         }
 
         Ok(agent_builder)
@@ -1764,29 +1770,25 @@ impl Bit {
         history: &Option<History>,
     ) -> flow_like_types::Result<(
         String,
-        Option<flow_like_types::Value>,
+        AgentSettings,
         Box<dyn CompletionClientDyn + Send + Sync + 'a>,
     )> {
-        let (model_name, additional_params, completion_client) = {
-            let model_factory = context.app_state.model_factory.clone();
-            let model = model_factory
-                .lock()
-                .await
-                .build(
-                    self,
-                    context.app_state.clone(),
-                    context.token.clone(),
-                    context.model_usage_context(),
-                )
-                .await?;
-            let additional_params = model.additional_params(history);
-            let default_model = model.default_model().await.unwrap_or_default();
-            let provider = model.provider().await?;
-            let completion = provider.into_client();
-            (default_model, additional_params, completion)
-        };
+        let model_factory = context.app_state.model_factory.clone();
+        let model = model_factory
+            .lock()
+            .await
+            .build(
+                self,
+                context.app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
+            .await?;
+        let settings = model.agent_settings(history)?;
+        let model_name = model.default_model().await.unwrap_or_default();
+        let completion_client = model.provider().await?.into_client();
 
-        Ok((model_name, additional_params, completion_client))
+        Ok((model_name, settings, completion_client))
     }
 }
 

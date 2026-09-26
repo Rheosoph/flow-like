@@ -9,6 +9,7 @@ mod index;
 pub mod join_queue;
 pub mod metadata;
 pub mod prerun_check;
+pub mod pricing;
 pub mod publish;
 pub mod purchase;
 pub mod recompile;
@@ -227,6 +228,15 @@ pub fn routes() -> Router<AppState> {
             post(join_queue::accept_access_request).delete(join_queue::reject_access_request),
         )
         .route("/package/{package_id}/purchase", post(purchase::purchase))
+        .route("/package/{package_id}/price", patch(pricing::update_price))
+        .route(
+            "/package/{package_id}/marketplace/checkout",
+            post(crate::payments::marketplace::checkout_package),
+        )
+        .route(
+            "/package/{package_id}/marketplace/terms",
+            post(crate::payments::marketplace::accept_package_seller_terms),
+        )
         .nest("/package/{package_id}/comments", comments::routes())
         .route(
             "/invitation/{invitation_id}/accept",

@@ -1,11 +1,13 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { SlateEditor, SlateElementProps, TElement } from "platejs";
+import type { SlateEditor, TElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 
 import { BaseTocPlugin, type Heading, isHeading } from "@platejs/toc";
 import { cva } from "class-variance-authority";
-import { NodeApi, SlateElement } from "platejs";
+import { NodeApi } from "platejs";
+import { SlateElement } from "platejs/static";
 
 import { Button } from "../../..";
 

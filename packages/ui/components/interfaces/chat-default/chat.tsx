@@ -47,6 +47,38 @@ function getInteractionCreatedAt(interaction: IInteractionRequest): number {
 	return (interaction.expires_at - interaction.ttl_seconds) * 1000;
 }
 
+function findAnchorMessage(
+	sortedMessages: readonly IMessage[],
+	createdAt: number,
+): IMessage | undefined {
+	let anchor: IMessage | undefined;
+	for (const message of sortedMessages) {
+		if (message.timestamp > createdAt) break;
+		anchor = message;
+	}
+	return anchor;
+}
+
+const noopRespond = () => {};
+
+function SettledInteractions({
+	interactions,
+	onRespond,
+}: Readonly<{
+	interactions: IInteractionRequest[] | undefined;
+	onRespond?: (interactionId: string, value: unknown) => void;
+}>) {
+	if (!interactions?.length) return null;
+	return (
+		<div className="mt-2 flex w-full flex-col items-start">
+			<InteractionGroup
+				interactions={interactions}
+				onRespond={onRespond ?? noopRespond}
+			/>
+		</div>
+	);
+}
+
 function getMessageTextContent(message: IMessage): string {
 	const content = message.inner.content;
 	if (typeof content === "string") return content;
@@ -262,42 +294,52 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				.sort((a, b) => a.timestamp - b.timestamp);
 		}, [localMessages, currentMessages]);
 
-		// Interactions are rendered separately after the live bubbles to avoid ordering issues
-		const interactionItems = useMemo<ChatItem[]>(() => {
-			if (!activeInteractions || activeInteractions.length === 0) return [];
-
+		// Pending interactions stay at the bottom where the user answers them; settled ones fold
+		// into a compact group under the message that was current when they were asked.
+		const { interactionItems, settledByMessageId } = useMemo(() => {
 			const items: ChatItem[] = [];
-			let settledGroup: IInteractionRequest[] = [];
+			const anchored = new Map<string, IInteractionRequest[]>();
+			if (!activeInteractions || activeInteractions.length === 0) {
+				return { interactionItems: items, settledByMessageId: anchored };
+			}
 
-			const flushGroup = () => {
-				if (settledGroup.length > 0) {
-					items.push({
-						type: "interaction-group",
-						data: settledGroup,
-						timestamp: 0,
-					});
-					settledGroup = [];
-				}
-			};
+			const anchors = [
+				...chatItems.map((item) => item.data),
+				...currentMessages,
+			].sort((a, b) => a.timestamp - b.timestamp);
+			const unanchored: IInteractionRequest[] = [];
 
 			for (const interaction of activeInteractions) {
-				const remaining = Math.max(
-					0,
-					Math.floor((interaction.expires_at * 1000 - Date.now()) / 1000),
-				);
-				const isPending = interaction.status === "pending" && remaining > 0;
-
-				if (!isPending) {
-					settledGroup.push(interaction);
-				} else {
-					flushGroup();
+				const isPending =
+					interaction.status === "pending" &&
+					interaction.expires_at * 1000 > Date.now();
+				if (isPending) {
 					items.push({ type: "interaction", data: interaction, timestamp: 0 });
+					continue;
 				}
+				const anchor = findAnchorMessage(
+					anchors,
+					getInteractionCreatedAt(interaction),
+				);
+				if (!anchor) {
+					unanchored.push(interaction);
+					continue;
+				}
+				const group = anchored.get(anchor.id);
+				if (group) group.push(interaction);
+				else anchored.set(anchor.id, [interaction]);
 			}
-			flushGroup();
 
-			return items;
-		}, [activeInteractions]);
+			if (unanchored.length > 0) {
+				items.unshift({
+					type: "interaction-group",
+					data: unanchored,
+					timestamp: 0,
+				});
+			}
+
+			return { interactionItems: items, settledByMessageId: anchored };
+		}, [activeInteractions, chatItems, currentMessages]);
 
 		useEffect(() => {
 			isSendingRef.current = isSending;
@@ -592,6 +634,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										widgetSnapshots={widgetSnapshots}
 									/>
 								</MessageShell>
+								<SettledInteractions
+									interactions={settledByMessageId.get(item.data.id)}
+									onRespond={onRespondToInteraction}
+								/>
 							</div>
 						))}
 						{isSending &&
@@ -656,6 +702,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									boardId={boardId}
 									eventId={eventId}
 									widgetSnapshots={widgetSnapshots}
+								/>
+								<SettledInteractions
+									interactions={settledByMessageId.get(liveMessage.id)}
+									onRespond={onRespondToInteraction}
 								/>
 							</div>
 						))}

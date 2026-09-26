@@ -24,8 +24,10 @@ import { useSearchParams } from "next/navigation";
 import type { UserManagerSettings } from "oidc-client-ts";
 import {
 	type ReactElement,
+	type RefObject,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -42,6 +44,7 @@ import {
 import {
 	type HostedTarget,
 	hostedNavigationPath,
+	isHostedQueryPath,
 	parseHostedTarget,
 } from "../lib/hosted-route";
 
@@ -130,7 +133,19 @@ export function HostedFrontend() {
 	);
 }
 
-function HostedSession({ initialData }: { initialData?: HostedBootstrap }) {
+type HostedRequest = ReturnType<typeof createHostedRequest>;
+
+function tokenBoundRequest(
+	target: HostedTarget,
+	token: RefObject<string | undefined>,
+): HostedRequest {
+	return (suffix, init) =>
+		createHostedRequest(target, token.current)(suffix, init);
+}
+
+export function HostedSession({
+	initialData,
+}: { initialData?: HostedBootstrap }) {
 	const auth = useAuth();
 	const searchParams = useSearchParams();
 	const [target] = useState<HostedTarget | null>(() =>
@@ -138,30 +153,43 @@ function HostedSession({ initialData }: { initialData?: HostedBootstrap }) {
 			? null
 			: parseHostedTarget(new URL(window.location.href)),
 	);
-	const [data, setData] = useState<HostedBootstrap | undefined>(initialData);
+	const [loaded, setLoaded] = useState<{
+		session: string | null;
+		data: HostedBootstrap;
+	}>();
 	const [error, setError] = useState<string>();
 	const redirecting = useRef(false);
 	const token = auth.user?.access_token;
+	const tokenRef = useRef(token);
+	useLayoutEffect(() => {
+		tokenRef.current = token;
+	}, [token]);
+	const session = auth.isAuthenticated ? (auth.user?.profile.sub ?? "") : null;
+	const data =
+		initialData ?? (loaded?.session === session ? loaded.data : undefined);
+	const hasData = data !== undefined;
+	const settled = !auth.isLoading && !auth.activeNavigator;
 	const request = useMemo(
-		() => (target ? createHostedRequest(target, token) : null),
-		[target, token],
+		() => (target ? tokenBoundRequest(target, tokenRef) : null),
+		[target],
 	);
 	useEffect(() => {
-		if (initialData) return;
-		if (!request || auth.isLoading || auth.activeNavigator) return;
+		if (initialData || hasData || !request || !settled) return;
 		const controller = new AbortController();
-		setData(undefined);
 		setError(undefined);
 		(async () => {
 			try {
 				const response = await request("", { signal: controller.signal });
-				setData((await response.json()) as HostedBootstrap);
+				setLoaded({
+					session,
+					data: (await response.json()) as HostedBootstrap,
+				});
 			} catch (cause) {
 				if (controller.signal.aborted) return;
 				if (
 					cause instanceof HostedHttpError &&
 					cause.status === 401 &&
-					!auth.isAuthenticated &&
+					session === null &&
 					!redirecting.current
 				) {
 					redirecting.current = true;
@@ -189,23 +217,11 @@ function HostedSession({ initialData }: { initialData?: HostedBootstrap }) {
 			}
 		})();
 		return () => controller.abort();
-	}, [
-		initialData,
-		request,
-		auth.isLoading,
-		auth.isAuthenticated,
-		auth.activeNavigator,
-		auth.signinRedirect,
-	]);
+	}, [initialData, hasData, request, settled, session, auth.signinRedirect]);
+	const variant = data?.bootstrap.servedVariant ?? "stable";
 	const runtimeRequest = useMemo(
-		() =>
-			target && data
-				? createHostedRequest(
-						{ ...target, variant: data.bootstrap.servedVariant ?? "stable" },
-						token,
-					)
-				: null,
-		[target, data, token],
+		() => (target ? tokenBoundRequest({ ...target, variant }, tokenRef) : null),
+		[target, variant],
 	);
 	if (auth.error) return <Status error>{auth.error.message}</Status>;
 	if (error) return <Status error>{error}</Status>;
@@ -241,7 +257,7 @@ function HostedRuntime({
 }: {
 	data: HostedBootstrap;
 	target: HostedTarget;
-	request: ReturnType<typeof createHostedRequest>;
+	request: HostedRequest;
 	queryParams: Record<string, string>;
 }) {
 	const backend = useMemo(
@@ -288,10 +304,11 @@ function HostedRuntime({
 					await request("/routes")
 				).json()) as HostedRoute[];
 				const path = hostedNavigationPath(
+					target.app,
 					route,
 					routes,
 					params,
-					new URLSearchParams(window.location.search).has("event"),
+					isHostedQueryPath(window.location.pathname),
 				);
 				if (replace) window.location.replace(path);
 				else window.location.assign(path);
@@ -303,7 +320,7 @@ function HostedRuntime({
 				);
 			}
 		},
-		[request],
+		[request, target.app],
 	);
 	useEffect(() => {
 		const previousBackend = useBackendStore.getState().backend;
@@ -339,7 +356,7 @@ function HostedRuntime({
 										css={bootstrap.appCustomCss}
 										scopeSelector="#hosted-interface"
 									/>
-									{target.kind !== "u" && (
+									{data.kind !== "u" && (
 										<header className="flex min-h-14 shrink-0 items-center gap-2 border-b px-4">
 											<span className="truncate font-medium">{event.name}</span>
 											<nav className="flex flex-1 items-center gap-2">
@@ -349,11 +366,11 @@ function HostedRuntime({
 										</header>
 									)}
 									<Container ref={sidebarRef}>
-										{target.kind === "c" ? (
+										{data.kind === "c" ? (
 											<ChatFeedbackEnabledContext.Provider value={false}>
 												<ChatInterface {...props} />
 											</ChatFeedbackEnabledContext.Provider>
-										) : target.kind === "f" ? (
+										) : data.kind === "f" ? (
 											<GenericEventFormInterface {...props} />
 										) : bootstrap.page ? (
 											<PageInterface

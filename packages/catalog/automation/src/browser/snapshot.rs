@@ -412,22 +412,22 @@ impl NodeLogic for BrowserGetElementSnapshotNode {
             VariableType::Boolean,
         );
 
+        super::selector::add_locator_pin(&mut node);
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use thirtyfour::By;
-
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("exec_not_found").await?;
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let selector: String = context.evaluate_pin("selector").await?;
+        let locator = super::selector::evaluate_locator(context, &selector).await?;
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let element = match driver.find(By::Css(&selector)).await {
+        let element = match super::selector::find(&driver, &locator).await {
             Ok(el) => el,
             Err(_) => {
                 context.set_pin_value("session_out", json!(session)).await?;

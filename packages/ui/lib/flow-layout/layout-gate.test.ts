@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { INode } from "../schema/flow/node";
 import { computeFlowLayoutDetailed } from "./index";
 import { measureLayerBox, measureNodeBox } from "./measure";
-import { type Scenario, allScenarios } from "./test-fixtures";
+import { GraphBuilder, type Scenario, allScenarios } from "./test-fixtures";
 import type { AutoLayoutInput, LayoutStyle } from "./types";
 
 const STYLES: LayoutStyle[] = ["compact", "balanced", "expanded"];
@@ -25,9 +25,12 @@ function buildRects(
 
 	for (const [id, position] of positions) {
 		const node = byId.get(id);
-		const box = entityIds.has(id)
-			? measureLayerBox(input.boardLayers?.[id] ?? ({ pins: {} } as never))
-			: measureNodeBox(node as INode);
+		const measured = input.nodeSizes?.get(id);
+		const box = measured
+			? { width: measured[0], height: measured[1] }
+			: entityIds.has(id)
+				? measureLayerBox(input.boardLayers?.[id] ?? ({ pins: {} } as never))
+				: measureNodeBox(node as INode);
 		rects.push({
 			id,
 			x: position[0],
@@ -183,6 +186,108 @@ describe("layout gate", () => {
 		const result = computeFlowLayoutDetailed(cycle.input, "compact");
 		expect(performance.now() - started).toBeLessThan(50);
 		expect(result.positions.size).toBe(cycle.input.layerNodes.length);
+	});
+});
+
+describe("layout gate: routed nested branches", () => {
+	function fixture(): AutoLayoutInput {
+		const graph = new GraphBuilder();
+		graph.exec("root", {
+			start: true,
+			execIn: false,
+			execOuts: ["upper", "lower"],
+		});
+		graph.exec("nested", { execOuts: ["first", "second"] });
+		for (const id of [
+			"upper-short",
+			"upper-long",
+			"upper-tail",
+			"lower",
+			"lower-tail",
+			"join",
+		])
+			graph.exec(id);
+		graph.connect("root:upper", "nested:exec-in");
+		graph.connect("root:lower", "lower:exec-in");
+		graph.connect("nested:first", "upper-short:exec-in");
+		graph.connect("nested:second", "upper-long:exec-in");
+		graph.execLink("upper-long", "upper-tail");
+		graph.execLink("lower", "lower-tail");
+		graph.execLink("upper-short", "join");
+		graph.execLink("upper-tail", "join");
+		graph.execLink("lower-tail", "join");
+		return graph.build({
+			nodeSizes: new Map([
+				["upper-long", [205.5, 200.5]],
+				["lower", [160.5, 177.25]],
+			]),
+		});
+	}
+
+	test("keeps unequal paths separated and stable with fractional measured sizes", () => {
+		let input = fixture();
+		const first = computeFlowLayoutDetailed(input, "routed");
+		const rects = buildRects(input, first.positions);
+		expect(first.positions.size).toBe(input.layerNodes.length);
+		expect(countOverlaps(rects)).toEqual([]);
+		const columns = new Map<number, Rect[]>();
+		for (const rect of rects) {
+			const column = first.diagnostics.columns.get(rect.id);
+			if (column === undefined) throw new Error("Missing fixture column");
+			const members = columns.get(column) ?? [];
+			members.push(rect);
+			columns.set(column, members);
+		}
+		for (const members of columns.values()) {
+			members.sort((a, b) => a.y - b.y);
+			for (let index = 1; index < members.length; index++) {
+				const previous = members[index - 1];
+				// Integer placement can round a fractional node height up by half a pixel.
+				expect(
+					members[index].y - previous.y - previous.height,
+				).toBeGreaterThanOrEqual(71.5);
+			}
+		}
+		for (const seed of [1, 7, 99]) {
+			input = reapply(input, first.positions);
+			input.layerNodes = shuffled(input.layerNodes, seed);
+			const next = computeFlowLayoutDetailed(input, "routed");
+			expect(serialise(next.positions)).toBe(serialise(first.positions));
+		}
+	});
+
+	test("keeps scoped nested branches clear of unselected nodes without layout drift", () => {
+		const original = fixture();
+		const arranged = computeFlowLayoutDetailed(original, "routed");
+		const only = new Set([
+			"nested",
+			"upper-short",
+			"upper-long",
+			"upper-tail",
+			"join",
+		]);
+		const obstacles = buildRects(original, arranged.positions).filter(
+			(rect) => !only.has(rect.id),
+		);
+		let input: AutoLayoutInput = {
+			...reapply(original, arranged.positions),
+			only,
+			obstacles,
+		};
+		const unselected = input.layerNodes.filter((node) => !only.has(node.id));
+		const first = computeFlowLayoutDetailed(input, "routed");
+		expect(new Set(first.positions.keys())).toEqual(only);
+		expect(
+			countOverlaps([...buildRects(input, first.positions), ...obstacles]),
+		).toEqual([]);
+		for (let run = 0; run < 3; run++) {
+			input = reapply(input, first.positions);
+			const next = computeFlowLayoutDetailed(input, "routed");
+			expect(serialise(next.positions)).toBe(serialise(first.positions));
+			expect(input.layerNodes.filter((node) => !only.has(node.id))).toEqual(
+				unselected,
+			);
+		}
 	});
 });
 

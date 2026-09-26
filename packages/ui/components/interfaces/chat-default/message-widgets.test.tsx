@@ -7,13 +7,20 @@ import type { IChatWidget, IMessage } from "./chat-db";
 
 const rendered: Surface[] = [];
 const scheduled: string[] = [];
+// bun keeps a module mock for every later file in the process, so both are put back in afterAll.
+const actualRenderer = { ...(await import("../../a2ui/A2UIRenderer")) };
+const actualWidgetSnapshot = {
+	...(await import("../../../lib/widget-snapshot")),
+};
 mock.module("../../a2ui/A2UIRenderer", () => ({
+	...actualRenderer,
 	A2UIRenderer: ({ surface }: { surface: Surface }) => {
 		rendered.push(surface);
 		return <div data-probe={surface.id} />;
 	},
 }));
 mock.module("../../../lib/widget-snapshot", () => ({
+	...actualWidgetSnapshot,
 	registerWidgetSnapshotSource: () => {},
 	scheduleWidgetSnapshot: (instanceId: string, signature: string) => {
 		scheduled.push(`${instanceId}@${signature}`);
@@ -21,7 +28,11 @@ mock.module("../../../lib/widget-snapshot", () => ({
 	unregisterWidgetSnapshotSource: () => {},
 	widgetSnapshotAttribute: () => ({}),
 }));
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../a2ui/A2UIRenderer", () => actualRenderer);
+	mock.module("../../../lib/widget-snapshot", () => actualWidgetSnapshot);
+});
 
 function widget(updates: unknown[] = []): IChatWidget {
 	return {
@@ -93,8 +104,8 @@ async function setup() {
 		IS_REACT_ACT_ENVIRONMENT: true,
 	});
 	const { createRoot } = await import("react-dom/client");
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const container = document.createElement("div");
+	document.body.append(container);
 	return { container, root: createRoot(container) };
 }
 

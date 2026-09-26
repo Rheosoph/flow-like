@@ -192,7 +192,10 @@ fn native_nodes() -> Vec<Arc<dyn NodeLogic>> {
                 construct::ConstructArrayNode, get::GetArrayElementNode, len::ArrayLengthNode,
                 push::PushArrayNode,
             },
-            bool::{and::BoolAnd, equal::BoolEqual, not::BoolNot, or::BoolOr, xor::BoolXor},
+            bool::{
+                and::BoolAnd, equal::BoolEqual, not::BoolNot, or::BoolOr, unequal::BoolUnequalNode,
+                xor::BoolXor,
+            },
             float::{
                 add::AddFloatNode, divide::DivideFloatNode, equal::EqualFloatNode,
                 gt::GreaterThanFloatNode, gte::GreaterThanOrEqualFloatNode, lt::LessThanFloatNode,
@@ -232,6 +235,7 @@ fn native_nodes() -> Vec<Arc<dyn NodeLogic>> {
         Arc::new(BoolOr::new()),
         Arc::new(BoolNot::new()),
         Arc::new(BoolEqual::new()),
+        Arc::new(BoolUnequalNode::new()),
         Arc::new(BoolXor::new()),
         Arc::new(SelectNode::new()),
         Arc::new(AddFloatNode::new()),
@@ -1218,6 +1222,7 @@ mod tests {
                 ("String", "!=") => json!(true),
                 ("String", "+") => json!("AbaB"),
                 ("Boolean", "==") => json!(true),
+                ("Boolean", "!=") => json!(false),
                 ("Boolean", "&&" | "||" | "^") => json!(false),
                 ("Integer" | "Float", "==" | "<" | "<=") => json!(false),
                 ("Integer" | "Float", "!=" | ">" | ">=") => json!(true),

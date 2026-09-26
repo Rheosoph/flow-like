@@ -10,6 +10,7 @@ import {
 	KeyIcon,
 	LogInIcon,
 	LogOut,
+	Server,
 	SettingsIcon,
 	Sparkles,
 	ZapIcon,
@@ -212,6 +213,14 @@ export function AccountMenu({
 							{t("settings", "Settings")}
 						</Link>
 					</DropdownMenuItem>
+					{signedIn && (
+						<DropdownMenuItem asChild className={itemClass}>
+							<Link href="/settings/devices">
+								<Server />
+								{t("devices", "Devices")}
+							</Link>
+						</DropdownMenuItem>
+					)}
 				</DropdownMenuGroup>
 				{signedIn && developerMode && (
 					<>

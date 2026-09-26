@@ -4,7 +4,9 @@
 //! Rig's Responses client appends `/responses` to the base URL that hosted Bits
 //! already point at (`{api}/api/v1`).
 
-use super::relay::{HostedProvider, PrepareUpstreamBody, deduplicate_tools, relay_request};
+use super::relay::{
+    HostedProvider, PrepareUpstreamBody, deduplicate_tools, relay_instance_request, relay_request,
+};
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 use axum::{Extension, Json, extract::State, http::HeaderMap, response::Response as AxumResponse};
 use flow_like::flow_like_model_provider::provider::ModelApiSurface;
@@ -73,6 +75,22 @@ pub async fn invoke_responses(
         headers,
         payload,
         ModelApiSurface::Responses,
+        prepare_upstream_body as PrepareUpstreamBody,
+    )
+    .await
+}
+
+pub async fn invoke_instance_responses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<AxumResponse, ApiError> {
+    relay_instance_request(
+        state,
+        headers,
+        payload,
+        ModelApiSurface::Responses,
+        "/instances/responses",
         prepare_upstream_body as PrepareUpstreamBody,
     )
     .await

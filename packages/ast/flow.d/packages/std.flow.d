@@ -3346,11 +3346,12 @@ declare namespace payments {
      * @param simulation (optional) — Local Board Test only: paid, canceled, expired or failed. Empty requests a real payment.
      * @param amountMinor (optional) — Total including applicable tax in integer minor units, for example 119 for EUR 1.19
      * @param ttlSeconds (optional) — Requested timeout in seconds, limited by the remaining run quota
+     * @param idempotencyKey (optional) — Reuse a stable key for the same payment across workflow retries. Completed payments immediately select their previous result. Leave empty for a new payment.
      * @returns paymentId — Server payment request identifier, or a sim_ identifier in Board Test
      * @returns reason — Machine-readable outcome reason
      * @impure has side effects / drives control flow
      */
-    function request({ currency?: string, productName?: string, description?: string, productTaxCode?: string, shippingCountries?: string, reference?: string, simulation?: string, amountMinor?: int, ttlSeconds?: int }): { paymentId: string, reason: string };
+    function request({ currency?: string, productName?: string, description?: string, productTaxCode?: string, shippingCountries?: string, reference?: string, simulation?: string, amountMinor?: int, ttlSeconds?: int, idempotencyKey?: string }): { paymentId: string, reason: string };
 }
 
 declare namespace random {

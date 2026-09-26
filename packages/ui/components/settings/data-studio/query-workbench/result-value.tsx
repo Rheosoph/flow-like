@@ -8,6 +8,10 @@ import {
 import { resolveStorageFile } from "../../../../lib/storage-file";
 import { cn } from "../../../../lib/utils";
 import { accountIdFromValue } from "../../../../state/backend-state/user-state";
+import {
+	BinaryCellPreview,
+	BinaryValueDetail,
+} from "../../../ui/binary-value-cell";
 import { GeometryCell, GeometryDetails } from "../../../ui/geometry-cell";
 import { RelativeTime } from "../../../ui/relative-time";
 import { StorageFileCell } from "../../../ui/storage-file-cell";
@@ -42,6 +46,7 @@ export function ResultCellValue({
 	}
 	if (kind === "geometry")
 		return <GeometryCell value={value} metadata={metadata} />;
+	if (kind === "binary") return <BinaryCellPreview value={value} />;
 	if (kind === "boolean") {
 		const truthy = value === true || value === "true" || value === 1;
 		return (
@@ -102,6 +107,8 @@ export function ResultDetailValue({
 }: Readonly<ResultValueProps>) {
 	if (kind === "geometry")
 		return <GeometryDetails value={value} metadata={metadata} />;
+	if (kind === "binary")
+		return <BinaryValueDetail value={value} className="mt-1 font-sans" />;
 	if (kind === "temporal") return <TemporalDetailValue value={value} />;
 
 	const userId = kind === "user" ? accountIdFromValue(value) : null;

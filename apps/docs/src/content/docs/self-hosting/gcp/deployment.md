@@ -71,9 +71,7 @@ Prepare these resources first:
   grant covers every Cloud SQL instance there; database user mappings and SQL
   grants must keep the worker limited to its audit database.
 - Secret Manager secrets containing the instance server CA PEM, the shared base64
-  `AUDIT_ENTRY_KEY`, the shared `SINK_TOKEN_ENCRYPTION_KEY`, and the worker's audit
-  configuration JSON. A minimal configuration is
-  `{"audit":{"enabled":true,"require_signing":true}}`. Supply the exact entry and
+  `AUDIT_ENTRY_KEY` and the shared `SINK_TOKEN_ENCRYPTION_KEY`. Supply the exact entry and
   sink secret IDs that the API already resolves through its Secret Manager project
   and `SECRET_PREFIX`. The helper grants both identities access to these same
   secrets; it does not change the API's secret lookup settings.
@@ -84,6 +82,12 @@ Prepare these resources first:
   with `docker build -f apps/backend/gcp/audit-worker/Dockerfile .` from the
   `flow-like` repository root. This recipe includes the IAM launcher used by the
   deployment helper and uses the repository's `.dockerignore`.
+- The worker's audit policy, which is compiled in: the `audit` section of the same
+  document as the GCP API image, either the tracked public default or the API
+  build's `flow_like_config` BuildKit secret with its `FLOW_LIKE_CONFIG_SHA256`
+  build argument. The worker reads no configuration at runtime, so the API's
+  `FLOW_LIKE_CONFIG_*` sources do not reach it; see
+  [Audit policy](/self-hosting/audit-trail/#audit-policy).
 
 ```sh
 python3 apps/backend/gcp/audit-worker/deploy.py \
@@ -96,7 +100,6 @@ python3 apps/backend/gcp/audit-worker/deploy.py \
   --database-name flow_like --database-ca-secret cloud-sql-server-ca \
   --entry-key-secret "$AUDIT_ENTRY_KEY_SECRET" \
   --encryption-secret "$SINK_TOKEN_ENCRYPTION_KEY_SECRET" \
-  --config-secret audit-config \
   --network audit-network --subnet audit-database
 ```
 
@@ -109,6 +112,19 @@ token with the `sqlservice.login` scope. It builds the child's temporary
 DNS endpoints, and removes the temporary CA file on exit. It stops the child
 before the token expires. Static database passwords and credential overrides are
 rejected; the old `--database-secret` argument is no longer supported.
+
+The private-IP example requires the per-instance `GOOGLE_MANAGED_INTERNAL_CA` CA
+mode. For `GOOGLE_MANAGED_CAS_CA` or `CUSTOMER_MANAGED_CAS_CA`, use the instance
+certificate DNS name so the launcher applies `verify-full`; verifying a shared
+CA alone does not establish which instance answered. The helper reads
+`settings.ipConfiguration.serverCaMode` and accepts an omitted mode as the API's
+legacy per-instance default. For DNS connections it checks the `dnsNames` entry
+with `dnsScope=INSTANCE` and `connectionType=PRIVATE_SERVICES_ACCESS`, normalizing
+a trailing dot before passing the hostname to the launcher. Create its private
+DNS record in the worker's VPC. This helper supports private services access;
+Private Service Connect requires separate endpoint setup. See Google's
+[server identity verification guide](https://docs.cloud.google.com/sql/docs/postgres/configure-ssl-instance#server-identity-verification)
+and [Cloud SQL instance API](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances).
 
 To avoid fetching the KMS public key at every startup, also supply
 `--audit-kid <current-key-id> --verifying-keys-secret <public-keys-secret-id>`.
@@ -127,8 +143,7 @@ least the requested retention, uniform bucket-level access, and public access
 prevention. The script checks the effective lock before deploying the job.
 
 The script requires Policy Troubleshooter to establish that the API cannot sign,
-access the audit bucket or worker configuration secret, impersonate the
-worker, or change its job/IAM policies. Inherited access or an inconclusive check
+access the audit bucket, impersonate the worker, or change its job/IAM policies. Inherited access or an inconclusive check
 stops deployment. The deployment identity needs visibility into ancestor policies;
 remove broad API grants rather than bypassing the checks. The entry and sink
 encryption secrets are required and shared with the API. The API receives no

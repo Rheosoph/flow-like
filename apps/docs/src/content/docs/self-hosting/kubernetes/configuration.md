@@ -67,7 +67,11 @@ for validation, limits and secret handling.
 
 For an explicit custom fallback build, `build-images.sh` accepts the
 repository-relative `FLOW_LIKE_BUILD_CONFIG`. Use only public settings because
-the document is embedded in the executable.
+the document is embedded in the executable. The audit worker is built from the
+same document and takes its `audit` section as its
+[audit policy](/self-hosting/audit-trail/#audit-policy). The runtime config
+above does not reach the worker, so audit policy changes need this build input
+and a rebuilt worker image.
 
 The web image reads `web.runtimeConfig.apiUrl`, falling back to `api.publicUrl`,
 and optional `redirectUrl`/`logoutUrl` at container startup. Omitted redirect and
@@ -76,9 +80,9 @@ roll out the same web image. Supply public HTTP(S) URLs without credentials,
 queries or fragments. See [Runtime web configuration](/self-hosting/containers/#runtime-web-configuration)
 for the separate static-metadata and third-party OAuth relay limits.
 
-`api.frontendBaseUrl` points hosted Event shortlinks to the same web deployment.
-Setup derives it from `PUBLIC_WEB_URL`, defaulting to `http://localhost:3001`.
-When API and web share an origin, route `/c`, `/f` and `/u` to web and
+`api.frontendBaseUrl` points hosted App links (`/a/<app-id>/<route>`) to the
+same web deployment. Setup derives it from `PUBLIC_WEB_URL`, defaulting to
+`http://localhost:3001`. When API and web share an origin, route `/a` to web and
 `/frontend` to API. See [Hosted frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
 for the static rewrites and existing login callback.
 

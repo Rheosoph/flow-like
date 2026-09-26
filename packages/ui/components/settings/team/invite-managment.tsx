@@ -7,11 +7,9 @@ import {
 	ExternalLinkIcon,
 	Link,
 	LinkIcon,
-	Mail,
 	MailIcon,
 	MoreVerticalIcon,
 	PlusIcon,
-	RefreshCw,
 	SearchIcon,
 	Settings,
 	Trash2Icon,
@@ -34,9 +32,6 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	AlertDialogTrigger,
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
 	Button,
 	Dialog,
 	DialogContent,
@@ -67,12 +62,8 @@ import {
 } from "../../../";
 import { useProjectUserSearch } from "../../../hooks/use-project-user-search";
 import { apiErrorMessage } from "../../../lib/api-error";
-import {
-	userAvatarUrl,
-	userDisplayName,
-	userInitials,
-	userSecondaryLabel,
-} from "../../../lib/user-display";
+import { asArray } from "../../../lib/response-shape";
+import { UserInviteSearchResults } from "../../ui/user-invite-search-results";
 import { SectionLockedPanel } from "../permission";
 import {
 	SectionHeading,
@@ -100,7 +91,6 @@ export function InviteUserDialog({
 	const access = useTeamAccess(appId);
 	const [message, setMessage] = useState("");
 	const [invitee, setInvitee] = useState("");
-	const [invitingId, setInvitingId] = useState<string | null>(null);
 	const [showInviteDialog, setShowInviteDialog] = useState(false);
 
 	// Both halves of this dialog — the project contacts and the user directory —
@@ -171,181 +161,35 @@ export function InviteUserDialog({
 
 					<div className="space-y-3">
 						<Separator />
-						{userSearch.results.length > 0 && (
-							<div className="space-y-2">
-								<h4 className="text-sm font-medium">
-									{invitee.trim()
-										? t("searchResults", "Search Results")
-										: t("peopleFromYourProjects", "People from your projects")}
-								</h4>
-								<div className="max-h-60 space-y-2 overflow-y-auto pr-2">
-									{userSearch.results.map(({ user, fromProject }) => {
-										const displayName = userDisplayName(user, user.id);
-										const secondary = userSecondaryLabel(user);
-										return (
-											<div
-												key={user.id}
-												className="flex items-center justify-between gap-3 rounded-lg border bg-card p-3"
-											>
-												<div className="flex min-w-0 items-center gap-3">
-													<Avatar className="h-9 w-9 shrink-0">
-														<AvatarImage
-															src={userAvatarUrl(user)}
-															alt={displayName}
-														/>
-														<AvatarFallback className="bg-primary/10 text-primary">
-															{userInitials(user)}
-														</AvatarFallback>
-													</Avatar>
-													<div className="min-w-0 flex-1">
-														<p className="truncate text-sm font-medium">
-															{displayName}
-														</p>
-														{secondary && (
-															<p className="truncate text-xs text-muted-foreground">
-																{secondary}
-															</p>
-														)}
-														{fromProject && (
-															<p className="text-xs text-primary">
-																{t("fromYourProjects", "From your projects")}
-															</p>
-														)}
-													</div>
-												</div>
-												<Button
-													size="sm"
-													disabled={invitingId !== null}
-													aria-label={t("inviteNamedUser", {
-														defaultValue: "Invite {{name}}",
-														name: displayName,
-													})}
-													onClick={async () => {
-														setInvitingId(user.id);
-														try {
-															await backend.teamState.inviteUser(
-																appId,
-																user.id,
-																message,
-															);
-															setShowInviteDialog(false);
-															setInvitee("");
-															setMessage("");
-															toast.success(
-																t("invitationSentToUser", {
-																	defaultValue: "Invitation sent to {{name}}",
-																	name: displayName,
-																}),
-															);
-															void userSearch.invalidate(user.id);
-															void invalidateInfinite(
-																backend.teamState.getAppInvites,
-																[appId],
-															);
-														} catch (error) {
-															toast.error(
-																apiErrorMessage(
-																	error,
-																	"Failed to send invite. Please try again.",
-																),
-															);
-														} finally {
-															setInvitingId(null);
-														}
-													}}
-													className="h-8 shrink-0 gap-1.5 text-xs"
-												>
-													{invitingId === user.id ? (
-														<RefreshCw className="h-3 w-3 animate-spin" />
-													) : (
-														<Mail className="h-3 w-3" />
-													)}
-													{t("invite", "Invite")}
-												</Button>
-											</div>
-										);
-									})}
-								</div>
-							</div>
-						)}
-						<section
-							aria-label={t("userSearchStatus", "User search status")}
-							aria-live="polite"
-							className="space-y-2 text-sm text-muted-foreground"
-						>
-							{userSearch.isLoadingContacts && (
-								<p className="flex items-center gap-2">
-									<RefreshCw className="h-3 w-3 animate-spin" />
-									{t(
-										"loadingProjectContacts",
-										"Loading people from your projects...",
-									)}
-								</p>
-							)}
-							{userSearch.isSearchingDirectory && (
-								<p className="flex items-center gap-2">
-									<RefreshCw className="h-3 w-3 animate-spin" />
-									{t("searchingDirectory", "Searching for more people...")}
-								</p>
-							)}
-							{/* The server's own message tells a revoked role from a dropped
-							    connection; "Retry" alone reads as a network blip. */}
-							{userSearch.contactsError && (
-								<div className="flex items-center justify-between gap-2">
-									<p>
-										{apiErrorMessage(
-											userSearch.contactsError,
-											t(
-												"projectContactsFailed",
-												"Could not load people from your projects.",
-											),
-										)}
-									</p>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={() => userSearch.retryContacts()}
-									>
-										{t("retry", "Retry")}
-									</Button>
-								</div>
-							)}
-							{userSearch.directoryError && (
-								<div className="flex items-center justify-between gap-2">
-									<p>
-										{apiErrorMessage(
-											userSearch.directoryError,
-											t("userSearchFailed", "Could not search for users"),
-										)}
-									</p>
-									<Button
-										size="sm"
-										variant="outline"
-										onClick={() => userSearch.retryDirectory()}
-									>
-										{t("retry", "Retry")}
-									</Button>
-								</div>
-							)}
-							{!userSearch.canSearchDirectory && (
-								<p>
-									{t(
-										"searchDirectoryHint",
-										"Enter at least 2 characters to search for anyone by name, handle, email or user ID.",
-									)}
-								</p>
-							)}
-							{userSearch.canSearchDirectory &&
-								!userSearch.isSearchingDirectory &&
-								!userSearch.isLoadingContacts &&
-								!userSearch.directoryError &&
-								!userSearch.contactsError &&
-								userSearch.results.length === 0 && (
-									<p className="py-4 text-center">
-										{t("noUsersFound", "No users found")}
-									</p>
-								)}
-						</section>
+						<UserInviteSearchResults
+							search={userSearch}
+							query={invitee}
+							onInvite={async (user, displayName) => {
+								try {
+									await backend.teamState.inviteUser(appId, user.id, message);
+									setShowInviteDialog(false);
+									setInvitee("");
+									setMessage("");
+									toast.success(
+										t("invitationSentToUser", {
+											defaultValue: "Invitation sent to {{name}}",
+											name: displayName,
+										}),
+									);
+									void userSearch.invalidate(user.id);
+									void invalidateInfinite(backend.teamState.getAppInvites, [
+										appId,
+									]);
+								} catch (error) {
+									toast.error(
+										apiErrorMessage(
+											error,
+											"Failed to send invite. Please try again.",
+										),
+									);
+								}
+							}}
+						/>
 					</div>
 				</div>
 			</DialogContent>
@@ -363,6 +207,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 		[appId],
 		access.canAdminister && !access.isLoading,
 	);
+	const linkList = asArray(links.data);
 	const [showCreateLinkDialog, setShowCreateLinkDialog] = useState(false);
 	const [newLinkName, setNewLinkName] = useState("");
 	const [newLinkMaxUses, setNewLinkMaxUses] = useState<string>("");
@@ -476,7 +321,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 				<SectionHeading
 					icon={LinkIcon}
 					title={t("inviteLinks", "Invite links")}
-					count={links.data?.length ?? 0}
+					count={linkList.length}
 					description={t(
 						"shareableLinksThatAddWhoeverOpensThemCapTheUsesOrLeaveThemOpen",
 						"Shareable links that add whoever opens them. Cap the uses, or leave them open.",
@@ -629,7 +474,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 					/>
 				)}
 
-				{!links.isError && (links.data?.length ?? 0) === 0 && (
+				{!links.isError && linkList.length === 0 && (
 					<EmptyState
 						className="max-w-full"
 						title={t("noInviteLinks", "No Invite Links")}
@@ -641,9 +486,9 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 					/>
 				)}
 
-				{(links.data?.length ?? 0) > 0 && (
+				{linkList.length > 0 && (
 					<div className="flex flex-col gap-2">
-						{links.data?.map((link) => (
+						{linkList.map((link) => (
 							<div key={link.id} className={teamRowClass({ align: "start" })}>
 								<TeamRowIcon icon={LinkIcon} className="mt-0.5" />
 								<div className="min-w-0 flex-1">

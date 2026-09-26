@@ -816,7 +816,8 @@ describe("real-world diagrams", () => {
 				}
 				for (const node of Object.values(result.board.nodes)) {
 					expect(
-						node.layer === null || result.board.layers[node.layer],
+						node.layer === null ||
+							(node.layer !== undefined && result.board.layers[node.layer]),
 					).toBeTruthy();
 				}
 			});

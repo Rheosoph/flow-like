@@ -3,13 +3,11 @@
 import {
 	type Descendant,
 	ElementApi,
-	ElementStatic,
-	LeafStatic,
 	NodeApi,
 	type Path,
 	type SlateEditor,
-	pipeDecorate,
 } from "platejs";
+import { ElementStatic, LeafStatic, pipeDecorate } from "platejs/static";
 import type * as React from "react";
 import {
 	Fragment,
@@ -82,14 +80,11 @@ function estimateBlockHeight(block: Descendant): number {
 }
 
 /**
- * Plate's static renderer resolves every node's path with `editor.api.findPath`.
+ * Plate's static renderer hands each node its path, but plugin helpers still
+ * resolve paths with `editor.api.findPath` — the table plugin twice per cell.
  * Outside the React editor the DOM-backed lookup tables are empty, so it falls
  * back to matching the node against the whole document — O(total nodes) per
- * lookup, which makes rendering a long document quadratic.
- *
- * Most of those lookups are for leaves synthesized during rendering (syntax
- * highlighting tokens, decoration splits) that are not in the document at all,
- * so they pay for a full scan and still come back empty.
+ * lookup, which makes rendering a long, table-heavy document quadratic.
  *
  * A read-only static editor never mutates its value, so every real path can be
  * indexed once up front. A miss then means the node genuinely is not in the
@@ -168,19 +163,17 @@ type DecorateFn = NonNullable<ReturnType<typeof pipeDecorate>>;
 /** Matches Plate's own fallback when no plugin contributes decorations. */
 const NO_DECORATIONS: DecorateFn = () => [];
 
-/**
- * Renders one top-level block. Mirrors Plate's own `Children` loop, except the
- * path is the block index rather than a `findPath` lookup — at the top level
- * those are the same thing, and `findPath` falls back to a full-document scan
- * under static rendering.
- */
+/** Renders one top-level block exactly like Plate's own `Children` loop. */
 function renderBlock(
 	editor: SlateEditor,
 	decorate: DecorateFn,
 	block: Descendant,
 	index: number,
 ) {
-	const decorations = decorate([block, [index]]) ?? [];
+	const path = [index];
+	const decorations = editor.api.range(path)
+		? (decorate([block, path]) ?? [])
+		: [];
 
 	return ElementApi.isElement(block) ? (
 		<ElementStatic
@@ -189,12 +182,14 @@ function renderBlock(
 			decorations={decorations}
 			editor={editor}
 			element={block}
+			path={path}
 		/>
 	) : (
 		<LeafStatic
 			key={index}
 			decorations={decorations}
 			editor={editor}
+			path={path}
 			text={block}
 		/>
 	);

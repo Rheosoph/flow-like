@@ -249,28 +249,9 @@ pub(super) async fn sales_overview(
 
     let period_revenue = totals.period_revenue;
     let period_purchase_count = totals.period_purchases;
-    let prev_period_revenue = totals.prev_period_revenue;
-    let prev_period_purchase_count = totals.prev_period_purchases;
-
-    let revenue_change_percent = if prev_period_revenue > 0 {
-        Some(((period_revenue - prev_period_revenue) as f64 / prev_period_revenue as f64) * 100.0)
-    } else if period_revenue > 0 {
-        Some(100.0)
-    } else {
-        None
-    };
-
-    let purchases_change_percent = if prev_period_purchase_count > 0 {
-        Some(
-            ((period_purchase_count - prev_period_purchase_count) as f64
-                / prev_period_purchase_count as f64)
-                * 100.0,
-        )
-    } else if period_purchase_count > 0 {
-        Some(100.0)
-    } else {
-        None
-    };
+    let revenue_change_percent = change_percent(period_revenue, totals.prev_period_revenue);
+    let purchases_change_percent =
+        change_percent(period_purchase_count, totals.prev_period_purchases);
 
     Ok(SalesOverview {
         total_revenue,
@@ -639,28 +620,54 @@ async fn compute_daily_stats_from_purchases(
     Ok(stats)
 }
 
-/// Verify the user holds the app's designated owner role and
-/// return the app row the check loaded.
-pub(crate) async fn verify_sales_access(
+/// Percentage change from the previous period; `None` when both are empty.
+pub(super) fn change_percent(current: i64, previous: i64) -> Option<f64> {
+    if previous > 0 {
+        Some(((current - previous) as f64 / previous as f64) * 100.0)
+    } else if current > 0 {
+        Some(100.0)
+    } else {
+        None
+    }
+}
+
+/// Verify the user holds the app's designated owner role and return the app
+/// row the check loaded. Flow payments can be collected at any visibility, so
+/// this is the gate for revenue that does not come from a store listing.
+pub(crate) async fn verify_revenue_access(
     state: &AppState,
     user: &AppUser,
     app_id: &str,
 ) -> Result<app::Model, ApiError> {
-    // Sales is user-only: `app_permission` alone would also admit API keys and
-    // connected apps.
+    // Revenue is user-only: `app_permission` alone would also admit API keys
+    // and connected apps.
     user.sub()?;
 
     // Prices, discounts and purchase lists must not outlive a demotion, so the
     // membership role is read fresh instead of from the permission cache.
     let role = user.app_permission_fresh(app_id, state).await?.role;
 
-    // Get the app to check owner role
     let app = app::Entity::find_by_id(app_id)
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    // Verify app is public/public_restricted (sales only make sense for these)
+    if app.owner_role_id.as_deref() == Some(role.id.as_str()) {
+        return Ok(app);
+    }
+
+    Err(ApiError::FORBIDDEN)
+}
+
+/// [`verify_revenue_access`] for store sales, which only exist for apps listed
+/// in the store.
+pub(crate) async fn verify_sales_access(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+) -> Result<app::Model, ApiError> {
+    let app = verify_revenue_access(state, user, app_id).await?;
+
     if !matches!(
         app.visibility,
         Visibility::Public | Visibility::PublicRequestAccess
@@ -670,12 +677,7 @@ pub(crate) async fn verify_sales_access(
         ));
     }
 
-    // Check if user has owner role
-    if app.owner_role_id.as_deref() == Some(role.id.as_str()) {
-        return Ok(app);
-    }
-
-    Err(ApiError::FORBIDDEN)
+    Ok(app)
 }
 
 #[cfg(test)]

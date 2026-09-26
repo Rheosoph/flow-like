@@ -28,6 +28,7 @@ import {
 } from "./native-widget";
 import { notificationIconSource } from "./notification-icon";
 import { pageSurfaceRevision } from "./page-surface-cache";
+import { asArray } from "./response-shape";
 
 export const NATIVE_WIDGET_PAGE_CAPTURE =
 	"flow-like:native-widget-page-capture";
@@ -115,8 +116,8 @@ export async function resolveNativeWidgetPageMedia(
 	}
 	assertActive();
 	const urls = new Map(
-		results
-			.filter((item) => item.url && !item.error)
+		asArray(results)
+			.filter((item) => item?.url && !item.error)
 			.map((item) => [item.prefix, item.url as string]),
 	);
 	const storageIds = new Set(storage.map((item) => item.nodeId));

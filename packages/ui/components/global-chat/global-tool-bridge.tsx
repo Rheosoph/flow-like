@@ -55,6 +55,12 @@ import {
 	updateFlowScriptGenerationRunReceipt,
 } from "../../lib/flowpilot/flowscript-generation-receipt";
 import { WorkspaceSearchSession } from "../../lib/flowpilot/workspace-search";
+import {
+	attachmentDisplayName,
+	forwardedFilesManifest,
+	mergeAttachments,
+	resolveForwardFiles,
+} from "../../lib/forwarded-attachments";
 import { resolveFrontendToolApprovalScope } from "../../lib/frontend-tool-approval-scope";
 import {
 	inspectLiveAppPage,
@@ -390,6 +396,26 @@ function parentRequestId(request: FrontendToolRequest) {
 	);
 }
 
+/** The files the user attached to the turn that owns `runId`. */
+function turnAttachments(runId: string | undefined): IAttachment[] {
+	return runId
+		? (useGlobalChatStore.getState().runs[runId]?.sourceAttachments ?? [])
+		: [];
+}
+
+/** Remember files forwarded for import per owning run, dropping runs that have ended. */
+function rememberForwardedImportFiles(
+	store: Map<string, IAttachment[]>,
+	runId: string,
+	files: readonly IAttachment[],
+): void {
+	const liveRuns = useGlobalChatStore.getState().runs;
+	for (const remembered of store.keys()) {
+		if (remembered !== runId && !liveRuns[remembered]) store.delete(remembered);
+	}
+	store.set(runId, mergeAttachments(store.get(runId) ?? [], files));
+}
+
 function sourceUserPrompt(request: FrontendToolRequest): string | undefined {
 	const owned =
 		request.context?.sourceUserPrompt ?? request.context?.source_user_prompt;
@@ -721,7 +747,7 @@ function routeForView(args: Record<string, unknown>): string {
 		case "library":
 			return "/library";
 		case "store":
-			return "/store/explore/apps";
+			return "/store/explore";
 		case "packages":
 			return "/store/packages";
 		case "settings":
@@ -1424,6 +1450,11 @@ export function GlobalToolBridge() {
 	// A create_app result is authoritative for the rest of its owning assistant turn. This prevents
 	// a transient board fetch failure from redirecting mutations into an older, similarly named app.
 	const createdAppTargetsByOwnerRef = useRef<Map<string, string>>(new Map());
+	// Files data_studio_agent forwarded for import, keyed by owning run: nested database_tool
+	// import_geojson calls may read only these.
+	const forwardedImportFilesByRunRef = useRef<Map<string, IAttachment[]>>(
+		new Map(),
+	);
 	// Failed repair candidates are board-scoped (not message-scoped), so a retry in a new turn can
 	// continue the closest source after a provider deadline or lost MCP response.
 	const boardRecoveryRef = useRef(new BoardEditRecoveryStore());
@@ -2314,6 +2345,11 @@ export function GlobalToolBridge() {
 					);
 				}
 				case "database_tool":
+					return executeRuntimeTool(request.toolName, args, {
+						attachments: scope.runId
+							? (forwardedImportFilesByRunRef.current.get(scope.runId) ?? [])
+							: [],
+					});
 				case "storage_tool":
 				case "ui_inspect":
 				case "execute_event":
@@ -3206,6 +3242,8 @@ export function GlobalToolBridge() {
 					const livePage = captureSourceCurrent
 						? snapshot.source?.handle
 						: findLivePage(appId, { eventId: pageEvent.id });
+					// A page registers at mount, so the fallback can find one whose onLoad is still filling it.
+					const livePageLoading = Boolean(livePage?.isLoading());
 					let inspection: ReturnType<typeof inspectLiveAppPage> | undefined;
 					let semanticInspectionFailure: string | undefined;
 					if (livePage) {
@@ -3217,13 +3255,16 @@ export function GlobalToolBridge() {
 								"The rendered component tree could not be inspected.",
 							);
 						}
+						if (livePageLoading && !semanticInspectionFailure) {
+							semanticInspectionFailure =
+								"The page was still running its onLoad workflow, so the inspected elements are its layout before that workflow's updates.";
+						}
 					} else {
 						semanticInspectionFailure =
 							"No matching live page registered a rendered component tree.";
 					}
-					const semanticInspectionComplete = Boolean(
-						inspection?.root_component_id,
-					);
+					const semanticInspectionComplete =
+						Boolean(inspection?.root_component_id) && !livePageLoading;
 					const evidenceComplete =
 						screenshotComplete && semanticInspectionComplete;
 					const failureDetail =
@@ -3646,6 +3687,7 @@ export function GlobalToolBridge() {
 					const onInterval =
 						argString(args, "on_interval_event_id") ||
 						argString(args, "onIntervalEventId");
+					const noCache = argBool(args, "no_cache") ?? argBool(args, "noCache");
 					if (boardId && page.boardId && boardId !== page.boardId) {
 						return {
 							status: "error",
@@ -3728,6 +3770,7 @@ export function GlobalToolBridge() {
 							if (typeof secs === "number" && secs > 0)
 								page.onIntervalSeconds = secs;
 						}
+						if (noCache !== undefined) page.noCache = noCache || undefined;
 						try {
 							await backend.pageState.updatePage(appId, page);
 						} catch (error) {
@@ -3742,6 +3785,7 @@ export function GlobalToolBridge() {
 							note: onLoad
 								? "Page onLoad event wired — it runs when the page opens."
 								: "Page onLoad event cleared.",
+							no_cache: page.noCache === true,
 						};
 					} finally {
 						releasePageLifecycle();
@@ -3976,6 +4020,26 @@ export function GlobalToolBridge() {
 						};
 					const overlayId =
 						argString(args, "overlay_id") || argString(args, "overlayId");
+					// Same fail-closed selection as call_app_chat: only the named files of the owning
+					// turn reach the specialist, and database_tool import_geojson reads nothing else.
+					const forwarding = resolveForwardFiles(
+						turnAttachments(scope.runId),
+						args.forward_files,
+					);
+					if (forwarding.status === "error") return forwarding;
+					const forwardedFiles = forwarding.files;
+					if (scope.runId && forwardedFiles.length > 0) {
+						rememberForwardedImportFiles(
+							forwardedImportFilesByRunRef.current,
+							scope.runId,
+							forwardedFiles,
+						);
+					}
+					const forwardedFileNames = forwardedFiles.map(attachmentDisplayName);
+					const specialistPrompt =
+						forwardedFiles.length > 0
+							? `${instruction}\n\n${forwardedFilesManifest(forwardedFiles)}`
+							: instruction;
 
 					const turnSelection = scope.turnSelection();
 					const owningUserPrompt = sourceUserPrompt(request);
@@ -4053,6 +4117,10 @@ export function GlobalToolBridge() {
 								app_id: appId,
 								overlay_id: overlayId,
 								instruction,
+								forwarded_files:
+									forwardedFileNames.length > 0
+										? forwardedFileNames
+										: undefined,
 							},
 							summary: "Delegated Data Studio sub-agent started.",
 						}),
@@ -4067,7 +4135,7 @@ export function GlobalToolBridge() {
 							null /* currentSurface */,
 							null /* currentCanvasSettings */,
 							[] /* selectedComponentIds */,
-							instruction,
+							specialistPrompt,
 							[] /* history */,
 							undefined /* images */,
 							onToken,
@@ -4102,6 +4170,10 @@ export function GlobalToolBridge() {
 								status: "ok",
 								app_id: appId,
 								overlay_id: overlayId,
+								forwarded_files:
+									forwardedFileNames.length > 0
+										? forwardedFileNames
+										: undefined,
 								response: response.message,
 							},
 							summary: "Delegated Data Studio sub-agent finished.",
@@ -7138,58 +7210,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 					// an explicit list forwards only the named files; omitted or [] forwards none.
 					// This fail-closed default prevents an underspecified tool call from disclosing every
 					// attachment to a local app.
-					const currentTurnFiles = scope.runId
-						? (useGlobalChatStore.getState().runs[scope.runId]
-								?.sourceAttachments ?? [])
-						: [];
-					const requestedFileNames = Array.isArray(args.forward_files)
-						? (args.forward_files as unknown[])
-								.filter((value): value is string => typeof value === "string")
-								.map((value) => value.trim().toLowerCase())
-								.filter((value) => value.length > 0)
-						: [];
-					const attachmentLabels = (file: IAttachment): string[] => {
-						const raw =
-							typeof file === "string"
-								? [file]
-								: [file.url, file.name].filter((value): value is string =>
-										Boolean(value),
-									);
-						const withBasenames = raw.flatMap((value) => {
-							const basename = value.split("?")[0]?.split("/").pop();
-							return basename && basename !== value
-								? [value, basename]
-								: [value];
-						});
-						return withBasenames.map((value) => value.toLowerCase());
-					};
-					const forwardedAttachments: IAttachment[] = [];
-					const selectedIndexes = new Set<number>();
-					for (const requestedName of new Set(requestedFileNames)) {
-						const matches = currentTurnFiles
-							.map((file, index) => ({ file, index }))
-							.filter(({ file }) =>
-								attachmentLabels(file).includes(requestedName),
-							);
-						if (matches.length !== 1) {
-							return {
-								status: "error",
-								code:
-									matches.length === 0
-										? "forward_file_not_found"
-										: "forward_file_name_ambiguous",
-								message:
-									matches.length === 0
-										? `Attachment '${requestedName}' does not belong to this tool call's user turn.`
-										: `Attachment name '${requestedName}' matches more than one file in this user turn. Ask the user to rename or reattach the intended file; no file was forwarded.`,
-							};
-						}
-						const [{ file, index }] = matches;
-						if (!selectedIndexes.has(index)) {
-							selectedIndexes.add(index);
-							forwardedAttachments.push(file);
-						}
-					}
+					const forwarding = resolveForwardFiles(
+						turnAttachments(scope.runId),
+						args.forward_files,
+					);
+					if (forwarding.status === "error") return forwarding;
+					const forwardedAttachments = forwarding.files;
 
 					// Invoke the app's chat event through the SAME pipeline the simple chat uses
 					// (executeEvent + processChatEvents), so it runs with full app-chat behavior.

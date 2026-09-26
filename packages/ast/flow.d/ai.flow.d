@@ -149,6 +149,15 @@ declare namespace agent {
     function registerThinking(this: Agent, { agentIn: Struct }): Struct;
 
     /**
+     * Gives the agent the Microsoft Work IQ tools (mail, calendar, files, people, chats, sites and Microsoft 365 Copilot) as the signed-in user. A tenant admin must enable Work IQ; tool calls are billed in Copilot Credits.
+     * @node agent_register_work_iq_tools @receiver agent_in @alias agentRegisterWorkIqTools
+     * @param agentIn — Agent object to add the Work IQ tools to (receiver: `this` in `x.registerWorkIqTools(...)`)
+     * @param allowWrites (optional) — Also register the tools that create, update, delete or send Microsoft 365 data. Tenant policy must allow them too.
+     * @returns agentOut — Agent object with the Work IQ tools registered
+     */
+    function registerWorkIqTools(this: Agent, { agentIn: Struct, allowWrites?: bool }): Struct;
+
+    /**
      * Sets the system prompt for an Agent to guide its behavior
      * @node agent_set_system_prompt @receiver agent_in @alias agentSetSystemPrompt
      * @param agentIn — Agent object to enable thinking on (receiver: `this` in `x.setSystemPrompt(...)`)
@@ -3039,6 +3048,21 @@ declare namespace onnx {
      * @impure has side effects / drives control flow
      */
     function gliner({ model: Struct, tokenizer: Struct, text: string, labels: string[], threshold?: float, maxWidth?: int, multiLabel?: bool, mergeAdjacent?: bool }): { result: Struct, entities: Struct[], entityCount: int };
+
+    /**
+     * Answer a choice, rubric score, or true-probability question about text using Laya multilingual. Connect one Model Directory; existing model files are loaded and missing files download automatically from mizchi/laya-multilingual-onnx. Loaded models are reused within the execution cache.
+     * @node onnx_laya @alias onnxLaya
+     * @param modelDir — Directory containing model.onnx, tokenizer/tokenizer.json (or tokenizer.json), and rl_agent_config.json. Missing files download automatically into this directory's managed cache (about 681 MB for the complete bundle)
+     * @param text — Text or serialized JSON state to evaluate
+     * @param instructions — Question to answer about Text
+     * @param questionType (optional) — choice selects a label; score returns an expected rubric level; noul returns P(true)
+     * @param criteria (optional) — Unique labels to choose from
+     * @returns result — Typed answer, calibrated probabilities, confidence, action probability and token count
+     * @returns choice — Selected choice label
+     * @returns confidence — Normalized entropy confidence, or max(P(false), P(true)) for noul
+     * @impure has side effects / drives control flow
+     */
+    function laya({ modelDir: Struct, text: string, instructions: string, questionType?: string, criteria?: string[] }): { result: Struct, choice: string, confidence: float };
 
     /**
      * Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Text longer than the model's window is split into overlapping chunks rather than truncated, so entities are found throughout a long document. Download tokenizer.json and config.json from the same model repository — config.json carries the id2label mapping that names the entity types and the sequence length the model accepts.

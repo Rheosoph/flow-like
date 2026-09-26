@@ -18,26 +18,54 @@ import {
 	X,
 } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { inferTemporalValue } from "../../../lib/date";
+import { namesGeometryKind } from "../../../lib/geometry";
 import { isGeometryMetadata } from "../../../lib/geometry-columns";
+import {
+	type ColumnLock,
+	type EditableIdentity,
+	type ObjectEditField,
+	type PropertyEditability,
+	isEditableProperty,
+	lockedObjectColumns,
+	propertyEditability,
+	resolveObjectIdentity,
+} from "../../../lib/ontology-object-edit";
+import { resolveStorageFile } from "../../../lib/storage-file";
 import { looksLikeUserColumnName } from "../../../lib/user-display";
 import type {
 	GraphOverlay,
 	NodeLabelMapping,
 	OntologyActionDefinition,
+	PropertyColumn,
 	SubgraphNode,
 } from "../../../state/backend-state/graph-state";
 import { accountIdFromValue } from "../../../state/backend-state/user-state";
 import { Badge } from "../badge";
+import { BinaryCellPreview, BinaryValueDetail } from "../binary-value-cell";
 import { Button } from "../button";
 import { GeometryCell } from "../geometry-cell";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { RelativeTime } from "../relative-time";
 import { ScrollArea } from "../scroll-area";
+import { StorageFileCell } from "../storage-file-cell";
 import { UserInlineTag } from "../user-identity";
 import { nodeCaptionAccountId } from "./graph-user-caption";
 import { getGraphIcon } from "./icons";
+import {
+	InlinePropertyEditor,
+	PropertyEditButton,
+	PropertyLockHint,
+} from "./ontology-property-editor";
 
 export interface ConnectionInfo {
 	label: string;
@@ -65,6 +93,13 @@ export interface GraphNodeInspectorProps {
 	onConnectionClick?: (nodeId: string) => void;
 	onFindPath?: (node: SubgraphNode) => void;
 	onRunAction?: (action: OntologyActionDefinition, node: SubgraphNode) => void;
+	/** Column types of the node's backing table; undefined while they load. */
+	editFields?: ReadonlyMap<string, ObjectEditField>;
+	/**
+	 * Saves edited property values. Omitted, the inspector is read-only.
+	 * Rejects with StaleObjectError when the stored row moved on.
+	 */
+	onUpdateProperties?: UpdateElementProperties;
 }
 
 function objectTypeMatches(
@@ -80,6 +115,8 @@ function objectTypeMatches(
 
 export type ValueKind =
 	| "geometry"
+	| "binary"
+	| "file"
 	| "string"
 	| "number"
 	| "boolean"
@@ -90,7 +127,40 @@ export type ValueKind =
 	| "object"
 	| "unknown";
 
-export { inferValueKind, PropertyValue, PropertyRow, FieldFilter, CopyButton };
+export {
+	inferValueKind,
+	declaredTypes,
+	PropertyValue,
+	PropertyRow,
+	FieldFilter,
+	CopyButton,
+};
+
+/**
+ * The app whose storage the properties below it live in. Only the app that
+ * owns the objects may provide it: a bare stored path resolves into the given
+ * app's root, so a remote ontology's paths would open the wrong file.
+ */
+const PropertyStorageAppContext = createContext<string | undefined>(undefined);
+export const PropertyStorageScope = PropertyStorageAppContext.Provider;
+export const usePropertyStorageAppId = () =>
+	useContext(PropertyStorageAppContext);
+
+export interface PropertyValueContext {
+	metadata?: Record<string, string>;
+	/** The column type the ontology declares; most properties arrive without one. */
+	typeName?: string;
+	appId?: string;
+}
+
+/** Declared column types by property name, for the properties a mapping lists. */
+function declaredTypes(
+	columns?: readonly PropertyColumn[],
+): ReadonlyMap<string, string> {
+	return new Map(
+		(columns ?? []).map((column) => [column.name, column.data_type]),
+	);
+}
 
 /**
  * `propKey` is what makes an epoch integer readable: an ontology property is
@@ -100,10 +170,16 @@ export { inferValueKind, PropertyValue, PropertyRow, FieldFilter, CopyButton };
 function inferValueKind(
 	value: unknown,
 	propKey?: string,
-	metadata?: Record<string, string>,
+	{ metadata, typeName, appId }: PropertyValueContext = {},
 ): { kind: ValueKind; dims?: number } {
 	if (value === null || value === undefined) return { kind: "unknown" };
 	if (isGeometryMetadata(metadata)) return { kind: "geometry" };
+	if (typeName && /binary/i.test(typeName)) {
+		// Storage hands a geoarrow column over as GeoJSON, and a declared type
+		// string keeps only its `Binary` storage — plain bytes arrive as octets.
+		if (namesGeometryKind(value)) return { kind: "geometry" };
+		if (Array.isArray(value)) return { kind: "binary" };
+	}
 	if (typeof value === "boolean") return { kind: "boolean" };
 	if (typeof value === "number" || typeof value === "bigint") {
 		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
@@ -139,6 +215,8 @@ function inferValueKind(
 			accountIdFromValue(value)
 		)
 			return { kind: "user" };
+		if (propKey && resolveStorageFile(propKey, value, appId))
+			return { kind: "file" };
 		return { kind: "string" };
 	}
 	return { kind: "unknown" };
@@ -226,29 +304,53 @@ function PropertyValue({
 	value,
 	propKey,
 	metadata,
+	typeName,
 	compact = false,
 }: {
 	value: unknown;
 	propKey: string;
 	metadata?: Record<string, string>;
+	typeName?: string;
 	compact?: boolean;
 }) {
 	const { t } = useTranslation("common");
-	const { kind, dims } = inferValueKind(value, propKey, metadata);
+	const appId = usePropertyStorageAppId();
+	const { kind, dims } = inferValueKind(value, propKey, {
+		metadata,
+		typeName,
+		appId,
+	});
+
+	if (kind === "geometry")
+		return (
+			<GeometryCell
+				value={value}
+				metadata={metadata}
+				variant={compact ? "compact" : "card"}
+			/>
+		);
+	if (kind === "binary")
+		return compact ? (
+			<BinaryCellPreview value={value} />
+		) : (
+			<BinaryValueDetail value={value} />
+		);
+	const file =
+		kind === "file" ? resolveStorageFile(propKey, value, appId) : null;
+	if (file && appId)
+		return (
+			<div className="group flex min-w-0 items-center justify-between gap-2">
+				<StorageFileCell appId={appId} file={file} className="-ml-2 min-w-0" />
+				<CopyButton text={String(value)} />
+			</div>
+		);
+
 	const display =
 		typeof value === "object"
 			? JSON.stringify(value, null, 2)
 			: String(value ?? "—");
 
 	switch (kind) {
-		case "geometry":
-			return (
-				<GeometryCell
-					value={value}
-					metadata={metadata}
-					variant={compact ? "compact" : "card"}
-				/>
-			);
 		case "boolean":
 			return (
 				<div className="group flex min-w-0 items-center justify-between gap-2">
@@ -401,24 +503,242 @@ function FieldFilter({
 	);
 }
 
+export interface PropertyRowEdit {
+	editability: PropertyEditability;
+	editing: boolean;
+	disabled: boolean;
+	/** The relationships a locked link column carries, named in the lock hint. */
+	relationshipLabel?: string;
+	onStart(): void;
+	onDone(): void;
+	onSave(value: unknown): Promise<void>;
+}
+
+function PropertyRowAffordance({
+	propKey,
+	edit,
+	editButtonRef,
+}: {
+	propKey: string;
+	edit: PropertyRowEdit;
+	editButtonRef: React.Ref<HTMLButtonElement>;
+}) {
+	if (edit.editing) return null;
+	const { editability } = edit;
+	if (isEditableProperty(editability)) {
+		return (
+			<PropertyEditButton
+				ref={editButtonRef}
+				name={propKey}
+				onClick={edit.onStart}
+				disabled={edit.disabled}
+			/>
+		);
+	}
+	return (
+		<PropertyLockHint
+			reason={editability.locked}
+			kind={editability.kind}
+			relationshipLabel={edit.relationshipLabel}
+		/>
+	);
+}
+
+/**
+ * Puts focus back on the row's pencil once its editor closes, unless the user
+ * has already moved focus somewhere else.
+ */
+function useFocusAfterEdit(editing: boolean) {
+	const editButtonRef = useRef<HTMLButtonElement>(null);
+	const wasEditing = useRef(editing);
+	useEffect(() => {
+		const closed = wasEditing.current && !editing;
+		wasEditing.current = editing;
+		const button = editButtonRef.current;
+		if (!closed || !button) return;
+		const active = button.ownerDocument.activeElement;
+		if (!active || active.contains(button)) button.focus();
+	}, [editing]);
+	return editButtonRef;
+}
+
 function PropertyRow({
 	propKey,
 	value,
 	metadata,
-}: { propKey: string; value: unknown; metadata?: Record<string, string> }) {
+	typeName,
+	edit,
+}: {
+	propKey: string;
+	value: unknown;
+	metadata?: Record<string, string>;
+	typeName?: string;
+	/** Omitted, the row is read-only and renders exactly as it always has. */
+	edit?: PropertyRowEdit;
+}) {
+	const appId = usePropertyStorageAppId();
+	const editButtonRef = useFocusAfterEdit(edit?.editing ?? false);
+	const kindChip = (
+		<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+			{inferValueKind(value, propKey, { metadata, typeName, appId }).kind}
+		</span>
+	);
 	return (
-		<div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
+		<div
+			className={`${edit ? "group " : ""}min-w-0 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5`}
+		>
 			<div className="mb-1.5 flex min-w-0 items-start justify-between gap-2">
 				<p className="min-w-0 text-[11px] font-medium text-muted-foreground [overflow-wrap:anywhere]">
 					{propKey}
 				</p>
-				<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
-					{inferValueKind(value, propKey, metadata).kind}
-				</span>
+				{edit ? (
+					<div className="-my-1 flex shrink-0 items-center gap-1">
+						{kindChip}
+						<PropertyRowAffordance
+							propKey={propKey}
+							edit={edit}
+							editButtonRef={editButtonRef}
+						/>
+					</div>
+				) : (
+					kindChip
+				)}
 			</div>
-			<PropertyValue value={value} propKey={propKey} metadata={metadata} />
+			{edit?.editing ? (
+				<InlinePropertyEditor
+					name={propKey}
+					value={value}
+					editability={edit.editability}
+					onSave={edit.onSave}
+					onDone={edit.onDone}
+				/>
+			) : (
+				<PropertyValue
+					value={value}
+					propKey={propKey}
+					metadata={metadata}
+					typeName={typeName}
+				/>
+			)}
 		</div>
 	);
+}
+
+/** Which relationships a link column on `table` stores, for the lock hint. */
+function relationshipLabelsForColumn(
+	overlay: GraphOverlay,
+	table: string,
+	column: string,
+): string | undefined {
+	const labels = new Set(
+		overlay.edges
+			.filter(
+				(edge) =>
+					edge.table === table &&
+					(edge.src_column === column || edge.dst_column === column),
+			)
+			.map((edge) => edge.label),
+	);
+	return labels.size > 0 ? [...labels].join(", ") : undefined;
+}
+
+interface ObjectEditContext {
+	identity: EditableIdentity;
+	locked: ReadonlyMap<string, ColumnLock> | null;
+}
+
+function resolveObjectEditContext(
+	overlay: GraphOverlay | undefined,
+	node: SubgraphNode,
+): ObjectEditContext {
+	if (!overlay) {
+		return { identity: { ok: false, reason: "unknownType" }, locked: null };
+	}
+	const identity = resolveObjectIdentity(overlay, node.label, node.props);
+	return {
+		identity,
+		locked: identity.ok ? lockedObjectColumns(overlay, identity.mapping) : null,
+	};
+}
+
+export type UpdateElementProperties = (
+	updates: Record<string, unknown>,
+	baseline: Record<string, unknown>,
+) => Promise<void>;
+
+interface PropertyRowEditsOptions {
+	/** Switching to another element drops the open editor. */
+	elementId: string | undefined;
+	props: Record<string, unknown> | undefined;
+	/** Undefined while column types load, which keeps every row read-only. */
+	fields: ReadonlyMap<string, ObjectEditField> | undefined;
+	/** Null when the element can't be edited at all. */
+	locked: ReadonlyMap<string, ColumnLock> | null;
+	onUpdate: UpdateElementProperties | undefined;
+	relationshipLabel?: (column: string) => string | undefined;
+}
+
+/** One property edits at a time; the others wait until it is saved or cancelled. */
+export function usePropertyRowEdits({
+	elementId,
+	props,
+	fields,
+	locked,
+	onUpdate,
+	relationshipLabel,
+}: PropertyRowEditsOptions) {
+	const [editing, setEditing] = useState<{
+		elementId: string;
+		key: string;
+	} | null>(null);
+	const stopEditing = useCallback(() => setEditing(null), []);
+	const editingKey =
+		elementId !== undefined && editing?.elementId === elementId
+			? editing.key
+			: null;
+
+	const rowEdit = (
+		key: string,
+		value: unknown,
+	): PropertyRowEdit | undefined => {
+		if (!onUpdate || !fields || !locked || elementId === undefined) {
+			return undefined;
+		}
+		const editability = propertyEditability(
+			key,
+			value,
+			fields.get(key),
+			locked,
+		);
+		return {
+			editability,
+			editing: editingKey === key,
+			disabled: editingKey !== null && editingKey !== key,
+			relationshipLabel:
+				!isEditableProperty(editability) &&
+				editability.locked === "relationship"
+					? relationshipLabel?.(key)
+					: undefined,
+			onStart: () => setEditing({ elementId, key }),
+			// A save that settles late must not close an editor opened since.
+			onDone: () =>
+				setEditing((current) =>
+					current?.elementId === elementId && current.key === key
+						? null
+						: current,
+				),
+			onSave: (next) => onUpdate({ [key]: next }, props ?? {}),
+		};
+	};
+
+	/** Hiding the property being edited closes its editor, so no row stays blocked. */
+	const guardToggle =
+		(onToggle: (field: string) => void) => (field: string) => {
+			if (field === editingKey) stopEditing();
+			onToggle(field);
+		};
+
+	return { editingKey, rowEdit, guardToggle };
 }
 
 export function GraphNodeInspector({
@@ -437,14 +757,43 @@ export function GraphNodeInspector({
 	onConnectionClick,
 	onFindPath,
 	onRunAction,
+	editFields,
+	onUpdateProperties,
 }: GraphNodeInspectorProps) {
 	const { t } = useTranslation("common");
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
 	const [showAllProps, setShowAllProps] = useState(false);
 
+	const editContext = useMemo(
+		() =>
+			onUpdateProperties && node
+				? resolveObjectEditContext(overlay, node)
+				: null,
+		[onUpdateProperties, overlay, node],
+	);
+	const { editingKey, rowEdit, guardToggle } = usePropertyRowEdits({
+		elementId: node?.id,
+		props: node?.props,
+		fields: editFields,
+		locked: editContext?.locked ?? null,
+		onUpdate: onUpdateProperties,
+		relationshipLabel: (column) =>
+			overlay && editContext?.identity.ok
+				? relationshipLabelsForColumn(
+						overlay,
+						editContext.identity.mapping.table,
+						column,
+					)
+				: undefined,
+	});
+
 	const mapping = useMemo(
 		() => overlay?.nodes.find((candidate) => candidate.label === node?.label),
 		[overlay, node?.label],
+	);
+	const typeNames = useMemo(
+		() => declaredTypes(mapping?.property_columns),
+		[mapping],
 	);
 	const objectView = useMemo(
 		() =>
@@ -480,7 +829,7 @@ export function GraphNodeInspector({
 	const Icon = getGraphIcon(node.style?.icon ?? "database");
 	const propEntries = node.props
 		? Object.entries(node.props).filter(
-				([, v]) => v !== null && v !== undefined,
+				([k, v]) => (v !== null && v !== undefined) || k === editingKey,
 			)
 		: [];
 	const allFields = propEntries.map(([k]) => k);
@@ -530,6 +879,14 @@ export function GraphNodeInspector({
 						<p className="mt-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
 							{node.label}
 						</p>
+						{editContext && !editContext.identity.ok && (
+							<p className="mt-1 text-[11px] text-muted-foreground/80">
+								{t(
+									"objectNotEditableHere",
+									"This object can't be edited here.",
+								)}
+							</p>
+						)}
 					</div>
 				</div>
 				<div className="flex items-center gap-1 shrink-0">
@@ -537,7 +894,7 @@ export function GraphNodeInspector({
 						<FieldFilter
 							allFields={allFields}
 							hiddenFields={hiddenFields}
-							onToggle={handleToggleField}
+							onToggle={guardToggle(handleToggleField)}
 						/>
 					)}
 					<Button
@@ -735,19 +1092,23 @@ export function GraphNodeInspector({
 							<div className="space-y-2">
 								{prominentEntries.map(([key, value]) => (
 									<PropertyRow
-										key={key}
+										key={`${node.id}:${key}`}
 										propKey={key}
 										value={value}
 										metadata={node.property_metadata?.[key]}
+										typeName={typeNames.get(key)}
+										edit={rowEdit(key, value)}
 									/>
 								))}
 								{!collapsedOthers &&
 									otherEntries.map(([key, value]) => (
 										<PropertyRow
-											key={key}
+											key={`${node.id}:${key}`}
 											propKey={key}
 											value={value}
 											metadata={node.property_metadata?.[key]}
+											typeName={typeNames.get(key)}
+											edit={rowEdit(key, value)}
 										/>
 									))}
 							</div>

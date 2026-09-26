@@ -5,6 +5,12 @@ use serde_json::Value;
 #[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait VectorStore: Send + Sync {
+    /// Writes are durably accepted by the store itself and must not be retained
+    /// in a process-local batching wrapper.
+    fn is_durably_managed(&self) -> bool {
+        false
+    }
+
     /// Reject a write before a buffering wrapper accepts it.
     fn ensure_writable(&self) -> Result<()> {
         Ok(())

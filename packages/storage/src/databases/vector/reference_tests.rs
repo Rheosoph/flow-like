@@ -75,7 +75,7 @@ async fn references_fail_closed_for_missing_or_conflicting_selectors() -> Result
     }
     assert!(
         LanceDBVectorStore::from_connection_with_selector(
-            store.connection().clone(),
+            store.connection()?.clone(),
             "missing_table".into(),
             version("main", 1)
         )
@@ -163,7 +163,7 @@ async fn references_resolve_tags_once_and_preserve_them_on_reopen() -> Result<()
         .insert(vec![json!({"id": 3, "value": "new"})])
         .await?;
     branch.update_tag("training").await?;
-    let reopened = snapshot.reopen(main.connection().clone()).await?;
+    let reopened = snapshot.reopen(main.connection()?.clone()).await?;
     assert_eq!(reopened.reference().await?.version, first.version);
     assert_eq!(reopened.reference().await?.branch, "experiment");
     assert_eq!(reopened.count(None).await?, 2);
@@ -229,14 +229,14 @@ async fn references_restore_branch_keeps_main_unchanged() -> Result<()> {
     assert!(restored.version > before.version);
     assert_eq!(
         branch
-            .reopen(main.connection().clone())
+            .reopen(main.connection()?.clone())
             .await?
             .count(None)
             .await?,
         2
     );
     assert_eq!(
-        main.reopen(main.connection().clone())
+        main.reopen(main.connection()?.clone())
             .await?
             .count(None)
             .await?,
@@ -329,7 +329,7 @@ async fn references_cleanup_preserves_tags_and_branches() -> Result<()> {
     assert_eq!(tagged.count(None).await?, 1);
     assert_eq!(
         branch
-            .reopen(main.connection().clone())
+            .reopen(main.connection()?.clone())
             .await?
             .count(None)
             .await?,

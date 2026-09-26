@@ -211,14 +211,14 @@ impl ResponseChunk {
         }
     }
 
-    /// Creates a finish chunk with optional usage
-    pub fn finish(model_name: &str, usage: Option<&RigUsage>) -> Self {
+    /// Creates a finish chunk with optional usage. Without a known reason it reports `stop`.
+    pub fn finish(model_name: &str, usage: Option<&RigUsage>, finish_reason: Option<&str>) -> Self {
         Self {
             model: Some(model_name.to_string()),
             choices: vec![ResponseChunkChoice {
                 index: 0,
                 delta: None,
-                finish_reason: Some("stop".to_string()),
+                finish_reason: Some(finish_reason.unwrap_or("stop").to_string()),
                 logprobs: None,
             }],
             usage: usage.map(|usage| Usage::from_rig(*usage)),

@@ -65,9 +65,9 @@ export class EmptyEventState implements IEventState {
 		feedbackId: string,
 		feedback: {
 			rating: number;
-			history?: any[];
-			globalState?: Record<string, any>;
-			localState?: Record<string, any>;
+			history?: unknown[];
+			globalState?: Record<string, unknown>;
+			localState?: Record<string, unknown>;
 			comment?: string;
 		},
 	): Promise<string> {
@@ -86,7 +86,7 @@ export class EmptyEventState implements IEventState {
 		throw new Error("Method not implemented.");
 	}
 	cancelExecution(runId: string): Promise<void> {
-		throw new Error("Method not implemented.");
+		return Promise.reject(new Error("Method not implemented."));
 	}
 
 	isEventSinkActive(eventId: string): Promise<boolean> {

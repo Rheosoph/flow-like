@@ -109,6 +109,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "../../..";
+import { asArray, isRecord } from "../../../lib/response-shape";
 import {
 	ALL_PERMISSIONS,
 	getPermissionLabel,
@@ -810,19 +811,24 @@ function AppTables({ appId }: Readonly<{ appId: string }>) {
 	const tables = useInvoke(backend.dbState.listTables, backend.dbState, [
 		appId,
 	]);
+	const tableNames = asArray(tables.data);
 
 	if (tables.error) return null;
 
 	return (
-		<PanelSection icon={Database} title="Tables" count={tables.data?.length}>
+		<PanelSection
+			icon={Database}
+			title="Tables"
+			count={tables.data ? tableNames.length : undefined}
+		>
 			{tables.isLoading ? (
 				<div className="space-y-1.5">
 					<Skeleton className="h-8 w-full" />
 					<Skeleton className="h-8 w-2/3" />
 				</div>
-			) : tables.data && tables.data.length > 0 ? (
+			) : tableNames.length > 0 ? (
 				<div className="space-y-1">
-					{tables.data.map((table) => (
+					{tableNames.map((table) => (
 						<div
 							key={table}
 							className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-xs"
@@ -1638,7 +1644,7 @@ function CaseWaterfall({
 			</div>
 		);
 	}
-	const runs = detail.data.runs;
+	const runs = asArray(detail.data.runs);
 	if (runs.length === 0) return null;
 
 	const minStart = Math.min(...runs.map((run) => run.started_at));
@@ -1950,8 +1956,8 @@ function ProcessCasesCard({
 
 export function ProcessGraph({
 	appId,
-	data,
-	cases,
+	data: rawData,
+	cases: rawCases,
 	casesLoading,
 	casesError,
 	isLoading,
@@ -1964,6 +1970,27 @@ export function ProcessGraph({
 }: Readonly<ProcessGraphProps>) {
 	const { t } = useTranslation("settings");
 	const { resolvedTheme } = useTheme();
+	// A partial or stale cached response must render as empty, not throw.
+	const data = useMemo<IProcessGraphResponse | undefined>(
+		() =>
+			isRecord(rawData)
+				? {
+						...rawData,
+						nodes: asArray(rawData.nodes).map((node) => ({
+							...node,
+							notes: asArray(node.notes),
+							tags: asArray(node.tags),
+						})),
+						edges: asArray(rawData.edges),
+						flows: asArray(rawData.flows),
+					}
+				: undefined,
+		[rawData],
+	);
+	const cases = useMemo(
+		() => (rawCases ? asArray(rawCases) : undefined),
+		[rawCases],
+	);
 	const [selection, setSelection] = useState<
 		{ kind: "node"; id: string } | { kind: "edge"; id: string } | null
 	>(null);

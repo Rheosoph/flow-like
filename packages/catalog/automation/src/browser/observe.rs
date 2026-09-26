@@ -50,6 +50,7 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
             "Retrieves console messages from the browser (logs, warnings, errors)",
             "Automation/Browser/Observe",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "getConsoleLogs");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -136,37 +137,14 @@ impl NodeLogic for BrowserGetConsoleLogsNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let level_filter: String = context.evaluate_pin("level_filter").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-
-        // Inject console capture script if not already present
-        let script = r#"
-            if (!window.__flowlike_console_logs) {
-                window.__flowlike_console_logs = [];
-                const originalConsole = {};
-                ['log', 'info', 'warn', 'error'].forEach(level => {
-                    originalConsole[level] = console[level];
-                    console[level] = function(...args) {
-                        window.__flowlike_console_logs.push({
-                            level: level,
-                            text: args.map(a => String(a)).join(' '),
-                            timestamp: Date.now(),
-                            source: null,
-                            line_number: null
-                        });
-                        originalConsole[level].apply(console, args);
-                    };
-                });
+        let state = super::protocol::network_state(context, &session).await?;
+        let all_logs = {
+            let state = state.lock().await;
+            if let Some(error) = &state.failure {
+                return Err(flow_like_types::anyhow!(error.clone()));
             }
-            return window.__flowlike_console_logs || [];
-        "#;
-
-        let result = driver
-            .execute(script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get console logs: {}", e))?;
-
-        let all_logs: Vec<ConsoleMessage> =
-            flow_like_types::json::from_value(result.json().clone()).unwrap_or_default();
+            state.console_logs.clone()
+        };
 
         let logs: Vec<ConsoleMessage> = if level_filter.is_empty() {
             all_logs
@@ -219,6 +197,7 @@ impl NodeLogic for BrowserClearConsoleLogsNode {
             "Clears the captured console log buffer",
             "Automation/Browser/Observe",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "clearConsoleLogs");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -263,12 +242,8 @@ impl NodeLogic for BrowserClearConsoleLogsNode {
 
         let session: AutomationSession = context.evaluate_pin("session").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-
-        driver
-            .execute("window.__flowlike_console_logs = [];", vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to clear console logs: {}", e))?;
+        let state = super::protocol::network_state(context, &session).await?;
+        state.lock().await.console_logs.clear();
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -303,6 +278,7 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
             "Starts observing network requests using the Performance API",
             "Automation/Browser/Observe",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "startNetworkObserver");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -336,6 +312,13 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
         )
         .set_default_value(Some(json!("")));
 
+        node.add_input_pin(
+            "debugger_address",
+            "Debugger Address",
+            "Optional Chrome or Edge debugger address; defaults to the attached browser",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
         node.add_output_pin(
@@ -358,44 +341,11 @@ impl NodeLogic for BrowserStartNetworkObserverNode {
 
         let driver = session.get_browser_driver_and_switch(context).await?;
 
-        let script = format!(
-            r#"
-            window.__flowlike_network_requests = [];
-            window.__flowlike_network_pattern = '{}';
-
-            // Use PerformanceObserver for network entries
-            if (window.PerformanceObserver) {{
-                const observer = new PerformanceObserver((list) => {{
-                    for (const entry of list.getEntries()) {{
-                        if (entry.entryType === 'resource') {{
-                            const pattern = window.__flowlike_network_pattern;
-                            if (!pattern || entry.name.includes(pattern)) {{
-                                window.__flowlike_network_requests.push({{
-                                    url: entry.name,
-                                    method: 'GET',
-                                    status: null,
-                                    status_text: null,
-                                    request_headers: null,
-                                    response_headers: null,
-                                    duration_ms: Math.round(entry.duration),
-                                    size_bytes: entry.transferSize || null,
-                                    resource_type: entry.initiatorType
-                                }});
-                            }}
-                        }}
-                    }}
-                }});
-                observer.observe({{ entryTypes: ['resource'] }});
-                window.__flowlike_network_observer = observer;
-            }}
-            "#,
-            url_pattern.replace('\'', "\\'")
-        );
-
-        driver
-            .execute(&script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to start network observer: {}", e))?;
+        let debugger_address: String = context.evaluate_pin("debugger_address").await?;
+        super::protocol::start_listener(context, &session, &driver, &debugger_address, None)
+            .await?;
+        let state = super::protocol::network_state(context, &session).await?;
+        state.lock().await.url_pattern = url_pattern;
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -430,6 +380,7 @@ impl NodeLogic for BrowserGetNetworkRequestsNode {
             "Retrieves captured network requests from the observer",
             "Automation/Browser/Observe",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "getNetworkRequests");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -499,25 +450,19 @@ impl NodeLogic for BrowserGetNetworkRequestsNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let clear_after: bool = context.evaluate_pin("clear_after").await?;
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
-
-        let script = if clear_after {
-            r#"
-            const requests = window.__flowlike_network_requests || [];
-            window.__flowlike_network_requests = [];
-            return requests;
-            "#
-        } else {
-            "return window.__flowlike_network_requests || [];"
+        let state = super::protocol::network_state(context, &session).await?;
+        let requests = {
+            let mut state = state.lock().await;
+            if let Some(error) = &state.failure {
+                return Err(flow_like_types::anyhow!(error.clone()));
+            }
+            if clear_after {
+                state.request_ids.clear();
+                std::mem::take(&mut state.requests)
+            } else {
+                state.requests.clone()
+            }
         };
-
-        let result = driver
-            .execute(script, vec![])
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to get network requests: {}", e))?;
-
-        let requests: Vec<NetworkRequest> =
-            flow_like_types::json::from_value(result.json().clone()).unwrap_or_default();
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("requests", json!(requests)).await?;
@@ -556,6 +501,7 @@ impl NodeLogic for BrowserWaitForNetworkIdleNode {
             "Waits until no network requests are in progress for a specified duration",
             "Automation/Browser/Observe",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "waitForNetworkIdle");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -626,14 +572,17 @@ impl NodeLogic for BrowserWaitForNetworkIdleNode {
         let session: AutomationSession = context.evaluate_pin("session").await?;
         let idle_time_ms: i64 = context.evaluate_pin("idle_time_ms").await?;
         let timeout_ms: i64 = context.evaluate_pin("timeout_ms").await?;
+        if idle_time_ms < 0 || timeout_ms < 0 {
+            return Err(flow_like_types::anyhow!(
+                "Network idle and timeout durations must be nonnegative"
+            ));
+        }
 
-        let driver = session.get_browser_driver_and_switch(context).await?;
+        let network = super::protocol::network_state(context, &session).await?;
 
         let start = Instant::now();
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
         let idle_duration = Duration::from_millis(idle_time_ms.max(0) as u64);
-        let mut last_request_count = 0i64;
-        let mut idle_start: Option<Instant> = None;
 
         loop {
             if start.elapsed() > timeout {
@@ -642,31 +591,24 @@ impl NodeLogic for BrowserWaitForNetworkIdleNode {
                 return Ok(());
             }
 
-            let script = r#"
-                return performance.getEntriesByType('resource').length;
-            "#;
-
-            let result = driver
-                .execute(script, vec![])
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to check network status: {}", e))?;
-
-            let current_count = result.json().as_i64().unwrap_or(0);
-
-            if current_count == last_request_count {
-                if let Some(started) = idle_start {
-                    if started.elapsed() >= idle_duration {
-                        break;
-                    }
-                } else {
-                    idle_start = Some(Instant::now());
+            context.check_cancelled()?;
+            let idle = {
+                let state = network.lock().await;
+                if let Some(error) = &state.failure {
+                    return Err(flow_like_types::anyhow!(error.clone()));
                 }
-            } else {
-                idle_start = None;
-                last_request_count = current_count;
+                super::protocol::has_been_idle(
+                    state.pending.len(),
+                    state.last_activity,
+                    Instant::now(),
+                    idle_duration,
+                )
+            };
+            if idle {
+                break;
             }
 
-            flow_like_types::tokio::time::sleep(Duration::from_millis(100)).await;
+            crate::rpa::branch::delay(context, Duration::from_millis(100)).await?;
         }
 
         context.set_pin_value("session_out", json!(session)).await?;

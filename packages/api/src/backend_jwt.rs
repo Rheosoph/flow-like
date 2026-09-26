@@ -64,6 +64,14 @@ pub enum TokenType {
     /// Capability carried in a widget sandbox URL. It widens one widget
     /// document to one approved policy and never authorizes access.
     WidgetGrant,
+    /// One redemption of a controller-approved device onboarding package.
+    DeviceEnrollment,
+    /// Device control-plane access bound to a registered device auth key.
+    DeviceSession,
+    DeviceSignaling,
+    InstanceProject,
+    /// One workload's sender-bound hosted resource authority.
+    InstanceResource,
 }
 
 impl TokenType {
@@ -78,6 +86,11 @@ impl TokenType {
             TokenType::AppConnection => "flow-like-app-connection",
             TokenType::PageAction => "flow-like-page-action",
             TokenType::WidgetGrant => "flow-like-widget-grant",
+            TokenType::DeviceEnrollment => "flow-like-device-enrollment",
+            TokenType::DeviceSession => "flow-like-device-control",
+            TokenType::DeviceSignaling => "flow-like-device-signaling",
+            TokenType::InstanceProject => "flow-like-project-resources",
+            TokenType::InstanceResource => "flow-like-model-proxy",
         }
     }
 
@@ -92,6 +105,10 @@ impl TokenType {
             TokenType::AppConnection => 10 * 60,    // 10 minutes
             TokenType::PageAction => 24 * 60 * 60,  // 24 hours
             TokenType::WidgetGrant => 60 * 60,      // 1 hour
+            TokenType::DeviceEnrollment => 24 * 60 * 60,
+            TokenType::DeviceSession => 10 * 60,
+            TokenType::DeviceSignaling | TokenType::InstanceProject => 5 * 60,
+            TokenType::InstanceResource => 5 * 60,
         }
     }
 }
@@ -185,11 +202,17 @@ pub fn is_configured() -> bool {
 ///
 /// The claims must include a `typ` field with `TokenType` and standard JWT fields.
 pub fn sign<T: Serialize>(claims: &T) -> Result<String, BackendJwtError> {
+    sign_typed(claims, "JWT")
+}
+
+/// Sign a profile whose JOSE type is checked separately from the payload's `typ`.
+pub fn sign_typed<T: Serialize>(claims: &T, jose_type: &str) -> Result<String, BackendJwtError> {
     let private_key = PRIVATE_KEY_PEM
         .get()
         .ok_or(BackendJwtError::MissingPrivateKey)?;
 
     let mut header = Header::new(Algorithm::ES256);
+    header.typ = Some(jose_type.to_string());
     header.kid = Some(get_kid().to_string());
 
     let encoding_key = EncodingKey::from_ec_pem(private_key)
@@ -197,6 +220,45 @@ pub fn sign<T: Serialize>(claims: &T) -> Result<String, BackendJwtError> {
 
     encode(&header, claims, &encoding_key)
         .map_err(|e| BackendJwtError::EncodingError(e.to_string()))
+}
+
+/// Strict profile verifier for registered devices. Existing token profiles retain
+/// their own compatibility rules through [`verify`].
+pub fn verify_typed<T: for<'de> Deserialize<'de>>(
+    token: &str,
+    expected_type: TokenType,
+    jose_type: &str,
+) -> Result<T, BackendJwtError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ProfileHeader {
+        alg: Algorithm,
+        typ: String,
+        kid: String,
+    }
+    if token.len() > 16_384 {
+        return Err(BackendJwtError::DecodingError(
+            "Device JWT exceeds size limit".into(),
+        ));
+    }
+    let encoded_header = token.split('.').next().unwrap_or_default();
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded_header)
+        .map_err(|_| BackendJwtError::DecodingError("Invalid JWT profile header".into()))?;
+    let header: ProfileHeader = serde_json::from_slice(&bytes)
+        .map_err(|_| BackendJwtError::DecodingError("Invalid JWT profile header".into()))?;
+    if header.alg != Algorithm::ES256 || header.typ != jose_type || header.kid != get_kid() {
+        return Err(BackendJwtError::DecodingError(
+            "Invalid JWT profile header".into(),
+        ));
+    }
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(&[ISSUER]);
+    validation.set_audience(&[expected_type.audience()]);
+    validation.set_required_spec_claims(&["iss", "sub", "aud", "exp", "nbf", "iat"]);
+    validation.validate_nbf = true;
+    validation.leeway = 0;
+    decode_with(token, &validation)
 }
 
 // ============================================================================

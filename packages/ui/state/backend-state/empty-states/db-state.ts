@@ -144,6 +144,13 @@ export class EmptyDatabaseState implements IDatabaseState {
 	): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
+	setPrimaryKey(
+		appId: string,
+		tableName: string,
+		column: string,
+	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
 	dropTable(appId: string, tableName: string): Promise<IDropTableResult> {
 		throw new Error("Method not implemented.");
 	}

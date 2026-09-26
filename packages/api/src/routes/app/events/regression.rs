@@ -752,7 +752,7 @@ async fn board_grading_blind(app: &App, board_id: &str, version_label: &str) -> 
         .open_board_authoritative(board_id.to_string(), version)
         .await
     {
-        Ok(board) => board.lock().await.log_level.to_u8() > LogLevel::Info.to_u8(),
+        Ok(board) => board.snapshot().log_level.to_u8() > LogLevel::Info.to_u8(),
         Err(error) => {
             tracing::warn!(%error, board_id = %board_id, version = %version_label, "Could not load the recorded run's board to check its log level");
             false
@@ -774,7 +774,7 @@ async fn board_grading_blind(app: &App, board_id: &str, version_label: &str) -> 
         (status = 200, description = "The promoted fixture", body = FixtureSummary),
         (status = 400, description = "Bad request"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
+        (status = 403, description = "Forbidden: requires both WriteEvents and ReadLogs"),
         (status = 404, description = "Not found"),
         (status = 409, description = "Conflict with the suite's schedule")
     ),
@@ -794,7 +794,13 @@ pub async fn promote_regression_fixture(
     Path((app_id, event_id)): Path<(String, String)>,
     Json(body): Json<PromoteFixtureRequest>,
 ) -> Result<Json<FixtureSummary>, ApiError> {
-    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
+    // Promoting grades the run from its logs and copies its recorded input.
+    let permission = ensure_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::WriteEvents | RolePermissions::ReadLogs
+    );
     let sub = permission.sub()?;
 
     if !is_safe_id(&event_id) || !is_safe_id(&body.run_id) {

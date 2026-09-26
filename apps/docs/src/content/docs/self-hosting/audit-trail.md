@@ -43,9 +43,9 @@ by removing the API identity's access to the underlying secrets, signing key and
 storage.
 
 The shared worker binary accepts `--once` for scheduled jobs and otherwise runs once
-a minute. It loads only the audit configuration and database connection, without
+a minute. It loads only its compiled audit policy and the database connection, without
 starting API routes or loading the backend JWT private key. Signing and an audit
-bucket and an explicit audit policy are required. A failed signing connection or checkpoint check produces a
+bucket are required. A failed signing connection or checkpoint check produces a
 failed run. `--health-check` fails after 15 minutes without a successful tick.
 
 The worker coordinates through `AuditWorkerLease`, which the API role cannot access.
@@ -53,10 +53,51 @@ Scheduled jobs release the lease after each tick; a stopped continuous worker's
 lease expires within five minutes. Disabling the dedicated worker leaves records
 pending. It does not transfer the work to the API.
 
+The migration job owns the SQL boundary between the two logins: it grants the
+restricted roles and fails when the API login can still change evidence beyond
+appending pending `AuditRecord` rows. The worker does not check grants itself, so run
+the migration job after every schema or role change.
+
+### Audit policy
+
+The dedicated worker's audit policy is the `audit` section of the
+`flow-like.config.json` its image was built with, the same build input as the API
+image. The `flow-like-audit-worker` recipe takes `FLOW_LIKE_CONFIG` like the Compose
+and Kubernetes API recipes and defaults to the same self-hosting example. The Azure
+and GCP worker recipes take the API's `flow_like_config` BuildKit secret and
+`FLOW_LIKE_CONFIG_SHA256` build argument. A document without an `audit` section
+yields the defaults. `"enabled": false` stops the worker at startup, and signing is
+required whatever `require_signing` says.
+
+The worker reads no configuration at runtime. `FLOW_LIKE_CONFIG_JSON`,
+`FLOW_LIKE_CONFIG_FILE` or `FLOW_LIKE_CONFIG_SECRET_REF` on the API replace the API's
+document only; they do not reach the worker. Set audit policy in the build-time
+config and rebuild the worker whenever it changes. The AWS Lambda worker is the
+exception: it builds the Lambda API's state and reads the same configuration as the
+Lambda API.
+
+### Pause the worker
+
+Pausing is a platform action, not a worker setting. Disable the schedule on AWS
+(EventBridge Scheduler) or GCP (Cloud Scheduler), switch the Azure Container Apps Job
+to a manual trigger, set `audit.replicaCount: 0` in the Helm chart, or stop the
+Compose service. Records stay pending while the worker is paused and are sealed once
+it runs again.
+
+### Entry key
+
 Every API and worker needs the same explicit `AUDIT_ENTRY_KEY`. Setup scripts
 generate this separately from `BACKEND_KEY`, so the worker never needs the backend
-JWT signing key. A worker with a different entry key quarantines pending records and
-holds every chain whose seal is still waiting for its epoch.
+JWT signing key. A worker holding a different entry key quarantines nothing: every
+record carries the id of the key that authenticated it, so the worker holds the chain
+(`held_chains` in its tick report, log line `audit entry key mismatch: chain <id>
+carries kid <x|null>, worker holds [<kids>]`), seals nothing on it and retries on the
+next tick. Supply the missing key as `AUDIT_ENTRY_KEY_PREVIOUS` and the chain seals;
+no row has to be deleted. The dedicated worker reads only `AUDIT_ENTRY_KEY` and
+`AUDIT_ENTRY_KEY_PREVIOUS`, never `BACKEND_KEY` or `BACKEND_KEY_PREVIOUS`, so a key
+the API derived from `BACKEND_KEY` reaches it only as the explicit value computed
+below. The AWS Lambda worker derives it from `BACKEND_KEY` and `BACKEND_KEY_PREVIOUS`
+like the API.
 
 If an existing deployment left `AUDIT_ENTRY_KEY` unset, preserve its derived key
 before switching workers. The derivation uses BLAKE3 derive-key with the exact context
@@ -93,7 +134,8 @@ If rotating to a new entry key during the same change, store this derived value 
 
 Deployments that derive the entry key from `BACKEND_KEY` set `AUDIT_ENTRY_KEY`
 explicitly before rotating `BACKEND_KEY`; otherwise the derived key changes with it and
-the old one is gone.
+the old one is gone. On AWS, where the API and the Lambda worker both derive it,
+setting the old value as `BACKEND_KEY_PREVIOUS` on both keeps it accepted instead.
 
 ### Held chains
 
@@ -107,6 +149,20 @@ To resolve one, investigate what changed the row. If the cause was a lost entry 
 restore it as `AUDIT_ENTRY_KEY_PREVIOUS` and delete the chain's `AuditHeldChain` row;
 the next run signs the chain again. Otherwise keep the rows as evidence: nothing
 deletes them.
+
+A chain whose pending records were authenticated with a key the worker does not hold
+is held without a row: the worker logs `audit entry key mismatch`, counts the chain in
+`held_chains`, seals and quarantines nothing on it, and tries again on the next tick.
+Only a record whose key the worker does hold and whose MAC still fails is quarantined.
+
+### Log lines that fail closed
+
+| Line | Level | Effect |
+| --- | --- | --- |
+| `audit entry key mismatch: chain <id> carries kid <x\|null>, worker holds [<kids>]` | error | That chain is held and `held_chains` counts it. The tick fails only when every due chain was held |
+
+Alert on it. A privilege boundary violation surfaces in the migration job, which
+fails, not in the worker.
 
 ## Environment
 
@@ -133,7 +189,6 @@ deletes them.
 | `AZURE_AUDIT_CONTAINER` | Worker | Audit container in `AZURE_STORAGE_ACCOUNT_NAME`, with the credentials of the other containers |
 | `AUDIT_BUCKET_LOCK_MODE`, `AUDIT_BUCKET_RETENTION_YEARS` | Compose object-store bootstrap | New buckets default to `COMPLIANCE` and 4 years. Existing insufficient policies fail validation without being changed |
 | `DATABASE_URL` | Each process | Its own restricted login. The worker and API never receive the migration owner login |
-| `FLOW_LIKE_CONFIG_JSON`, `FLOW_LIKE_CONFIG_PATH` | Worker | JSON or file containing the `audit` object; give the worker a dedicated config without API provider secrets |
 | `SINK_TOKEN_ENCRYPTION_KEY` | Worker, when using webhooks | Same encryption secret as the API; without it the worker skips webhook delivery |
 
 The first bucket variable that is set wins, in the order `AUDIT_BUCKET`,
@@ -357,8 +412,9 @@ and a token are present before the stack starts.
 ### Kubernetes
 
 The Helm chart places signing settings in the worker Deployment. It uses separate
-secrets for the entry key, bucket credentials, signing credentials, worker database
-login and audit configuration. The API receives only the entry key, public keys and
+secrets for the entry key, bucket credentials, signing credentials and worker database
+login; the audit policy is compiled into the worker image (see
+[Audit policy](#audit-policy)). The API receives only the entry key, public keys and
 its own database login. The object-store initializer receives bucket credentials,
 without the signing key or Vault token.
 
@@ -433,9 +489,12 @@ host compromise with storage and retained copies administered elsewhere.
    migration directory. Use the migration owner connection.
 3. Provision distinct API and worker database roles. The deployment migration applies
    `apps/backend/shared/audit_database_roles.ts` after creating the schema. Existing
-   owner or administrative roles are rejected for either runtime identity.
-4. Preserve the entry key during the switch. Give the worker its signing authority,
-   audit bucket identity and audit-only configuration. Give the API the public keys
+   owner or administrative roles are rejected for either runtime identity. On Aurora
+   DSQL, run the migration job once with `DSQL_AUDIT_ROLE_ARN` set to the worker's IAM
+   role; see [the DSQL audit worker role](/self-hosting/aws/database/#audit-worker-role).
+4. Preserve the entry key during the switch. Give the worker its signing authority and
+   audit bucket identity, and build its image from the API's config
+   ([Audit policy](#audit-policy)). Give the API the public keys
    in `AUDIT_VERIFYING_KEYS`; remove its access to worker secrets and cloud roles.
 5. Check the actual storage retention. Existing inadequate policies stop bootstrap;
    plan their remediation separately. Provision TLS and renew certificates before

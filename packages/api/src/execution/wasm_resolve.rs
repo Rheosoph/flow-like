@@ -44,9 +44,10 @@ pub async fn resolve_wasm_packages_for_platform(
 ) -> Option<HashMap<String, flow_like_types::dispatch::WasmPackageRef>> {
     let registry = state.wasm_registry.as_ref()?;
 
+    // Lapsed pins keep running through the licence grace period; expired ones do not.
     let packages = app_package::Entity::find()
         .filter(app_package::Column::AppId.eq(app_id))
-        .filter(app_package::Column::Stale.eq(false))
+        .filter(crate::package_license::usable_pins(chrono::Utc::now()))
         .all(&state.db)
         .await
         .ok()?;

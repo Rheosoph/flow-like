@@ -719,289 +719,82 @@ mod node_serialization_tests {
     }
 }
 
-// =============================================================================
-// Template Matching Accuracy Tests (requires `execute` feature)
-// =============================================================================
-// These tests use actual rustautogui template matching against known test images
-// from the RustAutoGUI project (MIT License): https://github.com/DavorMar/rustautogui
-//
-// Synthetic images are inspired by PyAutoGUI testing methodology (BSD-3-Clause):
-// https://github.com/asweigart/pyautogui
-
+// Template fixtures from RustAutoGUI (MIT): https://github.com/DavorMar/rustautogui
+// Matching uses supplied images and never initializes a desktop or captures a screen.
 #[cfg(feature = "execute")]
 mod template_matching_accuracy_tests {
-    use image::{ImageBuffer, Rgb, RgbImage};
+    use flow_like_catalog_automation::types::screen_match::find_template_in_image;
+    use image::{GrayImage, Luma};
     use std::path::PathBuf;
 
-    fn fixtures_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
+    fn fixture(name: &str) -> GrayImage {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/algorithm_tests")
+            .join(name);
+        image::open(&path)
+            .unwrap_or_else(|error| panic!("Cannot load {}: {error}", path.display()))
+            .to_luma8()
     }
 
-    fn algorithm_tests_dir() -> PathBuf {
-        fixtures_dir().join("algorithm_tests")
+    fn assert_fixture_match(main_name: &str, template_name: &str, x: u32, y: u32) {
+        let screen = fixture(main_name);
+        let template = fixture(template_name);
+        // Keep the known match and a border of distractor pixels. This tests real
+        // fixture pixels without scanning a large image in unoptimized test builds.
+        let left = x.saturating_sub(12);
+        let top = y.saturating_sub(12);
+        let width = (x + template.width() + 12).min(screen.width()) - left;
+        let height = (y + template.height() + 12).min(screen.height()) - top;
+        let region = image::imageops::crop_imm(&screen, left, top, width, height).to_image();
+        let matches = find_template_in_image(&region, &template, 0.95);
+        let best = matches.first().expect("Fixture template should match");
+        assert_eq!(
+            (best.0 + left, best.1 + top),
+            (x + template.width() / 2, y + template.height() / 2),
+            "Wrong match for {template_name}"
+        );
+        assert!(best.2 >= 0.95 && best.2 <= 1.0);
     }
 
-    /// Test basic template matching with synthetic gradient images
-    /// Inspired by PyAutoGUI's testing methodology (BSD-3-Clause)
-    /// Note: Solid color images don't work with Segmented mode (no texture features),
-    /// so we use FFT mode for uniform templates or create gradient patterns.
     #[test]
-    fn test_synthetic_gradient_template_preparation() {
-        // Create a gradient image with visual features (not solid color)
-        let main_image: RgbImage = ImageBuffer::from_fn(200, 200, |x, y| {
-            Rgb([x as u8, y as u8, 128]) // Gradient pattern
-        });
-
-        // Create a template from a region of the gradient
-        let template: RgbImage = ImageBuffer::from_fn(50, 50, |x, y| {
-            // Match the pattern at position (75, 75) in main image
-            Rgb([(75 + x) as u8, (75 + y) as u8, 128])
-        });
-
-        // Save images for template matching test
-        let temp_dir = std::env::temp_dir();
-        let main_path = temp_dir.join("test_gradient_main.png");
-        let template_path = temp_dir.join("test_gradient_template.png");
-        main_image
-            .save(&main_path)
-            .expect("Failed to save main image");
-        template
-            .save(&template_path)
-            .expect("Failed to save template");
-
-        // Test that template preparation works with gradient images
-        let mut gui = rustautogui::RustAutoGui::new(false).expect("Failed to create RustAutoGui");
-
-        // Segmented mode should work with gradient images (has texture)
-        let result = gui.prepare_template_from_file(
-            template_path.to_str().unwrap(),
-            None,
-            rustautogui::MatchMode::Segmented,
-        );
-        assert!(
-            result.is_ok(),
-            "Segmented mode should work with gradient images: {:?}",
-            result.err()
-        );
-
-        // FFT mode should also work
-        let result = gui.prepare_template_from_file(
-            template_path.to_str().unwrap(),
-            None,
-            rustautogui::MatchMode::FFT,
-        );
-        assert!(
-            result.is_ok(),
-            "FFT mode should work with gradient images: {:?}",
-            result.err()
-        );
-
-        // Clean up
-        std::fs::remove_file(main_path).ok();
-        std::fs::remove_file(template_path).ok();
+    fn darts_fixture_matches_at_its_known_position() {
+        assert_fixture_match("Darts_main.png", "Darts_template1.png", 206, 1);
     }
 
-    /// Test that rustautogui fixture images exist and are loadable
     #[test]
-    fn test_fixture_images_exist() {
-        let test_cases = [
-            ("Darts_main.png", "Darts_template1.png"),
-            ("Socket_main.png", "Socket_template1.png"),
-            ("Split_main.png", "Split_template1.png"),
-        ];
-
-        let dir = algorithm_tests_dir();
-        for (main_name, template_name) in test_cases {
-            let main_path = dir.join(main_name);
-            let template_path = dir.join(template_name);
-
-            if main_path.exists() && template_path.exists() {
-                // Verify images are loadable
-                let main_img = image::open(&main_path)
-                    .unwrap_or_else(|e| panic!("Failed to load {}: {}", main_name, e));
-                let template_img = image::open(&template_path)
-                    .unwrap_or_else(|e| panic!("Failed to load {}: {}", template_name, e));
-
-                // Verify template is smaller than main image
-                assert!(
-                    template_img.width() < main_img.width()
-                        && template_img.height() < main_img.height(),
-                    "Template {} should be smaller than main image {}",
-                    template_name,
-                    main_name
-                );
-            } else {
-                // Skip if fixtures not downloaded - this is expected in CI without setup
-                println!(
-                    "Skipping {} / {} - fixtures not downloaded",
-                    main_name, template_name
-                );
-            }
-        }
+    fn socket_fixture_matches_at_its_known_position() {
+        assert_fixture_match("Socket_main.png", "Socket_template1.png", 197, 345);
     }
 
-    /// Test rustautogui template preparation with real images
     #[test]
-    fn test_template_preparation_with_fixtures() {
-        let dir = algorithm_tests_dir();
-        let template_path = dir.join("Darts_template1.png");
-
-        if !template_path.exists() {
-            println!("Skipping test - Darts_template1.png not found. Run download_fixtures.sh");
-            return;
-        }
-
-        let mut gui = rustautogui::RustAutoGui::new(false).expect("Failed to create RustAutoGui");
-
-        // Test Segmented mode preparation
-        let result = gui.prepare_template_from_file(
-            template_path.to_str().unwrap(),
-            None,
-            rustautogui::MatchMode::Segmented,
-        );
-        assert!(
-            result.is_ok(),
-            "Segmented template preparation should succeed: {:?}",
-            result.err()
-        );
-
-        // Test FFT mode preparation
-        let result = gui.prepare_template_from_file(
-            template_path.to_str().unwrap(),
-            None,
-            rustautogui::MatchMode::FFT,
-        );
-        assert!(
-            result.is_ok(),
-            "FFT template preparation should succeed: {:?}",
-            result.err()
-        );
+    fn split_fixture_matches_at_its_known_position() {
+        assert_fixture_match("Split_main.png", "Split_template1.png", 969, 688);
     }
 
-    /// Test multiple template storage
-    #[test]
-    fn test_multiple_template_storage() {
-        let dir = algorithm_tests_dir();
-
-        let templates = [
-            ("darts1", "Darts_template1.png"),
-            ("darts2", "Darts_template2.png"),
-            ("socket1", "Socket_template1.png"),
-        ];
-
-        let mut gui = rustautogui::RustAutoGui::new(false).expect("Failed to create RustAutoGui");
-        let mut loaded_count = 0;
-
-        for (alias, filename) in templates {
-            let path = dir.join(filename);
-            if !path.exists() {
-                println!("Skipping {} - file not found", filename);
-                continue;
-            }
-
-            let result = gui.store_template_from_file(
-                path.to_str().unwrap(),
-                None,
-                rustautogui::MatchMode::Segmented,
-                alias,
-            );
-
-            assert!(
-                result.is_ok(),
-                "Should store template {}: {:?}",
-                alias,
-                result.err()
-            );
-            loaded_count += 1;
-        }
-
-        if loaded_count > 0 {
-            println!("Successfully stored {} templates", loaded_count);
-        }
+    fn textured_template() -> GrayImage {
+        GrayImage::from_fn(12, 12, |x, y| {
+            Luma([((x * 41 + y * 17 + x * y * 7) % 251) as u8])
+        })
     }
 
-    /// Performance benchmark: Template preparation time
     #[test]
-    fn test_template_preparation_performance() {
-        let dir = algorithm_tests_dir();
-        let templates = [
-            "Darts_template1.png",
-            "Socket_template1.png",
-            "Split_template1.png",
-        ];
-
-        let mut total_time = std::time::Duration::ZERO;
-        let mut count = 0;
-
-        for filename in templates {
-            let path = dir.join(filename);
-            if !path.exists() {
-                continue;
-            }
-
-            let mut gui =
-                rustautogui::RustAutoGui::new(false).expect("Failed to create RustAutoGui");
-
-            let start = std::time::Instant::now();
-            let _ = gui.prepare_template_from_file(
-                path.to_str().unwrap(),
-                None,
-                rustautogui::MatchMode::Segmented,
-            );
-            let elapsed = start.elapsed();
-
-            println!("{}: {:?}", filename, elapsed);
-            total_time += elapsed;
-            count += 1;
-        }
-
-        if count > 0 {
-            let avg_time = total_time / count as u32;
-            println!("Average template preparation time: {:?}", avg_time);
-
-            // Template preparation should be reasonably fast
-            // Note: Debug builds are significantly slower than release builds
-            // In release mode, expect < 100ms; in debug mode, allow up to 2s
-            #[cfg(debug_assertions)]
-            let threshold_ms = 2000; // 2 seconds for debug builds
-            #[cfg(not(debug_assertions))]
-            let threshold_ms = 500; // 500ms for release builds
-
-            assert!(
-                avg_time.as_millis() < threshold_ms,
-                "Template preparation too slow: {:?} (threshold: {}ms)",
-                avg_time,
-                threshold_ms
-            );
-        }
+    fn separate_occurrences_are_returned_once_each() {
+        let template = textured_template();
+        let mut screen = GrayImage::new(64, 32);
+        image::imageops::replace(&mut screen, &template, 4, 7);
+        image::imageops::replace(&mut screen, &template, 40, 7);
+        let matches = find_template_in_image(&screen, &template, 0.99);
+        let mut centers: Vec<_> = matches.iter().map(|(x, y, _)| (*x, *y)).collect();
+        centers.sort_unstable();
+        assert_eq!(centers, vec![(10, 13), (46, 13)]);
     }
 
-    /// Test search region constraints
     #[test]
-    fn test_search_region_preparation() {
-        let dir = algorithm_tests_dir();
-        let template_path = dir.join("Darts_template1.png");
-
-        if !template_path.exists() {
-            println!("Skipping test - fixture not found");
-            return;
-        }
-
-        let mut gui = rustautogui::RustAutoGui::new(false).expect("Failed to create RustAutoGui");
-
-        // Prepare with a specific search region (top-left quadrant)
-        let result = gui.prepare_template_from_file(
-            template_path.to_str().unwrap(),
-            Some((0, 0, 500, 500)), // x, y, width, height
-            rustautogui::MatchMode::Segmented,
-        );
-
-        assert!(
-            result.is_ok(),
-            "Should prepare template with search region: {:?}",
-            result.err()
-        );
+    fn excluded_search_region_has_no_match() {
+        let template = textured_template();
+        let mut screen = GrayImage::new(64, 32);
+        image::imageops::replace(&mut screen, &template, 40, 7);
+        let excluded = image::imageops::crop_imm(&screen, 0, 0, 24, 24).to_image();
+        assert!(find_template_in_image(&excluded, &template, 0.99).is_empty());
     }
 }

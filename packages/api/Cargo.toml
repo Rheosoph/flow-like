@@ -12,6 +12,7 @@ axum.workspace = true
 sea-orm.workspace = true
 flow-like-api-entity = { workspace = true, features = ["domain-conversions"] }
 flow-like-db.workspace = true
+flow-like-device-protocol.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 pin-project-lite = "0.2.16"
 tower.workspace = true

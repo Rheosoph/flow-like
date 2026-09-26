@@ -105,10 +105,12 @@ the immutable digests required by isolated execution. Rebuild them together when
 changing the assignment protocol. Local builds are single-architecture.
 
 `FLOW_LIKE_BUILD_CONFIG` optionally selects a repository-relative public JSON
-fallback to embed in the API. Runtime API settings belong in the setup-generated
-Secret; public web URLs belong in Helm runtime configuration. Neither requires
-installation-specific images. Generated secret files are excluded from root
-build contexts.
+document to embed in the API and the audit worker. For the API it is only a
+fallback; the worker compiles its `audit` section as its
+[audit policy](/self-hosting/audit-trail/#audit-policy) and reads no runtime
+config, so set audit policy there. Runtime API settings belong in the
+setup-generated Secret; public web URLs belong in Helm runtime configuration.
+Generated secret files are excluded from root build contexts.
 
 ## deploy.sh
 

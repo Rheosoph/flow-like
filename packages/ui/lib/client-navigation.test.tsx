@@ -58,7 +58,7 @@ describe("host navigation opt-in", () => {
 	});
 
 	test("delegates only push and replace, preserving navigation options", () => {
-		const navigate = mock(() => {});
+		const navigate = mock<ClientNavigation["navigate"]>(() => {});
 		const { router, next, native } = renderNavigation({
 			navigate,
 			href: (href) => href,

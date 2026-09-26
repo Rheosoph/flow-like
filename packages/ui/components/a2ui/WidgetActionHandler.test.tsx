@@ -225,8 +225,8 @@ describe("WidgetActionProvider input mappings", () => {
 			);
 
 			expect(runs).toHaveLength(1);
-			expect(runs[0].constructor).toBe("mapped");
-			expect(runs[0].toString).toBe("from context");
+			expect(runs[0]).toHaveProperty("constructor", "mapped");
+			expect(runs[0]).toHaveProperty("toString", "from context");
 			expect(runs[0].region).toBe("from context");
 		} finally {
 			for (const spy of spies) spy.mockRestore();

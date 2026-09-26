@@ -87,6 +87,8 @@ import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
+const EMPTY_INTERACTIONS: IInteractionRequest[] = [];
+
 function extractErrorMessage(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	if (typeof err === "string") return err;
@@ -595,45 +597,59 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
 	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
-	const [activeInteractions, setActiveInteractions] = useState<
-		IInteractionRequest[]
-	>([]);
+	const [interactionsBySession, setInteractionsBySession] = useState<
+		ReadonlyMap<string, IInteractionRequest[]>
+	>(() => new Map());
+	const activeInteractions = useMemo(
+		() => interactionsBySession.get(sessionIdParameter) ?? EMPTY_INTERACTIONS,
+		[interactionsBySession, sessionIdParameter],
+	);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
-	const interactionsBySession = useRef<Map<string, IInteractionRequest[]>>(
-		new Map(),
-	);
 	useEffect(() => {
 		activeInteractionsRef.current = activeInteractions;
 	}, [activeInteractions]);
 
-	// Keep interaction cache in sync with current session
-	useEffect(() => {
-		if (sessionIdParameter) {
-			interactionsBySession.current.set(sessionIdParameter, activeInteractions);
-		}
-	}, [sessionIdParameter, activeInteractions]);
+	const updateSessionInteractions = useCallback(
+		(
+			sessionId: string,
+			update: (prev: IInteractionRequest[]) => IInteractionRequest[],
+		) => {
+			setInteractionsBySession((prevMap) => {
+				const prev = prevMap.get(sessionId) ?? EMPTY_INTERACTIONS;
+				const next = update(prev);
+				if (next === prev) return prevMap;
+				const nextMap = new Map(prevMap);
+				nextMap.set(sessionId, next);
+				return nextMap;
+			});
+		},
+		[],
+	);
 
-	const addInteractions = useCallback((interactions: IInteractionRequest[]) => {
-		setActiveInteractions((prev) => {
-			const existingMap = new Map(prev.map((i) => [i.id, i]));
-			let changed = false;
-			for (const interaction of interactions) {
-				const existing = existingMap.get(interaction.id);
-				if (!existing) {
-					existingMap.set(interaction.id, interaction);
-					changed = true;
-				} else if (
-					existing.status === "pending" &&
-					interaction.status !== "pending"
-				) {
-					existingMap.set(interaction.id, interaction);
-					changed = true;
+	const addInteractions = useCallback(
+		(sessionId: string, interactions: IInteractionRequest[]) => {
+			updateSessionInteractions(sessionId, (prev) => {
+				const existingMap = new Map(prev.map((i) => [i.id, i]));
+				let changed = false;
+				for (const interaction of interactions) {
+					const existing = existingMap.get(interaction.id);
+					if (!existing) {
+						existingMap.set(interaction.id, interaction);
+						changed = true;
+					} else if (
+						existing.status === "pending" &&
+						interaction.status !== "pending"
+					) {
+						existingMap.set(interaction.id, interaction);
+						changed = true;
+					}
 				}
-			}
-			return changed ? Array.from(existingMap.values()) : prev;
-		});
-	}, []);
+				return changed ? Array.from(existingMap.values()) : prev;
+			});
+		},
+		[updateSessionInteractions],
+	);
 
 	const handleRespondToInteraction = useCallback(
 		async (interactionId: string, value: any) => {
@@ -651,7 +667,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			try {
 				await submitInteractionResponse(interaction, value);
 
-				setActiveInteractions((prev) =>
+				updateSessionInteractions(sessionIdParameter, (prev) =>
 					prev.map((i) =>
 						i.id === interactionId
 							? { ...i, status: "responded" as const, response_value: value }
@@ -666,7 +682,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				toast.error(`Failed to submit response: ${extractErrorMessage(err)}`);
 			}
 		},
-		[appId],
+		[sessionIdParameter, updateSessionInteractions],
 	);
 
 	const buildUseNavigationUrl = useCallback(
@@ -779,16 +795,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		return executionEngine.subscribeToGlobalUpdates(update);
 	}, [executionEngine, sessionIdParameter]);
 
-	// Cleanup active subscriptions and restore cached interactions on session change
+	// Cleanup active subscriptions on session change
 	useEffect(() => {
-		const cached = interactionsBySession.current.get(sessionIdParameter) ?? [];
-		setActiveInteractions(cached);
 		processedCompletedStreams.current.clear();
 		return () => {
-			interactionsBySession.current.set(
-				sessionIdParameter,
-				activeInteractionsRef.current,
-			);
 			activeSubscriptions.current.forEach((subId) => {
 				executionEngine.unsubscribeFromEventStream(sessionIdParameter, subId);
 			});
@@ -1129,7 +1139,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							appId,
 							eventId: event.id,
 							sessionId: sessionIdParameter,
-							onInteractions: addInteractions,
+							onInteractions: (interactions) =>
+								addInteractions(sessionIdParameter, interactions),
 						}),
 					)
 					.catch((error) => {
@@ -1183,7 +1194,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						done = result.done;
 
 						if (result.interactions?.length) {
-							addInteractions(result.interactions);
+							addInteractions(sessionIdParameter, result.interactions);
 						}
 
 						if (result.shouldUpdate) {
@@ -1207,7 +1218,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							eventId: event.id,
 							sessionId: sessionIdParameter,
 							live: { tmpLocalState, tmpGlobalState, processedEvents },
-							onInteractions: addInteractions,
+							onInteractions: (interactions) =>
+								addInteractions(sessionIdParameter, interactions),
 						});
 						// Clean up the reconnect subscriber tracking after completion
 						reconnectSubscribed.current.delete(subscriberId);
@@ -1478,7 +1490,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						Object.assign(responseMessage, result.responseMessage);
 
 						if (result.interactions?.length) {
-							addInteractions(result.interactions);
+							addInteractions(sessionIdParameter, result.interactions);
 						}
 
 						if (result.shouldUpdate) {
@@ -1504,7 +1516,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 								eventId: event.id,
 								sessionId: sessionIdParameter,
 								live: { tmpLocalState, tmpGlobalState, processedEvents },
-								onInteractions: addInteractions,
+								onInteractions: (interactions) =>
+									addInteractions(sessionIdParameter, interactions),
 							});
 						} finally {
 							activeSubscriptions.current = activeSubscriptions.current.filter(
@@ -1804,7 +1817,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					Object.assign(responseMessage, processed.responseMessage);
 
 					if (processed.interactions?.length) {
-						addInteractions(processed.interactions);
+						addInteractions(sessionIdParameter, processed.interactions);
 					}
 
 					// The assistant bubble appears only once the action actually

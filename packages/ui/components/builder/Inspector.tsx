@@ -30,6 +30,7 @@ import {
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../hooks";
 import { cn } from "../../lib";
+import { asArray } from "../../lib/response-shape";
 import {
 	createContractInputValue,
 	updateWidgetContractProps,
@@ -3561,7 +3562,7 @@ function OntologyIdField({
 					/>
 				</SelectTrigger>
 				<SelectContent>
-					{(ontologies.data ?? []).map((ontology) => (
+					{asArray(ontologies.data).map((ontology) => (
 						<SelectItem key={ontology.id} value={ontology.id}>
 							{ontology.name}
 						</SelectItem>

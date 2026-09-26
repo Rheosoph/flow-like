@@ -10,6 +10,26 @@ declare namespace automation {
     // === Automation ===
 
     /**
+     * Checks whether a native automation capability is granted, unavailable, or unsupported
+     * @node automation_check_capability @alias automationCheckCapability
+     * @param capability (optional) — Native capability to inspect
+     * @returns status — Capability state and recovery information
+     * @returns available — Whether access is currently available
+     * @impure has side effects / drives control flow
+     */
+    function checkCapability({ capability?: string }): { status: Struct, available: bool };
+
+    /**
+     * Requests operating-system access and returns the verified capability state
+     * @node automation_request_capability @alias automationRequestCapability
+     * @param capability (optional) — Native capability to inspect
+     * @returns status — Capability state and recovery information
+     * @returns available — Whether access is currently available
+     * @impure has side effects / drives control flow
+     */
+    function requestCapability({ capability?: string }): { status: Struct, available: bool };
+
+    /**
      * Starts a unified automation session for desktop, browser, and RPA automation
      * @node automation_start_session @alias automationStartSession
      * @param defaultDelayMs (optional) — Default delay between actions in milliseconds
@@ -100,9 +120,10 @@ declare namespace automation {
          * @returns found — Whether element was found
          * @returns selectorUsed — The selector that matched
          * @returns confidence — Match confidence
+         * @returns matchedSelector — Typed selector that matched
          * @impure has side effects / drives control flow
          */
-        function match({ session: Struct, fingerprint: Struct, strategy?: string, timeoutMs?: int }): { found: bool, selectorUsed: string, confidence: float };
+        function match({ session: Struct, fingerprint: Struct, strategy?: string, timeoutMs?: int }): { found: bool, selectorUsed: string, confidence: float, matchedSelector: Struct };
 
         /**
          * Creates fingerprint matching options
@@ -207,6 +228,8 @@ declare namespace automation {
          * @node llm_plan_actions @alias llmPlanActions
          * @param model — Vision-capable LLM model
          * @param screenshot — Base64-encoded current screenshot
+         * @param executionTarget (optional) — General proposes actions for any surface. Browser creates a plan for Execute Browser Action Plan.
+         * @param pageContext (optional) — DOM or accessibility snapshot containing selectors for browser actions
          * @param goal — What the automation should accomplish
          * @param availableActions (optional) — JSON array of available action types and their parameters
          * @param constraints (optional) — Any constraints or preferences for the plan
@@ -215,7 +238,7 @@ declare namespace automation {
          * @returns firstAction — The first action to execute
          * @impure has side effects / drives control flow
          */
-        function planActions({ model: Struct, screenshot: string, goal: string, availableActions?: string, constraints?: string }): { plan: Struct, actions: any, firstAction: Struct };
+        function planActions({ model: Struct, screenshot: string, executionTarget?: string, pageContext?: string, goal: string, availableActions?: string, constraints?: string }): { plan: Struct, actions: Struct[], firstAction: Struct };
 
         /**
          * Uses LLM to suggest the most appropriate next action given current screen and goal
@@ -295,7 +318,7 @@ declare namespace automation {
          * @returns elements — List of observed elements
          * @impure has side effects / drives control flow
          */
-        function observeScreen({ model: Struct, screenshot: string, focusArea?: string }): { observation: Struct, description: string, elements: any };
+        function observeScreen({ model: Struct, screenshot: string, focusArea?: string }): { observation: Struct, description: string, elements: Struct[] };
 
         /**
          * Uses LLM to rank multiple element candidates based on match quality
@@ -310,7 +333,7 @@ declare namespace automation {
          * @returns ranked — Candidates sorted by rank
          * @impure has side effects / drives control flow
          */
-        function rankCandidates({ model: Struct, screenshot: string, candidates: any, criteria: string, context?: string }): { result: Struct, bestMatch: string, ranked: any };
+        function rankCandidates({ model: Struct, screenshot: string, candidates: Struct[], criteria: string, context?: string }): { result: Struct, bestMatch: string, ranked: Struct[] };
 
         /**
          * Uses LLM to disambiguate between multiple element candidates
@@ -322,7 +345,7 @@ declare namespace automation {
          * @returns result — Resolution result
          * @impure has side effects / drives control flow
          */
-        function resolveElement({ model: Struct, screenshot: string, candidates: any, intent: string }): Struct;
+        function resolveElement({ model: Struct, screenshot: string, candidates: Struct[], intent: string }): Struct;
     }
 
     namespace selector {
@@ -423,8 +446,9 @@ declare namespace automation {
         /**
          * Finds a template image on screen and clicks on it
          * @node vision_click_template @alias visionClickTemplate
-         * @param session — Automation session handle (provides template matching via rustautogui)
+         * @param session — Automation session handle
          * @param template — Path to the template image file (FlowPath with caching support)
+         * @param monitor (optional) — Display index, -1 for primary, or -2 for all displays
          * @param confidence (optional) — Minimum match confidence (0.0-1.0)
          * @param clickType (optional) — Type of click to perform
          * @param offsetX (optional) — X offset from center of matched template
@@ -436,35 +460,37 @@ declare namespace automation {
          * @returns y — Y coordinate where clicked
          * @impure has side effects / drives control flow
          */
-        function clickTemplate({ session: Struct, template: Struct, confidence?: float, clickType?: string, offsetX?: int, offsetY?: int, fallbackX?: int, fallbackY?: int }): { found: bool, x: int, y: int };
+        function clickTemplate({ session: Struct, template: Struct, monitor?: int, confidence?: float, clickType?: string, offsetX?: int, offsetY?: int, fallbackX?: int, fallbackY?: int }): { found: bool, x: int, y: int };
 
         /**
          * Searches the screen for all occurrences of a template image
          * @node vision_find_all_templates @alias visionFindAllTemplates
          * @param session — Automation session handle for screen operations
          * @param template — Template image file
+         * @param monitor (optional) — Display index, -1 for primary, or -2 for all displays
          * @param confidence (optional) — Minimum match confidence (0.0-1.0)
          * @param maxResults (optional) — Maximum number of matches to return
          * @returns count — Number of matches found
          * @returns results — Array of match results (as JSON)
          * @impure has side effects / drives control flow
          */
-        function findAllTemplates({ session: Struct, template: Struct, confidence?: float, maxResults?: int }): { count: int, results: any };
+        function findAllTemplates({ session: Struct, template: Struct, monitor?: int, confidence?: float, maxResults?: int }): { count: int, results: any };
 
         /**
          * Searches the screen for a template image and returns its location
          * @node vision_find_template @alias visionFindTemplate
          * @param session — Automation session handle for screen operations
          * @param template — Template image file
+         * @param monitor (optional) — Display index, -1 for primary, or -2 for all displays
          * @param confidence (optional) — Minimum match confidence (0.0-1.0)
-         * @param matchMode (optional) — Algorithm for template matching
+         * @param matchMode (optional) — Automatic template matching for this platform
          * @returns found — Whether the template was found
          * @returns result — Match result with location and confidence
          * @returns x — X coordinate of match center
          * @returns y — Y coordinate of match center
          * @impure has side effects / drives control flow
          */
-        function findTemplate({ session: Struct, template: Struct, confidence?: float, matchMode?: string }): { found: bool, result: Struct, x: int, y: int };
+        function findTemplate({ session: Struct, template: Struct, monitor?: int, confidence?: float, matchMode?: string }): { found: bool, result: Struct, x: int, y: int };
 
         /**
          * Gets the color of a pixel at a screen position
@@ -472,19 +498,20 @@ declare namespace automation {
          * @param session — Automation session handle
          * @param x (optional) — X position
          * @param y (optional) — Y position
+         * @param monitor (optional) — Monitor index from List Displays (-1 = primary); coordinates are screenshot pixels
          * @returns red — Red component (0-255)
          * @returns green — Green component (0-255)
          * @returns blue — Blue component (0-255)
          * @returns hex — Hex color code (#RRGGBB)
          * @impure has side effects / drives control flow
          */
-        function getPixelColor({ session: Struct, x?: int, y?: int }): { red: int, green: int, blue: int, hex: string };
+        function getPixelColor({ session: Struct, x?: int, y?: int, monitor?: int }): { red: int, green: int, blue: int, hex: string };
 
         /**
          * Gets the dimensions of a monitor
          * @node vision_get_screen_size @alias visionGetScreenSize
          * @param session — Automation session handle
-         * @param monitor (optional) — Monitor index (0 = primary)
+         * @param monitor (optional) — Monitor index from List Displays (-1 = primary)
          * @returns width — Screen width
          * @returns height — Screen height
          * @impure has side effects / drives control flow
@@ -500,18 +527,19 @@ declare namespace automation {
          * @param width (optional) — Region width
          * @param height (optional) — Region height
          * @param filePath — Path to save the screenshot
+         * @param monitor (optional) — Monitor index from List Displays (-1 = primary); coordinates are screenshot pixels
          * @returns success — Whether the screenshot was saved
          * @returns image — Screenshot as NodeImage
          * @impure has side effects / drives control flow
          */
-        function screenshotRegion({ session: Struct, x?: int, y?: int, width?: int, height?: int, filePath: Struct }): { success: bool, image: Struct };
+        function screenshotRegion({ session: Struct, x?: int, y?: int, width?: int, height?: int, filePath: Struct, monitor?: int }): { success: bool, image: Struct };
 
         /**
          * Captures a screenshot and saves it to a file
          * @node vision_screenshot_to_file @alias visionScreenshotToFile
          * @param session — Automation session handle
          * @param filePath — Path to save the screenshot
-         * @param monitor (optional) — Monitor index (0 = primary)
+         * @param monitor (optional) — Monitor index from List Displays (-1 = primary)
          * @returns success — Whether the screenshot was saved
          * @returns image — Screenshot as NodeImage
          * @impure has side effects / drives control flow
@@ -523,6 +551,7 @@ declare namespace automation {
          * @node vision_wait_template @alias visionWaitTemplate
          * @param session — Automation session handle
          * @param template — Template image file
+         * @param monitor (optional) — Display index, -1 for primary, or -2 for all displays
          * @param confidence (optional) — Minimum match confidence (0.0-1.0)
          * @param timeoutMs (optional) — Maximum time to wait
          * @param pollIntervalMs (optional) — How often to check for template
@@ -530,19 +559,20 @@ declare namespace automation {
          * @returns result — Match result with location
          * @impure has side effects / drives control flow
          */
-        function waitTemplate({ session: Struct, template: Struct, confidence?: float, timeoutMs?: int, pollIntervalMs?: int }): { found: bool, result: Struct };
+        function waitTemplate({ session: Struct, template: Struct, monitor?: int, confidence?: float, timeoutMs?: int, pollIntervalMs?: int }): { found: bool, result: Struct };
 
         /**
          * Waits for a template image to disappear from screen
          * @node vision_wait_template_disappear @alias visionWaitTemplateDisappear
          * @param session — Automation session handle
          * @param template — Template image file
+         * @param monitor (optional) — Display index, -1 for primary, or -2 for all displays
          * @param confidence (optional) — Minimum match confidence (0.0-1.0)
          * @param timeoutMs (optional) — Maximum time to wait
          * @returns disappeared — Whether the template disappeared
          * @impure has side effects / drives control flow
          */
-        function waitTemplateDisappear({ session: Struct, template: Struct, confidence?: float, timeoutMs?: int }): bool;
+        function waitTemplateDisappear({ session: Struct, template: Struct, monitor?: int, confidence?: float, timeoutMs?: int }): bool;
     }
 }
 
@@ -550,20 +580,112 @@ declare namespace browser {
     // === Automation/Browser ===
 
     /**
-     * Closes an open browser context and releases resources
-     * @node browser_close @alias browserClose
-     * @param session — Automation session with browser to close
+     * Attaches ChromeDriver or EdgeDriver to an existing debugging-enabled browser.
+     * @node browser_attach @alias browserAttach
+     * @param session — Automation session
+     * @param webdriverUrl (optional) — Running ChromeDriver or EdgeDriver URL
+     * @param debuggerAddress (optional) — Existing browser debugging host:port
+     * @param browserType (optional) — Chrome or Edge
+     * @returns sessionOut — Updated automation session
      * @impure has side effects / drives control flow
      */
-    function close({ session: Struct }): void;
+    function attach({ session: Struct, webdriverUrl?: string, debuggerAddress?: string, browserType?: string }): Struct;
+
+    /**
+     * Closes a browser started by this session, or disconnects from an existing browser
+     * @node browser_close @alias browserClose
+     * @param session — Automation session with browser to close
+     * @returns sessionOut — Session with browser detached
+     * @impure has side effects / drives control flow
+     */
+    function close({ session: Struct }): Struct;
 
     /**
      * Closes a browser page/tab
      * @node browser_close_page @alias browserClosePage
      * @param session — Automation session with page to close
+     * @returns sessionOut — Session selecting a remaining tab when available
      * @impure has side effects / drives control flow
      */
-    function closePage({ session: Struct }): void;
+    function closePage({ session: Struct }): Struct;
+
+    /**
+     * Drags an element to another element.
+     * @node browser_drag @alias browserDrag
+     * @param session — Automation session
+     * @param source — Element to drag
+     * @param target — Drop target
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function drag({ session: Struct, source: Struct, target: Struct }): Struct;
+
+    /**
+     * Selects an iframe for subsequent actions on this session wire.
+     * @node browser_enter_frame @alias browserEnterFrame
+     * @param session — Automation session
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @param selector (optional) — Frame CSS selector
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function enterFrame({ session: Struct, locator?: Struct, selector?: string }): Struct;
+
+    /**
+     * Executes a validated LLM browser plan in order, stopping on the first failed action.
+     * @node browser_execute_plan @alias browserExecutePlan
+     * @param session — Automation session
+     * @param plan — Plan from LLM Plan Actions with CSS or typed selectors
+     * @param maxActions (optional) — Maximum actions accepted in one plan
+     * @param actionTimeoutMs (optional) — Maximum time per action in milliseconds
+     * @returns sessionOut — Updated automation session
+     * @returns executedCount — Number of completed actions
+     * @impure has side effects / drives control flow
+     */
+    function executePlan({ session: Struct, plan: Struct, maxActions?: int, actionTimeoutMs?: int }): { sessionOut: Struct, executedCount: int };
+
+    /**
+     * Reads, accepts, or dismisses a JavaScript alert, confirm, or prompt.
+     * @node browser_handle_dialog @alias browserHandleDialog
+     * @param session — Automation session
+     * @param action (optional) — read, accept, or dismiss
+     * @param text (optional) — Text for a prompt before accepting
+     * @returns sessionOut — Updated automation session
+     * @returns dialogText — Text shown in the dialog
+     * @impure has side effects / drives control flow
+     */
+    function handleDialog({ session: Struct, action?: string, text?: string }): { sessionOut: Struct, dialogText: string };
+
+    /**
+     * Presses a key while holding browser modifier keys.
+     * @node browser_key_chord @alias browserKeyChord
+     * @param session — Automation session
+     * @param key — Character or key name such as Enter
+     * @param modifiers (optional) — Control, Shift, Alt, or Meta
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function keyChord({ session: Struct, key: string, modifiers?: string[] }): Struct;
+
+    /**
+     * Returns to the parent frame or the top-level document.
+     * @node browser_leave_frame @alias browserLeaveFrame
+     * @param session — Automation session
+     * @param topLevel (optional) — Return to the top-level document
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function leaveFrame({ session: Struct, topLevel?: bool }): Struct;
+
+    /**
+     * Lists the browser tabs and their URLs.
+     * @node browser_list_tabs @alias browserListTabs
+     * @param session — Automation session
+     * @returns sessionOut — Updated automation session
+     * @returns tabs — Open browser tabs
+     * @impure has side effects / drives control flow
+     */
+    function listTabs({ session: Struct }): { sessionOut: Struct, tabs: Struct[] };
 
     /**
      * Creates a new browser page/tab in the given context
@@ -585,10 +707,77 @@ declare namespace browser {
      * @param viewportHeight (optional) — Browser viewport height in pixels
      * @param userAgent (optional) — Custom user agent string (optional)
      * @param pageLoadTimeout (optional) — Timeout for page loads in seconds
+     * @returns debuggerAddress — Chrome or Edge debugger endpoint, when available
      * @returns sessionOut — Automation session with browser attached
      * @impure has side effects / drives control flow
      */
-    function open({ session: Struct, webdriverUrl?: string, browserType?: string, headless?: bool, viewportWidth?: int, viewportHeight?: int, userAgent?: string, pageLoadTimeout?: int }): Struct;
+    function open({ session: Struct, webdriverUrl?: string, browserType?: string, headless?: bool, viewportWidth?: int, viewportHeight?: int, userAgent?: string, pageLoadTimeout?: int }): { debuggerAddress: string, sessionOut: Struct };
+
+    /**
+     * Opens the context menu for an element.
+     * @node browser_right_click @alias browserRightClick
+     * @param session — Automation session
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
+     * @param selector (optional) — Legacy CSS selector
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function rightClick({ session: Struct, locator?: Struct, selector?: string }): Struct;
+
+    /**
+     * Selects a tab by its explicit browser handle.
+     * @node browser_select_tab @alias browserSelectTab
+     * @param session — Automation session
+     * @param targetId (optional) — Exact CDP target ID of an attached Chrome or Edge tab
+     * @param handle (optional) — Handle returned by List Tabs
+     * @param url (optional) — Exact URL when no handle is supplied
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function selectTab({ session: Struct, targetId?: string, handle?: string, url?: string }): Struct;
+
+    /**
+     * Captures browser console messages before navigation or actions.
+     * @node browser_start_console_observer @alias browserStartConsoleObserver
+     * @param session — Automation session
+     * @param debuggerAddress (optional) — Chrome or Edge debugging address (host:port)
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function startConsoleObserver({ session: Struct, debuggerAddress?: string }): Struct;
+
+    /**
+     * Starts an installed WebDriver executable and waits until it is ready.
+     * @node browser_start_driver @alias browserStartDriver
+     * @param session — Automation session
+     * @param executable (optional) — Path to chromedriver, geckodriver, or msedgedriver
+     * @param port (optional) — Local WebDriver port
+     * @returns sessionOut — Updated automation session
+     * @returns webdriverUrl — Ready local WebDriver endpoint
+     * @impure has side effects / drives control flow
+     */
+    function startDriver({ session: Struct, executable?: string, port?: int }): { sessionOut: Struct, webdriverUrl: string };
+
+    /**
+     * Stops the WebDriver process started for this automation session.
+     * @node browser_stop_driver @alias browserStopDriver
+     * @param session — Automation session
+     * @returns sessionOut — Updated automation session
+     * @impure has side effects / drives control flow
+     */
+    function stopDriver({ session: Struct }): Struct;
+
+    /**
+     * Waits for the current tab to reach an expected URL without navigating again.
+     * @node browser_wait_for_url @alias browserWaitForUrl
+     * @param session — Automation session
+     * @param expectedUrl — Exact URL after navigation
+     * @param timeoutMs (optional) — Maximum wait in milliseconds
+     * @returns sessionOut — Updated automation session
+     * @returns found — Expected URL was reached
+     * @impure has side effects / drives control flow
+     */
+    function waitForUrl({ session: Struct, expectedUrl: string, timeoutMs?: int }): { sessionOut: Struct, found: bool };
 
     // === Automation/Browser/Auth ===
 
@@ -629,10 +818,12 @@ declare namespace browser {
      * @param session — Automation session
      * @param username (optional) — HTTP Basic Auth username
      * @param password (optional) — HTTP Basic Auth password
+     * @param origin — HTTP(S) origin allowed to receive credentials
+     * @param debuggerAddress (optional) — Optional Chrome or Edge debugger address; defaults to the attached browser
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function setBasicAuth({ session: Struct, username?: string, password?: string }): Struct;
+    function setBasicAuth({ session: Struct, username?: string, password?: string, origin: string, debuggerAddress?: string }): Struct;
 
     // === Automation/Browser/Capture ===
 
@@ -653,12 +844,13 @@ declare namespace browser {
      * @node browser_screenshot_element @alias browserScreenshotElement
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element to screenshot
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns screenshot — Screenshot as base64 PNG data
      * @returns image — Screenshot as NodeImage
      * @impure has side effects / drives control flow
      */
-    function screenshotElement({ session: Struct, selector?: string }): { sessionOut: Struct, screenshot: string, image: Struct };
+    function screenshotElement({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, screenshot: string, image: Struct };
 
     // === Automation/Browser/Extract ===
 
@@ -679,11 +871,12 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element
      * @param attribute (optional) — Name of attribute to get
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns value — Attribute value (empty if not found)
      * @impure has side effects / drives control flow
      */
-    function getAttribute({ session: Struct, selector?: string, attribute?: string }): { sessionOut: Struct, value: string };
+    function getAttribute({ session: Struct, selector?: string, attribute?: string, locator?: Struct }): { sessionOut: Struct, value: string };
 
     /**
      * Gets the HTML content of an element or the entire page
@@ -691,22 +884,24 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element (empty for entire page)
      * @param outerHtml (optional) — Include element's own tags (vs just inner content)
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns html — HTML content
      * @impure has side effects / drives control flow
      */
-    function getHtml({ session: Struct, selector?: string, outerHtml?: bool }): { sessionOut: Struct, html: string };
+    function getHtml({ session: Struct, selector?: string, outerHtml?: bool, locator?: Struct }): { sessionOut: Struct, html: string };
 
     /**
      * Gets the text content of an element
      * @node browser_get_text @alias browserGetText
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns text — Text content of the element
      * @impure has side effects / drives control flow
      */
-    function getText({ session: Struct, selector?: string }): { sessionOut: Struct, text: string };
+    function getText({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, text: string };
 
     // === Automation/Browser/Files ===
 
@@ -725,10 +920,11 @@ declare namespace browser {
      * @node browser_trigger_download @alias browserTriggerDownload
      * @param session — Automation session
      * @param selector — CSS selector for the download link/button
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function triggerDownload({ session: Struct, selector: string }): Struct;
+    function triggerDownload({ session: Struct, selector: string, locator?: Struct }): Struct;
 
     /**
      * Uploads a file to an input element using its selector
@@ -736,10 +932,11 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector for the file input element
      * @param filePath — Absolute path to the file to upload
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function uploadFile({ session: Struct, selector?: string, filePath: string }): Struct;
+    function uploadFile({ session: Struct, selector?: string, filePath: string, locator?: Struct }): Struct;
 
     /**
      * Uploads multiple files to a file input that accepts multiple
@@ -747,11 +944,12 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector for the file input element
      * @param filePaths — Array of absolute paths to the files to upload
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns uploadedCount — Number of files uploaded
      * @impure has side effects / drives control flow
      */
-    function uploadMultipleFiles({ session: Struct, selector?: string, filePaths: any }): { sessionOut: Struct, uploadedCount: int };
+    function uploadMultipleFiles({ session: Struct, selector?: string, filePaths: string[], locator?: Struct }): { sessionOut: Struct, uploadedCount: int };
 
     /**
      * Waits for a file to appear in the download directory
@@ -774,10 +972,12 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element (optional, press on active element if empty)
      * @param key (optional) — Key to press
+     * @param modifiers (optional) — Control, Shift, Alt, or Meta
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function pressKey({ session: Struct, selector?: string, key?: string }): Struct;
+    function pressKey({ session: Struct, selector?: string, key?: string, modifiers?: string[], locator?: Struct }): Struct;
 
     /**
      * Selects an option in a dropdown/select element
@@ -785,10 +985,11 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector of select element
      * @param value (optional) — Option value to select
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function selectOption({ session: Struct, selector?: string, value?: string }): Struct;
+    function selectOption({ session: Struct, selector?: string, value?: string, locator?: Struct }): Struct;
 
     /**
      * Types text into an element matching the selector
@@ -797,10 +998,11 @@ declare namespace browser {
      * @param selector (optional) — CSS selector of input element
      * @param text (optional) — Text to type into the element
      * @param clearFirst (optional) — Clear existing text before typing
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function typeText({ session: Struct, selector?: string, text?: string, clearFirst?: bool }): Struct;
+    function typeText({ session: Struct, selector?: string, text?: string, clearFirst?: bool, locator?: Struct }): Struct;
 
     // === Automation/Browser/Interact ===
 
@@ -809,40 +1011,48 @@ declare namespace browser {
      * @node browser_click @alias browserClick
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element to click
+     * @param button (optional) — left, middle, or right
+     * @param modifiers (optional) — Control, Shift, Alt, or Meta
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function click({ session: Struct, selector?: string }): Struct;
+    function click({ session: Struct, selector?: string, button?: string, modifiers?: string[], locator?: Struct }): Struct;
 
     /**
      * Double-clicks on an element matching the selector
      * @node browser_double_click @alias browserDoubleClick
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element to double-click
+     * @param button (optional) — left, middle, or right
+     * @param modifiers (optional) — Control, Shift, Alt, or Meta
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function doubleClick({ session: Struct, selector?: string }): Struct;
+    function doubleClick({ session: Struct, selector?: string, button?: string, modifiers?: string[], locator?: Struct }): Struct;
 
     /**
      * Hovers over an element matching the selector
      * @node browser_hover @alias browserHover
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element to hover
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function hover({ session: Struct, selector?: string }): Struct;
+    function hover({ session: Struct, selector?: string, locator?: Struct }): Struct;
 
     /**
      * Scrolls element into the visible area
      * @node browser_scroll_into_view @alias browserScrollIntoView
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element to scroll into view
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function scrollIntoView({ session: Struct, selector?: string }): Struct;
+    function scrollIntoView({ session: Struct, selector?: string, locator?: Struct }): Struct;
 
     // === Automation/Browser/Navigation ===
 
@@ -925,10 +1135,11 @@ declare namespace browser {
      * @node browser_start_network_observer @alias browserStartNetworkObserver
      * @param session — Automation session
      * @param urlPattern (optional) — Filter requests by URL pattern (empty for all)
+     * @param debuggerAddress (optional) — Optional Chrome or Edge debugger address; defaults to the attached browser
      * @returns sessionOut — Automation session (pass-through)
      * @impure has side effects / drives control flow
      */
-    function startNetworkObserver({ session: Struct, urlPattern?: string }): Struct;
+    function startNetworkObserver({ session: Struct, urlPattern?: string, debuggerAddress?: string }): Struct;
 
     /**
      * Waits until no network requests are in progress for a specified duration
@@ -975,6 +1186,7 @@ declare namespace browser {
      * @node browser_get_element_snapshot @alias browserGetElementSnapshot
      * @param session — Automation session
      * @param selector (optional) — CSS selector of element
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns html — Element outer HTML
      * @returns text — Element text content
@@ -986,7 +1198,7 @@ declare namespace browser {
      * @returns visible — Whether element is visible
      * @impure has side effects / drives control flow
      */
-    function getElementSnapshot({ session: Struct, selector?: string }): { sessionOut: Struct, html: string, text: string, tag: string, x: int, y: int, width: int, height: int, visible: bool };
+    function getElementSnapshot({ session: Struct, selector?: string, locator?: Struct }): { sessionOut: Struct, html: string, text: string, tag: string, x: int, y: int, width: int, height: int, visible: bool };
 
     // === Automation/Browser/Storage ===
 
@@ -1077,20 +1289,34 @@ declare namespace browser {
      * @param session — Automation session
      * @param selector (optional) — CSS selector to wait for
      * @param timeoutMs (optional) — Maximum time to wait
+     * @param locator (optional) — Typed selector, including its kind and optional CSS scope. Overrides the legacy CSS selector when connected.
      * @returns sessionOut — Automation session (pass-through)
      * @returns found — Whether the element was found within timeout
      * @impure has side effects / drives control flow
      */
-    function waitFor({ session: Struct, selector?: string, timeoutMs?: int }): { sessionOut: Struct, found: bool };
+    function waitFor({ session: Struct, selector?: string, timeoutMs?: int, locator?: Struct }): { sessionOut: Struct, found: bool };
 }
 
 declare namespace computer {
     // === Automation/Computer/Accessibility ===
 
     /**
+     * Invokes, focuses, selects, expands, collapses, or edits a native accessible element
+     * @node computer_accessibility_action @alias computerAccessibilityAction
+     * @param session — Active automation session
+     * @param element — Native element returned by Find Accessibility Element
+     * @param action (optional) — Native action
+     * @param value (optional) — Value to write for set_value
+     * @returns sessionOut — Session
+     * @impure has side effects / drives control flow
+     */
+    function accessibilityAction({ session: Struct, element: Struct, action?: string, value?: string }): Struct;
+
+    /**
      * Finds an element in the accessibility tree by role, name, or other attributes
      * @node computer_find_accessibility_element @alias computerFindAccessibilityElement
      * @param session — Computer session handle
+     * @param windowTitle (optional) — Window title, or empty for the active window
      * @param role (optional) — Accessibility role to match
      * @param name (optional) — Element name to match (partial match)
      * @returns sessionOut — Computer session handle (pass-through)
@@ -1099,14 +1325,14 @@ declare namespace computer {
      * @returns y — Element center Y coordinate
      * @impure has side effects / drives control flow
      */
-    function findAccessibilityElement({ session: Struct, role?: string, name?: string }): { sessionOut: Struct, element: Struct, x: int, y: int };
+    function findAccessibilityElement({ session: Struct, windowTitle?: string, role?: string, name?: string }): { sessionOut: Struct, element: Struct, x: int, y: int };
 
     /**
      * Retrieves the accessibility tree for a window (requires platform-specific accessibility APIs)
      * @node computer_get_accessibility_tree @alias computerGetAccessibilityTree
      * @param session — Computer session handle
-     * @param windowTitle (optional) — Title of the window to inspect (leave empty for focused window)
-     * @param maxDepth (optional) — Maximum tree depth to traverse (-1 for unlimited)
+     * @param windowTitle (optional) — Window title; empty uses the focused window, or the desktop accessibility root on Linux
+     * @param maxDepth (optional) — Maximum tree depth (1–32); results are limited to 2000 elements
      * @returns sessionOut — Computer session handle (pass-through)
      * @returns tree — Accessibility tree root node
      * @returns treeJson — Accessibility tree as JSON string for LLM processing
@@ -1122,7 +1348,7 @@ declare namespace computer {
      * @node computer_screenshot @alias computerScreenshot
      * @param session — Computer session handle
      * @param captureType (optional) — What to capture: full screen, specific display, or region
-     * @param displayIndex (optional) — Index of display to capture (when capture_type=display)
+     * @param displayIndex (optional) — Index of display for display or region capture
      * @param regionX (optional) — X coordinate of region (when capture_type=region)
      * @param regionY (optional) — Y coordinate of region
      * @param regionWidth (optional) — Width of region
@@ -1196,8 +1422,8 @@ declare namespace computer {
      * @param index (optional) — Display index (0-based)
      * @returns sessionOut — Computer session handle (pass-through)
      * @returns display — Display information
-     * @returns width — Display width in pixels
-     * @returns height — Display height in pixels
+     * @returns width — Display width in desktop input coordinates
+     * @returns height — Display height in desktop input coordinates
      * @impure has side effects / drives control flow
      */
     function getDisplay({ session: Struct, index?: int }): { sessionOut: Struct, display: Struct, width: int, height: int };
@@ -1208,8 +1434,8 @@ declare namespace computer {
      * @param session — Computer session handle
      * @returns sessionOut — Computer session handle (pass-through)
      * @returns display — Primary display information
-     * @returns width — Display width in pixels
-     * @returns height — Display height in pixels
+     * @returns width — Display width in desktop input coordinates
+     * @returns height — Display height in desktop input coordinates
      * @impure has side effects / drives control flow
      */
     function getPrimaryDisplay({ session: Struct }): { sessionOut: Struct, display: Struct, width: int, height: int };
@@ -1221,7 +1447,7 @@ declare namespace computer {
      * @returns sessionOut — Computer session handle (pass-through)
      * @returns displays — List of connected displays
      * @returns count — Number of connected displays
-     * @returns primaryIndex — Index of the primary display
+     * @returns primaryIndex — Index of the primary display, or -1 if none is designated
      * @impure has side effects / drives control flow
      */
     function listDisplays({ session: Struct }): { sessionOut: Struct, displays: Struct[], count: int, primaryIndex: int };
@@ -1263,12 +1489,13 @@ declare namespace computer {
      * @param confidence (optional) — Minimum confidence threshold for template matching (0.0-1.0)
      * @param naturalMove (optional) — Use curved, human-like mouse movement to avoid bot detection
      * @param moveDurationMs (optional) — Duration of natural mouse movement in milliseconds
-     * @param useFingerprint (optional) — If enabled, use fingerprint bounding box as fallback before raw coordinates
+     * @param useFingerprint (optional) — Resolve a unique accessible element from the current desktop before clicking
      * @param fingerprint — Optional element fingerprint for pre-click validation
+     * @param modifiers (optional) — Comma-separated ctrl, shift, alt, meta
      * @returns sessionOut — Computer session handle (pass-through)
      * @impure has side effects / drives control flow
      */
-    function mouseClick({ session: Struct, x?: int, y?: int, button?: string, useTemplateMatching?: bool, template: Struct, confidence?: float, naturalMove?: bool, moveDurationMs?: int, useFingerprint?: bool, fingerprint: Struct }): Struct;
+    function mouseClick({ session: Struct, x?: int, y?: int, button?: string, useTemplateMatching?: bool, template: Struct, confidence?: float, naturalMove?: bool, moveDurationMs?: int, useFingerprint?: bool, fingerprint: Struct, modifiers?: string }): Struct;
 
     /**
      * Double-clicks the mouse at the specified coordinates
@@ -1281,12 +1508,14 @@ declare namespace computer {
      * @param confidence (optional) — Minimum confidence threshold for template matching (0.0-1.0)
      * @param naturalMove (optional) — Use curved, human-like mouse movement to avoid bot detection
      * @param moveDurationMs (optional) — Duration of natural mouse movement in milliseconds
-     * @param useFingerprint (optional) — If enabled, use fingerprint bounding box as fallback before raw coordinates
+     * @param useFingerprint (optional) — Resolve a unique accessible element from the current desktop before clicking
      * @param fingerprint — Optional element fingerprint for pre-click validation
+     * @param button (optional) — Mouse button
+     * @param modifiers (optional) — Comma-separated ctrl, shift, alt, meta
      * @returns sessionOut — Computer session handle (pass-through)
      * @impure has side effects / drives control flow
      */
-    function mouseDoubleClick({ session: Struct, x?: int, y?: int, useTemplateMatching?: bool, template: Struct, confidence?: float, naturalMove?: bool, moveDurationMs?: int, useFingerprint?: bool, fingerprint: Struct }): Struct;
+    function mouseDoubleClick({ session: Struct, x?: int, y?: int, useTemplateMatching?: bool, template: Struct, confidence?: float, naturalMove?: bool, moveDurationMs?: int, useFingerprint?: bool, fingerprint: Struct, button?: string, modifiers?: string }): Struct;
 
     /**
      * Drags the mouse from one position to another
@@ -1297,10 +1526,11 @@ declare namespace computer {
      * @param toX (optional) — Ending X coordinate
      * @param toY (optional) — Ending Y coordinate
      * @param button (optional) — Mouse button to use for dragging
+     * @param modifiers (optional) — Comma-separated ctrl, shift, alt, meta
      * @returns sessionOut — Computer session handle (pass-through)
      * @impure has side effects / drives control flow
      */
-    function mouseDrag({ session: Struct, fromX?: int, fromY?: int, toX?: int, toY?: int, button?: string }): Struct;
+    function mouseDrag({ session: Struct, fromX?: int, fromY?: int, toX?: int, toY?: int, button?: string, modifiers?: string }): Struct;
 
     /**
      * Moves the mouse cursor to the specified screen coordinates
@@ -1378,13 +1608,15 @@ declare namespace computer {
      * Brings a window to the front and gives it focus
      * @node computer_focus_window @alias computerFocusWindow
      * @param session — Computer session handle
+     * @param windowId (optional) — Native window ID; fails if that window no longer exists
+     * @param processName (optional) — Exact application name to disambiguate the window
      * @param windowTitle — Title or app name to search for (partial match on both title and app name)
      * @param exactMatch (optional) — Require exact title match
      * @param launchIfNotFound (optional) — Try to launch the application if no window is found
      * @returns window — Focused window information
      * @impure has side effects / drives control flow
      */
-    function focusWindow({ session: Struct, windowTitle: string, exactMatch?: bool, launchIfNotFound?: bool }): Struct;
+    function focusWindow({ session: Struct, windowId?: string, processName?: string, windowTitle: string, exactMatch?: bool, launchIfNotFound?: bool }): Struct;
 
     /**
      * Gets information about the currently focused window
@@ -1402,11 +1634,12 @@ declare namespace computer {
      * @param session — Computer session handle
      * @param path — Application path or command
      * @param args (optional) — Command line arguments (space-separated)
+     * @param arguments (optional) — Arguments passed directly without shell evaluation
      * @param waitMs (optional) — Time to wait after launching (ms)
      * @returns pid — Process ID if available
      * @impure has side effects / drives control flow
      */
-    function launchApp({ session: Struct, path: string, args?: string, waitMs?: int }): int;
+    function launchApp({ session: Struct, path: string, args?: string, arguments?: string[], waitMs?: int }): int;
 
     /**
      * Lists all visible windows on the desktop
@@ -1416,7 +1649,35 @@ declare namespace computer {
      * @returns count — Number of windows
      * @impure has side effects / drives control flow
      */
-    function listWindows({ session: Struct }): { windows: any, count: int };
+    function listWindows({ session: Struct }): { windows: Struct[], count: int };
+
+    /**
+     * Restores, minimizes, maximizes, moves, resizes, or closes a window by native ID
+     * @node computer_window_operation @alias computerWindowOperation
+     * @param session — Active session
+     * @param windowId — ID returned by List Windows
+     * @param operation (optional) — Native window operation
+     * @param x (optional) — Desktop coordinates for move_resize
+     * @param y (optional) — Desktop coordinates for move_resize
+     * @param width (optional) — Desktop coordinates for move_resize
+     * @param height (optional) — Desktop coordinates for move_resize
+     * @returns sessionOut — Session
+     * @impure has side effects / drives control flow
+     */
+    function manageWindow({ session: Struct, windowId: string, operation?: string, x?: int, y?: int, width?: int, height?: int }): Struct;
+
+    /**
+     * Waits for a uniquely matching window or a timeout
+     * @node computer_wait_for_window @alias computerWaitForWindow
+     * @param session — Active session
+     * @param windowTitle — Window title substring
+     * @param processName (optional) — Exact application name
+     * @param focused (optional) — Wait until the matched window is focused
+     * @param timeoutMs (optional) — Maximum wait in milliseconds
+     * @returns window — Matched window
+     * @impure has side effects / drives control flow
+     */
+    function waitForWindow({ session: Struct, windowTitle: string, processName?: string, focused?: bool, timeoutMs?: int }): Struct;
 }
 
 declare namespace rpa {
@@ -1442,11 +1703,12 @@ declare namespace rpa {
      * @node rpa_assert_template_exists @alias rpaAssertTemplateExists
      * @param session — RPA session handle
      * @param templatePath (optional) — Path to the template image
+     * @param template — Template image from any FlowPath store; preferred over a local path
      * @param confidence (optional) — Minimum match confidence
      * @returns passed — Whether assertion passed
      * @impure has side effects / drives control flow
      */
-    function assertTemplateExists({ session: Struct, templatePath?: string, confidence?: float }): bool;
+    function assertTemplateExists({ session: Struct, templatePath?: string, template: Struct, confidence?: float }): bool;
 
     /**
      * Calculates elapsed time from a start timestamp
@@ -1521,12 +1783,13 @@ declare namespace rpa {
      * @node rpa_locate_template @alias rpaLocateTemplate
      * @param session — RPA session handle
      * @param templatePath (optional) — Path to the template image
+     * @param template — Template image from any FlowPath store; preferred over a local path
      * @param confidence (optional) — Minimum match confidence (0.0-1.0)
      * @returns x — X coordinate
      * @returns y — Y coordinate
      * @impure has side effects / drives control flow
      */
-    function locateTemplate({ session: Struct, templatePath?: string, confidence?: float }): { x: int, y: int };
+    function locateTemplate({ session: Struct, templatePath?: string, template: Struct, confidence?: float }): { x: int, y: int };
 
     /**
      * Logs an automation action for debugging and auditing
@@ -1551,17 +1814,18 @@ declare namespace rpa {
     function parseCheckpoint({ checkpointData?: string }): { data: string, name: string, timestamp: string };
 
     /**
-     * Retries an action multiple times with configurable backoff. WARNING: This node activates exec_attempt in a loop but the current executor does not re-enter downstream nodes -- the retry semantics require executor-level loop support to work correctly.
+     * Runs an action again after an error or a retry condition, with configurable backoff.
      * @node rpa_retry_loop @alias rpaRetryLoop
      * @param maxRetries (optional) — Maximum number of retry attempts
      * @param initialDelayMs (optional) — Initial delay before first retry
      * @param backoffType (optional) — Type of backoff strategy
-     * @param shouldRetry (optional) — Whether to retry (connect to condition check)
+     * @param shouldRetry (optional) — Retry even when the action succeeds (connect a condition if needed)
      * @returns attempt — Current attempt number
      * @returns totalAttempts — Total attempts made
+     * @returns lastError — Most recent action failure, empty after success
      * @impure has side effects / drives control flow
      */
-    function retryLoop({ maxRetries?: int, initialDelayMs?: int, backoffType?: string, shouldRetry?: bool }): { attempt: int, totalAttempts: int };
+    function retryLoop({ maxRetries?: int, initialDelayMs?: int, backoffType?: string, shouldRetry?: bool }): { attempt: int, totalAttempts: int, lastError: string };
 
     /**
      * Creates checkpoint data for potential recovery
@@ -1603,7 +1867,7 @@ declare namespace rpa {
     function takeSnapshot({ session: Struct, filePath: Struct, monitor?: int }): bool;
 
     /**
-     * Catches errors from automation actions. WARNING: This node reads error_occurred as a plain boolean input -- it does not actually intercept panics or Result::Err from downstream nodes. True try/catch semantics require executor-level support.
+     * Executes an action branch and routes errors to Catch.
      * @node rpa_try_catch @alias rpaTryCatch
      * @param errorOccurred (optional) — Whether an error occurred (wire from action)
      * @param errorMessage (optional) — Error message if any (wire from action)
@@ -1650,6 +1914,7 @@ declare namespace rpa {
      * @node rpa_wait_for_template @alias rpaWaitForTemplate
      * @param session — Automation session
      * @param templatePath (optional) — Path to the template image
+     * @param template — Template image from any FlowPath store; preferred over a local path
      * @param confidence (optional) — Minimum match confidence (0.0-1.0)
      * @param timeoutMs (optional) — Maximum wait time in milliseconds
      * @param pollIntervalMs (optional) — Check interval in milliseconds
@@ -1657,13 +1922,13 @@ declare namespace rpa {
      * @returns y — Y coordinate
      * @impure has side effects / drives control flow
      */
-    function waitForTemplate({ session: Struct, templatePath?: string, confidence?: float, timeoutMs?: int, pollIntervalMs?: int }): { x: int, y: int };
+    function waitForTemplate({ session: Struct, templatePath?: string, template: Struct, confidence?: float, timeoutMs?: int, pollIntervalMs?: int }): { x: int, y: int };
 
     /**
      * Executes an action with a timeout constraint
      * @node rpa_with_timeout @alias rpaWithTimeout
      * @param timeoutMs (optional) — Maximum time to wait for action
-     * @param completed (optional) — Whether the action completed (wire from action result)
+     * @param completed (optional) — Legacy input; completion is determined by the action branch
      * @returns elapsedMs — Time elapsed
      * @impure has side effects / drives control flow
      */

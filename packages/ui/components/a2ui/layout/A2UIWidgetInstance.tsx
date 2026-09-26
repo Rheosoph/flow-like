@@ -359,7 +359,8 @@ export function A2UIWidgetInstance({
 		if (inlineWidgetDef) return inlineWidgetDef;
 		// Query errors retain old data, but a confirmed deletion invalidates that definition.
 		if (isMissingResourceError(fetched.error)) return undefined;
-		return fetched.data;
+		// A restored cache entry can predate the payload check and hold no widget at all.
+		return Array.isArray(fetched.data?.components) ? fetched.data : undefined;
 	}, [fromRefs, inlineWidgetDef, fetched.data, fetched.error]);
 
 	// Apply this instance's parameter values onto the widget's components, so the same widget

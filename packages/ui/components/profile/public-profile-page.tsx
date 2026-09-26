@@ -15,6 +15,7 @@ import { useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInfiniteInvoke, useInvoke } from "../../hooks/use-invoke";
+import { asArray } from "../../lib/response-shape";
 import type { IApp } from "../../lib/schema/app/app";
 import { IAppSearchSort } from "../../lib/schema/app/app-search-query";
 import type { IMetadata } from "../../lib/schema/bit/bit";
@@ -420,8 +421,10 @@ export function PublicProfilePage() {
 	);
 	const combinedApps = useMemo(() => {
 		const unique = new Map<string, [IApp, IMetadata | undefined]>();
-		for (const item of apps.data?.pages.flat() ?? [])
-			unique.set(item[0].id, item);
+		for (const item of asArray(apps.data?.pages).flatMap((page) =>
+			asArray(page),
+		))
+			if (item?.[0]?.id) unique.set(item[0].id, item);
 		return [...unique.values()];
 	}, [apps.data]);
 

@@ -19,6 +19,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/native-event";
 import type { NativeCustomWidget } from "@flow-like/flow-like-ui/lib/native-widget";
 import type { RecentAppUse } from "@flow-like/flow-like-ui/lib/recent-apps";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { routePathsEqual } from "@flow-like/flow-like-ui/lib/route-path";
 import {
 	BUILTIN_RUNTIME_EVENT_TYPE_SET,
@@ -220,7 +221,7 @@ export async function loadNativeSnapshot(
 		);
 		results.forEach((result, offset) => {
 			const appId = batch[offset][0].id;
-			if (result.status === "fulfilled") {
+			if (result.status === "fulfilled" && Array.isArray(result.value)) {
 				eventsByApp.set(appId, result.value);
 				eventCatalog?.set(appId, { events: result.value, fetchedAt: nowMs });
 				return;
@@ -317,13 +318,13 @@ export async function loadNativeSnapshot(
 		section(
 			"attention",
 			"Needs attention",
-			(activity?.attention ?? []).filter(visibleRun).slice(0, 8).map(runItem),
+			asArray(activity?.attention).filter(visibleRun).slice(0, 8).map(runItem),
 			activity !== undefined,
 		),
 		section(
 			"recent_runs",
 			"Recent runs",
-			(history?.items ?? []).filter(visibleRun).map(runItem),
+			asArray(history?.items).filter(visibleRun).map(runItem),
 			history !== undefined,
 		),
 		section(
@@ -636,11 +637,7 @@ export async function dispatchNativeAction(
 			)
 				throw new Error("This app path no longer opens an active interface.");
 		}
-		context.navigate(
-			pathUseUrl(
-				new URL(appRouteUrl(action.appId, target), "https://native.invalid"),
-			),
-		);
+		context.navigate(appRouteUrl(action.appId, target));
 		return;
 	}
 	if (action.kind === "open_run") {

@@ -499,7 +499,7 @@ export function FlowpilotSection({
 									{t(
 										"valFailuresRecordedAcrossAllReportedRuns",
 										"{{val}} failures recorded across all reported runs.",
-										{ val: totals.failuresTotal.toLocaleString() },
+										{ val: (totals.failuresTotal ?? 0).toLocaleString() },
 									)}
 								</CardDescription>
 							</CardHeader>

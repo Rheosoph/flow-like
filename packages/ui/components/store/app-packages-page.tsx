@@ -3,19 +3,35 @@
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	ArrowUpCircle,
-	ChevronDown,
-	ChevronRight,
-	Layers,
+	Ban,
 	Package,
+	Plus,
 	RefreshCw,
+	ShoppingBag,
 	Trash2,
 	TriangleAlert,
-	Zap,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { isPurchaseRequiredError } from "../../lib/api-error";
+import {
+	type PackageAccess,
+	groupPackageNodesByCategory,
+	packageAccess,
+} from "../../lib/app-package-overview";
+import {
+	type LicenseTimeLeft,
+	type PackagePinState,
+	licenseExpiresAt,
+	licenseTimeLeft,
+	packagePinState,
+	storePackageHref,
+} from "../../lib/package-license";
+import type { AppPackageWidget } from "../../lib/package-widgets";
+import { asArray } from "../../lib/response-shape";
 import type { INode } from "../../lib/schema/flow/node";
 import type {
 	AddAppPackageRequest,
@@ -28,27 +44,26 @@ import { useBackend } from "../../state/backend-state";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "../ui/card";
-import {
-	Collapsible,
-	CollapsibleContent,
-	CollapsibleTrigger,
-} from "../ui/collapsible";
 import { EmptyState } from "../ui/empty-state";
 import { Skeleton } from "../ui/skeleton";
-import { Switch } from "../ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import {
-	Tooltip,
-	TooltipContent,
-	TooltipProvider,
-	TooltipTrigger,
-} from "../ui/tooltip";
+	type PackageAccessRow,
+	PackageAccessSection,
+} from "./app-packages/package-access-section";
+import {
+	PackageNodeCategories,
+	PackageNodeList,
+} from "./app-packages/package-nodes-section";
+import { PackageTile } from "./app-packages/package-tile";
+import { PackageUpdatesBanner } from "./app-packages/package-updates-banner";
+import { PackageWidgetsSection } from "./app-packages/package-widgets-section";
+import { LICENSE_WARNING_BADGE_CLASS } from "./app-packages/parts";
+import {
+	APP_PACKAGE_MANIFEST_KEY,
+	type PackageManifestView,
+	usePackageManifests,
+} from "./app-packages/use-package-manifests";
 import { PackageSearchDialog } from "./package-search-dialog";
 import {
 	WidgetPermissionsButton,
@@ -73,30 +88,90 @@ function installedToAppPackage(
 		autoUpdate: false,
 		addedAt: pkg.installedAt,
 		stale: false,
+		metadata: pkg.metadata,
 	};
 }
 
-function groupNodesByCategory(nodes: INode[]): Map<string, INode[]> {
-	const grouped = new Map<string, INode[]>();
-	for (const node of nodes) {
-		const category = node.category || "Uncategorized";
-		const existing = grouped.get(category);
-		if (existing) {
-			existing.push(node);
-		} else {
-			grouped.set(category, [node]);
-		}
-	}
-	return new Map([...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)));
+interface PinLicenseView {
+	state: PackagePinState;
+	expiresAt?: number;
+	timeLeft?: LicenseTimeLeft;
+}
+
+type PackagesTab = "overview" | "nodes" | "widgets" | "access";
+
+interface PackageView {
+	pkg: AppPackage;
+	name: string;
+	description?: string;
+	nodes: INode[];
+	manifest?: PackageManifestView;
+	license: PinLicenseView;
+	timeLeftLabel?: string;
+	access: PackageAccess;
+}
+
+const LICENSE_TICK_MS = 60_000;
+const OVERVIEW_WIDGET_LIMIT = 3;
+const SKELETON_KEYS = ["a", "b", "c", "d"] as const;
+const WARNING_ALERT_CLASS =
+	"border-amber-500/40 bg-amber-500/5 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400";
+
+function useNow(intervalMs: number, enabled: boolean): number {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!enabled) return;
+		setNow(Date.now());
+		const id = setInterval(() => setNow(Date.now()), intervalMs);
+		return () => clearInterval(id);
+	}, [intervalMs, enabled]);
+	return now;
+}
+
+/** Servers without licensing leave the decision to the reactivate endpoint. */
+function canReactivate(pkg: AppPackage): boolean {
+	return pkg.license ? pkg.viewerHasPackage === true : true;
+}
+
+function pinLicenseView(pkg: AppPackage, now: number): PinLicenseView {
+	const state = packagePinState(pkg, now);
+	const expiresAt = licenseExpiresAt(pkg);
+	return {
+		state,
+		expiresAt,
+		timeLeft: state === "lapsed" ? licenseTimeLeft(expiresAt, now) : undefined,
+	};
+}
+
+function useTimeLeftLabel() {
+	const { t } = useTranslation("store");
+	return useCallback(
+		(left: LicenseTimeLeft) =>
+			left.days >= 1
+				? t("licenseDaysLeft", {
+						defaultValue_one: "{{count}} day left",
+						defaultValue_other: "{{count}} days left",
+						count: left.days,
+					})
+				: t("licenseHoursLeft", {
+						defaultValue_one: "{{count}} hour left",
+						defaultValue_other: "{{count}} hours left",
+						count: left.hours,
+					}),
+		[t],
+	);
 }
 
 export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	const { t } = useTranslation("store");
 	const backend = useBackend();
+	const router = useRouter();
 	const queryClient = useQueryClient();
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [permissionsOpen, setPermissionsOpen] = useState(false);
+	const [tab, setTab] = useState<PackagesTab>("overview");
 	const widgetConsents = useMicroWidgetConsentEntries({ appId });
+	const formatTimeLeft = useTimeLeftLabel();
 
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -143,11 +218,12 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			isOffline.data !== undefined &&
 			(isOffline.data || !!profile.data),
 	});
+	const packageRows = useMemo(() => asArray(packages.data), [packages.data]);
 
 	const catalog = useQuery<INode[]>({
 		queryKey: ["app-catalog-nodes", appId],
 		queryFn: () => backend.boardState.getCatalog(appId),
-		enabled: !!appId && !!packages.data?.length,
+		enabled: !!appId && packageRows.length > 0,
 	});
 
 	const updates = useQuery<PackageUpdate[]>({
@@ -163,7 +239,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			!!appId &&
 			isOffline.data === false &&
 			!!profile.data &&
-			!!packages.data?.length,
+			packageRows.length > 0,
 	});
 
 	const nodesByPackage = useMemo(() => {
@@ -183,7 +259,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 
 	const updatesByPackage = useMemo(() => {
 		const map = new Map<string, PackageUpdate>();
-		for (const update of updates.data ?? []) {
+		for (const update of asArray(updates.data)) {
 			map.set(update.packageId, update);
 		}
 		return map;
@@ -197,6 +273,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
 		queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
 		queryClient.invalidateQueries({ queryKey: ["app-package-widgets", appId] });
+		queryClient.invalidateQueries({ queryKey: [APP_PACKAGE_MANIFEST_KEY] });
 	}, [queryClient, appId]);
 
 	const addPackage = useMutation({
@@ -212,12 +289,28 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			toast.success(t("packageAdded", "Package added"));
 			invalidatePackageQueries();
 		},
-		onError: (err: Error) =>
+		onError: (err: Error, req) => {
+			if (isPurchaseRequiredError(err)) {
+				toast.error(
+					t(
+						"packageLicenseRequiredToAdd",
+						"Get this package before adding it. An admin or the owner who holds a paid package licenses it for the project.",
+					),
+					{
+						action: {
+							label: t("getPackage", "Get package"),
+							onClick: () => router.push(storePackageHref(req.packageId)),
+						},
+					},
+				);
+				return;
+			}
 			toast.error(
 				t("failedToAddPackageMessage", "Failed to add package: {{message}}", {
 					message: err.message,
 				}),
-			),
+			);
+		},
 	});
 
 	const removePackage = useMutation({
@@ -287,7 +380,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		},
 		onSuccess: () => {
 			toast.success(t("packageReactivated", "Package reactivated"));
-			queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
+			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
 			toast.error(
@@ -354,10 +447,12 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	});
 
 	const handleSelect = useCallback(
-		(packageId: string, version: string) => {
-			addPackage.mutate({ packageId, version, autoUpdate: !isOffline.data });
-			setSearchOpen(false);
-		},
+		(packageId: string, version: string) =>
+			addPackage.mutateAsync({
+				packageId,
+				version,
+				autoUpdate: !isOffline.data,
+			}),
 		[addPackage, isOffline.data],
 	);
 
@@ -365,136 +460,346 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	// newer version available. Stale packages must be reactivated first.
 	const applicableUpdates = useMemo(
 		() =>
-			(packages.data ?? [])
+			packageRows
 				.filter((p) => !p.stale)
 				.flatMap((p) => updatesByPackage.get(p.packageId) ?? []),
-		[packages.data, updatesByPackage],
+		[packageRows, updatesByPackage],
 	);
 
 	const packageNames = useMemo(
 		() =>
 			new Map(
-				(packages.data ?? []).map((p) => [
-					p.packageId,
-					p.packageName ?? p.packageId,
-				]),
+				packageRows.map((p) => [p.packageId, p.packageName ?? p.packageId]),
 			),
-		[packages.data],
+		[packageRows],
 	);
 
-	const excludeIds = packages.data?.map((p) => p.packageId) ?? [];
-	const staleCount = packages.data?.filter((p) => p.stale).length ?? 0;
+	const hasLapsedPins = useMemo(
+		() => packageRows.some((p) => p.license?.status === "lapsed"),
+		[packageRows],
+	);
+	const now = useNow(LICENSE_TICK_MS, hasLapsedPins);
+	const licenseViews = useMemo(
+		() =>
+			new Map(packageRows.map((p) => [p.packageId, pinLicenseView(p, now)])),
+		[packageRows, now],
+	);
+	const licenseAlerts = useMemo(
+		() =>
+			packageRows.flatMap((pkg) => {
+				const view = licenseViews.get(pkg.packageId);
+				return view && (view.state === "lapsed" || view.state === "expired")
+					? [{ pkg, view }]
+					: [];
+			}),
+		[packageRows, licenseViews],
+	);
+
+	const excludeIds = packageRows.map((p) => p.packageId);
+
+	const packageIds = useMemo(
+		() => packageRows.map((p) => p.packageId),
+		[packageRows],
+	);
+	const manifests = usePackageManifests(packageIds);
+	const offline = !!isOffline.data;
+	const countsLoading = catalog.isLoading;
+
+	const views = useMemo(
+		(): PackageView[] =>
+			packageRows.map((pkg) => {
+				const manifest = manifests.byId.get(pkg.packageId);
+				const nodes = nodesByPackage.get(pkg.packageId) ?? [];
+				const license =
+					licenseViews.get(pkg.packageId) ?? pinLicenseView(pkg, now);
+				return {
+					pkg,
+					name: pkg.metadata?.name || pkg.packageName || pkg.packageId,
+					description:
+						pkg.metadata?.description || manifest?.access?.description,
+					nodes,
+					manifest,
+					license,
+					timeLeftLabel: license.timeLeft
+						? formatTimeLeft(license.timeLeft)
+						: undefined,
+					access: packageAccess(nodes, manifest?.access),
+				};
+			}),
+		[
+			packageRows,
+			manifests.byId,
+			nodesByPackage,
+			licenseViews,
+			now,
+			formatTimeLeft,
+		],
+	);
+
+	const displayNames = useMemo(
+		() => new Map(views.map((view) => [view.pkg.packageId, view.name])),
+		[views],
+	);
+
+	const widgets = useMemo(
+		(): AppPackageWidget[] =>
+			views.flatMap((view) =>
+				(view.manifest?.widgets ?? []).map((widget) => ({
+					packageId: view.pkg.packageId,
+					packageName: view.name,
+					packageVersion: view.pkg.version,
+					bundleHash: view.manifest?.bundleHash,
+					widget,
+				})),
+			),
+		[views],
+	);
+
+	const nodeGroups = useMemo(
+		() =>
+			groupPackageNodesByCategory(
+				new Map(views.map((view) => [view.pkg.packageId, view.nodes])),
+				t("appPackagesUncategorized", "Uncategorized"),
+			),
+		[views, t],
+	);
+	const nodeTotal = useMemo(
+		() => views.reduce((sum, view) => sum + view.nodes.length, 0),
+		[views],
+	);
+
+	const mutedPackageIds = useMemo(
+		() =>
+			new Set(
+				views
+					.filter(
+						(view) =>
+							view.license.state === "stale" ||
+							view.license.state === "expired",
+					)
+					.map((view) => view.pkg.packageId),
+			),
+		[views],
+	);
+
+	const accessRows = useMemo(
+		(): PackageAccessRow[] =>
+			views.map((view) => ({
+				packageId: view.pkg.packageId,
+				name: view.name,
+				access: view.access,
+				widgets: view.manifest?.widgets ?? [],
+				pinState: view.license.state,
+				timeLeftLabel: view.timeLeftLabel,
+			})),
+		[views],
+	);
+
+	const openGrants = useCallback(() => setPermissionsOpen(true), []);
+	const showTab = useCallback((next: PackagesTab) => () => setTab(next), []);
 
 	if (packages.isLoading || isOffline.isLoading)
 		return <PackagesPageSkeleton />;
 
+	const summary =
+		packageRows.length > 0 && !countsLoading
+			? t("appPackagesSummary", {
+					defaultValue_one:
+						"{{count}} package gives this app {{nodes}} and {{widgets}}.",
+					defaultValue_other:
+						"{{count}} packages give this app {{nodes}} and {{widgets}}.",
+					count: packageRows.length,
+					nodes: t("nodeCount", {
+						defaultValue_one: "{{count}} node",
+						defaultValue_other: "{{count}} nodes",
+						count: nodeTotal,
+					}),
+					widgets: t("appPackagesWidgetCount", {
+						defaultValue_one: "{{count}} widget",
+						defaultValue_other: "{{count}} widgets",
+						count: widgets.length,
+					}),
+				})
+			: t("wasmPackagesLinkedToThisApp", "WASM packages linked to this app");
+
+	const accessSection = (
+		<PackageAccessSection
+			rows={accessRows}
+			grantCount={widgetConsents.length}
+			onManageGrants={openGrants}
+		/>
+	);
+
 	return (
-		<Card>
-			<CardHeader className="flex flex-row items-center justify-between">
-				<div>
-					<CardTitle>{t("packages", "Packages")}</CardTitle>
-					<CardDescription>
-						{t(
-							"wasmPackagesLinkedToThisApp",
-							"WASM packages linked to this app",
-						)}
-					</CardDescription>
+		<div className="flex flex-col gap-6">
+			<header className="flex flex-wrap items-start justify-between gap-4">
+				<div className="min-w-0">
+					<h1 className="text-xl font-semibold tracking-tight">
+						{t("packages", "Packages")}
+					</h1>
+					<p className="mt-1 text-sm text-muted-foreground">{summary}</p>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2">
 					<WidgetPermissionsButton
 						count={widgetConsents.length}
-						onClick={() => setPermissionsOpen(true)}
+						onClick={openGrants}
 					/>
-					{applicableUpdates.length > 0 && !isOffline.data && (
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => applyAllUpdates.mutate(applicableUpdates)}
-							disabled={applyAllUpdates.isPending || applyUpdate.isPending}
-						>
-							<ArrowUpCircle className="mr-2 h-4 w-4" />
-							{t("updateAllLength", "Update all ({{length}})", {
-								length: applicableUpdates.length,
-							})}
-						</Button>
-					)}
 					<Button size="sm" onClick={() => setSearchOpen(true)}>
-						<Package className="mr-2 h-4 w-4" />
+						<Plus className="size-4" />
 						{t("addPackage", "Add Package")}
 					</Button>
 				</div>
-			</CardHeader>
-			<CardContent>
-				{staleCount > 0 && !isOffline.data && (
-					<Alert variant="destructive" className="mb-4">
-						<TriangleAlert className="h-4 w-4" />
-						<AlertTitle>
-							{t("stalePackagesDetected", "Stale packages detected")}
-						</AlertTitle>
-						<AlertDescription>
-							{t("stalePackagesWarning", {
-								defaultValue_one:
-									"{{count}} package is stale because the member who added it left the project. Stale packages cannot be updated or placed on new boards. An admin with access to the package can reactivate it.",
-								defaultValue_other:
-									"{{count}} packages are stale because the members who added them left the project. Stale packages cannot be updated or placed on new boards. An admin with access to the package can reactivate them.",
-								count: staleCount,
-							})}
-						</AlertDescription>
-					</Alert>
-				)}
-				{!packages.data?.length ? (
-					<EmptyState
-						className="w-full max-w-none grow"
-						icons={[Package]}
-						title={t("noPackages", "No packages")}
-						description={t(
-							"addAWasmPackageToGetStarted",
-							"Add a WASM package to get started.",
-						)}
+			</header>
+
+			{!offline &&
+				licenseAlerts.map(({ pkg, view }) => (
+					<PackageLicenseAlert
+						key={pkg.id}
+						pkg={pkg}
+						view={view}
+						onReactivate={() => reactivatePackage.mutate(pkg.packageId)}
+						onRemove={() => removePackage.mutate(pkg.packageId)}
+						isReactivating={reactivatePackage.isPending}
+						isRemoving={removePackage.isPending}
 					/>
-				) : (
-					<div className="space-y-3">
-						{packages.data.map((pkg) => (
-							<PackageCard
-								key={pkg.id}
-								pkg={pkg}
-								offline={!!isOffline.data}
-								nodes={nodesByPackage.get(pkg.packageId) ?? []}
-								catalogLoading={catalog.isLoading}
-								update={updatesByPackage.get(pkg.packageId)}
-								onToggleAutoUpdate={(val) =>
-									toggleAutoUpdate.mutate({
-										pkgId: pkg.packageId,
-										autoUpdate: val,
+				))}
+
+			{packageRows.length === 0 ? (
+				<EmptyState
+					className="w-full max-w-none grow"
+					icons={[Package]}
+					title={t("noPackages", "No packages")}
+					description={t(
+						"addAWasmPackageToGetStarted",
+						"Add a WASM package to get started.",
+					)}
+				/>
+			) : (
+				<Tabs
+					value={tab}
+					onValueChange={(value) => setTab(value as PackagesTab)}
+					className="gap-6"
+				>
+					<TabsList>
+						<TabsTrigger value="overview">
+							{t("overview", "Overview")}
+						</TabsTrigger>
+						<TabsTrigger value="nodes">
+							{t("appPackagesNodes", "Nodes")}
+							{!countsLoading && <TabCount count={nodeTotal} />}
+						</TabsTrigger>
+						<TabsTrigger value="widgets">
+							{t("appPackagesWidgets", "Widgets")}
+							{!manifests.loading && <TabCount count={widgets.length} />}
+						</TabsTrigger>
+						<TabsTrigger value="access">
+							{t("appPackagesAccess", "Access")}
+						</TabsTrigger>
+					</TabsList>
+
+					<TabsContent value="overview" className="flex flex-col gap-8">
+						{!offline && (
+							<PackageUpdatesBanner
+								updates={applicableUpdates}
+								packageNames={displayNames}
+								pending={applyUpdate.isPending || applyAllUpdates.isPending}
+								onApply={(update) =>
+									applyUpdate.mutate({
+										pkgId: update.packageId,
+										version: update.latestVersion,
 									})
 								}
-								onApplyUpdate={() => {
-									const update = updatesByPackage.get(pkg.packageId);
-									if (update) {
-										applyUpdate.mutate({
-											pkgId: pkg.packageId,
-											version: update.latestVersion,
-										});
-									}
-								}}
-								onRemove={() => removePackage.mutate(pkg.packageId)}
-								onReactivate={() => reactivatePackage.mutate(pkg.packageId)}
-								isToggling={toggleAutoUpdate.isPending}
-								isRemoving={removePackage.isPending}
-								isReactivating={reactivatePackage.isPending}
-								isApplyingUpdate={
-									applyUpdate.isPending || applyAllUpdates.isPending
-								}
+								onApplyAll={() => applyAllUpdates.mutate(applicableUpdates)}
 							/>
-						))}
-					</div>
-				)}
-			</CardContent>
+						)}
+						<section
+							aria-label={t("appPackagesLinked", "Linked packages")}
+							className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+						>
+							{views.map((view) => (
+								<PackageTile
+									key={view.pkg.id}
+									pkg={view.pkg}
+									name={view.name}
+									description={view.description}
+									pinState={view.license.state}
+									timeLeftLabel={view.timeLeftLabel}
+									nodeCount={view.nodes.length}
+									widgetCount={view.manifest?.widgets.length ?? 0}
+									countsLoading={countsLoading}
+									access={view.access}
+									update={updatesByPackage.get(view.pkg.packageId)}
+									offline={offline}
+									canReactivate={canReactivate(view.pkg)}
+									pending={{
+										autoUpdate: toggleAutoUpdate.isPending,
+										update: applyUpdate.isPending || applyAllUpdates.isPending,
+										reactivate: reactivatePackage.isPending,
+										remove: removePackage.isPending,
+									}}
+									actions={{
+										onToggleAutoUpdate: (autoUpdate) =>
+											toggleAutoUpdate.mutate({
+												pkgId: view.pkg.packageId,
+												autoUpdate,
+											}),
+										onApplyUpdate: () => {
+											const update = updatesByPackage.get(view.pkg.packageId);
+											if (update) {
+												applyUpdate.mutate({
+													pkgId: view.pkg.packageId,
+													version: update.latestVersion,
+												});
+											}
+										},
+										onReactivate: () =>
+											reactivatePackage.mutate(view.pkg.packageId),
+										onRemove: () => removePackage.mutate(view.pkg.packageId),
+									}}
+								/>
+							))}
+						</section>
+						<PackageWidgetsSection
+							widgets={widgets}
+							loading={manifests.loading}
+							limit={OVERVIEW_WIDGET_LIMIT}
+							onShowAll={showTab("widgets")}
+						/>
+						<PackageNodeCategories
+							groups={nodeGroups}
+							packageNames={displayNames}
+							mutedPackageIds={mutedPackageIds}
+							loading={countsLoading}
+							onShowAll={showTab("nodes")}
+						/>
+						{accessSection}
+					</TabsContent>
+
+					<TabsContent value="nodes">
+						<PackageNodeList
+							groups={nodeGroups}
+							packageNames={displayNames}
+							mutedPackageIds={mutedPackageIds}
+							loading={countsLoading}
+						/>
+					</TabsContent>
+
+					<TabsContent value="widgets">
+						<PackageWidgetsSection
+							widgets={widgets}
+							loading={manifests.loading}
+						/>
+					</TabsContent>
+
+					<TabsContent value="access">{accessSection}</TabsContent>
+				</Tabs>
+			)}
 
 			<PackageSearchDialog
 				open={searchOpen}
 				onOpenChange={setSearchOpen}
 				onSelect={handleSelect}
+				onRemove={(id) => removePackage.mutateAsync(id)}
 				excludePackageIds={excludeIds}
 				appId={appId}
 			/>
@@ -505,237 +810,155 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				open={permissionsOpen}
 				onOpenChange={setPermissionsOpen}
 			/>
-		</Card>
+		</div>
 	);
 }
 
-function PackageCard(props: {
+function TabCount({ count }: Readonly<{ count: number }>) {
+	return (
+		<span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums text-muted-foreground">
+			{count}
+		</span>
+	);
+}
+
+function PackageLicenseAlert({
+	pkg,
+	view,
+	onReactivate,
+	onRemove,
+	isReactivating,
+	isRemoving,
+}: Readonly<{
 	pkg: AppPackage;
-	offline: boolean;
-	nodes: INode[];
-	catalogLoading: boolean;
-	update?: PackageUpdate;
-	onToggleAutoUpdate: (val: boolean) => void;
-	onApplyUpdate: () => void;
-	onRemove: () => void;
+	view: PinLicenseView;
 	onReactivate: () => void;
-	isToggling: boolean;
-	isRemoving: boolean;
+	onRemove: () => void;
 	isReactivating: boolean;
-	isApplyingUpdate: boolean;
-}) {
-	const { t } = useTranslation("store");
-	const { pkg, nodes, update } = props;
-	const [nodesOpen, setNodesOpen] = useState(false);
-	const grouped = useMemo(() => groupNodesByCategory(nodes), [nodes]);
-	const updatable = !!update && !pkg.stale && !props.offline;
+	isRemoving: boolean;
+}>) {
+	const { t, i18n } = useTranslation("store");
+	const formatTimeLeft = useTimeLeftLabel();
+	const language = i18n.resolvedLanguage ?? i18n.language;
+	const disabledOn = useMemo(
+		() =>
+			view.expiresAt === undefined
+				? undefined
+				: new Intl.DateTimeFormat(language, {
+						dateStyle: "medium",
+						timeStyle: "short",
+					}).format(view.expiresAt),
+		[view.expiresAt, language],
+	);
+	const name = pkg.packageName ?? pkg.packageId;
+	const expired = view.state === "expired";
 
 	return (
-		<div
-			className={`rounded-lg border bg-card transition-colors ${pkg.stale ? "opacity-60" : ""}`}
+		<Alert
+			variant={expired ? "destructive" : "default"}
+			className={expired ? "" : WARNING_ALERT_CLASS}
 		>
-			<div className="flex items-center gap-3 p-4">
-				<div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
-					<Package className="h-4 w-4 text-muted-foreground" />
-				</div>
-				<div className="min-w-0 flex-1">
-					<div className="flex items-center gap-2">
-						<span className="truncate font-medium text-sm">
-							{pkg.packageName ?? pkg.packageId}
-						</span>
-						<Badge
-							variant="secondary"
-							className="shrink-0 text-xs"
-						>{`v${pkg.version}`}</Badge>
-						{pkg.stale ? (
-							<Badge variant="destructive" className="shrink-0 text-xs">
-								{t("stale", "Stale")}
-							</Badge>
-						) : (
-							<Badge variant="outline" className="shrink-0 text-xs">
-								{t("active", "Active")}
-							</Badge>
-						)}
-					</div>
-					{nodes.length > 0 && (
-						<p className="mt-0.5 text-xs text-muted-foreground">
-							{t("nodeCount", {
-								defaultValue_one: "{{count}} node",
-								defaultValue_other: "{{count}} nodes",
-								count: nodes.length,
-							})}{" "}
-							{t("acrossCategoryCount", {
-								defaultValue_one: "across {{count}} category",
-								defaultValue_other: "across {{count}} categories",
-								count: grouped.size,
-							})}
-						</p>
-					)}
-				</div>
-				<div className="flex items-center gap-2 shrink-0">
-					{!props.offline && (
-						<TooltipProvider delayDuration={300}>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<div className="flex items-center gap-1.5">
-										<Switch
-											checked={pkg.autoUpdate}
-											onCheckedChange={props.onToggleAutoUpdate}
-											disabled={props.isToggling || pkg.stale}
-											aria-label={t("toggleAutoupdate", "Toggle auto-update")}
-										/>
-									</div>
-								</TooltipTrigger>
-								<TooltipContent className="max-w-60">
-									<p className="font-medium">
-										{t("autoupdate", "Auto-update")}
-									</p>
-									<p className="text-xs text-muted-foreground">
-										{t(
-											"autoUpdateDescription",
-											"Flags this package to track new versions. Apply available updates from the package list.",
-										)}
-									</p>
-								</TooltipContent>
-							</Tooltip>
-						</TooltipProvider>
-					)}
-					{pkg.stale && !props.offline && (
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={props.onReactivate}
-							disabled={props.isReactivating}
-						>
-							<RefreshCw className="mr-1 h-3.5 w-3.5" />
-							{t("reactivate", "Reactivate")}
-						</Button>
-					)}
-					<Button
-						variant="ghost"
-						size="icon"
-						className="h-8 w-8"
-						onClick={props.onRemove}
-						disabled={props.isRemoving}
-						aria-label={t("removePackage", "Remove package")}
+			{expired ? (
+				<Ban className="h-4 w-4" />
+			) : (
+				<TriangleAlert className="h-4 w-4" />
+			)}
+			<AlertTitle className="line-clamp-none flex flex-wrap items-center gap-2">
+				{expired
+					? t(
+							"packageDisabledInProject",
+							"{{name}} is disabled in this project",
+							{
+								name,
+							},
+						)
+					: t("packageLicenseLapsedTitle", "{{name}} is no longer licensed", {
+							name,
+						})}
+				{view.timeLeft && (
+					<Badge
+						variant="outline"
+						className={`text-xs ${LICENSE_WARNING_BADGE_CLASS}`}
 					>
-						<Trash2 className="h-4 w-4 text-destructive" />
+						{formatTimeLeft(view.timeLeft)}
+					</Badge>
+				)}
+			</AlertTitle>
+			<AlertDescription className="gap-3">
+				<p>
+					{expired
+						? t(
+								"packageLicenseExpiredDescription",
+								"No admin or owner of this project has this package, so its licence expired. Cloud runs and downloads of it have stopped. Get the package and reactivate it to restore it, or remove it from the project.",
+							)
+						: disabledOn
+							? t(
+									"packageLicenseLapsedDescription",
+									"No admin or owner of this project has this package. Updates are paused and it will be disabled on {{date}}. One of them needs to get the package to keep it working.",
+									{ date: disabledOn },
+								)
+							: t(
+									"packageLicenseLapsedDescriptionUndated",
+									"No admin or owner of this project has this package. Updates are paused and it will be disabled soon. One of them needs to get the package to keep it working.",
+								)}
+				</p>
+				<div className="flex flex-wrap items-center gap-2">
+					<Button asChild size="sm" variant={expired ? "default" : "outline"}>
+						<Link href={storePackageHref(pkg.packageId)}>
+							<ShoppingBag className="mr-1 h-3.5 w-3.5" />
+							{t("getPackage", "Get package")}
+						</Link>
 					</Button>
-				</div>
-			</div>
-
-			{updatable && update && (
-				<div className="flex items-center gap-2 border-t bg-primary/5 px-4 py-2.5">
-					<ArrowUpCircle className="h-4 w-4 shrink-0 text-primary" />
-					<span className="min-w-0 flex-1 text-xs text-muted-foreground">
-						{t("updateAvailable", "Update available:")}{" "}
-						<span className="font-medium text-foreground">{`v${update.currentVersion}`}</span>{" "}
-						→{" "}
-						<span className="font-medium text-foreground">{`v${update.latestVersion}`}</span>
-					</span>
 					<Button
 						size="sm"
-						onClick={props.onApplyUpdate}
-						disabled={props.isApplyingUpdate}
+						variant="outline"
+						onClick={onReactivate}
+						disabled={isReactivating || !canReactivate(pkg)}
 					>
-						<ArrowUpCircle className="mr-1 h-3.5 w-3.5" />
-						{t("apply", "Apply")}
+						<RefreshCw className="mr-1 h-3.5 w-3.5" />
+						{t("reactivate", "Reactivate")}
 					</Button>
-				</div>
-			)}
-
-			{(nodes.length > 0 || props.catalogLoading) && (
-				<Collapsible open={nodesOpen} onOpenChange={setNodesOpen}>
-					<CollapsibleTrigger className="flex w-full items-center gap-2 border-t px-4 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
-						{nodesOpen ? (
-							<ChevronDown className="h-3.5 w-3.5" />
-						) : (
-							<ChevronRight className="h-3.5 w-3.5" />
-						)}
-						<Layers className="h-3.5 w-3.5" />
-						<span>{t("providedNodes", "Provided Nodes")}</span>
-						<Badge variant="secondary" className="ml-auto text-xs px-1.5 py-0">
-							{nodes.length}
-						</Badge>
-					</CollapsibleTrigger>
-					<CollapsibleContent>
-						<div className="border-t px-4 py-3">
-							{props.catalogLoading ? (
-								<div className="space-y-2">
-									{Array.from({ length: 3 }).map((_, i) => (
-										<Skeleton key={i} className="h-4 w-full" />
-									))}
-								</div>
-							) : (
-								<NodeCategoryList grouped={grouped} />
+					{expired && (
+						<Button
+							size="sm"
+							variant="ghost"
+							onClick={onRemove}
+							disabled={isRemoving}
+						>
+							<Trash2 className="mr-1 h-3.5 w-3.5 text-destructive" />
+							{t("removePackage", "Remove package")}
+						</Button>
+					)}
+					{!canReactivate(pkg) && (
+						<span className="text-xs text-muted-foreground">
+							{t(
+								"getPackageToReactivate",
+								"You don't have this package yet. Get it first, then reactivate it here.",
 							)}
-						</div>
-					</CollapsibleContent>
-				</Collapsible>
-			)}
-		</div>
-	);
-}
-
-function NodeCategoryList({ grouped }: { grouped: Map<string, INode[]> }) {
-	return (
-		<div className="space-y-3">
-			{[...grouped.entries()].map(([category, catNodes]) => (
-				<div key={category}>
-					<p className="text-xs font-medium text-muted-foreground mb-1.5">
-						{category.replace(/\//g, " / ")}
-					</p>
-					<div className="flex flex-wrap gap-1.5">
-						{catNodes.map((node) => (
-							<TooltipProvider key={node.name} delayDuration={200}>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<div className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs">
-											<Zap className="h-3 w-3 text-muted-foreground" />
-											<span className="max-w-50 truncate">
-												{node.friendly_name || node.name}
-											</span>
-										</div>
-									</TooltipTrigger>
-									<TooltipContent
-										side="bottom"
-										sideOffset={6}
-										className="max-w-xs border border-border bg-popover text-popover-foreground shadow-lg [&>svg]:bg-popover [&>svg]:fill-popover"
-									>
-										<p className="font-medium">
-											{node.friendly_name || node.name}
-										</p>
-										{node.description && (
-											<p className="mt-1 text-xs text-popover-foreground/70">
-												{node.description}
-											</p>
-										)}
-									</TooltipContent>
-								</Tooltip>
-							</TooltipProvider>
-						))}
-					</div>
+						</span>
+					)}
 				</div>
-			))}
-		</div>
+			</AlertDescription>
+		</Alert>
 	);
 }
 
 function PackagesPageSkeleton() {
 	return (
-		<Card>
-			<CardHeader className="flex flex-row items-center justify-between">
+		<div className="flex flex-col gap-6">
+			<div className="flex items-start justify-between gap-4">
 				<div className="space-y-2">
-					<Skeleton className="h-5 w-24" />
-					<Skeleton className="h-4 w-48" />
+					<Skeleton className="h-6 w-28" />
+					<Skeleton className="h-4 w-72" />
 				</div>
-				<Skeleton className="h-9 w-32" />
-			</CardHeader>
-			<CardContent className="space-y-3">
-				{Array.from({ length: 3 }).map((_, i) => (
-					<Skeleton key={i} className="h-20 w-full rounded-lg" />
+				<Skeleton className="h-8 w-32" />
+			</div>
+			<Skeleton className="h-9 w-80" />
+			<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+				{SKELETON_KEYS.map((key) => (
+					<Skeleton key={key} className="h-60 rounded-xl" />
 				))}
-			</CardContent>
-		</Card>
+			</div>
+		</div>
 	);
 }

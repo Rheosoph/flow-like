@@ -116,7 +116,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [api, execution-manager]
+        values: [api, execution-manager{{ if and .Values.audit.worker .Values.database.migration.enabled }}, audit-worker{{ end }}]
   policyTypes: [Egress]
   egress:
     # Endpoint IP/port depends on the cluster and on pre/post-DNAT enforcement.

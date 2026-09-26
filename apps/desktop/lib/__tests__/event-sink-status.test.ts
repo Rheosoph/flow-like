@@ -152,7 +152,7 @@ describe("desktop event trigger status", () => {
 	test("distinguishes a missing hosted sink from a failed status read", async () => {
 		const failure = Object.assign(new Error("forbidden"), { status: 403 });
 		mocks.fetcher
-			.mockRejectedValueOnce({ status: 404 })
+			.mockRejectedValueOnce({ status: 404, code: "NOT_FOUND" })
 			.mockRejectedValueOnce(failure);
 		const state = new EventState(backend() as never);
 		const value = context(event("cron", "REMOTE"));

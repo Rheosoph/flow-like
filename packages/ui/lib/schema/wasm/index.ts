@@ -285,7 +285,21 @@ export interface PackageSummary {
 	 * Absent on registries that predate the field.
 	 */
 	capabilities?: string[];
+	/**
+	 * Whether the signed-in caller may install the package: free public
+	 * packages, or any access row (owner, maintainer, user, buyer). Absent for
+	 * anonymous searches and older registries.
+	 */
+	viewerHasAccess?: boolean;
+	/**
+	 * The signed-in caller's `WasmPackagePermission` bits on this package
+	 * (see `lib/permission/wasm-package-permission.ts`). Absent for anonymous
+	 * searches, packages without an access row, and older registries.
+	 */
+	viewerPermission?: number;
 }
+
+export type PackageAccessFilter = "maintainer" | "library";
 
 export interface SearchResults {
 	packages: PackageSummary[];
@@ -320,6 +334,14 @@ export interface SearchFilters {
 	language?: string;
 	includeOwn?: boolean;
 	ownedOnly?: boolean;
+	/**
+	 * Only packages the caller holds with these permission bits:
+	 * `maintainer` = Owner | Maintainer, `library` = User | Buyer. Implies
+	 * `ownedOnly`.
+	 */
+	access?: PackageAccessFilter;
+	/** Restrict results to these package ids (at most 100). */
+	ids?: string[];
 }
 
 export interface PackageUpdate {
@@ -544,6 +566,22 @@ export interface PushMediaResponse {
 }
 
 // App package management
+export type AppPackageLicenseStatus = "active" | "lapsed" | "expired";
+
+/**
+ * Who licenses a package for a project. Paid, private and request-access
+ * packages need an admin or the owner who holds the package; when none does
+ * the pin lapses, stops taking updates and is disabled after `graceDays`.
+ */
+export interface AppPackageLicense {
+	required: boolean;
+	status: AppPackageLicenseStatus;
+	holderUserId?: string | null;
+	lapsedAt?: string | null;
+	expiresAt?: string | null;
+	graceDays: number;
+}
+
 export interface AppPackage {
 	id: string;
 	appId: string;
@@ -554,6 +592,11 @@ export interface AppPackage {
 	addedAt: string;
 	stale: boolean;
 	metadata?: MetaSummary;
+	/** Absent on servers and offline projects that predate project licensing. */
+	price?: number;
+	license?: AppPackageLicense;
+	/** Whether the caller holds the package and could license it for the project. */
+	viewerHasPackage?: boolean;
 }
 
 export interface AddAppPackageRequest {

@@ -5,6 +5,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
@@ -67,7 +68,7 @@ function CourseDetailContent() {
 
 	const enrollment = useMemo(
 		() =>
-			(enrollmentsQuery.data ?? []).find((e) => e.course_id === courseId) ??
+			asArray(enrollmentsQuery.data).find((e) => e.course_id === courseId) ??
 			null,
 		[enrollmentsQuery.data, courseId],
 	);
@@ -82,7 +83,7 @@ function CourseDetailContent() {
 	const completedLessonIds = useMemo(
 		() =>
 			new Set(
-				(progressQuery.data ?? [])
+				asArray(progressQuery.data)
 					.filter((p) => p.status === "COMPLETED")
 					.map((p) => p.lesson_id),
 			),
@@ -133,7 +134,7 @@ function CourseDetailContent() {
 		<CourseDetailView
 			courseId={courseId}
 			course={structureQuery.data?.course}
-			modules={structureQuery.data?.modules ?? []}
+			modules={asArray(structureQuery.data?.modules)}
 			completedLessonIds={completedLessonIds}
 			isEnrolled={isEnrolled}
 			workspaceAppId={workspaceAppId}

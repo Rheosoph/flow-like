@@ -22,6 +22,7 @@ import {
 	RefreshCw,
 	ChevronDown,
 } from "lucide-react";
+import { asArray, isRecord } from "../../../lib/response-shape";
 import { cn } from "../../../lib/utils";
 import { openUpgradeDialog } from "../../../state/upgrade-dialog-state";
 import { Button } from "../../ui/button";
@@ -214,7 +215,7 @@ export function UsageOverview() {
 	};
 	const [app, setApp] = useState("");
 	const [model, setModel] = useState("");
-	const rows = usage.data?.usage ?? [];
+	const rows = asArray(usage.data?.usage);
 	const filtered = useMemo(
 		() =>
 			rows.filter(
@@ -232,7 +233,7 @@ export function UsageOverview() {
 	const names = useUsageNames(displayed);
 	if (usage.isLoading)
 		return <p className="text-sm text-muted-foreground">Loading usage…</p>;
-	if (!usage.data)
+	if (!isRecord(usage.data) || !Array.isArray(usage.data.resources))
 		return (
 			<div className="rounded-xl border p-4">
 				<p>Usage is temporarily unavailable.</p>
@@ -242,7 +243,10 @@ export function UsageOverview() {
 			</div>
 		);
 	const overview = usage.data;
-	const runtimeSample = getRuntimeSample(overview);
+	const runtimeSample = getRuntimeSample({
+		usage: rows,
+		usageTruncated: overview.usageTruncated,
+	});
 	const runtimeResource = overview.resources.find(
 		(item) => item.resource === "cloud_runtime_ms",
 	);
@@ -306,7 +310,7 @@ export function UsageOverview() {
 			<div className="flex flex-wrap items-start justify-between gap-3">
 				<div className="space-y-1">
 					<h2 className="text-xl font-semibold">
-						Your {overview.plan.toLowerCase()} usage
+						Your {overview.plan?.toLowerCase()} usage
 					</h2>
 					<p className="text-sm text-muted-foreground">
 						Monthly allowances renew {formatQuotaDate(overview.periodEnd)}.
@@ -524,11 +528,13 @@ export function UsageOverview() {
 									<td className="p-2">
 										{formatQuota(row.runtimeMs, "cloud_runtime_ms")}
 									</td>
-									<td className="p-2">{row.cloudStarts.toLocaleString()}</td>
+									<td className="p-2">
+										{(row.cloudStarts ?? 0).toLocaleString()}
+									</td>
 									<td className="p-2">
 										{formatQuota(row.aiCostMicros, "hosted_ai_cost_micros")}
 									</td>
-									<td className="p-2">{row.aiCalls.toLocaleString()}</td>
+									<td className="p-2">{(row.aiCalls ?? 0).toLocaleString()}</td>
 								</tr>
 							))}
 						</tbody>

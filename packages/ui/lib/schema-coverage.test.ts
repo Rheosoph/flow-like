@@ -203,6 +203,31 @@ describe("schemaCovers", () => {
 		expect(schemaCovers('{"type":"object"}', "not json")).toBe(false);
 	});
 
+	test("a type list output is covered by the equivalent anyOf", () => {
+		const nullableBytes = {
+			type: ["array", "null"],
+			items: { type: "integer" },
+		};
+		const projection = {
+			anyOf: [{ type: "array", items: { type: "integer" } }, { type: "null" }],
+		};
+		expect(covers(nullableBytes, projection)).toBe(true);
+		expect(
+			covers(nullableBytes, { type: "array", items: { type: "integer" } }),
+		).toBe(false);
+		expect(
+			covers(
+				{ type: ["string", "null"], enum: ["a", null] },
+				{ type: ["string", "null"] },
+			),
+		).toBe(true);
+		const tuple = {
+			type: "array",
+			prefixItems: [{ type: "string" }, { type: ["integer", "null"] }],
+		};
+		expect(covers(tuple, { ...tuple, description: "a pair" })).toBe(true);
+	});
+
 	test("a bit does not cover a cached embedding model", () => {
 		const bitTypes = { type: "string", enum: ["Llm", "Embedding"] };
 		expect(

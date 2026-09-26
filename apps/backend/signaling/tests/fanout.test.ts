@@ -37,6 +37,7 @@ function spawnSignaling(env: Record<string, string>) {
 			PATH: process.env.PATH,
 			HOME: process.env.HOME,
 			PORT: "0",
+			SIGNAL_HOST: "127.0.0.1",
 			NODE_ENV: "development",
 			REALTIME_ALLOW_INSECURE_LOCAL_DEV: "true",
 			...env,

@@ -25,8 +25,25 @@ vi.mock("sonner", () => ({
 	}),
 }));
 
+import { IExecutionMode } from "@flow-like/flow-like-ui";
+import type { IBoardRunRequirements } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import { BoardState } from "../../components/tauri-provider/board-state";
 import { EventState } from "../../components/tauri-provider/event-state";
+
+function runRequirements(
+	overrides: Partial<IBoardRunRequirements> = {},
+): IBoardRunRequirements {
+	return {
+		runtime_variables: [],
+		oauth_requirements: [],
+		requires_local_execution: false,
+		execution_mode: IExecutionMode.Hybrid,
+		wasm_package_ids: [],
+		wasm_package_permissions: {},
+		instantiates_widgets: false,
+		...overrides,
+	};
+}
 
 function hostedBackend(authenticated = true) {
 	return {
@@ -60,10 +77,10 @@ describe("local execution widget preparation", () => {
 		const state = new BoardState(backend as never);
 		let prepared = false;
 		const preparation = state
-			.ensureAppPackagesInstalledForExecution("app-1", {
-				nodes: { widget: { name: "a2ui_instantiate_widget" } },
-				layers: {},
-			} as never)
+			.ensureAppPackagesInstalledForExecution(
+				"app-1",
+				runRequirements({ instantiates_widgets: true }),
+			)
 			.then(() => {
 				prepared = true;
 			});
@@ -89,10 +106,10 @@ describe("local execution widget preparation", () => {
 		const state = new BoardState(backend as never);
 
 		await expect(
-			state.ensureAppPackagesInstalledForExecution("app-1", {
-				nodes: { widget: { name: "a2ui_instantiate_widget" } },
-				layers: {},
-			} as never),
+			state.ensureAppPackagesInstalledForExecution(
+				"app-1",
+				runRequirements({ instantiates_widgets: true }),
+			),
 		).rejects.toBe(failure);
 	});
 
@@ -108,33 +125,112 @@ describe("local execution widget preparation", () => {
 		};
 		const state = new BoardState(backend as never);
 
-		await state.ensureAppPackagesInstalledForExecution("app-1", {
-			nodes: { log: { name: "log_info" } },
-			layers: {},
-		} as never);
+		await state.ensureAppPackagesInstalledForExecution(
+			"app-1",
+			runRequirements(),
+		);
 		await state.ensureAppPackagesInstalledForExecution("app-1");
 		expect(syncWidgetsForExecution).not.toHaveBeenCalled();
 	});
+});
 
-	test("hydrates widgets used inside a board layer", async () => {
-		const syncWidgetsForExecution = vi.fn().mockResolvedValue(undefined);
+describe("project package licences before a local run", () => {
+	const pin = (
+		packageId: string,
+		version: string,
+		status: "active" | "lapsed" | "expired",
+	) => ({
+		packageId,
+		version,
+		packageName: `Package ${packageId}`,
+		stale: status !== "active",
+		license: { required: true, status, graceDays: 30 },
+	});
+
+	function licensedBackend(localPackages: Record<string, string> = {}) {
+		mocks.fetcher.mockResolvedValueOnce([
+			pin("pkg-active", "1.0.0", "active"),
+			pin("pkg-lapsed", "2.0.0", "lapsed"),
+			pin("pkg-expired", "3.0.0", "expired"),
+		]);
+		const appState = {
+			listPackages: vi.fn().mockResolvedValue(localPackages),
+			addPackage: vi.fn().mockResolvedValue(undefined),
+			removePackage: vi.fn().mockResolvedValue(undefined),
+		};
+		const registryState = {
+			getInstalledPackages: vi.fn().mockResolvedValue([]),
+			installPackage: vi.fn().mockResolvedValue({}),
+		};
 		const backend = {
 			...hostedBackend(),
-			widgetState: { syncWidgetsForExecution },
+			widgetState: {},
 			isOffline: vi.fn().mockResolvedValue(false),
-			appState: {},
+			appState,
+			registryState,
 		};
-		const state = new BoardState(backend as never);
+		return { state: new BoardState(backend as never), appState, registryState };
+	}
 
-		await state.ensureAppPackagesInstalledForExecution("app-1", {
-			nodes: {},
-			layers: {
-				function: {
-					nodes: { widget: { name: "a2ui_instantiate_widget" } },
-				},
-			},
-		} as never);
-		expect(syncWidgetsForExecution).toHaveBeenCalledWith("app-1");
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.fetcher.mockReset();
+	});
+
+	test("installs usable pins through the project licence and skips expired ones", async () => {
+		const { state, appState, registryState } = licensedBackend({
+			"pkg-expired": "3.0.0",
+		});
+
+		await state.ensureAppPackagesInstalledForExecution(
+			"app-1",
+			runRequirements(),
+		);
+
+		expect(registryState.installPackage).toHaveBeenCalledTimes(2);
+		expect(registryState.installPackage).toHaveBeenCalledWith(
+			"pkg-active",
+			"1.0.0",
+			undefined,
+			"app-1",
+		);
+		expect(registryState.installPackage).toHaveBeenCalledWith(
+			"pkg-lapsed",
+			"2.0.0",
+			undefined,
+			"app-1",
+		);
+		expect(appState.addPackage).toHaveBeenCalledTimes(2);
+		expect(appState.addPackage).not.toHaveBeenCalledWith(
+			"app-1",
+			"pkg-expired",
+			expect.anything(),
+		);
+		expect(appState.removePackage).toHaveBeenCalledWith("app-1", "pkg-expired");
+	});
+
+	test("refuses a local run of a board that uses an expired package", async () => {
+		const { state, registryState } = licensedBackend();
+
+		await expect(
+			state.ensureAppPackagesInstalledForExecution(
+				"app-1",
+				runRequirements({ wasm_package_ids: ["pkg-expired"] }),
+			),
+		).rejects.toThrow(
+			"Package pkg-expired is disabled in this project: its licence expired",
+		);
+		expect(registryState.installPackage).not.toHaveBeenCalled();
+	});
+
+	test("lets boards run that only use lapsed packages", async () => {
+		const { state, registryState } = licensedBackend();
+
+		await state.ensureAppPackagesInstalledForExecution(
+			"app-1",
+			runRequirements({ wasm_package_ids: ["pkg-lapsed"] }),
+		);
+		expect(registryState.installPackage).toHaveBeenCalledTimes(2);
 	});
 });
 

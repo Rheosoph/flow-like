@@ -1,12 +1,15 @@
-import type {
-	ICreateDiscountRequest,
-	IDiscount,
-	IPurchasesResponse,
-	ISalesOverview,
-	ISalesState,
-	ISalesStats,
-	IUpdateDiscountRequest,
+import {
+	type ICreateDiscountRequest,
+	type IDiscount,
+	type IFlowPaymentsReport,
+	type IPurchasesResponse,
+	type ISalesOverview,
+	type ISalesState,
+	type ISalesStats,
+	type IUpdateDiscountRequest,
+	flowPaymentsPath,
 } from "@flow-like/flow-like-ui";
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { fetcher, post } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -17,12 +20,16 @@ export class SalesState implements ISalesState {
 		if (!this.backend.profile) {
 			throw new Error("Profile not available");
 		}
-		return await fetcher<ISalesOverview>(
+		const overview = await fetcher<ISalesOverview>(
 			this.backend.profile,
 			`apps/${appId}/sales`,
 			undefined,
 			this.backend.auth,
 		);
+		if (!isRecord(overview)) {
+			throw new Error(`Unexpected sales overview response for app ${appId}`);
+		}
+		return overview;
 	}
 
 	async getSalesStats(
@@ -43,12 +50,41 @@ export class SalesState implements ISalesState {
 		const url = query
 			? `apps/${appId}/sales/stats?${query}`
 			: `apps/${appId}/sales/stats`;
-		return await fetcher<ISalesStats>(
+		const stats = await fetcher<ISalesStats>(
 			this.backend.profile,
 			url,
 			undefined,
 			this.backend.auth,
 		);
+		if (!isRecord(stats)) {
+			throw new Error(`Unexpected sales stats response for app ${appId}`);
+		}
+		return { ...stats, dailyStats: asArray(stats.dailyStats) };
+	}
+
+	async getFlowPayments(
+		appId: string,
+		startDate?: string,
+		endDate?: string,
+		limit?: number,
+	): Promise<IFlowPaymentsReport> {
+		if (!this.backend.profile) {
+			throw new Error("Profile not available");
+		}
+		const report = await fetcher<IFlowPaymentsReport>(
+			this.backend.profile,
+			flowPaymentsPath(appId, startDate, endDate, limit),
+			undefined,
+			this.backend.auth,
+		);
+		if (!isRecord(report)) {
+			throw new Error(`Unexpected flow payments response for app ${appId}`);
+		}
+		return {
+			...report,
+			dailyStats: asArray(report.dailyStats),
+			recentPayments: asArray(report.recentPayments),
+		};
 	}
 
 	async listPurchases(
@@ -69,12 +105,16 @@ export class SalesState implements ISalesState {
 		const url = query
 			? `apps/${appId}/sales/purchases?${query}`
 			: `apps/${appId}/sales/purchases`;
-		return await fetcher<IPurchasesResponse>(
+		const response = await fetcher<IPurchasesResponse>(
 			this.backend.profile,
 			url,
 			undefined,
 			this.backend.auth,
 		);
+		if (!isRecord(response)) {
+			throw new Error(`Unexpected purchases response for app ${appId}`);
+		}
+		return { ...response, purchases: asArray(response.purchases) };
 	}
 
 	async updatePrice(
@@ -109,11 +149,13 @@ export class SalesState implements ISalesState {
 		const url = query
 			? `apps/${appId}/sales/discounts?${query}`
 			: `apps/${appId}/sales/discounts`;
-		return await fetcher<IDiscount[]>(
-			this.backend.profile,
-			url,
-			undefined,
-			this.backend.auth,
+		return asArray(
+			await fetcher<IDiscount[]>(
+				this.backend.profile,
+				url,
+				undefined,
+				this.backend.auth,
+			),
 		);
 	}
 

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { IVariable } from "../../../lib/schema/flow/board";
-import type { IEvent } from "../../../lib/schema/flow/event";
+import {
+	type IEvent,
+	IEventExecutionMode,
+	IEventExposure,
+} from "../../../lib/schema/flow/event";
 import { computeEventIssues, issuesForSection } from "./use-event-issues";
 
 const event = (overrides: Partial<IEvent> = {}): IEvent =>
@@ -205,5 +209,51 @@ describe("runtime variable coverage", () => {
 		expect(
 			issueIds({ event: event({ event_type: "cron" }), config: {} }),
 		).not.toContain("runtime-vars-unset");
+	});
+});
+
+describe("hosted link reachability", () => {
+	const hosted = { frontend_hosting: { enabled: true } };
+	const page = (overrides: Partial<IEvent> = {}) =>
+		event({
+			event_type: "page",
+			default_page_id: "overview",
+			route: "/overview",
+			node_id: "",
+			execution_mode: IEventExecutionMode.Remote,
+			exposure: IEventExposure.Public,
+			...overrides,
+		});
+	const hostingIssue = (input: IEvent, config: Record<string, unknown>) =>
+		computeEventIssues({ event: input, config }).find(
+			(issue) => issue.id === "hosting-not-live",
+		);
+
+	test("flags an enabled link the server would answer with 404", () => {
+		const issue = hostingIssue(
+			page({ execution_mode: IEventExecutionMode.Local }),
+			hosted,
+		);
+		expect(issue?.section).toBe("hosting");
+		expect(issue?.detail).toContain("Remote");
+		expect(
+			hostingIssue(
+				page({ active: false, exposure: IEventExposure.Internal }),
+				hosted,
+			)?.detail,
+		).toBe("It returns 404 until the event is active and Public.");
+		expect(hostingIssue(page({ route: null }), hosted)?.detail).toBe(
+			"It returns 404 until the event is given a route path.",
+		);
+		expect(
+			hostingIssue(page({ route: null, is_default: true }), hosted),
+		).toBeUndefined();
+	});
+
+	test("stays quiet when hosting is off or the link is live", () => {
+		expect(
+			hostingIssue(page({ execution_mode: IEventExecutionMode.Local }), {}),
+		).toBeUndefined();
+		expect(hostingIssue(page(), hosted)).toBeUndefined();
 	});
 });

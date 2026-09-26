@@ -235,8 +235,11 @@ describe("workflow start failure toasts", () => {
 			expect(widget).toBe(expected ?? WIDGET_FALLBACK);
 			if (expected) expect(expected.length).toBeLessThanOrEqual(300);
 			// The live-page bridge gets the toast's reason, never "[object Object]".
-			expect(page.runs.map((run) => [run.status, run.errorMessage])).toEqual([
-				["error", expected ?? WORKFLOW_FALLBACK],
+			expect(
+				page.runs.map((run) => [run.componentId, run.status, run.errorMessage]),
+			).toEqual([
+				["page-button", "error", expected ?? WORKFLOW_FALLBACK],
+				["map-a", "error", expected ?? WIDGET_FALLBACK],
 			]);
 			// The rejection reaches the toast only, never the console.
 			for (const call of page.consoleError.mock.calls) {
@@ -262,6 +265,22 @@ const CONTRACT_REJECTIONS: [string, unknown][] = [
 		}),
 	],
 ];
+
+describe("actions replayed from the surface cache", () => {
+	test("a pending action waits for the load run instead of failing", async () => {
+		const page = await setupFailingPage("never dispatched");
+		const { errors, infos } = await page.run(
+			"page",
+			{ name: "workflow_event", context: {}, pendingPageAction: true },
+			"page-button",
+		);
+		expect(errors).toHaveLength(0);
+		expect(infos.map(([title]) => title)).toEqual([
+			"This page is still loading — try that again in a moment.",
+		]);
+		expect(page.runs).toHaveLength(0);
+	});
+});
 
 describe("Page contract failure toasts", () => {
 	test.each(CONTRACT_REJECTIONS)(

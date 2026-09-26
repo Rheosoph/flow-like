@@ -90,6 +90,26 @@
 			}
 		]
 	},
+	"standalone": {
+		"enabled": true,
+		"max_devices_per_user": 100,
+		"max_pending_enrollments_per_user": 10,
+		"enrollment_ttl_seconds": 86400,
+		"release_trust": {
+			"manifest_url": "https://cdn.flow-like.com/standalone/release.jws",
+			"public_keys": [
+				"BiOj5QJR7W4o-c7g3kqw6dXATQlul5m40h8mUhOX9y8"
+			],
+			"minimum_sequence": 1
+		},
+		"telemetry_tiers": {
+			"FREE": { "max_bytes": 0, "retention_seconds": 0 },
+			"PREMIUM": { "max_bytes": 67108864, "retention_seconds": 86400 },
+			"PRO": { "max_bytes": 268435456, "retention_seconds": 604800 },
+			"MAX": { "max_bytes": 536870912, "retention_seconds": 2592000 },
+			"ENTERPRISE": { "max_bytes": 1073741824, "retention_seconds": 2592000 }
+		}
+	},
 	"features": {
 		"model_hosting": true,
 		"flow_hosting": true,
@@ -402,6 +422,33 @@
 			"pkce_required": true,
 			"requires_secret_proxy": false,
 			"userinfo_url": "https://graph.microsoft.com/oidc/userinfo"
+		},
+		"microsoft_workiq": {
+			"name": "Microsoft Work IQ",
+			"client_id": "c2f4f10c-2867-43a1-9558-ccae12f84bde",
+			"auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			"token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+			"scopes": ["offline_access"],
+			"pkce_required": true,
+			"requires_secret_proxy": false
+		},
+		"microsoft_power_platform": {
+			"name": "Microsoft Power Platform",
+			"client_id": "c2f4f10c-2867-43a1-9558-ccae12f84bde",
+			"auth_url": "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+			"token_url": "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+			"scopes": ["openid", "profile", "offline_access"],
+			"pkce_required": true,
+			"requires_secret_proxy": false
+		},
+		"microsoft_dataverse": {
+			"name": "Microsoft Dataverse",
+			"client_id": "c2f4f10c-2867-43a1-9558-ccae12f84bde",
+			"auth_url": "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+			"token_url": "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+			"scopes": ["openid", "profile", "offline_access"],
+			"pkce_required": true,
+			"requires_secret_proxy": false
 		},
 		"linkedin": {
 			"name": "LinkedIn",

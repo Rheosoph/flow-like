@@ -1,3 +1,4 @@
+import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type {
 	IAnalyticsDashboard,
 	IAnalyticsOverview,
@@ -25,12 +26,18 @@ export class AnalyticsState implements IAnalyticsState {
 		const url = query
 			? `apps/${appId}/analytics/?${query}`
 			: `apps/${appId}/analytics/`;
-		return await fetcher<IAnalyticsOverview>(
+		const overview = await fetcher<IAnalyticsOverview>(
 			this.backend.profile,
 			url,
 			undefined,
 			this.backend.auth,
 		);
+		if (!isRecord(overview)) {
+			throw new Error(
+				`Unexpected analytics overview response for app ${appId}`,
+			);
+		}
+		return overview;
 	}
 
 	async getAnalyticsDashboard(
@@ -53,12 +60,24 @@ export class AnalyticsState implements IAnalyticsState {
 		const url = query
 			? `apps/${appId}/analytics/dashboard?${query}`
 			: `apps/${appId}/analytics/dashboard`;
-		return await fetcher<IAnalyticsDashboard>(
+		const dashboard = await fetcher<IAnalyticsDashboard>(
 			this.backend.profile,
 			url,
 			undefined,
 			this.backend.auth,
 		);
+		if (!isRecord(dashboard)) {
+			throw new Error(
+				`Unexpected analytics dashboard response for app ${appId}`,
+			);
+		}
+		return {
+			...dashboard,
+			stats: {
+				...dashboard.stats,
+				dailyStats: asArray(dashboard.stats?.dailyStats),
+			},
+		};
 	}
 
 	async getAnalyticsStats(
@@ -111,11 +130,15 @@ export class AnalyticsState implements IAnalyticsState {
 		const url = query
 			? `apps/${appId}/analytics/feedback?${query}`
 			: `apps/${appId}/analytics/feedback`;
-		return await fetcher<IPaginatedFeedback>(
+		const feedback = await fetcher<IPaginatedFeedback>(
 			this.backend.profile,
 			url,
 			undefined,
 			this.backend.auth,
 		);
+		if (!isRecord(feedback)) {
+			throw new Error(`Unexpected feedback response for app ${appId}`);
+		}
+		return { ...feedback, items: asArray(feedback.items) };
 	}
 }

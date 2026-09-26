@@ -44,7 +44,6 @@ class DeploymentTest(unittest.TestCase):
             "secrets_vault_id": f"{SCOPE}/providers/Microsoft.KeyVault/vaults/secrets",
             "database_secret_uri": "https://secrets.vault.azure.net/secrets/database/version1",
             "entry_key_secret_uri": "https://secrets.vault.azure.net/secrets/entry-key/version1",
-            "config_secret_uri": "https://secrets.vault.azure.net/secrets/config/version1",
             "encryption_secret_uri": "https://secrets.vault.azure.net/secrets/encryption/version1",
             "database_user": "audit-worker", "kid": "audit-v1", "verifying_keys_file": str(self.keys),
             "name": "flow-like-audit-worker", "container": "audit", "retention_days": 1461,
@@ -78,6 +77,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(container["args"], ["--once"])
         self.assertEqual(job["configuration"]["replicaRetryLimit"], 0)
         self.assertNotIn("AZURE_STORAGE_ACCOUNT_KEY", values)
+        self.assertNotIn("FLOW_LIKE_CONFIG_JSON", values)
         self.assertTrue(all("keyVaultUrl" in secret and "value" not in secret for secret in job["configuration"]["secrets"]))
 
     def test_rejects_missing_export_key_or_unsafe_database_role(self):

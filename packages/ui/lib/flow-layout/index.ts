@@ -4,6 +4,7 @@ import {
 	buildLayoutGraph,
 	findComponents,
 } from "./build";
+import { normalizeAutoReroutes } from "./normalize-reroutes";
 import { assignOrder } from "./order";
 import { bindComments, packComponents, resolveCommentPositions } from "./pack";
 import { componentBounds, placeComponent } from "./place";
@@ -14,6 +15,7 @@ import {
 	normaliseColumns,
 	topologicalOrder,
 } from "./rank";
+import { planDataRoutes } from "./route";
 import {
 	type AutoLayoutInput,
 	type LGraph,
@@ -160,7 +162,24 @@ export function computeFlowLayoutDetailed(
 	input: AutoLayoutInput,
 	style: LayoutStyle = "compact",
 ): LayoutResult {
-	const cfg = getStyleConfig(style);
+	if (style === "routed") {
+		const normalized = normalizeAutoReroutes(input);
+		const result = computeNodeLayout(normalized.input, getStyleConfig(style));
+		return {
+			...result,
+			routing: {
+				routes: planDataRoutes(normalized.input, result.positions),
+				chains: normalized.chains,
+			},
+		};
+	}
+	return computeNodeLayout(input, getStyleConfig(style));
+}
+
+function computeNodeLayout(
+	input: AutoLayoutInput,
+	cfg: StyleConfig,
+): LayoutResult {
 	const graph = buildLayoutGraph(input);
 
 	const components = findComponents(graph);

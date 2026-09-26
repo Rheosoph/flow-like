@@ -1,13 +1,24 @@
 ---
 title: "Request Payment Node"
-description: "Ask an attended, signed-in user to pay the app owner and wait for a verified payment result."
+description: "Request Payment Flow-Like node: Ask the signed-in user to pay the app owner and wait for the verified result. Includes pin details and package metadata."
 sidebar:
   label: "Request Payment"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Request Payment, Request Payment node, Flow-Like node, Flow-Like node catalog, workflow automation node, Payments, std, request_payment, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Payments"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Request Payment Node\",\"name\":\"Request Payment\",\"description\":\"Request Payment Flow-Like node: Ask the signed-in user to pay the app owner and wait for the verified result. Includes pin details and package metadata.\",\"url\":\"https://docs.flow-like.com/nodes/payments/request-payment/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Payments\",\"keywords\":\"Request Payment, Request Payment node, Flow-Like node, Flow-Like node catalog, workflow automation node, Payments, std, request_payment, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Request Payment\",\"description\":\"Ask the signed-in user to pay the app owner and wait for the verified result\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
 ---
 
 import { NodeReference } from "../../../../components/node-docs/NodeReference";
 import { nodesBySlug } from "../../../../generated/catalog-nodes";
-
-Read the [payment requirements and Board Test guide](/nodes/payments/) before using this node.
 
 <NodeReference node={nodesBySlug["nodes/payments/request-payment"]} />

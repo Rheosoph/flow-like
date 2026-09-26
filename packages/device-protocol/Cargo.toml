@@ -1,0 +1,17 @@
+[package]
+name = "flow-like-device-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+base64.workspace = true
+sha2 = "0.10"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+thiserror = "2"
+url = "2"
+x25519-dalek = "2"
+zeroize = { workspace = true, features = ["derive"] }
+unicode-normalization = "0.1.25"

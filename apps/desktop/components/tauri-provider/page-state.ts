@@ -7,10 +7,31 @@ import {
 	normalizePageForPersistence,
 	parseDateValue,
 } from "@flow-like/flow-like-ui";
+import {
+	ApiResponseError,
+	UPSTREAM_UNAVAILABLE_CODE,
+	isHubUnavailable,
+} from "@flow-like/flow-like-ui/lib/api-error";
+import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher, fetcherConditional } from "../../lib/api";
+import { HUB_REFRESH_TIMEOUT_MS } from "../../lib/request-deadline";
 import type { TauriBackend } from "../tauri-provider";
 import { pageEtagKey, readPageEtag, writePageEtag } from "./page-etag-cache";
+
+/** A 2xx body of the wrong shape reads as an unavailable hub, never as data. */
+function malformedResponseError(path: string, expected: string) {
+	return new ApiResponseError({
+		status: 502,
+		code: UPSTREAM_UNAVAILABLE_CODE,
+		message: `Expected ${expected} but the API returned a malformed response`,
+		path,
+	});
+}
+
+function isPagePayload(value: unknown): value is IPage {
+	return isRecord(value) && typeof value.id === "string";
+}
 
 function nativeErrorMessage(error: unknown): string | undefined {
 	if (error instanceof Error) return error.message;
@@ -120,13 +141,30 @@ export class PageState implements IPageState {
 		if (route !== undefined) query.set("route", route);
 		if (eventId !== undefined) query.set("eventId", eventId);
 		const params = query.size > 0 ? `?${query.toString()}` : "";
+		const path = `apps/${appId}/pages/bootstrap${params}`;
 
-		return fetcher<IPageBootstrap>(
-			this.backend.profile,
-			`apps/${appId}/pages/bootstrap${params}`,
-			{ method: "GET" },
-			this.backend.auth,
-		);
+		let bootstrap: IPageBootstrap;
+		try {
+			bootstrap = await fetcher<IPageBootstrap>(
+				this.backend.profile,
+				path,
+				{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
+				this.backend.auth,
+			);
+		} catch (error) {
+			// A hub that did not rule leaves the device's own copy of the app as the
+			// best answer; its actions are still authorized natively before they run.
+			if (!isHubUnavailable(error)) throw error;
+			console.warn(
+				`[PageState] Hub unavailable for ${path}; serving the local Page bootstrap`,
+				error,
+			);
+			return this.getLocalPageBootstrap(appId, route, eventId);
+		}
+		if (!isRecord(bootstrap) || !isRecord(bootstrap.event)) {
+			throw malformedResponseError(path, "a Page bootstrap");
+		}
+		return bootstrap;
 	}
 
 	private async getNativePage(
@@ -228,18 +266,22 @@ export class PageState implements IPageState {
 		if (boardId) query.set("board_id", boardId);
 		if (version) query.set("version", version.join("_"));
 		const params = query.size > 0 ? `?${query.toString()}` : "";
-		const response = await fetcherConditional<IPage>(
+		const path = `apps/${appId}/pages/${pageId}${params}`;
+		const response = await fetcherConditional<unknown>(
 			this.backend.profile,
-			`apps/${appId}/pages/${pageId}${params}`,
+			path,
 			{ method: "GET" },
 			this.backend.auth,
 			ifNoneMatch,
 		);
-		return {
-			page: response.data ?? null,
-			notModified: response.notModified,
-			etag: response.etag,
-		};
+		if (response.notModified) {
+			return { page: null, notModified: true, etag: response.etag };
+		}
+		// Callers cache and render this payload, so a body that is no page must not stand in.
+		if (!isPagePayload(response.data)) {
+			throw malformedResponseError(path, "a Page");
+		}
+		return { page: response.data, notModified: false, etag: response.etag };
 	}
 
 	private async fetchRemotePage(
@@ -336,7 +378,7 @@ export class PageState implements IPageState {
 			const remotePages = await fetcher<PageListItem[]>(
 				this.backend.profile,
 				url,
-				{ method: "GET" },
+				{ method: "GET", timeoutMs: HUB_REFRESH_TIMEOUT_MS },
 				this.backend.auth,
 			);
 
@@ -421,12 +463,15 @@ export class PageState implements IPageState {
 		const url = boardId
 			? `apps/${appId}/pages?board_id=${boardId}`
 			: `apps/${appId}/pages`;
-		return fetcher<PageListItem[]>(
+		const pages = await fetcher<PageListItem[]>(
 			this.backend.profile,
 			url,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		// An empty inventory would read as "no pages exist" to callers that then create or skip.
+		if (!Array.isArray(pages)) throw malformedResponseError(url, "a Page list");
+		return pages;
 	}
 
 	/**
@@ -516,7 +561,12 @@ export class PageState implements IPageState {
 			if (remotePage) {
 				return this.cacheRemotePage(appId, remotePage, boardId);
 			}
-			if (nativeMiss) throw new Error(`Page not found: ${pageId}`);
+			// No remote page means the server was not asked. Only a local-only app's own
+			// store can confirm a miss; for a hosted app "not found" would let the builder
+			// create a blank page that later syncs over the real one.
+			if (nativeMiss && (await this.backend.isLocalOnly(appId))) {
+				throw new Error(`Page not found: ${pageId}`);
+			}
 			throw localError;
 		}
 
@@ -569,12 +619,15 @@ export class PageState implements IPageState {
 		if (boardId) query.set("board_id", boardId);
 		if (version) query.set("version", version.join("_"));
 		const params = query.size > 0 ? `?${query.toString()}` : "";
-		return fetcher<IPage>(
+		const path = `apps/${appId}/pages/${pageId}${params}`;
+		const page = await fetcher<unknown>(
 			this.backend.profile,
-			`apps/${appId}/pages/${pageId}${params}`,
+			path,
 			{ method: "GET" },
 			this.backend.auth,
 		);
+		if (!isPagePayload(page)) throw malformedResponseError(path, "a Page");
+		return page;
 	}
 
 	async createPage(

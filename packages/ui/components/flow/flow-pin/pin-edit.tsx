@@ -33,6 +33,7 @@ import { ProjectUserSelect } from "./variable-types/project-user-select";
 import { RemoteDatabaseSelect } from "./variable-types/remote-database-select";
 import { RemoteEventSelect } from "./variable-types/remote-event-select";
 import { RemoteProjectSelect } from "./variable-types/remote-project-select";
+import { TaxCodeSelect } from "./variable-types/tax-code-select";
 import { VarVariable } from "./variable-types/var-select";
 import { WidgetVariable } from "./variable-types/widget-select";
 
@@ -170,6 +171,14 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 					pin={pin}
 					value={cachedDefaultValue}
 					appId={appId}
+					setValue={updateDefaultValue}
+				/>
+			);
+		case "taxCode":
+			return (
+				<TaxCodeSelect
+					pin={pin}
+					value={cachedDefaultValue}
 					setValue={updateDefaultValue}
 				/>
 			);

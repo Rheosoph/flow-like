@@ -23,6 +23,7 @@ lance-io = { version = "=8.0.0", optional = true }
 lance = { version = "=8.0.0", default-features = false, features = ["geo"], optional = true }
 lance-index = { version = "=8.0.0", features = ["geo"], optional = true }
 lance-file = { version = "=8.0.0", optional = true }
+lance-table = { version = "=8.0.0", optional = true }
 arrow-array = { version = "=58.4.0", optional = true }
 arrow-schema = { version = "=58.4.0", features = ["serde"], optional = true }
 arrow = { version = "=58.4.0", optional = true }
@@ -96,6 +97,7 @@ database-runtime = [
     "dep:lance",
     "dep:lance-index",
     "dep:lance-file",
+    "dep:lance-table",
     "dep:arrow-array",
     "dep:arrow-schema",
     "dep:arrow",

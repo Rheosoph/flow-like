@@ -149,6 +149,15 @@ declare namespace agent {
     function registerThinking(this: Agent, { agentIn: Struct }): Struct;
 
     /**
+     * Gives the agent the Microsoft Work IQ tools (mail, calendar, files, people, chats, sites and Microsoft 365 Copilot) as the signed-in user. A tenant admin must enable Work IQ; tool calls are billed in Copilot Credits.
+     * @node agent_register_work_iq_tools @receiver agent_in @alias agentRegisterWorkIqTools
+     * @param agentIn — Agent object to add the Work IQ tools to (receiver: `this` in `x.registerWorkIqTools(...)`)
+     * @param allowWrites (optional) — Also register the tools that create, update, delete or send Microsoft 365 data. Tenant policy must allow them too.
+     * @returns agentOut — Agent object with the Work IQ tools registered
+     */
+    function registerWorkIqTools(this: Agent, { agentIn: Struct, allowWrites?: bool }): Struct;
+
+    /**
      * Sets the system prompt for an Agent to guide its behavior
      * @node agent_set_system_prompt @receiver agent_in @alias agentSetSystemPrompt
      * @param agentIn — Agent object to enable thinking on (receiver: `this` in `x.setSystemPrompt(...)`)

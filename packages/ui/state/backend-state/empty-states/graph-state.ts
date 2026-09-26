@@ -18,6 +18,7 @@ import type {
 	SubgraphNode,
 	SubgraphPayload,
 	SubgraphResult,
+	UpdateOntologyRowResult,
 	UpdateOverlayPayload,
 	UpsertGraphElementsResult,
 	ValidationResult,
@@ -146,6 +147,12 @@ export class EmptyGraphState implements IGraphState {
 		throw new Error("Method not implemented.");
 	}
 	upsertEdges(): Promise<UpsertGraphElementsResult> {
+		throw new Error("Method not implemented.");
+	}
+	updateObject(): Promise<UpdateOntologyRowResult> {
+		throw new Error("Method not implemented.");
+	}
+	updateRelationship(): Promise<UpdateOntologyRowResult> {
 		throw new Error("Method not implemented.");
 	}
 }

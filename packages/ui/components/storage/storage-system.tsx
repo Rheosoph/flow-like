@@ -27,6 +27,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "../..";
+import { asArray } from "../../lib/response-shape";
 import { humanFileSize } from "../../lib/utils";
 import {
 	Badge,
@@ -305,7 +306,7 @@ export function StorageSystem({
 
 			// check duplicates against visible folders (backend + virtual)
 			const existingFolderNames = new Set(
-				(files.data ?? [])
+				asArray(files.data)
 					.filter((f) => f.is_dir)
 					.map((f) => storageDisplayName(f.location).toLowerCase()),
 			);
@@ -330,7 +331,7 @@ export function StorageSystem({
 
 	// Merge backend items with virtual folders for current prefix
 	const filesWithVirtual = useMemo<IStorageItem[]>(() => {
-		const base = (files.data ?? []).slice();
+		const base = asArray(files.data).slice();
 		const have = new Set(base.map((f) => storageDisplayName(f.location)));
 		const basePrefixNorm = normalizePrefix(prefix);
 		const locFor = (name: string) =>

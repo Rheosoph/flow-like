@@ -32,6 +32,7 @@ import { MarkdownKit } from "./plugins/markdown-kit";
 import { MathKit } from "./plugins/math-kit";
 import { MediaKit } from "./plugins/media-kit";
 import { MentionKit } from "./plugins/mention-kit";
+import { SafeUrlKit } from "./plugins/safe-url-kit";
 import { SlashKit } from "./plugins/slash-kit";
 import { SuggestionKit } from "./plugins/suggestion-kit";
 import { TableKit } from "./plugins/table-kit";
@@ -56,6 +57,7 @@ export const createEditorKit = (appId?: string) => [
 	...DateKit,
 	...LinkKit,
 	...MentionKit,
+	...SafeUrlKit,
 
 	// Marks
 	...BasicMarksKit,

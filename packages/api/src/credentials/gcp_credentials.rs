@@ -5,7 +5,9 @@ use crate::state::{AppState, State};
 #[cfg(feature = "gcp")]
 use flow_like::credentials::{SharedCredentials, gcp_credentials::GcpSharedCredentials};
 use flow_like::{
-    flow_like_storage::lancedb::{connect, connection::ConnectBuilder},
+    flow_like_storage::{
+        databases::vector::lancedb::connect_lance, lancedb::connection::ConnectBuilder,
+    },
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
@@ -120,6 +122,122 @@ impl std::fmt::Debug for GcpRuntimeCredentials {
 
 #[cfg(feature = "gcp")]
 impl GcpRuntimeCredentials {
+    async fn device_execute_credentials(
+        &self,
+        sub: &str,
+        app_id: &str,
+        write: bool,
+        requested_expiry: i64,
+    ) -> Result<Self> {
+        super::device_execute_expiry(requested_expiry)?;
+        let prefixes = super::device_execute_prefixes(sub, app_id)?
+            .into_values()
+            .collect::<Vec<_>>();
+        let unavailable = || anyhow!("GCP could not issue bounded device credentials");
+        let target = std::env::var("GCP_INSTANCE_STORAGE_SERVICE_ACCOUNT").unwrap_or_default();
+        if !target.ends_with(".iam.gserviceaccount.com")
+            || !target.contains('@')
+            || !target
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._@".contains(&b))
+        {
+            return Err(anyhow!(
+                "GCP instance storage requires an explicitly configured service account for short-lived impersonation",
+            ));
+        }
+        let base = match self.base_token_source() {
+            GcpBaseTokenSource::Metadata => fetch_metadata_token().await,
+            GcpBaseTokenSource::ServiceAccountKey(key) => {
+                generate_access_token_standalone(
+                    &key,
+                    "https://www.googleapis.com/auth/cloud-platform",
+                )
+                .await
+            }
+        }
+        .map_err(|_| unavailable())?;
+        let lifetime = requested_expiry - chrono::Utc::now().timestamp() - 5;
+        if lifetime <= 0 {
+            return Err(unavailable());
+        }
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .map_err(|_| unavailable())?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ShortToken {
+            access_token: String,
+            expire_time: chrono::DateTime<chrono::Utc>,
+        }
+        let parent: ShortToken = client.post(format!("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{target}:generateAccessToken"))
+            .bearer_auth(base).json(&serde_json::json!({ "scope": [STORAGE_SCOPE], "lifetime": format!("{lifetime}s") }))
+            .send().await.map_err(|_| unavailable())?.error_for_status().map_err(|_| unavailable())?
+            .json().await.map_err(|_| unavailable())?;
+        let expires_at = parent.expire_time.timestamp();
+        if expires_at > requested_expiry
+            || expires_at <= chrono::Utc::now().timestamp()
+            || parent.access_token.is_empty()
+        {
+            return Err(unavailable());
+        }
+        let rule = GcpAccessRule::new(self.content_bucket.clone(), prefixes.clone(), write);
+        let cab = serde_json::json!({ "accessBoundary": { "accessBoundaryRules": [{
+            "availablePermissions": rule.access.roles(),
+            "availableResource": format!("//storage.googleapis.com/projects/_/buckets/{}", self.content_bucket),
+            "availabilityCondition": { "expression": access_boundary_condition(&rule) }
+        }] } }).to_string();
+        #[derive(Deserialize)]
+        struct Downscoped {
+            access_token: String,
+            token_type: String,
+        }
+        // A CAB token inherits its parent's expiry. An ordinary one-hour base
+        // token cannot satisfy a grant that expires earlier than that.
+        let result: Downscoped = client
+            .post("https://sts.googleapis.com/v1/token")
+            .form(&[
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:token-exchange",
+                ),
+                (
+                    "subject_token_type",
+                    "urn:ietf:params:oauth:token-type:access_token",
+                ),
+                ("subject_token", parent.access_token.as_str()),
+                (
+                    "requested_token_type",
+                    "urn:ietf:params:oauth:token-type:access_token",
+                ),
+                ("options", cab.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|_| unavailable())?
+            .error_for_status()
+            .map_err(|_| unavailable())?
+            .json()
+            .await
+            .map_err(|_| unavailable())?;
+        if result.access_token.is_empty() || !result.token_type.eq_ignore_ascii_case("bearer") {
+            return Err(unavailable());
+        }
+        Ok(Self {
+            service_account_key: None,
+            access_token: Some(result.access_token),
+            meta_bucket: self.meta_bucket.clone(),
+            content_bucket: self.content_bucket.clone(),
+            logs_bucket: self.logs_bucket.clone(),
+            allowed_prefixes: prefixes,
+            write_access: write,
+            expiration: chrono::DateTime::from_timestamp(expires_at, 0),
+            content_path_prefix: Some(format!("apps/{app_id}")),
+            user_content_path_prefix: Some(format!("users/{sub}/apps/{app_id}")),
+        })
+    }
+
     pub fn new(meta_bucket: &str, content_bucket: &str, logs_bucket: &str) -> Self {
         GcpRuntimeCredentials {
             service_account_key: None,
@@ -251,6 +369,11 @@ impl GcpRuntimeCredentials {
         }
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
+        if let CredentialsAccess::DeviceExecute { write, expires_at } = mode {
+            return self
+                .device_execute_credentials(sub, app_id, write, expires_at)
+                .await;
+        }
 
         // Decided here, ahead of the prefix work, so the one place this flow
         // branches by credential shape stays visible at the top. Under Workload
@@ -337,6 +460,7 @@ impl GcpRuntimeCredentials {
                 true,
             ),
             CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
+            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
         };
 
         // Generate a base access token, then downscope it with Credential Access Boundary
@@ -446,6 +570,11 @@ impl GcpRuntimeCredentials {
         }
         crate::credentials::validate_path_component(sub, "sub")?;
         crate::credentials::validate_path_component(app_id, "app_id")?;
+        if let CredentialsAccess::DeviceExecute { write, expires_at } = mode {
+            return self
+                .device_execute_credentials(sub, app_id, write, expires_at)
+                .await;
+        }
 
         let service_account_key = self
             .service_account_key
@@ -531,6 +660,7 @@ impl GcpRuntimeCredentials {
                 true,
             ),
             CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
+            CredentialsAccess::DeviceExecute { .. } => unreachable!("handled above"),
         };
 
         // Generate a base access token, then downscope it with Credential Access Boundary
@@ -645,6 +775,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { .. }
             | CredentialsAccess::ShadowExecute
     )
     .then(|| apps_prefix.to_string());
@@ -657,6 +788,7 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute
+            | CredentialsAccess::DeviceExecute { .. }
             | CredentialsAccess::ShadowExecute
     )
     .then(|| user_prefix.to_string());
@@ -1350,7 +1482,7 @@ fn make_gcs_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("gs://{}/{}", bucket, path);
-        let builder = connect(&url);
+        let builder = connect_lance(&url);
         match &credential {
             Some((option, value)) => builder.storage_option(option.to_string(), value.clone()),
             None => builder,
@@ -1781,6 +1913,39 @@ mod tests {
     /// `startsWith` on an unanchored directory prefix leaks: `apps/app-1`
     /// matches `apps/app-10`. Every rule goes through `with_access`, which
     /// anchors each prefix with a trailing slash.
+    #[test]
+    fn device_execute_cab_has_only_the_four_cloud_data_prefixes() {
+        let prefixes = crate::credentials::device_execute_prefixes("auth0|owner", "project")
+            .unwrap()
+            .into_values()
+            .collect::<Vec<_>>();
+        for write in [false, true] {
+            let rule = GcpAccessRule::new("content".into(), prefixes.clone(), write);
+            let condition = access_boundary_condition(&rule);
+            assert_eq!(rule.prefixes.len(), 4);
+            for prefix in &prefixes {
+                assert!(condition.contains(&format!("objects/{prefix}'")));
+            }
+            for forbidden in [
+                "metadata/",
+                "media/",
+                "tmp/global/",
+                "runs/",
+                "users/other/",
+            ] {
+                assert!(!condition.contains(forbidden));
+            }
+            assert_eq!(
+                rule.access.roles(),
+                if write {
+                    &["inRole:roles/storage.objectAdmin"]
+                } else {
+                    &["inRole:roles/storage.objectViewer"]
+                }
+            );
+        }
+    }
+
     #[test]
     fn test_gcp_access_rule_prefixes_never_match_a_sibling_app() {
         let rule = GcpAccessRule::new(

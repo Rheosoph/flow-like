@@ -100,6 +100,21 @@ Build a stable key before using upsert. After a large write, [Flush Database](/n
 
 Query local records with [(SQL) Filter Database](/nodes/data/database/search/filter-local-db/). Keep result limits and selected fields bounded for interactive workflows.
 
+### Column types from the first write
+
+A table without a declared schema takes its schema from the insert or upsert that creates it. Most columns follow their JSON shape. These top-level columns are typed from their non-null values instead:
+
+| Values in the first write | Column type |
+|---------------------------|-------------|
+| Strings that all parse as RFC3339, as a Date pin produces | `Timestamp(Millisecond, "UTC")`, see [Dates](/reference/dates/#getting-a-date-into-a-column) |
+| Valid GeoJSON geometries, as a Geometry pin produces, including mixed kinds | WKB geometry with WGS 84 metadata, see [Geometry](/reference/geometry/#tables-and-sql) |
+| Arrays of integers 0–255, at least one non-empty, as a Byte array pin produces | `Binary` |
+| Arrays in a column named `vector` | Fixed-size `Float32` vector, sized by the first non-empty array |
+
+A single value that does not fit, such as a Feature wrapper or the integer 300, leaves the column to its JSON shape. Reads return geometry as GeoJSON and `Binary` as an array of numbers.
+
+After creation, the stored schema is authoritative. Later writes must fit it, so a `Binary` column rejects values outside 0–255, and existing tables keep their column types. Declared schemas have no integer-list type; nest a list of small integers inside an object when it must stay a list. To change an inferred type, recreate the table or create it with a declared schema in Data Studio.
+
 ### Branches, versions, and snapshots
 
 Open Database and Open Remote Database accept a branch and a revision: Latest, Version, or
@@ -182,6 +197,7 @@ Write to a temporary or versioned path first when replacing an important artifac
 | Spreadsheet table is missing | Worksheet selection, merged cells, table boundaries |
 | JSON fields disappear | Schema optionality, field names, repair behavior |
 | Duplicate database records | Stable key, upsert choice, checkpoint timing |
+| A database column has an unexpected type | Values in the write that created the table, declared schema |
 
 ## Next steps
 

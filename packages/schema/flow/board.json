@@ -282,6 +282,10 @@
 				"pins_collapsed": {
 					"description": "The editor hides this node's unconnected data pins behind its latch. Presentation only; execution never reads it.",
 					"type": ["boolean", "null"]
+				},
+				"auto_reroute": {
+					"description": "The editor generated this reroute and may replace it during automatic layout.",
+					"type": ["boolean", "null"]
 				}
 			},
 			"required": [

@@ -1,4 +1,6 @@
-use crate::types::handles::{AutomationSession, BrowserContextOptions, BrowserType};
+use crate::types::handles::AutomationSession;
+#[cfg(feature = "execute")]
+use crate::types::handles::{BrowserContextOptions, BrowserType};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -9,8 +11,7 @@ use flow_like_types::{async_trait, json::json};
 use std::time::Duration;
 #[cfg(feature = "execute")]
 use thirtyfour::{
-    Capabilities, DesiredCapabilities, WebDriver,
-    common::capabilities::chromium::ChromiumLikeCapabilities,
+    Capabilities, DesiredCapabilities, common::capabilities::chromium::ChromiumLikeCapabilities,
 };
 
 #[crate::register_node]
@@ -32,6 +33,7 @@ impl NodeLogic for BrowserOpenNode {
             "Connects to a WebDriver server and opens a new browser session",
             "Automation/Browser",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "open");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -124,6 +126,12 @@ impl NodeLogic for BrowserOpenNode {
         .set_default_value(Some(json!(30)));
 
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
+        node.add_output_pin(
+            "debugger_address",
+            "Debugger Address",
+            "Chrome or Edge debugger endpoint, when available",
+            VariableType::String,
+        );
 
         node.add_output_pin(
             "session_out",
@@ -148,12 +156,19 @@ impl NodeLogic for BrowserOpenNode {
         let viewport_height: i64 = context.evaluate_pin("viewport_height").await?;
         let user_agent: String = context.evaluate_pin("user_agent").await?;
         let page_load_timeout: i64 = context.evaluate_pin("page_load_timeout").await?;
+        session.ensure_active(context).await?;
+        if session.has_browser() {
+            return Err(flow_like_types::anyhow!(
+                "Close the attached browser before replacing it"
+            ));
+        }
 
         let browser_type = match browser_type_str.as_str() {
             "Firefox" => BrowserType::Firefox,
             "Edge" => BrowserType::Edge,
             "Safari" => BrowserType::Safari,
-            _ => BrowserType::Chrome,
+            "Chrome" => BrowserType::Chrome,
+            _ => return Err(flow_like_types::anyhow!("Unknown browser type")),
         };
 
         let caps = match browser_type {
@@ -184,6 +199,12 @@ impl NodeLogic for BrowserOpenNode {
                         .set_headless()
                         .map_err(|e| flow_like_types::anyhow!("Failed to set headless: {}", e))?;
                 }
+                if !user_agent.is_empty() {
+                    let mut prefs =
+                        thirtyfour::common::capabilities::firefox::FirefoxPreferences::new();
+                    prefs.set("general.useragent.override", &user_agent)?;
+                    firefox_caps.set_preferences(prefs)?;
+                }
                 Capabilities::from(firefox_caps)
             }
             BrowserType::Edge => {
@@ -193,27 +214,62 @@ impl NodeLogic for BrowserOpenNode {
                         .set_headless()
                         .map_err(|e| flow_like_types::anyhow!("Failed to set headless: {}", e))?;
                 }
+                if !user_agent.is_empty() {
+                    edge_caps.add_arg(&format!("--user-agent={user_agent}"))?;
+                }
                 Capabilities::from(edge_caps)
             }
             BrowserType::Safari => {
+                if headless || !user_agent.is_empty() {
+                    return Err(flow_like_types::anyhow!(
+                        "Safari WebDriver does not support headless mode or a custom user agent"
+                    ));
+                }
                 let safari_caps = DesiredCapabilities::safari();
                 Capabilities::from(safari_caps)
             }
         };
 
-        let driver = WebDriver::new(&webdriver_url, caps).await.map_err(|e| {
-            flow_like_types::anyhow!("Failed to connect to WebDriver at {}: {}", webdriver_url, e)
-        })?;
-
-        driver
-            .set_page_load_timeout(Duration::from_secs(page_load_timeout as u64))
+        if viewport_width < 1
+            || viewport_height < 1
+            || viewport_width > u32::MAX as i64
+            || viewport_height > u32::MAX as i64
+            || page_load_timeout < 0
+        {
+            return Err(flow_like_types::anyhow!(
+                "Viewport dimensions must be positive and page timeout nonnegative"
+            ));
+        }
+        let (driver, debugger_address) = super::protocol::connect_webdriver(&webdriver_url, caps)
             .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to set page load timeout: {}", e))?;
+            .map_err(|e| {
+                flow_like_types::anyhow!(
+                    "Failed to connect to WebDriver at {}: {}",
+                    webdriver_url,
+                    e
+                )
+            })?;
 
-        driver
-            .set_window_rect(0, 0, viewport_width as u32, viewport_height as u32)
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to set window size: {}", e))?;
+        let setup: flow_like_types::Result<thirtyfour::WindowHandle> = async {
+            driver
+                .set_page_load_timeout(Duration::from_secs(page_load_timeout as u64))
+                .await
+                .map_err(|e| flow_like_types::anyhow!("Failed to set page load timeout: {}", e))?;
+
+            driver
+                .set_window_rect(0, 0, viewport_width as u32, viewport_height as u32)
+                .await
+                .map_err(|e| flow_like_types::anyhow!("Failed to set window size: {}", e))?;
+            Ok(driver.window().await?)
+        }
+        .await;
+        let initial_window = match setup {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = driver.quit().await;
+                return Err(error);
+            }
+        };
 
         let options = BrowserContextOptions {
             browser_type,
@@ -229,9 +285,25 @@ impl NodeLogic for BrowserOpenNode {
             ..Default::default()
         };
 
-        session.attach_browser(context, driver, &options).await?;
+        if let Err(error) = session
+            .attach_browser(context, driver.clone(), &options)
+            .await
+        {
+            let _ = driver.quit().await;
+            return Err(error);
+        }
+        session.set_current_page(context, initial_window).await?;
+        if let Some(address) = &debugger_address {
+            super::protocol::remember_debugger_address(context, &session, address).await;
+        }
+        super::selector::optional_output(
+            context,
+            "debugger_address",
+            json!(debugger_address.unwrap_or_default()),
+        )
+        .await?;
 
-        context.set_pin_value("session_out", json!(session)).await?;
+        super::selector::optional_output(context, "session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
@@ -261,9 +333,10 @@ impl NodeLogic for BrowserCloseNode {
         let mut node = Node::new(
             "browser_close",
             "Close Browser",
-            "Closes an open browser context and releases resources",
+            "Closes a browser started by this session, or disconnects from an existing browser",
             "Automation/Browser",
         );
+        node.set_version(1);
         node.set_flowscript_name("browser", "close");
         node.add_icon("/flow/icons/browser.svg");
 
@@ -291,6 +364,13 @@ impl NodeLogic for BrowserCloseNode {
 
         node.add_output_pin("exec_out", "▶", "Continue", VariableType::Execution);
 
+        node.add_output_pin(
+            "session_out",
+            "Session",
+            "Session with browser detached",
+            VariableType::Struct,
+        )
+        .set_schema::<AutomationSession>();
         node
     }
 
@@ -298,12 +378,16 @@ impl NodeLogic for BrowserCloseNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let session: AutomationSession = context.evaluate_pin("session").await?;
-
-        if let Ok(driver) = session.get_browser_driver(context).await {
-            let driver_clone = (*driver).clone();
-            let _ = driver_clone.quit().await;
-        }
+        let mut session: AutomationSession = context.evaluate_pin("session").await?;
+        let detached = session.detach_browser(context).await;
+        super::protocol::clear_listeners(context, &session).await;
+        context
+            .cache
+            .write()
+            .await
+            .remove(&format!("automation:debugger:{}", session.session_ref));
+        detached?;
+        super::selector::optional_output(context, "session_out", json!(session)).await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

@@ -4,8 +4,8 @@
 //! Custom nodes are public after admin approval.
 
 use super::types::{
-    MetaSummary, PackageSource, PackageStatus, PackageSummary, PackageVersion, PublishResponse,
-    RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
+    MetaSummary, PackageAccessFilter, PackageSource, PackageStatus, PackageSummary, PackageVersion,
+    PublishResponse, RegistryEntry, RegistryIndex, SearchFilters, SearchResults, SortField,
 };
 use super::widget_policy::declared_widget_network;
 use crate::deletion::{DeletionRoot, job};
@@ -917,6 +917,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: None,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect();
@@ -1520,6 +1522,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect();
@@ -1536,13 +1540,17 @@ impl ServerRegistry {
     /// Public packages are always returned. When `include_own` is true and a
     /// caller_id is provided, private packages the caller has access to are
     /// included as well. When `owned_only` is true, only packages the caller
-    /// has explicit access to (via wasm_package_user) are returned.
+    /// has explicit access to (via wasm_package_user) are returned; `access`
+    /// implies `owned_only` and keeps only rows with matching permission bits.
+    /// `ids` narrows any of these to the given package ids.
     pub async fn search_with_visibility(
         &self,
         filters: &SearchFilters,
         caller_id: Option<&str>,
         include_own: bool,
         owned_only: bool,
+        access: Option<PackageAccessFilter>,
+        ids: Option<&[String]>,
     ) -> flow_like_types::Result<SearchResults> {
         use crate::entity::sea_orm_active_enums::WasmPackageStatus;
         use sea_orm::Condition;
@@ -1556,13 +1564,14 @@ impl ServerRegistry {
         // Combined status + visibility filtering.
         // The user's own packages bypass the Active-only status filter so they
         // can see PendingReview / Disabled / etc. packages they own.
-        if owned_only {
+        if owned_only || access.is_some() {
             if let Some(uid) = caller_id {
                 let user_package_ids: Vec<String> = wasm_package_user::Entity::find()
                     .filter(wasm_package_user::Column::UserId.eq(uid))
                     .all(&self.db)
                     .await?
                     .into_iter()
+                    .filter(|r| access.is_none_or(|access| access.admits(r.permission)))
                     .map(|r| r.package_id)
                     .collect();
 
@@ -1633,6 +1642,10 @@ impl ServerRegistry {
                     }
                 }
             }
+        }
+
+        if let Some(ids) = ids {
+            query = query.filter(wasm_package::Column::Id.is_in(ids.iter().map(String::as_str)));
         }
 
         if let Some(q) = &filters.query {
@@ -1735,6 +1748,8 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: resolved_meta,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect();
@@ -2197,6 +2212,10 @@ impl ServerRegistry {
                     wasm_hash: Set(compile_hash.clone()),
                     wasm_size: Set(size),
                     widgets: Set(widgets_json.clone()),
+                    // No nodes, so no node capabilities: keep tiers and hosts only.
+                    permissions: Set(serde_json::to_value(
+                        manifest.permissions.with_node_capabilities(&[]),
+                    )?),
                     widget_bundle_hash: Set(widget_bundle_hash.clone()),
                     widget_bundle_size: Set(widget_bundle_size),
                     updated_at: Set(now_approve),
@@ -2449,6 +2468,11 @@ impl ServerRegistry {
                     update_model.wasm_hash = Set(latest.wasm_hash.clone());
                     update_model.wasm_size = Set(latest.wasm_size);
                     update_model.nodes = Set(latest.nodes.clone());
+                    if let Some(permissions) =
+                        permissions_with_node_capabilities(&pkg.permissions, &latest.nodes)
+                    {
+                        update_model.permissions = Set(permissions);
+                    }
                     update_model.widgets = Set(latest.widgets.clone());
                     update_model.widget_bundle_hash = Set(latest.widget_bundle_hash.clone());
                     update_model.widget_bundle_size = Set(latest.widget_bundle_size);
@@ -2704,17 +2728,38 @@ impl ServerRegistry {
                     rating_count: pkg.rating_count,
                     metadata: None,
                     capabilities: package_capability_tags(pkg.permissions, &pkg.widgets),
+                    viewer_has_access: None,
+                    viewer_permission: None,
                 }
             })
             .collect())
     }
 }
 
+/// The stored permissions with their capability flags replaced by what the
+/// package's compiled nodes declare. Resource tiers, the host allowlist and
+/// OAuth scopes stay as authored. `None` when the nodes are not known — the
+/// blob does not parse, or it is still the empty placeholder a version carries
+/// until node extraction succeeds — so callers keep the previous value instead
+/// of listing nothing.
+pub(crate) fn permissions_with_node_capabilities(
+    stored: &serde_json::Value,
+    nodes: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let authored: PackagePermissions = serde_json::from_value(stored.clone()).unwrap_or_default();
+    let nodes: Vec<PackageNodeEntry> = serde_json::from_value(nodes.clone()).ok()?;
+    if nodes.is_empty() {
+        return None;
+    }
+    serde_json::to_value(authored.with_node_capabilities(&nodes)).ok()
+}
+
 /// Derive the listing capability tags from a stored `permissions` blob.
 ///
-/// The permissions column is written by the publish flow, so a row that predates
-/// a manifest change (or carries anything unparseable) simply lists no
-/// capabilities rather than failing the whole listing.
+/// The publish flow writes the authored manifest to the permissions column and
+/// the compile callback and approval replace its capability flags with the
+/// ones the nodes declare, so a row that predates that (or carries anything
+/// unparseable) simply lists no capabilities rather than failing the listing.
 fn capability_tags_from_json(raw: serde_json::Value) -> Vec<String> {
     serde_json::from_value::<PackagePermissions>(raw)
         .map(|permissions| permissions.capability_tags())

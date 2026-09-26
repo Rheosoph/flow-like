@@ -51,8 +51,15 @@ export async function readTemplateMetadataSnapshot(
 			);
 			continue;
 		}
+		if (!Array.isArray(result.value)) {
+			errors.push(
+				`${reads[index].label}: returned ${typeof result.value}, not a list`,
+			);
+			continue;
+		}
 		if (result.value.length > MAX_OWNED_TEMPLATE_METADATA) capped = true;
 		for (const entry of result.value.slice(0, MAX_OWNED_TEMPLATE_METADATA)) {
+			if (!Array.isArray(entry)) continue;
 			const key = JSON.stringify([entry[0], entry[1]]);
 			if (!merged.has(key) && merged.size >= MAX_OWNED_TEMPLATE_METADATA) {
 				capped = true;

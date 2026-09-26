@@ -34,6 +34,7 @@ import {
 } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useClientRouter } from "../../lib/client-navigation";
+import { asArray } from "../../lib/response-shape";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -645,7 +646,7 @@ function TeamMemberPicker({ onPick }: { onPick: (sub: string) => void }) {
 	);
 	const members = useMemo(() => {
 		const seen = new Set<string>();
-		return ((team.data ?? []) as IMember[]).filter((m) => {
+		return asArray<IMember>(team.data).filter((m) => {
 			if (!m.user_id || seen.has(m.user_id)) return false;
 			seen.add(m.user_id);
 			return true;

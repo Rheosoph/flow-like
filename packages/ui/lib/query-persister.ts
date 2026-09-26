@@ -1,7 +1,12 @@
 "use client";
 
-import { experimental_createQueryPersister } from "@tanstack/query-persist-client-core";
+import {
+	type PersistedQuery,
+	experimental_createQueryPersister,
+} from "@tanstack/query-persist-client-core";
+import { type QueryState, notifyManager } from "@tanstack/react-query";
 import { createStore, del, entries, get, set } from "idb-keyval";
+import { isRecord } from "./response-shape";
 
 /**
  * Per-query persistence with an opinionated retention policy.
@@ -152,6 +157,78 @@ export interface SmartQueryPersisterOptions {
 }
 
 /**
+ * A 2xx that was never API data: a dead Lambda's `{errorType, errorMessage}` or
+ * a captive portal's HTML page. Clients before the fetcher rejected these
+ * cached them as the query's answer.
+ */
+function isUpstreamFailureBody(value: unknown): boolean {
+	if (typeof value === "string") {
+		return /^\s*<(!doctype html|html[\s>])/i.test(value);
+	}
+	return (
+		isRecord(value) &&
+		typeof value.errorType === "string" &&
+		typeof value.errorMessage === "string"
+	);
+}
+
+function holdsUpstreamFailure(data: unknown): boolean {
+	if (isUpstreamFailureBody(data)) return true;
+	return (
+		isRecord(data) &&
+		Array.isArray(data.pages) &&
+		data.pages.some(isUpstreamFailureBody)
+	);
+}
+
+const DISCARDED_ENTRY: PersistedQuery = {
+	buster: "",
+	queryHash: "",
+	queryKey: [],
+	state: { dataUpdatedAt: 0 } as QueryState,
+};
+
+/**
+ * Unreadable entries and cached upstream failures read back as expired, so
+ * every restore path deletes them instead of serving them to a consumer.
+ */
+function deserializePersistedQuery(cached: string): PersistedQuery {
+	try {
+		const parsed: unknown = JSON.parse(cached);
+		if (
+			isRecord(parsed) &&
+			isRecord(parsed.state) &&
+			!holdsUpstreamFailure(parsed.state.data)
+		) {
+			return parsed as unknown as PersistedQuery;
+		}
+	} catch {
+		/* dropped below */
+	}
+	return DISCARDED_ENTRY;
+}
+
+const unconfirmedRestores = new WeakSet<object>();
+
+function isObject(value: unknown): value is object {
+	return typeof value === "object" && value !== null;
+}
+
+/**
+ * True while `data` is a copy restored from this device's storage that no
+ * query function has confirmed since.
+ *
+ * A restore resolves the query's first fetch, so its observers cannot tell it
+ * from a network answer (`isFetchedAfterMount` flips), and the refetch it
+ * schedules only starts a macrotask later. Callers that must not act on a
+ * previous session's answer while the server can still be asked tell the two
+ * apart here.
+ */
+export function isUnconfirmedRestore(data: unknown): boolean {
+	return isObject(data) && unconfirmedRestores.has(data);
+}
+
+/**
  * Create the per-query persister. Attach `persisterFn` to the QueryClient's
  * `defaultOptions.queries.persister` and schedule `persisterGc()` once per
  * session on idle to sweep expired/busted entries.
@@ -163,15 +240,49 @@ export function createSmartQueryPersister(
 		options.backend ?? createIdbBackend(),
 		options.maxEntryBytes,
 	);
-	return experimental_createQueryPersister({
+	const persister = experimental_createQueryPersister({
 		storage,
+		deserialize: deserializePersistedQuery,
 		maxAge: options.maxAge ?? DEFAULT_MAX_AGE_MS,
 		buster: POLICY_BUSTER,
 		prefix: "fl-q",
+		refetchOnRestore: false,
 		filters: {
 			predicate: (query) => shouldPersistQuery(query),
 		},
 	});
+	const persisterFn: typeof persister.persisterFn = async (
+		queryFn,
+		context,
+		query,
+	) => {
+		let fetched = false;
+		const data = await persister.persisterFn(
+			(fnContext) => {
+				fetched = true;
+				return queryFn(fnContext);
+			},
+			context,
+			query,
+		);
+		if (fetched) {
+			// Structural sharing keeps the restored object when the server answers
+			// with equal data, so the confirmation unmarks the data it supersedes.
+			if (isObject(query.state.data)) {
+				unconfirmedRestores.delete(query.state.data);
+			}
+			return data;
+		}
+		if (isObject(data)) unconfirmedRestores.add(data);
+		// The stock `refetchOnRestore` drops this promise, so every refetch that
+		// failed after a restore (an offline cold start fails them all) reached
+		// telemetry as an unhandled rejection. The failure stays on the query.
+		notifyManager.schedule(() => {
+			if (query.isStale()) query.fetch().catch(() => {});
+		});
+		return data;
+	};
+	return { ...persister, persisterFn };
 }
 
 /**

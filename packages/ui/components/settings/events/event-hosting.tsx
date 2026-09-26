@@ -1,31 +1,23 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	AlertTriangle,
-	Copy,
-	ExternalLink,
-	Loader2,
-	Trash2,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, Copy, ExternalLink } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { getApiOrigin } from "../../../lib/api-url";
 import {
+	HOSTING_BLOCKER_FIX,
+	type HostingBlocker,
 	getHostedFrontendKind,
 	getHostedFrontendUrl,
+	getHostingBlockers,
 	parseFrontendHosting,
 } from "../../../lib/frontend-hosting";
-import {
-	type IEvent,
-	IEventExecutionMode,
-	IEventExposure,
-} from "../../../lib/schema/flow/event";
+import type { IEvent } from "../../../lib/schema/flow/event";
 import type { IFrontendHosting } from "../../../lib/schema/flow/event-payload";
 import { useBackend } from "../../../state/backend-state";
-import type { IEventAlias } from "../../../state/backend-state/event-state";
-import { Alert, AlertDescription } from "../../ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "../../ui/alert";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -36,29 +28,37 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from "../../ui/alert-dialog";
+import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { Switch } from "../../ui/switch";
 
-async function listNoEventAliases(): Promise<IEventAlias[]> {
-	return [];
-}
-
+/**
+ * A hosted app is one link, `/a/{appId}`; each routed chat, form or page is
+ * published on its own route beneath it.
+ */
 export function EventHosting({
 	appId,
 	event,
+	route,
 	config,
 	canWrite,
 	hasUnsavedChanges,
 	onUpdate,
+	onEventChange,
 }: {
 	appId: string;
 	event: IEvent;
+	/** The saved route this Event answers, or `null` when it has none. */
+	route: string | null;
 	config: Record<string, unknown>;
 	canWrite: boolean;
 	hasUnsavedChanges: boolean;
 	onUpdate: (hosting: IFrontendHosting) => void;
+	onEventChange?: (
+		change: Partial<Pick<IEvent, "active" | "execution_mode" | "exposure">>,
+	) => void;
 }) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
@@ -67,127 +67,55 @@ export function EventHosting({
 		backend.userState,
 		[],
 	);
-	const aliases = useInvoke<IEventAlias[], [string, string]>(
-		backend.eventState.listEventAliases ?? listNoEventAliases,
-		backend.eventState,
-		[appId, event.id],
-		Boolean(appId && event.id && backend.eventState.listEventAliases),
-	);
-	const [aliasInput, setAliasInput] = useState("");
-	const [aliasBusy, setAliasBusy] = useState(false);
-	const [aliasError, setAliasError] = useState<string | null>(null);
 	const [confirmAnonymous, setConfirmAnonymous] = useState(false);
-	const currentAlias = aliases.data?.[0]?.slug ?? "";
-	useEffect(() => {
-		setAliasInput(currentAlias);
-		setAliasError(null);
-	}, [currentAlias]);
 
-	const kind = getHostedFrontendKind(event);
-	if (!kind) return null;
+	if (!getHostedFrontendKind(event)) return null;
 	const hosting = parseFrontendHosting(config);
 	const anonymousWarning = t(
 		"hostingAnonymousWarning",
 		"Anyone with this link can run the workflow without signing in. The app owner pays for all anonymous usage, including compute and model costs. Only enable this for content and actions you intend to make public.",
 	);
 	const origin = getApiOrigin(profile.data);
-	const directUrl = getHostedFrontendUrl(origin, kind, event.id);
-	const aliasUrl = currentAlias
-		? getHostedFrontendUrl(origin, kind, currentAlias)
-		: null;
-	const available =
-		hosting.enabled &&
-		event.active &&
-		event.execution_mode === IEventExecutionMode.Remote &&
-		(event.exposure ?? IEventExposure.Public) === IEventExposure.Public;
-	const aliasDisabled =
-		!canWrite || aliasBusy || hasUnsavedChanges || aliases.isLoading;
-
-	const saveAlias = async () => {
-		const slug = aliasInput.trim().toLowerCase();
-		if (aliasDisabled || !slug || !backend.eventState.upsertEventAlias) return;
-		setAliasBusy(true);
-		setAliasError(null);
+	const url =
+		route === null ? null : getHostedFrontendUrl(origin, appId, route);
+	const blockers = getHostingBlockers(event, route);
+	const available = hosting.enabled && blockers.length === 0;
+	const live = available && !hasUnsavedChanges;
+	const blockerCopy: Record<HostingBlocker, { reason: string; fix?: string }> =
+		{
+			no_route: {
+				reason: t(
+					"hostingBlockerNoRoute",
+					"The event has no route. Set a route path under Identity; hosted links address routes, not events.",
+				),
+			},
+			inactive: {
+				reason: t("hostingBlockerInactive", "The event is inactive."),
+				fix: t("hostingFixActivate", "Activate"),
+			},
+			local_execution: {
+				reason: t(
+					"hostingBlockerLocal",
+					"Execution is Local. Hosted links only run on the server.",
+				),
+				fix: t("hostingFixRemote", "Switch to Remote"),
+			},
+			internal_exposure: {
+				reason: t(
+					"hostingBlockerInternal",
+					"Exposure is Internal, so there is no public endpoint.",
+				),
+				fix: t("hostingFixPublic", "Make public"),
+			},
+		};
+	const copyUrl = async (value: string) => {
 		try {
-			await backend.eventState.upsertEventAlias(appId, event.id, slug);
-			await aliases.refetch();
-			toast.success(t("hostingAliasSaved", "Alias saved"));
-		} catch (error) {
-			setAliasError(
-				error instanceof Error
-					? error.message
-					: t("hostingAliasSaveFailed", "Failed to save alias"),
-			);
-		} finally {
-			setAliasBusy(false);
-		}
-	};
-	const deleteAlias = async () => {
-		if (aliasDisabled || !currentAlias || !backend.eventState.deleteEventAlias)
-			return;
-		setAliasBusy(true);
-		setAliasError(null);
-		try {
-			await backend.eventState.deleteEventAlias(appId, event.id, currentAlias);
-			await aliases.refetch();
-			toast.success(t("hostingAliasRemoved", "Alias removed"));
-		} catch (error) {
-			setAliasError(
-				error instanceof Error
-					? error.message
-					: t("hostingAliasRemoveFailed", "Failed to remove alias"),
-			);
-		} finally {
-			setAliasBusy(false);
-		}
-	};
-	const copyUrl = async (url: string) => {
-		try {
-			await navigator.clipboard.writeText(url);
+			await navigator.clipboard.writeText(value);
 			toast.success(t("hostingLinkCopied", "Link copied"));
 		} catch {
 			toast.error(t("hostingLinkCopyFailed", "Could not copy the link"));
 		}
 	};
-	const urlField = (id: string, label: string, url: string) => (
-		<div className="space-y-2">
-			<Label htmlFor={id}>{label}</Label>
-			<div className="flex items-center gap-2">
-				<Input
-					id={id}
-					readOnly
-					value={url}
-					className="min-w-0 font-mono text-xs"
-				/>
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					onClick={() => copyUrl(url)}
-					aria-label={t("hostingCopyLink", "Copy link")}
-				>
-					<Copy className="size-4" />
-				</Button>
-				<Button
-					type="button"
-					variant="outline"
-					size="icon"
-					asChild
-					disabled={!available || hasUnsavedChanges}
-				>
-					<a
-						href={available && !hasUnsavedChanges ? url : undefined}
-						target="_blank"
-						rel="noopener noreferrer"
-						aria-label={t("hostingOpenPage", "Open hosted page")}
-						aria-disabled={!available || hasUnsavedChanges}
-					>
-						<ExternalLink className="size-4" />
-					</a>
-				</Button>
-			</div>
-		</div>
-	);
 
 	return (
 		<div className="space-y-6 rounded-lg border p-5">
@@ -227,8 +155,8 @@ export function EventHosting({
 					</Label>
 					<p className="text-sm text-muted-foreground">
 						{t(
-							"hostingEnableDescription",
-							"Publish a direct link to this chat, form or page. Visitors must sign in unless you separately allow anonymous access.",
+							"hostingEnableRouteDescription",
+							"Publish this route of the app's hosted link. Visitors must sign in unless you separately allow anonymous access.",
 						)}
 					</p>
 				</div>
@@ -280,85 +208,103 @@ export function EventHosting({
 					)}
 				</p>
 			)}
-			{hosting.enabled && !available && (
+			{hosting.enabled && blockers.length > 0 && (
 				<Alert>
-					<AlertDescription>
+					<AlertTriangle className="size-4" />
+					<AlertTitle>
 						{t(
-							"hostingRequirements",
-							"Set execution to Remote in the event or its workflow, activate the event and select Public exposure. Save these settings before sharing the link.",
+							"hostingBlockedTitleRoute",
+							"This route returns 404 until you fix this:",
 						)}
+					</AlertTitle>
+					<AlertDescription className="space-y-3">
+						<ul className="w-full space-y-2">
+							{blockers.map((blocker) => {
+								const fix = HOSTING_BLOCKER_FIX[blocker];
+								const label = blockerCopy[blocker].fix;
+								return (
+									<li
+										key={blocker}
+										className="flex flex-wrap items-center justify-between gap-2"
+									>
+										<span>{blockerCopy[blocker].reason}</span>
+										{canWrite && onEventChange && fix && label && (
+											<Button
+												type="button"
+												variant="outline"
+												size="sm"
+												onClick={() => onEventChange(fix)}
+											>
+												{label}
+											</Button>
+										)}
+									</li>
+								);
+							})}
+						</ul>
+						<p>
+							{t(
+								"hostingBlockedSave",
+								"Then save the event. The hosted link reads the saved settings.",
+							)}
+						</p>
 					</AlertDescription>
 				</Alert>
 			)}
-			{urlField(
-				"frontend-hosting-url",
-				t("hostingDirectLink", "Direct link"),
-				directUrl,
-			)}
-			<div className="space-y-2">
-				<Label htmlFor="frontend-hosting-alias">
-					{t("hostingAlias", "Public alias")}
-				</Label>
-				<div className="flex flex-wrap items-center gap-2">
-					<span className="text-sm text-muted-foreground">/{kind}/</span>
-					<Input
-						id="frontend-hosting-alias"
-						className="min-w-40 flex-1"
-						value={aliasInput}
-						placeholder="my-assistant"
-						disabled={aliasDisabled || !backend.eventState.upsertEventAlias}
-						onChange={(e) => setAliasInput(e.target.value)}
-					/>
-					<Button
-						type="button"
-						variant="outline"
-						disabled={
-							aliasDisabled ||
-							!backend.eventState.upsertEventAlias ||
-							!aliasInput.trim() ||
-							aliasInput.trim().toLowerCase() === currentAlias
-						}
-						onClick={saveAlias}
-					>
-						{aliasBusy && <Loader2 className="mr-2 size-4 animate-spin" />}
-						{t("hostingSaveAlias", "Save alias")}
-					</Button>
-					{currentAlias && (
+			{url && (
+				<div className="space-y-2">
+					<div className="flex items-center gap-2">
+						<Label htmlFor="frontend-hosting-url">
+							{t("hostingRouteLink", "Link to this route")}
+						</Label>
+						<Badge variant={live ? "secondary" : "outline"}>
+							{live
+								? t("hostingLinkLive", "Live")
+								: t("hostingLinkNotLive", "Not live")}
+						</Badge>
+					</div>
+					<div className="flex items-center gap-2">
+						<Input
+							id="frontend-hosting-url"
+							readOnly
+							value={url}
+							className="min-w-0 font-mono text-xs"
+						/>
 						<Button
 							type="button"
 							variant="outline"
 							size="icon"
-							disabled={aliasDisabled || !backend.eventState.deleteEventAlias}
-							onClick={deleteAlias}
-							aria-label={t("hostingRemoveAlias", "Remove alias")}
+							onClick={() => copyUrl(url)}
+							aria-label={t("hostingCopyLink", "Copy link")}
 						>
-							<Trash2 className="size-4" />
+							<Copy className="size-4" />
 						</Button>
-					)}
-				</div>
-				<p className="text-xs text-muted-foreground">
-					{hasUnsavedChanges
-						? t(
-								"hostingSaveBeforeAlias",
-								"Save event changes before updating the alias.",
-							)
-						: t(
-								"hostingAliasImmediate",
-								"Alias changes take effect immediately. Changing an alias stops the previous link from working.",
-							)}
-				</p>
-				{(aliasError || aliases.error) && (
-					<p role="alert" className="text-sm text-destructive">
-						{aliasError ?? aliases.error?.message}
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							asChild
+							disabled={!live}
+						>
+							<a
+								href={live ? url : undefined}
+								target="_blank"
+								rel="noopener noreferrer"
+								aria-label={t("hostingOpenPage", "Open hosted page")}
+								aria-disabled={!live}
+							>
+								<ExternalLink className="size-4" />
+							</a>
+						</Button>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"hostingRouteLinkHint",
+							"Every published route of this app shares the same link and differs only in its path. Navigation between pages keeps visitors on it, as long as the target route is published with the same sign-in setting.",
+						)}
 					</p>
-				)}
-			</div>
-			{aliasUrl &&
-				urlField(
-					"frontend-hosting-alias-url",
-					t("hostingAliasLink", "Alias link"),
-					aliasUrl,
-				)}
+				</div>
+			)}
 		</div>
 	);
 }

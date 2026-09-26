@@ -218,6 +218,8 @@ pub async fn assign_role(
         })
         .await?;
 
+    crate::package_license::refresh_app(&state, &app_id).await;
+
     audit_branch!(
         state,
         user,

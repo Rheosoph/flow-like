@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
+	type NativeActionCompletionContext,
 	type NativeActionRequest,
 	assertNativeActionCurrent,
 	completeNativeAction,
@@ -16,7 +17,9 @@ const request: NativeActionRequest = {
 const context = () => ({
 	getCurrentScope: () => request.scope,
 	now: () => 1000,
-	invoke: mock(async () => {}),
+	invoke: mock<NonNullable<NativeActionCompletionContext["invoke"]>>(
+		async () => undefined,
+	),
 });
 
 describe("native action results", () => {

@@ -57,6 +57,21 @@ describe("resolvePinEditorKind", () => {
 		);
 	});
 
+	test("the payment tax code gets the Stripe category picker", () => {
+		expect(
+			resolvePinEditorKind(pin("product_tax_code"), "request_payment"),
+		).toBe("taxCode");
+		expect(resolvePinEditorKind(pin("product_tax_code"), "other_node")).toBe(
+			"plain",
+		);
+		expect(
+			resolvePinEditorKind(
+				pin("product_tax_code", { depends_on: ["src"] }),
+				"request_payment",
+			),
+		).toBe("label");
+	});
+
 	test("booleans route to the checkbox", () => {
 		expect(
 			resolvePinEditorKind(pin("flag", { data_type: IVariableType.Boolean })),

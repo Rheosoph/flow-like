@@ -175,11 +175,12 @@ node.add_permission(NodePermission::StorageWrite);
 ```
 
 Permissions are part of the exported node definition and drive the execution
-sandbox. Package memory and timeout limits remain in `flow-like.toml`; see the
+sandbox. Package memory and timeout tiers, the host allowlist, and OAuth scopes
+remain in `flow-like.toml`; see the
 [manifest reference](/dev/wasm-nodes/manifest/).
 
-Do not use manifest capability flags as a substitute for
-`node.add_permission(...)`.
+Do not author capability flags in the manifest. The registry derives the
+store's capability listing from `node.add_permission(...)`.
 
 ## Test locally
 

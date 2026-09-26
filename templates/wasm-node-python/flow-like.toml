@@ -30,14 +30,9 @@ name = "Weather Agent"
 memory = "standard"
 timeout = "standard"
 
-[permissions.filesystem]
-node_storage = true
-user_storage = true
-
+# Capabilities (network, storage, database, models, ...) are declared on each
+# node in code. The sandbox enforces those, and the registry derives the store's
+# capability listing from them, so they are not repeated here. This file only
+# sets resource tiers, the outbound host allowlist and OAuth scopes.
 [permissions.network]
 allowed_hosts = ["geocoding-api.open-meteo.com", "api.open-meteo.com"]
-dns_enabled = false
-http_enabled = true
-tcp_enabled = false
-udp_enabled = false
-websocket_enabled = false

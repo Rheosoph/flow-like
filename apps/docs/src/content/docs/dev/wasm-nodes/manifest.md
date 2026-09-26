@@ -6,8 +6,10 @@ sidebar:
 ---
 
 Every WASM package should include a `flow-like.toml` file beside its project
-sources. The manifest describes the package and its resource limits. Node
-definitions and execution permissions come from the compiled WASM binary.
+sources. The manifest describes the package and the package-wide settings a
+node cannot state in code: resource limits, the outbound host allowlist, and
+OAuth scopes. Node definitions and execution permissions come from the compiled
+WASM binary.
 
 ## Minimal manifest
 
@@ -121,6 +123,8 @@ The available node permissions are:
 | `NetworkDns` | DNS lookups |
 | `StorageRead` | Read node/user storage |
 | `StorageWrite` | Write and delete node/user storage |
+| `DatabaseRead` | Read from wired database and SQL session pins |
+| `DatabaseWrite` | Modify rows through wired database pins |
 | `Variables` | Read and write flow variables |
 | `Cache` | Read and write execution cache |
 | `Streaming` | Stream events or text |
@@ -132,16 +136,65 @@ The available node permissions are:
 Language SDKs expose the same serialized permission labels, such as
 `"network:http"`, `"storage:write"`, and `"streaming"`.
 
-:::caution
-The typed manifest still parses package-level network, filesystem, OAuth, and
-capability fields for compatibility and package inspection. In the current
-loader, those capability flags are used while inspecting the module, but they
-are not merged into each node's execution security configuration. Execution
-capabilities come from the permissions exported by that node; package memory
-and timeout limits are layered onto them.
+The sandbox grants each node exactly the capabilities that node declares. The
+manifest cannot add or remove them.
 
-Do not rely on manifest `allowed_hosts` as an execution-time host allowlist.
+## Host allowlist and OAuth scopes
+
+Besides the resource tiers, `[permissions]` holds two package-wide settings:
+
+```toml
+[permissions.network]
+allowed_hosts = ["api.example.com"]
+
+[[permissions.oauth_scopes]]
+provider = "google"
+scopes = ["https://www.googleapis.com/auth/calendar.events"]
+reason = "Create calendar events"
+required = true
+```
+
+| Field | Description |
+| --- | --- |
+| `network.allowed_hosts` | Outbound host allowlist for every node in the package. An empty or missing list means unrestricted hosts |
+| `oauth_scopes[].provider` | OAuth provider ID |
+| `oauth_scopes[].scopes` | Scopes requested from that provider |
+| `oauth_scopes[].reason` | Why the package needs them; shown in the store |
+| `oauth_scopes[].required` | Marks the entry as required in the store; defaults to `false` |
+
+WASM node definitions carry no OAuth providers or scopes today, so these
+authored entries are the only source for the store's OAuth listing.
+
+:::caution
+`allowed_hosts` is not a complete egress control. The desktop loader for
+installed packages copies it, together with the memory and timeout tiers, into
+the execution configuration of every node it loads from the package. It is
+checked for WebSocket connects and for WASI sockets, where the destination IP
+address is compared with the list. A non-empty list also keeps the standard
+`wasi:http` interface from being linked, because that path cannot enforce it.
+The Flow-Like HTTP host function does not consult the list today.
+
+The server executor applies neither the manifest tiers nor `allowed_hosts`. It
+runs nodes with their declared capabilities and the runtime default limits.
 :::
+
+## Capability flags are derived
+
+The typed manifest still has capability fields: `network.http_enabled`,
+`websocket_enabled`, `tcp_enabled`, `udp_enabled`, `dns_enabled`,
+`filesystem.node_storage`, `user_storage`, `upload_dir`, `cache_dir`,
+`database.read`, `database.write`, `variables`, `cache`, `streaming`, `a2ui`,
+and `models`. Do not author them. They hold the capability listing shown in the
+store, and the registry derives them from the compiled node definitions when a
+version is compiled and again when it is approved. Authored values are
+replaced.
+
+The desktop app derives the same listing when a developer project is loaded and
+logs a warning for every authored flag that no node backs.
+
+A package whose nodes declare `StorageRead` or `StorageWrite` lists all four
+storage flags, because the sandbox gates the node, user, upload, and cache
+directories on a single storage capability.
 
 ## Node discovery
 

@@ -989,6 +989,15 @@
     "class": "Agent",
     "category": "AI/Agents/Builder"
   },
+  "agent_register_work_iq_tools": {
+    "qualified": "agent::registerWorkIqTools",
+    "namespace": "agent",
+    "alias": "registerWorkIqTools",
+    "flat": "agentRegisterWorkIqTools",
+    "receiver": "agent_in",
+    "class": "Agent",
+    "category": "AI/Agents/Builder"
+  },
   "agent_set_system_prompt": {
     "qualified": "agent::setSystemPrompt",
     "namespace": "agent",
@@ -2447,6 +2456,24 @@
     "class": null,
     "category": "AI/ML/ONNX/Audio"
   },
+  "automation_check_capability": {
+    "qualified": "automation::checkCapability",
+    "namespace": "automation",
+    "alias": "checkCapability",
+    "flat": "automationCheckCapability",
+    "receiver": null,
+    "class": null,
+    "category": "Automation"
+  },
+  "automation_request_capability": {
+    "qualified": "automation::requestCapability",
+    "namespace": "automation",
+    "alias": "requestCapability",
+    "flat": "automationRequestCapability",
+    "receiver": null,
+    "class": null,
+    "category": "Automation"
+  },
   "automation_start_session": {
     "qualified": "automation::startSession",
     "namespace": "automation",
@@ -2636,6 +2663,15 @@
     "class": "bool",
     "category": "Utils/Bool"
   },
+  "browser_attach": {
+    "qualified": "browser::attach",
+    "namespace": "browser",
+    "alias": "attach",
+    "flat": "browserAttach",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_back": {
     "qualified": "browser::back",
     "namespace": "browser",
@@ -2708,6 +2744,24 @@
     "class": null,
     "category": "Automation/Browser/Interact"
   },
+  "browser_drag": {
+    "qualified": "browser::drag",
+    "namespace": "browser",
+    "alias": "drag",
+    "flat": "browserDrag",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_enter_frame": {
+    "qualified": "browser::enterFrame",
+    "namespace": "browser",
+    "alias": "enterFrame",
+    "flat": "browserEnterFrame",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_execute_js": {
     "qualified": "browser::executeJs",
     "namespace": "browser",
@@ -2716,6 +2770,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Extract"
+  },
+  "browser_execute_plan": {
+    "qualified": "browser::executePlan",
+    "namespace": "browser",
+    "alias": "executePlan",
+    "flat": "browserExecutePlan",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "browser_forward": {
     "qualified": "browser::forward",
@@ -2834,6 +2897,15 @@
     "class": null,
     "category": "Automation/Browser/Navigation"
   },
+  "browser_handle_dialog": {
+    "qualified": "browser::handleDialog",
+    "namespace": "browser",
+    "alias": "handleDialog",
+    "flat": "browserHandleDialog",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_hover": {
     "qualified": "browser::hover",
     "namespace": "browser",
@@ -2842,6 +2914,33 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Interact"
+  },
+  "browser_key_chord": {
+    "qualified": "browser::keyChord",
+    "namespace": "browser",
+    "alias": "keyChord",
+    "flat": "browserKeyChord",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_leave_frame": {
+    "qualified": "browser::leaveFrame",
+    "namespace": "browser",
+    "alias": "leaveFrame",
+    "flat": "browserLeaveFrame",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_list_tabs": {
+    "qualified": "browser::listTabs",
+    "namespace": "browser",
+    "alias": "listTabs",
+    "flat": "browserListTabs",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "browser_load_cookies": {
     "qualified": "browser::loadCookies",
@@ -2888,6 +2987,15 @@
     "class": null,
     "category": "Automation/Browser/Navigation"
   },
+  "browser_right_click": {
+    "qualified": "browser::rightClick",
+    "namespace": "browser",
+    "alias": "rightClick",
+    "flat": "browserRightClick",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_save_cookies": {
     "qualified": "browser::saveCookies",
     "namespace": "browser",
@@ -2933,6 +3041,15 @@
     "class": null,
     "category": "Automation/Browser/Input"
   },
+  "browser_select_tab": {
+    "qualified": "browser::selectTab",
+    "namespace": "browser",
+    "alias": "selectTab",
+    "flat": "browserSelectTab",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_set_basic_auth": {
     "qualified": "browser::setBasicAuth",
     "namespace": "browser",
@@ -2969,6 +3086,24 @@
     "class": null,
     "category": "Automation/Browser/Storage"
   },
+  "browser_start_console_observer": {
+    "qualified": "browser::startConsoleObserver",
+    "namespace": "browser",
+    "alias": "startConsoleObserver",
+    "flat": "browserStartConsoleObserver",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
+  "browser_start_driver": {
+    "qualified": "browser::startDriver",
+    "namespace": "browser",
+    "alias": "startDriver",
+    "flat": "browserStartDriver",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
+  },
   "browser_start_network_observer": {
     "qualified": "browser::startNetworkObserver",
     "namespace": "browser",
@@ -2977,6 +3112,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Observe"
+  },
+  "browser_stop_driver": {
+    "qualified": "browser::stopDriver",
+    "namespace": "browser",
+    "alias": "stopDriver",
+    "flat": "browserStopDriver",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "browser_trigger_download": {
     "qualified": "browser::triggerDownload",
@@ -3049,6 +3193,15 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Browser/Observe"
+  },
+  "browser_wait_for_url": {
+    "qualified": "browser::waitForUrl",
+    "namespace": "browser",
+    "alias": "waitForUrl",
+    "flat": "browserWaitForUrl",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Browser"
   },
   "bytes_concat": {
     "qualified": "bytes::concat",
@@ -3256,6 +3409,15 @@
     "receiver": null,
     "class": null,
     "category": "AI/ML/ONNX/Face"
+  },
+  "computer_accessibility_action": {
+    "qualified": "computer::accessibilityAction",
+    "namespace": "computer",
+    "alias": "accessibilityAction",
+    "flat": "computerAccessibilityAction",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Computer/Accessibility"
   },
   "computer_capture_window": {
     "qualified": "computer::captureWindow",
@@ -3481,6 +3643,24 @@
     "receiver": null,
     "class": null,
     "category": "Automation/Computer/Wait"
+  },
+  "computer_wait_for_window": {
+    "qualified": "computer::waitForWindow",
+    "namespace": "computer",
+    "alias": "waitForWindow",
+    "flat": "computerWaitForWindow",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Computer/Window"
+  },
+  "computer_window_operation": {
+    "qualified": "computer::manageWindow",
+    "namespace": "computer",
+    "alias": "manageWindow",
+    "flat": "computerWindowOperation",
+    "receiver": null,
+    "class": null,
+    "category": "Automation/Computer/Window"
   },
   "construct_array": {
     "qualified": "array::construct",
@@ -4895,6 +5075,15 @@
     "class": null,
     "category": "Data/Providers"
   },
+  "data_github_abort_local_merge": {
+    "qualified": "github::abortMerge",
+    "namespace": "github",
+    "alias": "abortMerge",
+    "flat": "dataGithubAbortLocalMerge",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_add_issue_comment": {
     "qualified": "github::addIssueComment",
     "namespace": "github",
@@ -4904,6 +5093,24 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_add_repo_remote": {
+    "qualified": "github::addRepoRemote",
+    "namespace": "github",
+    "alias": "addRepoRemote",
+    "flat": "dataGithubAddRepoRemote",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_checkout_local_revision": {
+    "qualified": "github::checkoutRevision",
+    "namespace": "github",
+    "alias": "checkoutRevision",
+    "flat": "dataGithubCheckoutLocalRevision",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_clone_repo": {
     "qualified": "github::cloneRepo",
     "namespace": "github",
@@ -4912,6 +5119,15 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_commit_local_repository": {
+    "qualified": "github::commitChanges",
+    "namespace": "github",
+    "alias": "commitChanges",
+    "flat": "dataGithubCommitLocalRepository",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_compare_commits": {
     "qualified": "github::compareCommits",
@@ -4939,6 +5155,24 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_create_local_branch": {
+    "qualified": "github::createLocalBranch",
+    "namespace": "github",
+    "alias": "createLocalBranch",
+    "flat": "dataGithubCreateLocalBranch",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_create_local_tag": {
+    "qualified": "github::createLocalTag",
+    "namespace": "github",
+    "alias": "createLocalTag",
+    "flat": "dataGithubCreateLocalTag",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_create_or_update_file": {
     "qualified": "github::createOrUpdateFile",
@@ -4994,6 +5228,24 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_delete_local_branch": {
+    "qualified": "github::deleteLocalBranch",
+    "namespace": "github",
+    "alias": "deleteLocalBranch",
+    "flat": "dataGithubDeleteLocalBranch",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_delete_local_tag": {
+    "qualified": "github::deleteLocalTag",
+    "namespace": "github",
+    "alias": "deleteLocalTag",
+    "flat": "dataGithubDeleteLocalTag",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_download_file": {
     "qualified": "github::downloadFile",
     "namespace": "github",
@@ -5011,6 +5263,15 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_fetch_repo": {
+    "qualified": "github::fetchRepo",
+    "namespace": "github",
+    "alias": "fetchRepo",
+    "flat": "dataGithubFetchRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_get_branch": {
     "qualified": "github::getBranch",
@@ -5093,6 +5354,15 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_init_repo": {
+    "qualified": "github::initRepo",
+    "namespace": "github",
+    "alias": "initRepo",
+    "flat": "dataGithubInitRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_list_branches": {
     "qualified": "github::listBranches",
     "namespace": "github",
@@ -5128,6 +5398,42 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_list_local_branches": {
+    "qualified": "github::listLocalBranches",
+    "namespace": "github",
+    "alias": "listLocalBranches",
+    "flat": "dataGithubListLocalBranches",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_list_local_remotes": {
+    "qualified": "github::listRemotes",
+    "namespace": "github",
+    "alias": "listRemotes",
+    "flat": "dataGithubListLocalRemotes",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_list_local_stashes": {
+    "qualified": "github::listStashes",
+    "namespace": "github",
+    "alias": "listStashes",
+    "flat": "dataGithubListLocalStashes",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_list_local_tags": {
+    "qualified": "github::listLocalTags",
+    "namespace": "github",
+    "alias": "listLocalTags",
+    "flat": "dataGithubListLocalTags",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_list_pr_files": {
     "qualified": "github::listPrFiles",
@@ -5183,6 +5489,42 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_local_diff": {
+    "qualified": "github::diffRepository",
+    "namespace": "github",
+    "alias": "diffRepository",
+    "flat": "dataGithubLocalDiff",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_local_log": {
+    "qualified": "github::repositoryLog",
+    "namespace": "github",
+    "alias": "repositoryLog",
+    "flat": "dataGithubLocalLog",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_local_status": {
+    "qualified": "github::repositoryStatus",
+    "namespace": "github",
+    "alias": "repositoryStatus",
+    "flat": "dataGithubLocalStatus",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_merge_local_repository": {
+    "qualified": "github::mergeBranch",
+    "namespace": "github",
+    "alias": "mergeBranch",
+    "flat": "dataGithubMergeLocalRepository",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_merge_pull_request": {
     "qualified": "github::mergePullRequest",
     "namespace": "github",
@@ -5191,6 +5533,15 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_pop_local_stash": {
+    "qualified": "github::popStash",
+    "namespace": "github",
+    "alias": "popStash",
+    "flat": "dataGithubPopLocalStash",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_provider_app": {
     "qualified": "github::providerApp",
@@ -5219,6 +5570,51 @@
     "class": null,
     "category": "Data/GitHub"
   },
+  "data_github_pull_repo": {
+    "qualified": "github::pullRepo",
+    "namespace": "github",
+    "alias": "pullRepo",
+    "flat": "dataGithubPullRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_push_repo": {
+    "qualified": "github::pushRepo",
+    "namespace": "github",
+    "alias": "pushRepo",
+    "flat": "dataGithubPushRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_remove_repo_remote": {
+    "qualified": "github::removeRepoRemote",
+    "namespace": "github",
+    "alias": "removeRepoRemote",
+    "flat": "dataGithubRemoveRepoRemote",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_reset_local_repository": {
+    "qualified": "github::resetRepository",
+    "namespace": "github",
+    "alias": "resetRepository",
+    "flat": "dataGithubResetLocalRepository",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_save_local_stash": {
+    "qualified": "github::stashChanges",
+    "namespace": "github",
+    "alias": "stashChanges",
+    "flat": "dataGithubSaveLocalStash",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
   "data_github_search_code": {
     "qualified": "github::searchCode",
     "namespace": "github",
@@ -5245,6 +5641,51 @@
     "receiver": null,
     "class": null,
     "category": "Data/GitHub"
+  },
+  "data_github_set_repo_remote_url": {
+    "qualified": "github::setRepoRemoteUrl",
+    "namespace": "github",
+    "alias": "setRepoRemoteUrl",
+    "flat": "dataGithubSetRepoRemoteUrl",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_stage_local_files": {
+    "qualified": "github::stageFiles",
+    "namespace": "github",
+    "alias": "stageFiles",
+    "flat": "dataGithubStageLocalFiles",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_switch_local_branch": {
+    "qualified": "github::switchBranch",
+    "namespace": "github",
+    "alias": "switchBranch",
+    "flat": "dataGithubSwitchLocalBranch",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_sync_repo": {
+    "qualified": "github::syncRepo",
+    "namespace": "github",
+    "alias": "syncRepo",
+    "flat": "dataGithubSyncRepo",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
+  },
+  "data_github_unstage_local_files": {
+    "qualified": "github::unstageFiles",
+    "namespace": "github",
+    "alias": "unstageFiles",
+    "flat": "dataGithubUnstageLocalFiles",
+    "receiver": null,
+    "class": null,
+    "category": "Data/GitHub/Repository"
   },
   "data_github_update_issue": {
     "qualified": "github::updateIssue",
@@ -5984,6 +6425,87 @@
     "class": null,
     "category": "Data/Microsoft/Copilot"
   },
+  "data_microsoft_copilot_studio_agent": {
+    "qualified": "microsoft::copilotStudio::agent",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "agent",
+    "flat": "dataMicrosoftCopilotStudioAgent",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_chat": {
+    "qualified": "microsoft::copilotStudio::chat",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "chat",
+    "flat": "dataMicrosoftCopilotStudioChat",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_direct_line_chat": {
+    "qualified": "microsoft::copilotStudio::directLineChat",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "directLineChat",
+    "flat": "dataMicrosoftCopilotStudioDirectLineChat",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_list_agents": {
+    "qualified": "microsoft::copilotStudio::listAgents",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "listAgents",
+    "flat": "dataMicrosoftCopilotStudioListAgents",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_list_environments": {
+    "qualified": "microsoft::copilotStudio::listEnvironments",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "listEnvironments",
+    "flat": "dataMicrosoftCopilotStudioListEnvironments",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_provider_oauth": {
+    "qualified": "microsoft::copilotStudio::providerOauth",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "providerOauth",
+    "flat": "dataMicrosoftCopilotStudioProviderOauth",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_provider_token": {
+    "qualified": "microsoft::copilotStudio::providerToken",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "providerToken",
+    "flat": "dataMicrosoftCopilotStudioProviderToken",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_send_activity": {
+    "qualified": "microsoft::copilotStudio::sendActivity",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "sendActivity",
+    "flat": "dataMicrosoftCopilotStudioSendActivity",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_start_conversation": {
+    "qualified": "microsoft::copilotStudio::startConversation",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "startConversation",
+    "flat": "dataMicrosoftCopilotStudioStartConversation",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
   "data_microsoft_copilot_subscribe_notifications": {
     "qualified": "microsoft::copilot::subscribeNotifications",
     "namespace": "microsoft.copilot",
@@ -6713,6 +7235,42 @@
     "class": null,
     "category": "Data/Microsoft/To Do"
   },
+  "data_microsoft_workiq_chat": {
+    "qualified": "microsoft::workiq::chat",
+    "namespace": "microsoft.workiq",
+    "alias": "chat",
+    "flat": "dataMicrosoftWorkiqChat",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
+  "data_microsoft_workiq_provider_oauth": {
+    "qualified": "microsoft::workiq::providerOauth",
+    "namespace": "microsoft.workiq",
+    "alias": "providerOauth",
+    "flat": "dataMicrosoftWorkiqProviderOauth",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
+  "data_microsoft_workiq_provider_token": {
+    "qualified": "microsoft::workiq::providerToken",
+    "namespace": "microsoft.workiq",
+    "alias": "providerToken",
+    "flat": "dataMicrosoftWorkiqProviderToken",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
+  "data_microsoft_workiq_request": {
+    "qualified": "microsoft::workiq::request",
+    "namespace": "microsoft.workiq",
+    "alias": "request",
+    "flat": "dataMicrosoftWorkiqRequest",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
   "data_notion_append_block_children": {
     "qualified": "notion::appendBlockChildren",
     "namespace": "notion",
@@ -6883,6 +7441,141 @@
     "receiver": null,
     "class": null,
     "category": "Data/Notion"
+  },
+  "database_branches": {
+    "qualified": "db::branches",
+    "namespace": "db",
+    "alias": "branches",
+    "flat": "databaseBranches",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_checkout": {
+    "qualified": "db::checkout",
+    "namespace": "db",
+    "alias": "checkout",
+    "flat": "databaseCheckout",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_cleanup_versions": {
+    "qualified": "db::cleanupVersions",
+    "namespace": "db",
+    "alias": "cleanupVersions",
+    "flat": "databaseCleanupVersions",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_clone": {
+    "qualified": "db::clone",
+    "namespace": "db",
+    "alias": "clone",
+    "flat": "databaseClone",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_compare": {
+    "qualified": "db::compare",
+    "namespace": "db",
+    "alias": "compare",
+    "flat": "databaseCompare",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_create_branch": {
+    "qualified": "db::createBranch",
+    "namespace": "db",
+    "alias": "createBranch",
+    "flat": "databaseCreateBranch",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_create_tag": {
+    "qualified": "db::createTag",
+    "namespace": "db",
+    "alias": "createTag",
+    "flat": "databaseCreateTag",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_delete_branch": {
+    "qualified": "db::deleteBranch",
+    "namespace": "db",
+    "alias": "deleteBranch",
+    "flat": "databaseDeleteBranch",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_delete_tag": {
+    "qualified": "db::deleteTag",
+    "namespace": "db",
+    "alias": "deleteTag",
+    "flat": "databaseDeleteTag",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_reference": {
+    "qualified": "db::reference",
+    "namespace": "db",
+    "alias": "reference",
+    "flat": "databaseReference",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_restore": {
+    "qualified": "db::restore",
+    "namespace": "db",
+    "alias": "restore",
+    "flat": "databaseRestore",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_snapshot": {
+    "qualified": "db::snapshot",
+    "namespace": "db",
+    "alias": "snapshot",
+    "flat": "databaseSnapshot",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_tags": {
+    "qualified": "db::tags",
+    "namespace": "db",
+    "alias": "tags",
+    "flat": "databaseTags",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_update_tag": {
+    "qualified": "db::moveTag",
+    "namespace": "db",
+    "alias": "moveTag",
+    "flat": "databaseUpdateTag",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
+  },
+  "database_versions": {
+    "qualified": "db::versions",
+    "namespace": "db",
+    "alias": "versions",
+    "flat": "databaseVersions",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Versioning"
   },
   "delay": {
     "qualified": "control::delay",
@@ -12752,6 +13445,15 @@
     "class": null,
     "category": "AI/ML/ONNX/NLP"
   },
+  "onnx_laya": {
+    "qualified": "onnx::laya",
+    "namespace": "onnx",
+    "alias": "laya",
+    "flat": "onnxLaya",
+    "receiver": null,
+    "class": null,
+    "category": "AI/ML/ONNX/NLP"
+  },
   "onnx_model_info": {
     "qualified": "onnx::modelInfo",
     "namespace": "onnx",
@@ -14003,6 +14705,15 @@
     "class": null,
     "category": "AI/ML/ONNX"
   },
+  "service_ready": {
+    "qualified": "web::serviceReady",
+    "namespace": "web",
+    "alias": "serviceReady",
+    "flat": "serviceReady",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Services"
+  },
   "set_clear": {
     "qualified": "set::clear",
     "namespace": "set",
@@ -14119,6 +14830,15 @@
     "receiver": "set_in",
     "class": "set",
     "category": "Utils/Set"
+  },
+  "set_primary_key_local_db": {
+    "qualified": "db::setPrimaryKey",
+    "namespace": "db",
+    "alias": "setPrimaryKey",
+    "flat": "setPrimaryKeyLocalDb",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Schema"
   },
   "set_to_array": {
     "qualified": "set::toArray",
@@ -15091,6 +15811,15 @@
     "receiver": "model",
     "class": "NodeOnnxSession",
     "category": "AI/ML/ONNX"
+  },
+  "update_local_db": {
+    "qualified": "db::update",
+    "namespace": "db",
+    "alias": "update",
+    "flat": "updateLocalDb",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Update"
   },
   "upsert_graph_edge": {
     "qualified": "db::graph::upsertEdge",

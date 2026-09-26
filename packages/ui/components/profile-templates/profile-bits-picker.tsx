@@ -14,6 +14,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { getApiOrigin } from "../../lib/api-url";
+import { asArray } from "../../lib/response-shape";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import type { IBitSearchQuery } from "../../lib/schema/hub/bit-search-query";
 import { useBackend } from "../../state/backend-state";
@@ -125,7 +126,8 @@ export function ProfileBitsPicker({
 					bit,
 				]),
 			);
-			for (const bit of catalogue.data) bits.set(profileBitReference(bit), bit);
+			for (const bit of asArray(catalogue.data))
+				bits.set(profileBitReference(bit), bit);
 			return { identity, bits: [...bits.values()] };
 		});
 	}, [catalogue.data, identity]);
@@ -137,14 +139,14 @@ export function ProfileBitsPicker({
 				bit,
 			]),
 		);
-		for (const bit of catalogue.data ?? [])
+		for (const bit of asArray(catalogue.data))
 			bits.set(profileBitReference(bit), bit);
 		return [...bits.values()];
 	}, [known, identity, catalogue.data]);
 	const results = useMemo(
 		() => [
 			...new Map(
-				(catalogue.data ?? []).map((bit) => [profileBitReference(bit), bit]),
+				asArray(catalogue.data).map((bit) => [profileBitReference(bit), bit]),
 			).values(),
 		],
 		[catalogue.data],

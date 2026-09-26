@@ -230,7 +230,6 @@ eventsGeneric indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f
             const database15 = open({ name: parse({ string: content6 }).reference_db, userScoped: true, batchSize: 1000 })   //@n:v67kmavcvxp2pbtfg5gn9uos
             database15.purge()   //@n:p8zbmn5vv1tjs8vw74ldozvd
             files.delete({ filter: `'reference_db' = ${parse({ string: content6 }).reference_db}` })   //@n:ou74or1cudv83uo5vwur8q8n
-            reroute()   //@n:qm1linmwbhwfbrfh7mq3nt0q
             const pages2 = extractDocumentAi({ file: userDir({ nodeScope: false }).child(path), model: smallModel, extractImages: true, imagesPerMessage: 1, pagesPerBatch: 4, temperature: 0.1, maxTokens: 0 })   //@n:ybwen1ecwc3cpqx69gq3a9qm
             const summary2 = summarizeDocument({ pages: pages2, model: smallModel, detailLevel: "Medium", includeToc: true, strategy: "Refine", densification: "None", maxContextTokens: 8000, chunkOverlap: 10, trackEntities: false, parallelRequests: 4, densitySteps: 3 })   //@n:e14oowubmkkmm8nlewy3ivlu
             const pathOut = userDir({ nodeScope: false }).child(path).setExtension("flow_summary")   //@n:fj9c2ry7o4ad16kges3shwkc
@@ -239,30 +238,30 @@ eventsGeneric indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f
             const pathOut7 = userDir({ nodeScope: false }).child(path).setExtension("flow_md")   //@n:v14hfegxczlpf2rhuldc254a
             pathOut7.writeString(markdown2)   //@n:ieeqjtlukoozasxoxbzezp2g
             const vector3 = embedDocument({ queryString: summary2.summary, model: embeddingModel })   //@n:tt2szytgiqxdo82vh4amz5ol
-            let record2 = set({ structIn: {}, field: "vector", value: vector3 }).structOut   //@n:e9kpfkp5ivihjbtmims8fy9r
-            record2.content = summary2.summary   //@n:ql9k0oc83lxycuiyizqz3wk3
+            let row2 = set({ structIn: {}, field: "vector", value: vector3 }).structOut   //@n:e9kpfkp5ivihjbtmims8fy9r
+            row2.content = summary2.summary   //@n:ql9k0oc83lxycuiyizqz3wk3
             const date3 = now()   //@n:q2cbltadjb08t1j1ba9519n2
-            let row = set({ structIn: record2, field: "indexed", value: date3 }).structOut   //@n:a22a1br0nmgqkpwov1pz7p2x
-            row.path = userDir({ nodeScope: false }).child(path).rawPath()   //@n:rf3rktm1f4ftyrwf0e16s8ft
-            row.file_name = userDir({ nodeScope: false }).child(path).filename(true)   //@n:fwdsh4rorfsp1hg0u33u0zgj
+            row2.indexed = date3   //@n:a22a1br0nmgqkpwov1pz7p2x
+            row2.path = userDir({ nodeScope: false }).child(path).rawPath()   //@n:rf3rktm1f4ftyrwf0e16s8ft
+            row2.file_name = userDir({ nodeScope: false }).child(path).filename(true)   //@n:fwdsh4rorfsp1hg0u33u0zgj
             const cuid = random::cuid()   //@n:k10gsxn3te6tqaxf8kw6x17z
-            row.reference_db = cuid   //@n:l6lsh3fdxpszz699wjzheoj0
-            files.insertOne(row)   //@n:ot9y4104njuph6loxwaeloj1
+            row2.reference_db = cuid   //@n:l6lsh3fdxpszz699wjzheoj0
+            files.insertOne(row2)   //@n:ot9y4104njuph6loxwaeloj1
             const content2 = userDir({ nodeScope: false }).child(path).readToBytes()   //@n:ap9a2oq5jd56oppttnhntyz8
             const hash3 = blake3({ input: content2 })   //@n:u10ggc3447y21xhr6chplfy3
-            let row2 = set({ structIn: {}, field: "hash", value: hash3 }).structOut   //@n:dlmgbjk5lofic9h0qnlad8hf
-            row2.reference_db = cuid   //@n:j3ln3ged2q3y9im5i8hzznyf
+            let row = set({ structIn: {}, field: "hash", value: hash3 }).structOut   //@n:dlmgbjk5lofic9h0qnlad8hf
+            row.reference_db = cuid   //@n:j3ln3ged2q3y9im5i8hzznyf
             const pathOut3 = userDir({ nodeScope: false }).child(path).setExtension("flow_index")   //@n:i7syn55nzv508vu1vy9zjm0d
-            pathOut3.writeString(stringify({ value: row2, pretty: false }))   //@n:i988fpbssorl577cu81zakyi
+            pathOut3.writeString(stringify({ value: row, pretty: false }))   //@n:i988fpbssorl577cu81zakyi
             const database5 = open({ name: cuid, userScoped: true, batchSize: 1000 })   //@n:fzaqcxl9osvuwy0g9yxw8umg
             for (const item3 of pages2) {   //@n:emflpi61kfugpf37ht862gfm
-                let record4 = set({ structIn: {}, field: "page", value: item3.page_number }).structOut   //@n:n8bqy27w41jzht7fhop3q4ko
+                let row3 = set({ structIn: {}, field: "page", value: item3.page_number }).structOut   //@n:n8bqy27w41jzht7fhop3q4ko
                 const chunks = chunkText({ text: item3.content, model: embeddingModel, capacity: 8000, overlap: 20, markdown: true })   //@n:sixj9z0by3rq9q3ihg2s9n3j
                 for (const [index, item4] of chunks) {   //@n:j105jw40ombeqg414pr7swju
-                    let record3 = set({ structIn: record4, field: "content", value: item4 }).structOut   //@n:i6nh6fapa0j1wuszj87dit4y
-                    record3.chunk_id = index   //@n:jm47xl12ci20lk80zlvrbx40
+                    row3.content = item4   //@n:i6nh6fapa0j1wuszj87dit4y
+                    row3.chunk_id = index   //@n:jm47xl12ci20lk80zlvrbx40
                     const vector4 = embedDocument({ queryString: item4, model: embeddingModel })   //@n:xwoggws1xtccwwbdgfosmv61
-                    let row3 = set({ structIn: record3, field: "vector", value: vector4 }).structOut   //@n:q6suqnrf0jpevf6uy04ku267
+                    row3.vector = vector4   //@n:q6suqnrf0jpevf6uy04ku267
                     database5.insertOne(row3)   //@n:hpm2vd2nmzj8h7hi1awt6omg
                 }
             }
@@ -270,7 +269,6 @@ eventsGeneric indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f
             database5.optimize(false)   //@n:edhkjszurg00blcima48bzz4
         }
     } else { // exec_out_missing
-        reroute()   //@n:ts5q4ul1xhy8imi5l9wpm9li
     }
 }
 
@@ -471,9 +469,9 @@ eventsGeneric readFile(path: string, summary: bool, payload: Struct) {   //@n:o4
 eventsGeneric listFilesInPath(path: string, payload: Struct) {   //@n:iuj7lsynep4xqxshgp8g3h4r
     const paths = fromRawPath({ basePath: userDir({ nodeScope: false }), rawPath: path }).listPaths(false)   //@n:qt2j96v0nx2rb0ps9tjpuw5x
     const folders = fromRawPath({ basePath: userDir({ nodeScope: false }), rawPath: path }).listFolders(false)   //@n:yly5sss0lnawgzelngi29khs
-    let record5 = set({ structIn: {}, field: "files", value: paths }).structOut   //@n:ndc55i1zej9krr8puvhma6mn
-    record5.folders = folders   //@n:hwwnb1e3boml2bganej5m98n
-    return record5   //@n:x8yuz6uqnn48da8aeq6cetjv
+    let record2 = set({ structIn: {}, field: "files", value: paths }).structOut   //@n:ndc55i1zej9krr8puvhma6mn
+    record2.folders = folders   //@n:hwwnb1e3boml2bganej5m98n
+    return record2   //@n:x8yuz6uqnn48da8aeq6cetjv
 }
 
 eventsGeneric searchInFiles(query: string, filter: string, payload: Struct) {   //@n:vxoe4h9j60ia1yande7dztwe

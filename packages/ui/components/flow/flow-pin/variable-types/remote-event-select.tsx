@@ -13,6 +13,7 @@ import {
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand } from "../../../../lib";
 import { formatEventTypeLabel } from "../../../../lib/event-type-label";
+import { asArray, isRecord } from "../../../../lib/response-shape";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -127,7 +128,7 @@ export function RemoteEventSelect({
 
 				if (cancelled) return;
 
-				setLoadedEvents({ targetAppId, events: remoteEvents });
+				setLoadedEvents({ targetAppId, events: asArray(remoteEvents) });
 			} catch {
 				if (!cancelled) setError(true);
 			} finally {
@@ -172,6 +173,12 @@ export function RemoteEventSelect({
 					targetAppId,
 					eventId,
 				);
+				// The meta pin is persisted into the board; never store a non-object there.
+				if (!isRecord(detail)) {
+					throw new Error(
+						`Remote event detail for ${eventId} of app ${targetAppId} was not an object`,
+					);
+				}
 				metaValue = JSON.stringify(detail);
 			} catch {
 				toast.warning(

@@ -21,7 +21,6 @@ import {
 	FlaskConicalIcon,
 	MonitorIcon,
 	PlayCircleIcon,
-	ScrollTextIcon,
 	SquareCheckIcon,
 	TriangleAlertIcon,
 	WorkflowIcon,
@@ -107,6 +106,7 @@ import { deriveRunCapabilities } from "./flow-run-capabilities";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import type { RemoteEditorParticipant } from "./flowscript/flowscript-presence";
 import { LayerEditMenu } from "./layer-editing-menu";
+import { NodeLogBadge } from "./logs/node-log-badge";
 import { NodePresenceChips, mergePresenceParticipants } from "./node-presence";
 import { typeToColor } from "./utils";
 
@@ -1200,15 +1200,12 @@ const FlowNodeInner = memo(
 									) : null}
 								</span>
 							)}
-							{executed && (
-								<ScrollTextIcon
-									onClick={(e) => {
-										e.stopPropagation();
-										props.data.onFilterLogs?.(props.data.node.id);
-									}}
-									className="w-2 h-2 cursor-pointer hover:text-primary"
-								/>
-							)}
+							<NodeLogBadge
+								nodeId={props.data.node.id}
+								nodeName={props.data.node.friendly_name || props.data.node.name}
+								executed={executed === true}
+								onFilterLogs={props.data.onFilterLogs}
+							/>
 							{debouncedExecutionState === "running" && (
 								<PuffLoader
 									color={resolvedTheme === "dark" ? "white" : "black"}

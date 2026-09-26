@@ -10,12 +10,18 @@ afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
 
+function stubFetch(respond: () => Promise<Response>) {
+	const fetchMock = mock(respond);
+	globalThis.fetch = Object.assign(fetchMock, {
+		preconnect: originalFetch.preconnect,
+	});
+	return fetchMock;
+}
+
 describe("account photo upload", () => {
 	test("a rejected upload cannot commit the image or change account fields", async () => {
-		globalThis.fetch = mock(
-			async () => new Response("denied", { status: 403 }),
-		) as typeof fetch;
-		const request = mock(async () => ({
+		stubFetch(async () => new Response("denied", { status: 403 }));
+		const request = mock(async (_body: Record<string, unknown>) => ({
 			signed_url: "https://storage.test/upload",
 			avatar_upload_id: "staged.webp",
 		}));
@@ -36,10 +42,10 @@ describe("account photo upload", () => {
 
 	test("commits account fields only after a successful image upload", async () => {
 		const events: string[] = [];
-		globalThis.fetch = mock(async () => {
+		stubFetch(async () => {
 			events.push("upload");
 			return new Response(null, { status: 200 });
-		}) as typeof fetch;
+		});
 		const request = mock(async (body: Record<string, unknown>) => {
 			if (body.avatar_extension) {
 				events.push("prepare");
@@ -63,8 +69,7 @@ describe("account photo upload", () => {
 	});
 
 	test("missing completion metadata fails before uploading", async () => {
-		const upload = mock(async () => new Response(null));
-		globalThis.fetch = upload as typeof fetch;
+		const upload = stubFetch(async () => new Response(null));
 		await expect(
 			updateAccountWithAvatar(
 				{},

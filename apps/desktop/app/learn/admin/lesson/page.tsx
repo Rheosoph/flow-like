@@ -27,6 +27,7 @@ import type {
 	LessonAppRef,
 	LessonAssetView,
 } from "@flow-like/flow-like-ui/lib/learn/types";
+import { asArray } from "@flow-like/flow-like-ui/lib/response-shape";
 import { useTranslation } from "@flow-like/locales";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Save, Trash2 } from "lucide-react";
@@ -92,18 +93,18 @@ function LessonAdminContent() {
 
 	const aliasOptions = useMemo(
 		() =>
-			(linksQuery.data ?? [])
+			asArray(linksQuery.data)
 				.map((l) => l.alias)
 				.filter((a): a is string => Boolean(a)),
 		[linksQuery.data],
 	);
 
 	const lesson = lessonQuery.data?.lesson ?? null;
-	const challenges = lessonQuery.data?.challenges ?? [];
-	const appRefs = lessonQuery.data?.app_refs ?? [];
+	const challenges = asArray(lessonQuery.data?.challenges);
+	const appRefs = asArray(lessonQuery.data?.app_refs);
 	const assetMentionItems = useMemo(
 		() =>
-			(lessonQuery.data?.assets ?? []).map((asset: LessonAssetView) => ({
+			asArray(lessonQuery.data?.assets).map((asset: LessonAssetView) => ({
 				key: asset.id,
 				text: asset.name,
 				onSelect: (editor: unknown) => {

@@ -13,6 +13,7 @@ fn codex_invocation_uses_streamable_http_mcp_server() {
         "http://127.0.0.1:12345/mcp",
         "hello".to_string(),
         vec!["edit_flowscript".to_string()],
+        false,
         &[],
         None,
         None,
@@ -92,13 +93,15 @@ fn codex_invocation_uses_streamable_http_mcp_server() {
 }
 
 #[test]
-fn codex_invocation_isolates_native_and_user_config_web_tools() {
-    for tool_names in [
-        // Nested specialist surface: no public-web MCP tools.
-        vec!["edit_flowscript".to_string()],
-        // Global orchestrator surface: public research is available only through these
-        // reviewed FlowPilot MCP tools, never through Codex's native web-search tool.
-        vec!["internet_search".to_string(), "open_url".to_string()],
+fn codex_native_web_search_is_live_only_for_the_global_orchestrator() {
+    for (tool_names, global_orchestrator, expected) in [
+        (vec!["edit_flowscript".to_string()], false, "disabled"),
+        (
+            vec!["list_apps".to_string(), "flowpilot_board".to_string()],
+            true,
+            "live",
+        ),
+        (Vec::new(), true, "disabled"),
     ] {
         let invocation = ExternalAgentInvocation::new(
             FlowPilotAgentBackendKind::Codex,
@@ -111,20 +114,23 @@ fn codex_invocation_isolates_native_and_user_config_web_tools() {
             "http://127.0.0.1:12345/mcp",
             "hello".to_string(),
             tool_names,
+            global_orchestrator,
             &[],
             None,
             None,
         )
         .expect("codex invocation should build");
 
-        let native_web_disable_overrides = invocation
+        let web_search_overrides = invocation
             .args
             .windows(2)
-            .filter(|args| *args == ["--config", "web_search=\"disabled\""])
-            .count();
+            .filter(|args| args[0] == "--config" && args[1].starts_with("web_search="))
+            .map(|args| args[1].clone())
+            .collect::<Vec<_>>();
         assert_eq!(
-            native_web_disable_overrides, 1,
-            "every FlowPilot Codex invocation must override user config and force public-web access through the scoped MCP surface: {:?}",
+            web_search_overrides,
+            vec![format!("web_search=\"{expected}\"")],
+            "every FlowPilot Codex invocation must pin web search explicitly, live only for the global orchestrator: {:?}",
             invocation.args
         );
         assert_eq!(
@@ -153,6 +159,7 @@ fn codex_data_isolated_invocation_disables_native_data_access() {
         "http://127.0.0.1:12345/mcp",
         "return one query envelope".to_string(),
         Vec::new(),
+        false,
         &[],
         None,
         None,
@@ -233,6 +240,7 @@ fn codex_invocation_forwards_selected_model() {
         "http://127.0.0.1:12345/mcp",
         "hello".to_string(),
         vec!["edit_flowscript".to_string()],
+        false,
         &[],
         None,
         None,
@@ -407,6 +415,7 @@ fn claude_invocation_resumes_sessions_and_appends_the_role_prompt() {
         "http://127.0.0.1:23456/mcp",
         "continuation payload".to_string(),
         vec!["write_flowscript".to_string()],
+        false,
         &[],
         Some("session-1234"),
         Some("ROLE APPENDIX"),
@@ -441,6 +450,7 @@ fn claude_invocation_resumes_sessions_and_appends_the_role_prompt() {
         "http://127.0.0.1:12345/mcp",
         "hello".to_string(),
         vec!["edit_flowscript".to_string()],
+        false,
         &[],
         Some("session-1234"),
         Some("ROLE APPENDIX"),
@@ -493,6 +503,7 @@ fn claude_invocation_uses_shared_mcp_config() {
             "test_flowscript".to_string(),
             "commit_flowscript".to_string(),
         ],
+        false,
         &[],
         None,
         None,
@@ -586,10 +597,21 @@ fn claude_invocation_uses_shared_mcp_config() {
     assert!(config.contains("127.0.0.1:23456/mcp"));
     assert!(config.contains("\"alwaysLoad\": true"));
     let _ = std::fs::remove_file(config_path);
+
+    let disallowed = invocation
+        .args
+        .windows(2)
+        .find(|args| args[0] == "--disallowedTools")
+        .map(|args| args[1].clone())
+        .expect("claude invocation disallows built-ins");
+    assert!(
+        disallowed.contains("WebSearch") && disallowed.contains("WebFetch"),
+        "specialists must stay off the public web: {disallowed}"
+    );
 }
 
 #[test]
-fn claude_global_surface_defers_mcp_tool_schemas() {
+fn claude_global_surface_defers_mcp_tool_schemas_and_allows_native_web() {
     let invocation = ExternalAgentInvocation::new(
         FlowPilotAgentBackendKind::ClaudeCode,
         CliResolution::new(
@@ -600,16 +622,35 @@ fn claude_global_surface_defers_mcp_tool_schemas() {
         None,
         "http://127.0.0.1:23456/mcp",
         "hello".to_string(),
-        vec![
-            "list_apps".to_string(),
-            RESEARCH_AGENT_TOOL.to_string(),
-            "flowpilot_board".to_string(),
-        ],
+        vec!["list_apps".to_string(), "flowpilot_board".to_string()],
+        true,
         &[],
         None,
         None,
     )
     .expect("global Claude invocation should build");
+
+    let flag_value = |flag: &str| {
+        invocation
+            .args
+            .windows(2)
+            .find(|args| args[0] == flag)
+            .map(|args| args[1].clone())
+            .unwrap_or_default()
+    };
+    let allowed = flag_value("--allowedTools");
+    assert!(
+        allowed.contains("mcp__flowpilot__list_apps")
+            && allowed.contains("WebSearch")
+            && allowed.contains("WebFetch"),
+        "the global orchestrator must reach its native web tools under dontAsk: {allowed}"
+    );
+    let disallowed = flag_value("--disallowedTools");
+    assert!(
+        !disallowed.contains("WebSearch") && !disallowed.contains("WebFetch"),
+        "a disallow rule would override the allowlist: {disallowed}"
+    );
+    assert!(disallowed.contains("Bash") && disallowed.contains("Read"));
 
     assert!(
         !invocation
@@ -648,6 +689,7 @@ fn codex_invocation_attaches_images_via_image_flag() {
         "http://127.0.0.1:12345/mcp",
         "hello".to_string(),
         vec!["edit_flowscript".to_string()],
+        false,
         &[test_chat_image()],
         None,
         None,
@@ -683,6 +725,7 @@ fn claude_tool_free_invocation_disables_builtin_and_mcp_tools() {
         "http://127.0.0.1:23456/mcp",
         "query proposal".to_string(),
         Vec::new(),
+        false,
         &[],
         None,
         None,
@@ -724,6 +767,7 @@ fn claude_invocation_sends_images_as_stream_json_stdin() {
         "http://127.0.0.1:23456/mcp",
         "hello".to_string(),
         vec![],
+        false,
         &[test_chat_image()],
         None,
         None,

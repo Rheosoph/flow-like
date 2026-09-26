@@ -69,6 +69,10 @@ export interface IQueryTableVectorPayload {
 
 export interface IQueryTablePayload {
 	sql?: string;
+	/** Values for `sql`'s `$placeholders`, keyed by placeholder name without the `$`. */
+	sql_params?: Record<string, unknown>;
+	/** Columns to return; omitted returns every column. */
+	select?: string[];
 	vector_query?: IQueryTableVectorPayload;
 	filter?: string;
 	fts_term?: string;
@@ -81,9 +85,14 @@ export interface IIndexConfig {
 	columns: string[];
 }
 
+/** Exactly one of `sql_expression` or `type`. */
 export interface IAddColumnPayload {
 	name: string;
-	sql_expression: string;
+	/** Computes the column from existing columns. */
+	sql_expression?: string;
+	/** A table column type such as `geometry`; the column starts empty. */
+	type?: string;
+	vector_size?: number;
 }
 
 export interface IDatabaseSchemaField {
@@ -91,6 +100,8 @@ export interface IDatabaseSchemaField {
 	type: string;
 	nullable?: boolean;
 	vector_size?: number;
+	/** Marks the table key; at most one required field of a key type. */
+	primary_key?: boolean;
 }
 
 export interface ICreateTableResult {
@@ -349,6 +360,32 @@ export interface IDatabaseState {
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<number>;
+	/** {@link listItems} that propagates read failures instead of answering an empty page. */
+	listItemsAuthoritative?(
+		appId: string,
+		tableName: string,
+		offset?: number,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<unknown[]>;
+	/** {@link queryItems} that propagates read failures instead of answering no rows. */
+	queryItemsAuthoritative?(
+		appId: string,
+		tableName: string,
+		query: IQueryTablePayload,
+		offset?: number,
+		limit?: number,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<unknown[]>;
+	/** {@link countItems} that propagates read failures instead of answering 0. */
+	countItemsAuthoritative?(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<number>;
 	getSchema(
 		appId: string,
 		tableName: string,
@@ -422,6 +459,17 @@ export interface IDatabaseState {
 		tableName: string,
 		column: string,
 		nullable: boolean,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<void>;
+	/**
+	 * Mark `column` as the table key (Lance's unenforced primary key) so
+	 * concurrent Upserts on it cannot insert duplicates. A key is permanent.
+	 */
+	setPrimaryKey(
+		appId: string,
+		tableName: string,
+		column: string,
 		userScoped?: boolean,
 		selector?: IDatabaseSelector,
 	): Promise<void>;

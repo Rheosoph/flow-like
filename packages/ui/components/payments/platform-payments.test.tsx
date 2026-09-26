@@ -1,10 +1,29 @@
-import { beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, test } from "bun:test";
+import { Window } from "happy-dom";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 let responses: Record<string, unknown>;
 
+// bun keeps a module mock for every later file in the process, so each mocked module is
+// captured first and put back in afterAll.
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	payments: { ...(await import("./use-payments")) },
+	nextNavigation: { ...(await import("next/navigation")) },
+	nextLink: { ...(await import("next/link")) },
+	appPermissions: { ...(await import("../../hooks/use-app-permissions")) },
+};
+afterAll(() => {
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("./use-payments", () => actual.payments);
+	mock.module("next/navigation", () => actual.nextNavigation);
+	mock.module("next/link", () => actual.nextLink);
+	mock.module("../../hooks/use-app-permissions", () => actual.appPermissions);
+});
+
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({
 		t: (
 			key: string,
@@ -23,6 +42,7 @@ mock.module("@flow-like/locales", () => ({
 	}),
 }));
 mock.module("./use-payments", () => ({
+	...actual.payments,
 	usePayments: () => ({
 		identity: ["test", "owner"],
 		config: { onboarding_enabled: true, marketplace_enabled: true },
@@ -31,23 +51,37 @@ mock.module("./use-payments", () => ({
 	usePaymentDistribution: () => true,
 }));
 mock.module("next/navigation", () => ({
+	...actual.nextNavigation,
 	useSearchParams: () => new URLSearchParams("id=app"),
 }));
 mock.module("next/link", () => ({
+	...actual.nextLink,
 	default: ({ children, href }: { children: ReactNode; href: string }) => (
 		<a href={href}>{children}</a>
 	),
 }));
 mock.module("../../hooks/use-app-permissions", () => ({
+	...actual.appPermissions,
 	useAppPermissions: () => ({ can: () => true }),
 }));
 
+// Radix picks its layout effect when first imported, so the pages load under a document.
+const documentDescriptor = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"document",
+);
+Object.assign(globalThis, { document: new Window().document });
 const { PayoutsPage } = await import("./payouts-page");
-const { AppPaymentsPage } = await import("./app-payments-page");
+const { AppPaymentSettingsPanel, SellerTermsCard, SellerTermsConsentCard } =
+	await import("./app-payment-settings");
 const { EarningsPage } = await import("./earnings-page");
 const { NodePaymentCard } = await import("./node-payment");
 const { WithdrawalConfirmation, PurchaseLookupResult, PurchasesPage } =
 	await import("./purchases-page");
+const { marketplaceCheckoutPath } = await import("./checkout-dialog");
+if (documentDescriptor)
+	Object.defineProperty(globalThis, "document", documentDescriptor);
+else Reflect.deleteProperty(globalThis, "document");
 
 beforeEach(() => {
 	responses = {};
@@ -88,10 +122,89 @@ test("platform-owned app settings omit seller self-agreements and personal accou
 		canAcceptPayments: true,
 		canSell: true,
 	};
-	const markup = renderToStaticMarkup(<AppPaymentsPage />);
+	const markup = renderToStaticMarkup(
+		<>
+			<AppPaymentSettingsPanel appId="app" />
+			<SellerTermsCard appId="app" />
+		</>,
+	);
 	expect(markup).toContain("Flow-Like can collect payments for this app");
 	expect(markup).not.toContain("Accept seller terms");
 	expect(markup).not.toContain("Manage your payment account");
+});
+
+test("independent owners get the seller terms and their payout account link", () => {
+	responses["apps/app/payments/readiness"] = {
+		platformOwned: false,
+		canAcceptPayments: false,
+		canSell: false,
+	};
+	const panel = renderToStaticMarkup(<AppPaymentSettingsPanel appId="app" />);
+	expect(panel).toContain("Manage your payment account");
+	expect(panel).toContain("The owner must complete payment setup");
+	expect(renderToStaticMarkup(<SellerTermsCard appId="app" />)).toContain(
+		"Accept seller terms",
+	);
+});
+
+test("package seller terms follow the seller account, not an app readiness row", () => {
+	const card = (platformOwned: boolean | undefined) =>
+		renderToStaticMarkup(
+			<SellerTermsConsentCard
+				termsPath="registry/package/pkg/marketplace/terms"
+				platformOwned={platformOwned}
+				description="Accept the current seller terms before you sell this package."
+			/>,
+		);
+	expect(card(false)).toContain("Accept seller terms");
+	expect(card(false)).toContain("before you sell this package");
+	expect(card(true)).toBe("");
+	expect(card(undefined)).toBe("");
+});
+
+test("marketplace checkout targets the item's own checkout route", () => {
+	expect(marketplaceCheckoutPath("APP", "app/1")).toBe(
+		"apps/app%2F1/marketplace/checkout",
+	);
+	expect(marketplaceCheckoutPath("PACKAGE", "com.example.pkg")).toBe(
+		"registry/package/com.example.pkg/marketplace/checkout",
+	);
+});
+
+test("package orders link to the package store page and name the package", () => {
+	responses["user/purchases/pkg-order"] = {
+		orderId: "pkg-order",
+		appId: "",
+		itemKind: "PACKAGE",
+		itemId: "com.example.pkg",
+		status: "COMPLETED",
+		amount: 500,
+		currency: "eur",
+		refundedAmount: 0,
+		pendingRefundAmount: 0,
+		withdrawable: false,
+	};
+	responses["user/purchases/app-order"] = {
+		orderId: "app-order",
+		appId: "app-1",
+		itemKind: "APP",
+		itemName: "Some app",
+		status: "COMPLETED",
+		amount: 500,
+		currency: "eur",
+		refundedAmount: 0,
+		pendingRefundAmount: 0,
+		withdrawable: false,
+	};
+	const pkg = renderToStaticMarkup(
+		<PurchaseLookupResult orderId="pkg-order" />,
+	);
+	expect(pkg).toContain('href="/store/packages?id=com.example.pkg"');
+	expect(pkg).toContain(">com.example.pkg</a>");
+	const app = renderToStaticMarkup(
+		<PurchaseLookupResult orderId="app-order" />,
+	);
+	expect(app).toContain('href="/store?id=app-1"');
 });
 
 test("platform balance and historical recipients remain visibly distinct", () => {

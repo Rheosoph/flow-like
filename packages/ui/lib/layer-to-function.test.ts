@@ -355,6 +355,86 @@ describe("planLayerToFunction", () => {
 		).toEqual(["exec_in", "function_layer_id", "value", "value_2"]);
 	});
 
+	test("suffixes an output that shares an input's name so the call writes to the output", () => {
+		const { board, layer } = fixture();
+		const withOutput: ILayer = {
+			...layer,
+			pins: {
+				...layer.pins,
+				layer_str_out: pin(
+					"layer_str_out",
+					"value",
+					IPinType.Output,
+					IVariableType.String,
+					{
+						index: 1,
+						depends_on: ["inner_str_out"],
+						connected_to: ["sink_str"],
+					},
+				),
+			},
+		};
+		const { inner, sink } = board.nodes;
+		const nodes = {
+			...board.nodes,
+			inner: {
+				...inner,
+				pins: {
+					...inner.pins,
+					inner_str_out: pin(
+						"inner_str_out",
+						"value",
+						IPinType.Output,
+						IVariableType.String,
+						{ connected_to: ["layer_str_out"] },
+					),
+				},
+			},
+			sink: {
+				...sink,
+				pins: {
+					...sink.pins,
+					sink_str: pin(
+						"sink_str",
+						"value",
+						IPinType.Input,
+						IVariableType.String,
+						{ depends_on: ["layer_str_out"] },
+					),
+				},
+			},
+		};
+
+		const result = planLayerToFunction({
+			board: { ...board, nodes, layers: { layer: withOutput } } as IBoard,
+			layer: withOutput,
+			callFunctionTemplate,
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const { plan } = result;
+		expect(plan.renamedPins).toBe(1);
+		expect(plan.layer.pins.layer_str_in.name).toBe("value");
+		expect(plan.layer.pins.layer_str_out.name).toBe("value_2");
+		expect(plan.layer.pins.layer_str_out.friendly_name).toBe("value 2");
+
+		const callPins = Object.values(plan.callNode.pins);
+		expect(
+			callPins.filter((p) => p.name === "value").map((p) => p.pin_type),
+		).toEqual([IPinType.Input]);
+		const outputId =
+			callPins.find(
+				(p) => p.pin_type === IPinType.Output && p.name === "value_2",
+			)?.id ?? "";
+		expect(outputId).not.toBe("");
+		expect(
+			plan.commands
+				.filter((c) => c.command_type === ICommandType.ConnectPin)
+				.map(wire),
+		).toContainEqual([plan.callNode.id, outputId, "sink", "sink_str"]);
+	});
+
 	test("keeps a boundary pin named like the call node's own pin apart", () => {
 		const { board, layer } = fixture();
 		const clashing: ILayer = {

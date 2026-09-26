@@ -1,6 +1,19 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::{BTreeMap, HashMap};
 use std::time::SystemTime;
+
+/// Serialize a HashMap with its entries sorted by key, so equal content always encodes to
+/// identical bytes regardless of the map's hasher state. Content hashes (Page revisions,
+/// ETags) depend on this.
+pub fn serialize_sorted_map<K, V, S>(map: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    K: Serialize + Ord,
+    V: Serialize,
+    S: Serializer,
+{
+    serializer.collect_map(map.iter().collect::<BTreeMap<_, _>>())
+}
 
 /// Serialize SystemTime as ISO8601 string
 pub fn serialize_systemtime<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>

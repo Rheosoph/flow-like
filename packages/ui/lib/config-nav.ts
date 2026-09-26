@@ -1,10 +1,11 @@
 import {
+	BadgeEuroIcon,
 	ChartAreaIcon,
+	CloudOffIcon,
 	CogIcon,
 	CopyIcon,
 	CrownIcon,
 	DatabaseIcon,
-	DollarSignIcon,
 	FolderClosedIcon,
 	GlobeIcon,
 	LayersIcon,
@@ -14,6 +15,7 @@ import {
 	PaletteIcon,
 	ScrollTextIcon,
 	SendIcon,
+	ServerIcon,
 	SparklesIcon,
 	SquarePenIcon,
 	UserIcon,
@@ -36,7 +38,6 @@ export interface INavigationItem {
 	group: string;
 	visibilities?: IAppVisibility[];
 	requiresPaid?: boolean;
-	requiresPayments?: boolean;
 	disabled?: boolean;
 	devOnly?: boolean;
 	/**
@@ -55,6 +56,8 @@ export interface INavigationItem {
 	 * where every member may read the section.
 	 */
 	permissions?: RolePermissions[];
+	/** Host feature the section needs; hosts without it never list the section. */
+	hostCapability?: string;
 }
 
 /**
@@ -172,6 +175,17 @@ export function buildNavigationItems(
 			permissions: [RolePermissions.ReadWidgets],
 		},
 		{
+			href: "/library/config/devices",
+			label: t("projectDevices", "Devices"),
+			icon: ServerIcon,
+			description: t(
+				"projectDevicesDescription",
+				"Deploy this project to standalone devices and inspect replica health",
+			),
+			group: groups.build,
+			permissions: [RolePermissions.ReadBoards],
+		},
+		{
 			href: "/library/config/storage",
 			label: t("storage", "Storage"),
 			icon: FolderClosedIcon,
@@ -205,6 +219,24 @@ export function buildNavigationItems(
 			group: groups.data,
 			devOnly: true,
 			permissions: [RolePermissions.ReadFiles, RolePermissions.ReadDatabase],
+		},
+		{
+			href: "/library/config/offline",
+			label: t("offlineAccess", "Offline access"),
+			icon: CloudOffIcon,
+			description: t(
+				"offlineAccessNavDescription",
+				"Keep tables available on this device and sync changes made while offline",
+			),
+			group: groups.data,
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+				IAppVisibility.Private,
+			],
+			permissions: [RolePermissions.ExecuteEvents],
+			hostCapability: "offlineWrites",
 		},
 		{
 			href: "/library/config/packages",
@@ -277,25 +309,21 @@ export function buildNavigationItems(
 			permissions: [RolePermissions.ReadRoles],
 		},
 		{
-			href: "/library/config/payments",
-			label: t("payments", "Payments"),
-			icon: DollarSignIcon,
-			description: t(
-				"paymentSettingsDescription",
-				"Connect payouts and set payment limits",
-			),
-			group: groups.general,
-			requiresPayments: true,
-			permissions: [RolePermissions.Owner],
-		},
-		{
 			href: "/library/config/sales",
-			label: t("sales", "Sales"),
-			icon: DollarSignIcon,
+			label: t("monetization", "Monetization"),
+			icon: BadgeEuroIcon,
 			description: t(
-				"trackSalesManagePricingAndDiscounts",
-				"Track sales, manage pricing and discounts",
+				"monetizationNavDescription",
+				"Store sales, flow payments, pricing and payment settings",
 			),
+			// Flow payments work at any visibility; only a local-only app has no
+			// server to take money through.
+			visibilities: [
+				IAppVisibility.Public,
+				IAppVisibility.Prototype,
+				IAppVisibility.PublicRequestAccess,
+				IAppVisibility.Private,
+			],
 			group: groups.insights,
 			permissions: [RolePermissions.Owner],
 		},
@@ -368,10 +396,11 @@ export interface ResolveNavOptions {
 	visibility: IAppVisibility;
 	developerMode: boolean;
 	isPaid: boolean;
-	paymentsEnabled?: boolean;
 	/** Falls back to "allowed" while the caller's role is still unknown. */
 	can: (...permissions: RolePermissions[]) => boolean;
 	permissionLockReason: (item: INavigationItem) => string;
+	/** Capabilities of the host app; sections needing a missing one are left out. */
+	hostCapabilities?: ReadonlySet<string>;
 }
 
 /**
@@ -388,16 +417,21 @@ export function resolveNavigationItems(
 	items: INavigationItem[],
 	options: ResolveNavOptions,
 ): INavigationItemState[] {
-	const { visibility, developerMode, isPaid, can, permissionLockReason } =
-		options;
+	const {
+		visibility,
+		developerMode,
+		isPaid,
+		can,
+		permissionLockReason,
+		hostCapabilities,
+	} = options;
 
 	return items
 		.filter(
 			(item) =>
-				(!item.devOnly ||
-					developerMode ||
-					(item.href === "/library/config/sales" && options.paymentsEnabled)) &&
-				(!item.requiresPayments || options.paymentsEnabled) &&
+				(!item.hostCapability ||
+					hostCapabilities?.has(item.hostCapability) === true) &&
+				(!item.devOnly || developerMode) &&
 				(!item.visibilities ||
 					item.visibilities.includes(visibility) ||
 					item.lockedVisibilities?.includes(visibility)) &&

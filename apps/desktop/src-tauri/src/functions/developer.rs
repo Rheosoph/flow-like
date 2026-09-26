@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use flow_like::flow::node::{Node, NodeLogic, NodePermission, NodeWasm};
 use flow_like_wasm::abi::{WasmExecutionInput, WasmExecutionResult, WasmNodeDefinition};
 use flow_like_wasm::host_functions::ModelContext;
-use flow_like_wasm::manifest::PackageManifest;
+use flow_like_wasm::manifest::{PackageManifest, PackagePermissions};
 use flow_like_wasm::widget_frame::is_valid_package_id;
 use flow_like_wasm::{
     WasmEngine, WasmNodeLogic, WasmSecurityConfig, WidgetBundleReader, WidgetContract,
@@ -1779,11 +1779,48 @@ fn load_manifest_for_registration(
     ))
 }
 
+/// Permissions declared by this package's nodes in the catalog, or `None` when
+/// none of its nodes are loaded.
+async fn loaded_node_permissions(
+    app_handle: &AppHandle,
+    package_id: &str,
+) -> Option<Vec<NodePermission>> {
+    let flow_state = TauriFlowLikeState::construct(app_handle).await.ok()?;
+    let registry = flow_state.node_registry.read().await;
+    let package_nodes: Vec<&NodeWasm> = registry
+        .node_registry
+        .registry
+        .values()
+        .filter_map(|(node, _)| node.wasm.as_ref())
+        .filter(|wasm| wasm.package_id == package_id)
+        .collect();
+    (!package_nodes.is_empty()).then(|| {
+        package_nodes
+            .iter()
+            .flat_map(|wasm| wasm.permissions.iter().copied())
+            .collect()
+    })
+}
+
 async fn register_developer_package(
     app_handle: &AppHandle,
     wasm_path: &Path,
-    manifest: PackageManifest,
+    mut manifest: PackageManifest,
 ) {
+    // The store lists capabilities from the nodes, exactly as the registry does
+    // after compilation; the manifest keeps tiers, hosts and OAuth scopes.
+    if let Some(node_permissions) = loaded_node_permissions(app_handle, &manifest.id).await {
+        let derived = manifest
+            .permissions
+            .with_capabilities_from(node_permissions.iter());
+        for unbacked in
+            PackagePermissions::unbacked_capability_flags(&manifest.permissions, &derived)
+        {
+            tracing::warn!(package_id = %manifest.id, "{unbacked}");
+        }
+        manifest.permissions = derived;
+    }
+
     if let Ok(client) = TauriRegistryState::get_client(app_handle).await
         && let Err(e) = client.register_local_package(wasm_path, manifest).await
     {

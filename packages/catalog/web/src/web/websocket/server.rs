@@ -135,7 +135,7 @@ impl NodeLogic for WebSocketServerNode {
         context.deactivate_exec_pin("on_close").await?;
         context.activate_exec_pin("exec_error").await?;
 
-        let config: WebSocketServerConfig = context.evaluate_pin("config").await?;
+        let mut config: WebSocketServerConfig = context.evaluate_pin("config").await?;
         let referenced_fns = context.get_referenced_functions().await?;
         let handler = referenced_fns.first().cloned();
         if referenced_fns.len() > 1 {
@@ -158,7 +158,7 @@ impl NodeLogic for WebSocketServerNode {
         };
 
         let local_addr = listener.local_addr()?.to_string();
-        let tls_acceptor = match crate::web::tls::server_acceptor(&config.tls) {
+        let tls_acceptor = match crate::web::tls::ServiceAcceptor::new(context, &config.tls).await {
             Ok(acceptor) => acceptor,
             Err(err) => {
                 context.log_message(
@@ -168,6 +168,7 @@ impl NodeLogic for WebSocketServerNode {
                 return Ok(());
             }
         };
+        config.tls.secure = tls_acceptor.encrypted();
         context
             .set_pin_value("local_addr", json!(local_addr.clone()))
             .await?;
@@ -246,21 +247,17 @@ impl NodeLogic for WebSocketServerNode {
 
             let remote_addr = remote_addr.to_string();
             let expected_path = config.path.as_deref().and_then(normalize_path);
-            let stream: crate::web::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
-                match acceptor.accept(stream).await {
-                    Ok(stream) => Box::new(stream),
-                    Err(err) => {
-                        context.log_message(
-                            &format!("WebSocket TLS handshake failed: {}", err),
-                            LogLevel::Error,
-                        );
-                        continue;
-                    }
+            let stream: crate::web::tls::BoxedIo = match tls_acceptor.accept(stream).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    context.log_message(
+                        &format!("WebSocket TLS handshake failed: {}", err),
+                        LogLevel::Error,
+                    );
+                    continue;
                 }
-            } else {
-                Box::new(stream)
             };
-            let ws_stream = match tokio_tungstenite::accept_hdr_async(
+            let upgrade = tokio_tungstenite::accept_hdr_async(
                 stream,
                 move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
                       response| {
@@ -278,18 +275,22 @@ impl NodeLogic for WebSocketServerNode {
 
                     Ok(response)
                 },
-            )
-            .await
-            {
-                Ok(stream) => stream,
-                Err(err) => {
-                    context.log_message(
-                        &format!("WebSocket handshake failed: {}", err),
-                        LogLevel::Error,
-                    );
-                    continue;
-                }
-            };
+            );
+            let ws_stream =
+                match tokio::time::timeout(std::time::Duration::from_secs(10), upgrade).await {
+                    Ok(Ok(stream)) => stream,
+                    Ok(Err(err)) => {
+                        context.log_message(
+                            &format!("WebSocket handshake failed: {}", err),
+                            LogLevel::Error,
+                        );
+                        continue;
+                    }
+                    Err(_) => {
+                        context.log_message("WebSocket handshake timed out", LogLevel::Warn);
+                        continue;
+                    }
+                };
 
             let (sink, stream) = ws_stream.split();
             active_connections.fetch_add(1, Ordering::Relaxed);

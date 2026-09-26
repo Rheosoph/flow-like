@@ -4,20 +4,24 @@
 //! the personal values (IP, details), so those can expire later without breaking the
 //! chain the audit worker builds from the record hashes.
 
+use std::time::Duration;
+
 use chrono::{DateTime, FixedOffset, Utc};
-use flow_like_types::{Value, create_id};
+use flow_like_types::{Value, create_id, tokio};
 use sea_orm::{
     ActiveEnum, ActiveValue::Set, ConnectionTrait, DbErr, EntityTrait, sea_query::OnConflict,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::db::{DbConflict, classify_db_err};
 use crate::entity::{audit_record, sea_orm_active_enums::AuditActorType};
 
 use super::crypto::{
     RecordFields, canonical_json, details_commitment, ip_commitment, once_id, random_salt,
     record_hash, record_mac, strip_nul, strip_nul_value,
 };
+use super::keys::entry_kid;
 use super::level::RetentionClass;
 
 /// Chain of changes that belong to no app or package.
@@ -221,8 +225,15 @@ pub fn build_record(
         // Only the worker may assign records to seals. Omit the column so the API
         // can use an INSERT grant that excludes sealId.
         seal_id: sea_orm::ActiveValue::NotSet,
+        entry_kid: Set(Some(entry_kid(entry_key))),
     }
 }
+
+/// Attempts at the insert while a schema change has invalidated the session's catalog
+/// (Aurora DSQL `OC001`). A failed single statement commits nothing and the built row
+/// is reused, so the retry writes exactly what the first attempt would have.
+const SCHEMA_CHANGE_ATTEMPTS: u32 = 3;
+const SCHEMA_CHANGE_BACKOFF: Duration = Duration::from_millis(50);
 
 /// Insert one record. A single statement: records never conflict with each other, so
 /// any number of writers on the same chain proceed in parallel.
@@ -232,6 +243,32 @@ pub async fn write<C: ConnectionTrait>(
     mode: WriteMode,
 ) -> Result<(), DbErr> {
     let model = build_record(input, mode, super::keys::entry_key(), Utc::now());
+    let mut attempt = 1;
+    loop {
+        let Err(error) = insert(db, model.clone(), mode).await else {
+            return Ok(());
+        };
+        let Some(delay) = schema_change_backoff(attempt, classify_db_err(&error)) else {
+            return Err(error);
+        };
+        tracing::warn!(attempt, %error, "audit record insert hit a schema change; retrying");
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
+}
+
+/// The pause before the next attempt, or `None` when `error` is not a stale catalog or
+/// `attempt` was the last one.
+fn schema_change_backoff(attempt: u32, conflict: Option<DbConflict>) -> Option<Duration> {
+    (conflict == Some(DbConflict::SchemaChanged) && attempt < SCHEMA_CHANGE_ATTEMPTS)
+        .then(|| SCHEMA_CHANGE_BACKOFF * attempt)
+}
+
+async fn insert<C: ConnectionTrait>(
+    db: &C,
+    model: audit_record::ActiveModel,
+    mode: WriteMode,
+) -> Result<(), DbErr> {
     let insert = audit_record::Entity::insert(model);
     match mode {
         WriteMode::Append => {
@@ -330,6 +367,7 @@ mod tests {
         });
         assert!(mac_matches(&key, &hash, &unwrap(&model.mac).unwrap()));
         assert!(model.seal_id.is_not_set());
+        assert_eq!(unwrap(&model.entry_kid), Some(entry_kid(&key)));
     }
 
     #[test]
@@ -382,5 +420,71 @@ mod tests {
         let model = build_record(dirty, WriteMode::Append, &[1; 32], Utc::now());
         assert!(!unwrap(&model.resource_id).contains('\0'));
         assert!(!canonical_json(&unwrap(&model.details).unwrap()).contains("\\u0000"));
+    }
+
+    #[derive(Debug)]
+    struct SqlState(&'static str);
+
+    impl std::fmt::Display for SqlState {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for SqlState {}
+
+    impl sea_orm::sqlx::error::DatabaseError for SqlState {
+        fn message(&self) -> &str {
+            "schema has been updated by another transaction"
+        }
+
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(self.0.into())
+        }
+
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> sea_orm::sqlx::error::ErrorKind {
+            sea_orm::sqlx::error::ErrorKind::Other
+        }
+    }
+
+    fn db_err(code: &'static str) -> DbErr {
+        DbErr::Exec(sea_orm::RuntimeErr::SqlxError(std::sync::Arc::new(
+            sea_orm::sqlx::Error::Database(Box::new(SqlState(code))),
+        )))
+    }
+
+    #[test]
+    fn only_a_schema_change_is_retried_and_only_a_bounded_number_of_times() {
+        let stale = classify_db_err(&db_err("OC001"));
+        assert_eq!(stale, Some(DbConflict::SchemaChanged));
+        assert_eq!(schema_change_backoff(1, stale), Some(SCHEMA_CHANGE_BACKOFF));
+        assert_eq!(
+            schema_change_backoff(2, stale),
+            Some(SCHEMA_CHANGE_BACKOFF * 2)
+        );
+        assert_eq!(schema_change_backoff(SCHEMA_CHANGE_ATTEMPTS, stale), None);
+        for code in ["OC000", "23505", "42501"] {
+            assert_eq!(
+                schema_change_backoff(1, classify_db_err(&db_err(code))),
+                None,
+                "{code}"
+            );
+        }
+        assert_eq!(
+            schema_change_backoff(1, classify_db_err(&DbErr::Custom("x".into()))),
+            None
+        );
     }
 }

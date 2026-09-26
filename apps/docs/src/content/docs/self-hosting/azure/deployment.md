@@ -71,6 +71,13 @@ docker build --platform linux/amd64 \
   -t flow-like-azure-audit-worker .
 ```
 
+The worker compiles the `audit` section of the same document as the Azure API
+image: the tracked public default, or the API build's `flow_like_config` BuildKit
+secret with its `FLOW_LIKE_CONFIG_SHA256` build argument. It reads no
+configuration at runtime, so the API's `FLOW_LIKE_CONFIG_*` sources do not reach
+it. Set audit policy in that build input; see
+[Audit policy](/self-hosting/audit-trail/#audit-policy).
+
 Publish it to your registry and select the resulting digest. This image adds an
 Entra PostgreSQL launcher to the shared audit binary. It obtains a short-lived
 token from the Container Apps identity endpoint, places it in the child process's
@@ -80,10 +87,9 @@ runtime of 55 minutes. Each scheduled execution obtains a token again.
 
 Prepare a versioned P-256 Key Vault key, a Container Apps environment with private
 database connectivity, and versioned Key Vault secrets for the worker database
-URL, shared base64 entry key, shared export-token encryption key, and audit
-configuration. A minimal configuration is
-`{"audit":{"enabled":true,"require_signing":true}}`. Both vaults must use Azure
-RBAC. Keep the signing key and worker database secret outside the API's access.
+URL, shared base64 entry key and shared export-token encryption key. Both vaults
+must use Azure RBAC. Keep the signing key and worker database secret outside the
+API's access.
 
 Create the worker's user-assigned identity using the resource group and `--name`
 you will pass to the planner. The default name is `flow-like-audit-worker`.
@@ -118,8 +124,7 @@ python3 apps/backend/azure/audit-worker/deploy.py \
   --database-user "$AUDIT_DATABASE_USER" \
   --database-secret-uri "$AUDIT_DATABASE_SECRET_URI" \
   --entry-key-secret-uri "$AUDIT_ENTRY_KEY_SECRET_URI" \
-  --encryption-secret-uri "$SINK_TOKEN_ENCRYPTION_KEY_SECRET_URI" \
-  --config-secret-uri "$AUDIT_CONFIG_SECRET_URI"
+  --encryption-secret-uri "$SINK_TOKEN_ENCRYPTION_KEY_SECRET_URI"
 ```
 
 For a private Azure Container Registry, add
@@ -140,7 +145,7 @@ The deployment identity must be able to read the signing key's public part and
 enumerate the API identity's security groups and inherited RBAC assignments,
 including management-group policies. The script rejects direct, inherited, or
 conditional API roles that can use audit storage, sign, read the worker
-database/configuration secrets, or change worker resources and permissions.
+database secret, or change worker resources and permissions.
 Remove broad API grants when this check fails. Key Vault role propagation can
 take time; rerun the deployment after a newly assigned role becomes effective.
 The worker's inherited roles are checked too: evidence deletion, retention

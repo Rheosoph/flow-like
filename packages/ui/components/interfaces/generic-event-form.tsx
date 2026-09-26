@@ -35,6 +35,7 @@ import type {
 import { useClientRouter } from "../../lib/client-navigation";
 import { formatDuration } from "../../lib/date";
 import { defaultValueFromType } from "../../lib/flow-defaults";
+import { asArray } from "../../lib/response-shape";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
@@ -815,10 +816,9 @@ export function GenericEventFormInterface({
 
 	const routeEventNames = useMemo(() => {
 		const mapping: Record<string, string> = {};
-		if (!routesQuery.data || !eventsQuery.data) return mapping;
-
-		for (const route of routesQuery.data) {
-			const evt = eventsQuery.data.find((e) => e.id === route.eventId);
+		const events = asArray(eventsQuery.data);
+		for (const route of asArray(routesQuery.data)) {
+			const evt = events.find((e) => e.id === route.eventId);
 			if (evt?.name) {
 				mapping[route.path] = evt.name;
 			}

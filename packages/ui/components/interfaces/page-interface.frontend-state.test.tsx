@@ -9,6 +9,10 @@ import {
 } from "../../lib/app-route-url";
 import type { IEvent } from "../../lib/schema/flow/event";
 import type { IPage } from "../../state/backend-state/page-state";
+import type {
+	FrontendStatePersistence,
+	FrontendStateStore,
+} from "../a2ui/frontend-state";
 
 type Run = {
 	payload: { id: string; payload: Record<string, unknown> };
@@ -31,15 +35,56 @@ const pageGetAll = mock(async (_appId: string, pageId: string) => {
 const globalSet = mock(async () => {});
 const pageSet = mock(async () => {});
 
-mock.module("../../lib/idb-storage", () => ({
-	appGlobalState: { getAll: globalGetAll, set: globalSet },
-	pageLocalState: {
-		getAll: pageGetAll,
-		set: pageSet,
-		clearPage: mock(async () => {}),
+// bun keeps a module mock for every later file in the process, so the modules that later files
+// use for real are captured here and restored in afterAll. frontend-state binds its default
+// persistence when it is first evaluated, often by an earlier file, so the stores get the test
+// persistence injected instead of through a storage module mock.
+const actualFrontendState = { ...(await import("../a2ui/frontend-state")) };
+const testPersistence: FrontendStatePersistence = {
+	global: { getAll: globalGetAll, set: globalSet },
+	page: { getAll: pageGetAll, set: pageSet, clearPage: mock(async () => {}) },
+};
+const testStores = new Map<string | undefined, FrontendStateStore>();
+mock.module("../a2ui/frontend-state", () => ({
+	...actualFrontendState,
+	getFrontendStateStore: (appId: string | undefined) => {
+		let store = testStores.get(appId);
+		if (!store) {
+			store = actualFrontendState.createFrontendStateStore(
+				appId,
+				testPersistence,
+			);
+			testStores.set(appId, store);
+		}
+		return store;
 	},
 }));
+const actual = {
+	locales: { ...(await import("@flow-like/locales")) },
+	nextNavigation: { ...(await import("next/navigation")) },
+	oidc: { ...(await import("react-oidc-context")) },
+	assetSource: { ...(await import("../../hooks/use-asset-source")) },
+	backendState: { ...(await import("../../state/backend-state")) },
+	executionService: {
+		...(await import("../../state/execution-service-context")),
+	},
+	renderer: { ...(await import("../a2ui/A2UIRenderer")) },
+	dataContext: { ...(await import("../a2ui/DataContext")) },
+	livePageAgentBridge: { ...(await import("../a2ui/LivePageAgentBridge")) },
+	routeDialog: { ...(await import("../a2ui/RouteDialogProvider")) },
+	collectRunElements: { ...(await import("../a2ui/collect-run-elements")) },
+	elementsRequestHandler: {
+		...(await import("../a2ui/elements-request-handler")),
+	},
+	widgetQueryHandler: { ...(await import("../a2ui/widget-query-handler")) },
+	scopedCustomCss: { ...(await import("../scoped-custom-css")) },
+	nativeWidgetPageCapture: {
+		...(await import("./native-widget-page-capture")),
+	},
+	pageLoadingSkeleton: { ...(await import("./page-loading-skeleton")) },
+};
 mock.module("@flow-like/locales", () => ({
+	...actual.locales,
 	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
 }));
 const router = {
@@ -48,11 +93,16 @@ const router = {
 };
 let hostSearch = "host=ignored";
 mock.module("next/navigation", () => ({
+	...actual.nextNavigation,
 	useRouter: () => router,
 	useSearchParams: () => new URLSearchParams(hostSearch),
 }));
-mock.module("react-oidc-context", () => ({ useAuth: () => null }));
+mock.module("react-oidc-context", () => ({
+	...actual.oidc,
+	useAuth: () => null,
+}));
 mock.module("../../hooks/use-asset-source", () => ({
+	...actual.assetSource,
 	useAssetSource: () => ({ src: undefined }),
 }));
 const backend = {
@@ -73,19 +123,29 @@ const backend = {
 		},
 	},
 };
-mock.module("../../state/backend-state", () => ({ useBackend: () => backend }));
+mock.module("../../state/backend-state", () => ({
+	...actual.backendState,
+	useBackend: () => backend,
+}));
 mock.module("../../state/execution-service-context", () => ({
+	...actual.executionService,
 	useExecutionServiceOptional: () => null,
 }));
 const childrenOnly = ({ children }: { children: ReactNode }) => children;
 mock.module("../a2ui/A2UIRenderer", () => ({
+	...actual.renderer,
 	A2UIRenderer: ({ agentBridge }: { agentBridge: ReactNode }) => agentBridge,
 }));
-mock.module("../a2ui/DataContext", () => ({ DataProvider: childrenOnly }));
+mock.module("../a2ui/DataContext", () => ({
+	...actual.dataContext,
+	DataProvider: childrenOnly,
+}));
 mock.module("../a2ui/LivePageAgentBridge", () => ({
+	...actual.livePageAgentBridge,
 	LivePageAgentBridge: () => null,
 }));
 mock.module("./native-widget-page-capture", () => ({
+	...actual.nativeWidgetPageCapture,
 	NativeWidgetPageCaptureBridge: ({ ready }: { ready: boolean }) => {
 		captureReadiness.push(ready);
 		return null;
@@ -93,20 +153,28 @@ mock.module("./native-widget-page-capture", () => ({
 }));
 const dialogs = { openDialog: () => {}, closeDialog: () => {} };
 mock.module("../a2ui/RouteDialogProvider", () => ({
+	...actual.routeDialog,
 	RouteDialogProvider: childrenOnly,
 	useRouteDialog: () => dialogs,
 }));
 mock.module("../a2ui/collect-run-elements", () => ({
+	...actual.collectRunElements,
 	collectRunElements: async () => ({}),
 }));
 mock.module("../a2ui/elements-request-handler", () => ({
+	...actual.elementsRequestHandler,
 	handleElementsRequestMessage: () => false,
 }));
 mock.module("../a2ui/widget-query-handler", () => ({
+	...actual.widgetQueryHandler,
 	handleWidgetQueryMessage: () => false,
 }));
-mock.module("../scoped-custom-css", () => ({ ScopedCustomCss: () => null }));
+mock.module("../scoped-custom-css", () => ({
+	...actual.scopedCustomCss,
+	ScopedCustomCss: () => null,
+}));
 mock.module("./page-loading-skeleton", () => ({
+	...actual.pageLoadingSkeleton,
 	PageLoadingSkeleton: () => null,
 }));
 
@@ -130,7 +198,35 @@ afterEach(async () => {
 	router.push.mockClear();
 	router.replace.mockClear();
 });
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../a2ui/frontend-state", () => actualFrontendState);
+	mock.module("@flow-like/locales", () => actual.locales);
+	mock.module("next/navigation", () => actual.nextNavigation);
+	mock.module("react-oidc-context", () => actual.oidc);
+	mock.module("../../hooks/use-asset-source", () => actual.assetSource);
+	mock.module("../../state/backend-state", () => actual.backendState);
+	mock.module(
+		"../../state/execution-service-context",
+		() => actual.executionService,
+	);
+	mock.module("../a2ui/A2UIRenderer", () => actual.renderer);
+	mock.module("../a2ui/DataContext", () => actual.dataContext);
+	mock.module("../a2ui/LivePageAgentBridge", () => actual.livePageAgentBridge);
+	mock.module("../a2ui/RouteDialogProvider", () => actual.routeDialog);
+	mock.module("../a2ui/collect-run-elements", () => actual.collectRunElements);
+	mock.module(
+		"../a2ui/elements-request-handler",
+		() => actual.elementsRequestHandler,
+	);
+	mock.module("../a2ui/widget-query-handler", () => actual.widgetQueryHandler);
+	mock.module("../scoped-custom-css", () => actual.scopedCustomCss);
+	mock.module(
+		"./native-widget-page-capture",
+		() => actual.nativeWidgetPageCapture,
+	);
+	mock.module("./page-loading-skeleton", () => actual.pageLoadingSkeleton);
+});
 
 function createPage(id: string): IPage {
 	return {
@@ -314,6 +410,10 @@ describe("page lifecycle frontend state", () => {
 		);
 		await act(() => root?.unmount());
 		root = undefined;
+		// onUnload waits one task to confirm the unmount is not a StrictMode replay.
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
 		expect(runs[2].payload.payload).toMatchObject({
 			_event_type: "onUnload",
 			_global_state: { theme: "dark" },

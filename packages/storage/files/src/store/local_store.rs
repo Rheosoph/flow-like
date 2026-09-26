@@ -65,6 +65,18 @@ impl LocalObjectStore {
         let path = self.store.path_to_filesystem(location)?;
         Ok(path)
     }
+
+    /// Resolve a directory prefix, including the empty prefix for the store root.
+    pub fn directory_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+        // object_store validates the final component as a filename, rejecting empty
+        // paths and names ending in #<digits>. A directory prefix has neither restriction.
+        // Resolve a placeholder child without creating it, then remove that component.
+        let mut path = self
+            .store
+            .path_to_filesystem(&location.clone().join(".flow-like-directory-path"))?;
+        path.pop();
+        Ok(path)
+    }
 }
 
 #[async_trait]
@@ -267,6 +279,44 @@ mod tests {
         ));
         let store = LocalObjectStore::new(dir.clone()).unwrap();
         (store, dir)
+    }
+
+    #[test]
+    fn directory_paths_resolve_root_and_missing_prefixes_without_creating_files() {
+        let (_, parent) = temp_store();
+        let dir = parent.join("store with spaces % and #123");
+        let store = LocalObjectStore::new(dir.clone()).unwrap();
+        let root = dir.canonicalize().unwrap();
+        assert_eq!(
+            store.directory_to_filesystem(&Path::from("")).unwrap(),
+            root
+        );
+        for prefix in [
+            "nested/repo",
+            "build#123",
+            "space and ünicode",
+            "percent%20literal",
+        ] {
+            assert_eq!(
+                store
+                    .directory_to_filesystem(&Path::parse(prefix).unwrap())
+                    .unwrap(),
+                root.join(prefix),
+            );
+            let encoded = Path::from(prefix);
+            assert_eq!(
+                store.directory_to_filesystem(&encoded).unwrap(),
+                root.join(encoded.as_ref())
+            );
+        }
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        // File operations must retain object_store's reserved filename checks.
+        assert!(
+            store
+                .path_to_filesystem(&Path::parse("build#123").unwrap())
+                .is_err()
+        );
+        fs::remove_dir_all(parent).unwrap();
     }
 
     #[tokio::test]

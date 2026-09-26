@@ -11,6 +11,7 @@ import { sinkSupportsEventExecution } from "../../lib/event-definitions";
 import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
+import { asArray, isRecord } from "../../lib/response-shape";
 import { IExecutionMode } from "../../lib/schema/flow/board";
 import {
 	type BoardVersion,
@@ -235,7 +236,7 @@ export function EventForm({
 				setPathError("Path must start with '/'");
 				return;
 			}
-			const existing = routes.data?.find((r) => {
+			const existing = asArray(routes.data).find((r) => {
 				if (normalizedPath(r.path) !== path) return false;
 				if (event?.id && r.eventId === event.id) return false;
 				return true;
@@ -416,7 +417,7 @@ export function EventForm({
 
 	const handleSelectPage = (pageId: string) => {
 		setPathError(null);
-		const page = (pages.data ?? []).find(
+		const page = asArray(pages.data).find(
 			(p: PageListItem) => p.pageId === pageId,
 		);
 		handleInputChange("default_page_id", pageId);
@@ -448,7 +449,7 @@ export function EventForm({
 				</SelectTrigger>
 				<SelectContent>
 					<SelectItem value="latest">{t("latest", "Latest")}</SelectItem>
-					{versions.data?.map((version) => (
+					{asArray(versions.data).map((version) => (
 						<SelectItem key={version.join(".")} value={version.join(".")}>
 							v{version.join(".")}
 						</SelectItem>
@@ -534,7 +535,7 @@ export function EventForm({
 								<SelectValue placeholder={t("selectAPage", "Select a page")} />
 							</SelectTrigger>
 							<SelectContent>
-								{(pages.data ?? []).map((p: PageListItem) => (
+								{asArray(pages.data).map((p: PageListItem) => (
 									<SelectItem key={p.pageId} value={p.pageId}>
 										{p.name}
 									</SelectItem>
@@ -590,7 +591,7 @@ export function EventForm({
 									/>
 								</SelectTrigger>
 								<SelectContent>
-									{boards.data?.map((board) => (
+									{asArray(boards.data).map((board) => (
 										<SelectItem key={board.id} value={board.id}>
 											{board.name}
 										</SelectItem>
@@ -654,7 +655,7 @@ export function EventForm({
 			)}
 
 			{/* Node and Board Selection */}
-			{!isPageEvent && board.data && (
+			{!isPageEvent && board.data && isRecord(board.data.nodes) && (
 				<div className="space-y-4">
 					<div className="space-y-2">
 						<Label htmlFor="node">{t("node", "Node")}</Label>

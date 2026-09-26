@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { openExternalUrl } from "../../lib/open-external";
@@ -9,9 +9,29 @@ import type {
 	RequestAccessResponse,
 	WasmPurchaseResponse,
 } from "../../lib/schema/wasm";
-import { usePaymentDistribution } from "../payments/use-payments";
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
+import { usePaymentDistribution, usePayments } from "../payments/use-payments";
+
+const CHECKOUT_POLL_MS = 4000;
+const CHECKOUT_POLL_LIMIT_MS = 10 * 60_000;
+
+/**
+ * Whether the viewer may install the package. Free public packages download
+ * without an access row; everything else needs one (`currentUserPermission`).
+ * `undefined` while the package is unknown.
+ */
+export function viewerHasPackageAccess(
+	pkg:
+		| Pick<RegistryEntry, "price" | "visibility" | "currentUserPermission">
+		| null
+		| undefined,
+): boolean | undefined {
+	if (!pkg) return undefined;
+	if (pkg.visibility === "local") return true;
+	if ((pkg.currentUserPermission ?? 0) !== 0) return true;
+	return pkg.visibility === "public" && (pkg.price ?? 0) <= 0;
+}
 
 export function usePackageStoreData(
 	packageId: string | undefined,
@@ -22,6 +42,7 @@ export function usePackageStoreData(
 ) {
 	const backend = useBackend();
 	const purchasingAllowed = usePaymentDistribution();
+	const marketplaceEnabled = usePayments().config?.marketplace_enabled === true;
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -30,7 +51,30 @@ export function usePackageStoreData(
 
 	const [isPurchasing, setIsPurchasing] = useState(false);
 	const [isRequesting, setIsRequesting] = useState(false);
-	const [hasAccess, setHasAccess] = useState<boolean | undefined>(undefined);
+	const [grantedAccess, setGrantedAccess] = useState(false);
+	const [awaitingCheckout, setAwaitingCheckout] = useState(false);
+	const [checkoutOpen, setCheckoutOpen] = useState(false);
+
+	const hasAccess = useMemo(
+		() => (grantedAccess ? true : viewerHasPackageAccess(pkg)),
+		[grantedAccess, pkg],
+	);
+
+	useEffect(() => {
+		if (!awaitingCheckout || hasAccess) return;
+		const poll = window.setInterval(
+			() => onAccessChanged?.(),
+			CHECKOUT_POLL_MS,
+		);
+		const stop = window.setTimeout(
+			() => setAwaitingCheckout(false),
+			CHECKOUT_POLL_LIMIT_MS,
+		);
+		return () => {
+			window.clearInterval(poll);
+			window.clearTimeout(stop);
+		};
+	}, [awaitingCheckout, hasAccess, onAccessChanged]);
 
 	const formatPrice = useCallback((price?: number | null) => {
 		if (!price || price <= 0) return "Free";
@@ -42,6 +86,11 @@ export function usePackageStoreData(
 	const onBuy = useCallback(async () => {
 		if (!packageId || !profile.data || isPurchasing || !purchasingAllowed)
 			return;
+
+		if (marketplaceEnabled) {
+			setCheckoutOpen(true);
+			return;
+		}
 
 		setIsPurchasing(true);
 		try {
@@ -58,13 +107,14 @@ export function usePackageStoreData(
 
 			if (result.alreadyHasAccess) {
 				toast.info("You already have access to this package!");
-				setHasAccess(true);
+				setGrantedAccess(true);
 				onAccessChanged?.();
 				return;
 			}
 
 			if (result.checkoutUrl) {
 				await openExternalUrl(result.checkoutUrl, "checkout");
+				setAwaitingCheckout(true);
 			} else {
 				toast.error("Unable to start purchase. Please try again.");
 			}
@@ -79,6 +129,7 @@ export function usePackageStoreData(
 		profile.data,
 		isPurchasing,
 		purchasingAllowed,
+		marketplaceEnabled,
 		fetcher,
 		auth,
 		onAccessChanged,
@@ -92,13 +143,17 @@ export function usePackageStoreData(
 			const result = await fetcher<RequestAccessResponse>(
 				profile.data.hub_profile,
 				`registry/package/${packageId}/access`,
-				{ method: "PUT" },
+				{
+					method: "PUT",
+					body: JSON.stringify({}),
+					headers: { "Content-Type": "application/json" },
+				},
 				auth,
 			);
 
 			if (result.granted) {
 				toast.success("Access granted! You can now use this package.");
-				setHasAccess(true);
+				setGrantedAccess(true);
 				onAccessChanged?.();
 				return;
 			}
@@ -153,6 +208,9 @@ export function usePackageStoreData(
 	return {
 		isPurchasing,
 		isRequesting,
+		awaitingCheckout,
+		checkoutOpen,
+		setCheckoutOpen,
 		priceLabel,
 		hasAccess,
 		onBuy,

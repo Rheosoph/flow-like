@@ -15,6 +15,7 @@ import { useTranslation } from "@flow-like/locales";
 import { GitForkIcon, Loader2Icon } from "lucide-react";
 import { useApplyForkBundle } from "../../../lib/use-apply-fork-bundle";
 import { useOfflineToOnlineFork } from "../../../lib/use-offline-to-online-fork";
+import { DuplicateAppCard } from "./duplicate-app-card";
 
 interface ForkAppButtonProps {
 	localApp: IApp;
@@ -35,36 +36,39 @@ export function ForkAppButton({
 	const { forkOfflineAppOnline, isForking } = useOfflineToOnlineFork();
 	if (localApp.visibility === IAppVisibility.Offline) {
 		return (
-			<Card>
-				<CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
-					<div className="space-y-1">
-						<CardTitle className="flex items-center gap-2">
-							<GitForkIcon className="w-4 h-4" />
-							{t("createAnOnlineCopy", "Create an online copy")}
-						</CardTitle>
-						<CardDescription>
-							{t(
-								"uploadAFreshSecretstrippedCopyOfThisLocalAppToYourAccountTheLocalAppRemainsUnchanged",
-								"Upload a fresh, secret-stripped copy of this local app to your account. The local app remains unchanged.",
+			<>
+				<DuplicateAppCard appId={localApp.id} appName={appName} />
+				<Card>
+					<CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+						<div className="space-y-1">
+							<CardTitle className="flex items-center gap-2">
+								<GitForkIcon className="w-4 h-4" />
+								{t("createAnOnlineCopy", "Create an online copy")}
+							</CardTitle>
+							<CardDescription>
+								{t(
+									"uploadAFreshSecretstrippedCopyOfThisLocalAppToYourAccountTheLocalAppRemainsUnchanged",
+									"Upload a fresh, secret-stripped copy of this local app to your account. The local app remains unchanged.",
+								)}
+							</CardDescription>
+						</div>
+					</CardHeader>
+					<CardContent>
+						<Button
+							onClick={() => forkOfflineAppOnline(localApp.id, appName)}
+							disabled={isForking}
+							className="gap-2"
+						>
+							{isForking ? (
+								<Loader2Icon className="w-4 h-4 animate-spin" />
+							) : (
+								<GitForkIcon className="w-4 h-4" />
 							)}
-						</CardDescription>
-					</div>
-				</CardHeader>
-				<CardContent>
-					<Button
-						onClick={() => forkOfflineAppOnline(localApp.id, appName)}
-						disabled={isForking}
-						className="gap-2"
-					>
-						{isForking ? (
-							<Loader2Icon className="w-4 h-4 animate-spin" />
-						) : (
-							<GitForkIcon className="w-4 h-4" />
-						)}
-						{t("createOnlineCopy", "Create online copy")}
-					</Button>
-				</CardContent>
-			</Card>
+							{t("createOnlineCopy", "Create online copy")}
+						</Button>
+					</CardContent>
+				</Card>
+			</>
 		);
 	}
 

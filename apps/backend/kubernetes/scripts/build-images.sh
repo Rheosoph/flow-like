@@ -29,8 +29,8 @@ for component in ${COMPONENTS:-api executor execution-manager sink-trigger runti
   esac
   reference="$repository:$TAG"
   extra=()
-  if [[ "$component" == api && -n "${FLOW_LIKE_BUILD_CONFIG:-}" ]]; then
-    # Explicit compatibility fallback only. Setup config is mounted at runtime.
+  if [[ ( "$component" == api || "$component" == audit-worker ) && -n "${FLOW_LIKE_BUILD_CONFIG:-}" ]]; then
+    # The API's fallback behind the runtime config; the worker's only audit policy.
     extra+=(--build-arg "FLOW_LIKE_CONFIG=$FLOW_LIKE_BUILD_CONFIG")
   fi
   # Web deployment URLs come from Helm runtime settings, not build arguments.

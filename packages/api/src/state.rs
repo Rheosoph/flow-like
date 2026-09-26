@@ -851,8 +851,16 @@ impl State {
                 .await
                 .ok()
                 .map(|s| s.expose_secret().to_string());
-            crate::audit::keys::init_previous_entry_key(previous_entry_key.as_deref())
-                .expect("AUDIT_ENTRY_KEY_PREVIOUS must be base64 of 32 bytes");
+            let previous_backend_key = secrets
+                .get_secret_string(&SecretRef::new("BACKEND_KEY_PREVIOUS"))
+                .await
+                .ok()
+                .map(|s| s.expose_secret().to_string());
+            crate::audit::keys::init_previous_entry_key(
+                previous_entry_key.as_deref(),
+                previous_backend_key.as_deref(),
+            )
+            .expect("AUDIT_ENTRY_KEY_PREVIOUS must be base64 of 32 bytes");
             if platform_config.audit.enabled
                 && platform_config.audit.require_signing
                 && entry_key_source == crate::audit::keys::EntryKeySource::Ephemeral

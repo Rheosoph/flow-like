@@ -540,7 +540,6 @@ pub async fn import_app_from_file(
         .await?
         .hub_profile
         .id;
-    let settings = TauriSettingsState::construct(&app_handle).await?;
 
     let options = ImportOptions {
         password,
@@ -557,22 +556,33 @@ pub async fn import_app_from_file(
     let app_id = &report.app.id;
     info!(target: "import", app_id = %app_id, mode = ?report.mode, "Imported app");
 
-    // Import can take a while. Apply membership to the latest stored profile so
-    // edits made during the import, including Home saves, remain intact.
+    add_app_to_profile(&app_handle, &profile_id, app_id).await?;
+
+    Ok(report)
+}
+
+/// Adds `app_id` to the profile that was current when a long-running copy
+/// started. Applied to the latest stored profile so edits made meanwhile,
+/// including Home saves, remain intact.
+pub(super) async fn add_app_to_profile(
+    app_handle: &AppHandle,
+    profile_id: &str,
+    app_id: &str,
+) -> Result<(), TauriFunctionError> {
+    let settings = TauriSettingsState::construct(app_handle).await?;
     let mut settings = settings.lock().await;
     let profile = settings
         .profiles
-        .get_mut(&profile_id)
-        .ok_or_else(|| TauriFunctionError::new("Profile not found"))?;
+        .get_mut(profile_id)
+        .ok_or_else(|| TauriFunctionError::new(&format!("Profile {profile_id} not found")))?;
     let apps = profile.hub_profile.apps.get_or_insert_with(Vec::new);
 
-    if !apps.iter().any(|a| &a.app_id == app_id) {
-        apps.push(ProfileApp::new(app_id.clone()));
+    if !apps.iter().any(|a| a.app_id == app_id) {
+        apps.push(ProfileApp::new(app_id.to_string()));
         profile.advance_revision(None);
         settings.try_serialize()?;
     }
-
-    Ok(report)
+    Ok(())
 }
 
 #[tauri::command(async)]

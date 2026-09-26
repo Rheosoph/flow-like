@@ -17,7 +17,7 @@ def parser():
     result = argparse.ArgumentParser(description=__doc__)
     for name in ("subscription", "resource-group", "location", "environment-id", "api-identity-id",
                  "storage-account", "image", "key-id", "key-vault-id", "secrets-vault-id",
-                 "database-secret-uri", "entry-key-secret-uri", "config-secret-uri", "encryption-secret-uri"):
+                 "database-secret-uri", "entry-key-secret-uri", "encryption-secret-uri"):
         result.add_argument(f"--{name}", required=True)
     result.add_argument("--name", default="flow-like-audit-worker")
     result.add_argument("--container", default="audit")
@@ -34,7 +34,8 @@ def parser():
     result.add_argument("--apply", action="store_true",
                         help="Create resources and irreversibly lock container retention")
     result.epilog = (
-        "Build --image from apps/backend/azure/audit-worker/Dockerfile with the flow-like repository as context. "
+        "Build --image from apps/backend/azure/audit-worker/Dockerfile with the flow-like repository as context "
+        "and the API build's config; the worker's audit policy is compiled in. "
         "Create the worker's Entra database role and restricted grants before deployment. "
         "The entry/encryption secrets must match the API byte for byte. This planner never reads secret values; "
         "the launcher checks the database URL when the job starts."
@@ -154,8 +155,7 @@ def plan(args):
                                  "--allow-shared-key-access", "false", "--allow-blob-public-access", "false")})
     steps.append({"verify_account": True,
                   "inspect": command("storage", "account", "show", "--name", args.storage_account, *group)})
-    private_secrets = [args.database_secret_uri, args.config_secret_uri]
-    secret_scopes = [f"{args.secrets_vault_id}/secrets/{versioned_uri(uri, 'secrets')}" for uri in private_secrets]
+    secret_scopes = [f"{args.secrets_vault_id}/secrets/{versioned_uri(args.database_secret_uri, 'secrets')}"]
     job_scope = f"{scope}/providers/Microsoft.App/jobs/{args.name}"
     steps.append({"verify_api_access": True, "api_identity": args.api_identity_id,
                   "vaults": sorted({args.key_vault_id, args.secrets_vault_id}),
@@ -195,7 +195,6 @@ def plan(args):
                                      "--assignee-principal-type", "ServicePrincipal", "--role", role_id, "--scope", resource)})
     secrets = {"database": ("DATABASE_URL", args.database_secret_uri),
                "entry-key": ("AUDIT_ENTRY_KEY", args.entry_key_secret_uri),
-               "config": ("FLOW_LIKE_CONFIG_JSON", args.config_secret_uri),
                "encryption": ("SINK_TOKEN_ENCRYPTION_KEY", args.encryption_secret_uri)}
     previous_entry_key = getattr(args, "previous_entry_key_secret_uri", None)
     if previous_entry_key:

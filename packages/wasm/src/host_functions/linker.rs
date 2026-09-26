@@ -853,12 +853,12 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         None => return 0,
                     };
 
-                    let store = match ctx.resolve_store(&flow_path.store_ref) {
+                    let path = flow_path.object_path();
+                    let store = match ctx.resolve_store(&flow_path.store_ref, &path) {
                         Some(s) => s,
                         None => return 0,
                     };
 
-                    let path = flow_path.object_path();
                     match store.as_generic().get(&path).await {
                         Ok(result) => match result.bytes().await {
                             Ok(bytes) => {
@@ -1108,13 +1108,14 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         None => return 0,
                     };
 
-                    let store = match ctx.resolve_store(&flow_path.store_ref) {
+                    let path = flow_path.object_path();
+                    let store = match ctx.resolve_store(&flow_path.store_ref, &path) {
                         Some(s) => s,
                         None => return 0,
                     };
 
                     use futures::StreamExt;
-                    let prefix = flow_path.object_path();
+                    let prefix = path;
                     let entries: Vec<_> = store
                         .as_generic()
                         .list(Some(&prefix))

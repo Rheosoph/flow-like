@@ -35,6 +35,7 @@ import {
 	type PresenceMark,
 	mergePresenceMarks,
 } from "../../../lib/realtime/presence-locations";
+import { asArray } from "../../../lib/response-shape";
 import {
 	type IBoard,
 	type ILayer,
@@ -192,13 +193,14 @@ export function BoardExplorer({
 		Boolean(appId && boardId),
 		[appId, boardId],
 	);
+	const pageList = useMemo(() => asArray(pages.data), [pages.data]);
 
 	// Reported from an effect rather than from a row: naming a tab writes into the host's
 	// state, and doing that while rendering is a render-phase update on another component.
 	useEffect(() => {
 		if (!onPageName) return;
-		for (const page of pages.data ?? []) onPageName(page.pageId, page.name);
-	}, [onPageName, pages.data]);
+		for (const page of pageList) onPageName(page.pageId, page.name);
+	}, [onPageName, pageList]);
 
 	const nameErrorText = useCallback(
 		(error: IModuleNameError | null) => {
@@ -596,10 +598,10 @@ export function BoardExplorer({
 					onCancel={() => setDraftingPage(false)}
 				/>
 			)}
-			{!pages.isLoading && (pages.data?.length ?? 0) === 0 && !draftingPage && (
+			{!pages.isLoading && pageList.length === 0 && !draftingPage && (
 				<EmptyRow label={t("noPagesYet", "No pages yet")} />
 			)}
-			{pages.data?.map((page) => {
+			{pageList.map((page) => {
 				const row = (
 					<TreeRow
 						key={page.pageId}

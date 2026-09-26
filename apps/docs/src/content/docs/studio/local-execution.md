@@ -26,7 +26,7 @@ local-only node families:
 | **Vision** | Find or click image templates, inspect pixels, and wait for a visual state | Reads the runner's display |
 | **RPA** | Locate targets, act, assert, retry, checkpoint, and collect diagnostics | Coordinates local UI interactions and recovery |
 
-These are concrete catalog capabilities—not a general promise that every
+These catalog capabilities do not imply that every
 camera, microphone, USB device, GPU, or locally installed program is available.
 Check the documentation for the specific node you intend to use.
 
@@ -65,21 +65,36 @@ Local execution identifies the host. The Flow can still call APIs, databases,
 models, and other network services when its nodes and the machine's network
 policy allow them.
 
-## Computer-automation consent
+## Automation approval and system permissions
 
-Flows that control the computer or read the screen require explicit approval in
-Desktop. A manual run can be approved once or remembered for the Flow. A local
-Event can be approved for that Event so later API, chat, or scheduled triggers
-do not need a foreground prompt.
+Desktop checks the capabilities used by the resolved workflow before running it.
+Browser control, clipboard access, application launching, native input, screen
+capture, accessibility, and window management are separate capabilities. A
+browser workflow does not ask for desktop screen or accessibility access.
 
-Remembered approvals are stored on the current desktop. Operating-system
-permissions—such as accessibility, screen capture, mouse, or keyboard
-control—are separate and may also need to be granted.
+A manual run can be approved once or remembered for the Flow. A local Event can
+be approved for that Event so later API, chat, or scheduled triggers can run
+without a foreground prompt. Native execution checks approval for both manual
+and background runs.
+
+Remembered approvals are stored by Desktop and belong to the current profile,
+App, and workflow revision. Changing the workflow requires another approval.
+Switching profiles while a dialog is open cancels that approval attempt.
+
+Operating-system access is checked separately. The permission dialog rechecks
+when the app regains focus, offers a manual recheck, and resumes only when every
+required capability is available. Closing or cancelling the dialog cancels the
+pending request. On macOS, the permission belongs to the running executable;
+a different development build or signing identity may need its own grant.
+
+The **Check Automation Capability** and **Request Automation Capability** nodes
+expose the same native checks to Flows. Their status output distinguishes granted
+access, capabilities with no separate permission prompt, denied access,
+unavailable backends, and unsupported operations.
 
 :::caution[Approve only trusted automation]
-Computer automation can view on-screen data and interact with other
-applications as the signed-in user. Review the Flow, restrict its credentials,
-and grant only the operating-system permissions it needs.
+Computer automation can view on-screen data and interact with other applications
+as the signed-in user. Review the Flow and grant the capabilities it needs.
 :::
 
 ## Build reliable local automations

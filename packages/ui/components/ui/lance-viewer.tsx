@@ -14,7 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 // dnd-kit imports
-import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import {
 	type ColumnDef,
 	type ColumnFiltersState,
@@ -30,30 +30,38 @@ import {
 } from "@tanstack/react-table";
 import Dexie, { type Table } from "dexie";
 import {
+	ArrowDown,
+	ArrowUp,
 	CalendarDays,
+	ChevronLeft,
+	ChevronRight,
 	ClipboardList,
 	Clock,
 	Columns3,
+	Copy,
 	Database,
 	Download,
 	GripVertical,
 	Info,
+	KeyRound,
 	ListTree,
+	Loader2,
 	Maximize2,
 	Minimize2,
 	MoreHorizontal,
 	RefreshCcw,
+	RefreshCw,
+	Rows2,
+	Rows3,
+	Rows4,
 	Save,
 	Search,
-	Settings,
-	SlidersHorizontal,
-	Trash2,
-	Wrench,
 	X,
 	Zap,
 } from "lucide-react";
 import * as React from "react";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { cn } from "../../lib";
 import {
@@ -61,14 +69,8 @@ import {
 	formatAbsoluteDateTime,
 	formatCalendarDate,
 	formatRelativeTime,
-	fromDateInputValue,
-	fromDateTimeInputValue,
 	inferTemporalValue,
-	localTimeZoneLabel,
 	parseTemporalValue,
-	toDateInputValue,
-	toDateTimeInputValue,
-	toEpochNumber,
 } from "../../lib/date";
 import { geoArrowIndexKind } from "../../lib/geoarrow-index";
 import { resolveStorageFile } from "../../lib/storage-file";
@@ -88,17 +90,17 @@ import {
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 	Input,
 	Label,
-	ScrollArea,
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-	Separator,
 	Switch,
 	TextEditor,
 	Textarea,
@@ -107,7 +109,9 @@ import {
 	TooltipTrigger,
 	buttonVariants,
 } from "./";
+import { BinaryCellPreview, BinaryValueDetail } from "./binary-value-cell";
 import { GeometryCell, GeometryDetails } from "./geometry-cell";
+import { PortalContainerProvider } from "./portal-container";
 import { StorageFileChip, StorageFilePreview } from "./storage-file-cell";
 import {
 	Table as DataTable,
@@ -117,13 +121,12 @@ import {
 	TableHeader,
 	TableRow,
 } from "./table";
+import { canArrowFieldBeKey, isKeyFieldMetadata } from "./table-schema";
+import { TableSchemaDialog } from "./table-schema-dialog";
 import {
-	ColumnTypeSelect,
-	EDIT_COLUMN_TYPE_GROUPS,
-	IndexTypeHelp,
-	IndexTypeSelect,
-	buildAddColumnExpression,
-} from "./table-schema";
+	type TemporalCell,
+	TemporalValueEditor,
+} from "./temporal-value-editor";
 import { UserIdentityCard, UserInlineTag } from "./user-identity";
 
 export type LanceFieldKind =
@@ -135,6 +138,7 @@ export type LanceFieldKind =
 	| "vector"
 	| "array"
 	| "object"
+	| "binary"
 	| "unknown";
 
 export type LanceTemporalUnit =
@@ -153,11 +157,14 @@ export interface LanceField {
 	items?: LanceFieldKind | LanceField;
 	nullable?: boolean;
 	temporal?: LanceTemporalUnit;
+	/** Set on a top-level column that could become the table key. */
+	keyEligible?: boolean;
 }
 
 export interface LanceSchema {
 	table: string;
 	fields: LanceField[];
+	/** The key column (Lance's unenforced primary key), when the table has one. */
 	primaryKey?: string;
 }
 
@@ -198,10 +205,14 @@ export interface LanceDBExplorerProps {
 	onDropColumns?: (columns: string[]) => Promise<void>;
 	onAddColumn?: (name: string, sqlExpression: string) => Promise<void>;
 	onAlterColumn?: (column: string, nullable: boolean) => Promise<void>;
+	/** Marks a column as the permanent table key; the host refreshes the schema. */
+	onSetPrimaryKey?: (column: string) => Promise<void>;
 	onBuildIndex?: (column: string, indexType: string) => Promise<void>;
 	onGetIndices?: () => Promise<IIndexConfig[]>;
 	onDropIndex?: (indexName: string) => Promise<void>;
 	onRefresh?: () => void;
+	/** Spins the refresh control while the host refetches. */
+	refreshing?: boolean;
 
 	pageSizeOptions?: readonly number[];
 	initialPage?: number;
@@ -224,6 +235,13 @@ export interface LanceDBExplorerProps {
 	settingsScope?: string;
 	/** Hosts with their own chrome disable the fullscreen overlay. */
 	allowFullscreen?: boolean;
+	/** Rendered before the table name, e.g. a back button. */
+	leading?: React.ReactNode;
+	/** Rendered after the table name, e.g. branch and version pickers. */
+	meta?: React.ReactNode;
+	/** Appended to the table actions menu, e.g. destructive table operations. */
+	menuItems?: React.ReactNode;
+	/** Extra header content, rendered before the schema button. */
 	children?: React.ReactNode;
 }
 
@@ -292,10 +310,12 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	onDropColumns,
 	onAddColumn,
 	onAlterColumn,
+	onSetPrimaryKey,
 	onBuildIndex,
 	onGetIndices,
 	onDropIndex,
 	onRefresh,
+	refreshing = false,
 	pageSizeOptions = [25, 50, 100, 250],
 	initialPage = 1,
 	initialPageSize,
@@ -304,6 +324,9 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	className,
 	settingsScope,
 	allowFullscreen = true,
+	leading,
+	meta,
+	menuItems,
 }) => {
 	const { t } = useTranslation("common");
 	const [schema, setSchema] = useState<LanceSchema | null>(null);
@@ -348,6 +371,24 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 	const [globalQuery, setGlobalQuery] = useState("");
 	const [appliedQuery, setAppliedQuery] = useState("");
+
+	const applyQuery = useCallback(
+		(query: string) => {
+			setAppliedQuery(query);
+			// Without a host search the filter only narrows the rows already loaded,
+			// so jumping back to page one would hide the rows being filtered.
+			if (!onSearch) return;
+			handlePageChange(1);
+			onSearch({ query, mode: initialMode });
+		},
+		[onSearch, initialMode, handlePageChange],
+	);
+
+	useEffect(() => {
+		if (globalQuery === appliedQuery) return;
+		const timer = setTimeout(() => applyQuery(globalQuery), 250);
+		return () => clearTimeout(timer);
+	}, [globalQuery, appliedQuery, applyQuery]);
 
 	const [lastCount, setLastCount] = useState(0);
 	const [fullscreen, setFullscreen] = useState(false);
@@ -474,7 +515,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	const columns = useMemo<ColumnDef<Record<string, any>>[]>(() => {
 		if (!schema) return [];
 		const base: ColumnDef<Record<string, any>>[] = schema.fields.map((f) =>
-			buildColumnForField(f),
+			buildColumnForField(f, f.name === schema.primaryKey),
 		);
 
 		base.unshift({
@@ -495,7 +536,10 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 			),
 			enableSorting: false,
 			enableHiding: false,
-			size: 28,
+			enableResizing: false,
+			size: 40,
+			minSize: 40,
+			maxSize: 40,
 		});
 
 		return base;
@@ -558,8 +602,10 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		const csv = [cols.join(",")].concat(
 			rows.map((r) => cols.map((c) => stringifyCSV(r.getValue(c))).join(",")),
 		);
-		navigator.clipboard.writeText(csv.join("\n"));
-	}, [table]);
+		void navigator.clipboard
+			.writeText(csv.join("\n"))
+			.then(() => toast.success(t("copied", "Copied!")));
+	}, [table, t]);
 
 	const copySelectedAsJSON = useCallback(() => {
 		const rows = table.getSelectedRowModel().rows;
@@ -568,8 +614,17 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 			null,
 			2,
 		);
-		navigator.clipboard.writeText(json);
-	}, [table]);
+		void navigator.clipboard
+			.writeText(json)
+			.then(() => toast.success(t("copied", "Copied!")));
+	}, [table, t]);
+
+	const resetLayout = useCallback(() => {
+		setColumnVisibility({});
+		setColumnOrder([]);
+		setSorting([]);
+		setColumnSizing({});
+	}, []);
 
 	const selectedCount = table.getSelectedRowModel().rows.length;
 
@@ -579,8 +634,30 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	const isLastPage = knowsTotal
 		? currentTo >= (total ?? 0)
 		: lastCount < pageSize;
+	const pageCount = knowsTotal
+		? Math.max(1, Math.ceil((total ?? 0) / pageSize))
+		: undefined;
+	const rangeLabel = knowsTotal
+		? t(
+				"resultcountOfTotalcountRows",
+				"{{resultCount}} of {{totalCount}} rows",
+				{
+					resultCount: `${currentFrom.toLocaleString()}–${currentTo.toLocaleString()}`,
+					totalCount: (total ?? 0).toLocaleString(),
+				},
+			)
+		: total === 0
+			? t("countRows", {
+					count: 0,
+					defaultValue_one: "{{count}} row",
+					defaultValue_other: "{{count}} rows",
+				})
+			: null;
 
 	const isFullscreen = allowFullscreen && fullscreen;
+	const [fullscreenLayer, setFullscreenLayer] = useState<HTMLDivElement | null>(
+		null,
+	);
 
 	const containerCls = cn(
 		"flex h-full w-full flex-col gap-3",
@@ -598,52 +675,72 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 		[appId, schema?.fields, onUpdateItem],
 	);
 
-	return (
+	const content = (
 		<LanceDBContext.Provider value={contextValue}>
-			<div className={containerCls}>
-				<div className="flex items-center gap-2 flex-shrink-0">
-					<Database className="h-5 w-5" />
-					<div className="text-sm text-muted-foreground">{tableName}</div>
-					<Separator orientation="vertical" className="mx-1" />
-					<div className="ml-auto flex items-center gap-2">
-						<DensityToggle value={density} onChange={setDensity} />
-						{allowFullscreen && (
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => setFullscreen((v) => !v)}
-								title={
-									isFullscreen
-										? t("exitFullscreen", "Exit fullscreen")
-										: t("fullscreen", "Fullscreen")
-								}
-							>
-								{isFullscreen ? (
-									<>
-										<Minimize2 className="h-4 w-4 mr-2" /> {t("exit", "Exit")}
-									</>
-								) : (
-									<>
-										<Maximize2 className="h-4 w-4 mr-2" />{" "}
-										{t("fullscreen", "Fullscreen")}
-									</>
-								)}
-							</Button>
-						)}
-						<SchemaDialog
+			<div
+				ref={isFullscreen ? setFullscreenLayer : undefined}
+				className={containerCls}
+			>
+				<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+					<div className="flex min-w-0 items-center gap-1.5">
+						{leading}
+						<LanceTableHeading
+							name={tableName}
+							rowCount={total}
+							columnCount={schema?.fields.length}
+						/>
+					</div>
+					{meta && (
+						<div className="flex min-w-0 items-center gap-3">
+							<span aria-hidden className="h-5 w-px shrink-0 bg-border" />
+							{meta}
+						</div>
+					)}
+					<div className="ml-auto flex items-center gap-1.5">
+						{children}
+						<TableSchemaDialog
 							schema={schema}
 							tableName={tableName}
+							rowCount={total}
 							onDropColumns={onDropColumns}
 							onAddColumn={onAddColumn}
 							onAlterColumn={onAlterColumn}
+							onSetPrimaryKey={onSetPrimaryKey}
 							onBuildIndex={onBuildIndex}
 							onGetIndices={onGetIndices}
 							onDropIndex={onDropIndex}
 						/>
-						<DatabaseActionsDropdown
-							onOptimize={onOptimize}
-							onRefresh={onRefresh}
+						<TableActionsMenu onOptimize={onOptimize}>
+							{menuItems}
+						</TableActionsMenu>
+					</div>
+				</div>
+
+				<div className="flex shrink-0 flex-wrap items-center gap-2">
+					<RowFilterInput
+						value={globalQuery}
+						onValueChange={setGlobalQuery}
+						onSubmit={() => applyQuery(globalQuery)}
+						onClear={() => {
+							setGlobalQuery("");
+							applyQuery("");
+						}}
+						placeholder={
+							onSearch
+								? t("search", "Search…")
+								: t("filterRowsOnThisPage", "Filter rows on this page…")
+						}
+					/>
+					{selectedCount > 0 && (
+						<SelectionActions
+							count={selectedCount}
+							onCopyCsv={copySelectedAsCSV}
+							onCopyJson={copySelectedAsJSON}
+							onClear={() => table.resetRowSelection()}
 						/>
+					)}
+					<div className="ml-auto flex items-center gap-0.5">
+						<DensityToggle value={density} onChange={setDensity} />
 						<ColumnVisibilityDropdown
 							columns={table.getAllLeafColumns().map((c: any) => ({
 								id: c.id,
@@ -651,26 +748,31 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 							}))}
 							visibility={columnVisibility}
 							onChange={setColumnVisibility}
+							onResetLayout={resetLayout}
 						/>
-						{children}
+						{onRefresh && (
+							<ToolbarIconButton
+								label={t("refresh", "Refresh")}
+								onClick={onRefresh}
+								disabled={refreshing}
+							>
+								<RefreshCw className={cn(refreshing && "animate-spin")} />
+							</ToolbarIconButton>
+						)}
+						{allowFullscreen && (
+							<ToolbarIconButton
+								label={
+									isFullscreen
+										? t("exitFullscreen", "Exit fullscreen")
+										: t("fullscreen", "Fullscreen")
+								}
+								onClick={() => setFullscreen((v) => !v)}
+							>
+								{isFullscreen ? <Minimize2 /> : <Maximize2 />}
+							</ToolbarIconButton>
+						)}
 					</div>
 				</div>
-
-				<Toolbar
-					value={globalQuery}
-					onValueChange={setGlobalQuery}
-					onSearch={() => {
-						setAppliedQuery(globalQuery);
-						handlePageChange(1);
-						onSearch?.({ query: globalQuery, mode: initialMode });
-					}}
-					onReset={() => {
-						setGlobalQuery("");
-						setAppliedQuery("");
-						handlePageChange(1);
-						onSearch?.({ query: "", mode: initialMode });
-					}}
-				/>
 
 				<div className="flex flex-col flex-1 min-h-0 min-w-0 rounded-xl border bg-card">
 					<div className="flex-1 w-full overflow-auto min-h-0">
@@ -810,87 +912,78 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 						</DataTable>
 					</div>
 
-					<div className="flex items-center justify-between px-3 py-2 border-t bg-muted/20 flex-shrink-0">
-						<div className="text-xs text-muted-foreground">
-							{knowsTotal ? (
-								<>
-									{t("showing", "Showing")} <b>{currentFrom}</b>–
-									<b>{currentTo}</b> of <b>{(total ?? 0).toLocaleString()}</b>
-								</>
-							) : (
-								<>—</>
-							)}
-							{selectedCount > 0 && (
-								<Badge variant="secondary" className="ml-2">
-									{t("selectedcountSelected", "{{selectedCount}} selected", {
-										selectedCount,
-									})}
-								</Badge>
+					<div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t px-3 py-2 text-xs text-muted-foreground">
+						<div className="flex items-center gap-2 tabular-nums">
+							{rangeLabel && <span>{rangeLabel}</span>}
+							{appliedQuery && (
+								<span className="text-foreground">
+									{t(
+										"lengthVisibleOnThisPage",
+										"{{length}} visible on this page",
+										{ length: table.getRowModel().rows.length },
+									)}
+								</span>
 							)}
 						</div>
-						<div className="flex items-center gap-2">
-							<Select
-								value={String(pageSize)}
-								onValueChange={(v) => handlePageSizeChange(Number(v))}
-							>
-								<SelectTrigger className="h-8 w-[120px]">
-									<SelectValue placeholder={t("pageSize", "Page size")} />
-								</SelectTrigger>
-								<SelectContent>
-									{pageSizeOptions.map((n) => (
-										<SelectItem key={n} value={String(n)}>
-											{t("nPage", "{{n}} / page", { n })}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => handlePageChange(Math.max(1, page - 1))}
-								disabled={page === 1}
-							>
-								{t("prev", "Prev")}
-							</Button>
-							<div className="text-sm w-14 text-center">{page}</div>
-							<Button
-								variant="outline"
-								size="sm"
-								onClick={() => handlePageChange(page + 1)}
-								disabled={isLastPage}
-							>
-								{t("next", "Next")}
-							</Button>
-
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild>
-									<Button variant="outline" size="sm">
-										<MoreHorizontal className="h-4 w-4" />
-									</Button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent align="end">
-									<DropdownMenuItem onClick={copySelectedAsCSV}>
-										<Download className="h-4 w-4 mr-2" />{" "}
-										{t("copySelectedAsCsv", "Copy selected as CSV")}
-									</DropdownMenuItem>
-									<DropdownMenuItem onClick={copySelectedAsJSON}>
-										<ClipboardList className="h-4 w-4 mr-2" />{" "}
-										{t("copySelectedAsJson", "Copy selected as JSON")}
-									</DropdownMenuItem>
-									<DropdownMenuSeparator />
-									<DropdownMenuItem
-										onClick={() => {
-											setColumnVisibility({});
-											setColumnOrder([]);
-											setSorting([]);
-											setColumnSizing({});
-										}}
+						<div className="flex items-center gap-4">
+							<div className="flex items-center gap-2">
+								<span className="hidden sm:inline">
+									{t("rowsPerPage", "Rows per page")}
+								</span>
+								<Select
+									value={String(pageSize)}
+									onValueChange={(v) => handlePageSizeChange(Number(v))}
+								>
+									<SelectTrigger
+										size="sm"
+										className="h-7 gap-1 px-2 text-xs"
+										aria-label={t("rowsPerPage", "Rows per page")}
 									>
-										<RefreshCcw className="h-4 w-4 mr-2" />{" "}
-										{t("resetLayout", "Reset layout")}
-									</DropdownMenuItem>
-								</DropdownMenuContent>
-							</DropdownMenu>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent align="end">
+										{pageSizeOptions.map((n) => (
+											<SelectItem key={n} value={String(n)}>
+												{n}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							</div>
+							<span className="tabular-nums">
+								{pageCount
+									? t("pageOfTotal", "Page {{page}} of {{total}}", {
+											page,
+											total: pageCount,
+										})
+									: t("pagePagenumber", "Page {{pageNumber}}", {
+											pageNumber: page,
+										})}
+							</span>
+							<div className="flex items-center gap-1">
+								<Button
+									variant="outline"
+									size="icon"
+									className="size-7"
+									aria-label={t("previous", "Previous")}
+									title={t("previous", "Previous")}
+									onClick={() => handlePageChange(Math.max(1, page - 1))}
+									disabled={page === 1}
+								>
+									<ChevronLeft />
+								</Button>
+								<Button
+									variant="outline"
+									size="icon"
+									className="size-7"
+									aria-label={t("next", "Next")}
+									title={t("next", "Next")}
+									onClick={() => handlePageChange(page + 1)}
+									disabled={isLastPage}
+								>
+									<ChevronRight />
+								</Button>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -902,6 +995,17 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 				)}
 			</div>
 		</LanceDBContext.Provider>
+	);
+
+	if (!isFullscreen) return content;
+	// Any ancestor with a transform or backdrop filter turns `fixed` into a box
+	// local to that ancestor, so the overlay has to leave the host's tree. Its
+	// menus and dialogs then portal into the overlay to stay above it.
+	return createPortal(
+		<PortalContainerProvider container={fullscreenLayer}>
+			{content}
+		</PortalContainerProvider>,
+		document.body,
 	);
 };
 
@@ -948,12 +1052,12 @@ const SortableHeaderCell: React.FC<{
 				{isDraggable && (
 					<span
 						title={t("dragToReorder", "Drag to reorder")}
-						className="inline-flex h-4 w-4 items-center justify-center text-muted-foreground cursor-grab active:cursor-grabbing"
+						className="inline-flex h-4 w-4 items-center justify-center text-muted-foreground cursor-grab opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
 						{...attributes}
 						{...listeners}
 						onClick={(e) => e.stopPropagation()}
 					>
-						<GripVertical className="h-3 w-3 opacity-70" />
+						<GripVertical className="h-3 w-3" />
 					</span>
 				)}
 				{header.isPlaceholder ? null : (
@@ -965,8 +1069,12 @@ const SortableHeaderCell: React.FC<{
 						onClick={header.column.getToggleSortingHandler()}
 					>
 						{flexRender(header.column.columnDef.header, header.getContext())}
-						{{ asc: "↑", desc: "↓" }[header.column.getIsSorted() as string] ??
-							null}
+						{header.column.getIsSorted() === "asc" && (
+							<ArrowUp className="size-3 text-muted-foreground" />
+						)}
+						{header.column.getIsSorted() === "desc" && (
+							<ArrowDown className="size-3 text-muted-foreground" />
+						)}
 					</div>
 				)}
 			</div>
@@ -978,7 +1086,8 @@ const ColumnVisibilityDropdown: React.FC<{
 	columns: { id: string; canHide: boolean }[];
 	visibility: VisibilityState;
 	onChange: React.Dispatch<React.SetStateAction<VisibilityState>>;
-}> = ({ columns, visibility, onChange }) => {
+	onResetLayout: () => void;
+}> = ({ columns, visibility, onChange, onResetLayout }) => {
 	const { t } = useTranslation("common");
 	const [query, setQuery] = useState("");
 
@@ -994,14 +1103,15 @@ const ColumnVisibilityDropdown: React.FC<{
 		[onChange],
 	);
 
+	const hideable = useMemo(() => columns.filter((c) => c.canHide), [columns]);
+	const hiddenCount = hideable.filter((c) => !isVisible(c.id)).length;
+
 	const filtered = useMemo(
 		() =>
-			columns
-				.filter((c) => c.canHide)
-				.filter(
-					(c) => !query || c.id.toLowerCase().includes(query.toLowerCase()),
-				),
-		[columns, query],
+			hideable.filter(
+				(c) => !query || c.id.toLowerCase().includes(query.toLowerCase()),
+			),
+		[hideable, query],
 	);
 
 	const showAll = useCallback(() => {
@@ -1027,40 +1137,52 @@ const ColumnVisibilityDropdown: React.FC<{
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="outline" size="sm">
-					<Columns3 className="h-4 w-4 mr-2" /> {t("columns", "Columns")}
+				<Button variant="ghost" size="sm" className="text-muted-foreground">
+					<Columns3 /> {t("columns", "Columns")}
+					{hiddenCount > 0 && (
+						<Badge
+							variant="secondary"
+							className="h-5 rounded-sm px-1.5 text-[10px] tabular-nums"
+						>
+							{t("countHidden", {
+								count: hiddenCount,
+								defaultValue_one: "{{count}} hidden",
+								defaultValue_other: "{{count}} hidden",
+							})}
+						</Badge>
+					)}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuLabel className="flex items-center justify-between">
 					<span>{t("toggleColumns", "Toggle columns")}</span>
-					<SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+					<span className="text-xs font-normal text-muted-foreground tabular-nums">
+						{`${hideable.length - hiddenCount}/${hideable.length}`}
+					</span>
 				</DropdownMenuLabel>
 				<div className="px-2 pb-2">
 					<Input
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
+						onKeyDown={(e) => e.stopPropagation()}
 						placeholder={t("filterColumns", "Filter columns…")}
 						className="h-8"
 					/>
 				</div>
-				<div className="px-2 pb-2 flex items-center justify-between gap-2">
-					<div className="flex flex-row items-center gap-2">
-						<Button size="sm" variant="outline" onClick={showAll}>
-							{t("all", "All")}
-						</Button>
-						<Button size="sm" variant="outline" onClick={hideAll}>
-							{t("none", "None")}
-						</Button>
-					</div>
-					<span className="text-xs text-muted-foreground">{`${filtered.length}/${columns.filter((c) => c.canHide).length}`}</span>
+				<div className="flex items-center gap-2 px-2 pb-2">
+					<Button size="sm" variant="outline" className="h-7" onClick={showAll}>
+						{t("all", "All")}
+					</Button>
+					<Button size="sm" variant="outline" className="h-7" onClick={hideAll}>
+						{t("none", "None")}
+					</Button>
 				</div>
 				<DropdownMenuSeparator />
 				<div className="max-h-64 overflow-auto pr-1">
 					{filtered.map((c) => (
 						<DropdownMenuCheckboxItem
 							key={c.id}
-							className="capitalize"
+							className="font-mono text-xs"
 							checked={isVisible(c.id)}
 							onCheckedChange={(v) => setVisible(c.id, !!v)}
 							onSelect={(e) => e.preventDefault()}
@@ -1074,43 +1196,58 @@ const ColumnVisibilityDropdown: React.FC<{
 						</div>
 					)}
 				</div>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={onResetLayout}>
+					<RefreshCcw /> {t("resetLayout", "Reset layout")}
+				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
 };
 
+type Density = "compact" | "comfortable" | "spacious";
+
+const DENSITY_ICONS: Record<Density, React.ComponentType> = {
+	compact: Rows4,
+	comfortable: Rows3,
+	spacious: Rows2,
+};
+
 const DensityToggle: React.FC<{
-	value: "compact" | "comfortable" | "spacious";
-	onChange: (v: "compact" | "comfortable" | "spacious") => void;
+	value: Density;
+	onChange: (v: Density) => void;
 }> = ({ value, onChange }) => {
 	const { t } = useTranslation("common");
-	const label =
-		value === "compact"
-			? "Compact"
-			: value === "spacious"
-				? "Spacious"
-				: "Comfort";
+	const Icon = DENSITY_ICONS[value];
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button
-					variant="outline"
-					size="sm"
+					variant="ghost"
+					size="icon"
+					className="size-8 text-muted-foreground"
 					title={t("rowDensity", "Row density")}
+					aria-label={t("rowDensity", "Row density")}
 				>
-					<SlidersHorizontal className="h-4 w-4 mr-2" /> {label}
+					<Icon />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-40">
-				<DropdownMenuItem onClick={() => onChange("compact")}>
-					{t("compact", "Compact")}
-				</DropdownMenuItem>
-				<DropdownMenuItem onClick={() => onChange("comfortable")}>
-					{t("comfortable", "Comfortable")}
-				</DropdownMenuItem>
-				<DropdownMenuItem onClick={() => onChange("spacious")}>
-					{t("spacious", "Spacious")}
-				</DropdownMenuItem>
+			<DropdownMenuContent align="end" className="w-44">
+				<DropdownMenuLabel>{t("rowDensity", "Row density")}</DropdownMenuLabel>
+				<DropdownMenuRadioGroup
+					value={value}
+					onValueChange={(next) => onChange(next as Density)}
+				>
+					<DropdownMenuRadioItem value="compact">
+						{t("compact", "Compact")}
+					</DropdownMenuRadioItem>
+					<DropdownMenuRadioItem value="comfortable">
+						{t("comfortable", "Comfortable")}
+					</DropdownMenuRadioItem>
+					<DropdownMenuRadioItem value="spacious">
+						{t("spacious", "Spacious")}
+					</DropdownMenuRadioItem>
+				</DropdownMenuRadioGroup>
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
@@ -1190,13 +1327,35 @@ const UserCell: React.FC<{
 	/>
 );
 
+const KeyColumnHeader: React.FC<{ name: string }> = ({ name }) => {
+	const { t } = useTranslation("common");
+	const hint = t(
+		"tableKeyHint",
+		"Key column: Upserts on this column can't create duplicate rows.",
+	);
+	return (
+		<span className="inline-flex items-center gap-1">
+			{name}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex shrink-0 text-primary">
+						<KeyRound className="size-3" role="img" aria-label={hint} />
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{hint}</TooltipContent>
+			</Tooltip>
+		</span>
+	);
+};
+
 const buildColumnForField = (
 	f: LanceField,
+	isKey = false,
 ): ColumnDef<Record<string, any>> => ({
 	id: f.name,
 	accessorFn: (row: Record<string, any>) => row[f.name],
-	header: f.name,
-	enableSorting: true,
+	header: isKey ? () => <KeyColumnHeader name={f.name} /> : f.name,
+	enableSorting: f.kind !== "binary",
 	enableColumnFilter: true,
 	cell: ({ getValue, row }) => (
 		<Cell value={getValue()} field={f} rowData={row.original} />
@@ -1219,9 +1378,11 @@ const Cell: React.FC<{
 	);
 
 	const openDialog = useCallback(() => {
-		setEditValue(safeStringify(value, 2));
+		// Bytes are not edited as text, and a pretty-printed octet array runs to
+		// one line per byte.
+		setEditValue(field.kind === "binary" ? "" : safeStringify(value, 2));
 		setDialogOpen(true);
-	}, [value]);
+	}, [field.kind, value]);
 
 	const renderCellPreviewButton = () => {
 		if (value == null) {
@@ -1283,6 +1444,8 @@ const Cell: React.FC<{
 				return (
 					<DateCell value={value} unit={field.temporal} onClick={openDialog} />
 				);
+			case "binary":
+				return <BinaryCellPreview value={value} onClick={openDialog} />;
 			case "vector": {
 				const arr = ensureNumericArray(value);
 				const dims = field.dims ?? arr.length;
@@ -1361,13 +1524,6 @@ const Cell: React.FC<{
 	);
 };
 
-interface TemporalCell {
-	/** The unit the stored number counts in, and the one an edit writes back. */
-	unit: LanceTemporalUnit;
-	/** The storage shape of the column, which an edit has to keep. */
-	wire: "number" | "string";
-}
-
 /**
  * Whether a cell holds an instant, and how it is stored. Declared temporal
  * columns say so in the schema; the rest are believed only when the column name
@@ -1398,113 +1554,6 @@ export const resolveTemporalCell = (
 	}
 
 	return null;
-};
-
-/**
- * Edits an instant as a wall-clock date and time instead of as the epoch integer
- * on disk, and writes it back in the column's own shape and unit.
- */
-const TemporalValueEditor: React.FC<{
-	value: string;
-	temporal: TemporalCell;
-	nullable?: boolean;
-	onChange: (value: string) => void;
-}> = ({ value, temporal, nullable, onChange }) => {
-	const { t } = useTranslation("common");
-	const timeZone = useMemo(() => localTimeZoneLabel(), []);
-	const dayPrecision = temporal.unit === "day";
-
-	const date = useMemo(() => {
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(value);
-		} catch {
-			parsed = value;
-		}
-		return parseTemporalValue(parsed, temporal.unit);
-	}, [value, temporal.unit]);
-
-	const emit = useCallback(
-		(next: Date | null) => {
-			if (!next) {
-				onChange("null");
-				return;
-			}
-			onChange(
-				JSON.stringify(
-					temporal.wire === "string"
-						? next.toISOString()
-						: toEpochNumber(next, temporal.unit),
-				),
-			);
-		},
-		[onChange, temporal.unit, temporal.wire],
-	);
-
-	return (
-		<div className="space-y-3">
-			<div className="flex flex-wrap items-center gap-2">
-				<Input
-					type={dayPrecision ? "date" : "datetime-local"}
-					step={dayPrecision ? undefined : 1}
-					className="w-auto"
-					value={
-						date
-							? dayPrecision
-								? toDateInputValue(date)
-								: toDateTimeInputValue(date)
-							: ""
-					}
-					onChange={(e) => {
-						const next = dayPrecision
-							? fromDateInputValue(e.target.value)
-							: fromDateTimeInputValue(e.target.value);
-						if (next || !e.target.value) emit(next);
-					}}
-				/>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => {
-						const now = new Date();
-						// A day column stores the calendar day the viewer is in, not the
-						// instant, which would round to tomorrow past midday in the east.
-						emit(
-							dayPrecision
-								? (fromDateInputValue(toDateTimeInputValue(now).slice(0, 10)) ??
-										now)
-								: now,
-						);
-					}}
-				>
-					<Clock className="h-3.5 w-3.5 mr-2" /> {t("now", "Now")}
-				</Button>
-				{nullable !== false && date && (
-					<Button variant="ghost" size="sm" onClick={() => emit(null)}>
-						<X className="h-3.5 w-3.5 mr-2" /> {t("clear", "Clear")}
-					</Button>
-				)}
-			</div>
-			<div className="rounded-md border bg-muted/40 px-3 py-2 space-y-1">
-				{date ? (
-					<>
-						<p className="text-sm">
-							{dayPrecision
-								? formatCalendarDate(date, "full")
-								: formatAbsoluteDateTime(date)}
-						</p>
-						<p className="text-xs text-muted-foreground">
-							{formatRelativeTime(date, "long")}
-							{!dayPrecision && timeZone ? ` · ${timeZone}` : ""}
-						</p>
-					</>
-				) : (
-					<p className="text-sm text-muted-foreground">NULL</p>
-				)}
-				<code className="block text-[11px] text-muted-foreground">{value}</code>
-			</div>
-		</div>
-	);
 };
 
 const CellViewDialog: React.FC<{
@@ -1557,7 +1606,7 @@ const CellViewDialog: React.FC<{
 	}, [open]);
 
 	const handleSave = useCallback(async () => {
-		if (!onUpdateItem || field.kind === "geometry") return;
+		if (!onUpdateItem || !isEditableKind(field.kind)) return;
 
 		setSaving(true);
 		try {
@@ -1590,6 +1639,7 @@ const CellViewDialog: React.FC<{
 		onUpdateItem,
 		rowData,
 		fields,
+		field.kind,
 		field.name,
 		t,
 	]);
@@ -1625,6 +1675,8 @@ const CellViewDialog: React.FC<{
 				);
 			case "number":
 				return <code className="text-sm">{String(value)}</code>;
+			case "binary":
+				return <BinaryValueDetail value={value} />;
 			case "vector": {
 				const arr = ensureNumericArray(value);
 				const dims = field.dims ?? arr.length;
@@ -1685,7 +1737,7 @@ const CellViewDialog: React.FC<{
 								</Label>
 								<Switch
 									id="edit-switch"
-									disabled={field.kind === "geometry"}
+									disabled={!isEditableKind(field.kind)}
 									checked={isEditing}
 									onCheckedChange={setIsEditing}
 								/>
@@ -1789,488 +1841,218 @@ const Sparkline: React.FC<{ data: number[] }> = ({ data }) => {
 	return <canvas ref={ref} aria-label="sparkline" />;
 };
 
-const Toolbar: React.FC<{
+export const LanceTableHeading: React.FC<{
+	name: string;
+	rowCount?: number;
+	columnCount?: number;
+}> = ({ name, rowCount, columnCount }) => {
+	const { t } = useTranslation("common");
+	const facts = [
+		typeof rowCount === "number"
+			? t("countRows", {
+					count: rowCount,
+					defaultValue_one: "{{count}} row",
+					defaultValue_other: "{{count}} rows",
+				})
+			: null,
+		columnCount
+			? t("countColumns", {
+					count: columnCount,
+					defaultValue_one: "{{count}} column",
+					defaultValue_other: "{{count}} columns",
+				})
+			: null,
+	]
+		.filter(Boolean)
+		.join(" · ");
+	return (
+		<div className="flex min-w-0 items-center gap-2.5">
+			<div className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-muted/40">
+				<Database className="size-4 text-muted-foreground" />
+			</div>
+			<div className="min-w-0">
+				<h2 className="truncate text-sm font-semibold leading-5">{name}</h2>
+				{facts && (
+					<p className="truncate text-xs leading-4 text-muted-foreground">
+						{facts}
+					</p>
+				)}
+			</div>
+		</div>
+	);
+};
+
+const RowFilterInput: React.FC<{
 	value: string;
+	placeholder: string;
 	onValueChange: (v: string) => void;
-	onSearch: () => void;
-	onReset: () => void;
-}> = ({ value, onValueChange, onSearch, onReset }) => (
-	<div className="flex flex-wrap items-center gap-2 flex-shrink-0">
-		<div className="relative w-full sm:w-[380px]">
-			<Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+	onSubmit: () => void;
+	onClear: () => void;
+}> = ({ value, placeholder, onValueChange, onSubmit, onClear }) => {
+	const { t } = useTranslation("common");
+	return (
+		<div className="relative w-full sm:w-80">
+			<Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 			<Input
-				className="pl-8"
-				placeholder={i18next.t("search", "Search…")}
+				className="h-8 pl-8 pr-8"
+				placeholder={placeholder}
+				aria-label={placeholder}
 				value={value}
 				onChange={(e) => onValueChange(e.target.value)}
 				onKeyDown={(e) => {
-					if (e.key === "Enter") onSearch();
+					if (e.key === "Enter") onSubmit();
+					if (e.key === "Escape" && value) {
+						e.stopPropagation();
+						onClear();
+					}
 				}}
 			/>
+			{value && (
+				<Button
+					variant="ghost"
+					size="icon"
+					className="absolute right-1 top-1/2 size-6 -translate-y-1/2 text-muted-foreground"
+					aria-label={t("clearSearch", "Clear search")}
+					title={t("clearSearch", "Clear search")}
+					onClick={onClear}
+				>
+					<X className="size-3.5" />
+				</Button>
+			)}
 		</div>
-		<Button variant="outline" size="sm" onClick={onSearch}>
-			{i18next.t("apply", "Apply")}
-		</Button>
-		<Button variant="ghost" size="sm" onClick={onReset}>
-			{i18next.t("reset", "Reset")}
-		</Button>
-	</div>
+	);
+};
+
+const SelectionActions: React.FC<{
+	count: number;
+	onCopyCsv: () => void;
+	onCopyJson: () => void;
+	onClear: () => void;
+}> = ({ count, onCopyCsv, onCopyJson, onClear }) => {
+	const { t } = useTranslation("common");
+	return (
+		<div className="flex h-8 items-center gap-0.5 rounded-md border bg-muted/40 pl-2.5 pr-0.5 text-xs">
+			<span className="mr-1 font-medium tabular-nums">
+				{t("selectedcountSelected", "{{selectedCount}} selected", {
+					selectedCount: count,
+				})}
+			</span>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
+						<Copy /> {t("copy", "Copy")}
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="start">
+					<DropdownMenuItem onSelect={onCopyCsv}>
+						<Download /> {t("copySelectedAsCsv", "Copy selected as CSV")}
+					</DropdownMenuItem>
+					<DropdownMenuItem onSelect={onCopyJson}>
+						<ClipboardList /> {t("copySelectedAsJson", "Copy selected as JSON")}
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<Button
+				variant="ghost"
+				size="icon"
+				className="size-7"
+				aria-label={t("clearSelection", "Clear selection")}
+				title={t("clearSelection", "Clear selection")}
+				onClick={onClear}
+			>
+				<X />
+			</Button>
+		</div>
+	);
+};
+
+const ToolbarIconButton: React.FC<{
+	label: string;
+	onClick: () => void;
+	disabled?: boolean;
+	children: React.ReactNode;
+}> = ({ label, onClick, disabled, children }) => (
+	<Button
+		variant="ghost"
+		size="icon"
+		className="size-8 text-muted-foreground"
+		title={label}
+		aria-label={label}
+		onClick={onClick}
+		disabled={disabled}
+	>
+		{children}
+	</Button>
 );
 
-const DatabaseActionsDropdown: React.FC<{
+const TableActionsMenu: React.FC<{
 	onOptimize?: (keepVersions?: boolean) => Promise<void>;
-	onRefresh?: () => void;
-}> = ({ onOptimize, onRefresh }) => {
+	children?: React.ReactNode;
+}> = ({ onOptimize, children }) => {
 	const { t } = useTranslation("common");
 	const [optimizing, setOptimizing] = useState(false);
+
+	if (!onOptimize && !children) return null;
 
 	const handleOptimize = async (keepVersions: boolean) => {
 		if (!onOptimize) return;
 		setOptimizing(true);
 		try {
 			await onOptimize(keepVersions);
+		} catch {
+			// The host reports optimize failures.
 		} finally {
 			setOptimizing(false);
 		}
 	};
 
 	return (
-		<DropdownMenu>
+		// Items open dialogs; a modal menu closing under a modal dialog can leave
+		// the body without pointer events.
+		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
 				<Button
 					variant="outline"
-					size="sm"
-					title={t("databaseActions", "Database Actions")}
+					size="icon"
+					className="size-8"
+					title={t("moreActions", "More actions")}
+					aria-label={t("moreActions", "More actions")}
 				>
-					<Wrench className="h-4 w-4 mr-2" /> {t("actions", "Actions")}
+					{optimizing ? (
+						<Loader2 className="animate-spin" />
+					) : (
+						<MoreHorizontal />
+					)}
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-56">
-				<DropdownMenuLabel>
-					{t("databaseOperations", "Database Operations")}
-				</DropdownMenuLabel>
-				<DropdownMenuSeparator />
-				{onRefresh && (
-					<DropdownMenuItem onClick={onRefresh}>
-						<RefreshCcw className="h-4 w-4 mr-2" />{" "}
-						{t("refreshData", "Refresh Data")}
-					</DropdownMenuItem>
-				)}
+			<DropdownMenuContent align="end" className="w-72">
 				{onOptimize && (
 					<>
 						<DropdownMenuItem
-							onClick={() => handleOptimize(true)}
 							disabled={optimizing}
+							onSelect={() => void handleOptimize(true)}
 						>
-							<Zap className="h-4 w-4 mr-2" />
-							{optimizing
-								? "Optimizing..."
-								: t("optimizeKeepVersions", "Optimize and Keep Versions")}
+							<Zap /> {t("optimizeKeepVersions", "Optimize and Keep Versions")}
 						</DropdownMenuItem>
 						<DropdownMenuItem
-							onClick={() => handleOptimize(false)}
 							disabled={optimizing}
+							onSelect={() => void handleOptimize(false)}
 						>
-							<Zap className="h-4 w-4 mr-2" />
-							{optimizing
-								? "Optimizing..."
-								: t(
-										"optimizePruneOldVersions",
-										"Optimize and Prune Old Versions",
-									)}
+							<Zap />{" "}
+							{t("optimizePruneOldVersions", "Optimize and Prune Old Versions")}
 						</DropdownMenuItem>
 					</>
 				)}
+				{onOptimize && children && <DropdownMenuSeparator />}
+				{children}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
 };
 
-const SchemaDialog: React.FC<{
-	schema: LanceSchema | null;
-	tableName?: string;
-	onDropColumns?: (columns: string[]) => Promise<void>;
-	onAddColumn?: (name: string, sqlExpression: string) => Promise<void>;
-	onAlterColumn?: (column: string, nullable: boolean) => Promise<void>;
-	onBuildIndex?: (column: string, indexType: string) => Promise<void>;
-	onGetIndices?: () => Promise<IIndexConfig[]>;
-	onDropIndex?: (indexName: string) => Promise<void>;
-}> = ({
-	schema,
-	tableName,
-	onDropColumns,
-	onAddColumn,
-	onAlterColumn,
-	onBuildIndex,
-	onGetIndices,
-	onDropIndex,
-}) => {
-	const { t } = useTranslation("common");
-	const [open, setOpen] = useState(false);
-	const [activeTab, setActiveTab] = useState<"schema" | "indices" | "add">(
-		"schema",
-	);
-	const [indices, setIndices] = useState<IIndexConfig[]>([]);
-	const [loadingIndices, setLoadingIndices] = useState(false);
-	const [newColumnName, setNewColumnName] = useState("");
-	const [newColumnType, setNewColumnType] = useState("string");
-	const [newColumnDefault, setNewColumnDefault] = useState("");
-	const [indexColumn, setIndexColumn] = useState("");
-	const [indexType, setIndexType] = useState("auto");
-	const [processing, setProcessing] = useState(false);
-	const indexField = schema?.fields.find((field) => field.name === indexColumn);
-
-	const loadIndices = useCallback(async () => {
-		if (!onGetIndices) return;
-		setLoadingIndices(true);
-		try {
-			const result = await onGetIndices();
-			setIndices(result);
-		} finally {
-			setLoadingIndices(false);
-		}
-	}, [onGetIndices]);
-
-	useEffect(() => {
-		if (open && activeTab === "indices" && onGetIndices) {
-			loadIndices();
-		}
-	}, [open, activeTab, loadIndices, onGetIndices]);
-
-	const handleDropColumn = async (columnName: string) => {
-		if (!onDropColumns) return;
-		setProcessing(true);
-		try {
-			await onDropColumns([columnName]);
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const handleDropIndex = async (indexName: string) => {
-		if (!onDropIndex) return;
-		setProcessing(true);
-		try {
-			await onDropIndex(indexName);
-			await loadIndices();
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const handleAddColumn = async () => {
-		if (!onAddColumn || !newColumnName) return;
-		const expression = buildAddColumnExpression(
-			newColumnType,
-			newColumnDefault,
-		);
-		if (!expression) return;
-		setProcessing(true);
-		try {
-			await onAddColumn(newColumnName, expression);
-			setNewColumnName("");
-			setNewColumnDefault("");
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const handleBuildIndex = async () => {
-		if (!onBuildIndex || !indexColumn) return;
-		setProcessing(true);
-		try {
-			await onBuildIndex(indexColumn, indexType);
-			await loadIndices();
-			setIndexColumn("");
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const hasSchemaOps = onDropColumns || onAddColumn || onAlterColumn;
-	const hasIndexOps = onBuildIndex || onGetIndices;
-
-	return (
-		<>
-			<Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-				<Settings className="h-4 w-4 mr-2" /> {t("schema", "Schema")}
-			</Button>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="w-full max-w-lg max-h-[80vh] overflow-y-auto">
-					<DialogHeader>
-						<DialogTitle>
-							{t("tableTablename", "Table: {{tableName}}", { tableName })}
-						</DialogTitle>
-					</DialogHeader>
-
-					{(hasSchemaOps || hasIndexOps) && (
-						<div className="flex gap-2 border-b pb-2">
-							<Button
-								variant={activeTab === "schema" ? "default" : "ghost"}
-								size="sm"
-								onClick={() => setActiveTab("schema")}
-							>
-								{t("schema", "Schema")}
-							</Button>
-							{hasIndexOps && (
-								<Button
-									variant={activeTab === "indices" ? "default" : "ghost"}
-									size="sm"
-									onClick={() => setActiveTab("indices")}
-								>
-									{t("indices", "Indices")}
-								</Button>
-							)}
-							{hasSchemaOps && (
-								<Button
-									variant={activeTab === "add" ? "default" : "ghost"}
-									size="sm"
-									onClick={() => setActiveTab("add")}
-								>
-									{t("modify", "Modify")}
-								</Button>
-							)}
-						</div>
-					)}
-
-					{activeTab === "schema" && (
-						<>
-							{schema ? (
-								<ScrollArea className="max-h-[50vh]">
-									<div className="space-y-2 pr-2">
-										{schema.fields.map((f) => (
-											<div
-												key={f.name}
-												className="flex items-center justify-between gap-3 py-2 px-2 rounded-md hover:bg-muted/50"
-											>
-												<div className="flex-1">
-													<div className="font-medium text-sm">{f.name}</div>
-													<div className="text-xs text-muted-foreground">
-														{describeField(f)}
-													</div>
-												</div>
-												{f.kind === "vector" && (
-													<Badge variant="secondary">
-														{f.dims ?? "?"} dims
-													</Badge>
-												)}
-												{onDropColumns && (
-													<Button
-														variant="ghost"
-														size="sm"
-														className="h-7 px-2 text-destructive hover:text-destructive"
-														onClick={() => handleDropColumn(f.name)}
-														disabled={processing}
-													>
-														<Trash2 className="h-3 w-3" />
-													</Button>
-												)}
-											</div>
-										))}
-									</div>
-								</ScrollArea>
-							) : (
-								<div className="text-sm text-muted-foreground py-4">
-									{t("noSchemaLoadedYet", "No schema loaded yet.")}
-								</div>
-							)}
-						</>
-					)}
-
-					{activeTab === "indices" && (
-						<div className="space-y-4">
-							<div className="space-y-2">
-								<Label>{t("currentIndices", "Current Indices")}</Label>
-								{loadingIndices ? (
-									<div className="text-sm text-muted-foreground">
-										Loading...
-									</div>
-								) : indices.length > 0 ? (
-									<ScrollArea className="max-h-[30vh]">
-										<div className="space-y-2 pr-2">
-											{indices.map((idx) => (
-												<div
-													key={idx.name}
-													className="flex items-center justify-between gap-2 p-2 rounded-md bg-muted/50"
-												>
-													<div className="min-w-0 flex-1">
-														<div className="font-medium text-sm truncate">
-															{idx.name}
-														</div>
-														<div className="text-xs text-muted-foreground truncate">
-															{idx.index_type} on {idx.columns.join(", ")}
-														</div>
-													</div>
-													{onDropIndex && (
-														<Button
-															variant="ghost"
-															size="sm"
-															className="h-7 px-2 text-destructive hover:text-destructive flex-shrink-0"
-															onClick={() => handleDropIndex(idx.name)}
-															disabled={processing}
-														>
-															<Trash2 className="h-3 w-3" />
-														</Button>
-													)}
-												</div>
-											))}
-										</div>
-									</ScrollArea>
-								) : (
-									<div className="text-sm text-muted-foreground">
-										{t("noIndicesFound", "No indices found.")}
-									</div>
-								)}
-							</div>
-
-							{onBuildIndex && schema && (
-								<div className="space-y-3 border-t pt-4">
-									<Label>{t("createNewIndex", "Create New Index")}</Label>
-									<div className="flex flex-wrap gap-2">
-										<Select
-											value={indexColumn}
-											onValueChange={(column) => {
-												setIndexColumn(column);
-												setIndexType("auto");
-											}}
-										>
-											<SelectTrigger className="flex-1">
-												<SelectValue
-													placeholder={t("selectColumn", "Select column")}
-												/>
-											</SelectTrigger>
-											<SelectContent>
-												{schema.fields.map((f) => (
-													<SelectItem key={f.name} value={f.name}>
-														{f.name}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-										<IndexTypeSelect
-											value={indexType}
-											onChange={setIndexType}
-											className="w-52"
-											columnType={indexField?.indexKind ?? indexField?.kind}
-											disabled={
-												!indexColumn ||
-												processing ||
-												indexField?.indexKind === "unsupported-geometry"
-											}
-										/>
-										<Button
-											onClick={handleBuildIndex}
-											disabled={
-												!indexColumn ||
-												processing ||
-												indexField?.indexKind === "unsupported-geometry"
-											}
-										>
-											{processing ? "Building..." : "Build"}
-										</Button>
-										<IndexTypeHelp
-											value={indexType}
-											columnType={indexField?.indexKind}
-										/>
-									</div>
-								</div>
-							)}
-						</div>
-					)}
-
-					{activeTab === "add" && (
-						<div className="space-y-4 flex flex-col">
-							{onAddColumn && (
-								<div className="space-y-3 flex-shrink-0">
-									<Label>{t("addNewColumn", "Add New Column")}</Label>
-									<div className="grid gap-2 sm:grid-cols-[1fr_150px]">
-										<Input
-											placeholder={t("columnName", "Column name")}
-											value={newColumnName}
-											onChange={(e) => setNewColumnName(e.target.value)}
-										/>
-										<ColumnTypeSelect
-											value={newColumnType}
-											onChange={setNewColumnType}
-											groups={EDIT_COLUMN_TYPE_GROUPS}
-										/>
-									</div>
-									<Input
-										placeholder={t(
-											"defaultValueOptionalLeaveEmptyForNull",
-											"Default value (optional — leave empty for NULL)",
-										)}
-										value={newColumnDefault}
-										onChange={(e) => setNewColumnDefault(e.target.value)}
-									/>
-									<div className="text-xs text-muted-foreground">
-										{t(
-											"newColumnsAreAddedAsNullableLeaveTheDefaultEmptyToBackfillExistingRowsWithNullOrProvideATypedDefaultValue",
-											"New columns are added as nullable. Leave the default empty to backfill existing rows with NULL, or provide a typed default value.",
-										)}
-									</div>
-									<Button
-										onClick={handleAddColumn}
-										disabled={!newColumnName || processing}
-										className="w-full"
-									>
-										{processing ? "Adding..." : t("addColumn", "Add Column")}
-									</Button>
-								</div>
-							)}
-
-							{onAlterColumn && schema && (
-								<div className="space-y-3 border-t pt-4 flex-1 min-h-0 flex flex-col">
-									<Label className="flex-shrink-0">
-										{t("makeColumnNullable", "Make Column Nullable")}
-									</Label>
-									<div className="text-xs text-muted-foreground mb-2 flex-shrink-0">
-										{t(
-											"noteLancedbOnlySupportsMakingColumnsNullableNotTheReverse",
-											"Note: LanceDB only supports making columns nullable, not the reverse.",
-										)}
-									</div>
-									<ScrollArea className="flex-1 min-h-0">
-										<div className="space-y-1 pr-2">
-											{schema.fields.map((f) => (
-												<div
-													key={f.name}
-													className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted/50"
-												>
-													<div className="min-w-0 flex-1">
-														<span className="text-sm truncate block">
-															{f.name}
-														</span>
-														<span className="text-xs text-muted-foreground">
-															{f.nullable
-																? "Nullable"
-																: t("notNullable", "Not Nullable")}
-														</span>
-													</div>
-													{!f.nullable && (
-														<Button
-															variant="outline"
-															size="sm"
-															className="flex-shrink-0"
-															onClick={() => onAlterColumn(f.name, true)}
-															disabled={processing}
-														>
-															{t("makeNullable", "Make Nullable")}
-														</Button>
-													)}
-												</div>
-											))}
-										</div>
-									</ScrollArea>
-								</div>
-							)}
-						</div>
-					)}
-				</DialogContent>
-			</Dialog>
-		</>
-	);
-};
+/** Geometry and bytes have no textual form an edit could round-trip through. */
+const isEditableKind = (kind: LanceFieldKind) =>
+	kind !== "geometry" && kind !== "binary";
 
 const ROW_IDENTITY_KEYS = ["id", "_rowid", "_id"] as const;
 const ROW_IDENTITY_KINDS = new Set<LanceFieldKind>([
@@ -2359,13 +2141,27 @@ export const buildRowIdentityFilter = (
 	return conditions.length ? conditions.join(" AND ") : null;
 };
 
-export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => ({
-	table:
-		typeof arrow?.metadata?.["name"] === "string"
-			? String(arrow.metadata["name"])
-			: "table",
-	fields: (arrow?.fields ?? []).map(arrowFieldToLance),
-});
+export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => {
+	const fields = arrow?.fields ?? [];
+	const key = fields.find((f) => isKeyFieldMetadata(f?.metadata));
+	return {
+		table:
+			typeof arrow?.metadata?.name === "string"
+				? String(arrow.metadata.name)
+				: "table",
+		fields: fields.map(arrowTopLevelFieldToLance),
+		...(key ? { primaryKey: String(key.name ?? "") } : {}),
+	};
+};
+
+const arrowTopLevelFieldToLance = (
+	f: ArrowSchemaJSON["fields"][number],
+): LanceField => {
+	const field = arrowFieldToLance(f);
+	return field.kind !== "geometry" && canArrowFieldBeKey(f ?? {})
+		? { ...field, keyEligible: true }
+		: field;
+};
 
 const ARROW_TIME_UNITS: Record<string, LanceTemporalUnit> = {
 	Second: "second",
@@ -2399,12 +2195,11 @@ const arrowFieldToLance = (f: any): LanceField => {
 
 	if (typeof dt === "string") {
 		const temporal = arrowPrimitiveTemporalUnit(dt);
+		const kind = arrowPrimitiveToKind(dt);
 		return {
 			name,
-			kind: arrowPrimitiveToKind(dt),
-			...(["Binary", "LargeBinary", "BinaryView"].includes(dt)
-				? { indexKind: "binary" as const }
-				: {}),
+			kind,
+			...(kind === "binary" ? { indexKind: "binary" as const } : {}),
 			nullable,
 			...(temporal ? { temporal } : {}),
 		};
@@ -2412,7 +2207,7 @@ const arrowFieldToLance = (f: any): LanceField => {
 
 	if (dt && typeof dt === "object") {
 		if (dt.FixedSizeBinary !== undefined) {
-			return { name, kind: "string", indexKind: "binary", nullable };
+			return { name, kind: "binary", indexKind: "binary", nullable };
 		}
 		if (dt.Timestamp) {
 			const [unit] = dt.Timestamp as [string, string | null];
@@ -2485,10 +2280,11 @@ const arrowPrimitiveToKind = (dt: string): LanceFieldKind => {
 		case "Utf8":
 		case "Utf8View":
 		case "LargeUtf8":
+			return "string";
 		case "Binary":
 		case "BinaryView":
 		case "LargeBinary":
-			return "string";
+			return "binary";
 		case "Bool":
 		case "Boolean":
 			return "boolean";
@@ -2576,21 +2372,6 @@ const DateDetail: React.FC<{ value: any; unit?: LanceTemporalUnit }> = ({
 			</p>
 		</div>
 	);
-};
-
-const describeField = (f: LanceField): string => {
-	switch (f.kind) {
-		case "vector":
-			return `${f.kind}${f.dims ? `(${f.dims})` : ""}`;
-		case "array":
-			return `array<${
-				typeof f.items === "string"
-					? f.items
-					: ((f.items as any)?.kind ?? "unknown")
-			}>`;
-		default:
-			return f.kind;
-	}
 };
 
 // Infer schema from values when no Arrow schema is provided

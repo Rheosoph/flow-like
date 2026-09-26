@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import type { IChannelHandle } from "../../schema/channel";
 
 const invoke = mock(async (_command: string, _args?: unknown) => "delivered");
-mock.module("@tauri-apps/api/core", () => ({ invoke }));
+// bun keeps a module mock for every later file in the process, so the real module is
+// captured first and put back in afterAll.
+const actualTauriCore = { ...(await import("@tauri-apps/api/core")) };
+mock.module("@tauri-apps/api/core", () => ({ ...actualTauriCore, invoke }));
+afterAll(() => {
+	mock.module("@tauri-apps/api/core", () => actualTauriCore);
+});
 
 const { replyToChannel } = await import("../index");
 

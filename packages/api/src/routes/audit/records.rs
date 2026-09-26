@@ -320,6 +320,7 @@ mod tests {
             details_salt: Some(vec![3; 32]),
             mac: None,
             seal_id: seal_id.map(str::to_owned),
+            entry_kid: None,
         }
     }
 

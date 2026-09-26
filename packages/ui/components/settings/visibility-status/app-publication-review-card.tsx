@@ -8,6 +8,7 @@ import {
 	PauseCircle,
 	XCircle,
 } from "lucide-react";
+import { asArray } from "../../../lib/response-shape";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -112,7 +113,7 @@ function normalizeLabel(value?: string | null) {
 export function normalizeAppPublicationRequests(
 	requests: RawAppPublicationRequestItem[],
 ): AppPublicationRequestItem[] {
-	return requests.map((request) => ({
+	return asArray(requests).map((request) => ({
 		id: request.id,
 		targetVisibility: normalizeLabel(
 			request.targetVisibility ?? request.target_visibility,
@@ -121,7 +122,7 @@ export function normalizeAppPublicationRequests(
 		approverId: request.approverId ?? request.approver_id ?? undefined,
 		createdAt: request.createdAt ?? request.created_at ?? "",
 		updatedAt: request.updatedAt ?? request.updated_at ?? "",
-		logs: (request.logs ?? []).map((log) => ({
+		logs: asArray(request.logs).map((log) => ({
 			id: log.id,
 			authorId: log.authorId ?? log.author_id ?? undefined,
 			author: normalizeActor(log.author),

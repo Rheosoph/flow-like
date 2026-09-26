@@ -1,7 +1,9 @@
 //! Seal pending records. A chain is due once enough records are pending or its oldest
 //! is old enough; each seal checks its records' MACs, links to the chain's previous
 //! seal and claims its records in one transaction. Records that fail the check are
-//! quarantined and never sealed.
+//! quarantined and never sealed. A batch with a record whose MAC matches none of the
+//! entry keys this worker holds, and that names none of them, is a key this worker is
+//! missing rather than tampering: the chain is held until a tick holds the key.
 
 use chrono::{DateTime, FixedOffset, SubsecRound, TimeDelta, Utc};
 use flow_like::hub::AuditRetention;
@@ -38,11 +40,13 @@ struct PendingChain {
     oldest: DateTime<Utc>,
 }
 
-/// A batch in hash order, split into records that verify and ids that do not.
+/// A batch in hash order, split into records that verify, ids that do not, and the kids
+/// of records whose MAC no held key made and that name no held key.
 #[derive(Default)]
 struct Checked {
     intact: Vec<(audit_record::Model, Hash)>,
     invalid: Vec<String>,
+    unmatched: Vec<Option<String>>,
 }
 
 pub(super) async fn run(
@@ -71,11 +75,20 @@ pub(super) async fn run(
         .max_records_per_seal
         .clamp(1, MAX_RECORDS_PER_SEAL);
     let sealed_at = now.trunc_subsecs(3).fixed_offset();
+    let keys = accepted_entry_keys();
+    let held_kids = keys
+        .iter()
+        .map(|(kid, _)| kid.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut batches = 0;
+    let mut due = 0u64;
+    let mut held = 0u64;
     for chain in chains {
         if !is_due(chain.pending, chain.oldest, now, retention) {
             continue;
         }
+        due += 1;
         let mut previous = chain_head(&context.db, &chain.chain_id).await?;
         let mut remaining = chain.pending;
         loop {
@@ -95,7 +108,18 @@ pub(super) async fn run(
             }
             batches += 1;
 
-            let checked = check_batch(records, &accepted_entry_keys());
+            let checked = check_batch(records, &keys);
+            if let Some(kid) = checked.unmatched.first() {
+                tracing::error!(
+                    target: "audit",
+                    "audit entry key mismatch: chain {} carries kid {}, worker holds [{held_kids}]",
+                    chain.chain_id,
+                    kid.as_deref().unwrap_or("null")
+                );
+                report.held_chains += 1;
+                held += 1;
+                break;
+            }
             if !checked.invalid.is_empty() {
                 report.quarantined +=
                     quarantine(&context.db, &chain.chain_id, checked.invalid).await?;
@@ -131,6 +155,11 @@ pub(super) async fn run(
                 break;
             }
         }
+    }
+    if due > 0 && held == due {
+        return Err(flow_like_types::anyhow!(
+            "audit entry key mismatch held every due chain ({held}); worker holds [{held_kids}]"
+        ));
     }
     Ok(())
 }
@@ -202,23 +231,33 @@ async fn pending_records(
         .await
 }
 
-/// `keys` are the entry keys a MAC may have been made with (current, then previous).
-fn check_batch(mut records: Vec<audit_record::Model>, keys: &[Hash]) -> Checked {
+/// `keys` are the entry keys this worker holds, by kid, current first. A record naming
+/// one of them is checked against that key alone, so a failure is tampering. A record
+/// naming none (or none this worker holds) is checked against every key; a failure
+/// there means the worker lacks the key, not that the record changed.
+fn check_batch(mut records: Vec<audit_record::Model>, keys: &[(String, Hash)]) -> Checked {
     sort_records(&mut records);
     let mut checked = Checked::default();
     for record in records {
-        let hash = check_record(&record)
-            .ok()
-            .map(|(hash, _)| hash)
-            .filter(|hash| {
-                record
-                    .mac
-                    .as_deref()
-                    .is_some_and(|mac| keys.iter().any(|key| mac_matches(key, hash, mac)))
-            });
-        match hash {
-            Some(hash) => checked.intact.push((record, hash)),
-            None => checked.invalid.push(record.id),
+        let hash = check_record(&record).ok().map(|(hash, _)| hash);
+        let Some((hash, mac)) = hash.zip(record.mac.as_deref()) else {
+            checked.invalid.push(record.id);
+            continue;
+        };
+        let named = record
+            .entry_kid
+            .as_deref()
+            .and_then(|kid| keys.iter().find(|(held, _)| held == kid));
+        let matched = match named {
+            Some((_, key)) => mac_matches(key, &hash, mac),
+            None => keys.iter().any(|(_, key)| mac_matches(key, &hash, mac)),
+        };
+        if matched {
+            checked.intact.push((record, hash));
+        } else if named.is_some() {
+            checked.invalid.push(record.id);
+        } else {
+            checked.unmatched.push(record.entry_kid);
         }
     }
     checked
@@ -332,10 +371,16 @@ async fn commit_seal(
 mod tests {
     use super::*;
     use crate::audit::crypto::{seal_mac_matches, to_hash};
+    use crate::audit::keys::entry_kid;
     use crate::audit::record::{AuditRecordInput, WriteMode, build_record};
     use sea_orm::TryIntoModel;
 
     const KEY: Hash = [7; 32];
+    const OTHER: Hash = [8; 32];
+
+    fn held(keys: &[Hash]) -> Vec<(String, Hash)> {
+        keys.iter().map(|key| (entry_kid(key), *key)).collect()
+    }
 
     fn records(base: DateTime<Utc>) -> Vec<audit_record::Model> {
         (0..5i64)
@@ -402,22 +447,49 @@ mod tests {
             batch[4].id.clone(),
         ];
 
-        let checked = check_batch(batch, &[KEY]);
+        let checked = check_batch(batch, &held(&[KEY]));
         let mut quarantined = checked.invalid.clone();
         quarantined.sort();
         let mut expected = invalid.to_vec();
         expected.sort();
         assert_eq!(quarantined, expected);
         assert_eq!(checked.intact.len(), 2);
+        assert!(checked.unmatched.is_empty());
+    }
 
-        let wrong_key = check_batch(records(Utc::now()), &[[8; 32]]);
-        assert!(wrong_key.intact.is_empty());
-        assert_eq!(wrong_key.invalid.len(), 5);
+    #[test]
+    fn records_naming_no_held_key_are_held_not_quarantined() {
+        let unknown_kid = check_batch(records(Utc::now()), &held(&[OTHER]));
+        assert!(unknown_kid.intact.is_empty() && unknown_kid.invalid.is_empty());
+        assert_eq!(unknown_kid.unmatched, vec![Some(entry_kid(&KEY)); 5]);
+
+        let mut pre_kid = records(Utc::now());
+        for record in &mut pre_kid {
+            record.entry_kid = None;
+        }
+        let wrong_key = check_batch(pre_kid.clone(), &held(&[OTHER]));
+        assert!(wrong_key.intact.is_empty() && wrong_key.invalid.is_empty());
+        assert_eq!(wrong_key.unmatched, vec![None; 5]);
+
+        let any_key = check_batch(pre_kid, &held(&[OTHER, KEY]));
+        assert_eq!(any_key.intact.len(), 5);
+        assert!(any_key.invalid.is_empty() && any_key.unmatched.is_empty());
+    }
+
+    #[test]
+    fn records_naming_a_held_key_are_checked_against_that_key_only() {
+        let mut batch = records(Utc::now());
+        for record in &mut batch {
+            record.entry_kid = Some(entry_kid(&OTHER));
+        }
+        let checked = check_batch(batch, &held(&[KEY, OTHER]));
+        assert!(checked.intact.is_empty() && checked.unmatched.is_empty());
+        assert_eq!(checked.invalid.len(), 5);
     }
 
     #[test]
     fn seals_hash_their_fields_and_root_their_records_in_order() {
-        let checked = check_batch(records(Utc::now()), &[KEY]);
+        let checked = check_batch(records(Utc::now()), &held(&[KEY]));
         assert!(checked.invalid.is_empty());
         let sealed_at = Utc::now().trunc_subsecs(3).fixed_offset();
         let previous = (4, vec![9; 32]);

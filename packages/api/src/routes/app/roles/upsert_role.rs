@@ -110,6 +110,7 @@ pub async fn upsert_role(
     if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
         tracing::warn!(error = %e, "Failed to invalidate permission cache after {}", action);
     }
+    crate::package_license::refresh_app(&state, &app_id).await;
 
     audit_branch!(state, user, app_id, action, "Role", resource_id);
     Ok(Json(()))

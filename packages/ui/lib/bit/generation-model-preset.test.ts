@@ -65,9 +65,11 @@ describe("generation model presets", () => {
 			if (preset.kind === "video") {
 				expect(((preset.defaults.video_frames ?? 0) - 1) % 4).toBe(0);
 				expect(preset.defaults.fps).toBeGreaterThan(0);
-				expect(["avi", "webp", "webm"]).toContain(
-					preset.defaults.output_format,
-				);
+				expect(preset.defaults.output_format).toBeOneOf([
+					"avi",
+					"webp",
+					"webm",
+				]);
 			}
 		});
 	}

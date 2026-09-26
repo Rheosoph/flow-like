@@ -6,12 +6,43 @@ import { createRoot } from "react-dom/client";
 // Keep this focused on ChatBox and the shared voice hooks. The production UI barrel
 // pulls in Radix portals and unrelated browser integrations that happy-dom does not
 // need in order to exercise recording, submission, or transcription.
+// bun keeps globals and module mocks for every later file in the process, so both are
+// captured first and put back in afterAll. Radix picks its layout effect when first imported,
+// so the real modules load under a document.
+const globalDescriptors = [
+	"AudioContext",
+	"Blob",
+	"document",
+	"Element",
+	"Event",
+	"File",
+	"HTMLElement",
+	"MediaRecorder",
+	"MouseEvent",
+	"Node",
+	"navigator",
+	"requestAnimationFrame",
+	"cancelAnimationFrame",
+	"window",
+	"IS_REACT_ACT_ENVIRONMENT",
+].map(
+	(key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
+);
+Object.assign(globalThis, { document: new Window().document });
+const actual = {
+	lib: { ...(await import("../../../lib")) },
+	ui: { ...(await import("../../ui")) },
+	fileDialog: { ...(await import("./chatbox/file-dialog")) },
+};
+
 mock.module("../../../lib", () => ({
+	...actual.lib,
 	cn: (...classes: unknown[]) => classes.filter(Boolean).join(" "),
 	humanFileSize: (bytes: number) => `${bytes} B`,
 }));
 
 mock.module("../../ui", () => ({
+	...actual.ui,
 	Button: forwardRef<
 		HTMLButtonElement,
 		React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -35,10 +66,20 @@ mock.module("../../ui", () => ({
 }));
 
 mock.module("./chatbox/file-dialog", () => ({
+	...actual.fileDialog,
 	FileManagerDialog: () => null,
 }));
 
-afterAll(() => mock.restore());
+afterAll(() => {
+	mock.restore();
+	mock.module("../../../lib", () => actual.lib);
+	mock.module("../../ui", () => actual.ui);
+	mock.module("./chatbox/file-dialog", () => actual.fileDialog);
+	for (const [key, descriptor] of globalDescriptors) {
+		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+		else Reflect.deleteProperty(globalThis, key);
+	}
+});
 
 type RecorderDataEvent = { data: Blob };
 type SpeechResult = ArrayLike<{ transcript: string }> & { isFinal: boolean };
@@ -201,8 +242,9 @@ async function renderChatBox(
 	> = {},
 ) {
 	const { ChatBox } = await import(chatBoxTestModule);
-	const container = window.document.createElement("div");
-	window.document.body.append(container);
+	const host = window.document.createElement("div");
+	window.document.body.append(host);
+	const container = host as unknown as HTMLElement;
 	const root = createRoot(container);
 	const chatBoxRef = createRef<import("./chatbox").ChatBoxRef>();
 

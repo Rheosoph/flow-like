@@ -20,7 +20,7 @@ shell commands; do not treat the file as a shell script.
 | `BIND_ADDRESS` | `127.0.0.1` | Bind address for published listeners |
 | `WEB_PORT`, `API_PORT`, `SIGNALING_PORT` | `3001`, `8080`, `4444` | Edge proxy ports |
 | `PUBLIC_API_URL`, `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Client-facing API origin |
-| `FRONTEND_BASE_URL` | `http://localhost:3001` | Existing web origin for hosted Event shortlinks; setup uses `--web-origin` |
+| `FRONTEND_BASE_URL` | `http://localhost:3001` | Existing web origin for hosted App links (`/a/<app-id>/<route>`); setup uses `--web-origin` |
 | `NEXT_PUBLIC_REDIRECT_URL` | `http://localhost:3001/callback` | OIDC login callback |
 | `NEXT_PUBLIC_REDIRECT_LOGOUT_URL` | `http://localhost:3001/` | Post-logout URL |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3001` | Exact API browser origins |
@@ -101,9 +101,35 @@ See the [runtime API contract](/self-hosting/containers/#runtime-api-configurati
 for document limits, secret references and failure behavior.
 
 If all three runtime sources are empty, the API uses its compiled public
-fallback. `FLOW_LIKE_CONFIG` remains an optional repository-relative local-build
-fallback input. Never put deployment credentials in it or publish them in an
-image.
+fallback. `FLOW_LIKE_CONFIG` is the repository-relative file that local builds
+compile into the API and audit-worker images. Never put deployment credentials
+in it or publish them in an image.
+
+### Audit worker policy
+
+The `audit-worker` service reads only the `audit` section of the
+`flow-like.config.json` compiled into its image. Compose passes the API's
+`FLOW_LIKE_CONFIG` build argument to the worker as well, so a local build embeds
+the same file in both images. The runtime sources above never reach the worker:
+it has no config mount and no `FLOW_LIKE_CONFIG_*` variables. The published
+worker image is built without a `FLOW_LIKE_CONFIG` override and runs the default
+audit policy. The API still takes its own `audit` section from its runtime
+source; keep the two aligned.
+
+To change the worker's policy, edit the file `FLOW_LIKE_CONFIG` names, set
+`AUDIT_WORKER_IMAGE` to a local tag such as `flow-like-audit-worker:local`, then
+rebuild and restart the worker:
+
+```bash
+docker compose build audit-worker
+python3 scripts/up.py
+```
+
+To pause sealing, stop the service with `docker compose stop audit-worker`. The
+API keeps recording, and new records stay pending until
+`docker compose start audit-worker`; the next `up.py` also starts it. In a Swarm
+stack, run `docker service scale <stack>_audit-worker=0` and scale it back to 1
+to resume.
 
 The `signaling` service exchanges collaboration offers, answers and ICE
 candidates. The hub's optional `realtime.ice` setting can configure Cloudflare

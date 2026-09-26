@@ -316,6 +316,10 @@ pub(crate) async fn trigger_shared_function_context(
         .as_object()
         .ok_or_else(|| anyhow!("Registered function arguments must be a JSON object"))?;
     let mut context = context.lock().await;
+    let observer = context.service_observer().await;
+    let invocation = observer.as_ref().map(|observer| {
+        observer.begin(json::to_vec(arguments).map_or(0, |value| value.len() as u64))
+    });
     reset_function_output_pins(&context).await;
 
     let pins: Vec<_> = context
@@ -348,10 +352,23 @@ pub(crate) async fn trigger_shared_function_context(
         tracing::warn!("Failed to flush {} logs: {:?}", log_name, err);
     }
 
-    match run {
+    let result = match run {
         Ok(_) => Ok(result.unwrap_or_else(|| json::json!({"ok": true}))),
         Err(error) => Err(anyhow!("Registered function failed: {:?}", error)),
+    };
+    if let Some(observer) = observer {
+        if let Ok(value) = &result {
+            observer.response_bytes(json::to_vec(value).map_or(0, |bytes| bytes.len()));
+        }
     }
+    if let Some(invocation) = invocation {
+        invocation.finish(if result.is_ok() {
+            flow_like::flow::execution::service::ServiceOutcome::Succeeded
+        } else {
+            flow_like::flow::execution::service::ServiceOutcome::Failed
+        });
+    }
+    result
 }
 
 #[cfg(all(feature = "execute", not(feature = "remote")))]

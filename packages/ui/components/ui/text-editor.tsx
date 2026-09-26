@@ -1,7 +1,8 @@
 "use client";
 
 import { remarkMdx, remarkMention } from "@platejs/markdown";
-import { PlateStatic, type Value, createSlateEditor } from "platejs";
+import { type Value, createSlateEditor } from "platejs";
+import { PlateStatic } from "platejs/static";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
@@ -21,6 +22,7 @@ import {
 	type MentionItem,
 	MentionItemsProvider,
 } from "../editor/mention-items-context";
+import { withCodeGuard } from "../editor/plugins/markdown-code-guard";
 import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
@@ -60,13 +62,19 @@ type PlateLikeNode = {
 	[key: string]: unknown;
 };
 
+type MarkdownDeserializeOptions = {
+	remarkPlugins: ReadonlyArray<unknown>;
+	withoutMdx?: boolean;
+	onError?: (error: Error) => void;
+};
+
 type DeserializingEditor = {
 	api: {
 		deserialize: (data: string) => PlateLikeNode[];
 		markdown: {
 			deserialize: (
 				data: string,
-				options: { remarkPlugins: ReadonlyArray<unknown> },
+				options: MarkdownDeserializeOptions,
 			) => PlateLikeNode[];
 		};
 	};
@@ -204,13 +212,60 @@ const splitMarkdownPreservingCodeBlocks = (markdown: string): string[] => {
 	return blocks.filter(Boolean);
 };
 
+const footnoteLabel = (node: PlateLikeNode) =>
+	typeof node.identifier === "string" && node.identifier
+		? `[${node.identifier}]`
+		: "";
+
+const isPlainText = (
+	node: PlateLikeNode | undefined,
+): node is { text: string } =>
+	node !== undefined &&
+	typeof node.text === "string" &&
+	Object.keys(node).length === 1;
+
+function prependText(
+	children: PlateLikeNode[],
+	prefix: string,
+): PlateLikeNode[] {
+	const [head, ...tail] = children;
+	return isPlainText(head)
+		? [{ text: `${prefix}${head.text}` }, ...tail]
+		: [{ text: prefix }, ...children];
+}
+
+/**
+ * No footnote plugin is registered, so the parser's footnote nodes become text:
+ * a reference turns into a superscript `[1]` and a definition into its own
+ * paragraphs, the first one labelled `[1] `.
+ */
+function transformFootnote(node: PlateLikeNode): PlateLikeNode[] {
+	const label = footnoteLabel(node);
+	if (node.type === "footnoteReference") {
+		return label ? [{ text: label, superscript: true }] : [];
+	}
+	const [first, ...rest] = transformSpecialLinks(node.children ?? []);
+	if (!first) return [];
+	if (!label || !Array.isArray(first.children)) return [first, ...rest];
+	return [
+		{ ...first, children: prependText(first.children, `${label} `) },
+		...rest,
+	];
+}
+
 /**
  * Post-process Plate nodes to convert focus://, invalid://, and user:// links to custom elements
  */
 export const transformSpecialLinks = (
 	nodes: ReadonlyArray<PlateLikeNode>,
 ): PlateLikeNode[] => {
-	return nodes.map((node) => {
+	return nodes.flatMap<PlateLikeNode>((node) => {
+		if (
+			node.type === "footnoteReference" ||
+			node.type === "footnoteDefinition"
+		) {
+			return transformFootnote(node);
+		}
 		// If this is a link with focus:// url, convert to focus_node
 		if (
 			node.type === "a" &&
@@ -285,6 +340,33 @@ export const transformSpecialLinks = (
 	});
 };
 
+const rethrow = (error: Error) => {
+	throw error;
+};
+
+/**
+ * Markdown to Plate nodes with code kept verbatim: MarkdownKit's deserialize
+ * guards code from the JSX rewrite. Without remark-mdx nothing needs JSX, so
+ * the rewrite is skipped and only `<br>` outside code is normalised as it
+ * always was.
+ */
+export function deserializeMarkdown(
+	editor: unknown,
+	markdown: string,
+	remarkPlugins: ReadonlyArray<unknown>,
+): PlateLikeNode[] {
+	const { api } = editor as DeserializingEditor;
+	if (remarkPlugins.includes(remarkMdx))
+		return api.markdown.deserialize(markdown, { remarkPlugins });
+	return withCodeGuard(markdown, (guarded) =>
+		api.markdown.deserialize(guarded.replaceAll("<br>", "<br />"), {
+			remarkPlugins,
+			withoutMdx: true,
+			onError: rethrow,
+		}),
+	);
+}
+
 /**
  * Safely deserializes content into Plate editor nodes.
  * It handles prefixed native Plate JSON, Markdown, and plain text, with fallbacks.
@@ -330,9 +412,7 @@ export const safeDeserialize = (
 	// Pre-process directive blocks (:::type ... :::) at text level before parsing.
 	const preprocessed = preprocessDirectiveBlocks(data);
 	try {
-		const nodes = deserializingEditor.api.markdown.deserialize(preprocessed, {
-			remarkPlugins,
-		});
+		const nodes = deserializeMarkdown(editor, preprocessed, remarkPlugins);
 		if (nodes.length > 0) return toValue(transformSpecialLinks(nodes));
 		return paragraphValue("");
 	} catch (error) {
@@ -345,9 +425,7 @@ export const safeDeserialize = (
 		const blocks = splitMarkdownPreservingCodeBlocks(preprocessed);
 		const nodes = blocks.flatMap((block): PlateLikeNode[] => {
 			try {
-				return deserializingEditor.api.markdown.deserialize(block, {
-					remarkPlugins,
-				});
+				return deserializeMarkdown(editor, block, remarkPlugins);
 			} catch {
 				return [{ type: "p", children: [{ text: block }] }];
 			}
