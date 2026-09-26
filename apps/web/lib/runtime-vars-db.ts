@@ -69,16 +69,34 @@ export async function setRuntimeVar(
 	value: number[],
 	isSecret: boolean,
 ): Promise<void> {
-	const id = `${appId}:${variableId}`;
-	await runtimeVarsDB.values.put({
-		id,
-		appId,
-		boardId,
-		variableId,
-		variableName,
-		value,
-		isSecret,
-		updatedAt: new Date().toISOString(),
+	await setRuntimeVars(appId, boardId, [
+		{ variableId, variableName, value, isSecret },
+	]);
+}
+
+/** Save a batch together so a failed write preserves every previous value. */
+export async function setRuntimeVars(
+	appId: string,
+	boardId: string,
+	values: Array<
+		Pick<
+			IRuntimeVariableValue,
+			"variableId" | "variableName" | "value" | "isSecret"
+		>
+	>,
+): Promise<void> {
+	if (values.length === 0) return;
+	const updatedAt = new Date().toISOString();
+	await runtimeVarsDB.transaction("rw", runtimeVarsDB.values, async () => {
+		await runtimeVarsDB.values.bulkPut(
+			values.map((value) => ({
+				...value,
+				id: `${appId}:${value.variableId}`,
+				appId,
+				boardId,
+				updatedAt,
+			})),
+		);
 	});
 }
 

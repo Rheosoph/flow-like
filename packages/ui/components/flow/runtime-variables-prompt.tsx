@@ -99,6 +99,7 @@ function RuntimeVariablesForm({
 		return map;
 	});
 	const [isSaving, setIsSaving] = useState(false);
+	const [saveFailed, setSaveFailed] = useState(false);
 
 	const missingCount = useMemo(() => {
 		return variables.filter((variable) => {
@@ -119,6 +120,7 @@ function RuntimeVariablesForm({
 
 	const handleSave = useCallback(async () => {
 		if (!canSave) return;
+		setSaveFailed(false);
 		setIsSaving(true);
 		try {
 			const result: RuntimeVariableValue[] = [];
@@ -130,6 +132,8 @@ function RuntimeVariablesForm({
 				}
 			}
 			await onSave(result);
+		} catch {
+			setSaveFailed(true);
 		} finally {
 			setIsSaving(false);
 		}
@@ -170,6 +174,7 @@ function RuntimeVariablesForm({
 									variable={current}
 									updateVariable={updateVariable}
 									refs={refs}
+									disabled={isSaving}
 								/>
 							</div>
 						</Card>
@@ -187,6 +192,15 @@ function RuntimeVariablesForm({
 						count: missingCount,
 					})}
 				</div>
+			)}
+
+			{saveFailed && (
+				<p role="alert" className="text-sm text-destructive">
+					{t(
+						"couldNotSaveRuntimeVariablesEntriesKept",
+						"Could not save runtime variables. Your entries are still here. Try again.",
+					)}
+				</p>
 			)}
 
 			<DialogFooter className="gap-2">

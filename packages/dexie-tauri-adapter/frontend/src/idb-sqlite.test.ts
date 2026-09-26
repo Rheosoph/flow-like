@@ -861,6 +861,171 @@ describe("Dexie e2e on the SQLite shim", () => {
 	}, 20000);
 });
 
+describe("runtime variable persistence over the SQLite shim", () => {
+	async function loadRuntimeVars() {
+		const previous = { ...Dexie.dependencies };
+		Object.assign(Dexie.dependencies, getShim());
+		try {
+			return await import("../../../../apps/desktop/lib/runtime-vars-db");
+		} finally {
+			Object.assign(Dexie.dependencies, previous);
+		}
+	}
+
+	it("round-trips large multiline secrets after reopening the database", async () => {
+		installSqlBackend();
+		const { getRuntimeVar, runtimeVarsDB, setRuntimeVar } =
+			await loadRuntimeVars();
+		const certificate = [
+			"-----BEGIN CERTIFICATE-----",
+			...Array.from({ length: 4096 }, () =>
+				"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".repeat(2),
+			),
+			"-----END CERTIFICATE-----",
+			"",
+		].join("\r\n");
+		const bytes = Array.from(
+			new TextEncoder().encode(JSON.stringify(certificate)),
+		);
+
+		try {
+			await setRuntimeVar(
+				"app",
+				"board",
+				"certificate",
+				"Certificate",
+				bytes,
+				true,
+			);
+			runtimeVarsDB.close();
+			await runtimeVarsDB.open();
+
+			const stored = await getRuntimeVar("app", "certificate");
+			expect(stored?.value).toEqual(bytes);
+			expect(stored?.isSecret).toBe(true);
+			expect(
+				JSON.parse(new TextDecoder().decode(new Uint8Array(stored?.value))),
+			).toBe(certificate);
+		} finally {
+			runtimeVarsDB.close();
+		}
+	}, 20000);
+
+	it("rejects failed writes and retains the previous secret", async () => {
+		installSqlBackend();
+		const { getRuntimeVar, runtimeVarsDB, setRuntimeVar } =
+			await loadRuntimeVars();
+		const original = Array.from(
+			new TextEncoder().encode(JSON.stringify("old-secret")),
+		);
+		const replacement = Array.from(
+			new TextEncoder().encode(JSON.stringify("new-secret".repeat(25000))),
+		);
+
+		try {
+			await runtimeVarsDB.open();
+			await setRuntimeVar(
+				"app",
+				"board",
+				"failed-certificate",
+				"Certificate",
+				original,
+				true,
+			);
+			const execute = invokeHandlers.get(`${PREFIX}sql_exec`);
+			if (typeof execute !== "function") throw new Error("Missing SQL backend");
+			invokeHandlers.set(`${PREFIX}sql_exec`, (args) => {
+				const queries = args?.queries as Array<{ sql: string }>;
+				if (queries.some((query) => /^\s*(INSERT|UPDATE)\b/i.test(query.sql))) {
+					return queries.map(() => ({
+						error: "Simulated storage failure",
+						rows_affected: 0,
+						rows: [],
+					}));
+				}
+				return execute(args);
+			});
+
+			await expect(
+				setRuntimeVar(
+					"app",
+					"board",
+					"failed-certificate",
+					"Certificate",
+					replacement,
+					true,
+				),
+			).rejects.toThrow();
+			installSqlBackend();
+			expect((await getRuntimeVar("app", "failed-certificate"))?.value).toEqual(
+				original,
+			);
+		} finally {
+			installSqlBackend();
+			runtimeVarsDB.close();
+		}
+	}, 20000);
+
+	it("rolls back earlier batch writes when a later secret fails to save", async () => {
+		installSqlBackend();
+		const { getRuntimeVar, runtimeVarsDB, setRuntimeVars } =
+			await loadRuntimeVars();
+		const original = Array.from(
+			new TextEncoder().encode(JSON.stringify("old-secret")),
+		);
+		const values = ["batch-first", "batch-second"].map((variableId) => ({
+			variableId,
+			variableName: variableId,
+			value: original,
+			isSecret: true,
+		}));
+
+		try {
+			await runtimeVarsDB.open();
+			await setRuntimeVars("app", "board", values);
+			const execute = invokeHandlers.get(`${PREFIX}sql_exec`);
+			if (typeof execute !== "function") throw new Error("Missing SQL backend");
+			let writes = 0;
+			invokeHandlers.set(`${PREFIX}sql_exec`, (args) => {
+				const queries = args?.queries as Array<{ sql: string }>;
+				return queries.map((query) => {
+					if (/^\s*INSERT\b/i.test(query.sql) && ++writes === 2) {
+						return {
+							error: "Simulated storage failure",
+							rows_affected: 0,
+							rows: [],
+						};
+					}
+					return execute({ ...args, queries: [query] })[0];
+				});
+			});
+
+			await expect(
+				setRuntimeVars(
+					"app",
+					"board",
+					values.map((value) => ({
+						...value,
+						value: Array.from(
+							new TextEncoder().encode(JSON.stringify("new-secret")),
+						),
+					})),
+				),
+			).rejects.toThrow();
+			expect(writes).toBe(2);
+			installSqlBackend();
+			for (const value of values) {
+				expect((await getRuntimeVar("app", value.variableId))?.value).toEqual(
+					original,
+				);
+			}
+		} finally {
+			installSqlBackend();
+			runtimeVarsDB.close();
+		}
+	}, 20000);
+});
+
 describe("blob-offload middleware over the SQLite shim", () => {
 	const storedBlobs = new Map<string, number[]>();
 
