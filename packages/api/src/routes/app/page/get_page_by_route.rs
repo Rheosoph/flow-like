@@ -48,7 +48,7 @@ pub async fn get_page_by_route(
 
     for board_id in app.boards.iter() {
         if let Ok(board) = app.open_board(board_id.to_string(), None, None).await {
-            let board_guard = board.lock().await;
+            let board_guard = board.snapshot();
             if let Ok(loaded) = board_guard.load_all_pages(None).await {
                 for unreadable in &loaded.unreadable {
                     tracing::warn!(

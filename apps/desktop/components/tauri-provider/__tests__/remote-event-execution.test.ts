@@ -50,8 +50,9 @@ vi.mock("sonner", () => ({
 }));
 
 // The remote-known Event markers persist through localStorage, which the node
-// test environment does not provide.
-if (typeof globalThis.localStorage === "undefined") {
+// test environment does not provide. Node 25 defines the global without a
+// backing file, so the methods are what decides whether it is usable.
+if (typeof globalThis.localStorage?.clear !== "function") {
 	const store = new Map<string, string>();
 	Object.defineProperty(globalThis, "localStorage", {
 		configurable: true,
@@ -111,10 +112,24 @@ function fakeBackend(overrides: { localOnly?: boolean } = {}) {
 			// caller has no permission to see the flow. Reading it is the failure
 			// every path here has to avoid.
 			getBoard: vi.fn().mockRejectedValue(new Error("board not found")),
+			getBoardRunRequirements: vi
+				.fn()
+				.mockRejectedValue(new Error("board not found")),
 			ensureAppPackagesInstalledForExecution: vi.fn(),
 		},
 	};
 }
+
+/** What the host reports for a board with no OAuth, automation or packages. */
+const emptyRunRequirements = () => ({
+	runtime_variables: [],
+	oauth_requirements: [],
+	requires_local_execution: false,
+	execution_mode: "Hybrid",
+	wasm_package_ids: [],
+	wasm_package_permissions: {},
+	instantiates_widgets: false,
+});
 
 beforeEach(() => {
 	mocks.invoke.mockReset();
@@ -252,7 +267,7 @@ describe("an event pinned to Remote execution", () => {
 		expect(mocks.streamFetcher.mock.calls[0][1]).toBe(
 			`apps/${APP}/events/${EVENT}/invoke`,
 		);
-		expect(backend.boardState.getBoard).not.toHaveBeenCalled();
+		expect(backend.boardState.getBoardRunRequirements).not.toHaveBeenCalled();
 		expect(mocks.invoke).not.toHaveBeenCalledWith(
 			"execute_event",
 			expect.anything(),
@@ -353,7 +368,9 @@ describe("an event pinned to Remote execution", () => {
 	test("preflight reports remote-only even when the API is unreachable", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return remoteEvent();
-			if (command === "get_board") throw new Error("board not found");
+			if (command === "get_board_run_requirements") {
+				throw new Error("board not found");
+			}
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		mocks.fetcher.mockRejectedValue(new Error("offline"));
@@ -366,7 +383,7 @@ describe("an event pinned to Remote execution", () => {
 		expect(prerun.event_execution_mode).toBe("Remote");
 		expect(prerun.board_id).toBe(BOARD);
 		expect(mocks.invoke).not.toHaveBeenCalledWith(
-			"get_board",
+			"get_board_run_requirements",
 			expect.anything(),
 		);
 	});
@@ -381,7 +398,7 @@ describe("an event pinned to Remote execution", () => {
 		const result = await state.checkEventOAuth(APP, remoteEvent());
 
 		expect(result).toEqual({ missingProviders: [] });
-		expect(backend.boardState.getBoard).not.toHaveBeenCalled();
+		expect(backend.boardState.getBoardRunRequirements).not.toHaveBeenCalled();
 	});
 
 	test("preflight prefers the server's answer when it is reachable", async () => {
@@ -466,7 +483,9 @@ describe("a caller who may run the event but not read its board", () => {
 	test("preflight falls through to the server's answer", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localEvent();
-			if (command === "get_board") throw new Error("forbidden");
+			if (command === "get_board_run_requirements") {
+				throw new Error("forbidden");
+			}
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		mocks.fetcher.mockResolvedValue({
@@ -498,7 +517,7 @@ describe("a caller who may run the event but not read its board", () => {
 		const result = await state.checkEventOAuth(APP, localEvent());
 
 		expect(result).toEqual({ missingProviders: [] });
-		expect(backend.boardState.getBoard).toHaveBeenCalledTimes(1);
+		expect(backend.boardState.getBoardRunRequirements).toHaveBeenCalledTimes(1);
 	});
 
 	test("a local-only app still surfaces the board failure", async () => {
@@ -525,13 +544,9 @@ describe("an event that runs on this device", () => {
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue({
-			id: BOARD,
-			variables: {},
-			nodes: {},
-			layers: {},
-			execution_mode: "Hybrid",
-		});
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		return { backend, event, state: new EventState(backend as never) };
 	}
 
@@ -613,18 +628,26 @@ describe("an event that runs on this device", () => {
 		);
 	});
 
-	test("preflight still reads the local board", async () => {
+	test("preflight still reads the local board's requirements", async () => {
 		const localEvent = { ...remoteEvent(), execution_mode: "Local" };
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localEvent;
-			if (command === "get_board")
+			if (command === "get_board_run_requirements") {
 				return {
-					id: BOARD,
-					variables: {},
-					nodes: {},
-					layers: {},
-					execution_mode: "Hybrid",
+					...emptyRunRequirements(),
+					runtime_variables: [
+						{
+							id: "var-1",
+							name: "Region",
+							data_type: "String",
+							value_type: "Normal",
+							secret: false,
+						},
+					],
+					wasm_package_ids: ["pkg-1"],
+					wasm_package_permissions: { "pkg-1": ["NetworkHttp"] },
 				};
+			}
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const state = new EventState(fakeBackend() as never);
@@ -632,9 +655,21 @@ describe("an event that runs on this device", () => {
 		const prerun = await state.prerunEvent(APP, EVENT);
 
 		expect(prerun.event_execution_mode).toBe("Local");
+		expect(prerun.can_execute_locally).toBe(true);
+		expect(prerun.runtime_variables.map((variable) => variable.id)).toEqual([
+			"var-1",
+		]);
+		expect(prerun.has_wasm_nodes).toBe(true);
+		expect(prerun.wasm_package_permissions).toEqual({
+			"pkg-1": ["NetworkHttp"],
+		});
 		expect(mocks.invoke).toHaveBeenCalledWith(
-			"get_board",
+			"get_board_run_requirements",
 			expect.objectContaining({ boardId: BOARD }),
+		);
+		expect(mocks.invoke).not.toHaveBeenCalledWith(
+			"get_board",
+			expect.anything(),
 		);
 		expect(mocks.fetcher).not.toHaveBeenCalled();
 	});
@@ -670,13 +705,9 @@ describe("a registry-backed local Page action", () => {
 		});
 		const backend = fakeBackend();
 		backend.profile = { id: "profile-1" } as never;
-		backend.boardState.getBoard.mockResolvedValue({
-			id: BOARD,
-			variables: {},
-			nodes: {},
-			layers: {},
-			execution_mode: "Hybrid",
-		});
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		await state.executeEvent(
@@ -833,14 +864,8 @@ describe("a registry-backed local Page action", () => {
 		};
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent;
-			if (command === "get_board") {
-				return {
-					id: BOARD,
-					variables: {},
-					nodes: {},
-					layers: {},
-					execution_mode: "Hybrid",
-				};
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
 			}
 			throw new Error(`unexpected invoke: ${command}`);
 		});
@@ -908,18 +933,12 @@ describe("the pre-run Page contract gate", () => {
 		default_page_id: "page-1",
 	});
 
-	const emptyHybridBoard = () => ({
-		id: BOARD,
-		variables: {},
-		nodes: {},
-		layers: {},
-		execution_mode: "Hybrid",
-	});
-
 	test("still runs locally when a board edit superseded the rendered revision", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-stale" };
 			}
@@ -928,7 +947,9 @@ describe("the pre-run Page contract gate", () => {
 		});
 		mocks.fetcher.mockResolvedValue(hybridPrerun());
 		const backend = fakeBackend();
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		await state.executeEvent(
@@ -985,7 +1006,9 @@ describe("the pre-run Page contract gate", () => {
 	test("a local-only app with a superseded revision runs instead of failing", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-stale" };
 			}
@@ -993,7 +1016,9 @@ describe("the pre-run Page contract gate", () => {
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		await state.executeEvent(
@@ -1021,7 +1046,9 @@ describe("the pre-run Page contract gate", () => {
 	test("throws an actionable error instead of a doomed hub call when unreachable", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			// No Page contract on this device at all — not merely a superseded one.
 			if (command === "get_local_page_bootstrap") {
 				throw new Error("No active Event was found");
@@ -1058,7 +1085,9 @@ describe("the pre-run Page contract gate", () => {
 		// click runs with that rather than being refused or shipped to a hub.
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-device" };
 			}
@@ -1066,7 +1095,9 @@ describe("the pre-run Page contract gate", () => {
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		await state.executeEvent(
@@ -1099,12 +1130,16 @@ describe("the pre-run Page contract gate", () => {
 		// still compares it. Substituting would resurrect a revoked capability.
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "execute_event") return undefined;
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		await state.executeEvent(
@@ -1137,7 +1172,9 @@ describe("the pre-run Page contract gate", () => {
 		// classifier reads `{ error }` rather than only `message`.
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-device" };
 			}
@@ -1147,7 +1184,9 @@ describe("the pre-run Page contract gate", () => {
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		const seen: string[] = [];
@@ -1179,7 +1218,9 @@ describe("the pre-run Page contract gate", () => {
 	test("times a native dispatch that fails before run_initiated", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-device" };
 			}
@@ -1189,7 +1230,9 @@ describe("the pre-run Page contract gate", () => {
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		const steps = await tracedStepNames(() =>
@@ -1219,7 +1262,9 @@ describe("the pre-run Page contract gate", () => {
 		// content and duplicate or discard what the click just produced.
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "get_local_page_bootstrap") {
 				return { executionRevision: "per2-device" };
 			}
@@ -1227,7 +1272,9 @@ describe("the pre-run Page contract gate", () => {
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend({ localOnly: true });
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		const seen: string[] = [];
@@ -1256,13 +1303,17 @@ describe("the pre-run Page contract gate", () => {
 	test("a local dynamic Page action skips the contract gate", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return localPageEvent();
-			if (command === "get_board") return emptyHybridBoard();
+			if (command === "get_board_run_requirements") {
+				return emptyRunRequirements();
+			}
 			if (command === "execute_event") return undefined;
 			throw new Error(`unexpected invoke: ${command}`);
 		});
 		const backend = fakeBackend();
 		backend.profile = { id: "profile-1" } as never;
-		backend.boardState.getBoard.mockResolvedValue(emptyHybridBoard());
+		backend.boardState.getBoardRunRequirements.mockResolvedValue(
+			emptyRunRequirements(),
+		);
 		const state = new EventState(backend as never);
 
 		await state.executeEvent(

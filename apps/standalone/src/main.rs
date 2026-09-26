@@ -497,6 +497,7 @@ async fn main() -> Result<()> {
                 "This binary was built without the runtime feature"
             );
             drop(store);
+            flow_like_standalone::certificates::collect_unused(&state_dir)?;
             let session = enrollment::DeviceSession::load(&state_dir)?.map(std::sync::Arc::new);
             let boot_id = flow_like_standalone::host::boot_id()?;
             let run_id = uuid::Uuid::new_v4().to_string();
@@ -537,6 +538,21 @@ async fn main() -> Result<()> {
                     cancel.child_token(),
                 ))
             });
+            let certificate_inventory = session.clone().map(|device| {
+                tokio::spawn(flow_like_standalone::certificate_inventory::publish(
+                    state_dir.clone(),
+                    device,
+                    cancel.child_token(),
+                ))
+            });
+            let certificate_renewal = tokio::spawn(flow_like_standalone::certificate_issuers::run(
+                state_dir.clone(),
+                cancel.child_token(),
+            ));
+            let acme = tokio::spawn(flow_like_standalone::acme::run(
+                state_dir.clone(),
+                cancel.child_token(),
+            ));
             let metrics = tokio::spawn(flow_like_standalone::telemetry::sample(
                 state_dir.clone(),
                 cancel.child_token(),
@@ -600,9 +616,14 @@ async fn main() -> Result<()> {
             if let Some(transport) = transport {
                 let _ = transport.await;
             }
+            let _ = certificate_renewal.await;
+            let _ = acme.await;
             let _ = metrics.await;
             if let Some(fleet) = fleet {
                 let _ = fleet.await;
+            }
+            if let Some(inventory) = certificate_inventory {
+                let _ = inventory.await;
             }
             let _ = secrets.await;
             if let Some(archives) = archives {
@@ -700,6 +721,7 @@ async fn run_child(
                 slot: bootstrap.replica_slot,
             }),
             Some(bootstrap.data_root.as_deref().context("Supervisor did not provide the placement data root")?),
+            bootstrap.config.tls_certificate_id.as_ref().map(|_| flow_like_standalone::service_tls::ManagedTls::new(broker.clone()) as std::sync::Arc<dyn flow_like_runtime::flow::execution::service::ServiceTlsProvider>),
             || async {
                 broker.ready().await?;
                 {

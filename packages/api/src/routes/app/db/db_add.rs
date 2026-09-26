@@ -3,7 +3,9 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_write_connection, validate_table_name},
+    routes::app::db::{
+        ScopeParams, resolve_write_connection, table_input_error, validate_table_name,
+    },
     state::AppState,
 };
 use axum::{
@@ -30,6 +32,7 @@ pub struct AddToDBPayload {
     request_body = String,
     responses(
         (status = 200, description = "Items inserted", body = ()),
+        (status = 400, description = "A row value does not fit its column or names a column the table does not have"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -74,7 +77,7 @@ pub async fn add_to_table(
     };
 
     let row_count = payload.items.len();
-    db.insert(payload.items).await?;
+    db.insert(payload.items).await.map_err(table_input_error)?;
 
     audit_branch!(
         state,

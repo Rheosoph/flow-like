@@ -989,6 +989,15 @@
     "class": "Agent",
     "category": "AI/Agents/Builder"
   },
+  "agent_register_work_iq_tools": {
+    "qualified": "agent::registerWorkIqTools",
+    "namespace": "agent",
+    "alias": "registerWorkIqTools",
+    "flat": "agentRegisterWorkIqTools",
+    "receiver": "agent_in",
+    "class": "Agent",
+    "category": "AI/Agents/Builder"
+  },
   "agent_set_system_prompt": {
     "qualified": "agent::setSystemPrompt",
     "namespace": "agent",
@@ -6416,6 +6425,87 @@
     "class": null,
     "category": "Data/Microsoft/Copilot"
   },
+  "data_microsoft_copilot_studio_agent": {
+    "qualified": "microsoft::copilotStudio::agent",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "agent",
+    "flat": "dataMicrosoftCopilotStudioAgent",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_chat": {
+    "qualified": "microsoft::copilotStudio::chat",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "chat",
+    "flat": "dataMicrosoftCopilotStudioChat",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_direct_line_chat": {
+    "qualified": "microsoft::copilotStudio::directLineChat",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "directLineChat",
+    "flat": "dataMicrosoftCopilotStudioDirectLineChat",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_list_agents": {
+    "qualified": "microsoft::copilotStudio::listAgents",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "listAgents",
+    "flat": "dataMicrosoftCopilotStudioListAgents",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_list_environments": {
+    "qualified": "microsoft::copilotStudio::listEnvironments",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "listEnvironments",
+    "flat": "dataMicrosoftCopilotStudioListEnvironments",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_provider_oauth": {
+    "qualified": "microsoft::copilotStudio::providerOauth",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "providerOauth",
+    "flat": "dataMicrosoftCopilotStudioProviderOauth",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_provider_token": {
+    "qualified": "microsoft::copilotStudio::providerToken",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "providerToken",
+    "flat": "dataMicrosoftCopilotStudioProviderToken",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_send_activity": {
+    "qualified": "microsoft::copilotStudio::sendActivity",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "sendActivity",
+    "flat": "dataMicrosoftCopilotStudioSendActivity",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
+  "data_microsoft_copilot_studio_start_conversation": {
+    "qualified": "microsoft::copilotStudio::startConversation",
+    "namespace": "microsoft.copilotStudio",
+    "alias": "startConversation",
+    "flat": "dataMicrosoftCopilotStudioStartConversation",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Copilot Studio"
+  },
   "data_microsoft_copilot_subscribe_notifications": {
     "qualified": "microsoft::copilot::subscribeNotifications",
     "namespace": "microsoft.copilot",
@@ -7144,6 +7234,42 @@
     "receiver": null,
     "class": null,
     "category": "Data/Microsoft/To Do"
+  },
+  "data_microsoft_workiq_chat": {
+    "qualified": "microsoft::workiq::chat",
+    "namespace": "microsoft.workiq",
+    "alias": "chat",
+    "flat": "dataMicrosoftWorkiqChat",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
+  "data_microsoft_workiq_provider_oauth": {
+    "qualified": "microsoft::workiq::providerOauth",
+    "namespace": "microsoft.workiq",
+    "alias": "providerOauth",
+    "flat": "dataMicrosoftWorkiqProviderOauth",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
+  "data_microsoft_workiq_provider_token": {
+    "qualified": "microsoft::workiq::providerToken",
+    "namespace": "microsoft.workiq",
+    "alias": "providerToken",
+    "flat": "dataMicrosoftWorkiqProviderToken",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
+  },
+  "data_microsoft_workiq_request": {
+    "qualified": "microsoft::workiq::request",
+    "namespace": "microsoft.workiq",
+    "alias": "request",
+    "flat": "dataMicrosoftWorkiqRequest",
+    "receiver": null,
+    "class": null,
+    "category": "Data/Microsoft/Work IQ"
   },
   "data_notion_append_block_children": {
     "qualified": "notion::appendBlockChildren",
@@ -14579,6 +14705,15 @@
     "class": null,
     "category": "AI/ML/ONNX"
   },
+  "service_ready": {
+    "qualified": "web::serviceReady",
+    "namespace": "web",
+    "alias": "serviceReady",
+    "flat": "serviceReady",
+    "receiver": null,
+    "class": null,
+    "category": "Web/Services"
+  },
   "set_clear": {
     "qualified": "set::clear",
     "namespace": "set",
@@ -14695,6 +14830,15 @@
     "receiver": "set_in",
     "class": "set",
     "category": "Utils/Set"
+  },
+  "set_primary_key_local_db": {
+    "qualified": "db::setPrimaryKey",
+    "namespace": "db",
+    "alias": "setPrimaryKey",
+    "flat": "setPrimaryKeyLocalDb",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Schema"
   },
   "set_to_array": {
     "qualified": "set::toArray",
@@ -15667,6 +15811,15 @@
     "receiver": "model",
     "class": "NodeOnnxSession",
     "category": "AI/ML/ONNX"
+  },
+  "update_local_db": {
+    "qualified": "db::update",
+    "namespace": "db",
+    "alias": "update",
+    "flat": "updateLocalDb",
+    "receiver": "database",
+    "class": "NodeDBConnection",
+    "category": "Data/Database/Update"
   },
   "upsert_graph_edge": {
     "qualified": "db::graph::upsertEdge",

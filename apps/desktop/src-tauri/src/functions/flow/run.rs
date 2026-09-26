@@ -7,6 +7,8 @@ use flow_like::flow::compiled::{
     prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
 };
 use flow_like::flow::execution::log::LogMessage;
+use flow_like::flow::execution::log_query::LogQuery;
+use flow_like::flow::execution::log_summary::LogSummary;
 use flow_like::flow::execution::rejection::{RejectedRun, RejectionStage};
 use flow_like::flow::execution::run_index::{RunQuery, read_run_payload};
 use flow_like::flow::execution::{
@@ -14,8 +16,9 @@ use flow_like::flow::execution::{
 };
 use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
-use flow_like::state::{FlowLikeState, RunData};
+use flow_like::state::{FlowLikeState, FlowNodeRegistryInner, RunData};
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
+use flow_like_types::sync::DashMap;
 use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::{Value, json, tokio};
 use serde::Deserialize;
@@ -253,7 +256,7 @@ async fn resolve_local_page_target(
         flow_like_types::anyhow!("Page triggers can only invoke Events that own a Page")
     })?;
 
-    let board = app
+    let (board, board_revision) = app
         .open_board(event.board_id.clone(), None, event.board_version)
         .await
         .map_err(|error| {
@@ -262,8 +265,8 @@ async fn resolve_local_page_target(
                 event.board_id,
                 error
             )
-        })?;
-    let board = board.lock().await;
+        })?
+        .snapshot_with_revision();
     timer.lap("open_board");
     if board.id != event.board_id {
         return Err(flow_like_types::anyhow!(
@@ -343,14 +346,17 @@ async fn resolve_local_page_target(
         ));
     }
     timer.lap("page_contract");
-    // Build the executable template from the same Board value that produced
-    // the Page contract. Reloading Latest through the template cache here
-    // could observe a concurrent save and execute a different revision.
+    // Build the executable template from the same board snapshot that produced
+    // the Page contract. Reloading Latest through the storage-backed template
+    // cache could observe a concurrent save and execute a different revision;
+    // the page cache is keyed by this snapshot's revision instead.
     let registry = state.node_registry.read().await.node_registry.clone();
-    let template = Arc::new(CompiledRunTemplate::from_board(
-        Arc::new(board.clone()),
+    let template = page_template(
+        format!("{}/{}@{:?}", app.id, board.id, event.board_version),
+        &board,
+        board_revision,
         registry.as_ref(),
-    )?);
+    )?;
     timer.lap("compile");
 
     Ok(ResolvedLocalPageTarget {
@@ -364,6 +370,41 @@ struct ResolvedLocalPageTarget {
     node_id: String,
     sealing_context: LocalPageActionSealingContext,
     template: Arc<flow_like::flow::compiled::CompiledRunTemplate>,
+}
+
+struct PageTemplate {
+    revision: u64,
+    fingerprint: [u8; 32],
+    template: Arc<CompiledRunTemplate>,
+}
+
+/// The template of the last board revision a Page Event ran against, per board: every page
+/// action between two edits reuses one compile instead of cloning and compiling the board.
+static PAGE_TEMPLATES: LazyLock<DashMap<String, PageTemplate>> = LazyLock::new(DashMap::new);
+
+fn page_template(
+    cache_key: String,
+    board: &Arc<flow_like::flow::board::Board>,
+    revision: u64,
+    registry: &FlowNodeRegistryInner,
+) -> flow_like_types::Result<Arc<CompiledRunTemplate>> {
+    let fingerprint = registry.fingerprint();
+    if let Some(cached) = PAGE_TEMPLATES.get(&cache_key)
+        && cached.revision == revision
+        && cached.fingerprint == fingerprint
+    {
+        return Ok(cached.template.clone());
+    }
+    let template = Arc::new(CompiledRunTemplate::from_board(board.clone(), registry)?);
+    PAGE_TEMPLATES.insert(
+        cache_key,
+        PageTemplate {
+            revision,
+            fingerprint,
+            template: template.clone(),
+        },
+    );
+    Ok(template)
 }
 
 pub(crate) async fn resolve_run_template(
@@ -1305,6 +1346,39 @@ pub async fn query_run(
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let logs = state.query_run(&log_meta, &query, limit, offset).await?;
     Ok(logs)
+}
+
+#[tauri::command(async)]
+pub async fn query_run_logs(
+    app_handle: AppHandle,
+    log_meta: LogMeta,
+    query: LogQuery,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<LogMessage>, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    Ok(state
+        .query_run_logs(&log_meta, &query, offset, limit)
+        .await?)
+}
+
+#[tauri::command(async)]
+pub async fn count_run_logs(
+    app_handle: AppHandle,
+    log_meta: LogMeta,
+    query: LogQuery,
+) -> Result<usize, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    Ok(state.count_run_logs(&log_meta, &query).await?)
+}
+
+#[tauri::command(async)]
+pub async fn get_run_log_summary(
+    app_handle: AppHandle,
+    log_meta: LogMeta,
+) -> Result<Option<LogSummary>, TauriFunctionError> {
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    Ok(state.run_log_summary(&log_meta).await?)
 }
 
 #[cfg(test)]

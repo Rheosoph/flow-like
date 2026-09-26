@@ -16,7 +16,9 @@ use super::model::{
 use super::query;
 use super::rails;
 use super::resolve::{Candidates, Hydrated};
-use crate::entity::sea_orm_active_enums::{Status, Visibility, WasmPackageStatus, WasmPackageVisibility};
+use crate::entity::sea_orm_active_enums::{
+    Status, Visibility, WasmPackageStatus, WasmPackageVisibility,
+};
 use crate::entity::{app, meta, wasm_package};
 use crate::error::ApiError;
 use crate::routes::registry::types::{MetaSummary, PackageSummary, SearchFilters};
@@ -174,7 +176,11 @@ pub fn in_id_order<T: Clone>(ids: &[String], found: &HashMap<String, T>) -> Vec<
 
 /// Public, active packages among `ids` through the registry. `caller_id` stays `None`, so curation can never
 /// surface a private package. Media stays unsigned; see [`presign_packages`].
-pub async fn packages(state: &AppState, ids: &[String], language: &str) -> Result<PackageMap, ApiError> {
+pub async fn packages(
+    state: &AppState,
+    ids: &[String],
+    language: &str,
+) -> Result<PackageMap, ApiError> {
     let Some(registry) = state.wasm_registry.as_ref() else {
         return Ok(HashMap::new());
     };
@@ -247,7 +253,9 @@ pub async fn rule_items<C: ConnectionTrait>(
                 source: CollectionSource::Rule,
                 rule: Some(rule),
                 ..
-            } if rule.item_kind != ItemKind::Package || viewer.dev => Some((placement.id.clone(), rule)),
+            } if rule.item_kind != ItemKind::Package || viewer.dev => {
+                Some((placement.id.clone(), rule))
+            }
             _ => None,
         })
         .map(|(id, rule)| async move {
@@ -275,13 +283,22 @@ pub async fn hydrate(
     let mut wanted = Wanted::default();
     let item_ids = candidates.item_ids();
     wanted.add_all(item_ids.apps.iter().map(|id| (ItemKind::App, id.as_str())));
-    wanted.add_all(item_ids.packages.iter().map(|id| (ItemKind::Package, id.as_str())));
+    wanted.add_all(
+        item_ids
+            .packages
+            .iter()
+            .map(|id| (ItemKind::Package, id.as_str())),
+    );
     for items in rule_items.values() {
         wanted.add_all(items.iter().map(|(kind, id)| (*kind, id.as_str())));
     }
     for rail in rails.values() {
         wanted.add_all(rail.apps.iter().map(|id| (ItemKind::App, id.as_str())));
-        wanted.add_all(rail.packages.iter().map(|id| (ItemKind::Package, id.as_str())));
+        wanted.add_all(
+            rail.packages
+                .iter()
+                .map(|id| (ItemKind::Package, id.as_str())),
+        );
     }
     let store = if wanted.is_empty() {
         None
@@ -332,8 +349,10 @@ async fn app_refs<C: ConnectionTrait>(
     let tasks = rows.into_iter().map(|(id, visibility, status)| {
         let meta = best.remove(&id);
         async move {
-            let public = matches!(visibility, Visibility::Public | Visibility::PublicRequestAccess)
-                && status == Status::Active;
+            let public = matches!(
+                visibility,
+                Visibility::Public | Visibility::PublicRequestAccess
+            ) && status == Status::Active;
             let (name, icon_url, cover_url) = match meta {
                 Some(meta) => {
                     let mut media = Metadata {
@@ -383,7 +402,9 @@ async fn package_refs<C: ConnectionTrait>(
         .filter(meta::Column::WasmPackageId.is_in(ids.to_vec()))
         .order_by_asc(meta::Column::Lang);
     let (rows, metas) = futures::try_join!(rows.all(db), metas.all(db))?;
-    let mut best = best_meta(metas, DEFAULT_LANGUAGE, |meta| meta.wasm_package_id.as_ref());
+    let mut best = best_meta(metas, DEFAULT_LANGUAGE, |meta| {
+        meta.wasm_package_id.as_ref()
+    });
     let tasks = rows.into_iter().map(|(id, name, visibility, status)| {
         let meta = best.remove(&id).map(|meta| MetaSummary::from_model(&meta));
         async move {
@@ -452,7 +473,9 @@ pub async fn item_refs(state: &AppState, layout: &LayoutDoc) -> Result<Vec<ItemR
             let found = match kind {
                 ItemKind::App => apps.get(id).cloned(),
                 ItemKind::Package => packages.get(id).cloned(),
-                ItemKind::Collection => layout.find(id).and_then(|(_, placement)| match &placement.content {
+                ItemKind::Collection => layout.find(id).and_then(|(_, placement)| match &placement
+                    .content
+                {
                     PlacementContent::Collection { title, .. } => Some(ItemRef {
                         kind,
                         id: id.to_owned(),
@@ -547,7 +570,10 @@ mod tests {
             found["a"].primary_category.as_deref(),
             Some("ANALYTICS_REPORTING")
         );
-        assert_eq!(found["b"].primary_category.as_deref(), Some("FINANCE_BILLING"));
+        assert_eq!(
+            found["b"].primary_category.as_deref(),
+            Some("FINANCE_BILLING")
+        );
         assert_eq!(found["c"].secondary_category.as_deref(), Some("INSURANCE"));
     }
 

@@ -1,3 +1,10 @@
+import type {
+	CertificateAuthoritySpec,
+	CertificateAuthorityEnvelope,
+	CertificateAuthorityPublic,
+	CertificateAuthoritySigningRequest,
+	SignedCertificateChain,
+} from "./certificate-authority";
 export interface Ed25519PublicKey {
 	kty: "OKP";
 	crv: "Ed25519";
@@ -179,6 +186,56 @@ export interface BrowserController {
 	free(): void;
 }
 export interface DeviceCrypto {
+	createCertificateAuthorityVault(
+		spec: CertificateAuthoritySpec,
+		password: Uint8Array,
+		now: number,
+	): CertificateAuthorityEnvelope;
+	inspectCertificateAuthorityVault(
+		accountBinding: string,
+		authorityId: string,
+		password: Uint8Array,
+		vault: Uint8Array,
+	): CertificateAuthorityPublic;
+	inspectCertificateAuthorityBackup(
+		accountBinding: string,
+		authorityId: string,
+		password: Uint8Array,
+		vault: Uint8Array,
+		rootVault: Uint8Array,
+	): CertificateAuthorityPublic;
+	rewrapCertificateAuthorityVault(
+		accountBinding: string,
+		authorityId: string,
+		currentPassword: Uint8Array,
+		newPassword: Uint8Array,
+		vault: Uint8Array,
+		rootVault: Uint8Array,
+	): CertificateAuthorityEnvelope;
+	renewCertificateAuthorityVault(
+		accountBinding: string,
+		authorityId: string,
+		password: Uint8Array,
+		vault: Uint8Array,
+		rootVault: Uint8Array,
+		now: number,
+	): CertificateAuthorityEnvelope;
+	signServiceCertificate(
+		accountBinding: string,
+		authorityId: string,
+		password: Uint8Array,
+		vault: Uint8Array,
+		request: CertificateAuthoritySigningRequest,
+		now: number,
+	): SignedCertificateChain;
+	signDeviceCertificateIssuer(
+		accountBinding: string,
+		authorityId: string,
+		password: Uint8Array,
+		vault: Uint8Array,
+		request: CertificateAuthoritySigningRequest,
+		now: number,
+	): SignedCertificateChain;
 	sealAccountRecovery(
 		scope: AccountRecoveryContext,
 		password: Uint8Array,
@@ -264,6 +321,7 @@ export type Capability =
 	| "remove"
 	| "scale"
 	| "update_agent"
+	| "manage_certificates"
 	| "reboot";
 
 export interface TelemetryRoster {
@@ -384,6 +442,11 @@ export interface Inspection {
 	boot_id: string | null;
 	placements: PlacementStatus[];
 	observed_at?: number;
+	certificate_management?: 1;
+	can_manage_certificates?: boolean;
+	certificate_issuance?: 1;
+	certificate_acme?: 1;
+	can_delegate_certificate_renewal?: boolean;
 }
 
 export type InventoryScope = ManagementGrant["scope"];

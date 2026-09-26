@@ -589,6 +589,7 @@ impl Fixture {
             artifact_pins: vec![],
             package_pins: vec![],
             bit_pins: vec![],
+            tls_certificate_id: None,
             hosting: Some(HostingConfig {
                 host: "127.0.0.1".parse()?,
                 port: self.port,
@@ -2528,6 +2529,313 @@ async fn online_catalog_services_keep_workers_through_renewal_and_outage_then_dr
             })
             .await?;
         }
+        agent.stop().await?;
+    }
+    Ok(())
+}
+
+fn certificate_client(certificate: &rcgen::Certificate) -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .tls_built_in_root_certs(false)
+        .add_root_certificate(reqwest::Certificate::from_der(certificate.der())?)
+        .tls_info(true)
+        .pool_max_idle_per_host(0)
+        .build()?)
+}
+
+async fn certificate_service_request(
+    client: &reqwest::Client,
+    kind: &str,
+    port: u16,
+    session: Option<&str>,
+) -> Result<(Vec<u8>, Option<String>)> {
+    let origin = format!("https://127.0.0.1:{port}");
+    let request = match kind {
+        "http" => client
+            .post(format!("{origin}/tls"))
+            .bearer_auth(SERVICE_TOKEN)
+            .json(&json!({})),
+        "mcp" => {
+            let request = client
+                .post(format!("{origin}/mcp"))
+                .header("accept", "application/json");
+            if let Some(session) = session {
+                request
+                    .header("mcp-session-id", session)
+                    .header("mcp-protocol-version", "2025-06-18")
+                    .json(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+            } else {
+                request.json(&json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+                    "params":{"protocolVersion":"2025-06-18","capabilities":{},
+                        "clientInfo":{"name":"certificate-lifecycle-test","version":"1"}}}))
+            }
+        }
+        _ => client.get(format!("{origin}/nonexistent-route")),
+    };
+    let response = request.send().await?;
+    let peer = response
+        .extensions()
+        .get::<reqwest::tls::TlsInfo>()
+        .and_then(reqwest::tls::TlsInfo::peer_certificate)
+        .context("TLS peer identity")?
+        .to_vec();
+    let returned_session = response
+        .headers()
+        .get("mcp-session-id")
+        .map(|value| value.to_str().map(str::to_owned))
+        .transpose()?;
+    if kind == "rest" {
+        ensure!(
+            response.status() == reqwest::StatusCode::NOT_FOUND,
+            "REST TLS route response"
+        );
+    } else {
+        let response: Value = response.error_for_status()?.json().await?;
+        if kind == "http" {
+            ensure!(
+                response == json!({"revision":1}),
+                "Native HTTPS workflow response"
+            );
+        } else if session.is_some() {
+            ensure!(
+                response["result"]["tools"] == json!([]),
+                "Retained MCP session after TLS rotation"
+            );
+        } else {
+            ensure!(
+                response["result"]["protocolVersion"] == "2025-06-18",
+                "MCP HTTPS initialization"
+            );
+            ensure!(returned_session.is_some(), "MCP session header");
+        }
+    }
+    Ok((peer, returned_session))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires loopback listeners and spawning the standalone runtime binary"]
+async fn device_certificates_rotate_live_native_rest_and_mcp_services() -> Result<()> {
+    for kind in ["http", "rest", "mcp"] {
+        let fixture = Fixture::new()?;
+        let mut placement = if kind == "http" {
+            fixture.project(1, "/tls").await?
+        } else {
+            fixture
+                .catalog_service(1, kind, fixture.port, false)
+                .await?
+        };
+        let certificate_id = Uuid::new_v4().to_string();
+        placement.tls_certificate_id = Some(certificate_id.clone());
+        let first =
+            rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])?;
+        let second =
+            rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])?;
+        let mut controller = fixture.controller().await?;
+        let imported = controller
+            .command(ManagementCommand::PutCertificate {
+                certificate_id: certificate_id.clone(),
+                label: format!("{kind} service"),
+                expected_revision: 0,
+                certificate_chain_pem: SecretValue(first.cert.pem()),
+                private_key_pem: SecretValue(first.signing_key.serialize_pem()),
+            })
+            .await?;
+        assert_eq!(imported.state, "completed");
+        assert_eq!(imported.result["certificate"]["revision"], 1);
+        assert!(!serde_json::to_string(&imported)?.contains("PRIVATE KEY"));
+        controller
+            .command(ManagementCommand::Apply {
+                config: serde_json::to_value(&placement)?,
+                expected_revision: 0,
+                start: false,
+            })
+            .await?;
+        let mut agent = Agent::start(&fixture.root)?;
+        if kind == "http" {
+            for (name, value) in [
+                ("service-token", SERVICE_TOKEN.to_owned()),
+                ("credential-secret", serde_json::to_string(VARIABLE_SECRET)?),
+            ] {
+                let operation = controller
+                    .command(ManagementCommand::SetSecret {
+                        placement_id: "api".into(),
+                        expected_revision: 1,
+                        name: name.into(),
+                        value: SecretValue(value),
+                    })
+                    .await?
+                    .operation_id;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if controller.operation(&operation).await?.state == "completed" {
+                            return Ok::<_, anyhow::Error>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                    }
+                })
+                .await
+                .context("Service credential publication")??;
+            }
+        }
+        controller
+            .command(ManagementCommand::Start {
+                placement_id: "api".into(),
+                expected_revision: 1,
+            })
+            .await?;
+        fixture
+            .wait_ready(1)
+            .await
+            .with_context(|| format!("{kind} TLS readiness"))?;
+        let before = fixture
+            .store()?
+            .get_placement("api")?
+            .context("Running TLS placement")?;
+        let pids: Vec<_> = before
+            .replicas
+            .iter()
+            .map(|replica| replica.process_id)
+            .collect();
+        assert!(
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()?
+                .get(format!(
+                    "http://127.0.0.1:{}/nonexistent-route",
+                    fixture.port
+                ))
+                .send()
+                .await
+                .is_err(),
+            "{kind} listener must reject plaintext"
+        );
+        let (peer, session) = certificate_service_request(
+            &certificate_client(&first.cert)?,
+            kind,
+            fixture.port,
+            None,
+        )
+        .await?;
+        assert_eq!(peer.as_slice(), first.cert.der().as_ref());
+        let listed = controller
+            .command(ManagementCommand::Certificates {
+                placement_id: None,
+                after: None,
+                limit: 4,
+            })
+            .await?;
+        assert_eq!(
+            listed.result["certificates"][0]["certificate_id"],
+            certificate_id
+        );
+        assert_eq!(listed.result["certificates"][0]["binding_count"], 1);
+        assert_eq!(
+            listed.result["certificates"][0]["bindings"][0]["placement_id"],
+            "api"
+        );
+        assert!(
+            listed.result["certificates"][0]["not_after"]
+                .as_i64()
+                .unwrap()
+                > unix_time()?
+        );
+        let delete = controller.request(ManagementCommand::DeleteCertificate {
+            certificate_id: certificate_id.clone(),
+            expected_revision: 1,
+        })?;
+        assert_eq!(controller.transmit(&delete).await?.state, "rejected");
+        let wrong_key = controller.request(ManagementCommand::PutCertificate {
+            certificate_id: certificate_id.clone(),
+            label: "Rejected mismatch".into(),
+            expected_revision: 1,
+            certificate_chain_pem: SecretValue(first.cert.pem()),
+            private_key_pem: SecretValue(second.signing_key.serialize_pem()),
+        })?;
+        assert_eq!(controller.transmit(&wrong_key).await?.state, "rejected");
+        let rotated = controller
+            .command(ManagementCommand::PutCertificate {
+                certificate_id: certificate_id.clone(),
+                label: format!("{kind} renewed"),
+                expected_revision: 1,
+                certificate_chain_pem: SecretValue(second.cert.pem()),
+                private_key_pem: SecretValue(second.signing_key.serialize_pem()),
+            })
+            .await?;
+        assert_eq!(rotated.result["certificate"]["revision"], 2);
+        assert_ne!(
+            rotated.result["certificate"]["sha256_fingerprint"],
+            imported.result["certificate"]["sha256_fingerprint"]
+        );
+        let client = certificate_client(&second.cert)?;
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Ok((peer, _)) =
+                    certificate_service_request(&client, kind, fixture.port, session.as_deref())
+                        .await
+                {
+                    ensure!(
+                        peer.as_slice() == second.cert.der().as_ref(),
+                        "New TLS handshake must present the renewed certificate"
+                    );
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .with_context(|| format!("{kind} live TLS rotation"))??;
+        let after = fixture
+            .store()?
+            .get_placement("api")?
+            .context("Placement after certificate rotation")?;
+        assert_eq!(
+            after
+                .replicas
+                .iter()
+                .map(|replica| replica.process_id)
+                .collect::<Vec<_>>(),
+            pids,
+            "Certificate renewal must preserve the workflow process"
+        );
+        assert_eq!(
+            (after.config_revision, after.intent_revision),
+            (before.config_revision, before.intent_revision)
+        );
+        controller
+            .command(ManagementCommand::Stop {
+                placement_id: "api".into(),
+                expected_revision: 1,
+            })
+            .await?;
+        wait_for("TLS placement stopped", || {
+            Ok(fixture
+                .store()?
+                .get_placement("api")?
+                .is_some_and(|record| {
+                    record.observed_state == ObservedState::Stopped
+                        && record
+                            .replicas
+                            .iter()
+                            .all(|replica| replica.process_id.is_none())
+                }))
+        })
+        .await?;
+        controller
+            .command(ManagementCommand::Remove {
+                placement_id: "api".into(),
+                expected_revision: 1,
+            })
+            .await?;
+        let deleted = controller
+            .command(ManagementCommand::DeleteCertificate {
+                certificate_id,
+                expected_revision: 2,
+            })
+            .await?;
+        assert_eq!(deleted.result["deleted"], true);
         agent.stop().await?;
     }
     Ok(())

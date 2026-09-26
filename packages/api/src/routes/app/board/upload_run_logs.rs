@@ -207,6 +207,7 @@ mod tests {
             bit_ids: Some(vec!["bit".to_string()]),
             start: 1_700_000_000_000_000 + index as u64,
             end: 1_700_000_000_000_100 + index as u64,
+            fingerprint: None,
         }
     }
 

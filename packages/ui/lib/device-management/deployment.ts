@@ -268,6 +268,7 @@ const placementConfigSchema = z
 			.min(1)
 			.max(64),
 		hosting: hostingSchema.nullish(),
+		tls_certificate_id: z.string().uuid().nullish(),
 		max_replicas: z.number().int().min(1).max(32),
 		variables: z.record(identifier, z.unknown()).default({}),
 		secret_overrides: z.record(identifier, identifier).default({}),
@@ -721,6 +722,8 @@ type PlanInput = {
 	port: number;
 	replicas: number;
 	serviceToken: string;
+	/** Undefined keeps the selected certificate; null removes the device override. */
+	tlsCertificateId?: string | null;
 	resourceGrant?: Record<string, unknown>;
 	/** Undefined preserves existing settings; null explicitly disables buffering. */
 	offlineWrites?: OfflineWritesConfig | null;
@@ -965,6 +968,14 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 			: {}),
 		...(resourceGrant ? { resource_grant: resourceGrant } : {}),
 	};
+	if (input.tlsCertificateId !== undefined) {
+		if (input.tlsCertificateId === null) delete config.tls_certificate_id;
+		else
+			config.tls_certificate_id = z
+				.string()
+				.uuid()
+				.parse(input.tlsCertificateId);
+	}
 	if (checkedOfflineWrites) config.offline_writes = checkedOfflineWrites;
 	if (checkedResources) config.resources = checkedResources;
 	if (existing) {

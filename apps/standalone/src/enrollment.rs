@@ -898,6 +898,54 @@ impl DeviceSession {
         response_json(self.client.post(&endpoint).json(&serde_json::json!({"client_assertion":self.keys.assertion(&self.manifest.device_id,&endpoint)?,"bundle":bundle})).send().await?).await
     }
 
+    pub(crate) async fn publish_certificate_inventory(
+        &self,
+        inventory: &CertificateInventory,
+    ) -> Result<()> {
+        ensure!(
+            inventory.device_id == self.manifest.device_id,
+            "Certificate inventory device mismatch"
+        );
+        let endpoint = endpoint_url(
+            &self.manifest.api_base_url,
+            &format!("/devices/{}/certificate-inventory", self.manifest.device_id),
+        )?;
+        let (authorization, proof) = self.authorization(&Method::PUT, &endpoint).await?;
+        let mut authorization = reqwest::header::HeaderValue::from_str(&authorization)?;
+        authorization.set_sensitive(true);
+        let mut proof = reqwest::header::HeaderValue::from_str(&proof)?;
+        proof.set_sensitive(true);
+        let mut current = inventory.clone();
+        current.issued_at = unix_time()?;
+        let compact = sign_certificate_inventory(&current, &self.keys.auth)?;
+        let response = self
+            .client
+            .put(endpoint)
+            .header("authorization", authorization)
+            .header("dpop", proof)
+            .json(&serde_json::json!({"inventory_jws":compact}))
+            .send()
+            .await?;
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            *self.lease.lock().await = None;
+        }
+        #[derive(Deserialize)]
+        struct Receipt {
+            revision: u64,
+            certificates: Vec<CertificateInventoryEntry>,
+        }
+        let receipt: Receipt = response_json(response).await?;
+        ensure!(
+            receipt.revision == inventory.revision
+                && receipt.certificates == inventory.certificates,
+            "Certificate inventory acknowledgement changed the published revision"
+        );
+        Ok(())
+    }
+
     pub(crate) async fn upload_archive(
         &self,
         bundle: &flow_like_device_protocol::EncryptedArchive,

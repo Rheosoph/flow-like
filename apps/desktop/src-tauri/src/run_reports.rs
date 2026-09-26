@@ -860,6 +860,7 @@ impl LogSelection {
                 bit_ids: None,
                 start: at,
                 end: at,
+                fingerprint: None,
             });
         }
         logs
@@ -965,6 +966,7 @@ mod tests {
             bit_ids: None,
             start,
             end: start,
+            fingerprint: None,
         }
     }
 

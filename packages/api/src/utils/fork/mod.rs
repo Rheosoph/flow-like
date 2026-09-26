@@ -17,10 +17,7 @@ pub mod ids;
 pub mod job;
 pub mod policy;
 pub mod preview;
-use flow_like::a2ui::{
-    id_refs::{self, IdRef},
-    page_remap,
-};
+use flow_like::app::remap::{self, remap_widget_json};
 use flow_like::utils::compression::{
     compress_to_file, compress_to_file_json, from_compressed, from_compressed_json,
 };
@@ -142,91 +139,7 @@ pub struct ForkReport {
     pub objects_copied: u64,
 }
 
-/// Mapping table built during a fork. Returned to callers and persisted on
-/// the user's enrollment so the server can later translate original-app IDs
-/// (referenced by lesson payloads, app refs, etc.) into the user-specific
-/// IDs in their forked copy.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
-pub struct ForkIdMap {
-    pub source_app_id: String,
-    pub app_id: String,
-    /// Board IDs: source -> destination
-    pub boards: HashMap<String, String>,
-    /// Node IDs: source -> destination (flat across boards & layers)
-    pub nodes: HashMap<String, String>,
-    /// Pin IDs: source -> destination (flat across boards, layers, nodes)
-    pub pins: HashMap<String, String>,
-    /// Event IDs: source -> destination
-    pub events: HashMap<String, String>,
-    /// Page IDs: source -> destination
-    pub pages: HashMap<String, String>,
-    /// Layer IDs: source -> destination
-    pub layers: HashMap<String, String>,
-    /// Widget IDs: source -> destination
-    #[serde(default)]
-    pub widgets: HashMap<String, String>,
-    /// Template IDs: source -> destination
-    #[serde(default)]
-    pub templates: HashMap<String, String>,
-    /// Variable IDs: source -> destination (currently identity-mapped —
-    /// pins do not directly reference variable IDs in the proto today,
-    /// so the map is reserved for future use and reporting)
-    #[serde(default)]
-    pub variables: HashMap<String, String>,
-    /// Role IDs: source -> destination. Includes both the system roles
-    /// (Owner / Admin / Member) and any custom roles copied from source.
-    #[serde(default)]
-    pub roles: HashMap<String, String>,
-    /// Seed every destination id in this map is derived from
-    /// ([`ids::derive_id`]). Never leaves the process.
-    #[serde(skip)]
-    #[schema(ignore)]
-    pub seed: String,
-}
-
-impl ForkIdMap {
-    /// The destination id for `src` in this fork.
-    pub fn mint(&self, src: &str) -> String {
-        ids::derive_id(&self.seed, src)
-    }
-
-    /// The map without its node / pin / layer / variable entries, which run
-    /// to thousands of pairs and are derivable from the top-level ids.
-    pub fn top_level(&self) -> Self {
-        Self {
-            nodes: HashMap::new(),
-            pins: HashMap::new(),
-            layers: HashMap::new(),
-            variables: HashMap::new(),
-            ..self.clone()
-        }
-    }
-
-    pub fn translate_board(&self, src: &str) -> String {
-        self.boards
-            .get(src)
-            .cloned()
-            .unwrap_or_else(|| src.to_string())
-    }
-    pub fn translate_node(&self, src: &str) -> String {
-        self.nodes
-            .get(src)
-            .cloned()
-            .unwrap_or_else(|| src.to_string())
-    }
-    pub fn translate_event(&self, src: &str) -> String {
-        self.events
-            .get(src)
-            .cloned()
-            .unwrap_or_else(|| src.to_string())
-    }
-    pub fn translate_page(&self, src: &str) -> String {
-        self.pages
-            .get(src)
-            .cloned()
-            .unwrap_or_else(|| src.to_string())
-    }
-}
+pub use flow_like::app::remap::ForkIdMap;
 
 /// One serialized meta artifact extracted from the in-memory bundle —
 /// the bytes are exactly what would have been written to disk
@@ -2721,334 +2634,22 @@ pub async fn sync_uploaded_metadata_media_to_db(
 
 // ---- helpers ----------------------------------------------------------
 
-fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> Result<proto::Board, ApiError> {
-    flow_like::flow::board::Board::validate_proto_types(&board)?;
-    board.format_version = flow_like::flow::board::Board::required_proto_format_version(&board);
-    // Host receipts belong to the source board's persistence boundary and must never be copied
-    // into a fork where their identities and replay claims are invalid.
-    board.internal_refs.clear();
-    let new_board_id = maps
-        .boards
-        .get(&board.id)
-        .cloned()
-        .unwrap_or_else(|| maps.mint(&board.id));
-    maps.boards
-        .entry(board.id.clone())
-        .or_insert_with(|| new_board_id.clone());
-
-    // First pass: build node + pin + layer id maps for this board.
-    // Layers must be registered BEFORE any node is rewritten — nodes that
-    // live inside a function/collapsed layer are stored in `board.nodes`
-    // with `node.layer = Some(layer_id)`; if the layer isn't in
-    // `maps.layers` at rewrite time, `node.layer` would be cleared to
-    // None, orphaning the node from its function and emptying the layer
-    // when the desktop reconstructs `layer.nodes` from `node.layer`.
-    register_node_pin_ids(&board.nodes, maps);
-    for layer in board.layers.values() {
-        let layer_id = maps.mint(&layer.id);
-        maps.layers.entry(layer.id.clone()).or_insert(layer_id);
-        if let Some(parent) = layer.parent_id.as_ref() {
-            let parent_id = maps.mint(parent);
-            maps.layers.entry(parent.clone()).or_insert(parent_id);
-        }
-        register_node_pin_ids(&layer.nodes, maps);
-        register_pin_ids(&layer.pins, maps);
-    }
-
-    // Second pass: rewrite ids and references.
-    let mut new_nodes = HashMap::with_capacity(board.nodes.len());
-    for (_, mut node) in board.nodes.drain() {
-        rewrite_node(&mut node, maps);
-        new_nodes.insert(node.id.clone(), node);
-    }
-    board.nodes = new_nodes;
-
-    let mut new_layers = HashMap::with_capacity(board.layers.len());
-    for (_, mut layer) in board.layers.drain() {
-        let new_layer_id = maps
-            .layers
-            .get(&layer.id)
-            .cloned()
-            .unwrap_or_else(|| maps.mint(&layer.id));
-        layer.id = new_layer_id.clone();
-        if let Some(parent) = layer.parent_id.as_ref() {
-            layer.parent_id = maps.layers.get(parent).cloned();
-        }
-        let mut layer_nodes = HashMap::with_capacity(layer.nodes.len());
-        for (_, mut node) in layer.nodes.drain() {
-            rewrite_node(&mut node, maps);
-            layer_nodes.insert(node.id.clone(), node);
-        }
-        layer.nodes = layer_nodes;
-
-        let mut layer_pins = HashMap::with_capacity(layer.pins.len());
-        for (_, mut pin) in layer.pins.drain() {
-            rewrite_pin_top(&mut pin, maps);
-            layer_pins.insert(pin.id.clone(), pin);
-        }
-        layer.pins = layer_pins;
-        new_layers.insert(new_layer_id, layer);
-    }
-    board.layers = new_layers;
-
-    board.id = new_board_id;
-    board.page_ids = board
-        .page_ids
-        .iter()
-        .map(|p| maps.translate_page(p))
-        .collect();
-
-    strip_board_secrets(&mut board);
+/// Secrets must never travel into a fork — even when the caller is the
+/// source-app owner — because the destination may live in a different
+/// security boundary (different org, different deployment, anonymous public
+/// download).
+fn remap_board(board: proto::Board, maps: &mut ForkIdMap) -> Result<proto::Board, ApiError> {
+    let mut board = remap::remap_board(board, maps)?;
+    remap::strip_board_secrets(&mut board);
     Ok(board)
 }
 
-/// Clears `default_value` on every variable marked `secret = true`, both at
-/// board level and inside each layer. Secrets must never travel into a
-/// fork — even when the caller is the source-app owner — because the
-/// destination may live in a different security boundary (different org,
-/// different deployment, anonymous public download).
-fn strip_board_secrets(board: &mut proto::Board) {
-    for var in board.variables.values_mut() {
-        if var.secret {
-            var.default_value.clear();
-        }
-    }
-    for layer in board.layers.values_mut() {
-        for var in layer.variables.values_mut() {
-            if var.secret {
-                var.default_value.clear();
-            }
-        }
-    }
-}
-
-fn register_node_pin_ids(nodes: &HashMap<String, proto::Node>, maps: &mut ForkIdMap) {
-    for node in nodes.values() {
-        let node_id = maps.mint(&node.id);
-        maps.nodes.entry(node.id.clone()).or_insert(node_id);
-        register_pin_ids(&node.pins, maps);
-    }
-}
-
-fn register_pin_ids(pins: &HashMap<String, proto::Pin>, maps: &mut ForkIdMap) {
-    for pin in pins.values() {
-        let pin_id = maps.mint(&pin.id);
-        maps.pins.entry(pin.id.clone()).or_insert(pin_id);
-    }
-}
-
-fn rewrite_node(node: &mut proto::Node, maps: &ForkIdMap) {
-    node.id = maps.translate_node(&node.id);
-    if let Some(layer) = node.layer.as_ref() {
-        // Layers were pre-registered in remap_board, so a missing entry
-        // means a stale pointer; preserve the original so the desktop
-        // can surface the reference rather than silently orphan the node.
-        node.layer = Some(maps.layers.get(layer).cloned().unwrap_or(layer.clone()));
-    }
-    // Agent / Call Reference style nodes carry a list of function-target
-    // node ids in `fn_refs.fn_refs`. These are global node ids; without
-    // translation, the destination would point at the source's nodes.
-    if let Some(fn_refs) = node.fn_refs.as_mut() {
-        fn_refs.fn_refs = fn_refs
-            .fn_refs
-            .iter()
-            .map(|id| maps.nodes.get(id).cloned().unwrap_or(id.clone()))
-            .collect();
-    }
-    let mut new_pins = HashMap::with_capacity(node.pins.len());
-    for (_, mut pin) in node.pins.drain() {
-        rewrite_pin_top(&mut pin, maps);
-        new_pins.insert(pin.id.clone(), pin);
-    }
-    node.pins = new_pins;
-}
-
-fn rewrite_pin_top(pin: &mut proto::Pin, maps: &ForkIdMap) {
-    pin.id = maps.pins.get(&pin.id).cloned().unwrap_or(pin.id.clone());
-    pin.connected_to = pin
-        .connected_to
-        .iter()
-        .map(|p| maps.pins.get(p).cloned().unwrap_or(p.clone()))
-        .collect();
-    pin.depends_on = pin
-        .depends_on
-        .iter()
-        .map(|p| maps.pins.get(p).cloned().unwrap_or(p.clone()))
-        .collect();
-    // Pin default values frequently encode a target id chosen by the
-    // user — Call Function holds a layer id in `function_layer_id`,
-    // Call Reference holds a node id in `fn_ref`, Goto / page-link
-    // nodes hold page or event ids. Translate every JSON string we
-    // recognize so those references land on the destination's id space.
-    rewrite_default_value_ids(&mut pin.default_value, maps);
-}
-
-/// Walks a JSON-encoded pin `default_value` and rewrites every string
-/// whose contents match a known source id (node, layer, event, page,
-/// pin) to the destination id from `maps`. Strings that don't match
-/// anything in the maps are left untouched. Empty bytes / non-JSON
-/// payloads are no-ops so non-string defaults (numbers, structs that
-/// don't reference ids) keep working.
-fn rewrite_default_value_ids(default_value: &mut Vec<u8>, maps: &ForkIdMap) {
-    if default_value.is_empty() {
-        return;
-    }
-    let mut value: flow_like_types::Value = match serde_json::from_slice(default_value) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    if !translate_ids_in_json(&mut value, maps) {
-        return;
-    }
-    if let Ok(bytes) = serde_json::to_vec(&value) {
-        *default_value = bytes;
-    }
-}
-
-/// Recursively visits a JSON value and rewrites any string equal to a
-/// known source id, plus any page-scoped element reference whose page
-/// head is a known source page. Returns whether anything changed so
-/// callers can skip a re-encode when the payload is untouched.
-fn translate_ids_in_json(value: &mut flow_like_types::Value, maps: &ForkIdMap) -> bool {
-    match value {
-        flow_like_types::Value::String(s) => {
-            let translated = lookup_id(s, maps).or_else(|| translate_element_ref(s, maps));
-            if let Some(translated) = translated {
-                *s = translated;
-                true
-            } else {
-                false
-            }
-        }
-        flow_like_types::Value::Array(items) => {
-            let mut changed = false;
-            for item in items.iter_mut() {
-                if translate_ids_in_json(item, maps) {
-                    changed = true;
-                }
-            }
-            changed
-        }
-        flow_like_types::Value::Object(map) => {
-            let mut changed = false;
-            for (_k, v) in map.iter_mut() {
-                if translate_ids_in_json(v, maps) {
-                    changed = true;
-                }
-            }
-            changed
-        }
-        _ => false,
-    }
-}
-
-/// Whole-string translation of any id a pin default may name.
-///
-/// `widgets` is in this chain because the `widget_selector` pin of
-/// `a2ui_instantiate_widget` stores the bare project widget id (see
-/// `WidgetVariable` / `widget-select.tsx`, which commits
-/// `selector: widgetId`), and `fork_widgets` gives every copied widget
-/// a fresh id — so without this the forked node resolves against the
-/// source app's widget and fails with "Widget '…' not found". Package
-/// widget selectors are immune by construction: they are encoded
-/// `pkg:{package_id}/{widget_id}`, never a key of `maps.widgets`, and
-/// package ids are global and must never be rewritten. Legacy
-/// name-based selectors are likewise untouched.
-///
-/// `roles` is here because the `role` pin of the project-user nodes
-/// accepts "Role ID or exact role name" — an id needs translating, a
-/// name is not a map key and passes through.
-///
-/// Deliberately absent: `templates` (no board artifact stores a
-/// template id) and `variables` (variable ids are preserved verbatim
-/// by `remap_board`, so `var_ref` defaults must keep resolving against
-/// the unchanged `board.variables` keys).
-fn lookup_id(src: &str, maps: &ForkIdMap) -> Option<String> {
-    maps.nodes
-        .get(src)
-        .or_else(|| maps.layers.get(src))
-        .or_else(|| maps.events.get(src))
-        .or_else(|| maps.pages.get(src))
-        .or_else(|| maps.pins.get(src))
-        .or_else(|| maps.boards.get(src))
-        .or_else(|| maps.widgets.get(src))
-        .or_else(|| maps.roles.get(src))
-        .cloned()
-}
-
-/// UI element references are composite: the element picker stores
-/// `"{page_id}/{component_id}"` in the `element_ref` pin default (see
-/// `ElementSelect`), and the runtime keys its `_elements` payload the
-/// same way — the prerun manifest lists the refs a board reads, and
-/// `ExecutionContext::read_element` resolves them by exact key first,
-/// then by `/{component_id}` suffix on the shipped map.
-///
-/// Component ids are page-scoped and survive a fork unchanged, but the
-/// page head does not, so `lookup_id` never matches the composite
-/// string as a whole. Without this pass every `Get Element` /
-/// `Set Element …` node in a forked app keeps pointing at the source
-/// app's page and silently resolves to "element not found".
-fn translate_element_ref(src: &str, maps: &ForkIdMap) -> Option<String> {
-    let (page_id, component_id) = src.split_once('/')?;
-    if component_id.is_empty() {
-        return None;
-    }
-    let new_page_id = maps.pages.get(page_id)?;
-    Some(format!("{}/{}", new_page_id, component_id))
-}
-
-fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
-    event.id = maps
-        .events
-        .get(&event.id)
-        .cloned()
-        .unwrap_or_else(|| maps.mint(&event.id));
-    event.board_id = maps.translate_board(&event.board_id);
-    event.node_id = maps.translate_node(&event.node_id);
-    if let Some(default_page) = event.default_page_id.as_ref() {
-        event.default_page_id = Some(maps.translate_page(default_page));
-    }
-    if let Some(canary) = event.canary.as_mut() {
-        canary.board_id = maps.translate_board(&canary.board_id);
-        canary.node_id = maps.translate_node(&canary.node_id);
-    }
-    for variant in event.variants.iter_mut() {
-        variant.board_id = maps.translate_board(&variant.board_id);
-        variant.node_id = maps.translate_node(&variant.node_id);
-        if let Some(page) = variant.default_page_id.as_ref() {
-            variant.default_page_id = Some(maps.translate_page(page));
-        }
-    }
-    for input in event.inputs.iter_mut() {
-        if let Some(new_pin) = maps.pins.get(&input.id) {
-            input.id = new_pin.clone();
-        }
-    }
-
-    strip_event_secrets(event);
-}
-
-/// Clears `default_value` on every secret-marked variable inside an event
-/// proto, including the canary's and every variant's variables. The event's
-/// `config` bytes are intentionally NOT touched here — token sites (HTTP
+/// The event's `config` bytes are not touched here — token sites (HTTP
 /// auth_token, PAT, OAuth) are replaced in Phase 4 with caller-supplied
 /// values.
-fn strip_event_secrets(event: &mut proto::Event) {
-    strip_secret_values(&mut event.variables);
-    if let Some(canary) = event.canary.as_mut() {
-        strip_secret_values(&mut canary.variables);
-    }
-    for variant in event.variants.iter_mut() {
-        strip_secret_values(&mut variant.variables);
-    }
-}
-
-fn strip_secret_values(variables: &mut HashMap<String, proto::Variable>) {
-    for var in variables.values_mut() {
-        if var.secret {
-            var.default_value.clear();
-        }
-    }
+fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
+    remap::remap_event(event, maps);
+    remap::strip_event_secrets(event);
 }
 
 /// Bounded concurrency for the copy loops. AWS S3 returns 503 SlowDown
@@ -3494,56 +3095,9 @@ impl RemapIssues {
 /// this workflow / navigate to this page / show this widget" hook
 /// silently points at the source app's ids.
 fn remap_page(page: &mut proto::Page, new_page_id: &str, maps: &ForkIdMap) -> RemapIssues {
-    page.id = new_page_id.to_string();
-    let mut by_field = fork_field_translator(maps);
-    let mut by_literal = fork_literal_translator(maps);
-    let mut translators = page_remap::IdTranslators {
-        by_field: &mut by_field,
-        by_literal: &mut by_literal,
-    };
     RemapIssues {
-        unrewritten: page_remap::remap_page_refs(page, &mut translators),
+        unrewritten: remap::remap_page(page, new_page_id, maps),
     }
-}
-
-/// Resolve a reference the a2ui walker found under a recognized field
-/// name. Translation stays opt-in per value: a name only resolves when
-/// the embedded string is actually a key of the corresponding map, so a
-/// user-authored `nodeId` in unrelated game state is left alone, and a
-/// value already on the destination's id space is a no-op.
-fn fork_field_translator(maps: &ForkIdMap) -> impl FnMut(IdRef, &str) -> Option<String> + '_ {
-    move |kind, id| match kind {
-        IdRef::Node => maps.nodes.get(id).cloned(),
-        IdRef::Board => maps.boards.get(id).cloned(),
-        IdRef::Page => maps.pages.get(id).cloned(),
-        IdRef::Widget => maps.widgets.get(id).cloned(),
-        IdRef::Event => maps.events.get(id).cloned(),
-        IdRef::App => {
-            (id == maps.source_app_id && !maps.source_app_id.is_empty() && !maps.app_id.is_empty())
-                .then(|| maps.app_id.clone())
-        }
-    }
-}
-
-/// Resolve a reference that arrived without a field name — a widget
-/// customization value, an exposed prop's default. `lookup_id` is the
-/// same whole-string pass pin defaults take, so the two agree on what
-/// counts as an id, and composite element references
-/// (`{page_id}/{component_id}`) follow the page they name.
-fn fork_literal_translator(maps: &ForkIdMap) -> impl FnMut(&str) -> Option<String> + '_ {
-    move |id| lookup_id(id, maps).or_else(|| translate_element_ref(id, maps))
-}
-
-/// Run the shared widget pass over a JSON-serialized `.widget` document with
-/// this fork's translators.
-fn remap_widget_json(widget: &mut flow_like_types::Value, maps: &ForkIdMap) -> Vec<String> {
-    let mut by_field = fork_field_translator(maps);
-    let mut by_literal = fork_literal_translator(maps);
-    let mut translators = page_remap::IdTranslators {
-        by_field: &mut by_field,
-        by_literal: &mut by_literal,
-    };
-    page_remap::remap_widget_json(widget, &mut translators)
 }
 
 /// Write a remapped page to the canonical board-scoped layout
@@ -4345,6 +3899,8 @@ async fn filter_accessible_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like::a2ui::id_refs;
+    use flow_like::app::remap::{fork_field_translator, rewrite_default_value_ids};
 
     fn page_row(id: &str, board_id: Option<&str>) -> page::Model {
         let now = chrono::Utc::now().fixed_offset();

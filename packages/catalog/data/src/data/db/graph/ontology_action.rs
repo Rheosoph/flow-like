@@ -138,30 +138,8 @@ impl NodeLogic for OntologyActionRequestNode {
             .unwrap_or_else(|_| json!({}));
         // Generated bindings may expand a flat schema into one pin per property.
         let parameters = super::merge_parameter_pins(context, parameters).await;
-        let execution = context
-            .execution_cache
-            .clone()
-            .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
-        let app_id = execution.app_id.clone();
-        let database = if let Some(credentials) = &context.credentials {
-            credentials.to_db(&app_id).await?
-        } else {
-            let path = execution.get_storage(false)?.join("db");
-            context
-                .app_state
-                .config
-                .read()
-                .await
-                .callbacks
-                .build_project_database
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No database builder found"))?(path)
-        };
-        let connection = context
-            .app_state
-            .with_lance_session(database)
-            .execute()
-            .await?;
+        let connection =
+            crate::data::db::vector::connection::open_shared(context, false).await?;
         let ontology = match lancegraph::load_overlay(&connection, &ontology_id).await {
             Ok(ontology) => ontology,
             Err(error) => return fail(context, error).await,

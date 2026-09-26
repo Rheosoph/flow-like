@@ -736,6 +736,41 @@ export class DatabaseState implements IDatabaseState {
 		});
 	}
 
+	async setPrimaryKey(
+		appId: string,
+		tableName: string,
+		column: string,
+		userScoped?: boolean,
+		selector?: IDatabaseSelector,
+	): Promise<void> {
+		const target = await this.tableTarget(appId, tableName, userScoped);
+		if (target === "device") throw managedStructureError();
+
+		if (target === "hub") {
+			return await fetcher(
+				this.backend.profile!,
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/primary-key`,
+					userScoped,
+					selector,
+				),
+				{
+					method: "PUT",
+					body: JSON.stringify({ column }),
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke("db_set_primary_key", {
+			appId,
+			tableName,
+			column,
+			userScoped: userScoped ?? false,
+			...(selector ? { selector } : {}),
+		});
+	}
+
 	async dropTable(
 		appId: string,
 		tableName: string,

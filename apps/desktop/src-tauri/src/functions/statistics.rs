@@ -714,11 +714,9 @@ pub async fn get_board_statistics(
             let mut results = Vec::new();
             for board_id in &app.boards {
                 if let Ok(board) = app.open_board(board_id.clone(), Some(true), None).await {
-                    let board_lock = board.lock().await;
-                    let (summary, node_usages, _) =
-                        analyze_board(&board_lock, &app_id, &catalog_names);
-                    let graph = BoardGraph::from_board(&board_lock, &app_id);
-                    drop(board_lock);
+                    let board = board.snapshot();
+                    let (summary, node_usages, _) = analyze_board(&board, &app_id, &catalog_names);
+                    let graph = BoardGraph::from_board(&board, &app_id);
 
                     results.push(BoardLoadResult {
                         summary,

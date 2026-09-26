@@ -34,6 +34,7 @@ use futures::future::BoxFuture;
 use internal_node::InternalNode;
 use internal_pin::InternalPin;
 use log::LogMessage;
+use log_summary::{LogSummary, LogSummaryBuilder};
 use num_cpus;
 use run_index::RunIndex;
 use schemars::JsonSchema;
@@ -50,10 +51,13 @@ pub mod egress;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
+#[cfg(feature = "flow-runtime")]
+pub mod log_query;
+pub mod log_summary;
 pub mod rejection;
 pub mod resources;
-pub mod service;
 pub mod run_index;
+pub mod service;
 pub mod trace;
 pub mod user_context;
 
@@ -367,6 +371,8 @@ pub struct Run {
     pub event_version: Option<String>,
 
     pub visited_nodes: AHashMap<String, LogLevel>,
+    /// Counts and repeat groups of every flushed log; written as the run's summary sidecar.
+    pub log_summary: LogSummaryBuilder,
     pub log_store: Option<FlowLikeStore>,
     pub run_index: Option<Arc<dyn RunIndex>>,
     #[cfg(feature = "flow-runtime")]
@@ -375,6 +381,8 @@ pub struct Run {
     >,
     #[cfg(feature = "flow-runtime")]
     pub lance_write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
+    #[cfg(feature = "flow-runtime")]
+    pub(crate) log_table: LogTableHandle,
 }
 
 impl Run {
@@ -465,11 +473,31 @@ impl Run {
         self.logs = self.logs.saturating_add(logs.len() as u64);
         self.highest_log_level = highest;
 
+        // Oldest first within a flush, and every row carries its repeat group.
+        logs.sort_by_key(|log| log.start);
+        for log in logs.iter_mut() {
+            let level = log.log_level.to_u8();
+            let fingerprint = log_summary::fingerprint(log.node_id.as_deref(), level, &log.message);
+            let start = log
+                .start
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_micros() as u64)
+                .unwrap_or_default();
+            self.log_summary.record(
+                log.node_id.as_deref(),
+                level,
+                start,
+                &log.message,
+                Some(&fingerprint),
+            );
+            log.fingerprint = Some(fingerprint.id);
+        }
+
         // 2) build arrow batch in-memory
         let arrow_batch = LogMessage::into_arrow(logs)?;
         let schema = arrow_batch.schema();
 
-        let meta = if finalize {
+        let (meta, summary) = if finalize {
             let vs = &self.board.version;
             let version_string = format!("v{}-{}-{}", vs.0, vs.1, vs.2);
             let start_micros = self
@@ -492,8 +520,14 @@ impl Run {
                 .drain()
                 .map(|(k, v)| (k, v.to_u8()))
                 .collect::<Vec<(String, u8)>>();
+            let summary = (!self.log_summary.is_empty()).then(|| {
+                self.log_summary.finish(
+                    true,
+                    Some(visited_nodes.iter().map(|(id, _)| id.clone()).collect()),
+                )
+            });
 
-            Some(LogMeta {
+            let meta = LogMeta {
                 app_id: self.app_id.clone(),
                 run_id: self.id.clone(),
                 board_id: self.board.id.clone(),
@@ -508,9 +542,10 @@ impl Run {
                 event_version: self.event_version.clone(),
                 payload,
                 is_remote: false,
-            })
+            };
+            (Some(meta), summary)
         } else {
-            None
+            (None, None)
         };
 
         Ok(Some(PreparedFlush {
@@ -521,9 +556,11 @@ impl Run {
             schema,
             log_initialized: self.log_initialized,
             meta,
+            summary,
             write_options: self.lance_write_options.clone(),
             log_store: self.log_store.clone(),
             run_index: self.run_index.clone(),
+            log_table: self.log_table.clone(),
         }))
     }
 
@@ -561,9 +598,28 @@ pub(crate) struct PreparedFlush {
     schema: SchemaRef,
     log_initialized: bool,
     meta: Option<LogMeta>,
+    summary: Option<LogSummary>,
     write_options: Option<flow_like_storage::lancedb::table::WriteOptions>,
     log_store: Option<FlowLikeStore>,
     run_index: Option<Arc<dyn RunIndex>>,
+    log_table: LogTableHandle,
+}
+
+/// The run's open log table, shared by every flush of the run so periodic
+/// flushes append without reconnecting.
+#[cfg(feature = "flow-runtime")]
+#[derive(Clone, Default)]
+pub(crate) struct LogTableHandle(Arc<std::sync::Mutex<Option<flow_like_storage::lancedb::Table>>>);
+
+#[cfg(feature = "flow-runtime")]
+impl LogTableHandle {
+    fn get(&self) -> Option<flow_like_storage::lancedb::Table> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, table: Option<flow_like_storage::lancedb::Table>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = table;
+    }
 }
 
 #[cfg(not(feature = "flow-runtime"))]
@@ -590,6 +646,19 @@ impl PreparedFlush {
 
             match self.try_write().await {
                 Ok(result) => {
+                    if let (Some(meta), Some(summary), Some(store)) =
+                        (&self.meta, &self.summary, &self.log_store)
+                        && let Err(error) = log_summary::write_run_summary(
+                            store,
+                            &meta.app_id,
+                            &meta.board_id,
+                            &meta.run_id,
+                            summary,
+                        )
+                        .await
+                    {
+                        tracing::warn!(run_id = %meta.run_id, error = %error, "Failed to write run log summary sidecar");
+                    }
                     // The log table is already written: an index failure must
                     // not drop the meta callers report the run with, nor retry.
                     if let Some(meta) = &self.meta
@@ -639,16 +708,38 @@ impl PreparedFlush {
     }
 
     async fn try_write(&self) -> flow_like_types::Result<FlushResult> {
+        let created_table = match self.log_table.get() {
+            Some(table) => {
+                if let Err(error) = self.try_add(&table).await {
+                    // A stale handle must not pin every retry to the same failure.
+                    self.log_table.set(None);
+                    return Err(error);
+                }
+                false
+            }
+            None => {
+                let (table, created_table) = self.connect_and_write().await?;
+                self.log_table.set(Some(table));
+                created_table
+            }
+        };
+
+        Ok(FlushResult {
+            created_table,
+            meta: self.meta.clone(),
+        })
+    }
+
+    async fn connect_and_write(
+        &self,
+    ) -> flow_like_types::Result<(flow_like_storage::lancedb::Table, bool)> {
         let db = (self.db_fn)(self.base_path.clone()).execute().await?;
 
         // Fast path: table already exists, just append
         match db.open_table(&self.run_id).execute().await {
             Ok(table) => {
                 self.try_add(&table).await?;
-                return Ok(FlushResult {
-                    created_table: false,
-                    meta: self.meta.clone(),
-                });
+                return Ok((table, false));
             }
             Err(open_err) => {
                 tracing::debug!(run_id = %self.run_id, error = %open_err, "open_table failed, will create");
@@ -660,13 +751,8 @@ impl PreparedFlush {
         if let Some(opts) = &self.write_options {
             builder = builder.write_options(opts.clone());
         }
-        match builder.execute().await {
-            Ok(_) => {
-                return Ok(FlushResult {
-                    created_table: !self.log_initialized,
-                    meta: self.meta.clone(),
-                });
-            }
+        let table = match builder.execute().await {
+            Ok(table) => table,
             Err(create_err) => {
                 // Another concurrent flush likely created the table between our
                 // open_table and create_table calls — fall back to open + add.
@@ -677,13 +763,11 @@ impl PreparedFlush {
                     )
                 })?;
                 self.try_add(&table).await?;
+                table
             }
-        }
+        };
 
-        Ok(FlushResult {
-            created_table: !self.log_initialized,
-            meta: self.meta.clone(),
-        })
+        Ok((table, !self.log_initialized))
     }
 }
 
@@ -1050,7 +1134,14 @@ impl InternalRun {
         let (log_store, db, lance_write_options) = {
             let guard = handler.config.read().await;
             let log_store = guard.stores.log_store.clone();
-            let db = guard.callbacks.build_logs_database.clone();
+            // Flushes connect through the run's Lance Session: it carries the
+            // host's store registry and keeps caches instead of a default per connect.
+            let session = handler.lance_session.clone();
+            let db = guard.callbacks.build_logs_database.clone().map(
+                |build| -> crate::credentials::LogsDbBuilder {
+                    Arc::new(move |path: Path| build(path).session(session.clone()))
+                },
+            );
             let write_opts = guard.callbacks.lance_write_options.clone();
             tracing::debug!(
                 has_log_store = log_store.is_some(),
@@ -1103,12 +1194,15 @@ impl InternalRun {
             }),
 
             visited_nodes: AHashMap::with_capacity(board.nodes.len()),
+            log_summary: LogSummaryBuilder::default(),
             log_store,
             run_index,
             #[cfg(feature = "flow-runtime")]
             log_db: db,
             #[cfg(feature = "flow-runtime")]
             lance_write_options,
+            #[cfg(feature = "flow-runtime")]
+            log_table: LogTableHandle::default(),
         };
 
         let run = Arc::new(Mutex::new(run));
@@ -3110,6 +3204,111 @@ mod tests {
             .expect("flush wait should stop promptly")
             .expect("flush wait task should complete");
         assert!(!ticked);
+    }
+
+    #[cfg(feature = "flow-runtime")]
+    mod log_flush {
+        use super::*;
+        use flow_like_storage::arrow_array::Int32Array;
+        use flow_like_storage::arrow_schema::{DataType, Field, Schema};
+        use std::sync::atomic::AtomicUsize;
+
+        async fn run_with_log_db(connects: Arc<AtomicUsize>) -> (Arc<FlowLikeState>, InternalRun) {
+            let uri = format!("memory://run-logs-{}", create_id());
+            let mut config = FlowLikeConfig::new();
+            config.register_build_logs_database(Arc::new(move |_path: Path| {
+                connects.fetch_add(1, Ordering::SeqCst);
+                flow_like_storage::lancedb::connect(&uri)
+            }));
+            let state = Arc::new(FlowLikeState::new(
+                config,
+                HTTPClient::new_without_refetch(),
+            ));
+            let board = Board::new_detached(Some("log-flush".to_string()), Path::default());
+            let payload = RunPayload {
+                id: "unused-entry".to_string(),
+                payload: None,
+                runtime_variables: None,
+                filter_secrets: Some(true),
+            };
+            let run = InternalRun::new(
+                "test-app",
+                Arc::new(board),
+                None,
+                &state,
+                &Profile::default(),
+                &payload,
+                false,
+                test_intercom_callback(),
+                None,
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await
+            .expect("build run");
+            (state, run)
+        }
+
+        async fn flush(run: &InternalRun, message: &str) -> FlushResult {
+            let prepared = {
+                let mut run = run.run.lock().await;
+                run.push_node_log("node", None, message, LogLevel::Info);
+                run.prepare_flush(false)
+                    .expect("prepare flush")
+                    .expect("log database configured")
+            };
+            prepared.write().await.expect("flush logs")
+        }
+
+        async fn cached_table(run: &InternalRun) -> flow_like_storage::lancedb::Table {
+            run.run
+                .lock()
+                .await
+                .log_table
+                .get()
+                .expect("flush caches the log table")
+        }
+
+        #[tokio::test]
+        async fn flushes_append_through_one_connection_on_the_run_session() {
+            let connects = Arc::new(AtomicUsize::new(0));
+            let (state, run) = run_with_log_db(connects.clone()).await;
+
+            assert!(flush(&run, "first").await.created_table);
+            assert!(!flush(&run, "second").await.created_table);
+
+            assert_eq!(connects.load(Ordering::SeqCst), 1);
+            let table = cached_table(&run).await;
+            assert_eq!(table.count_rows(None).await.unwrap(), 2);
+            let dataset = table.dataset().unwrap().get().await.unwrap();
+            assert!(Arc::ptr_eq(&dataset.session(), &state.lance_session));
+        }
+
+        #[tokio::test]
+        async fn failed_append_on_the_cached_table_reconnects_on_retry() {
+            let connects = Arc::new(AtomicUsize::new(0));
+            let (_state, run) = run_with_log_db(connects.clone()).await;
+            let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))]).unwrap();
+            let stale =
+                flow_like_storage::lancedb::connect(&format!("memory://stale-{}", create_id()))
+                    .execute()
+                    .await
+                    .unwrap()
+                    .create_table("stale", batch)
+                    .execute()
+                    .await
+                    .unwrap();
+            run.run.lock().await.log_table.set(Some(stale));
+
+            assert!(flush(&run, "after stale handle").await.created_table);
+
+            assert_eq!(connects.load(Ordering::SeqCst), 1);
+            let table = cached_table(&run).await;
+            assert_eq!(table.name(), run.run.lock().await.id);
+            assert_eq!(table.count_rows(None).await.unwrap(), 1);
+        }
     }
 
     /// The gates in nodes and host functions key off the run's environment,

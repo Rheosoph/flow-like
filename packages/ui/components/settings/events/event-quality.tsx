@@ -307,7 +307,7 @@ export function EventQuality({
 				loading={corpusQuery.isLoading}
 				error={corpusQuery.isError ? messageOf(corpusQuery.error) : null}
 				locked={!canReadCorpus}
-				canPromote={canWriteEvents}
+				canPromote={canWriteEvents && canReadLogs}
 				writeDeniedMessage={writeDeniedMessage}
 				suiteExists={suite !== null}
 				nodeName={nodeName}

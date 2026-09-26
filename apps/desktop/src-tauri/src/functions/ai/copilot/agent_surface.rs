@@ -18,12 +18,13 @@ use flow_like::{
         },
     },
     flow::{
-        board::Board,
+        board::{Board, BoardCell},
         copilot::{
             BoardContextManifest, CatalogProvider, FlowScriptPendingDelivery, GraphContext,
             ManifestAudit, ManifestAugmentations, ManifestSource, ManifestSourceStatus,
-            board_fingerprint, default_flowscript_module_templates, flowscript_workspace_envelope,
-            global_assistant_system_prompt, workflow_strategy_fingerprint,
+            WebResearchCapability, board_fingerprint, default_flowscript_module_templates,
+            flowscript_workspace_envelope, global_assistant_system_prompt_for,
+            workflow_strategy_fingerprint,
         },
         node::Node,
     },
@@ -34,9 +35,9 @@ use tauri::{AppHandle, Manager};
 pub(super) struct FlowPilotAgentSurface {
     pub(super) graph_context: Option<Arc<GraphContext>>,
     pub(super) board_arc: Option<Arc<Board>>,
-    /// Registry-backed current board. Retained FlowScript source operations lock this at execution
+    /// Registry-backed current board. Retained FlowScript source operations read it at execution
     /// time so the commit fingerprint and host queue boundary cannot rely on a captured clone.
-    pub(super) live_board: Option<Arc<flow_like_types::sync::Mutex<Board>>>,
+    pub(super) live_board: Option<Arc<BoardCell>>,
     /// Original host-owned workflow request used to derive a deterministic scope-coverage
     /// contract before the model can author its own capability plan. Bound to the immutable
     /// end-user request (not the per-run composed specialist instruction), so nested repair runs
@@ -70,7 +71,7 @@ pub(super) struct FlowPilotAgentSurface {
 pub(super) fn live_board_handle(
     app_handle: &AppHandle,
     board: Option<&Board>,
-) -> Option<Arc<flow_like_types::sync::Mutex<Board>>> {
+) -> Option<Arc<BoardCell>> {
     let board_id = board
         .map(|board| board.id.trim())
         .filter(|board_id| !board_id.is_empty())?;
@@ -89,8 +90,8 @@ pub(super) async fn pending_flowscript_redelivery_for_request(
     request_identity_prompt: &str,
 ) -> Option<FlowScriptPendingDelivery> {
     let current_board = match live_board_handle(app_handle, Some(captured_board)) {
-        Some(live_board) => live_board.lock().await.clone(),
-        None => captured_board.clone(),
+        Some(live_board) => live_board.snapshot(),
+        None => Arc::new(captured_board.clone()),
     };
     let store = retained_flow_ir_draft_store_for_board(&current_board).ok()?;
     let binding =
@@ -295,6 +296,7 @@ pub(super) fn build_flowpilot_agent_surface(
     request_identity_prompt: &str,
     host_context_guidance: Option<&str>,
     global: Option<&str>,
+    web_research: WebResearchCapability,
     board_context_augmentation: Option<&serde_json::Value>,
     // Read-only sub-run (flowpilot_board explain): keep the board copilot out of workflow-edit mode
     // so it streams and returns its answer instead of being coerced to emit an edit and, failing
@@ -409,7 +411,7 @@ pub(super) fn build_flowpilot_agent_surface(
         });
 
     let mut system_content = if global.is_some() {
-        global_assistant_system_prompt()
+        global_assistant_system_prompt_for(web_research)
     } else {
         match scope {
             CopilotScope::Board => match board_flowscript.as_deref() {
@@ -676,6 +678,7 @@ mod prompt_selection_tests {
             &format!("flowpilot-panel:conversation\n{REQUEST}"),
             None,
             None,
+            WebResearchCapability::Delegated,
             Some(augmentation),
             false,
         )
@@ -829,6 +832,7 @@ mod prompt_selection_tests {
                 REQUEST,
                 guidance,
                 global,
+                WebResearchCapability::Delegated,
                 augmentation,
                 read_only,
             )
@@ -864,6 +868,7 @@ mod prompt_selection_tests {
                 REQUEST,
                 None,
                 None,
+                WebResearchCapability::Delegated,
                 None,
                 false,
             );

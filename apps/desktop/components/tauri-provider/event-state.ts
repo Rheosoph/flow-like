@@ -1,7 +1,6 @@
 import {
 	type IApp,
 	IAppVisibility,
-	type IBoard,
 	type IEvent,
 	IEventExecutionMode,
 	type IEventState,
@@ -10,7 +9,6 @@ import {
 	type IIntercomEvent,
 	type ILogMetadata,
 	type IMetadata,
-	type INode,
 	type IOAuthProvider,
 	type IOAuthToken,
 	type IPrerunEventResponse,
@@ -19,10 +17,8 @@ import {
 	type IVersionType,
 	type PageTrigger,
 	type ProgressToastData,
-	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
 	classifyPageContractError,
-	extractOAuthRequirementsFromBoard,
 	finishAllProgressToasts,
 	getCurrentPageContext,
 	injectDataFunction,
@@ -44,6 +40,7 @@ import {
 	runTimingNow,
 	timeRunStep,
 } from "@flow-like/flow-like-ui/lib/run-timing";
+import type { IBoardRunRequirements } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import type {
 	IEventAlias,
 	IEventCorpusResult,
@@ -102,11 +99,6 @@ const HUB_CONFIG_RETRY_MS = 60_000;
 
 function isEventRecord(value: unknown): value is IEvent {
 	return isRecord(value) && typeof value.id === "string";
-}
-
-function boardUsesOAuth(board: IBoard): boolean {
-	const { oauth_requirements } = extractOAuthRequirementsFromBoard(board);
-	return asArray(oauth_requirements).length > 0;
 }
 
 const LOCAL_DYNAMIC_PAGE_ACTION_ID_PREFIX = "lda1_";
@@ -362,18 +354,34 @@ export class EventState implements IEventState {
 		return profile;
 	}
 
+	/** The pre-run facts of an event's board; throws when this device cannot read the board. */
+	private async eventBoardRequirements(
+		appId: string,
+		event: IEvent,
+	): Promise<IBoardRunRequirements> {
+		const requirements =
+			await this.backend.boardState.getBoardRunRequirements?.(
+				appId,
+				event.board_id,
+				(event.board_version as [number, number, number]) ?? undefined,
+			);
+		if (!requirements) {
+			throw new Error(
+				`Board ${event.board_id} cannot be inspected on this device`,
+			);
+		}
+		return requirements;
+	}
+
 	private async ensureRpaApprovalForEvent(
 		appId: string,
 		event: IEvent,
-		board: IBoard,
+		requirements: IBoardRunRequirements,
 		context: "execution" | "event_registration",
 	): Promise<void> {
 		if (event.execution_mode === "Remote") return;
 		if (context === "event_registration" && event.active === false) return;
-
-		const { requires_local_execution } =
-			extractOAuthRequirementsFromBoard(board);
-		if (!requires_local_execution) return;
+		if (!requirements.requires_local_execution) return;
 
 		const approved = await requestRpaAutomationConsent({
 			appId,
@@ -922,16 +930,10 @@ export class EventState implements IEventState {
 		});
 		const restored = preview.plan.restored;
 		if (restored.board_id && restored.execution_mode !== "Remote") {
-			const board = await this.backend.boardState.getBoard(
-				appId,
-				restored.board_id,
-				restored.board_version as [number, number, number] | undefined,
-				true,
-			);
 			await this.ensureRpaApprovalForEvent(
 				appId,
 				restored,
-				board,
+				await this.eventBoardRequirements(appId, restored),
 				"event_registration",
 			);
 		}
@@ -954,16 +956,10 @@ export class EventState implements IEventState {
 		oauthTokens?: Record<string, IOAuthToken>,
 	): Promise<IEvent> {
 		if (event.board_id && event.execution_mode !== "Remote") {
-			const board = await this.backend.boardState.getBoard(
-				appId,
-				event.board_id,
-				event.board_version as [number, number, number] | undefined,
-				true,
-			);
 			await this.ensureRpaApprovalForEvent(
 				appId,
 				event,
-				board,
+				await this.eventBoardRequirements(appId, event),
 				"event_registration",
 			);
 		}
@@ -1400,15 +1396,10 @@ export class EventState implements IEventState {
 					}
 			  >
 			| undefined;
-		let board: IBoard;
+		let requirements: IBoardRunRequirements;
 		try {
-			board = await timeRunStep("get_board", () =>
-				this.backend.boardState.getBoard(
-					appId,
-					event.board_id,
-					(event.board_version as [number, number, number]) ?? undefined,
-					true,
-				),
+			requirements = await timeRunStep("board_requirements", () =>
+				this.eventBoardRequirements(appId, event),
 			);
 		} catch (error) {
 			// Everything below reads the flow to prepare a local run: packages,
@@ -1434,23 +1425,27 @@ export class EventState implements IEventState {
 		await timeRunStep("packages", async () =>
 			this.backend.boardState.ensureAppPackagesInstalledForExecution?.(
 				appId,
-				board,
+				requirements,
 			),
 		);
 		await timeRunStep("rpa_approval", () =>
-			this.ensureRpaApprovalForEvent(appId, event, board, "execution"),
+			this.ensureRpaApprovalForEvent(appId, event, requirements, "execution"),
 		);
 		beforeDispatch?.();
 		// Provider configs are only looked up for OAuth nodes; other runs never wait on the hub.
-		const hub = boardUsesOAuth(board)
-			? await timeRunStep("hub_config", () =>
-					getHubConfig(this.backend.profile),
-				)
-			: undefined;
+		const hub =
+			requirements.oauth_requirements.length > 0
+				? await timeRunStep("hub_config", () =>
+						getHubConfig(this.backend.profile),
+					)
+				: undefined;
 		const oauthResult = await timeRunStep("oauth_tokens", () =>
-			checkOAuthTokens(board, oauthTokenStore, hub, {
-				refreshToken: oauthService.refreshToken.bind(oauthService),
-			}),
+			checkOAuthTokensFromPrerun(
+				requirements.oauth_requirements,
+				oauthTokenStore,
+				hub,
+				{ refreshToken: oauthService.refreshToken.bind(oauthService) },
+			),
 		);
 
 		// Check consent for providers that have tokens but might not have consent for this app
@@ -1973,14 +1968,9 @@ export class EventState implements IEventState {
 			return { missingProviders: [] };
 		}
 
-		let board: IBoard;
+		let requirements: IBoardRunRequirements;
 		try {
-			board = await this.backend.boardState.getBoard(
-				appId,
-				event.board_id,
-				(event.board_version as [number, number, number]) ?? undefined,
-				true,
-			);
+			requirements = await this.eventBoardRequirements(appId, event);
 		} catch (error) {
 			// A user who may run an event but not read its board — the normal
 			// shape of a published app — cannot resolve OAuth here and does not
@@ -1994,12 +1984,16 @@ export class EventState implements IEventState {
 			return { missingProviders: [] };
 		}
 
-		const hub = boardUsesOAuth(board)
-			? await getHubConfig(this.backend.profile)
-			: undefined;
-		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
-			refreshToken: oauthService.refreshToken.bind(oauthService),
-		});
+		const hub =
+			requirements.oauth_requirements.length > 0
+				? await getHubConfig(this.backend.profile)
+				: undefined;
+		const oauthResult = await checkOAuthTokensFromPrerun(
+			requirements.oauth_requirements,
+			oauthTokenStore,
+			hub,
+			{ refreshToken: oauthService.refreshToken.bind(oauthService) },
+		);
 
 		console.log("[checkEventOAuth] oauthResult:", {
 			requiredProviders: oauthResult.requiredProviders?.map((p) => p.id),
@@ -2161,64 +2155,27 @@ export class EventState implements IEventState {
 					"Page triggers require an active Event with a configured Page",
 				);
 			}
-			const board: IBoard = await timeRunStep("prerun.local_board", () =>
-				invoke<IBoard>("get_board", {
+			// Local on purpose: no materialization or hub refresh here — the
+			// remote prerun below is the fallback for a board this device lacks.
+			const requirements = await timeRunStep("prerun.local_board", () =>
+				invoke<IBoardRunRequirements>("get_board_run_requirements", {
 					appId,
 					boardId: event.board_id,
 					version: event.board_version,
 				}),
 			);
 
-			const runtimeVariables = Object.values(board.variables)
-				.filter((v) => v.runtime_configured)
-				.map((v) => ({
-					id: v.id,
-					name: v.name,
-					description: v.description ?? undefined,
-					data_type: v.data_type,
-					value_type: v.value_type,
-					secret: v.secret,
-					schema: v.schema ?? undefined,
-				}));
-
-			const {
-				oauth_requirements,
-				requires_local_execution,
-				execution_mode,
-				can_execute_locally,
-			} = extractOAuthRequirementsFromBoard(board);
-
-			// Collect all WASM (external) node package_ids and permissions
-			const wasmPackageIds = new Set<string>();
-			const wasmPackagePermissions: Record<string, string[]> = {};
-			const collectWasm = (node: INode) => {
-				if (node.wasm?.package_id) {
-					wasmPackageIds.add(node.wasm.package_id);
-					if (node.wasm.permissions?.length) {
-						const existing = wasmPackagePermissions[node.wasm.package_id] ?? [];
-						for (const perm of node.wasm.permissions) {
-							if (!existing.includes(perm)) existing.push(perm);
-						}
-						wasmPackagePermissions[node.wasm.package_id] = existing;
-					}
-				}
-			};
-			for (const node of Object.values(board.nodes)) collectWasm(node);
-			for (const layer of Object.values(board.layers)) {
-				for (const node of Object.values(layer.nodes)) collectWasm(node);
-			}
-
 			return {
 				board_id: event.board_id,
-				runtime_variables: runtimeVariables,
-				oauth_requirements,
-				requires_local_execution,
-				execution_mode,
+				runtime_variables: requirements.runtime_variables,
+				oauth_requirements: requirements.oauth_requirements,
+				requires_local_execution: requirements.requires_local_execution,
+				execution_mode: requirements.execution_mode,
 				event_execution_mode: event.execution_mode ?? IEventExecutionMode.Local,
-				can_execute_locally,
-				has_wasm_nodes: wasmPackageIds.size > 0,
-				wasm_package_ids: Array.from(wasmPackageIds),
-				wasm_package_permissions: wasmPackagePermissions,
+				can_execute_locally: true,
+				has_wasm_nodes: requirements.wasm_package_ids.length > 0,
+				wasm_package_ids: requirements.wasm_package_ids,
+				wasm_package_permissions: requirements.wasm_package_permissions,
 			};
 		};
 

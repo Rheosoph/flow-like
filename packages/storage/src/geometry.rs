@@ -6,6 +6,7 @@ use flow_like_types::{Result, Value, anyhow};
 use geoarrow_array::GeoArrowArray;
 use std::{collections::HashMap, sync::Arc};
 
+mod geojson;
 mod nested;
 
 pub const EXTENSION_NAME: &str = "ARROW:extension:name";
@@ -54,23 +55,110 @@ pub fn validate_geometry_field(field: &Field) -> Result<()> {
     Ok(())
 }
 
-/// A GeoJSON geometry that a WKB column stores without loss: a flow Geometry
-/// profile value without `bbox` or foreign members, whose WKB fits the limit.
-pub fn is_geometry_value(value: &Value) -> bool {
-    fn bare(value: &Value) -> bool {
-        let Some(object) = value.as_object() else {
-            return false;
-        };
-        names_geometry_kind(value)
-            && object.iter().all(|(key, member)| match key.as_str() {
-                "type" | "coordinates" => true,
-                "geometries" => member
-                    .as_array()
-                    .is_some_and(|children| children.iter().all(bare)),
-                _ => false,
-            })
+const GEOMETRY_INPUT_FORMS: &str = "a GeoJSON geometry object (Point, LineString, Polygon, MultiPoint, MultiLineString, MultiPolygon or GeometryCollection), a GeoJSON Feature, GeoJSON text, WKT text in longitude latitude order, or null";
+
+/// The geometry a declared geometry column stores for `value`: a bare GeoJSON
+/// geometry, or null. Features contribute their geometry; GeoJSON and WKT text
+/// are parsed; `bbox` and foreign members are dropped.
+pub fn geometry_input(value: &Value) -> Result<Value> {
+    match value {
+        Value::Null => Ok(Value::Null),
+        Value::String(text) => geometry_text(text),
+        Value::Object(object) => match object.get("type").and_then(Value::as_str) {
+            Some("Feature") => match object.get("geometry") {
+                Some(Value::Null) => Ok(Value::Null),
+                Some(geometry) => bare_geometry(geometry)
+                    .map_err(|error| anyhow!("GeoJSON Feature geometry: {error}")),
+                None => Err(anyhow!(
+                    "received a GeoJSON Feature without a geometry member; expected {GEOMETRY_INPUT_FORMS}"
+                )),
+            },
+            Some("FeatureCollection") => Err(anyhow!(
+                "received a GeoJSON FeatureCollection; write one row per feature, each carrying that feature's geometry"
+            )),
+            _ => bare_geometry(value),
+        },
+        other => Err(anyhow!(
+            "received {}; expected {GEOMETRY_INPUT_FORMS}",
+            describe_value(other)
+        )),
     }
-    bare(value) && flow_like_geometry::to_wkb(value).is_ok()
+}
+
+/// [`geometry_input`] encoded as the WKB a geometry column stores.
+pub fn geometry_input_wkb(value: &Value) -> Result<Option<Vec<u8>>> {
+    match geometry_input(value)? {
+        Value::Null => Ok(None),
+        geometry => flow_like_geometry::to_wkb(&geometry).map(Some),
+    }
+}
+
+fn geometry_text(text: &str) -> Result<Value> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(anyhow!(
+            "received an empty string; use null for an absent geometry, otherwise {GEOMETRY_INPUT_FORMS}"
+        ));
+    }
+    if text.starts_with('{') {
+        let parsed: Value = serde_json::from_str(text)
+            .map_err(|error| anyhow!("received text that is not valid GeoJSON: {error}"))?;
+        return geometry_input(&parsed);
+    }
+    flow_like_geometry::from_wkt(text).map_err(|error| {
+        anyhow!("received text that is neither GeoJSON nor valid WKT ({error}); expected {GEOMETRY_INPUT_FORMS}")
+    })
+}
+
+fn bare_geometry(value: &Value) -> Result<Value> {
+    if !names_geometry_kind(value) {
+        return Err(anyhow!(
+            "received {}; expected {GEOMETRY_INPUT_FORMS}",
+            describe_value(value)
+        ));
+    }
+    let geometry = without_foreign_members(value);
+    flow_like_types::geometry::validate_geometry(&geometry, None)?;
+    Ok(geometry)
+}
+
+/// Keeps `crs` so the validator still refuses an alternate CRS declaration.
+fn without_foreign_members(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    Value::Object(
+        object
+            .iter()
+            .filter_map(|(key, member)| match key.as_str() {
+                "type" | "coordinates" | "crs" => Some((key.clone(), member.clone())),
+                "geometries" => Some((
+                    key.clone(),
+                    member
+                        .as_array()
+                        .map(|children| {
+                            Value::Array(children.iter().map(without_foreign_members).collect())
+                        })
+                        .unwrap_or_else(|| member.clone()),
+                )),
+                _ => None,
+            })
+            .collect(),
+    )
+}
+
+fn describe_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".into(),
+        Value::Bool(_) => "a boolean".into(),
+        Value::Number(_) => "a number".into(),
+        Value::String(_) => "a string".into(),
+        Value::Array(_) => "an array".into(),
+        Value::Object(object) => match object.get("type").and_then(Value::as_str) {
+            Some(kind) => format!("an object of type '{kind}'"),
+            None => "an object without a GeoJSON type".into(),
+        },
+    }
 }
 
 /// An object whose `type` names a geometry kind is meant as a geometry: a
@@ -248,9 +336,25 @@ pub fn register_geo_functions(context: &datafusion::prelude::SessionContext) {
     geodatafusion::register(context);
     register_ordered_relations(context);
     nested::register_extension_preserving_nesting(context);
+    geojson::register_text_functions(context);
     context.register_udf(datafusion::logical_expr::ScalarUDF::from(
         Wgs84FromText::default(),
     ));
+}
+
+/// A WKB geometry result, scalar when the function was called with a scalar.
+fn wkb_result(
+    scalar: bool,
+    values: Vec<Option<Vec<u8>>>,
+) -> datafusion::logical_expr::ColumnarValue {
+    use datafusion::{common::ScalarValue, logical_expr::ColumnarValue};
+    if scalar {
+        ColumnarValue::Scalar(ScalarValue::Binary(values.into_iter().next().flatten()))
+    } else {
+        ColumnarValue::Array(Arc::new(BinaryArray::from_iter(
+            values.iter().map(|value| value.as_deref()),
+        )))
+    }
 }
 
 const CONVERSE_RELATIONS: [(&str, &str); 4] = [
@@ -357,9 +461,7 @@ impl datafusion::logical_expr::ScalarUDFImpl for Wgs84FromText {
         &self,
         args: datafusion::logical_expr::ScalarFunctionArgs,
     ) -> datafusion::error::Result<datafusion::logical_expr::ColumnarValue> {
-        use datafusion::{
-            common::ScalarValue, error::DataFusionError, logical_expr::ColumnarValue,
-        };
+        use datafusion::{error::DataFusionError, logical_expr::ColumnarValue};
         // A bound Geometry parameter already is a WGS 84 geometry.
         if args.args[0].data_type() == DataType::Binary {
             let field = &args.arg_fields[0];
@@ -389,15 +491,10 @@ impl datafusion::logical_expr::ScalarUDFImpl for Wgs84FromText {
             })
             .collect::<Result<Vec<_>>>()
             .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        if matches!(args.args[0], ColumnarValue::Scalar(_)) {
-            Ok(ColumnarValue::Scalar(ScalarValue::Binary(
-                values.into_iter().next().flatten(),
-            )))
-        } else {
-            Ok(ColumnarValue::Array(Arc::new(BinaryArray::from_iter(
-                values.iter().map(|value| value.as_deref()),
-            ))))
-        }
+        Ok(wkb_result(
+            matches!(args.args[0], ColumnarValue::Scalar(_)),
+            values,
+        ))
     }
 }
 
@@ -414,6 +511,204 @@ mod tests {
         )));
         assert!(validate_crs(&Field::new("unknown", DataType::Binary, true)).is_err());
     }
+    fn square() -> Value {
+        json!({"type": "Polygon", "coordinates": [[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]]]})
+    }
+
+    #[test]
+    fn geometry_input_accepts_geometries_features_and_text() -> Result<()> {
+        let point = json!({"type": "Point", "coordinates": [13.405, 52.52]});
+        let annotated = json!({
+            "type": "GeometryCollection",
+            "bbox": [0.0, 0.0, 4.0, 4.0],
+            "name": "site",
+            "geometries": [{"type": "Point", "coordinates": [13.405, 52.52], "id": 7}]
+        });
+        for (input, expected) in [
+            (point.clone(), point.clone()),
+            (
+                json!({"type": "Feature", "id": 3, "geometry": square(), "properties": {"a": 1}}),
+                square(),
+            ),
+            (Value::String(square().to_string()), square()),
+            (
+                Value::String(json!({"type": "Feature", "geometry": point}).to_string()),
+                point.clone(),
+            ),
+            (json!(" POINT (13.405 52.52) "), point.clone()),
+            (json!("POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0))"), square()),
+            (
+                annotated,
+                json!({"type": "GeometryCollection", "geometries": [point]}),
+            ),
+            (Value::Null, Value::Null),
+            (
+                json!({"type": "Feature", "geometry": null, "properties": {}}),
+                Value::Null,
+            ),
+        ] {
+            assert_eq!(geometry_input(&input)?, expected, "{input}");
+        }
+        assert_eq!(
+            geometry_input_wkb(&json!("POINT (1 2)"))?,
+            Some(flow_like_geometry::to_wkb(
+                &json!({"type": "Point", "coordinates": [1.0, 2.0]})
+            )?)
+        );
+        assert_eq!(geometry_input_wkb(&Value::Null)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn geometry_input_rejections_name_the_input_and_the_accepted_forms() {
+        let rejected = |value: Value| geometry_input(&value).unwrap_err().to_string();
+
+        let collection = rejected(json!({"type": "FeatureCollection", "features": []}));
+        assert!(collection.contains("one row per feature"), "{collection}");
+
+        for (value, received) in [
+            (json!(42), "a number"),
+            (json!([13.4, 52.5]), "an array"),
+            (json!({"type": "Circle", "radius": 3}), "type 'Circle'"),
+            (json!({"coordinates": [1, 2]}), "without a GeoJSON type"),
+        ] {
+            let message = rejected(value);
+            assert!(message.contains(received), "{message}");
+            assert!(message.contains("WKT text"), "{message}");
+        }
+
+        let z = rejected(json!({"type": "Point", "coordinates": [1.0, 2.0, 3.0]}));
+        assert!(z.contains("Z/M"), "{z}");
+        let wkt_z = rejected(json!("POINT Z (1 2 3)"));
+        assert!(wkt_z.contains("two-dimensional"), "{wkt_z}");
+        let feature = rejected(json!({"type": "Feature", "properties": {}}));
+        assert!(feature.contains("without a geometry member"), "{feature}");
+        let nested = rejected(json!({"type": "Feature", "geometry": {"type": "Feature"}}));
+        assert!(nested.contains("type 'Feature'"), "{nested}");
+        let text = rejected(json!("not a geometry"));
+        assert!(text.contains("neither GeoJSON nor valid WKT"), "{text}");
+        let broken = rejected(json!("{\"type\": \"Point\""));
+        assert!(broken.contains("not valid GeoJSON"), "{broken}");
+        assert!(rejected(json!("  ")).contains("use null"));
+        let crs = rejected(json!({"type": "Point", "coordinates": [1.0, 2.0], "crs": {}}));
+        assert!(crs.contains("CRS"), "{crs}");
+    }
+
+    fn shapes_context() -> Result<datafusion::prelude::SessionContext> {
+        let ctx = datafusion::prelude::SessionContext::new();
+        register_geo_functions(&ctx);
+        let batch = crate::arrow_utils::value_to_record_batch_with_fields(
+            vec![
+                json!({"id": 1, "geom": square(), "text": square().to_string()}),
+                json!({"id": 2, "geom": null, "text": null}),
+            ],
+            Some(vec![
+                Arc::new(Field::new("id", DataType::Int64, false)),
+                Arc::new(geometry_field("geom", true)),
+                Arc::new(Field::new("text", DataType::LargeUtf8, true)),
+            ]),
+        )?;
+        ctx.register_batch("shapes", batch)?;
+        Ok(ctx)
+    }
+
+    async fn sql_rows(ctx: &datafusion::prelude::SessionContext, sql: &str) -> Result<Vec<Value>> {
+        let batches = ctx.sql(sql).await?.collect().await?;
+        Ok(batches
+            .iter()
+            .map(crate::arrow_utils::record_batch_to_value)
+            .collect::<Result<Vec<_>>>()?
+            .concat())
+    }
+
+    #[tokio::test]
+    async fn geojson_sql_functions_round_trip_and_st_astext_reads_as_wkt() -> Result<()> {
+        let ctx = shapes_context()?;
+        let converted = sql_rows(
+            &ctx,
+            "SELECT ST_AsGeoJSON(geom) AS json, ST_GeomFromGeoJSON(text) AS parsed, \
+             ST_AsGeoJSON(ST_GeomFromGeoJSON(ST_AsGeoJSON(geom))) AS round_trip, \
+             ST_AsText(geom) AS wkt FROM shapes ORDER BY id",
+        )
+        .await?;
+        let json_text = converted[0]["json"].as_str().expect("GeoJSON text");
+        assert_eq!(serde_json::from_str::<Value>(json_text)?, square());
+        assert_eq!(converted[0]["parsed"], square());
+        assert_eq!(converted[0]["round_trip"], converted[0]["json"]);
+        let wkt = converted[0]["wkt"].as_str().expect("WKT text");
+        assert_eq!(flow_like_geometry::from_wkt(wkt)?, square());
+        for column in ["json", "parsed", "round_trip", "wkt"] {
+            assert_eq!(converted[1][column], Value::Null, "{column}");
+        }
+
+        let text = ctx
+            .sql("SELECT ST_AsText(geom) AS wkt, ST_AsGeoJSON(geom) AS json FROM shapes")
+            .await?;
+        for field in text.schema().fields() {
+            assert_eq!(field.data_type(), &DataType::Utf8, "{field:?}");
+            assert!(!field.metadata().contains_key(EXTENSION_NAME), "{field:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stored_wkt_geometry_columns_read_as_geojson() -> Result<()> {
+        let field = Field::new("outline", DataType::Utf8, true).with_metadata(HashMap::from([
+            (EXTENSION_NAME.into(), "geoarrow.wkt".into()),
+            (EXTENSION_METADATA.into(), WGS84_METADATA.into()),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![field])),
+            vec![Arc::new(arrow_array::StringArray::from(vec![
+                Some("POLYGON ((0 0, 4 0, 4 4, 0 4, 0 0))"),
+                None,
+            ]))],
+        )?;
+        assert_eq!(
+            crate::arrow_utils::record_batch_to_value(&batch)?,
+            vec![json!({"outline": square()}), json!({"outline": null})]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn geojson_sql_functions_take_scalars_and_reject_non_geometry() -> Result<()> {
+        let ctx = shapes_context()?;
+        let scalars = sql_rows(
+            &ctx,
+            "SELECT ST_AsGeoJSON(flow_geomfromtext('POINT(1 2)')) AS json, \
+             ST_GeomFromGeoJSON('{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[1,2]}}') AS feature, \
+             ST_GeomFromGeoJSON('POINT (1 2)') AS wkt, \
+             ST_Area(ST_GeomFromGeoJSON(text)) AS area FROM shapes WHERE id = 1",
+        )
+        .await?;
+        let point = json!({"type": "Point", "coordinates": [1.0, 2.0]});
+        assert_eq!(
+            serde_json::from_str::<Value>(scalars[0]["json"].as_str().unwrap_or_default())?,
+            point
+        );
+        assert_eq!(scalars[0]["feature"], point);
+        assert_eq!(scalars[0]["wkt"], point);
+        assert_eq!(scalars[0]["area"], json!(16.0));
+
+        let error = ctx
+            .sql("SELECT ST_GeomFromGeoJSON('{\"type\":\"FeatureCollection\",\"features\":[]}') AS g")
+            .await;
+        let error = match error {
+            Ok(frame) => frame.collect().await.map(|_| ()).unwrap_err().to_string(),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("one row per feature"), "{error}");
+        let error = ctx
+            .sql("SELECT ST_AsGeoJSON(text) FROM shapes")
+            .await
+            .map(|_| ())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ST_GeomFromGeoJSON"), "{error}");
+        Ok(())
+    }
+
     #[test]
     fn geometry_metadata_accepts_explicit_planar_edges() {
         let field = |edges: &str| {

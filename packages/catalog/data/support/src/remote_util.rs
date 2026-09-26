@@ -1704,17 +1704,8 @@ mod tests {
                         "application/xml",
                         "<ListBucketResult><Name>target-content</Name><Prefix>apps/target/storage/db/</Prefix><KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated></ListBucketResult>",
                     )
-                } else if matches!(method, "GET" | "HEAD") {
-                    // The namespace probes an optional __manifest dataset.
-                    ("404 Not Found", "application/xml", "")
                 } else {
-                    // Read-only credentials cannot initialize that manifest.
-                    // Lance then uses the existing directory-listing mode.
-                    (
-                        "403 Forbidden",
-                        "application/xml",
-                        "<Error><Code>AccessDenied</Code><Message>Read-only fixture</Message></Error>",
-                    )
+                    ("404 Not Found", "application/xml", "")
                 };
                 recorded.lock().unwrap().push(request);
                 let reply = format!(
@@ -1817,12 +1808,10 @@ mod tests {
                 assert!(request.starts_with("GET "));
                 assert_eq!(url.path().trim_end_matches('/'), "/target-content");
                 assert!(url.query_pairs().any(|(key, value)| key == "prefix"
-                    && (value.trim_end_matches('/') == "apps/target/storage/db"
-                        || value.starts_with("apps/target/storage/db/__manifest/"))));
+                    && value.trim_end_matches('/') == "apps/target/storage/db"));
             } else {
-                assert!(
-                    url.path()
-                        .starts_with("/target-content/apps/target/storage/db/__manifest/")
+                panic!(
+                    "the namespace manifest is disabled, so only listings reach the store: {request}"
                 );
             }
             assert!(request.contains("Credential=target-access/"));

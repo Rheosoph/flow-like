@@ -1173,7 +1173,7 @@ fn database_builder(
 {
     Arc::new(move |path: ObjectPath| {
         let uri = database_uri(&location, &path);
-        flow_like_storage::lancedb::connect(&uri)
+        flow_like_storage::databases::vector::lancedb::connect_lance(&uri)
     })
 }
 
@@ -1244,6 +1244,7 @@ mod tests {
             package_pins: Vec::new(),
             bit_pins: Vec::new(),
             max_replicas: 1,
+            tls_certificate_id: None,
             hosting: None,
             variables: BTreeMap::new(),
             secret_overrides: BTreeMap::new(),

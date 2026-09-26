@@ -117,7 +117,7 @@ async fn refresh_open_board_definitions(
 
     for board in &boards {
         board
-            .lock()
+            .write()
             .await
             .refresh_node_definitions(flow_state.clone())
             .await;

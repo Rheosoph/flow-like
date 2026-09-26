@@ -33,16 +33,7 @@ async fn ensure_graph_tables_unbuffered(
             "The database adapter does not declare which graph tables are buffered"
         )
     })?;
-    let cache = context
-        .execution_cache
-        .as_ref()
-        .ok_or_else(|| flow_like_types::anyhow!("No execution cache found"))?;
-    let path = if user_scoped {
-        cache.get_user_dir(false)?
-    } else {
-        cache.get_storage(false)?
-    }
-    .join("db");
+    let path = super::vector::connection::database_path(context, user_scoped)?;
     for table in overlay
         .nodes
         .iter()
@@ -205,51 +196,8 @@ impl NodeLogic for OpenGraphOverlayNode {
 
         let cache_set = context.cache.read().await.contains_key(&cache_key);
         if !cache_set {
-            let context_cache = context
-                .execution_cache
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
-            let app_id = context_cache.app_id.clone();
-
-            let db = if let Some(credentials) = &context.credentials {
-                if user_scoped {
-                    credentials
-                        .to_db_scoped(&context_cache.sub, &app_id)
-                        .await?
-                } else {
-                    credentials.to_db(&app_id).await?
-                }
-            } else if user_scoped {
-                let user_dir = context_cache.get_user_dir(false)?;
-                let user_dir = user_dir.join("db");
-                context
-                    .app_state
-                    .config
-                    .read()
-                    .await
-                    .callbacks
-                    .build_user_database
-                    .clone()
-                    .ok_or(flow_like_types::anyhow!("No user database builder found"))?(
-                    user_dir
-                )
-            } else {
-                let board_dir = context_cache.get_storage(false)?;
-                let board_dir = board_dir.join("db");
-                context
-                    .app_state
-                    .config
-                    .read()
-                    .await
-                    .callbacks
-                    .build_project_database
-                    .clone()
-                    .ok_or(flow_like_types::anyhow!("No database builder found"))?(
-                    board_dir
-                )
-            };
-
-            let connection = context.app_state.with_lance_session(db).execute().await?;
+            let connection =
+                super::vector::connection::open_shared(context, user_scoped).await?;
 
             let overlay = match lancegraph::load_overlay(&connection, &overlay_id).await {
                 Ok(o) => o,
@@ -379,49 +327,8 @@ impl NodeLogic for CreateGraphOverlayNode {
         let overlay: flow_like_catalog_core::GraphOverlay = context.evaluate_pin("overlay").await?;
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
 
-        let context_cache = context
-            .execution_cache
-            .clone()
-            .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
-        let app_id = context_cache.app_id.clone();
-
-        let db = if let Some(credentials) = &context.credentials {
-            if user_scoped {
-                credentials
-                    .to_db_scoped(&context_cache.sub, &app_id)
-                    .await?
-            } else {
-                credentials.to_db(&app_id).await?
-            }
-        } else if user_scoped {
-            let user_dir = context_cache.get_user_dir(false)?;
-            let user_dir = user_dir.join("db");
-            context
-                .app_state
-                .config
-                .read()
-                .await
-                .callbacks
-                .build_user_database
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No user database builder found"))?(
-                user_dir
-            )
-        } else {
-            let board_dir = context_cache.get_storage(false)?;
-            let board_dir = board_dir.join("db");
-            context
-                .app_state
-                .config
-                .read()
-                .await
-                .callbacks
-                .build_project_database
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No database builder found"))?(board_dir)
-        };
-
-        let connection = context.app_state.with_lance_session(db).execute().await?;
+        let connection =
+            super::vector::connection::open_shared(context, user_scoped).await?;
 
         let overlay_id = if overlay.id.is_empty() {
             uuid::Uuid::new_v4().to_string()

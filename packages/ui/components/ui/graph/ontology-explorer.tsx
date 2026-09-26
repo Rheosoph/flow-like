@@ -34,6 +34,7 @@ import type {
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 import { Button } from "../button";
 import type { ExpansionOptions } from "./graph-expansion-dialog";
+import { PropertyStorageScope } from "./graph-node-inspector";
 import { GraphViewer, getNodeRawId } from "./graph-viewer";
 import {
 	OntologyActionDialog,
@@ -962,50 +963,54 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 					</Button>
 				</div>
 			)}
-			<GraphViewer
-				key={ontologyQueryTargetKey}
-				overlay={overlay}
-				data={data}
-				loading={loading}
-				truncated={data?.truncated}
-				showToolbar={showToolbar}
-				showSearch={allowSearch}
-				showLegend={showLegend}
-				onNodeSelect={onNodeSelect}
-				onEdgeSelect={onEdgeSelect}
-				onRunCypher={allowCypher ? handleRunCypher : undefined}
-				onRunQuery={allowCypher ? handleRunQuery : undefined}
-				onAskFlowPilot={allowCypher ? handleAskFlowPilot : undefined}
-				onCancelFlowPilot={allowCypher ? handleCancelFlowPilotQuery : undefined}
-				flowPilotStatus={queryUiMatchesTarget ? flowPilotQueryStatus : null}
-				generatedQueryProposal={
-					queryUiMatchesTarget ? flowPilotQueryProposal : null
-				}
-				queryReceipt={queryUiMatchesTarget ? flowPilotQueryReceipt : null}
-				cypherResults={
-					queryUiMatchesTarget ? (cypherResult?.rows ?? null) : null
-				}
-				cypherMetadata={
-					queryUiMatchesTarget ? cypherResult?.property_metadata : undefined
-				}
-				cypherLoading={queryUiMatchesTarget ? cypherLoading : false}
-				cypherError={queryUiMatchesTarget ? cypherError : null}
-				onExpandNode={allowExpand ? handleExpandNode : undefined}
-				onExpandChildren={allowExpand ? handleExpandChildren : undefined}
-				onCollapseChildren={allowExpand ? handleCollapseChildren : undefined}
-				onRemoveNodes={allowExpand ? handleRemoveNodes : undefined}
-				onMergeSubgraph={allowCypher ? handleMergeSubgraph : undefined}
-				persistKey={`${appId}:${overlayId}`}
-				expandedChildParents={expandedChildParents}
-				onSearchNodes={allowSearch ? handleSearchNodes : undefined}
-				onStyleChange={allowStyleEdit ? handleStyleChange : undefined}
-				onLimitChange={allowLimitChange ? handleLimitChange : undefined}
-				limit={nodeLimit}
-				onFindPaths={allowPaths ? handleFindPaths : undefined}
-				onRunAction={allowActions ? handleRunAction : undefined}
-				analytics={analytics}
-				enableClusterLayout
-			/>
+			<PropertyStorageScope value={appId}>
+				<GraphViewer
+					key={ontologyQueryTargetKey}
+					overlay={overlay}
+					data={data}
+					loading={loading}
+					truncated={data?.truncated}
+					showToolbar={showToolbar}
+					showSearch={allowSearch}
+					showLegend={showLegend}
+					onNodeSelect={onNodeSelect}
+					onEdgeSelect={onEdgeSelect}
+					onRunCypher={allowCypher ? handleRunCypher : undefined}
+					onRunQuery={allowCypher ? handleRunQuery : undefined}
+					onAskFlowPilot={allowCypher ? handleAskFlowPilot : undefined}
+					onCancelFlowPilot={
+						allowCypher ? handleCancelFlowPilotQuery : undefined
+					}
+					flowPilotStatus={queryUiMatchesTarget ? flowPilotQueryStatus : null}
+					generatedQueryProposal={
+						queryUiMatchesTarget ? flowPilotQueryProposal : null
+					}
+					queryReceipt={queryUiMatchesTarget ? flowPilotQueryReceipt : null}
+					cypherResults={
+						queryUiMatchesTarget ? (cypherResult?.rows ?? null) : null
+					}
+					cypherMetadata={
+						queryUiMatchesTarget ? cypherResult?.property_metadata : undefined
+					}
+					cypherLoading={queryUiMatchesTarget ? cypherLoading : false}
+					cypherError={queryUiMatchesTarget ? cypherError : null}
+					onExpandNode={allowExpand ? handleExpandNode : undefined}
+					onExpandChildren={allowExpand ? handleExpandChildren : undefined}
+					onCollapseChildren={allowExpand ? handleCollapseChildren : undefined}
+					onRemoveNodes={allowExpand ? handleRemoveNodes : undefined}
+					onMergeSubgraph={allowCypher ? handleMergeSubgraph : undefined}
+					persistKey={`${appId}:${overlayId}`}
+					expandedChildParents={expandedChildParents}
+					onSearchNodes={allowSearch ? handleSearchNodes : undefined}
+					onStyleChange={allowStyleEdit ? handleStyleChange : undefined}
+					onLimitChange={allowLimitChange ? handleLimitChange : undefined}
+					limit={nodeLimit}
+					onFindPaths={allowPaths ? handleFindPaths : undefined}
+					onRunAction={allowActions ? handleRunAction : undefined}
+					analytics={analytics}
+					enableClusterLayout
+				/>
+			</PropertyStorageScope>
 			<OntologyActionDialog
 				target={actionTarget}
 				overlay={overlay}

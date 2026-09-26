@@ -2,6 +2,10 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import {
+	certificateStatus,
+	type DeviceCertificate,
+} from "../../../lib/device-management/certificates";
+import {
 	type DeploymentEvent,
 	type DeploymentPlan,
 	DeploymentPublicationFailedError,
@@ -46,6 +50,9 @@ export function DeviceDeploymentForm({
 	installed,
 	connected = true,
 	placements = [],
+	certificates = [],
+	certificateManagement = false,
+	canManageCertificates = false,
 	deviceId,
 	profile,
 	run,
@@ -54,6 +61,9 @@ export function DeviceDeploymentForm({
 	installed: InstalledProject;
 	connected?: boolean;
 	placements?: PlacementStatus[];
+	certificates?: DeviceCertificate[];
+	certificateManagement?: boolean;
+	canManageCertificates?: boolean;
 	deviceId: string;
 	profile: IProfile;
 	run: <T>(operation: (call: ManagementCall) => Promise<T>) => Promise<T>;
@@ -85,6 +95,7 @@ export function DeviceDeploymentForm({
 	const [port, setPort] = useState("8080");
 	const [replicas, setReplicas] = useState("1");
 	const [serviceToken, setServiceToken] = useState("");
+	const [tlsCertificateId, setTlsCertificateId] = useState("");
 	const [offlineWrites, setOfflineWrites] =
 		useState<OfflineWritesConfig | null>(null);
 	const [resourceLimits, setResourceLimits] =
@@ -185,6 +196,7 @@ export function DeviceDeploymentForm({
 		setRemovedEvents([]);
 		setAcceptRemovedEvents(false);
 		setServiceToken("");
+		setTlsCertificateId("");
 		setLoaded(false);
 		setNeedsReload(false);
 		setError(undefined);
@@ -268,6 +280,7 @@ export function DeviceDeploymentForm({
 				}
 			}
 			setExisting(snapshot);
+			setTlsCertificateId(snapshot?.config.tls_certificate_id ?? "");
 			setOfflineWrites(snapshot?.config.offline_writes ?? null);
 			setResourceLimits(snapshot?.config.resources ?? null);
 			setRollout(snapshot?.rollout ?? undefined);
@@ -396,6 +409,9 @@ export function DeviceDeploymentForm({
 					port: Number(port),
 					replicas: Number(replicas),
 					serviceToken,
+					tlsCertificateId: canManageCertificates
+						? tlsCertificateId || null
+						: undefined,
 					offlineWrites,
 					resourceLimits,
 					resourceGrant: grant
@@ -872,6 +888,55 @@ export function DeviceDeploymentForm({
 							onChange={setOfflineWrites}
 						/>
 					)}
+					<label
+						htmlFor={`${formId}-certificate`}
+						className="block space-y-1 text-sm"
+					>
+						Service TLS certificate
+						<select
+							id={`${formId}-certificate`}
+							disabled={!certificateManagement || !canManageCertificates}
+							className="block w-full rounded border bg-background p-2"
+							value={tlsCertificateId}
+							onChange={(event) => setTlsCertificateId(event.target.value)}
+						>
+							<option value="">No device certificate override</option>
+							{tlsCertificateId &&
+								!certificates.some(
+									(certificate) =>
+										certificate.certificate_id === tlsCertificateId,
+								) && (
+									<option value={tlsCertificateId}>
+										Current certificate: {tlsCertificateId}
+									</option>
+								)}
+							{certificates.map((certificate) => (
+								<option
+									key={certificate.certificate_id}
+									value={certificate.certificate_id}
+									disabled={["expired", "not_yet_valid"].includes(
+										certificateStatus(certificate),
+									)}
+								>
+									{certificate.label} · expires{" "}
+									{new Date(certificate.not_after * 1000).toLocaleDateString()}
+								</option>
+							))}
+						</select>
+						<span className="block text-xs text-muted-foreground">
+							Applies to HTTP, chat, Page, REST and MCP listeners in this
+							placement. Import or refresh certificates in Service certificates
+							above. Removing the override restores the workflow's listener
+							settings; native hosting uses HTTP without a certificate.
+						</span>
+						{certificateManagement && !canManageCertificates && (
+							<span className="block text-xs text-muted-foreground">
+								Your device permissions preserve the current certificate
+								assignment. Certificate management permission is required to
+								change it.
+							</span>
+						)}
+					</label>
 					{hosted && (
 						<div className="space-y-2">
 							<label htmlFor={`${formId}-host`} className="block text-sm">

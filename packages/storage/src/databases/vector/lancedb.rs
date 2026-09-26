@@ -38,7 +38,7 @@ use lancedb::{
     table::{CompactionOptions, Duration, OptimizeOptions},
 };
 
-use std::{any::Any, path::PathBuf, sync::Arc};
+use std::{any::Any, collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
 use crate::arrow_utils::{
@@ -49,6 +49,10 @@ use crate::databases::df_provider::{zero_column_safe, zero_column_safe_writable}
 use crate::databases::lance_filter_params::orient_spatial_relations;
 
 use super::VectorStore;
+use super::schema::{
+    PrimaryKeyRejected, TableInputRejected, primary_key_columns, primary_key_ineligibility,
+    primary_key_marker_update, without_primary_key_marker,
+};
 
 #[cfg(test)]
 #[path = "reference_tests.rs"]
@@ -57,6 +61,12 @@ mod reference_tests;
 #[cfg(test)]
 #[path = "mutation_tests.rs"]
 mod mutation_tests;
+
+/// Tables live at the database root, so LanceDB's namespace manifest only
+/// costs a LIST + GET per connect and creates `__manifest` in fresh roots.
+pub fn connect_lance(uri: &str) -> lancedb::connection::ConnectBuilder {
+    connect(uri).namespace_client_property("manifest_enabled", "false")
+}
 
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema, Clone, Debug)]
 pub struct IndexConfigDto {
@@ -237,6 +247,9 @@ pub struct LanceDBVectorStore {
     selector: DatabaseSelector,
     mutation_adapter: Option<Arc<dyn LogicalTableMutationAdapter>>,
     last_write_receipt: Arc<std::sync::RwLock<Option<LocalWriteReceipt>>>,
+    /// ID columns upserts ruled out as the table key, with the column's type and
+    /// nullability at that time; a changed column is checked again.
+    unmarkable_keys: HashMap<String, Option<(DataType, bool)>>,
 }
 
 impl Cacheable for LanceDBVectorStore {
@@ -327,7 +340,7 @@ impl LanceDBVectorStore {
 
     pub async fn new(path: PathBuf, table_name: String) -> Result<Self> {
         Self::validate_table_name(&table_name)?;
-        let connection = connect(path.to_str().unwrap()).execute().await.ok();
+        let connection = connect_lance(path.to_str().unwrap()).execute().await.ok();
         let connection: Connection = connection.ok_or(anyhow!("Error connecting to LanceDB"))?;
 
         let table = connection.open_table(&table_name).execute().await.ok();
@@ -340,6 +353,7 @@ impl LanceDBVectorStore {
             selector: DatabaseSelector::default(),
             mutation_adapter: None,
             last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         })
     }
 
@@ -362,6 +376,7 @@ impl LanceDBVectorStore {
             selector: DatabaseSelector::default(),
             mutation_adapter: None,
             last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         }
     }
 
@@ -382,6 +397,7 @@ impl LanceDBVectorStore {
             selector,
             mutation_adapter: None,
             last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         })
     }
 
@@ -426,6 +442,7 @@ impl LanceDBVectorStore {
             selector,
             mutation_adapter: None,
             last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         })
     }
 
@@ -581,6 +598,7 @@ impl LanceDBVectorStore {
             },
             mutation_adapter: None,
             last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         })
     }
 
@@ -734,6 +752,7 @@ impl LanceDBVectorStore {
             selector: DatabaseSelector::default(),
             mutation_adapter: None,
             last_write_receipt: Default::default(),
+            unmarkable_keys: Default::default(),
         })
     }
 
@@ -873,6 +892,7 @@ impl LanceDBVectorStore {
             self.connection.drop_table(&self.table_name, &[]).await?;
         }
         self.table = None;
+        self.unmarkable_keys.clear();
         Ok(())
     }
 
@@ -919,6 +939,8 @@ impl LanceDBVectorStore {
             .table
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
+        // The merged schema replaces the manifest's; a stale one would drop a newer key.
+        table.checkout_latest().await?;
 
         validate_new_columns(&transform)?;
         if let NewColumnTransform::SqlExpressions(expressions) = &transform {
@@ -942,7 +964,7 @@ impl LanceDBVectorStore {
                             })
                         {
                             return Err(anyhow!(
-                                "Geometry expressions cannot add columns without preserving metadata; declare geometry when creating the table"
+                                "Geometry expressions cannot add columns without preserving metadata; add a typed column with type 'geometry' instead, then write GeoJSON values"
                             ));
                         }
                     }
@@ -961,6 +983,18 @@ impl LanceDBVectorStore {
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
 
+        table.checkout_latest().await?;
+        let keys = table_primary_key(&table).await?;
+        if let Some(key) = column_names
+            .iter()
+            .find_map(|name| targeted_key(&keys, name))
+        {
+            return Err(PrimaryKeyRejected(format!(
+                "Column '{key}' is the key of table '{}'; the key column cannot be removed",
+                self.table_name
+            ))
+            .into());
+        }
         table.drop_columns(column_names).await?;
         Ok(())
     }
@@ -976,7 +1010,10 @@ impl LanceDBVectorStore {
             .clone()
             .ok_or_else(|| anyhow!("Table not initialized"))?;
 
+        // A change built on a stale schema would commit over, and drop, a newer key.
+        table.checkout_latest().await?;
         let schema = table.schema().await?;
+        let keys = primary_key_columns(&schema);
         for change in alteration {
             let root = change.path.split('.').next().unwrap_or(&change.path);
             if change.data_type.is_some()
@@ -988,9 +1025,29 @@ impl LanceDBVectorStore {
                     "Geometry column types cannot be altered; create a declared geometry column and insert validated values"
                 ));
             }
+            self.ensure_key_alteration_allowed(&keys, change)?;
         }
         let result = table.alter_columns(alteration).await?;
         Ok(result)
+    }
+
+    /// Lance accepts both changes, but a nullable key fails every later write.
+    fn ensure_key_alteration_allowed(
+        &self,
+        keys: &[String],
+        change: &ColumnAlteration,
+    ) -> Result<()> {
+        let Some(key) = targeted_key(keys, &change.path) else {
+            return Ok(());
+        };
+        if change.nullable != Some(true) && change.data_type.is_none() {
+            return Ok(());
+        }
+        Err(PrimaryKeyRejected(format!(
+            "Column '{key}' is the key of table '{}'; the key column must stay required and keep its type",
+            self.table_name
+        ))
+        .into())
     }
 
     pub async fn list_indices(&self) -> Result<Vec<IndexConfigDto>> {
@@ -1019,32 +1076,25 @@ impl LanceDBVectorStore {
         let filter = filter.as_str();
         let table = self.require_readable_table().await?;
         let schema = table.schema().await?;
-        for column in updates.keys() {
-            if crate::geometry::is_geometry_field(schema.field_with_name(column)?) {
-                return Err(anyhow!(
-                    "Geometry column '{column}' cannot be updated with SQL expressions; use a validated upsert"
-                ));
-            }
-        }
-        let mut expressions = Vec::with_capacity(updates.len());
-        for (column, value) in updates {
-            let binary = matches!(
-                schema.field_with_name(&column)?.data_type(),
-                DataType::Binary
-                    | DataType::LargeBinary
-                    | DataType::BinaryView
-                    | DataType::FixedSizeBinary(_)
+        let mut unknown: Vec<&str> = updates
+            .keys()
+            .map(String::as_str)
+            .filter(|column| schema.field_with_name(column).is_err())
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort_unstable();
+            return Err(
+                crate::arrow_utils::unknown_columns(&self.table_name, &unknown, &schema).into(),
             );
-            let value_str = match &value {
-                Value::Array(bytes) if binary => binary_sql_literal(&column, bytes)?,
-                Value::String(s) => format!("'{}'", s.replace('\'', "''")),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => "NULL".to_string(),
-                _ => format!("'{}'", value.to_string().replace('\'', "''")),
-            };
-            expressions.push((column, value_str));
         }
+        let expressions = updates
+            .into_iter()
+            .map(|(column, value)| {
+                let literal =
+                    update_sql_literal(&self.table_name, schema.field_with_name(&column)?, &value)?;
+                Ok((column, literal))
+            })
+            .collect::<Result<Vec<_>>>()?;
         if self.is_durably_managed() {
             return self
                 .apply_logical_mutation(LogicalTableMutation::Update {
@@ -1070,17 +1120,212 @@ impl LanceDBVectorStore {
         Ok(())
     }
 
+    /// Adds a nullable column of a `create_table` type, null in every existing row. Unlike an
+    /// SQL expression, the declared field keeps geometry's WKB/WGS84 metadata.
+    pub async fn add_typed_column(
+        &self,
+        name: &str,
+        data_type: &str,
+        vector_size: Option<u32>,
+    ) -> Result<()> {
+        let schema = super::schema::database_fields_to_arrow_schema(&[
+            super::schema::DatabaseSchemaField {
+                name: name.to_string(),
+                data_type: data_type.to_string(),
+                nullable: true,
+                vector_size,
+                primary_key: false,
+            },
+        ])?;
+        self.add_columns(NewColumnTransform::AllNulls(Arc::new(schema)), None)
+            .await?;
+        Ok(())
+    }
+
+    /// A column definition from the API or FlowPilot: exactly one of an SQL expression computed
+    /// from existing columns, or a type for an initially empty column.
+    pub async fn add_column_definition(
+        &self,
+        name: &str,
+        sql_expression: Option<&str>,
+        data_type: Option<&str>,
+        vector_size: Option<u32>,
+    ) -> Result<()> {
+        match (sql_expression, data_type) {
+            (Some(expression), None) => self.add_column(name, expression).await,
+            (None, Some(data_type)) => self.add_typed_column(name, data_type, vector_size).await,
+            _ => Err(anyhow!(
+                "Column '{name}' needs exactly one of sql_expression or type"
+            )),
+        }
+    }
+
     pub async fn make_column_nullable(&self, column: &str, nullable: bool) -> Result<()> {
+        let alteration = ColumnAlteration::new(column.to_string()).set_nullable(nullable);
+        self.alter_column(&[alteration]).await?;
+        Ok(())
+    }
+
+    /// The table key (Lance unenforced primary key), when exactly one column carries it.
+    pub async fn primary_key(&self) -> Result<Option<String>> {
+        let table = self.require_readable_table().await?;
+        let keys = table_primary_key(&table).await?;
+        Ok(<[String; 1]>::try_from(keys).ok().map(|[key]| key))
+    }
+
+    /// Mark `column` as the table key. Repeating the current key succeeds; the key never changes.
+    pub async fn set_primary_key(&self, column: &str) -> Result<()> {
         self.ensure_unmanaged("schema changes")?;
         self.ensure_writable()?;
-        let table = self
-            .table
-            .clone()
-            .ok_or_else(|| anyhow!("Table not initialized"))?;
+        let table = self.table.clone().ok_or_else(|| {
+            anyhow!(
+                "Table '{}' does not exist; create it before setting its key",
+                self.table_name
+            )
+        })?;
+        table.checkout_latest().await?;
+        let keys = table_primary_key(&table).await?;
+        if !keys.is_empty() {
+            return self.expect_primary_key(&keys, column);
+        }
+        self.ensure_key_candidate(&table, column).await?;
 
-        let alteration = ColumnAlteration::new(column.to_string()).set_nullable(nullable);
-        table.alter_columns(&[alteration]).await?;
+        let Err(error) = table
+            .update_field_metadata(&[primary_key_marker_update(column)])
+            .await
+        else {
+            return Ok(());
+        };
+        table.checkout_latest().await?;
+        let keys = table_primary_key(&table).await?;
+        if keys.is_empty() {
+            return Err(anyhow!(
+                "Setting column '{column}' as the key of table '{}' failed: {error}",
+                self.table_name
+            ));
+        }
+        self.expect_primary_key(&keys, column)
+    }
+
+    async fn ensure_key_candidate(&self, table: &Table, column: &str) -> Result<()> {
+        let schema = table.schema().await?;
+        let field = schema.field_with_name(column).map_err(|_| {
+            PrimaryKeyRejected(format!(
+                "Table '{}' has no column '{column}' to use as its key",
+                self.table_name
+            ))
+        })?;
+        if let Some(reason) = primary_key_ineligibility(field) {
+            return Err(PrimaryKeyRejected(format!(
+                "Column '{column}' cannot be the key of table '{}': {reason}",
+                self.table_name
+            ))
+            .into());
+        }
+        let duplicates = self.duplicate_key_values(column).await?;
+        if duplicates > 0 {
+            return Err(PrimaryKeyRejected(format!(
+                "Column '{column}' cannot be the key of table '{}': it holds {duplicates} duplicate values; remove the duplicate rows first",
+                self.table_name
+            ))
+            .into());
+        }
         Ok(())
+    }
+
+    fn expect_primary_key(&self, keys: &[String], column: &str) -> Result<()> {
+        if keys == [column] {
+            return Ok(());
+        }
+        Err(PrimaryKeyRejected(format!(
+            "Table '{}' is already keyed on '{}'; the key cannot change to '{column}'",
+            self.table_name,
+            keys.join("', '")
+        ))
+        .into())
+    }
+
+    /// Rows beyond the first for each value of `column`.
+    async fn duplicate_key_values(&self, column: &str) -> Result<i64> {
+        use datafusion::functions_aggregate::expr_fn::{count, count_distinct};
+
+        let batches = SessionContext::new()
+            .read_table(self.to_datafusion().await?)?
+            .aggregate(
+                vec![],
+                vec![
+                    count(lit(1)).alias("rows"),
+                    count_distinct(ident(column)).alias("values"),
+                ],
+            )?
+            .select(vec![col("rows") - col("values")])?
+            .collect()
+            .await?;
+        batches
+            .first()
+            .filter(|batch| batch.num_rows() == 1)
+            .and_then(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int64Array>()
+            })
+            .map(|duplicates| duplicates.value(0))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Counting duplicate values of column '{column}' in table '{}' returned no result",
+                    self.table_name
+                )
+            })
+    }
+
+    /// Mark the upsert's ID column as the key of a table without one, so concurrent
+    /// upserts of the same new ID retry as updates. Returns whether `id_field` is the key.
+    async fn ensure_upsert_key(&mut self, table: &Table, id_field: &str) -> Result<bool> {
+        let keys = table_primary_key(table).await?;
+        if !keys.is_empty() {
+            return Ok(keys == [id_field]);
+        }
+        // The handle may predate another writer's key or a change to the column.
+        table.checkout_latest().await?;
+        let schema = table.schema().await?;
+        let keys = primary_key_columns(&schema);
+        if !keys.is_empty() {
+            return Ok(keys == [id_field]);
+        }
+        let field = schema.field_with_name(id_field).ok();
+        let signature = field.map(|field| (field.data_type().clone(), field.is_nullable()));
+        if self.unmarkable_keys.get(id_field) == Some(&signature) {
+            return Ok(false);
+        }
+        if field.is_none_or(|field| primary_key_ineligibility(field).is_some()) {
+            self.unmarkable_keys.insert(id_field.to_string(), signature);
+            return Ok(false);
+        }
+        let duplicates = self.duplicate_key_values(id_field).await?;
+        if duplicates > 0 {
+            eprintln!(
+                "[LanceDB] Not marking column '{id_field}' as the key of table '{}': it holds {duplicates} duplicate values. Remove them to stop concurrent upserts from adding more.",
+                self.table_name
+            );
+            self.unmarkable_keys.insert(id_field.to_string(), signature);
+            return Ok(false);
+        }
+        let Err(error) = table
+            .update_field_metadata(&[primary_key_marker_update(id_field)])
+            .await
+        else {
+            return Ok(true);
+        };
+        table.checkout_latest().await?;
+        let keys = table_primary_key(table).await?;
+        if keys.is_empty() {
+            eprintln!(
+                "[LanceDB] Could not mark column '{id_field}' as the key of table '{}'; concurrent upserts may duplicate new IDs: {error:#}",
+                self.table_name
+            );
+        }
+        Ok(keys == [id_field])
     }
 
     /// The returned provider supports SELECT, INSERT INTO and (via
@@ -1248,6 +1493,102 @@ impl TableProvider for ReadOnlyDatabaseProvider {
     }
 }
 
+async fn table_primary_key(table: &Table) -> Result<Vec<String>> {
+    let schema = table.schema().await?;
+    Ok(primary_key_columns(&schema))
+}
+
+/// The key a column path names, resolved the way Lance resolves paths, so a
+/// backtick-quoted spelling of the key column is still recognised.
+fn targeted_key<'a>(keys: &'a [String], path: &str) -> Option<&'a String> {
+    let segments = lance::datatypes::parse_field_path(path).ok()?;
+    let [name] = segments.as_slice() else {
+        return None;
+    };
+    keys.iter().find(|key| *key == name)
+}
+
+/// Whether `error` means concurrent commits kept winning, as opposed to bad input.
+pub fn is_write_contention(error: &flow_like_types::Error) -> bool {
+    error.chain().any(|cause| {
+        let lance = match cause.downcast_ref::<lancedb::Error>() {
+            Some(lancedb::Error::Lance { source }) => source,
+            _ => match cause.downcast_ref::<lance::Error>() {
+                Some(source) => source,
+                None => return false,
+            },
+        };
+        matches!(
+            lance,
+            lance::Error::TooMuchWriteContention { .. }
+                | lance::Error::RetryableCommitConflict { .. }
+                | lance::Error::CommitConflict { .. }
+        )
+    })
+}
+
+fn update_sql_literal(table: &str, field: &arrow_schema::Field, value: &Value) -> Result<String> {
+    let column = field.name();
+    if crate::geometry::is_geometry_field(field) {
+        return geometry_sql_literal(column, value);
+    }
+    let binary = matches!(
+        field.data_type(),
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    );
+    ensure_update_value_casts(table, field, value)?;
+    Ok(match value {
+        Value::Array(bytes) if binary => binary_sql_literal(column, bytes)?,
+        Value::Object(_) if binary => return Err(binary_value_rejected(column, "an object").into()),
+        Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "NULL".to_string(),
+        _ => format!("'{}'", value.to_string().replace('\'', "''")),
+    })
+}
+
+/// Lance casts each SET literal to the column type while it writes; the same cast
+/// up front rejects a value the column cannot hold before anything is written.
+fn ensure_update_value_casts(
+    table: &str,
+    field: &arrow_schema::Field,
+    value: &Value,
+) -> Result<()> {
+    use arrow_array::{ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
+    let target = field.data_type();
+    if !(target.is_primitive() || target == &DataType::Boolean) {
+        return Ok(());
+    }
+    let literal: ArrayRef = match value {
+        Value::Null => return Ok(()),
+        Value::Bool(flag) => Arc::new(BooleanArray::from(vec![*flag])),
+        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
+            (Some(integer), _) => Arc::new(Int64Array::from(vec![integer])),
+            (None, Some(float)) => Arc::new(Float64Array::from(vec![float])),
+            (None, None) => return Ok(()),
+        },
+        Value::String(text) => Arc::new(StringArray::from(vec![text.as_str()])),
+        structured => Arc::new(StringArray::from(vec![structured.to_string()])),
+    };
+    let options = arrow::compute::CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    arrow::compute::cast_with_options(&literal, target, &options)
+        .map(|_| ())
+        .map_err(|error| {
+            TableInputRejected(format!(
+                "Column '{}' of table '{table}' is {target}; cannot store {value}: {error}",
+                field.name()
+            ))
+            .into()
+        })
+}
+
 /// Lance casts a quoted string to Binary as its UTF-8 text, so bytes read back as a
 /// JSON array are written as a hex literal.
 fn binary_sql_literal(column: &str, bytes: &[Value]) -> Result<String> {
@@ -1255,21 +1596,53 @@ fn binary_sql_literal(column: &str, bytes: &[Value]) -> Result<String> {
         .iter()
         .map(|byte| {
             byte.as_u64()
-                .filter(|byte| *byte <= u8::MAX as u64)
-                .map(|byte| format!("{byte:02X}"))
+                .and_then(|byte| u8::try_from(byte).ok())
         })
-        .collect::<Option<String>>()
-        .map(|hex| format!("X'{hex}'"))
-        .ok_or_else(|| anyhow!("Binary column '{column}' takes an array of integers 0-255"))
+        .collect::<Option<Vec<u8>>>()
+        .map(|bytes| hex_sql_literal(&bytes))
+        .ok_or_else(|| {
+            binary_value_rejected(column, "an array that is not all integers 0-255").into()
+        })
+}
+
+/// A plain Binary column would otherwise store structured values as their JSON text.
+fn binary_value_rejected(column: &str, received: &str) -> TableInputRejected {
+    TableInputRejected(format!(
+        "Binary column '{column}' takes an array of integers 0-255, but received {received}. To store GeoJSON geometry, add a geometry column with add_column {{\"name\": \"<new column>\", \"type\": \"geometry\"}} and write the geometry there"
+    ))
+}
+
+/// An update replaces values only, so the column keeps its geometry metadata.
+fn geometry_sql_literal(column: &str, value: &Value) -> Result<String> {
+    let bytes = crate::geometry::geometry_input_wkb(value).map_err(|error| {
+        TableInputRejected(format!(
+            "Geometry column '{column}' takes a GeoJSON geometry object, a GeoJSON Feature, GeoJSON or WKT text, or null: {error}"
+        ))
+    })?;
+    Ok(bytes.map_or_else(|| "NULL".to_string(), |bytes| hex_sql_literal(&bytes)))
+}
+
+fn hex_sql_literal(bytes: &[u8]) -> String {
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    format!("X'{hex}'")
 }
 
 /// Treat the historical timezone-less millisecond timestamp as compatible
 /// with the UTC-aware schema now emitted for new timestamp columns. The stored
 /// schema remains authoritative; writes to that legacy shape are normalized at
 /// the serialization boundary.
+/// Upserts key a table after it is created, so an existing key the request does not
+/// declare is compatible; a declared key must match the existing one.
 fn schemas_compatible_for_creation(existing: &Schema, requested: &Schema) -> bool {
     if existing == requested {
         return true;
+    }
+    let requested_keys = primary_key_columns(requested);
+    if !requested_keys.is_empty() && requested_keys != primary_key_columns(existing) {
+        return false;
     }
 
     existing.metadata() == requested.metadata()
@@ -1281,7 +1654,8 @@ fn schemas_compatible_for_creation(existing: &Schema, requested: &Schema) -> boo
             .all(|(existing, requested)| {
                 existing.name() == requested.name()
                     && existing.is_nullable() == requested.is_nullable()
-                    && existing.metadata() == requested.metadata()
+                    && without_primary_key_marker(existing.metadata())
+                        == without_primary_key_marker(requested.metadata())
                     && (existing.data_type() == requested.data_type()
                         || matches!(
                             (existing.data_type(), requested.data_type()),
@@ -1740,7 +2114,13 @@ impl VectorStore for LanceDBVectorStore {
                 .write_options(self.creation_write_options());
             match builder.execute().await {
                 Ok(table) => {
-                    self.table = Some(table);
+                    self.table = Some(table.clone());
+                    if let Err(error) = self.ensure_upsert_key(&table, &id_field).await {
+                        eprintln!(
+                            "[LanceDB] Created table '{}' but could not mark '{id_field}' as its key: {error:#}",
+                            self.table_name
+                        );
+                    }
                     return Ok(());
                 }
                 Err(lancedb::Error::TableAlreadyExists { .. }) => {
@@ -1761,12 +2141,16 @@ impl VectorStore for LanceDBVectorStore {
             }
         }
 
-        let items = self.write_batch_reader(items).await?;
         let table = self.table.clone().unwrap();
+        // Convert first: a batch that fails must not leave an irreversible key behind.
+        let items = self.write_batch_reader(items).await?;
+        // Lance only detects a concurrent insert of the same key on the unindexed path.
+        let keyed = self.ensure_upsert_key(&table, &id_field).await?;
         table
             .merge_insert(&[&id_field])
             .when_matched_update_all(None)
             .when_not_matched_insert_all()
+            .use_index(!keyed)
             .to_owned()
             .execute(items)
             .await?;
@@ -2695,6 +3079,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_lance_does_not_create_namespace_manifest() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let connection = connect_lance(&test_path).execute().await?;
+
+        assert!(connection.table_names().execute().await?.is_empty());
+        assert!(!std::path::Path::new(&test_path).join("__manifest").exists());
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn create_empty_table_is_strictly_idempotent() -> Result<()> {
         let test_path = format!("./tmp/{}", create_id());
         std::fs::create_dir_all(&test_path)?;
@@ -2951,6 +3348,66 @@ mod tests {
                 crate::databases::lance_filter_params::bind_filter_params(filter, &geometry_param)?;
             assert_eq!(db.count(Some(bound)).await?, expected, "{filter}");
         }
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn typed_geometry_column_on_an_existing_table_takes_geojson_updates() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        db.insert(vec![
+            json!({"id": 1, "name": "inside"}),
+            json!({"id": 2, "name": "outline"}),
+            json!({"id": 3, "name": "unplaced"}),
+        ])
+        .await?;
+
+        assert!(
+            db.add_column("location", "flow_geomfromtext(CAST(NULL AS VARCHAR))")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("type 'geometry'")
+        );
+        db.add_typed_column("location", "geometry", None).await?;
+        let point = json!({"type": "Point", "coordinates": [2.0, 2.0]});
+        let polygon = json!({"type": "Polygon", "coordinates": [[[3.0, 3.0], [6.0, 3.0], [6.0, 6.0], [3.0, 6.0], [3.0, 3.0]]]});
+        db.update("id = 1", HashMap::from([("location".to_string(), point.clone())]))
+            .await?;
+        db.update(
+            "id = 2",
+            HashMap::from([("location".to_string(), polygon.clone())]),
+        )
+        .await?;
+        assert!(
+            db.update(
+                "id = 3",
+                HashMap::from([("location".to_string(), json!({"type": "Point"}))])
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("GeoJSON geometry")
+        );
+
+        let reopened =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "entities".to_string()).await?;
+        assert!(crate::geometry::is_geometry_field(
+            reopened.schema().await?.field_with_name("location")?
+        ));
+        let area = "flow_geomfromtext('POLYGON ((0 0,4 0,4 4,0 4,0 0))')";
+        assert_eq!(
+            sql_ids(&reopened, &format!("ST_Intersects(location, {area})")).await?,
+            vec![json!(1), json!(2)]
+        );
+        let mut rows = reopened.filter("id IN (1, 2, 3)", None, 10, 0).await?;
+        rows.sort_by_key(|row| row["id"].as_i64());
+        assert_eq!(rows[0]["location"], point);
+        assert_eq!(rows[1]["location"], polygon);
+        assert_eq!(rows[2]["location"], Value::Null);
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())

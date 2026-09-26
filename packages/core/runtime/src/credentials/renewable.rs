@@ -1,5 +1,7 @@
 use super::{SharedCredentials, StoreType, aws_credentials::s3_storage_options};
 use async_trait::async_trait;
+#[cfg(feature = "flow-runtime")]
+use flow_like_storage::databases::vector::lancedb::connect_lance;
 use flow_like_storage::{
     files::{
         credentials::{
@@ -759,10 +761,7 @@ impl RenewableSharedCredentials {
         } else {
             root.join("storage").join("db")
         };
-        Ok(
-            flow_like_storage::lancedb::connect(&self.database_uri(Purpose::Content, &path)?)
-                .session(self.session()?),
-        )
+        Ok(connect_lance(&self.database_uri(Purpose::Content, &path)?).session(self.session()?))
     }
 
     pub async fn to_db_scoped(
@@ -780,10 +779,10 @@ impl RenewableSharedCredentials {
         if requested != prefix_path(&expected)? {
             return Err(AuthorizationError::Denied.into());
         }
-        Ok(flow_like_storage::lancedb::connect(
-            &self.database_uri(Purpose::User, &requested.join("db"))?,
+        Ok(
+            connect_lance(&self.database_uri(Purpose::User, &requested.join("db"))?)
+                .session(self.session()?),
         )
-        .session(self.session()?))
     }
 
     pub fn to_logs_db_builder(&self) -> Result<super::LogsDbBuilder> {
@@ -793,7 +792,7 @@ impl RenewableSharedCredentials {
         let session = self.session()?;
         let owner = self.this.upgrade().ok_or(AuthorizationError::Denied)?;
         Ok(Arc::new(move |path| {
-            flow_like_storage::lancedb::connect(
+            connect_lance(
                 &owner
                     .database_uri(Purpose::Logs, &path)
                     .expect("validated log location"),

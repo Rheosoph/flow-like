@@ -23,6 +23,7 @@ impl NodeLogic for ServiceReadyNode {
             "Marks a supervised daemon ready after its initialization succeeds. Continue into the daemon's long-running work; returning from the workflow stops the service.",
             "Web/Services",
         );
+        node.set_flowscript_name("web", "serviceReady");
         node.add_input_pin(
             "exec_in",
             "Execute",

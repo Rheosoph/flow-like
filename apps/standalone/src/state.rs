@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 11;
 const APPLICATION_ID: i64 = 0x464c5341;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -323,6 +323,21 @@ impl StateStore {
 
         if version < 8 {
             crate::fleet::migrate(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+
+        if version < 9 {
+            transaction.execute_batch(crate::certificates::SCHEMA)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+
+        if version < 10 {
+            transaction.execute_batch(crate::certificate_requests::SCHEMA)?;
+            transaction.execute_batch(crate::certificate_issuers::SCHEMA)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        if version < 11 {
+            transaction.execute_batch(crate::acme::SCHEMA)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
 
@@ -881,7 +896,7 @@ mod tests {
         let config = json!({"id":"active","project_id":"project","deployment_id":"deployment"});
         store.upsert_placement("active", &config, DesiredState::Stopped)?;
         store.connection.execute("INSERT INTO telemetry_records(placement_id,kind,created_at,ciphertext) VALUES('removed','log',0,x'')", [])?;
-        store.connection.execute_batch("DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; PRAGMA user_version=4;")?;
+        store.connection.execute_batch("DROP TABLE certificate_acme; DROP TABLE certificate_issuers; DROP TABLE certificate_requests; DROP TABLE device_certificates; DROP TABLE certificate_inventory; DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; PRAGMA user_version=4;")?;
         drop(store);
         let mut store = StateStore::open(&path)?;
         assert!(
@@ -1169,7 +1184,7 @@ mod tests {
         let device_id = store.device_id().to_owned();
         store.upsert_placement("rest", &json!({"revision":"one"}), DesiredState::Stopped)?;
         store.connection.execute_batch(
-            "DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; DROP TABLE placement_replicas; ALTER TABLE placements DROP COLUMN desired_replicas; DROP TABLE registration; DROP TABLE workload_instances; DROP TABLE management_policy; DROP TABLE management_operations; DROP TABLE telemetry_audiences; DROP TABLE telemetry_records; DROP TABLE host_operations; DROP TABLE secret_operations; DROP TABLE archive_rosters; DROP TABLE archive_outbox; DROP TABLE project_artifact_transfers; PRAGMA user_version = 1;",
+            "DROP TABLE certificate_acme; DROP TABLE certificate_issuers; DROP TABLE certificate_requests; DROP TABLE device_certificates; DROP TABLE certificate_inventory; DROP TABLE fleet_published_streams; DROP TABLE fleet_publication; DROP TABLE placement_rollouts; DROP TRIGGER operational_command_insert; DROP TRIGGER operational_command_update; DROP TRIGGER operational_replica_insert; DROP TRIGGER operational_replica_update; DROP TRIGGER operational_replica_delete; DROP TRIGGER operational_outbox_bound; DROP TABLE operational_message_scopes; DROP TABLE operational_outbox; DROP TABLE operational_coverage; DROP TABLE usage_processes; DROP TABLE usage_totals; DROP TRIGGER placement_identity_insert; DROP TRIGGER placement_identity_remember; DROP TRIGGER placement_identity_update; DROP TRIGGER placement_identity_retire; DROP TABLE placement_identities; DROP TABLE placement_replicas; ALTER TABLE placements DROP COLUMN desired_replicas; DROP TABLE registration; DROP TABLE workload_instances; DROP TABLE management_policy; DROP TABLE management_operations; DROP TABLE telemetry_audiences; DROP TABLE telemetry_records; DROP TABLE host_operations; DROP TABLE secret_operations; DROP TABLE archive_rosters; DROP TABLE archive_outbox; DROP TABLE project_artifact_transfers; PRAGMA user_version = 1;",
         )?;
         drop(store);
         let store = StateStore::open(&path)?;

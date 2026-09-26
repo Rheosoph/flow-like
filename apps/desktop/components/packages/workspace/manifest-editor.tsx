@@ -40,6 +40,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { isPlaceholderId } from "../mine-model";
 import { mineQueryKeys } from "../use-mine-packages";
+import { type ManifestData, normalizeManifest } from "./manifest-data";
 import { nodeInspectionKey } from "./node-debugger";
 
 const MEMORY_TIERS = [
@@ -62,34 +63,6 @@ const TIMEOUT_TIERS = [
 	{ value: "very_long", label: "Very Long (10min)" },
 	{ value: "maximum", label: "Maximum (30min)" },
 ];
-
-interface ManifestData {
-	manifest_version: number;
-	id: string;
-	name: string;
-	version: string;
-	description: string;
-	authors: { name: string; email?: string; url?: string }[];
-	license?: string;
-	repository?: string;
-	homepage?: string;
-	keywords: string[];
-	// Capability flags are not authored: nodes declare them in code and the
-	// registry derives the store listing from the compiled nodes.
-	permissions: {
-		memory: string;
-		timeout: string;
-		network: {
-			allowed_hosts: string[];
-		};
-		oauth_scopes: {
-			provider: string;
-			scopes: string[];
-			reason: string;
-			required: boolean;
-		}[];
-	};
-}
 
 function createDefaultManifest(): ManifestData {
 	return {
@@ -565,11 +538,9 @@ export function ManifestEditor({
 		unsavedDrafts.delete(projectPath);
 		setLoading(true);
 		try {
-			const raw = await invoke<Record<string, unknown>>(
-				"developer_get_manifest",
-				{ projectPath },
+			const manifest = normalizeManifest(
+				await invoke<unknown>("developer_get_manifest", { projectPath }),
 			);
-			const manifest = raw as unknown as ManifestData;
 			setData(manifest);
 			setLoadedPlaceholder(isPlaceholderId(manifest.id));
 			setHasChanges(false);

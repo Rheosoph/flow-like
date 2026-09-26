@@ -84,7 +84,7 @@
 								"id": "challenge-tstore-find-the-store",
 								"kind": "SINGLE_CHOICE",
 								"prompt": "Priya wants to see what community apps and packages already exist before rebuilding the triage flow. Where does she look?",
-								"explanation": "The Explore hub carries both shelves — community apps and the package registry (Packages in its header) — and the home screen previews it with Featured and Top Charts. Developer Tools is the tempting miss: it's where you BUILD packages, not where you discover them.",
+								"explanation": "The Explore hub carries both shelves — community apps and the package registry (Packages in its header, with Developer Mode on) — and the home screen previews it with Featured and Top Charts. Packages › Mine is the tempting miss: it's where you BUILD and publish your own packages, not where you discover new ones.",
 								"points": 10,
 								"position": 0,
 								"payload": {
@@ -95,7 +95,7 @@
 										},
 										{
 											"id": "developer-tools",
-											"label": "Developer Tools — that's where packages live"
+											"label": "Packages › Mine — that's where packages live"
 										},
 										{
 											"id": "node-menu",
@@ -142,7 +142,7 @@
 								"id": "challenge-tstore-three-scopes",
 								"kind": "MULTIPLE_CHOICE",
 								"prompt": "Which statements about the three package scopes are true?",
-								"explanation": "Registry, device, and app are deliberately separate: discover in Explore → Packages, manage the device copy in Library → Packages, and declare per-app versions in each app's Packages screen. The tempting wrong pick is the auto-update one — updating the device copy never rewrites an app's linked version, which is exactly why old client apps keep working after a device update.",
+								"explanation": "Registry, device, and app are deliberately separate: discover in Explore → Packages, manage the device copy in Packages › Library, and declare per-app versions in each app's Packages screen. The tempting wrong pick is the auto-update one — updating the device copy never rewrites an app's linked version, which is exactly why old client apps keep working after a device update.",
 								"points": 10,
 								"position": 2,
 								"payload": {
@@ -153,7 +153,7 @@
 										},
 										{
 											"id": "device-library",
-											"label": "Library → Packages manages what's installed on this computer"
+											"label": "Packages › Library manages what's installed on this computer"
 										},
 										{
 											"id": "app-declares",

@@ -5,7 +5,10 @@ import {
 	PackageWorkspace,
 	type PackageWorkspaceLocal,
 } from "@flow-like/flow-like-ui/components/store/package-workspace/package-workspace";
-import { useRegistryPackage } from "@flow-like/flow-like-ui/components/store/package-workspace/use-registry-package";
+import {
+	type RegistryPackageResult,
+	useRegistryPackage,
+} from "@flow-like/flow-like-ui/components/store/package-workspace/use-registry-package";
 import {
 	type WorkspaceTab,
 	workspaceTabFromParam,
@@ -114,7 +117,7 @@ function PlaceholderStatePill() {
 /** True when the shell will show its "This id is taken" banner for this checkout. */
 function useIdTakenBanner(
 	packageId: string | undefined,
-	registry: ReturnType<typeof useRegistryPackage>,
+	registry: RegistryPackageResult,
 ): boolean {
 	const permission = registry.entry?.currentUserPermission;
 	return useMemo(() => {

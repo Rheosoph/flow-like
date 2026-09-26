@@ -36,6 +36,7 @@ use std::{
 };
 use tracing::instrument;
 
+pub mod cell;
 pub mod cleanup;
 pub mod commands;
 pub mod dirty;
@@ -174,6 +175,7 @@ pub enum VersionType {
     Patch,
 }
 
+pub use cell::{BoardCell, BoardWriter};
 pub use flow_like_editor_contracts::layer::{LayerCache, LayerCacheScope};
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -2923,7 +2925,7 @@ impl Board {
     }
 
     pub async fn create_template(
-        &mut self,
+        &self,
         template_id: String,
         version_type: VersionType,
         old_template: Option<Board>,

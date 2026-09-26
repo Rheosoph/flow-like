@@ -128,7 +128,7 @@ impl NodeLogic for TcpListenNode {
                 return Ok(());
             }
         };
-        let tls_acceptor = match crate::web::tls::server_acceptor(&config.tls) {
+        let tls_acceptor = match crate::web::tls::ServiceAcceptor::new(context, &config.tls).await {
             Ok(acceptor) => acceptor,
             Err(err) => {
                 context.log_message(
@@ -184,19 +184,15 @@ impl NodeLogic for TcpListenNode {
                     };
 
                     let remote_addr = addr.to_string();
-                    let (reader, writer) = if let Some(acceptor) = &tls_acceptor {
-                        match acceptor.accept(stream).await {
-                            Ok(stream) => crate::web::tls::boxed_split(stream),
-                            Err(err) => {
-                                context.log_message(
-                                    &format!("TCP listener TLS handshake failed: {}", err),
-                                    LogLevel::Error,
-                                );
-                                continue;
-                            }
+                    let (reader, writer) = match tls_acceptor.accept(stream).await {
+                        Ok(stream) => crate::web::tls::boxed_split(stream),
+                        Err(err) => {
+                            context.log_message(
+                                &format!("TCP listener TLS handshake failed: {}", err),
+                                LogLevel::Error,
+                            );
+                            continue;
                         }
-                    } else {
-                        crate::web::tls::boxed_split(stream)
                     };
 
                     let ref_id = format!("tcp_{}", flow_like_types::create_id());

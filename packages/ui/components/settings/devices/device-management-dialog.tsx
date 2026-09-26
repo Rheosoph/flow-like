@@ -6,6 +6,7 @@ import {
 	withPassword,
 } from "../../../lib/device-management/crypto";
 import type { InstalledProject } from "../../../lib/device-management/deployment";
+import type { DeviceCertificate } from "../../../lib/device-management/certificates";
 import { readDeviceInspection } from "../../../lib/device-management/inspection";
 import {
 	type InventoryWriter,
@@ -47,6 +48,7 @@ import { Textarea } from "../../ui/textarea";
 import { DeviceAccountRecovery } from "./device-account-recovery";
 import { DeviceArchiveHistory } from "./device-archive-history";
 import { DeviceDeploymentForm } from "./device-deployment-form";
+import { DeviceCertificates } from "./device-certificates";
 import { DeviceGroupMetrics } from "./device-group-metrics";
 import { DeviceHostOperations } from "./device-host-operations";
 import { DeviceMessagesView } from "./device-messages-view";
@@ -82,6 +84,7 @@ export function DeviceManagementDialog({
 	const [error, setError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [connected, setConnected] = useState(false);
+	const [certificates, setCertificates] = useState<DeviceCertificate[]>([]);
 	const [transport, setTransport] = useState<string>();
 	const [inspection, setInspection] = useState<Inspection>();
 	const [manifest, setManifest] = useState<OnboardingManifest>();
@@ -625,6 +628,7 @@ export function DeviceManagementDialog({
 									unlock.current?.();
 									unlock.current = undefined;
 									setConnected(false);
+									setCertificates([]);
 									setLogs([]);
 									setMetrics(undefined);
 									setMessages(undefined);
@@ -634,6 +638,27 @@ export function DeviceManagementDialog({
 								Lock
 							</Button>
 						</div>
+						{inspection?.certificate_management === 1 ? (
+							<DeviceCertificates
+								run={runGroup}
+								disabled={busy}
+								canManage={inspection.can_manage_certificates === true}
+								scope={scope}
+								issuance={inspection.certificate_issuance === 1}
+								acme={inspection.certificate_acme === 1}
+								canDelegate={
+									inspection.can_delegate_certificate_renewal === true
+								}
+								onChanged={setCertificates}
+							/>
+						) : (
+							inspection && (
+								<p className="rounded border p-3 text-sm">
+									Update this device's standalone binary to manage service
+									certificates remotely.
+								</p>
+							)
+						)}
 						<div className="space-y-2">
 							<div className="flex flex-wrap items-center justify-between gap-2">
 								<h3 className="font-semibold">Project placements</h3>
@@ -914,6 +939,9 @@ export function DeviceManagementDialog({
 											manifest={manifest}
 											receipt={deviceReceipt}
 											invitationVault={record.invitationVault}
+											certificateManagement={
+												inspection?.certificate_management === 1
+											}
 										/>
 									)}
 								</>
@@ -1009,6 +1037,9 @@ export function DeviceManagementDialog({
 						key={`${device.device_id}:${projectId ?? ""}:${installedGeneration}:${installedProject.project_id}:${installedProject.project_path}`}
 						installed={installedProject}
 						placements={visiblePlacements}
+						certificates={certificates}
+						certificateManagement={inspection?.certificate_management === 1}
+						canManageCertificates={inspection?.can_manage_certificates === true}
 						connected={connected}
 						deviceId={device.device_id}
 						profile={profile}

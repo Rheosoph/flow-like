@@ -60,7 +60,7 @@ use flow_like::flow::ast::{
     RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
     destructive_flowscript_command_summaries, reconcile_text_with_catalog,
 };
-use flow_like::flow::board::Board;
+use flow_like::flow::board::{Board, BoardCell};
 use flow_like::flow::copilot::memory::AssistantMemory;
 use flow_like::flow::copilot::platform::{
     PLATFORM_TOOL_IMAGE_URLS_FIELD, PlatformToolImageUrl, run_internet_search, run_memory_tool,
@@ -100,7 +100,6 @@ use flow_like::flow::copilot::{
     run_declaration_queries, tool_definition_parts, validate_model_facing_emit_commands,
     validate_model_facing_emit_commands_scope,
 };
-use flow_like_types::sync::Mutex as AsyncMutex;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -329,7 +328,7 @@ impl FlowIrDraftStoreAccessError {
 
 fn flow_ir_draft_store_for_board(
     board: &Board,
-    live_board: Option<&Arc<AsyncMutex<Board>>>,
+    live_board: Option<&Arc<BoardCell>>,
 ) -> Result<Arc<FlowIrDraftStore>, FlowIrDraftStoreAccessError> {
     with_current_board(board, live_board, |current| {
         persisted_flow_ir_draft_store(&board.id, current)
@@ -626,16 +625,17 @@ fn hydrate_flow_ir_draft_store_from_path(path: &Path, board: &Board, store: &Flo
     store.import_retained_snapshot(board, snapshot);
 }
 
-/// Hold the registry-backed board lock for the entire operation so fingerprint validation and
-/// command queueing observe one host state. Detached/anonymous boards retain the captured fallback.
+/// Hold the registry-backed board's writer permit for the entire operation so fingerprint
+/// validation and command queueing observe one host state; readers are not held up.
+/// Detached/anonymous boards retain the captured fallback.
 fn with_current_board<T>(
     captured: &Board,
-    live: Option<&Arc<AsyncMutex<Board>>>,
+    live: Option<&Arc<BoardCell>>,
     operation: impl FnOnce(&Board) -> T,
 ) -> T {
     match live {
         Some(live) => {
-            let board = block_on_tool(live.lock());
+            let board = block_on_tool(live.write());
             operation(&board)
         }
         None => operation(captured),
@@ -654,7 +654,7 @@ fn with_current_board<T>(
 pub(super) fn create_board_tools(
     graph_context: Option<Arc<GraphContext>>,
     board: Option<Arc<Board>>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     request_acceptance_prompt: Option<&str>,
     catalog_provider: Option<Arc<dyn CatalogProvider>>,
     side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
@@ -1480,22 +1480,8 @@ fn specialist_operation_allowed(
 }
 
 fn database_operation_requires_approval(operation: &str) -> bool {
-    matches!(
-        operation,
-        "create_table"
-            | "insert"
-            | "add_items"
-            | "delete"
-            | "remove_items"
-            | "update"
-            | "build_index"
-            | "drop_index"
-            | "optimize"
-            | "add_column"
-            | "drop_columns"
-            | "alter_column"
-            | "delete_table"
-    )
+    READ_WRITE_DATABASE_OPERATIONS.contains(&operation)
+        && !READ_ONLY_DATABASE_OPERATIONS.contains(&operation)
 }
 
 /// `delete_table` destroys one specific table, so its "don't ask again" memory must not authorize
@@ -1507,11 +1493,14 @@ fn database_approval_session_key(operation: &str, table_name: &str) -> String {
     format!("database:{operation}")
 }
 
-fn database_approval_message(operation: &str, table_name: &str) -> String {
+fn database_approval_message(operation: &str, table_name: &str, file_name: &str) -> String {
     if operation == "delete_table" {
         return format!(
             "FlowPilot wants to PERMANENTLY DROP table '{table_name}', including every row and the table schema. This cannot be undone, and ontology overlays referencing the table are pruned."
         );
+    }
+    if operation == "import_geojson" {
+        return format!("FlowPilot wants to import '{file_name}' into table '{table_name}'.");
     }
     format!(
         "FlowPilot wants to run database operation '{}'{}.",
@@ -1662,7 +1651,11 @@ fn create_database_tool(
         let approval = if database_operation_requires_approval(&operation) {
             FrontendToolApproval::mutating(
                 database_approval_title(&operation),
-                database_approval_message(&operation, &table_name),
+                database_approval_message(
+                    &operation,
+                    &table_name,
+                    &arg_string(args, "file_name", "fileName"),
+                ),
                 database_approval_session_key(&operation, &table_name),
             )
         } else {
@@ -2175,7 +2168,7 @@ fn flowscript_tool_cancelled_result(
 
 fn create_write_flowscript_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: FlowIrAcceptanceBinding,
@@ -2221,7 +2214,7 @@ fn create_write_flowscript_tool(
 
 fn create_patch_flowscript_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: FlowIrAcceptanceBinding,
@@ -2272,7 +2265,7 @@ fn create_patch_flowscript_tool(
 
 fn create_check_flowscript_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: FlowIrAcceptanceBinding,
@@ -2317,7 +2310,7 @@ fn create_check_flowscript_tool(
 
 fn create_test_flowscript_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: FlowIrAcceptanceBinding,
@@ -2386,7 +2379,7 @@ fn create_test_flowscript_tool(
 
 fn create_commit_flowscript_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: FlowIrAcceptanceBinding,
@@ -2588,7 +2581,7 @@ fn create_plan_flow_ir_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, ToolHa
 #[allow(dead_code)]
 fn create_begin_flow_ir_draft_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: Option<FlowIrAcceptanceBinding>,
@@ -2644,7 +2637,7 @@ fn create_begin_flow_ir_draft_tool(
 #[allow(dead_code)]
 fn create_update_flow_ir_draft_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: Option<FlowIrAcceptanceBinding>,
@@ -2699,7 +2692,7 @@ fn create_update_flow_ir_draft_tool(
 #[allow(dead_code)]
 fn create_upsert_flow_ir_module_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: Option<FlowIrAcceptanceBinding>,
@@ -2754,7 +2747,7 @@ fn create_upsert_flow_ir_module_tool(
 #[allow(dead_code)]
 fn create_validate_flow_ir_draft_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: Option<FlowIrAcceptanceBinding>,
@@ -2810,7 +2803,7 @@ fn create_validate_flow_ir_draft_tool(
 #[allow(dead_code)]
 fn create_commit_flow_ir_draft_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
     provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: Option<FlowIrAcceptanceBinding>,
@@ -3009,7 +3002,7 @@ fn create_commit_flow_ir_draft_tool(
 /// snapshot used only to derive the shared Rig schema.
 fn create_get_current_flowscript_tool(
     board: Arc<Board>,
-    live_board: Option<Arc<AsyncMutex<Board>>>,
+    live_board: Option<Arc<BoardCell>>,
 ) -> (Tool, ToolHandler) {
     let tool = tool_from_rig_definition(&GetCurrentFlowScriptTool {
         board: board.clone(),
@@ -5324,6 +5317,12 @@ mod tests {
         assert!(READ_WRITE_DATABASE_OPERATIONS.contains(&"delete_table"));
         assert!(!READ_ONLY_DATABASE_OPERATIONS.contains(&"delete_table"));
         assert!(database_operation_requires_approval("delete_table"));
+        assert!(database_operation_requires_approval("import_geojson"));
+        assert!(!database_operation_requires_approval("query"));
+        assert_eq!(
+            database_approval_message("import_geojson", "sites", "sites.geojson"),
+            "FlowPilot wants to import 'sites.geojson' into table 'sites'."
+        );
 
         assert_eq!(
             database_approval_session_key("delete_table", "orders"),
@@ -6223,7 +6222,7 @@ mod tests {
         let captured = empty_board("live-board-test");
         let mut updated = captured.clone();
         updated.name = "Live".to_string();
-        let live = Arc::new(AsyncMutex::new(updated));
+        let live = Arc::new(BoardCell::new(updated));
 
         let observed = with_current_board(&captured, Some(&live), |board| board.name.clone());
         assert_eq!(observed, "Live");

@@ -33,7 +33,7 @@ function parseUnitInterval(value: string): number {
 function linearToSrgb(value: number): number {
 	const clamped = Math.max(0, Math.min(1, value));
 	if (clamped <= 0.0031308) return clamped * 12.92;
-	return 1.055 * Math.pow(clamped, 1 / 2.4) - 0.055;
+	return 1.055 * clamped ** (1 / 2.4) - 0.055;
 }
 
 function parseOklchRgb(value: string): [number, number, number] | null {
@@ -54,9 +54,9 @@ function parseOklchRgb(value: string): [number, number, number] | null {
 	const a = chroma * Math.cos(hueRadians);
 	const b = chroma * Math.sin(hueRadians);
 
-	const l = Math.pow(lightness + 0.3963377774 * a + 0.2158037573 * b, 3);
-	const m = Math.pow(lightness - 0.1055613458 * a - 0.0638541728 * b, 3);
-	const s = Math.pow(lightness - 0.0894841775 * a - 1.291485548 * b, 3);
+	const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+	const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+	const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
 
 	const r = linearToSrgb(
 		4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,

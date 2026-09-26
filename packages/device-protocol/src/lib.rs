@@ -2,25 +2,27 @@
 //! does not consume a challenge or replay ID; the API must do that atomically.
 
 mod archive;
-mod inventory;
+mod certificates;
 mod fleet;
+mod inventory;
 mod management;
 mod offline;
 mod proof;
-mod release;
 mod recovery;
+mod release;
 mod storage;
 mod wire;
 mod workload;
 
 pub use archive::*;
-pub use inventory::*;
+pub use certificates::*;
 pub use fleet::*;
+pub use inventory::*;
 pub use management::*;
 pub use offline::*;
 pub use proof::*;
-pub use release::*;
 pub use recovery::*;
+pub use release::*;
 pub use storage::*;
 pub use wire::*;
 pub use workload::*;

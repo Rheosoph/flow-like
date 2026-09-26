@@ -288,6 +288,9 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::invoke_board_async::invoke_board_async,
         crate::routes::app::board::prerun_board::prerun_board,
         crate::routes::app::board::query_logs::query_logs,
+        crate::routes::app::board::run_logs::query_run_logs,
+        crate::routes::app::board::run_logs::count_run_logs,
+        crate::routes::app::board::run_logs::get_run_log_summary,
         crate::routes::app::board::get_runs::get_runs,
         crate::routes::app::board::get_run_payload::get_run_payload,
         crate::routes::app::board::report_run::report_run,
@@ -511,6 +514,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::get_indices::get_db_indices,
         crate::routes::app::db::add_column::add_column,
         crate::routes::app::db::alter_column::alter_column,
+        crate::routes::app::db::set_primary_key::set_primary_key,
         crate::routes::app::db::drop_columns::drop_columns,
         crate::routes::app::db::build_index::build_index,
         crate::routes::app::db::drop_index::drop_index,
@@ -729,6 +733,15 @@ impl Modify for SecurityAddon {
         crate::routes::course::weekly::rotate_weekly,
     ),
     components(schemas(
+        crate::routes::app::board::run_logs::QueryRunLogsRequest,
+        crate::routes::app::board::run_logs::CountRunLogsRequest,
+        crate::routes::app::board::run_logs::CountRunLogsResponse,
+        flow_like::flow::execution::log_query::LogQuery,
+        flow_like::flow::execution::log_query::LogFold,
+        flow_like::flow::execution::log_summary::LogSummary,
+        flow_like::flow::execution::log_summary::SummaryLog,
+        flow_like::flow::execution::log_summary::LogGroup,
+        flow_like::flow::execution::log_summary::LogSlotRange,
         crate::payments::accounts::ConnectView,
         crate::payments::admin::BlockInput,
         crate::payments::admin::RetryInput,
@@ -811,6 +824,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::graph::import_read::ImportQueryPayload,
         crate::routes::app::db::add_column::AddColumnPayload,
         crate::routes::app::db::alter_column::AlterColumnPayload,
+        crate::routes::app::db::set_primary_key::SetPrimaryKeyPayload,
         crate::routes::app::db::build_index::BuildIndexPayload,
         crate::routes::app::db::build_index::IndexType,
         crate::routes::app::db::db_delete::DeleteFromDBPayload,
@@ -1566,7 +1580,13 @@ mod tests {
                 .expect("PlacementContent is registered"),
         )
         .unwrap();
-        for field in ["ctaLabel", "ctaHref", "imageUrl", "rotationSeconds", "autoFill"] {
+        for field in [
+            "ctaLabel",
+            "ctaHref",
+            "imageUrl",
+            "rotationSeconds",
+            "autoFill",
+        ] {
             assert!(
                 content.contains(&format!("\"{field}\"")),
                 "PlacementContent does not expose {field}"

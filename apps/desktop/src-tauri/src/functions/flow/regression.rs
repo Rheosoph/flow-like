@@ -304,7 +304,7 @@ async fn board_grading_blind(app: &App, board_id: &str, version: Option<(u32, u3
         .open_board(board_id.to_string(), Some(false), version)
         .await
     {
-        Ok(board) => board.lock().await.log_level.to_u8() > LogLevel::Info.to_u8(),
+        Ok(board) => board.snapshot().log_level.to_u8() > LogLevel::Info.to_u8(),
         Err(error) => {
             tracing::warn!(%error, board_id = %board_id, ?version, "Could not load the board to check its log level");
             false
@@ -886,8 +886,8 @@ pub async fn plan_regression_suite_run(
                 "Candidate board {} (version {:?}) could not be loaded: {}",
                 suite.board_id, board_version, error
             ))
-        })?;
-    let board = board.lock().await;
+        })?
+        .snapshot();
 
     let fixtures = suite.list_fixtures(&app).await?;
     let plan = plan_suite_cases(&fixtures, &board, None);

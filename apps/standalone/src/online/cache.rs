@@ -2466,16 +2466,17 @@ mod tests {
         for _ in 0..10 {
             control.cloud_failed(&cache_error(CloudUnavailable));
         }
-        let availability = control.availability.lock().unwrap();
-        assert_eq!(availability.failures, 6);
-        assert!(
-            availability
-                .retry_at
-                .unwrap()
-                .saturating_duration_since(Instant::now())
-                <= Duration::from_secs(30)
-        );
-        drop(availability);
+        {
+            let availability = control.availability.lock().unwrap();
+            assert_eq!(availability.failures, 6);
+            assert!(
+                availability
+                    .retry_at
+                    .unwrap()
+                    .saturating_duration_since(Instant::now())
+                    <= Duration::from_secs(30)
+            );
+        }
         cloud.mode.store(0, Ordering::SeqCst);
         // Writes always reach the provider even while reads use cached data.
         cache.put(&path, "online".into()).await.unwrap();

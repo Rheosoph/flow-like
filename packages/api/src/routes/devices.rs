@@ -14,6 +14,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(devices::management::routes())
         .merge(devices::archives::routes())
+        .merge(devices::certificates::routes())
         .merge(devices::inventory::routes())
         .merge(devices::fleet::routes())
         .route("/", get(list))

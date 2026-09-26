@@ -37,6 +37,8 @@ use datafusion::physical_plan::{
 use flow_like_types::async_trait;
 use futures::StreamExt;
 
+use crate::databases::vector::schema::primary_key_columns;
+
 use crate::databases::lance_dml::{
     LanceDmlExec, LanceDmlOp, assignments_to_lance_updates, filters_to_lance_predicate,
 };
@@ -118,6 +120,34 @@ struct ZeroColumnSafeProvider {
     /// When present, UPDATE/DELETE are translated onto this handle instead of
     /// forwarding to the adapter (which cannot execute them).
     dml_table: Option<lancedb::Table>,
+}
+
+impl ZeroColumnSafeProvider {
+    /// An overwrite commits the query's schema, which carries no key marker. The key is
+    /// read from the live table because an upsert may have set it after this mount.
+    async fn ensure_overwrite_keeps_key(&self) -> DataFusionResult<()> {
+        let keys = match &self.dml_table {
+            Some(table) => {
+                table
+                    .checkout_latest()
+                    .await
+                    .map_err(|error| DataFusionError::External(error.into()))?;
+                let schema = table
+                    .schema()
+                    .await
+                    .map_err(|error| DataFusionError::External(error.into()))?;
+                primary_key_columns(&schema)
+            }
+            None => primary_key_columns(&self.schema()),
+        };
+        if keys.is_empty() {
+            return Ok(());
+        }
+        Err(DataFusionError::Plan(format!(
+            "INSERT OVERWRITE would replace the table schema and drop its key column '{}'; delete the rows and use INSERT INTO instead",
+            keys.join("', '")
+        )))
+    }
 }
 
 #[async_trait]
@@ -214,6 +244,9 @@ impl TableProvider for ZeroColumnSafeProvider {
             .any(|field| crate::geometry::is_geometry_field(field))
         {
             return Err(DataFusionError::Plan("SQL INSERT into geometry tables is unsupported; use validated JSON or Arrow insert/upsert".into()));
+        }
+        if matches!(insert_op, InsertOp::Overwrite) {
+            self.ensure_overwrite_keeps_key().await?;
         }
         self.inner.insert_into(state, input, insert_op).await
     }

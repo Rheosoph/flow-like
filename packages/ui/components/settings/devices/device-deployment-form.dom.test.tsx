@@ -2,6 +2,7 @@ import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
 import { StrictMode, act } from "react";
 import type { InstalledProject } from "../../../lib/device-management/deployment";
+import type { DeviceCertificate } from "../../../lib/device-management/certificates";
 import type { ManagementCall } from "../../../lib/device-management/telemetry";
 import type {
 	ManagementResponse,
@@ -82,6 +83,7 @@ const installed = {
 	project_id: "project",
 	project_path: "/device/projects/project/revisions/pinned",
 	revision: "a".repeat(64),
+	online_metadata_sha256: "b".repeat(64),
 	source: "offline" as const,
 };
 let project: InstalledProject = installed;
@@ -111,6 +113,21 @@ let applied = 0;
 let callOverride: ManagementCall | undefined;
 let discoveredVariables = variables;
 let placementRows: PlacementStatus[] = [];
+let certificateManagement = false;
+let canManageCertificates = false;
+const deviceCertificate: DeviceCertificate = {
+	certificate_id: "00000000-0000-4000-8000-000000000001",
+	label: "Edge TLS",
+	revision: 1,
+	subject: "CN=edge.test",
+	issuer: "CN=Issuer",
+	dns_names: ["edge.test"],
+	ip_addresses: [],
+	sha256_fingerprint: "a".repeat(64),
+	not_before: 0,
+	not_after: Math.floor(Date.now() / 1000) + 86400,
+	bindings: [],
+};
 const initialConfiguration = {
 	placement_id: "existing-service",
 	project_id: "project",
@@ -236,6 +253,9 @@ async function render(connected = true) {
 					installed={project}
 					connected={connected}
 					placements={placementRows}
+					certificateManagement={certificateManagement}
+					canManageCertificates={canManageCertificates}
+					certificates={[deviceCertificate]}
 					deviceId="device"
 					profile={{ id: "profile" } as IProfile}
 					run={(operation) => operation(call)}
@@ -351,6 +371,8 @@ afterEach(async () => {
 	callOverride = undefined;
 	discoveredVariables = variables;
 	placementRows = [];
+	certificateManagement = false;
+	canManageCertificates = false;
 	configuration = structuredClone(initialConfiguration);
 });
 afterAll(async () => {
@@ -411,6 +433,53 @@ test("pinned offline discovery provisions stopped placement with secrets only in
 		expect(input.value).toBe("");
 	expect(httpCalls).toBe(0);
 	expect(calls.some(({ command }) => command.type === "start")).toBe(false);
+});
+
+test("TLS selection is gated by device support and applies only the selected certificate reference", async () => {
+	await prepare();
+	const selector = () =>
+		[...container.querySelectorAll("label")]
+			.find((value) => value.textContent?.includes("Service TLS certificate"))
+			?.querySelector("select");
+	expect(selector()?.disabled).toBe(true);
+	certificateManagement = true;
+	canManageCertificates = true;
+	await render();
+	expect(selector()?.disabled).toBe(false);
+	await act(async () => {
+		const select = selector();
+		if (!select) throw new Error("Missing TLS certificate selector");
+		select.value = deviceCertificate.certificate_id;
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+	});
+	await click("Create stopped placement");
+	await until(() => applied === 1);
+	const config = calls.find(({ command }) => command.type === "apply")?.command
+		.config as Record<string, unknown>;
+	expect(config.tls_certificate_id).toBe(deviceCertificate.certificate_id);
+	expect(JSON.stringify(config)).not.toContain("PRIVATE KEY");
+	expect(httpCalls).toBe(0);
+});
+
+test("project deploy permission preserves certificate assignment without allowing changes", async () => {
+	certificateManagement = true;
+	Object.assign(configuration.config, {
+		tls_certificate_id: deviceCertificate.certificate_id,
+	});
+	await prepareUpdate();
+	const selector = [...container.querySelectorAll("label")]
+		.find((value) => value.textContent?.includes("Service TLS certificate"))
+		?.querySelector("select");
+	expect(selector?.disabled).toBe(true);
+	expect(selector?.value).toBe(deviceCertificate.certificate_id);
+	expect(container.textContent).toContain(
+		"preserve the current certificate assignment",
+	);
+	await click("Apply placement update");
+	await until(() => applied === 1);
+	const config = calls.find(({ command }) => command.type === "apply")?.command
+		.config as Record<string, unknown>;
+	expect(config.tls_certificate_id).toBe(deviceCertificate.certificate_id);
 });
 
 test("unmount after accepted apply prevents sending the remaining secret commands", async () => {
@@ -624,6 +693,7 @@ for (const source of ["offline", "online"] as const) {
 				project_id: "project",
 				project_path: "/device/online/projects/project",
 				revision: "published-2",
+				online_metadata_sha256: "b".repeat(64),
 				source,
 			};
 			Object.assign(configuration, { rollout_sources: ["offline", "online"] });
@@ -720,6 +790,7 @@ test("an online project on an older agent offers manual updates without claiming
 		project_id: "project",
 		project_path: "/device/online/projects/project",
 		revision: "published-2",
+		online_metadata_sha256: "b".repeat(64),
 		source: "online",
 	};
 	configuration.config.source = "online";

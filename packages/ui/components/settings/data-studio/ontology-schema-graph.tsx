@@ -857,7 +857,7 @@ export function OntologySchemaGraph(props: Readonly<OntologySchemaGraphProps>) {
 				</ReactFlowProvider>
 			</div>
 			<Dialog open={expanded} onOpenChange={setExpanded}>
-				<DialogContent className="flex h-[88vh] max-w-[min(96vw,1600px)] flex-col gap-3">
+				<DialogContent className="flex h-[88vh] flex-col gap-3 sm:max-w-[min(96vw,1600px)]">
 					<DialogHeader>
 						<DialogTitle>
 							{title ?? t("schemaDiagram", "Schema diagram")}

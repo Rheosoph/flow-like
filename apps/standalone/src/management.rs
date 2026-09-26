@@ -131,6 +131,27 @@ impl Authority {
         );
         Ok(())
     }
+
+    fn require_certificate_assignment(
+        &self,
+        store: &StateStore,
+        config: &PlacementConfig,
+    ) -> Result<()> {
+        let previous = store.get_placement(&config.id)?;
+        let previous_id = previous
+            .as_ref()
+            .and_then(|record| record.config.get("tls_certificate_id"))
+            .and_then(Value::as_str);
+        if previous_id != config.tls_certificate_id.as_deref() {
+            // Assigning a certificate gives the selected workload access to its private key.
+            // Project deployment authority cannot expand that device-level delegation.
+            ensure!(
+                self.permits(ManagementCapability::ManageCertificates, None, None),
+                "Changing a certificate assignment requires device certificate administration"
+            );
+        }
+        Ok(())
+    }
 }
 
 fn authorized_read<R>(
@@ -833,6 +854,241 @@ fn execute(
 ) -> Result<ManagementResponse> {
     validate_request(request, &manifest.device_id, now)?;
     match &request.command {
+        ManagementCommand::AcmeCertificates { after, limit } => {
+            ensure!(
+                (1..=8).contains(limit),
+                "ACME policy page limit must be between 1 and 8"
+            );
+            if let Some(after) = after {
+                validate_certificate_id(after)?;
+            }
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    ensure!(
+                        authority.grant.is_none(),
+                        "Only the device owner can manage ACME renewal"
+                    );
+                    let mut policies = Vec::new();
+                    let mut next = None;
+                    for policy in crate::acme::list(store)? {
+                        if after
+                            .as_deref()
+                            .is_some_and(|after| policy.certificate_id.as_str() <= after)
+                        {
+                            continue;
+                        }
+                        if policies.len() >= usize::from(*limit) {
+                            next = policies
+                                .last()
+                                .map(|item: &AcmeCertificateMetadata| item.certificate_id.clone());
+                            break;
+                        }
+                        policies.push(policy);
+                        if serde_json::to_vec(&policies)?.len() > noise::MAX_PLAINTEXT - 1024 {
+                            policies.pop();
+                            ensure!(
+                                !policies.is_empty(),
+                                "ACME policy exceeds the encrypted response limit"
+                            );
+                            next = policies.last().map(|item| item.certificate_id.clone());
+                            break;
+                        }
+                    }
+                    Ok(ManagementResponse {
+                        operation_id: request.operation_id.clone(),
+                        state: "completed".into(),
+                        result: json!({"policies":policies,"next":next}),
+                    })
+                },
+            );
+        }
+        ManagementCommand::CertificateIssuers { after, limit } => {
+            ensure!(
+                (1..=8).contains(limit),
+                "Certificate issuer page limit must be between 1 and 8"
+            );
+            if let Some(after) = after {
+                validate_certificate_id(after)?;
+            }
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    ensure!(
+                        authority.grant.is_none(),
+                        "Only the device owner can manage certificate renewal authorities"
+                    );
+                    let mut issuers = Vec::new();
+                    let mut next = None;
+                    for item in crate::certificate_issuers::list(store)? {
+                        if after
+                            .as_deref()
+                            .is_some_and(|after| item.certificate_id.as_str() <= after)
+                        {
+                            continue;
+                        }
+                        if issuers.len() >= usize::from(*limit) {
+                            next = issuers.last().map(|item: &CertificateIssuerMetadata| {
+                                item.certificate_id.clone()
+                            });
+                            break;
+                        }
+                        issuers.push(item);
+                        if serde_json::to_vec(&issuers)?.len() > noise::MAX_PLAINTEXT - 1024 {
+                            issuers.pop();
+                            ensure!(
+                                !issuers.is_empty(),
+                                "Certificate issuer exceeds the encrypted response limit"
+                            );
+                            next = issuers.last().map(|item| item.certificate_id.clone());
+                            break;
+                        }
+                    }
+                    Ok(ManagementResponse {
+                        operation_id: request.operation_id.clone(),
+                        state: "completed".into(),
+                        result: json!({"issuers":issuers,"next":next}),
+                    })
+                },
+            );
+        }
+        ManagementCommand::CertificateRequests { after, limit } => {
+            ensure!(
+                (1..=8).contains(limit),
+                "Certificate request page limit must be between 1 and 8"
+            );
+            if let Some(after) = after {
+                validate_certificate_id(after)?;
+            }
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    authority.require(ManagementCapability::ManageCertificates, None, None)?;
+                    let mut requests = Vec::new();
+                    let mut next = None;
+                    for item in crate::certificate_requests::list(store)? {
+                        if item.purpose == CertificateRequestPurpose::Issuer
+                            && authority.grant.is_some()
+                        {
+                            continue;
+                        }
+                        if after
+                            .as_deref()
+                            .is_some_and(|after| item.request_id.as_str() <= after)
+                        {
+                            continue;
+                        }
+                        if requests.len() >= usize::from(*limit) {
+                            next = requests
+                                .last()
+                                .map(|item: &CertificateSigningRequest| item.request_id.clone());
+                            break;
+                        }
+                        requests.push(item);
+                        if serde_json::to_vec(&requests)?.len() > noise::MAX_PLAINTEXT - 1024 {
+                            requests.pop();
+                            ensure!(
+                                !requests.is_empty(),
+                                "Certificate request exceeds the encrypted response limit"
+                            );
+                            next = requests.last().map(|item| item.request_id.clone());
+                            break;
+                        }
+                    }
+                    Ok(ManagementResponse {
+                        operation_id: request.operation_id.clone(),
+                        state: "completed".into(),
+                        result: json!({"requests":requests,"next":next}),
+                    })
+                },
+            );
+        }
+        ManagementCommand::Certificates {
+            placement_id,
+            after,
+            limit,
+        } => {
+            ensure!(
+                (1..=8).contains(limit),
+                "Certificate page limit must be between 1 and 8"
+            );
+            if let Some(after) = after {
+                validate_certificate_id(after)?;
+            }
+            return authorized_read(
+                store,
+                authority.read_guard(manifest, request, now, None, None),
+                || {
+                    if let Some(id) = placement_id {
+                        let (_, project) = placement_scope(store, id)?;
+                        authority.require(
+                            ManagementCapability::Status,
+                            Some(&project),
+                            Some(id),
+                        )?;
+                    } else if let Some(grant) = &authority.grant {
+                        ensure!(
+                            grant.capabilities.contains(&ManagementCapability::Status),
+                            "Status access denied"
+                        );
+                    }
+                    let mut certificates = Vec::new();
+                    let mut next = None;
+                    let inventory_revision = crate::certificates::inventory_revision(store)?;
+                    for mut certificate in crate::certificates::list(store)? {
+                        if after
+                            .as_deref()
+                            .is_some_and(|after| certificate.certificate_id.as_str() <= after)
+                        {
+                            continue;
+                        }
+                        certificate.bindings.retain(|binding| {
+                            placement_id
+                                .as_deref()
+                                .is_none_or(|id| binding.placement_id == id)
+                                && authority.permits(
+                                    ManagementCapability::Status,
+                                    Some(&binding.project_id),
+                                    Some(&binding.placement_id),
+                                )
+                        });
+                        if (placement_id.is_some()
+                            || !authority.permits(ManagementCapability::Status, None, None))
+                            && certificate.bindings.is_empty()
+                        {
+                            continue;
+                        }
+                        if certificates.len() >= usize::from(*limit) {
+                            next = certificates
+                                .last()
+                                .map(|value: &CertificateMetadata| value.certificate_id.clone());
+                            break;
+                        }
+                        certificates.push(crate::certificates::bounded_metadata(certificate)?);
+                        // Leave room for the response envelope and continuation cursor.
+                        if serde_json::to_vec(&certificates)?.len() > noise::MAX_PLAINTEXT - 1024 {
+                            certificates.pop();
+                            ensure!(
+                                !certificates.is_empty(),
+                                "Certificate bindings exceed the encrypted response limit"
+                            );
+                            next = certificates
+                                .last()
+                                .map(|value| value.certificate_id.clone());
+                            break;
+                        }
+                    }
+                    Ok(ManagementResponse {
+                        operation_id: request.operation_id.clone(),
+                        state: "completed".into(),
+                        result: json!({"certificates":certificates,"inventory_revision":inventory_revision,"next":next}),
+                    })
+                },
+            );
+        }
         ManagementCommand::OfflineQueue {
             placement_id,
             after,
@@ -942,7 +1198,7 @@ fn execute(
             return Ok(ManagementResponse {
                 operation_id: request.operation_id.clone(),
                 state: "completed".into(),
-                result: json!({"device_id":manifest.device_id,"boot_id":if authority.permits(ManagementCapability::Status,None,None){Some(boot_id)}else{None},"isolation":if authority.permits(ManagementCapability::Status,None,None){Some(crate::isolation::capabilities(state_dir))}else{None},"placements":placements,"next":next}),
+                result: json!({"device_id":manifest.device_id,"certificate_management":1,"certificate_issuance":1,"certificate_acme":1,"can_delegate_certificate_renewal":authority.grant.is_none(),"can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),"boot_id":if authority.permits(ManagementCapability::Status,None,None){Some(boot_id)}else{None},"isolation":if authority.permits(ManagementCapability::Status,None,None){Some(crate::isolation::capabilities(state_dir))}else{None},"placements":placements,"next":next}),
             });
         }
         ManagementCommand::Inspect => {
@@ -970,7 +1226,7 @@ fn execute(
                     Ok(ManagementResponse {
                         operation_id: request.operation_id.clone(),
                         state: "completed".into(),
-                        result: json!({"device_id":manifest.device_id,"boot_id":if authority.permits(ManagementCapability::Status,None,None){Some(boot_id)}else{None},"isolation":if authority.permits(ManagementCapability::Status,None,None){Some(crate::isolation::capabilities(state_dir))}else{None},"placements":placements}),
+                        result: json!({"device_id":manifest.device_id,"certificate_management":1,"certificate_issuance":1,"certificate_acme":1,"can_delegate_certificate_renewal":authority.grant.is_none(),"can_manage_certificates":authority.permits(ManagementCapability::ManageCertificates,None,None),"boot_id":if authority.permits(ManagementCapability::Status,None,None){Some(boot_id)}else{None},"isolation":if authority.permits(ManagementCapability::Status,None,None){Some(crate::isolation::capabilities(state_dir))}else{None},"placements":placements}),
                     })
                 },
             );
@@ -1213,10 +1469,40 @@ fn execute(
     match result {
         Ok(value) => {
             store.connection.execute_batch("COMMIT")?;
+            if matches!(
+                request.command,
+                ManagementCommand::PutCertificate { .. }
+                    | ManagementCommand::DeleteCertificate { .. }
+                    | ManagementCommand::CreateCertificateRequest { .. }
+                    | ManagementCommand::InstallCertificateRequest { .. }
+                    | ManagementCommand::DeleteCertificateRequest { .. }
+                    | ManagementCommand::CreateCertificateIssuerRequest { .. }
+                    | ManagementCommand::InstallCertificateIssuer { .. }
+                    | ManagementCommand::DeleteCertificateIssuer { .. }
+                    | ManagementCommand::ConfigureAcmeCertificate { .. }
+                    | ManagementCommand::DeleteAcmeCertificate { .. }
+            ) {
+                let _ = crate::certificates::collect_unused(state_dir);
+            }
             Ok(value)
         }
         Err(error) => {
             let _ = store.connection.execute_batch("ROLLBACK");
+            if matches!(
+                request.command,
+                ManagementCommand::PutCertificate { .. }
+                    | ManagementCommand::DeleteCertificate { .. }
+                    | ManagementCommand::CreateCertificateRequest { .. }
+                    | ManagementCommand::InstallCertificateRequest { .. }
+                    | ManagementCommand::DeleteCertificateRequest { .. }
+                    | ManagementCommand::CreateCertificateIssuerRequest { .. }
+                    | ManagementCommand::InstallCertificateIssuer { .. }
+                    | ManagementCommand::DeleteCertificateIssuer { .. }
+                    | ManagementCommand::ConfigureAcmeCertificate { .. }
+                    | ManagementCommand::DeleteAcmeCertificate { .. }
+            ) {
+                let _ = crate::certificates::collect_unused(state_dir);
+            }
             Err(error)
         }
     }
@@ -1287,9 +1573,48 @@ fn execute_transaction(
     now: i64,
 ) -> Result<ManagementResponse> {
     authority.require_current(store, manifest, now)?;
+    if matches!(
+        request.command,
+        ManagementCommand::PutCertificate { .. }
+            | ManagementCommand::DeleteCertificate { .. }
+            | ManagementCommand::CreateCertificateRequest { .. }
+            | ManagementCommand::InstallCertificateRequest { .. }
+            | ManagementCommand::DeleteCertificateRequest { .. }
+            | ManagementCommand::CreateCertificateIssuerRequest { .. }
+            | ManagementCommand::InstallCertificateIssuer { .. }
+            | ManagementCommand::DeleteCertificateIssuer { .. }
+            | ManagementCommand::ConfigureAcmeCertificate { .. }
+            | ManagementCommand::DeleteAcmeCertificate { .. }
+    ) {
+        authority.require(ManagementCapability::ManageCertificates, None, None)?;
+    }
+    if matches!(
+        request.command,
+        ManagementCommand::CreateCertificateIssuerRequest { .. }
+            | ManagementCommand::InstallCertificateIssuer { .. }
+            | ManagementCommand::DeleteCertificateIssuer { .. }
+            | ManagementCommand::ConfigureAcmeCertificate { .. }
+            | ManagementCommand::DeleteAcmeCertificate { .. }
+    ) {
+        ensure!(
+            authority.grant.is_none(),
+            "Only the device owner can manage certificate renewal authorities"
+        );
+    }
+    if let ManagementCommand::DeleteCertificateRequest { request_id } = &request.command {
+        let issuer: bool = store.connection.query_row("SELECT EXISTS(SELECT 1 FROM certificate_requests WHERE request_id=?1 AND json_extract(metadata_json,'$.purpose')='issuer')", [request_id], |row| row.get(0))?;
+        ensure!(
+            !issuer || authority.grant.is_none(),
+            "Only the device owner can cancel an issuing authority request"
+        );
+    }
     let digest = if matches!(
         request.command,
-        ManagementCommand::SetSecret { .. } | ManagementCommand::RolloutSecret { .. }
+        ManagementCommand::SetSecret { .. }
+            | ManagementCommand::RolloutSecret { .. }
+            | ManagementCommand::PutCertificate { .. }
+            | ManagementCommand::InstallCertificateRequest { .. }
+            | ManagementCommand::InstallCertificateIssuer { .. }
     ) {
         crate::secrets::request_digest(state_dir, request)?
     } else {
@@ -1313,6 +1638,152 @@ fn execute_transaction(
     let mut project = None;
     let mut placement = None;
     let result = match &request.command {
+        ManagementCommand::ConfigureAcmeCertificate {
+            certificate_id,
+            label,
+            expected_revision,
+            expected_certificate_revision,
+            dns_names,
+            environment,
+            http_bind,
+            terms_of_service_agreed,
+        } => {
+            ensure!(
+                authority.grant.is_none(),
+                "Only the device owner can manage ACME renewal"
+            );
+            let acme = crate::acme::configure(
+                store,
+                certificate_id,
+                label,
+                *expected_revision,
+                *expected_certificate_revision,
+                dns_names,
+                *environment,
+                http_bind,
+                *terms_of_service_agreed,
+                now,
+            )?;
+            json!({"acme":acme})
+        }
+        ManagementCommand::DeleteAcmeCertificate {
+            certificate_id,
+            expected_revision,
+        } => {
+            ensure!(
+                authority.grant.is_none(),
+                "Only the device owner can manage ACME renewal"
+            );
+            crate::acme::delete(store, certificate_id, *expected_revision)?;
+            json!({"certificate_id":certificate_id,"deleted":true})
+        }
+        ManagementCommand::CreateCertificateIssuerRequest {
+            request_id,
+            certificate_id,
+            expected_revision,
+            dns_names,
+            ip_addresses,
+            leaf_lifetime_days,
+        } => {
+            let request = crate::certificate_issuers::create_request(
+                store,
+                state_dir,
+                request_id,
+                certificate_id,
+                *expected_revision,
+                dns_names,
+                ip_addresses,
+                *leaf_lifetime_days,
+                now,
+            )?;
+            json!({"request":request})
+        }
+        ManagementCommand::InstallCertificateIssuer {
+            request_id,
+            certificate_chain_pem,
+        } => {
+            let issuer = crate::certificate_issuers::install(
+                store,
+                state_dir,
+                request_id,
+                &certificate_chain_pem.0,
+                now,
+            )?;
+            json!({"issuer":issuer})
+        }
+        ManagementCommand::DeleteCertificateIssuer {
+            certificate_id,
+            expected_revision,
+        } => {
+            crate::certificate_issuers::delete(store, certificate_id, *expected_revision)?;
+            json!({"certificate_id":certificate_id,"deleted":true})
+        }
+        ManagementCommand::CreateCertificateRequest {
+            request_id,
+            certificate_id,
+            label,
+            expected_revision,
+            dns_names,
+            ip_addresses,
+        } => {
+            let request = crate::certificate_requests::create(
+                store,
+                state_dir,
+                request_id,
+                certificate_id,
+                label,
+                *expected_revision,
+                dns_names,
+                ip_addresses,
+                now,
+            )?;
+            json!({"request":request})
+        }
+        ManagementCommand::InstallCertificateRequest {
+            request_id,
+            certificate_chain_pem,
+        } => {
+            let certificate = crate::certificate_requests::install(
+                store,
+                state_dir,
+                request_id,
+                &certificate_chain_pem.0,
+                now,
+            )?;
+            let certificate = crate::certificates::bounded_metadata(certificate)?;
+            json!({"certificate":certificate,"inventory_revision":crate::certificates::inventory_revision(store)?})
+        }
+        ManagementCommand::DeleteCertificateRequest { request_id } => {
+            crate::certificate_requests::delete(store, request_id)?;
+            json!({"request_id":request_id,"deleted":true})
+        }
+        ManagementCommand::PutCertificate {
+            certificate_id,
+            label,
+            expected_revision,
+            certificate_chain_pem,
+            private_key_pem,
+        } => {
+            let certificate = crate::certificates::put(
+                store,
+                state_dir,
+                certificate_id,
+                label,
+                *expected_revision,
+                &certificate_chain_pem.0,
+                &private_key_pem.0,
+                now,
+            )?;
+            let certificate = crate::certificates::bounded_metadata(certificate)?;
+            json!({"certificate":certificate,"inventory_revision":crate::certificates::inventory_revision(store)?})
+        }
+        ManagementCommand::DeleteCertificate {
+            certificate_id,
+            expected_revision,
+        } => {
+            let revision = crate::certificates::delete(store, certificate_id, *expected_revision)?;
+            json!({"certificate_id":certificate_id,"deleted":true,"inventory_revision":revision})
+        }
         ManagementCommand::OfflineQueueRetry {
             placement_id,
             scope,
@@ -1373,7 +1844,11 @@ fn execute_transaction(
                 Some(&config.project_id),
                 Some(&config.id),
             )?;
+            authority.require_certificate_assignment(store, &config)?;
             validate_remote_project_path(state_dir, &config)?;
+            if let Some(id) = &config.tls_certificate_id {
+                crate::certificates::validate_binding(store, state_dir, id, now)?;
+            }
             let rollout = store.stage_rollout(
                 &request.operation_id,
                 &config,
@@ -1537,7 +2012,11 @@ fn execute_transaction(
                     "Placement identity is immutable"
                 );
             }
+            authority.require_certificate_assignment(store, &config)?;
             validate_remote_project_path(state_dir, &config)?;
+            if let Some(id) = &config.tls_certificate_id {
+                crate::certificates::validate_binding(store, state_dir, id, now)?;
+            }
             if let Some(old) = &existing {
                 crate::secrets::preserve_for_revision(
                     &serde_json::from_value(old.config.clone())?,
@@ -1654,7 +2133,24 @@ fn execute_transaction(
     };
     let response = ManagementResponse {
         operation_id: request.operation_id.clone(),
-        state: "accepted".into(),
+        state: if matches!(
+            request.command,
+            ManagementCommand::PutCertificate { .. }
+                | ManagementCommand::DeleteCertificate { .. }
+                | ManagementCommand::CreateCertificateRequest { .. }
+                | ManagementCommand::InstallCertificateRequest { .. }
+                | ManagementCommand::DeleteCertificateRequest { .. }
+                | ManagementCommand::CreateCertificateIssuerRequest { .. }
+                | ManagementCommand::InstallCertificateIssuer { .. }
+                | ManagementCommand::DeleteCertificateIssuer { .. }
+                | ManagementCommand::ConfigureAcmeCertificate { .. }
+                | ManagementCommand::DeleteAcmeCertificate { .. }
+        ) {
+            "completed"
+        } else {
+            "accepted"
+        }
+        .into(),
         result,
     };
     store.connection.execute("INSERT INTO management_operations(operation_id,request_digest,principal,project_id,placement_id,accepted_at,result_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![request.operation_id,digest,authority.principal,project,placement,now,serde_json::to_string(&response)?])?;
@@ -3312,6 +3808,861 @@ mod tests {
                 .success(),
             "Browser peer verification failed"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn certificate_commands_are_private_idempotent_scoped_and_bound() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(temp.path())?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let now = unix_time()?;
+        let request = |id: &str, command| ManagementRequest {
+            operation_id: id.into(),
+            device_id: manifest.device_id.clone(),
+            issued_at: now,
+            expires_at: now + 100,
+            command,
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let unbound = uuid::Uuid::new_v4().to_string();
+        let identity = rcgen::generate_simple_self_signed(vec!["service.example.test".into()])?;
+        let certificate_chain_pem = identity.cert.pem();
+        let private_key_pem = identity.signing_key.serialize_pem();
+        let put = |id: &str, revision| ManagementCommand::PutCertificate {
+            certificate_id: id.into(),
+            label: "Service HTTPS".into(),
+            expected_revision: revision,
+            certificate_chain_pem: SecretValue(certificate_chain_pem.clone()),
+            private_key_pem: SecretValue(private_key_pem.clone()),
+        };
+        let create = request("certificate-create", put(&id, 0));
+        let first = execute(&mut store, &owner, &create, &manifest, "boot", &root, now)?;
+        assert_eq!(first.state, "completed");
+        assert_eq!(first.result["certificate"]["revision"], 1);
+        assert_eq!(
+            execute(&mut store, &owner, &create, &manifest, "boot", &root, now)?.result,
+            first.result
+        );
+        assert_eq!(crate::certificates::inventory_revision(&store)?, 2);
+        let journal: String = store.connection.query_row(
+            "SELECT result_json FROM management_operations WHERE operation_id='certificate-create'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert!(!journal.contains("PRIVATE KEY") && !journal.contains("BEGIN CERTIFICATE"));
+        assert!(!format!("{create:?}").contains("PRIVATE KEY"));
+        assert!(
+            execute(
+                &mut store,
+                &owner,
+                &request("stale", put(&id, 0)),
+                &manifest,
+                "boot",
+                &root,
+                now
+            )
+            .is_err()
+        );
+        execute(
+            &mut store,
+            &owner,
+            &request("unbound", put(&unbound, 0)),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let mut config = placement(&root)?;
+        config["tls_certificate_id"] = json!(id);
+        store.upsert_placement("api", &config, crate::state::DesiredState::Stopped)?;
+        assert!(
+            execute(
+                &mut store,
+                &owner,
+                &request(
+                    "delete-in-use",
+                    ManagementCommand::DeleteCertificate {
+                        certificate_id: id.clone(),
+                        expected_revision: 1
+                    }
+                ),
+                &manifest,
+                "boot",
+                &root,
+                now
+            )
+            .is_err()
+        );
+        let controller = SigningKey::generate();
+        let grant = ManagementGrant {
+            grant_id: "reader".into(),
+            user_id: "reader".into(),
+            controller_key: controller.public_key(),
+            scope: ManagementScope::Project {
+                project_id: "project".into(),
+            },
+            capabilities: vec![ManagementCapability::Status],
+            expires_at: now + 1000,
+            group_id: None,
+            group_version: None,
+        };
+        let policy = ManagementPolicy {
+            version: 1,
+            device_id: manifest.device_id.clone(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![grant.clone()],
+            issued_at: now - 1,
+            expires_at: now + 1000,
+        };
+        store.accept_management_policy(
+            &sign_management_policy(&policy, &signing)?,
+            &signing.public_key(),
+            &manifest.device_id,
+            now,
+        )?;
+        let reader = Authority {
+            principal: "reader:reader".into(),
+            key: controller.public_key(),
+            grant: Some(grant),
+        };
+        let list = request(
+            "certificate-list",
+            ManagementCommand::Certificates {
+                placement_id: None,
+                after: None,
+                limit: 4,
+            },
+        );
+        let response = execute(&mut store, &reader, &list, &manifest, "boot", &root, now)?;
+        assert_eq!(response.result["certificates"].as_array().unwrap().len(), 1);
+        assert_eq!(response.result["certificates"][0]["certificate_id"], id);
+        assert_eq!(
+            response.result["certificates"][0]["bindings"][0]["placement_id"],
+            "api"
+        );
+        assert!(!serde_json::to_string(&response)?.contains("PRIVATE KEY"));
+        assert!(
+            execute(
+                &mut store,
+                &reader,
+                &request("denied-write", put(&id, 1)),
+                &manifest,
+                "boot",
+                &root,
+                now
+            )
+            .is_err()
+        );
+        assert!(
+            execute(
+                &mut store,
+                &reader,
+                &request(
+                    "denied-delete",
+                    ManagementCommand::DeleteCertificate {
+                        certificate_id: unbound.clone(),
+                        expected_revision: 1
+                    }
+                ),
+                &manifest,
+                "boot",
+                &root,
+                now
+            )
+            .is_err()
+        );
+        let mut invalid_policy = policy;
+        invalid_policy.grants[0]
+            .capabilities
+            .push(ManagementCapability::ManageCertificates);
+        assert!(sign_management_policy(&invalid_policy, &signing).is_err());
+        let deleted = execute(
+            &mut store,
+            &owner,
+            &request(
+                "delete-unbound",
+                ManagementCommand::DeleteCertificate {
+                    certificate_id: unbound,
+                    expected_revision: 1,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        assert_eq!(deleted.state, "completed");
+        assert_eq!(deleted.result["deleted"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn project_deploy_cannot_acquire_or_change_a_device_certificate_assignment() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(temp.path())?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let now = unix_time()?;
+        let request = |id: &str, command| ManagementRequest {
+            operation_id: id.into(),
+            device_id: manifest.device_id.clone(),
+            issued_at: now,
+            expires_at: now + 100,
+            command,
+        };
+        let certificate = rcgen::generate_simple_self_signed(vec!["service.example.test".into()])?;
+        let first = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        for id in [&first, &other] {
+            crate::certificates::put(
+                &store,
+                &root,
+                id,
+                "Device identity",
+                0,
+                &certificate.cert.pem(),
+                &certificate.signing_key.serialize_pem(),
+                now,
+            )?;
+        }
+        let controller = SigningKey::generate();
+        let grant = ManagementGrant {
+            grant_id: "deployer".into(),
+            user_id: "deployer".into(),
+            controller_key: controller.public_key(),
+            scope: ManagementScope::Project {
+                project_id: "project".into(),
+            },
+            capabilities: vec![
+                ManagementCapability::Status,
+                ManagementCapability::Deploy,
+                ManagementCapability::Start,
+            ],
+            expires_at: now + 1000,
+            group_id: None,
+            group_version: None,
+        };
+        let policy = ManagementPolicy {
+            version: 1,
+            device_id: manifest.device_id.clone(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![grant.clone()],
+            issued_at: now - 1,
+            expires_at: now + 1000,
+        };
+        store.accept_management_policy(
+            &sign_management_policy(&policy, &signing)?,
+            &signing.public_key(),
+            &manifest.device_id,
+            now,
+        )?;
+        let deployer = Authority {
+            principal: "deployer:deployer".into(),
+            key: controller.public_key(),
+            grant: Some(grant),
+        };
+        let mut config = placement(&root)?;
+        config["tls_certificate_id"] = json!(other);
+        let denied = execute(
+            &mut store,
+            &deployer,
+            &request(
+                "new-binding",
+                ManagementCommand::Apply {
+                    config: config.clone(),
+                    expected_revision: 0,
+                    start: true,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )
+        .unwrap_err();
+        assert!(denied.to_string().contains("certificate assignment"));
+        assert!(store.get_placement("api")?.is_none());
+        config["tls_certificate_id"] = Value::Null;
+        execute(
+            &mut store,
+            &deployer,
+            &request(
+                "plain-deploy",
+                ManagementCommand::Apply {
+                    config: config.clone(),
+                    expected_revision: 0,
+                    start: true,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        config["tls_certificate_id"] = json!(first);
+        execute(
+            &mut store,
+            &owner,
+            &request(
+                "owner-assign",
+                ManagementCommand::Apply {
+                    config: config.clone(),
+                    expected_revision: 1,
+                    start: true,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        config["variables"]["public-listen-port"] = json!(9090);
+        execute(
+            &mut store,
+            &deployer,
+            &request(
+                "retain-binding",
+                ManagementCommand::Apply {
+                    config: config.clone(),
+                    expected_revision: 2,
+                    start: true,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        for (label, next) in [("steal", json!(other)), ("remove", Value::Null)] {
+            let mut changed = config.clone();
+            changed["tls_certificate_id"] = next;
+            for (name, command) in [
+                (
+                    "apply",
+                    ManagementCommand::Apply {
+                        config: changed.clone(),
+                        expected_revision: 3,
+                        start: true,
+                    },
+                ),
+                (
+                    "stage",
+                    ManagementCommand::StageRollout {
+                        config: changed,
+                        expected_revision: 3,
+                        stabilization_seconds: 2,
+                        deadline_seconds: 15,
+                    },
+                ),
+            ] {
+                let error = execute(
+                    &mut store,
+                    &deployer,
+                    &request(&format!("{label}-{name}"), command),
+                    &manifest,
+                    "boot",
+                    &root,
+                    now,
+                )
+                .unwrap_err();
+                assert!(error.to_string().contains("certificate assignment"));
+            }
+        }
+        let retained = execute(
+            &mut store,
+            &deployer,
+            &request(
+                "retained-stage",
+                ManagementCommand::StageRollout {
+                    config: config.clone(),
+                    expected_revision: 3,
+                    stabilization_seconds: 2,
+                    deadline_seconds: 15,
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        assert_eq!(retained.result["state"], "staged");
+        execute(
+            &mut store,
+            &deployer,
+            &request(
+                "cancel-retained",
+                ManagementCommand::CancelRollout {
+                    rollout_id: "retained-stage".into(),
+                },
+            ),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let inspect = request("deployer-inspect", ManagementCommand::Inspect);
+        assert_eq!(
+            execute(
+                &mut store, &deployer, &inspect, &manifest, "boot", &root, now
+            )?
+            .result["can_manage_certificates"],
+            false
+        );
+        let inspect = request("owner-inspect", ManagementCommand::Inspect);
+        assert_eq!(
+            execute(&mut store, &owner, &inspect, &manifest, "boot", &root, now)?.result["can_manage_certificates"],
+            true
+        );
+        assert_eq!(
+            store.get_placement("api")?.unwrap().config["tls_certificate_id"],
+            first
+        );
+        let rejected: u64 = store.connection.query_row("SELECT COUNT(*) FROM management_operations WHERE operation_id IN ('new-binding','steal-apply','steal-stage','remove-apply','remove-stage')", [], |r| r.get(0))?;
+        assert_eq!(rejected, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn certificate_requests_are_idempotent_and_issuer_delegation_is_owner_only() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(temp.path())?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let now = unix_time()?;
+        let request = |id: &str, command| ManagementRequest {
+            operation_id: id.into(),
+            device_id: manifest.device_id.clone(),
+            issued_at: now,
+            expires_at: now + 100,
+            command,
+        };
+        let controller = SigningKey::generate();
+        let grant = ManagementGrant {
+            grant_id: "certificate-admin".into(),
+            user_id: "certificate-admin".into(),
+            controller_key: controller.public_key(),
+            scope: ManagementScope::Device,
+            capabilities: vec![
+                ManagementCapability::Status,
+                ManagementCapability::ManageCertificates,
+            ],
+            expires_at: now + 1000,
+            group_id: None,
+            group_version: None,
+        };
+        let policy = ManagementPolicy {
+            version: 1,
+            device_id: manifest.device_id.clone(),
+            policy_version: 1,
+            previous_policy_digest: None,
+            grants: vec![grant.clone()],
+            issued_at: now - 1,
+            expires_at: now + 1000,
+        };
+        store.accept_management_policy(
+            &sign_management_policy(&policy, &signing)?,
+            &signing.public_key(),
+            &manifest.device_id,
+            now,
+        )?;
+        let shared = Authority {
+            principal: "certificate-admin:certificate-admin".into(),
+            key: controller.public_key(),
+            grant: Some(grant),
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let pending_id = uuid::Uuid::new_v4().to_string();
+        let create = request(
+            "create-device-csr",
+            ManagementCommand::CreateCertificateRequest {
+                request_id: pending_id.clone(),
+                certificate_id: id.clone(),
+                label: "Enterprise REST".into(),
+                expected_revision: 0,
+                dns_names: vec!["service.example.test".into()],
+                ip_addresses: vec![],
+            },
+        );
+        let first = execute(&mut store, &shared, &create, &manifest, "boot", &root, now)?;
+        assert_eq!(first.state, "completed");
+        assert_eq!(first.result["request"]["purpose"], "service");
+        assert_eq!(
+            first.result,
+            execute(&mut store, &shared, &create, &manifest, "boot", &root, now)?.result
+        );
+        assert!(!serde_json::to_string(&first)?.contains("PRIVATE KEY"));
+        assert_eq!(crate::certificate_requests::list(&store)?.len(), 1);
+        let certificate_id = uuid::Uuid::new_v4().to_string();
+        let identity = rcgen::generate_simple_self_signed(vec!["service.example.test".into()])?;
+        crate::certificates::put(
+            &store,
+            &root,
+            &certificate_id,
+            "REST",
+            0,
+            &identity.cert.pem(),
+            &identity.signing_key.serialize_pem(),
+            now,
+        )?;
+        let issuer_request_id = uuid::Uuid::new_v4().to_string();
+        let issuer_request = request(
+            "create-device-issuer",
+            ManagementCommand::CreateCertificateIssuerRequest {
+                request_id: issuer_request_id.clone(),
+                certificate_id: certificate_id.clone(),
+                expected_revision: 1,
+                dns_names: vec!["service.example.test".into()],
+                ip_addresses: vec![],
+                leaf_lifetime_days: 30,
+            },
+        );
+        assert!(
+            execute(
+                &mut store,
+                &shared,
+                &issuer_request,
+                &manifest,
+                "boot",
+                &root,
+                now
+            )
+            .is_err()
+        );
+        let created = execute(
+            &mut store,
+            &owner,
+            &issuer_request,
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        assert_eq!(created.result["request"]["purpose"], "issuer");
+        let list = request(
+            "list-csrs",
+            ManagementCommand::CertificateRequests {
+                after: None,
+                limit: 8,
+            },
+        );
+        assert_eq!(
+            execute(&mut store, &shared, &list, &manifest, "boot", &root, now)?.result["requests"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            execute(&mut store, &owner, &list, &manifest, "boot", &root, now)?.result["requests"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let issuers = request(
+            "list-issuers",
+            ManagementCommand::CertificateIssuers {
+                after: None,
+                limit: 8,
+            },
+        );
+        assert!(execute(&mut store, &shared, &issuers, &manifest, "boot", &root, now).is_err());
+        let cancel = request(
+            "cancel-issuer-csr",
+            ManagementCommand::DeleteCertificateRequest {
+                request_id: issuer_request_id,
+            },
+        );
+        assert!(execute(&mut store, &shared, &cancel, &manifest, "boot", &root, now).is_err());
+        execute(&mut store, &owner, &cancel, &manifest, "boot", &root, now)?;
+        assert!(execute(&mut store, &shared, &cancel, &manifest, "boot", &root, now).is_err());
+        let configure = request(
+            "configure-public-certificate",
+            ManagementCommand::ConfigureAcmeCertificate {
+                certificate_id: certificate_id.clone(),
+                label: "Public REST".into(),
+                expected_revision: 0,
+                expected_certificate_revision: 1,
+                dns_names: vec!["service.example.test".into()],
+                environment: AcmeEnvironment::LetsEncryptStaging,
+                http_bind: "127.0.0.1:8080".into(),
+                terms_of_service_agreed: true,
+            },
+        );
+        assert!(
+            execute(
+                &mut store, &shared, &configure, &manifest, "boot", &root, now
+            )
+            .is_err()
+        );
+        let configured = execute(
+            &mut store, &owner, &configure, &manifest, "boot", &root, now,
+        )?;
+        assert_eq!(configured.state, "completed");
+        assert_eq!(
+            configured.result,
+            execute(
+                &mut store, &owner, &configure, &manifest, "boot", &root, now
+            )?
+            .result
+        );
+        let list = request(
+            "list-acme",
+            ManagementCommand::AcmeCertificates {
+                after: None,
+                limit: 8,
+            },
+        );
+        assert!(execute(&mut store, &shared, &list, &manifest, "boot", &root, now).is_err());
+        assert_eq!(
+            execute(&mut store, &owner, &list, &manifest, "boot", &root, now)?.result["policies"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let revoke = request(
+            "stop-acme",
+            ManagementCommand::DeleteAcmeCertificate {
+                certificate_id: certificate_id.clone(),
+                expected_revision: 1,
+            },
+        );
+        assert!(execute(&mut store, &shared, &revoke, &manifest, "boot", &root, now).is_err());
+        execute(&mut store, &owner, &revoke, &manifest, "boot", &root, now)?;
+        assert_eq!(
+            crate::certificates::metadata(&store, &certificate_id)?.revision,
+            1
+        );
+        let journal = store
+            .connection
+            .prepare("SELECT result_json FROM management_operations")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert!(journal.iter().all(|entry| !entry.contains("PRIVATE KEY")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn owner_created_certificate_and_delegated_renewal_complete_a_trusted_tls_cycle()
+    -> Result<()> {
+        use flow_like_device_crypto::certificate_authority as ca;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn handshake(root: &Path, certificate_id: &str, root_pem: &str) -> Result<Vec<u8>> {
+            let (_, identity) = crate::certificates::load_certified_key(root, certificate_id)?;
+            let mut resolver = rustls::server::ResolvesServerCertUsingSni::new();
+            resolver.add("api.example.test", (*identity).clone())?;
+            let server = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
+            .with_cert_resolver(std::sync::Arc::new(resolver));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let task = tokio::spawn(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                    let (stream, _) = listener.accept().await?;
+                    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server));
+                    let mut stream = acceptor.accept(stream).await?;
+                    let mut request = [0_u8; 4];
+                    stream.read_exact(&mut request).await?;
+                    ensure!(&request == b"ping", "Unexpected test TLS request");
+                    stream.write_all(b"pong").await?;
+                    stream.shutdown().await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+                .await?
+            });
+            let mut trusted = rustls::RootCertStore::empty();
+            for cert in rustls_pemfile::certs(&mut std::io::Cursor::new(root_pem.as_bytes())) {
+                trusted.add(cert?)?;
+            }
+            ensure!(
+                trusted.len() == 1,
+                "TLS test must trust only the exported organisation root"
+            );
+            let client = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(trusted)
+            .with_no_client_auth();
+            let stream = tokio::net::TcpStream::connect(address).await?;
+            let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(client));
+            let mut stream = connector
+                .connect(
+                    rustls::pki_types::ServerName::try_from("api.example.test")?,
+                    stream,
+                )
+                .await?;
+            let presented = stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .context("Missing TLS certificate")?[0]
+                .as_ref()
+                .to_vec();
+            stream.write_all(b"ping").await?;
+            let mut response = [0_u8; 4];
+            stream.read_exact(&mut response).await?;
+            assert_eq!(&response, b"pong");
+            task.await??;
+            Ok(presented)
+        }
+
+        let temp = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(temp.path())?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let signing = SigningKey::generate();
+        let manifest = manifest(&signing);
+        let owner = owner(&manifest);
+        let now = unix_time()?;
+        let command = |command| ManagementRequest {
+            operation_id: uuid::Uuid::new_v4().to_string(),
+            device_id: manifest.device_id.clone(),
+            issued_at: now,
+            expires_at: now + 100,
+            command,
+        };
+        let authority_id = uuid::Uuid::new_v4().to_string();
+        let password = b"owner-local-password-for-issuance";
+        let authority = ca::create_certificate_authority_vault(
+            &ca::CertificateAuthoritySpec {
+                account_binding: "owner-account".into(),
+                authority_id: authority_id.clone(),
+                label: "Customer organisation".into(),
+                dns_suffixes: vec!["example.test".into()],
+                ip_addresses: vec![],
+                validity_days: 365,
+            },
+            password,
+            now,
+        )?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let created = execute(
+            &mut store,
+            &owner,
+            &command(ManagementCommand::CreateCertificateRequest {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                certificate_id: id.clone(),
+                label: "Private organisation API".into(),
+                expected_revision: 0,
+                dns_names: vec!["api.example.test".into()],
+                ip_addresses: vec![],
+            }),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let csr: CertificateSigningRequest =
+            serde_json::from_value(created.result["request"].clone())?;
+        let signed = ca::sign_service_certificate(
+            "owner-account",
+            &authority_id,
+            password,
+            &authority.vault,
+            &ca::CertificateSigningRequest {
+                csr_pem: csr.csr_pem,
+                dns_names: csr.dns_names,
+                ip_addresses: csr.ip_addresses,
+                validity_days: 30,
+            },
+            now,
+        )?;
+        let installed = execute(
+            &mut store,
+            &owner,
+            &command(ManagementCommand::InstallCertificateRequest {
+                request_id: csr.request_id,
+                certificate_chain_pem: SecretValue(signed.certificate_chain_pem),
+            }),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        assert_eq!(installed.result["certificate"]["revision"], 1);
+        let initial = handshake(&root, &id, &authority.public_bundle.root_certificate_pem).await?;
+        let initial_key = crate::certificates::load_identity(&root, &id)?.private_key_pem;
+        let created = execute(
+            &mut store,
+            &owner,
+            &command(ManagementCommand::CreateCertificateIssuerRequest {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                certificate_id: id.clone(),
+                expected_revision: 1,
+                dns_names: vec!["api.example.test".into()],
+                ip_addresses: vec![],
+                leaf_lifetime_days: 30,
+            }),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let csr: CertificateSigningRequest =
+            serde_json::from_value(created.result["request"].clone())?;
+        let signed = ca::sign_device_certificate_issuer(
+            "owner-account",
+            &authority_id,
+            password,
+            &authority.vault,
+            &ca::CertificateSigningRequest {
+                csr_pem: csr.csr_pem,
+                dns_names: csr.dns_names,
+                ip_addresses: csr.ip_addresses,
+                validity_days: 180,
+            },
+            now,
+        )?;
+        let installed = execute(
+            &mut store,
+            &owner,
+            &command(ManagementCommand::InstallCertificateIssuer {
+                request_id: csr.request_id,
+                certificate_chain_pem: SecretValue(signed.certificate_chain_pem),
+            }),
+            &manifest,
+            "boot",
+            &root,
+            now,
+        )?;
+        let mut policy: CertificateIssuerMetadata =
+            serde_json::from_value(installed.result["issuer"].clone())?;
+        policy.next_renewal_at = now;
+        store.connection.execute(
+            "UPDATE certificate_issuers SET metadata_json=?2 WHERE certificate_id=?1",
+            params![id, serde_json::to_string(&policy)?],
+        )?;
+        assert_eq!(crate::certificate_issuers::renew_due(&root, now)?, 1);
+        let renewed = handshake(&root, &id, &authority.public_bundle.root_certificate_pem).await?;
+        assert_ne!(initial, renewed);
+        assert_eq!(crate::certificates::metadata(&store, &id)?.revision, 2);
+        assert_ne!(
+            initial_key.0,
+            crate::certificates::load_identity(&root, &id)?
+                .private_key_pem
+                .0
+        );
+        let journal = store
+            .connection
+            .prepare("SELECT result_json FROM management_operations")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert!(journal.iter().all(|entry| !entry.contains("PRIVATE KEY")));
         Ok(())
     }
 }

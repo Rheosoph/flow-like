@@ -64,7 +64,7 @@ pub async fn get_page(
         let page_id = &page_id;
         async move {
             let board = app.open_board(board_id, Some(false), None).await.ok()?;
-            let board = board.lock().await;
+            let board = board.snapshot();
             board.load_page(page_id, None).await.ok()
         }
     };

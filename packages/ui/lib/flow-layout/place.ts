@@ -64,7 +64,7 @@ export function placeComponent(
 		for (const node of spine) {
 			const desired = primaryIncomingY(graph, node) ?? 0;
 			node.y = Number.isFinite(cursor)
-				? Math.max(desired, cursor + cfg.vGap)
+				? Math.max(desired, cursor + (cfg.branchGap ?? cfg.vGap))
 				: desired;
 			node.placed = true;
 			cursor = node.y + node.height;

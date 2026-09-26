@@ -1308,6 +1308,7 @@ const DATABASE_MUTATION_OPERATIONS = new Set([
 	"delete_table",
 	"insert",
 	"add_items",
+	"import_geojson",
 	"delete",
 	"remove_items",
 	"update",

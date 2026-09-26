@@ -25,8 +25,25 @@ vi.mock("sonner", () => ({
 	}),
 }));
 
+import { IExecutionMode } from "@flow-like/flow-like-ui";
+import type { IBoardRunRequirements } from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import { BoardState } from "../../components/tauri-provider/board-state";
 import { EventState } from "../../components/tauri-provider/event-state";
+
+function runRequirements(
+	overrides: Partial<IBoardRunRequirements> = {},
+): IBoardRunRequirements {
+	return {
+		runtime_variables: [],
+		oauth_requirements: [],
+		requires_local_execution: false,
+		execution_mode: IExecutionMode.Hybrid,
+		wasm_package_ids: [],
+		wasm_package_permissions: {},
+		instantiates_widgets: false,
+		...overrides,
+	};
+}
 
 function hostedBackend(authenticated = true) {
 	return {
@@ -60,10 +77,10 @@ describe("local execution widget preparation", () => {
 		const state = new BoardState(backend as never);
 		let prepared = false;
 		const preparation = state
-			.ensureAppPackagesInstalledForExecution("app-1", {
-				nodes: { widget: { name: "a2ui_instantiate_widget" } },
-				layers: {},
-			} as never)
+			.ensureAppPackagesInstalledForExecution(
+				"app-1",
+				runRequirements({ instantiates_widgets: true }),
+			)
 			.then(() => {
 				prepared = true;
 			});
@@ -89,10 +106,10 @@ describe("local execution widget preparation", () => {
 		const state = new BoardState(backend as never);
 
 		await expect(
-			state.ensureAppPackagesInstalledForExecution("app-1", {
-				nodes: { widget: { name: "a2ui_instantiate_widget" } },
-				layers: {},
-			} as never),
+			state.ensureAppPackagesInstalledForExecution(
+				"app-1",
+				runRequirements({ instantiates_widgets: true }),
+			),
 		).rejects.toBe(failure);
 	});
 
@@ -108,33 +125,12 @@ describe("local execution widget preparation", () => {
 		};
 		const state = new BoardState(backend as never);
 
-		await state.ensureAppPackagesInstalledForExecution("app-1", {
-			nodes: { log: { name: "log_info" } },
-			layers: {},
-		} as never);
+		await state.ensureAppPackagesInstalledForExecution(
+			"app-1",
+			runRequirements(),
+		);
 		await state.ensureAppPackagesInstalledForExecution("app-1");
 		expect(syncWidgetsForExecution).not.toHaveBeenCalled();
-	});
-
-	test("hydrates widgets used inside a board layer", async () => {
-		const syncWidgetsForExecution = vi.fn().mockResolvedValue(undefined);
-		const backend = {
-			...hostedBackend(),
-			widgetState: { syncWidgetsForExecution },
-			isOffline: vi.fn().mockResolvedValue(false),
-			appState: {},
-		};
-		const state = new BoardState(backend as never);
-
-		await state.ensureAppPackagesInstalledForExecution("app-1", {
-			nodes: {},
-			layers: {
-				function: {
-					nodes: { widget: { name: "a2ui_instantiate_widget" } },
-				},
-			},
-		} as never);
-		expect(syncWidgetsForExecution).toHaveBeenCalledWith("app-1");
 	});
 });
 
@@ -186,10 +182,10 @@ describe("project package licences before a local run", () => {
 			"pkg-expired": "3.0.0",
 		});
 
-		await state.ensureAppPackagesInstalledForExecution("app-1", {
-			nodes: {},
-			layers: {},
-		} as never);
+		await state.ensureAppPackagesInstalledForExecution(
+			"app-1",
+			runRequirements(),
+		);
 
 		expect(registryState.installPackage).toHaveBeenCalledTimes(2);
 		expect(registryState.installPackage).toHaveBeenCalledWith(
@@ -217,19 +213,10 @@ describe("project package licences before a local run", () => {
 		const { state, registryState } = licensedBackend();
 
 		await expect(
-			state.ensureAppPackagesInstalledForExecution("app-1", {
-				nodes: {},
-				layers: {
-					function: {
-						nodes: {
-							wasm: {
-								name: "expired_node",
-								wasm: { package_id: "pkg-expired", permissions: [] },
-							},
-						},
-					},
-				},
-			} as never),
+			state.ensureAppPackagesInstalledForExecution(
+				"app-1",
+				runRequirements({ wasm_package_ids: ["pkg-expired"] }),
+			),
 		).rejects.toThrow(
 			"Package pkg-expired is disabled in this project: its licence expired",
 		);
@@ -239,15 +226,10 @@ describe("project package licences before a local run", () => {
 	test("lets boards run that only use lapsed packages", async () => {
 		const { state, registryState } = licensedBackend();
 
-		await state.ensureAppPackagesInstalledForExecution("app-1", {
-			nodes: {
-				wasm: {
-					name: "lapsed_node",
-					wasm: { package_id: "pkg-lapsed", permissions: [] },
-				},
-			},
-			layers: {},
-		} as never);
+		await state.ensureAppPackagesInstalledForExecution(
+			"app-1",
+			runRequirements({ wasm_package_ids: ["pkg-lapsed"] }),
+		);
 		expect(registryState.installPackage).toHaveBeenCalledTimes(2);
 	});
 });

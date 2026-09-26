@@ -88,6 +88,7 @@ function installedToAppPackage(
 		autoUpdate: false,
 		addedAt: pkg.installedAt,
 		stale: false,
+		metadata: pkg.metadata,
 	};
 }
 

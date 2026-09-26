@@ -1,4 +1,5 @@
 use super::VectorStore;
+use super::lancedb::is_write_contention;
 use flow_like_types::{Cacheable, Result, Value, anyhow, async_trait};
 use std::any::Any;
 use std::collections::{BTreeSet, HashSet};
@@ -366,7 +367,7 @@ impl<T: VectorStore> BufferedVectorStore<T> {
                         "[BufferedVectorStore] Batch upsert failed (no existing table, {} records): {err:#}",
                         items.len()
                     );
-                    return Self::upsert_divide_and_conquer(inner, items, id_field).await;
+                    return Self::upsert_after_failure(inner, items, id_field, &err).await;
                 }
             }
         }
@@ -383,8 +384,9 @@ impl<T: VectorStore> BufferedVectorStore<T> {
                 "[BufferedVectorStore] Batch upsert of {} compatible records failed: {err:#}",
                 compatible.len()
             );
-            failures
-                .extend(Self::upsert_divide_and_conquer(inner, compatible, id_field.clone()).await);
+            failures.extend(
+                Self::upsert_after_failure(inner, compatible, id_field.clone(), &err).await,
+            );
         }
 
         if !outliers.is_empty() {
@@ -429,6 +431,34 @@ impl<T: VectorStore> BufferedVectorStore<T> {
         })
     }
 
+    /// Splitting isolates rejected records. When concurrent commits kept winning,
+    /// every half would repeat the same full-table merge, so the batch fails once.
+    async fn upsert_after_failure(
+        inner: &mut T,
+        items: Vec<BufferedItem>,
+        id_field: String,
+        error: &flow_like_types::Error,
+    ) -> Vec<BufferedWriteFailure> {
+        if is_write_contention(error) {
+            return Self::failed_upserts(&items, error);
+        }
+        Self::upsert_divide_and_conquer(inner, items, id_field).await
+    }
+
+    fn failed_upserts(
+        items: &[BufferedItem],
+        error: &flow_like_types::Error,
+    ) -> Vec<BufferedWriteFailure> {
+        items
+            .iter()
+            .map(|item| BufferedWriteFailure {
+                origin: item.origin.clone(),
+                operation: BufferedWriteKind::Upsert,
+                error: format!("{error:#}"),
+            })
+            .collect()
+    }
+
     /// Tier 2: binary-split recursive fallback.
     /// Returns every terminal record failure with its originating write.
     fn upsert_divide_and_conquer<'a>(
@@ -445,11 +475,10 @@ impl<T: VectorStore> BufferedVectorStore<T> {
                 Ok(()) => return Vec::new(),
                 Err(err) if items.len() == 1 => {
                     eprintln!("[BufferedVectorStore] Skipping upsert for record: {err:#}");
-                    return vec![BufferedWriteFailure {
-                        origin: items[0].origin.clone(),
-                        operation: BufferedWriteKind::Upsert,
-                        error: format!("{err:#}"),
-                    }];
+                    return Self::failed_upserts(&items, &err);
+                }
+                Err(err) if is_write_contention(&err) => {
+                    return Self::failed_upserts(&items, &err);
                 }
                 Err(_) => {}
             }

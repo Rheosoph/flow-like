@@ -4,6 +4,8 @@ use flow_like::{
         renewable::{RenewableSharedCredentials, SharedCredentialRefresh},
     },
     flow::execution::extract_sub_from_jwt,
+    flow_like_storage::lance::session::Session as LanceSession,
+    state::FlowLikeState,
 };
 use flow_like_types::{
     authorization::{
@@ -18,7 +20,7 @@ use flow_like_types::{
 use std::{
     collections::HashMap,
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant, SystemTime},
@@ -61,14 +63,28 @@ struct Sessions {
 
 static SESSIONS: LazyLock<Mutex<Sessions>> = LazyLock::new(Mutex::default);
 
-type LeaseCell = Arc<tokio::sync::OnceCell<Arc<RenewableSharedCredentials>>>;
-type LeaseEntries = HashMap<String, (Instant, LeaseCell)>;
+/// The Lance session sits beside the credentials, not inside them: its store
+/// registry's providers own the credentials, so nesting it would leak both.
+#[derive(Default)]
+struct Lease {
+    credentials: tokio::sync::OnceCell<Arc<RenewableSharedCredentials>>,
+    lance: OnceLock<Arc<LanceSession>>,
+}
+type LeaseEntries = HashMap<String, (Instant, Arc<Lease>)>;
 static LEASES: LazyLock<Mutex<LeaseEntries>> = LazyLock::new(Mutex::default);
 static CACHE_SWEEPER_STARTED: AtomicBool = AtomicBool::new(false);
 const IDLE_LEASE_RETENTION: Duration = Duration::from_secs(15 * 60);
 
+/// Denied leases go at once: revoked webview epochs are never requested again,
+/// and a new execution after a permission change must recheck. Old runs retain
+/// their terminally denied provider and stay fenced.
 fn prune_idle_leases(leases: &mut LeaseEntries) {
-    leases.retain(|_, (used, _)| used.elapsed() < IDLE_LEASE_RETENTION);
+    leases.retain(|_, (used, lease)| {
+        used.elapsed() < IDLE_LEASE_RETENTION
+            && lease.credentials.get().is_none_or(|credentials| {
+                credentials.authorization_current() != Err(AuthorizationError::Denied)
+            })
+    });
 }
 
 fn start_cache_sweeper() {
@@ -617,21 +633,12 @@ pub(crate) async fn prepare(
         .to_hex()
         .to_string();
     start_cache_sweeper();
-    let cell = {
+    let lease = {
         let mut leases = LEASES.lock().map_err(|_| AuthorizationError::Denied)?;
         prune_idle_leases(&mut leases);
-        if leases
-            .get(&key)
-            .and_then(|(_, cell)| cell.get())
-            .is_some_and(|lease| lease.authorization_current() == Err(AuthorizationError::Denied))
-        {
-            // Recheck an explicit new execution after permissions change. Old
-            // runs retain their terminally denied provider and stay fenced.
-            leases.remove(&key);
-        }
-        if let Some((used, cell)) = leases.get_mut(&key) {
+        if let Some((used, lease)) = leases.get_mut(&key) {
             *used = Instant::now();
-            cell.clone()
+            lease.clone()
         } else {
             if leases.len() >= MAX_LEASES {
                 let oldest = leases
@@ -642,14 +649,15 @@ pub(crate) async fn prepare(
                     leases.remove(&oldest);
                 }
             }
-            let cell = Arc::new(tokio::sync::OnceCell::new());
-            leases.insert(key, (Instant::now(), cell.clone()));
-            cell
+            let lease = Arc::new(Lease::default());
+            leases.insert(key, (Instant::now(), lease.clone()));
+            lease
         }
     };
     // Initial requests for the same scope share one network operation; other
     // projects never wait on this scope's issuer or retry backoff.
-    let credentials = cell
+    let credentials = lease
+        .credentials
         .get_or_try_init(|| async move {
             let source = Arc::new(Source {
                 hub,
@@ -685,13 +693,38 @@ pub(crate) fn falls_back_to_device_storage(error: &flow_like_types::Error) -> bo
 }
 
 pub(crate) fn install_registry(
-    state: &mut flow_like::state::FlowLikeState,
+    state: &mut FlowLikeState,
     credentials: &SharedCredentials,
 ) -> flow_like_types::Result<()> {
     if let SharedCredentials::Renewable(credentials) = credentials {
-        state.set_lance_store_registry(credentials.lance_registry_with_local()?);
+        state.lance_session = lance_session(credentials)?;
     }
     Ok(())
+}
+
+/// Runs on one lease share its Lance caches, which end with the lease.
+/// Credentials whose lease was evicted since `prepare` get a session of their own.
+fn lance_session(
+    credentials: &Arc<RenewableSharedCredentials>,
+) -> flow_like_types::Result<Arc<LanceSession>> {
+    let lease = LEASES.lock().ok().and_then(|leases| {
+        leases.values().find_map(|(_, lease)| {
+            lease
+                .credentials
+                .get()
+                .is_some_and(|leased| Arc::ptr_eq(leased, credentials))
+                .then(|| lease.clone())
+        })
+    });
+    if let Some(session) = lease.as_ref().and_then(|lease| lease.lance.get()) {
+        return Ok(session.clone());
+    }
+    let session =
+        FlowLikeState::retained_lance_session(Some(credentials.lance_registry_with_local()?));
+    Ok(match lease {
+        Some(lease) => lease.lance.get_or_init(|| session).clone(),
+        None => session,
+    })
 }
 
 #[cfg(test)]
@@ -1419,21 +1452,124 @@ mod tests {
 
     #[test]
     fn idle_cache_eviction_keeps_recent_entries_and_external_references() {
-        let cell = Arc::new(tokio::sync::OnceCell::new());
+        let lease = Arc::new(Lease::default());
         let mut entries = HashMap::from([
             (
                 "idle".into(),
-                (Instant::now() - IDLE_LEASE_RETENTION, cell.clone()),
+                (Instant::now() - IDLE_LEASE_RETENTION, lease.clone()),
             ),
             (
                 "recent".into(),
-                (Instant::now(), Arc::new(tokio::sync::OnceCell::new())),
+                (Instant::now(), Arc::new(Lease::default())),
             ),
         ]);
         prune_idle_leases(&mut entries);
         assert!(!entries.contains_key("idle"));
         assert!(entries.contains_key("recent"));
-        assert_eq!(Arc::strong_count(&cell), 1);
+        assert_eq!(Arc::strong_count(&lease), 1);
+    }
+
+    struct FixedCredentials {
+        credentials: SharedCredentials,
+        denied: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl SharedCredentialRefresh for FixedCredentials {
+        async fn refresh(&self) -> Result<SharedCredentials, AuthorizationError> {
+            Ok(self.credentials.clone())
+        }
+
+        fn authorization_current(&self) -> Result<(), AuthorizationError> {
+            if self.denied.load(Ordering::Acquire) {
+                Err(AuthorizationError::Denied)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    async fn renewable_aws() -> (Arc<RenewableSharedCredentials>, Arc<FixedCredentials>) {
+        use flow_like::credentials::aws_credentials::AwsSharedCredentials;
+        let initial = SharedCredentials::Aws(AwsSharedCredentials {
+            access_key_id: Some("access".into()),
+            secret_access_key: Some("secret".into()),
+            session_token: Some("session".into()),
+            meta_bucket: "meta".into(),
+            content_bucket: "content".into(),
+            logs_bucket: String::new(),
+            meta_config: None,
+            content_config: None,
+            logs_config: None,
+            region: "eu-central-1".into(),
+            expiration: Some((SystemTime::now() + Duration::from_secs(3600)).into()),
+            content_path_prefix: Some("apps/project".into()),
+            user_content_path_prefix: None,
+        });
+        let source = Arc::new(FixedCredentials {
+            credentials: initial.clone(),
+            denied: AtomicBool::new(false),
+        });
+        let renewable = RenewableSharedCredentials::new(initial, "project".into(), source.clone())
+            .await
+            .unwrap();
+        (renewable, source)
+    }
+
+    #[tokio::test]
+    async fn pruning_drops_denied_leases_before_they_idle_out() {
+        let (renewable, source) = renewable_aws().await;
+        let lease = Arc::new(Lease::default());
+        lease.credentials.set(renewable).unwrap();
+        let mut entries = HashMap::from([("lease".to_string(), (Instant::now(), lease))]);
+        prune_idle_leases(&mut entries);
+        assert!(entries.contains_key("lease"));
+        source.denied.store(true, Ordering::Release);
+        prune_idle_leases(&mut entries);
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runs_on_one_lease_share_its_lance_session_until_the_lease_ends() {
+        use flow_like::{state::FlowLikeConfig, utils::http::HTTPClient};
+        let (renewable, _) = renewable_aws().await;
+        let lease = Arc::new(Lease::default());
+        lease.credentials.set(renewable.clone()).unwrap();
+        let key = "lance-session-test".to_string();
+        LEASES
+            .lock()
+            .unwrap()
+            .insert(key.clone(), (Instant::now(), lease));
+        let credentials = SharedCredentials::Renewable(renewable);
+        let state = FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch());
+
+        let mut first = state.for_execution_run();
+        let mut second = state.for_execution_run();
+        install_registry(&mut first, &credentials).unwrap();
+        install_registry(&mut second, &credentials).unwrap();
+        assert!(Arc::ptr_eq(&first.lance_session, &second.lance_session));
+        assert!(!Arc::ptr_eq(&state.lance_session, &first.lance_session));
+        assert!(
+            first
+                .lance_session
+                .store_registry()
+                .get_provider("s3")
+                .is_some()
+        );
+
+        LEASES.lock().unwrap().remove(&key);
+        let mut evicted = state.for_execution_run();
+        install_registry(&mut evicted, &credentials).unwrap();
+        assert!(!Arc::ptr_eq(&first.lance_session, &evicted.lance_session));
+
+        let session = Arc::downgrade(&first.lance_session);
+        let SharedCredentials::Renewable(renewable) = &credentials else {
+            unreachable!()
+        };
+        let owner = Arc::downgrade(renewable);
+        drop((first, second, evicted, credentials));
+        assert!(session.upgrade().is_none());
+        assert!(owner.upgrade().is_none());
     }
 
     #[test]

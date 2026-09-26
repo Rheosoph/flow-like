@@ -391,6 +391,34 @@ function TableInspectorData({
 		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
 	);
 
+	const handleSetPrimaryKey = useCallback(
+		async (column: string) => {
+			try {
+				await backend.dbState.setPrimaryKey(
+					appId,
+					table,
+					column,
+					userScoped,
+					selector,
+				);
+				toast.success(
+					t("tableKeySetMessage", '"{{name}}" is now the table key', {
+						name: column,
+					}),
+				);
+				handleRefresh();
+			} catch (err) {
+				toast.error(
+					t("tableKeySetFailedMessage", "Set table key failed: {{message}}", {
+						message: getErrorMessage(err),
+					}),
+				);
+				throw err;
+			}
+		},
+		[backend.dbState, appId, table, userScoped, selector, handleRefresh, t],
+	);
+
 	const handleGetIndices = useCallback(
 		async () => backend.dbState.getIndices(appId, table, userScoped, selector),
 		[backend.dbState, appId, table, userScoped, selector],
@@ -572,6 +600,7 @@ function TableInspectorData({
 				onDropColumns={canWrite ? handleDropColumns : undefined}
 				onAddColumn={canWrite ? handleAddColumn : undefined}
 				onAlterColumn={canWrite ? handleAlterColumn : undefined}
+				onSetPrimaryKey={canWrite ? handleSetPrimaryKey : undefined}
 				onGetIndices={handleGetIndices}
 				onDropIndex={canWrite ? handleDropIndex : undefined}
 				onBuildIndex={canWrite ? handleBuildIndex : undefined}

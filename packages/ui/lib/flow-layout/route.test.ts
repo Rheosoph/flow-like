@@ -70,6 +70,41 @@ function crossingCount(
 	}
 	return count;
 }
+
+function distinctIntersections(
+	paths: Array<Array<readonly [Point, Point]>>,
+): number {
+	let count = 0;
+	for (let i = 0; i < paths.length; i++) {
+		for (let j = i + 1; j < paths.length; j++) {
+			const intersections: Point[] = [];
+			for (const [a, b] of paths[i]) {
+				for (const [c, d] of paths[j]) {
+					const dx = b.x - a.x;
+					const dy = b.y - a.y;
+					const otherDx = d.x - c.x;
+					const otherDy = d.y - c.y;
+					const determinant = dx * otherDy - dy * otherDx;
+					if (Math.abs(determinant) < 1e-8) continue;
+					const t =
+						((c.x - a.x) * otherDy - (c.y - a.y) * otherDx) / determinant;
+					const u = ((c.x - a.x) * dy - (c.y - a.y) * dx) / determinant;
+					if (t < -1e-8 || t > 1 + 1e-8 || u < -1e-8 || u > 1 + 1e-8) continue;
+					const point = { x: a.x + t * dx, y: a.y + t * dy };
+					if (
+						!intersections.some(
+							(previous) =>
+								Math.hypot(previous.x - point.x, previous.y - point.y) < 1,
+						)
+					)
+						intersections.push(point);
+				}
+			}
+			count += intersections.length;
+		}
+	}
+	return count;
+}
 function skipEdge(pathType: AutoLayoutInput["edgePathType"] = "default") {
 	const graph = new GraphBuilder();
 	graph.exec("source", { dataOuts: 1 });
@@ -85,7 +120,177 @@ function skipEdge(pathType: AutoLayoutInput["edgePathType"] = "default") {
 	]);
 	return { input: graph.build({ edgePathType: pathType }), positions };
 }
+
+function parallelBranches(
+	edgePathType: AutoLayoutInput["edgePathType"] = "default",
+	independent = false,
+) {
+	const graph = new GraphBuilder();
+	const positions: Positions = new Map();
+	if (!independent) {
+		graph.exec("fork", {
+			start: true,
+			execIn: false,
+			execOuts: ["upper", "lower"],
+		});
+		graph.exec("join");
+		positions.set("fork", [0, 0]);
+		positions.set("join", [1150, 210]);
+	}
+	for (const [branch, y] of [
+		["upper", 0],
+		["lower", 210],
+	] as const) {
+		for (let index = 0; index < 4; index++) {
+			graph.exec(`${branch}-${index}`, {
+				dataIns: 6,
+				dataOuts: 6,
+				start: independent && index === 0,
+			});
+			positions.set(`${branch}-${index}`, [230 * (index + 1), y]);
+			if (index > 0)
+				graph.execLink(`${branch}-${index - 1}`, `${branch}-${index}`);
+		}
+		if (!independent) {
+			graph.execLink("fork", `${branch}-0`, branch);
+			graph.execLink(`${branch}-3`, "join");
+		}
+	}
+	for (const [from, to, output, input] of [
+		["upper-0", "upper-2", 2, 4],
+		["lower-0", "lower-2", 3, 4],
+		["lower-1", "lower-3", 5, 2],
+		["lower-1", "lower-3", 0, 4],
+		["lower-1", "lower-3", 3, 5],
+	] as const)
+		graph.dataLink(from, to, output, input);
+	return { graph, input: graph.build({ edgePathType }), positions };
+}
+
+function expectBranchLocality(
+	input: AutoLayoutInput,
+	positions: Positions,
+	routes: DataRoute[],
+) {
+	const upper: number[] = [];
+	const lower: number[] = [];
+	for (const route of routes) {
+		expect(route.unresolved).toBeUndefined();
+		expect(route.waypoints.length).toBeGreaterThan(0);
+		expectClear(input, positions, route);
+		if (route.from.startsWith("upper"))
+			upper.push(...route.waypoints.map((point) => point.y + 12));
+		if (route.from.startsWith("lower"))
+			lower.push(...route.waypoints.map((point) => point.y));
+	}
+	// Each branch has a clear corridor. Its reroutes must not cross the other branch's band.
+	expect(Math.max(...upper)).toBeLessThan(Math.min(...lower));
+}
 describe("data route planning", () => {
+	for (const pathType of [
+		"default",
+		"straight",
+		"step",
+		"smoothstep",
+	] as const) {
+		test(`keeps parallel execution branches in their own routing corridors (${pathType})`, () => {
+			const { input, positions } = parallelBranches(pathType);
+			const before = structuredClone(input);
+			const routes = planDataRoutes(input, positions);
+			expectBranchLocality(input, positions, routes);
+			expect(planDataRoutes(input, positions)).toEqual(routes);
+			expect(input).toEqual(before);
+			const placed = computeFlowLayoutDetailed(input, "routed");
+			expectBranchLocality(
+				input,
+				placed.positions,
+				required(placed.routing).routes,
+			);
+			const placedRoutes = required(placed.routing).routes;
+			const beforeCrossings = distinctIntersections(
+				placedRoutes.map((route) =>
+					sampleDataRoute(input, placed.positions, { ...route, waypoints: [] }),
+				),
+			);
+			const afterCrossings = distinctIntersections(
+				placedRoutes.map((route) =>
+					sampleDataRoute(input, placed.positions, route),
+				),
+			);
+			expect(afterCrossings).toBeLessThanOrEqual(beforeCrossings);
+		});
+	}
+	test("keeps independent execution chains in separate routing bands", () => {
+		const { input, positions } = parallelBranches("default", true);
+		expectBranchLocality(input, positions, planDataRoutes(input, positions));
+	});
+	test("ignores a tall branch tail beyond the connection's horizontal span", () => {
+		const { graph, positions } = parallelBranches();
+		for (const node of graph.nodes.values()) {
+			for (const pin of Object.values(node.pins)) {
+				if (pin.data_type === "Execution") continue;
+				pin.connected_to = [];
+				pin.depends_on = [];
+			}
+		}
+		graph.dataLink("upper-0", "upper-2", 2, 4);
+		const input = graph.build();
+		const expected = planDataRoutes(input, positions);
+		const tall = {
+			...input,
+			nodeSizes: new Map<string, readonly [number, number]>([
+				["upper-3", [150, 2000]],
+			]),
+		};
+		const actual = planDataRoutes(tall, positions);
+		expect(actual).toEqual(expected);
+		expect(actual[0].unresolved).toBeUndefined();
+		expectClear(tall, positions, actual[0]);
+	});
+	test("pure inputs below the execution spines do not reverse branch order", () => {
+		const { graph } = parallelBranches();
+		for (let index = 0; index < 6; index++) {
+			graph.pure(`pure-${index}`);
+			graph.dataLink(`pure-${index}`, "upper-3", 0, index);
+		}
+		const input = graph.build();
+		const placed = computeFlowLayoutDetailed(input, "routed");
+		expect(required(placed.positions.get("pure-5"))[1]).toBeGreaterThan(
+			required(placed.positions.get("lower-2"))[1],
+		);
+		const branchRoutes = required(placed.routing).routes.filter(
+			(route) => !route.from.startsWith("pure"),
+		);
+		expectBranchLocality(input, placed.positions, branchRoutes);
+	});
+	test("allows cross-branch transfers and keeps backward routing bounded", () => {
+		const graph = new GraphBuilder();
+		for (const branch of ["upper", "lower"]) {
+			graph.exec(`${branch}-a`, { start: true, dataIns: 1, dataOuts: 1 });
+			graph.exec(`${branch}-b`, { dataIns: 1, dataOuts: 1 });
+			graph.execLink(`${branch}-a`, `${branch}-b`);
+		}
+		graph.dataLink("upper-a", "lower-b");
+		graph.dataLink("lower-b", "lower-a");
+		const input = graph.build();
+		const positions: Positions = new Map([
+			["upper-a", [0, 0]],
+			["upper-b", [460, 0]],
+			["lower-a", [0, 200]],
+			["lower-b", [460, 200]],
+		]);
+		const routes = planDataRoutes(input, positions);
+		expect(routes).toHaveLength(2);
+		const transfer = required(routes.find((route) => route.from === "upper-a"));
+		expect(transfer.to).toBe("lower-b");
+		expect(transfer.unresolved).toBeUndefined();
+		expectClear(input, positions, transfer);
+		const backward = required(routes.find((route) => route.from === "lower-b"));
+		expect(backward.to).toBe("lower-a");
+		expect(backward.waypoints.length).toBeLessThanOrEqual(4);
+		if (backward.waypoints.length) expectClear(input, positions, backward);
+		else expect(backward.unresolved).toBe(true);
+	});
 	test("keeps routes stable when zoom adds floating point noise to measured handles", () => {
 		const graph = new GraphBuilder();
 		for (let index = 0; index < 7; index++) {

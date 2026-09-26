@@ -3,6 +3,7 @@ use crate::{
     fs::unix_time,
     limits::validate_request,
     manager::{RefreshOutcome, TableActivation, TableSetup, WriteManager},
+    outbox::CLOSED,
 };
 use anyhow::{Context, Result, ensure};
 use flow_like_device_protocol::{
@@ -185,6 +186,9 @@ impl TableOverlay {
     }
     /// Fails for removed, cloud-deleted and held tables.
     pub(crate) fn usable(&self) -> Result<()> {
+        if let Some(manager) = self.manager.upgrade() {
+            ensure!(!manager.is_closed(), CLOSED);
+        }
         let table = &self.selection.table;
         ensure!(
             !self.removed.load(Ordering::Acquire),
@@ -472,13 +476,14 @@ impl TableOverlay {
                         version: snapshot.source_version,
                         fingerprint: Some(snapshot.source_fingerprint.clone()),
                     };
+                    let local_version = snapshot.table.version().await?;
+                    manager.queue.record_refresh(&self.key, unix_time()?)?;
                     manager.queue.initialize_table(
                         &self.key,
                         &serde_json::to_value(expected)?,
-                        snapshot.table.version().await?,
+                        local_version,
                         &name,
-                    )?;
-                    manager.queue.record_refresh(&self.key, unix_time()?)
+                    )
                 }
                 .await;
                 if let Err(error) = recorded {
@@ -658,17 +663,28 @@ impl TableOverlay {
                 let table = table.context("Cannot delete from an absent offline table")?;
                 let values =
                     rows(table, &filter, Select::Columns(vec![key.clone()]), limit).await?;
-                let predicates = values
+                let keys = values
                     .iter()
-                    .map(|row| {
-                        key_filter(key, row.get(key).context("Offline primary key is missing")?)
-                    })
+                    .map(|row| row.get(key).context("Offline primary key is missing"))
                     .collect::<Result<Vec<_>>>()?;
-                let filter = if predicates.is_empty() {
-                    "false".into()
-                } else {
-                    predicates.join(" OR ")
+                let filter = match keys.as_slice() {
+                    [] => "false".into(),
+                    [value] => key_filter(key, value)?,
+                    keys => format!(
+                        "{} IN ({})",
+                        sql_identifier(key),
+                        keys.iter()
+                            .map(|value| key_literal(value))
+                            .collect::<Result<Vec<_>>>()?
+                            .join(",")
+                    ),
                 };
+                offline_replay::validate_expression(&filter).with_context(|| {
+                    format!(
+                        "Offline delete of {} rows exceeds the replayable filter size; delete fewer rows at once",
+                        keys.len()
+                    )
+                })?;
                 (OfflineMutation::TableDelete { filter }, values)
             }
         };

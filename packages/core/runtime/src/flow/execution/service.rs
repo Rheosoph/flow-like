@@ -149,3 +149,27 @@ impl ExecutionContext {
             .map(|observer| observer.0.clone())
     }
 }
+
+/// The host supplies TLS without exposing identity material to workflow values.
+pub trait ServiceIo:
+    flow_like_types::tokio::io::AsyncRead + flow_like_types::tokio::io::AsyncWrite + Unpin + Send
+{
+}
+impl<T> ServiceIo for T where
+    T: flow_like_types::tokio::io::AsyncRead
+        + flow_like_types::tokio::io::AsyncWrite
+        + Unpin
+        + Send
+{
+}
+pub type BoxedServiceIo = Box<dyn ServiceIo>;
+pub type ServiceTlsFuture<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>>;
+
+pub trait ServiceTlsProvider: Send + Sync {
+    fn validate(&self) -> ServiceTlsFuture<'_, ()>;
+    fn accept(
+        &self,
+        stream: flow_like_types::tokio::net::TcpStream,
+    ) -> ServiceTlsFuture<'_, BoxedServiceIo>;
+}

@@ -379,7 +379,7 @@ impl App {
             .ok_or_else(|| anyhow!("App state not found"))?;
         for board_id in &self.boards {
             let board = self.open_board(board_id.clone(), Some(false), None).await?;
-            if board.lock().await.variables.values().any(|variable| {
+            if board.snapshot().variables.values().any(|variable| {
                 variable.secret && super::secret_has_value(variable.default_value.as_deref())
             }) {
                 bail!(

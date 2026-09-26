@@ -19,6 +19,7 @@ pub mod prerun_board;
 pub mod query_logs;
 pub mod realtime;
 pub mod report_run;
+pub mod run_logs;
 pub mod scoring;
 pub mod secrets;
 pub mod summaries;
@@ -116,6 +117,12 @@ pub fn routes() -> Router<AppState> {
             get(get_run_payload::get_run_payload),
         )
         .route("/{board_id}/logs", get(query_logs::query_logs))
+        .route("/{board_id}/logs/query", post(run_logs::query_run_logs))
+        .route("/{board_id}/logs/count", post(run_logs::count_run_logs))
+        .route(
+            "/{board_id}/logs/summary",
+            get(run_logs::get_run_log_summary),
+        )
         .route(
             "/{board_id}/elements",
             get(get_execution_elements::get_execution_elements),

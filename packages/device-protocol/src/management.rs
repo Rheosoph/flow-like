@@ -110,6 +110,7 @@ pub enum ManagementCapability {
     Scale,
     UpdateAgent,
     Reboot,
+    ManageCertificates,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +240,88 @@ impl std::fmt::Debug for SecretValue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ManagementCommand {
+    Certificates {
+        #[serde(default)]
+        placement_id: Option<String>,
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default = "default_certificate_page_limit")]
+        limit: u16,
+    },
+    PutCertificate {
+        certificate_id: String,
+        label: String,
+        expected_revision: u64,
+        certificate_chain_pem: SecretValue,
+        private_key_pem: SecretValue,
+    },
+    DeleteCertificate {
+        certificate_id: String,
+        expected_revision: u64,
+    },
+    CertificateRequests {
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default = "default_certificate_page_limit")]
+        limit: u16,
+    },
+    CreateCertificateRequest {
+        request_id: String,
+        certificate_id: String,
+        label: String,
+        expected_revision: u64,
+        dns_names: Vec<String>,
+        ip_addresses: Vec<String>,
+    },
+    InstallCertificateRequest {
+        request_id: String,
+        certificate_chain_pem: SecretValue,
+    },
+    DeleteCertificateRequest {
+        request_id: String,
+    },
+    CertificateIssuers {
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default = "default_certificate_page_limit")]
+        limit: u16,
+    },
+    CreateCertificateIssuerRequest {
+        request_id: String,
+        certificate_id: String,
+        expected_revision: u64,
+        dns_names: Vec<String>,
+        ip_addresses: Vec<String>,
+        leaf_lifetime_days: u16,
+    },
+    InstallCertificateIssuer {
+        request_id: String,
+        certificate_chain_pem: SecretValue,
+    },
+    DeleteCertificateIssuer {
+        certificate_id: String,
+        expected_revision: u64,
+    },
+    AcmeCertificates {
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default = "default_certificate_page_limit")]
+        limit: u16,
+    },
+    ConfigureAcmeCertificate {
+        certificate_id: String,
+        label: String,
+        expected_revision: u64,
+        expected_certificate_revision: u64,
+        dns_names: Vec<String>,
+        environment: crate::AcmeEnvironment,
+        http_bind: String,
+        terms_of_service_agreed: bool,
+    },
+    DeleteAcmeCertificate {
+        certificate_id: String,
+        expected_revision: u64,
+    },
     OfflineQueue {
         placement_id: String,
         #[serde(default)]
@@ -403,6 +486,10 @@ pub enum ManagementCommand {
 
 fn default_inspect_page_limit() -> u16 {
     2
+}
+
+fn default_certificate_page_limit() -> u16 {
+    4
 }
 
 fn default_rollout_stabilization() -> u32 {
@@ -582,7 +669,7 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
         grant.controller_key.validate()?;
         if !grants.insert(&grant.grant_id)
             || grant.capabilities.is_empty()
-            || grant.capabilities.len() > 12
+            || grant.capabilities.len() > 13
             || grant.expires_at > policy.expires_at
             || grant.expires_at <= policy.issued_at
             || grant.group_id.is_some() != grant.group_version.is_some()
@@ -605,7 +692,9 @@ fn validate_policy(policy: &ManagementPolicy) -> Result<()> {
                 if grant.capabilities.iter().any(|cap| {
                     matches!(
                         cap,
-                        ManagementCapability::Reboot | ManagementCapability::UpdateAgent
+                        ManagementCapability::Reboot
+                            | ManagementCapability::UpdateAgent
+                            | ManagementCapability::ManageCertificates
                     )
                 }) {
                     return Err(ProtocolError::Invalid(

@@ -62,11 +62,6 @@ impl NodeLogic for ListTablesNode {
 
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
 
-        let context_cache = context
-            .execution_cache
-            .clone()
-            .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
-        let app_id = context_cache.app_id.clone();
         let list_local = context
             .app_state
             .config
@@ -76,54 +71,14 @@ impl NodeLogic for ListTablesNode {
             .database_table_names
             .clone();
         if let Some(list_local) = list_local {
-            let path = if user_scoped {
-                context_cache.get_user_dir(false)?.join("db")
-            } else {
-                context_cache.get_storage(false)?.join("db")
-            };
-            let tables = list_local(path).await?;
+            let tables =
+                list_local(super::connection::database_path(context, user_scoped)?).await?;
             context.set_pin_value("tables", json!(tables)).await?;
             context.activate_exec_pin("exec_out").await?;
             return Ok(());
         }
 
-        let db = if let Some(credentials) = &context.credentials {
-            if user_scoped {
-                credentials
-                    .to_db_scoped(&context_cache.sub, &app_id)
-                    .await?
-            } else {
-                credentials.to_db(&app_id).await?
-            }
-        } else if user_scoped {
-            let user_dir = context_cache.get_user_dir(false)?;
-            let user_dir = user_dir.join("db");
-            context
-                .app_state
-                .config
-                .read()
-                .await
-                .callbacks
-                .build_user_database
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No user database builder found"))?(
-                user_dir
-            )
-        } else {
-            let board_dir = context_cache.get_storage(false)?;
-            let board_dir = board_dir.join("db");
-            context
-                .app_state
-                .config
-                .read()
-                .await
-                .callbacks
-                .build_project_database
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No database builder found"))?(board_dir)
-        };
-
-        let db = context.app_state.with_lance_session(db).execute().await?;
+        let db = super::connection::open_shared(context, user_scoped).await?;
         // Listing is a connection-level metadata operation. Do not construct a
         // table-bound store with an empty sentinel name: LanceDB 0.27 validates
         // that name while opening the table and panics internally on the error.

@@ -113,6 +113,45 @@ const SQL_CAST_TYPES: Record<string, string> = {
 
 const QUOTED_SQL_TYPES = new Set(["STRING", "DATE", "TIMESTAMP", "BINARY"]);
 
+export function addColumnSqlType(type: string): string | undefined {
+	return SQL_CAST_TYPES[type];
+}
+
+const INTEGER_LITERAL = /^-?\d+$/;
+const FLOAT_LITERAL = /^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+const DATE_LITERAL = /^\d{4}-\d{2}-\d{2}$/;
+const TIMESTAMP_LITERAL =
+	/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$/;
+
+/**
+ * Numeric and boolean defaults are spliced into the SQL expression unquoted,
+ * so they must be real literals before they reach `buildAddColumnExpression`.
+ */
+export function validateColumnDefault(
+	type: string,
+	value: string,
+): string | null {
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	if ((type === "int32" || type === "int64") && !INTEGER_LITERAL.test(trimmed))
+		return i18next.t("enterAWholeNumber", "Enter a whole number");
+	if (
+		(type === "float32" || type === "float64") &&
+		!FLOAT_LITERAL.test(trimmed)
+	)
+		return i18next.t("enterANumber", "Enter a number");
+	if (type === "boolean" && trimmed !== "true" && trimmed !== "false")
+		return i18next.t("enterTrueOrFalse", "Enter true or false");
+	if (type === "date32" && !DATE_LITERAL.test(trimmed))
+		return i18next.t("useTheFormatYyyyMmDd", "Use the format YYYY-MM-DD");
+	if (type === "timestamp" && !TIMESTAMP_LITERAL.test(trimmed))
+		return i18next.t(
+			"useTheFormatYyyyMmDdHhMmSs",
+			"Use the format YYYY-MM-DD HH:MM:SS",
+		);
+	return null;
+}
+
 /**
  * Build the typed SQL expression LanceDB needs to add a column. An empty
  * default yields a typed NULL; a provided default becomes a typed literal.
@@ -129,6 +168,63 @@ export function buildAddColumnExpression(
 		? `'${trimmed.replace(/'/g, "''")}'`
 		: trimmed;
 	return `CAST(${literal} AS ${sqlType})`;
+}
+
+// --- Table key (Lance's unenforced primary key) ------------------------------
+
+const KEY_POSITION_METADATA = "lance-schema:unenforced-primary-key:position";
+const LEGACY_KEY_METADATA = "lance-schema:unenforced-primary-key";
+const MAX_KEY_POSITION = 4_294_967_295;
+/** The types Lance's inserted-key conflict filter hashes; it skips any other type. */
+const KEY_ARROW_TYPES = new Set([
+	"Int32",
+	"Int64",
+	"UInt32",
+	"UInt64",
+	"Utf8",
+	"LargeUtf8",
+	"Binary",
+	"LargeBinary",
+]);
+/** `geometry` is Binary too, but a shape is no row identity. */
+const KEY_COLUMN_TYPES = new Set([
+	"string",
+	"int32",
+	"int64",
+	"uint32",
+	"uint64",
+	"binary",
+]);
+
+/** Whether Arrow field metadata marks the column as the table key, read as Lance reads it. */
+export function isKeyFieldMetadata(metadata: unknown): boolean {
+	if (!metadata || typeof metadata !== "object") return false;
+	const record = metadata as Record<string, unknown>;
+	const position = String(record[KEY_POSITION_METADATA] ?? "");
+	if (/^\+?\d+$/.test(position) && Number(position) <= MAX_KEY_POSITION)
+		return true;
+	const legacy = record[LEGACY_KEY_METADATA];
+	return typeof legacy === "string" && /^(true|1|yes)$/i.test(legacy);
+}
+
+/**
+ * Whether an existing top-level Arrow field can become the key. It must be
+ * required; a nullable column has to be made required first, which Lance only
+ * allows while it holds no NULLs.
+ */
+export function canArrowFieldBeKey(field: {
+	data_type?: unknown;
+	nullable?: boolean;
+}): boolean {
+	if (field.nullable !== false) return false;
+	return (
+		typeof field.data_type === "string" && KEY_ARROW_TYPES.has(field.data_type)
+	);
+}
+
+/** Whether a designer column type can be the key of a new table. */
+export function isKeyColumnType(type: string): boolean {
+	return KEY_COLUMN_TYPES.has(type);
 }
 
 export interface IndexTypeOption {

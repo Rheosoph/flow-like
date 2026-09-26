@@ -1,5 +1,7 @@
 export interface ILog {
 	end: ISystemTime;
+	/** Groups repeats of one message; absent on runs recorded before fingerprints. */
+	fingerprint?: null | string;
 	log_level: ILogLevel;
 	message: string;
 	node_id?: null | string;

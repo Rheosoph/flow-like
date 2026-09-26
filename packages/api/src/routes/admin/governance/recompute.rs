@@ -78,7 +78,7 @@ pub async fn recompute_scores(
                     continue;
                 }
             };
-            let board = board.lock().await;
+            let board = board.snapshot();
             if let Err(err) = persist_board_score(&state.db, &app_id, &board).await {
                 tracing::warn!("failed to persist score for {app_id}/{board_id}: {err:?}");
                 failures += 1;

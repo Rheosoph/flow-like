@@ -2,8 +2,9 @@
 //! identity binding remains independently verifiable by management controllers.
 
 pub(crate) mod archives;
-pub(crate) mod inventory;
+pub(crate) mod certificates;
 pub(crate) mod fleet;
+pub(crate) mod inventory;
 pub(crate) mod jwt;
 pub(crate) mod management;
 pub(crate) mod readiness;

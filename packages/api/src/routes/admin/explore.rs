@@ -15,7 +15,8 @@ use crate::permission::global_permission::GlobalPermission;
 use crate::routes::explore::edition::{self, Edition};
 use crate::routes::explore::hydrate;
 use crate::routes::explore::model::{
-    ExploreEditorState, ExploreOrderBody, PlacementInput, check_slot, ensure_kind_unchanged,
+    ExploreEditorState, ExploreOrderBody, LayoutDoc, PlacementInput, check_slot,
+    ensure_kind_unchanged,
 };
 use crate::routes::explore::resolve::ExplorePreview;
 use crate::routes::store::explore::{
@@ -68,7 +69,7 @@ pub struct ExplorePreviewQuery {
     pub signed_in: Option<String>,
     /// `desktop` or `web` (default).
     pub platform: Option<String>,
-    /// Viewer language (default `en`).
+    /// Viewer language (default `en`); languages the hub does not offer fall back to `en`.
     pub language: Option<String>,
 }
 
@@ -109,12 +110,31 @@ enum DraftChange {
 }
 
 fn missing_placement(id: &str) -> ApiError {
-    ApiError::not_found(format!("Explore placement {id} does not exist in the draft"))
+    ApiError::not_found(format!(
+        "Explore placement {id} does not exist in the draft"
+    ))
+}
+
+/// A COLLECTION that a spotlight still shows cannot be deleted; `name` is how the error names it.
+fn ensure_unreferenced(layout: &LayoutDoc, id: &str, name: &str) -> Result<(), ApiError> {
+    let referencing: Vec<&str> = layout
+        .referencing(id)
+        .into_iter()
+        .map(|placement| placement.name.as_str())
+        .collect();
+    if referencing.is_empty() {
+        return Ok(());
+    }
+    Err(ApiError::conflict(format!(
+        "{name} is shown by {}; remove it there first",
+        referencing.join(", ")
+    )))
 }
 
 /// One draft mutation inside the caller's transaction: coordinate on the draft, check the revision before
-/// anything is loaded, validate against the current draft, write, and close with the revision CAS. Returns
-/// the LIVE revision a publish replaced, whose cached pages the caller drops after the commit.
+/// anything is loaded, validate against the current draft, write, and close with the revision CAS. A placement
+/// this server version cannot read blocks every mutation except deleting that placement. Returns the LIVE
+/// revision a publish replaced, whose cached pages the caller drops after the commit.
 async fn apply(
     txn: &DatabaseTransaction,
     expected: &str,
@@ -124,9 +144,10 @@ async fn apply(
     coordinate(txn, LOCK_DOMAIN, &[LOCK_DRAFT]).await?;
     match change {
         DraftChange::Publish => {
-            let replaced = edition::header(txn, Edition::Live)
-                .await?
-                .map_or_else(|| edition::DEFAULT_REVISION.to_owned(), |header| header.revision);
+            let replaced = edition::header(txn, Edition::Live).await?.map_or_else(
+                || edition::DEFAULT_REVISION.to_owned(),
+                |header| header.revision,
+            );
             edition::publish(txn, expected, now).await?;
             return Ok(Some(replaced));
         }
@@ -140,7 +161,16 @@ async fn apply(
         | DraftChange::Order(_) => {}
     }
     edition::ensure_draft(txn, expected, now).await?;
-    let layout = edition::load(txn, Edition::Draft).await?.layout;
+    let loaded = edition::load(txn, Edition::Draft).await?;
+    if let DraftChange::Delete { id } = change
+        && loaded.unreadable.contains(id)
+    {
+        ensure_unreferenced(&loaded.layout, id, &format!("Placement {id}"))?;
+        edition::delete_placement(txn, Edition::Draft, id).await?;
+        edition::cas(txn, expected, now).await?;
+        return Ok(None);
+    }
+    let layout = loaded.writable()?;
     match change {
         DraftChange::Create {
             id,
@@ -156,41 +186,35 @@ async fn apply(
                 .into_doc(id.clone());
             let mut order: Vec<String> = layout
                 .slot(slot_key)
-                .map(|slot| slot.placements.iter().map(|placement| placement.id.clone()).collect())
+                .map(|slot| {
+                    slot.placements
+                        .iter()
+                        .map(|placement| placement.id.clone())
+                        .collect()
+                })
                 .unwrap_or_default();
             let index = position
                 .and_then(|position| usize::try_from(position).ok())
                 .map_or(order.len(), |position| position.min(order.len()));
             order.insert(index, id.clone());
             let position = i32::try_from(index).unwrap_or(i32::MAX);
-            edition::insert_placement(txn, Edition::Draft, slot_key, position, &placement, now).await?;
+            edition::insert_placement(txn, Edition::Draft, slot_key, position, &placement, now)
+                .await?;
             edition::write_slot_order(txn, Edition::Draft, slot_key, &order).await?;
         }
         DraftChange::Update { id, input } => {
             let (slot, current) = layout.find(id).ok_or_else(|| missing_placement(id))?;
             ensure_kind_unchanged(current.kind, &input.content)?;
             check_slot(&slot.key, &input.content)?;
-            let mut placement = input
+            let placement = input
                 .clone()
                 .validated(&layout.collection_ids())?
                 .into_doc(id.clone());
-            placement.created_at = current.created_at;
             edition::update_placement(txn, Edition::Draft, &placement, now).await?;
         }
         DraftChange::Delete { id } => {
             let (_, placement) = layout.find(id).ok_or_else(|| missing_placement(id))?;
-            let referencing: Vec<&str> = layout
-                .referencing(id)
-                .into_iter()
-                .map(|placement| placement.name.as_str())
-                .collect();
-            if !referencing.is_empty() {
-                return Err(ApiError::conflict(format!(
-                    "{} is shown by {}; remove it there first",
-                    placement.name,
-                    referencing.join(", ")
-                )));
-            }
+            ensure_unreferenced(&layout, id, &placement.name)?;
             edition::delete_placement(txn, Edition::Draft, id).await?;
         }
         DraftChange::Order(body) => {
@@ -219,7 +243,12 @@ async fn editor_state(state: &AppState) -> Result<ExploreEditorState, ApiError> 
     let now = Utc::now();
     let changes = edition::diff(&draft.layout, &live.layout);
     let refs = hydrate::item_refs(state, &draft.layout).await?;
-    let warnings = hydrate::ref_warnings(&draft.layout, &refs);
+    let mut warnings = hydrate::ref_warnings(&draft.layout, &refs);
+    warnings.extend(draft.unreadable.iter().map(|id| {
+        format!(
+            "Placement {id} was saved by a newer server version, so this server cannot change, reorder or publish the draft while it is there. Delete it here, or discard the draft to go back to the live page."
+        )
+    }));
     let draft_revision = draft.revision().to_owned();
     let mut layout = draft.layout;
     layout.fill_statuses(now);
@@ -289,7 +318,7 @@ pub async fn get_explore_editor(
         (status = 400, description = "The placement is invalid or the slot does not accept it"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required"),
-        (status = 409, description = "The draft changed; reload it before saving")
+        (status = 409, description = "The draft changed (reload it before saving), or it holds placements this server version cannot read")
     )
 )]
 #[tracing::instrument(name = "POST /admin/explore/placements", skip(state, user, body))]
@@ -322,7 +351,7 @@ pub async fn create_explore_placement(
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required"),
         (status = 404, description = "No such placement in the draft"),
-        (status = 409, description = "The draft changed; reload it before saving")
+        (status = 409, description = "The draft changed (reload it before saving), or it holds placements this server version cannot read")
     )
 )]
 #[tracing::instrument(name = "PUT /admin/explore/placements/{id}", skip(state, user, body))]
@@ -345,17 +374,20 @@ pub async fn update_explore_placement(
     delete,
     path = "/admin/explore/placements/{id}",
     tag = "admin",
-    description = "Delete a draft placement and its items. A collection that a spotlight still shows cannot be deleted.",
+    description = "Delete a draft placement and its items. A collection that a spotlight still shows cannot be deleted. A placement saved by a newer server version can always be deleted, even though it blocks every other change.",
     params(("id" = String, Path, description = "Placement id"), DeletePlacementQuery),
     responses(
         (status = 200, description = "Editor state", body = ExploreEditorState),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required"),
         (status = 404, description = "No such placement in the draft"),
-        (status = 409, description = "The draft changed, or another placement still shows this collection")
+        (status = 409, description = "The draft changed, another placement still shows this collection, or the draft holds other placements this server version cannot read")
     )
 )]
-#[tracing::instrument(name = "DELETE /admin/explore/placements/{id}", skip(state, user, query))]
+#[tracing::instrument(
+    name = "DELETE /admin/explore/placements/{id}",
+    skip(state, user, query)
+)]
 pub async fn delete_explore_placement(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -378,7 +410,7 @@ pub async fn delete_explore_placement(
         (status = 400, description = "The lists are not a permutation of the touched slots, or a slot does not accept a placement"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required"),
-        (status = 409, description = "The draft changed; reload it before saving")
+        (status = 409, description = "The draft changed (reload it before saving), or it holds placements this server version cannot read")
     )
 )]
 #[tracing::instrument(name = "PUT /admin/explore/order", skip(state, user, body))]
@@ -389,7 +421,12 @@ pub async fn order_explore(
 ) -> Result<Json<ExploreEditorState>, ApiError> {
     user.check_global_permission(&state, GlobalPermission::WriteLandingPage)
         .await?;
-    mutate(&state, body.expected_revision.clone(), DraftChange::Order(body)).await
+    mutate(
+        &state,
+        body.expected_revision.clone(),
+        DraftChange::Order(body),
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -403,7 +440,7 @@ pub async fn order_explore(
         (status = 400, description = "The draft breaks a layout rule"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required"),
-        (status = 409, description = "The draft changed; reload it before publishing")
+        (status = 409, description = "The draft changed (reload it before publishing), or it holds placements this server version cannot read")
     )
 )]
 #[tracing::instrument(name = "POST /admin/explore/publish", skip(state, user, body))]
@@ -427,7 +464,7 @@ pub async fn publish_explore(
         (status = 200, description = "Editor state", body = ExploreEditorState),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required"),
-        (status = 409, description = "The draft changed; reload it before discarding")
+        (status = 409, description = "The draft changed (reload it before discarding), or a placement cannot be read by this server version")
     )
 )]
 #[tracing::instrument(name = "POST /admin/explore/discard", skip(state, user, body))]
@@ -459,7 +496,7 @@ fn preview_edition(raw: Option<&str>) -> Result<Edition, ApiError> {
     params(ExplorePreviewQuery),
     responses(
         (status = 200, description = "Resolved page and selection trace", body = ExplorePreview),
-        (status = 400, description = "Unknown source, platform, language or flag value"),
+        (status = 400, description = "Unknown source, platform or flag value, or a language that is not a language tag"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — landing page permission required")
     )
@@ -593,14 +630,17 @@ mod tests {
 
     mod database {
         use super::*;
-        use crate::entity::explore_placement_item;
+        use crate::entity::{explore_placement, explore_placement_item};
         use crate::routes::explore::model::{
             ExploreSlotOrder, ItemKind, ItemOverrides, LayoutDoc, PlacementContent,
             PlacementItemDoc, RailKey, SLOT_HERO, SLOT_STAT, SLOT_UNPLACED,
         };
         use crate::routes::explore::query::test_database::Fixture;
         use flow_like_types::tokio;
-        use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait};
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{
+            ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait,
+        };
 
         async fn run(
             db: &DatabaseConnection,
@@ -694,17 +734,31 @@ mod tests {
             };
             let picks_input = input(picks(), &[(ItemKind::App, "a1"), (ItemKind::App, "a2")]);
             let (status, _) = status_of(
-                run(db, "stale", create("picks", "row:trending", None, picks_input.clone())).await,
+                run(
+                    db,
+                    "stale",
+                    create("picks", "row:trending", None, picks_input.clone()),
+                )
+                .await,
             );
             assert_eq!(status, StatusCode::CONFLICT);
-            run(db, edition::DEFAULT_REVISION, create("picks", "row:trending", Some(0), picks_input.clone()))
-                .await
-                .unwrap();
+            run(
+                db,
+                edition::DEFAULT_REVISION,
+                create("picks", "row:trending", Some(0), picks_input.clone()),
+            )
+            .await
+            .unwrap();
             let (revision, layout) = draft(db).await;
             assert_ne!(revision, edition::DEFAULT_REVISION);
             assert_eq!(ids(&layout, "row:trending"), ["picks", "default-trending"]);
             let (status, _) = status_of(
-                run(db, edition::DEFAULT_REVISION, create("late", "row:trending", None, picks_input.clone())).await,
+                run(
+                    db,
+                    edition::DEFAULT_REVISION,
+                    create("late", "row:trending", None, picks_input.clone()),
+                )
+                .await,
             );
             assert_eq!(status, StatusCode::CONFLICT);
 
@@ -715,25 +769,87 @@ mod tests {
                 },
                 &[],
             );
-            let (status, message) = status_of(run(db, &revision, create("t2", SLOT_STAT, None, trending.clone())).await);
-            assert_eq!((status, message.as_str()), (StatusCode::BAD_REQUEST, "stat does not accept rail/trending"));
-            let (status, _) = status_of(run(db, &revision, create("t2", "row:ghost", None, trending.clone())).await);
+            let (status, message) = status_of(
+                run(
+                    db,
+                    &revision,
+                    create("t2", SLOT_STAT, None, trending.clone()),
+                )
+                .await,
+            );
+            assert_eq!(
+                (status, message.as_str()),
+                (
+                    StatusCode::BAD_REQUEST,
+                    "stat does not accept rail/trending"
+                )
+            );
+            let (status, _) = status_of(
+                run(
+                    db,
+                    &revision,
+                    create("t2", "row:ghost", None, trending.clone()),
+                )
+                .await,
+            );
             assert_eq!(status, StatusCode::BAD_REQUEST);
 
             let (status, message) = status_of(
-                run(db, &revision, DraftChange::Update { id: "picks".into(), input: trending.clone() }).await,
+                run(
+                    db,
+                    &revision,
+                    DraftChange::Update {
+                        id: "picks".into(),
+                        input: trending.clone(),
+                    },
+                )
+                .await,
             );
             assert_eq!(status, StatusCode::BAD_REQUEST);
-            assert!(message.starts_with("Placement kind cannot change"), "{message}");
+            assert!(
+                message.starts_with("Placement kind cannot change"),
+                "{message}"
+            );
             let (status, _) = status_of(
-                run(db, &revision, DraftChange::Update { id: "ghost".into(), input: picks_input.clone() }).await,
+                run(
+                    db,
+                    &revision,
+                    DraftChange::Update {
+                        id: "ghost".into(),
+                        input: picks_input.clone(),
+                    },
+                )
+                .await,
             );
             assert_eq!(status, StatusCode::NOT_FOUND);
 
-            let three = input(picks(), &[(ItemKind::App, "a3"), (ItemKind::Package, "p1"), (ItemKind::App, "a1")]);
-            run(db, &revision, DraftChange::Update { id: "picks".into(), input: three }).await.unwrap();
+            let three = input(
+                picks(),
+                &[
+                    (ItemKind::App, "a3"),
+                    (ItemKind::Package, "p1"),
+                    (ItemKind::App, "a1"),
+                ],
+            );
+            run(
+                db,
+                &revision,
+                DraftChange::Update {
+                    id: "picks".into(),
+                    input: three,
+                },
+            )
+            .await
+            .unwrap();
             let (revision, layout) = draft(db).await;
-            let items: Vec<&str> = layout.find("picks").unwrap().1.items.iter().map(|item| item.id.as_str()).collect();
+            let items: Vec<&str> = layout
+                .find("picks")
+                .unwrap()
+                .1
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect();
             assert_eq!(items, ["a3", "p1", "a1"]);
             assert_eq!(item_rows(db, "picks").await, 3);
 
@@ -747,12 +863,22 @@ mod tests {
                     &[(ItemKind::Collection, "picks")],
                 )
             };
-            run(db, &revision, create("slides", SLOT_HERO, Some(0), spotlight)).await.unwrap();
+            run(
+                db,
+                &revision,
+                create("slides", SLOT_HERO, Some(0), spotlight),
+            )
+            .await
+            .unwrap();
             let (revision, layout) = draft(db).await;
             assert_eq!(ids(&layout, SLOT_HERO), ["slides", "default-hero"]);
-            let (status, message) = status_of(run(db, &revision, DraftChange::Delete { id: "picks".into() }).await);
+            let (status, message) =
+                status_of(run(db, &revision, DraftChange::Delete { id: "picks".into() }).await);
             assert_eq!(status, StatusCode::CONFLICT);
-            assert_eq!(message, "Picks is shown by Hero slides; remove it there first");
+            assert_eq!(
+                message,
+                "Picks is shown by Hero slides; remove it there first"
+            );
 
             let (status, _) = status_of(
                 run(
@@ -793,7 +919,15 @@ mod tests {
             let (revision, layout) = draft(db).await;
             assert_eq!(ids(&layout, SLOT_UNPLACED), ["picks"]);
 
-            run(db, &revision, DraftChange::Delete { id: "slides".into() }).await.unwrap();
+            run(
+                db,
+                &revision,
+                DraftChange::Delete {
+                    id: "slides".into(),
+                },
+            )
+            .await
+            .unwrap();
             let (revision, _) = draft(db).await;
             assert_eq!(item_rows(db, "slides").await, 0);
 
@@ -806,16 +940,87 @@ mod tests {
             let (revision, published) = draft(db).await;
             assert!(edition::diff(&published, &live.layout).is_empty());
 
-            run(db, &revision, DraftChange::Delete { id: "picks".into() }).await.unwrap();
+            run(db, &revision, DraftChange::Delete { id: "picks".into() })
+                .await
+                .unwrap();
             let (revision, layout) = draft(db).await;
             assert!(layout.find("picks").is_none());
             assert_eq!(item_rows(db, "picks").await, 0);
             let (status, _) = status_of(run(db, "stale", DraftChange::Discard).await);
             assert_eq!(status, StatusCode::CONFLICT);
-            assert_eq!(run(db, &revision, DraftChange::Discard).await.unwrap(), None);
+            assert_eq!(
+                run(db, &revision, DraftChange::Discard).await.unwrap(),
+                None
+            );
             let (_, discarded) = draft(db).await;
             assert!(discarded.find("picks").is_some());
             assert!(edition::diff(&discarded, &live.layout).is_empty());
+
+            fixture.drop_database().await;
+        }
+
+        #[tokio::test]
+        #[ignore = "requires a disposable PostgreSQL database"]
+        async fn an_unreadable_placement_blocks_edits_but_can_be_deleted() {
+            let fixture = Fixture::new().await;
+            let db = &fixture.db;
+            let picks_input = input(picks(), &[(ItemKind::App, "a1"), (ItemKind::App, "a2")]);
+            run(
+                db,
+                edition::DEFAULT_REVISION,
+                DraftChange::Create {
+                    id: "future".into(),
+                    slot_key: "row:trending".into(),
+                    position: Some(0),
+                    input: picks_input,
+                },
+            )
+            .await
+            .unwrap();
+            explore_placement::Entity::update_many()
+                .col_expr(
+                    explore_placement::Column::Content,
+                    Expr::value(serde_json::json!({"kind": "carousel", "title": "Future"})),
+                )
+                .filter(explore_placement::Column::Edition.eq(Edition::Draft.as_str()))
+                .filter(explore_placement::Column::Id.eq("future"))
+                .exec(db)
+                .await
+                .unwrap();
+            let loaded = edition::load(db, Edition::Draft).await.unwrap();
+            assert_eq!(loaded.unreadable, ["future"]);
+            let revision = loaded.revision().to_owned();
+
+            let retitle = || DraftChange::Update {
+                id: "default-trending".into(),
+                input: input(
+                    PlacementContent::Rail {
+                        rail: RailKey::Trending,
+                        title: Some("Hot now".into()),
+                    },
+                    &[],
+                ),
+            };
+            let (status, _) = status_of(run(db, &revision, retitle()).await);
+            assert_eq!(status, StatusCode::CONFLICT);
+            let (status, _) = status_of(run(db, &revision, DraftChange::Publish).await);
+            assert_eq!(status, StatusCode::CONFLICT);
+
+            run(
+                db,
+                &revision,
+                DraftChange::Delete {
+                    id: "future".into(),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(item_rows(db, "future").await, 0);
+            let loaded = edition::load(db, Edition::Draft).await.unwrap();
+            assert!(loaded.unreadable.is_empty());
+            assert_eq!(ids(&loaded.layout, "row:trending"), ["default-trending"]);
+            let revision = loaded.revision().to_owned();
+            run(db, &revision, retitle()).await.unwrap();
 
             fixture.drop_database().await;
         }

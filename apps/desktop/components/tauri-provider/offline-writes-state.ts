@@ -23,6 +23,20 @@ export const OFFLINE_WRITES_EVENTS = {
 	mirror: "offline-writes:mirror",
 } as const;
 
+const TABLE_ROUTE_COMMAND = "offline_writes_table_route";
+let missingTableRouteCommandReported = false;
+
+/** A build whose Rust side lacks the routing command can only reach tables through the hub. */
+function isMissingTableRouteCommand(error: unknown): boolean {
+	const message =
+		typeof error === "string"
+			? error
+			: error instanceof Error
+				? error.message
+				: "";
+	return message.includes(TABLE_ROUTE_COMMAND) && /not found/i.test(message);
+}
+
 function subscribeEvent<T>(
 	name: string,
 	listener: (payload: T) => void,
@@ -190,12 +204,24 @@ export class OfflineWritesState implements IOfflineWritesState {
 	): Promise<OfflineTableRoute> {
 		const token = this.token;
 		if (!token) return "hub";
-		return invoke("offline_writes_table_route", {
-			appId,
-			token,
-			table,
-			userScoped: userScoped ?? false,
-		});
+		try {
+			return await invoke<OfflineTableRoute>(TABLE_ROUTE_COMMAND, {
+				appId,
+				token,
+				table,
+				userScoped: userScoped ?? false,
+			});
+		} catch (error) {
+			if (!isMissingTableRouteCommand(error)) throw error;
+			if (!missingTableRouteCommandReported) {
+				missingTableRouteCommandReported = true;
+				console.warn(
+					`[OfflineWrites] Tauri command ${TABLE_ROUTE_COMMAND} is not registered; routing tables through the hub.`,
+					error,
+				);
+			}
+			return "hub";
+		}
 	}
 
 	async forgetApp(appId: string, allAccounts: boolean): Promise<void> {

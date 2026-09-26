@@ -1,5 +1,3 @@
-import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
-import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type BoardEditJob,
 	type BoardEditJobDeliveryClaim,
@@ -33,10 +31,12 @@ import {
 	type ILog,
 	type ILogLevel,
 	type ILogMetadata,
+	type ILogQuery,
 	type INode,
 	type IOAuthProvider,
 	type IPrerunBoardResponse,
 	type IRunContext,
+	type IRunLogSummary,
 	type IRunPayload,
 	type IScopedFlowScriptResponse,
 	type ISettingsProfile,
@@ -45,7 +45,7 @@ import {
 	type UIActionContext,
 	type UnifiedChatMessage,
 	type UnifiedCopilotResponse,
-	checkOAuthTokens,
+	checkOAuthTokensFromPrerun,
 	dispatchBoardDelivered,
 	dispatchBoardSyncChanged,
 	dispatchBoardSyncRecoveryRequest,
@@ -61,6 +61,7 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	ApiResponseError,
 	isHubUnavailable,
@@ -77,6 +78,7 @@ import {
 	type IBoardSyncRequest,
 	type IBoardSyncResponse,
 } from "@flow-like/flow-like-ui/lib/board-sync";
+import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
@@ -93,7 +95,10 @@ import { timeRunStep } from "@flow-like/flow-like-ui/lib/run-timing";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
 import type { AppPackage } from "@flow-like/flow-like-ui/lib/schema/wasm";
-import type { IFlowIrCommitReadback } from "@flow-like/flow-like-ui/state/backend-state/board-state";
+import type {
+	IBoardRunRequirements,
+	IFlowIrCommitReadback,
+} from "@flow-like/flow-like-ui/state/backend-state/board-state";
 import { createId } from "@paralleldrive/cuid2";
 import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -513,21 +518,14 @@ const summarizeBoardElementRefs = (board: IBoard) => {
 type RemoteAppPackage = Pick<AppPackage, "packageId" | "version"> &
 	Partial<Pick<AppPackage, "packageName" | "license">>;
 
-const boardNodes = (board: IBoard): INode[] => [
-	...Object.values(board.nodes),
-	...Object.values(board.layers).flatMap((layer) => Object.values(layer.nodes)),
-];
-
 /** Expired pins are disabled for the project: running their nodes locally would bypass the licence. */
 const assertNoExpiredPackagesUsed = (
-	nodes: INode[],
+	packageIds: readonly string[],
 	remotePackages: RemoteAppPackage[],
 ): void => {
 	const expired = remotePackages.filter(isExpiredPin);
-	if (expired.length === 0 || nodes.length === 0) return;
-	const usedPackageIds = new Set(
-		nodes.flatMap((node) => node.wasm?.package_id ?? []),
-	);
+	if (expired.length === 0 || packageIds.length === 0) return;
+	const usedPackageIds = new Set(packageIds);
 	const blocked = expired.find((pkg) => usedPackageIds.has(pkg.packageId));
 	if (!blocked) return;
 	throw new Error(
@@ -890,10 +888,9 @@ export class BoardState implements IBoardState {
 
 	async ensureAppPackagesInstalledForExecution(
 		appId: string,
-		board?: IBoard,
+		requirements?: IBoardRunRequirements,
 	): Promise<void> {
-		const nodes = board ? boardNodes(board) : [];
-		if (nodes.some((node) => node.name === "a2ui_instantiate_widget")) {
+		if (requirements?.instantiates_widgets) {
 			await timeRunStep("packages.widgets", async () =>
 				this.backend.widgetState.syncWidgetsForExecution?.(appId),
 			);
@@ -901,7 +898,10 @@ export class BoardState implements IBoardState {
 		const remotePackages = await timeRunStep("packages.remote_list", () =>
 			this.syncRemoteAppPackages(appId),
 		);
-		assertNoExpiredPackagesUsed(nodes, remotePackages);
+		assertNoExpiredPackagesUsed(
+			requirements?.wasm_package_ids ?? [],
+			remotePackages,
+		);
 		await timeRunStep("packages.install", () =>
 			this.ensureRemoteAppPackagesInstalled(appId, remotePackages, {
 				forceReload: true,
@@ -1307,6 +1307,149 @@ export class BoardState implements IBoardState {
 		return materialized;
 	}
 
+	/**
+	 * Pull a newer hub revision of a Latest board into local storage before a run. Past the cap
+	 * the run starts from the local board; the refresh keeps going and lands for the next reader.
+	 * Resolves to `board` itself whenever nothing was applied.
+	 */
+	private refreshLocalBoardFromHub(
+		appId: string,
+		boardId: string,
+		board: IBoard,
+	): Promise<IBoard> {
+		const refreshed = (async (): Promise<IBoard> => {
+			try {
+				// Deliver whatever the last interactive edit left in the outbox first, so the remote
+				// snapshot fetched below is not older than the board that was just committed here.
+				await timeRunStep("get_board.settle_outbox", () =>
+					this.settleOutbox(appId, boardId),
+				);
+				const pendingSync = await timeRunStep("get_board.pending_sync", () =>
+					this.backend.getOfflineSyncCommands(appId, boardId),
+				);
+				const pendingMutations = pendingSync.filter(
+					commandSyncHasPendingMutation,
+				);
+				if (pendingMutations.length > 0) {
+					// Local edits are still queued for the server; the remote snapshot
+					// predates them, so the local board is the fresher one.
+					console.warn(
+						"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
+						{ boardId, pendingBatches: pendingMutations.length },
+					);
+					return board;
+				}
+
+				const remoteData = await timeRunStep("get_board.remote", () =>
+					this.fetchRemoteBoard(appId, boardId),
+				);
+
+				if (remoteData) {
+					if (
+						!(await timeRunStep("get_board.lineage", () =>
+							this.lineageAllowsRemoteApply(appId, boardId, remoteData),
+						))
+					) {
+						return board;
+					}
+
+					const { merged, changed } = await timeRunStep("get_board.merge", () =>
+						mergeBoardOffThread(remoteData, board),
+					);
+					if (!changed) return board;
+					await this.storeMergedRemoteBoard(appId, boardId, remoteData, merged);
+					return merged;
+				}
+			} catch (e) {
+				console.warn(
+					"[BoardState] forceFresh sync failed, using local board:",
+					e,
+				);
+			}
+			return board;
+		})();
+		return settleWithin(refreshed, HUB_REFRESH_TIMEOUT_MS, board);
+	}
+
+	private async storeMergedRemoteBoard(
+		appId: string,
+		boardId: string,
+		remoteData: IBoard,
+		merged: IBoard,
+	): Promise<void> {
+		console.log("[BoardState] forceFresh: updating local board:", { boardId });
+		await timeRunStep("get_board.upsert", () =>
+			invoke("upsert_board", {
+				appId: appId,
+				boardId: boardId,
+				name: merged.name,
+				description: merged.description,
+				logLevel: merged.log_level,
+				stage: merged.stage,
+				executionMode: merged.execution_mode,
+				boardData: merged,
+			}),
+		);
+		await timeRunStep("get_board.record_lineage", () =>
+			this.recordAppliedRemoteLineage(appId, boardId, remoteData),
+		);
+		dispatchRemoteBoardApplied(appId, boardId, "sync");
+		this.backend.queryClient?.setQueryData(
+			[this.getBoard.name || "backendFn", appId, boardId],
+			merged,
+		);
+	}
+
+	/**
+	 * The run preflight's view of a board, answered from the host's current revision. Keeps
+	 * what `getBoard(…, forceFresh)` guaranteed before a run: a board this device does not hold
+	 * yet is materialized first, and a Latest board of an online app takes the hub's newer
+	 * revision (within the refresh cap) before its requirements are read.
+	 */
+	async getBoardRunRequirements(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoardRunRequirements> {
+		const read = () =>
+			invoke<IBoardRunRequirements>("get_board_run_requirements", {
+				appId,
+				boardId,
+				version,
+			});
+		let requirements: IBoardRunRequirements;
+		try {
+			requirements = await timeRunStep("board_requirements.local", read);
+		} catch {
+			await timeRunStep("board_requirements.materialize", () =>
+				this.getBoard(appId, boardId, version, true),
+			);
+			return timeRunStep("board_requirements.materialized", read);
+		}
+		if (
+			typeof version !== "undefined" ||
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.backend.queryClient ||
+			(await timeRunStep("board_requirements.is_offline", () =>
+				this.backend.isOffline(appId),
+			))
+		) {
+			return requirements;
+		}
+		const local = await timeRunStep("board_requirements.local_board", () =>
+			this.fetchLocalBoard(appId, boardId),
+		);
+		const refreshed = await this.refreshLocalBoardFromHub(
+			appId,
+			boardId,
+			local,
+		);
+		return refreshed === local
+			? requirements
+			: timeRunStep("board_requirements.refreshed", read);
+	}
+
 	async getBoard(
 		appId: string,
 		boardId: string,
@@ -1350,91 +1493,7 @@ export class BoardState implements IBoardState {
 		// before returning. This ensures the board in local storage is up-to-date
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
-			// Past the cap the run starts from the local board; the refresh keeps
-			// going and lands for the next reader.
-			const refreshed = (async (): Promise<IBoard> => {
-				try {
-					// Deliver whatever the last interactive edit left in the outbox first, so the remote
-					// snapshot fetched below is not older than the board that was just committed here.
-					await timeRunStep("get_board.settle_outbox", () =>
-						this.settleOutbox(appId, boardId),
-					);
-					const pendingSync = await timeRunStep("get_board.pending_sync", () =>
-						this.backend.getOfflineSyncCommands(appId, boardId),
-					);
-					const pendingMutations = pendingSync.filter(
-						commandSyncHasPendingMutation,
-					);
-					if (pendingMutations.length > 0) {
-						// Local edits are still queued for the server; the remote snapshot
-						// predates them, so the local board is the fresher one.
-						console.warn(
-							"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
-							{ boardId, pendingBatches: pendingMutations.length },
-						);
-						return board;
-					}
-
-					const remoteData = await timeRunStep("get_board.remote", () =>
-						this.fetchRemoteBoard(appId, boardId),
-					);
-
-					if (remoteData) {
-						if (
-							!(await timeRunStep("get_board.lineage", () =>
-								this.lineageAllowsRemoteApply(appId, boardId, remoteData),
-							))
-						) {
-							return board;
-						}
-
-						const { merged, changed } = await timeRunStep(
-							"get_board.merge",
-							() => mergeBoardOffThread(remoteData, board),
-						);
-						if (changed && typeof version === "undefined") {
-							console.log("[BoardState] forceFresh: updating local board:", {
-								boardId,
-							});
-							await timeRunStep("get_board.upsert", () =>
-								invoke("upsert_board", {
-									appId: appId,
-									boardId: boardId,
-									name: merged.name,
-									description: merged.description,
-									logLevel: merged.log_level,
-									stage: merged.stage,
-									executionMode: merged.execution_mode,
-									boardData: merged,
-								}),
-							);
-							await timeRunStep("get_board.record_lineage", () =>
-								this.recordAppliedRemoteLineage(appId, boardId, remoteData),
-							);
-							dispatchRemoteBoardApplied(appId, boardId, "sync");
-
-							if (this.backend.queryClient) {
-								const queryKey = [
-									this.getBoard.name || "backendFn",
-									appId,
-									boardId,
-									version,
-								].filter((arg) => typeof arg !== "undefined");
-								this.backend.queryClient.setQueryData(queryKey, merged);
-							}
-							return merged;
-						}
-						return board;
-					}
-				} catch (e) {
-					console.warn(
-						"[BoardState] forceFresh sync failed, using local board:",
-						e,
-					);
-				}
-				return board;
-			})();
-			return settleWithin(refreshed, HUB_REFRESH_TIMEOUT_MS, board);
+			return this.refreshLocalBoardFromHub(appId, boardId, board);
 		}
 
 		const promise = injectDataFunction(
@@ -1906,13 +1965,12 @@ export class BoardState implements IBoardState {
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
-		let board: IBoard;
+		let requirements: IBoardRunRequirements;
 		try {
-			board = await this.getBoard(
+			requirements = await this.getBoardRunRequirements(
 				appId,
 				boardId,
 				normalizeBoardVersion(payload.version),
-				true,
 			);
 		} catch (error) {
 			// Everything below reads the flow to prepare a local run. A user who
@@ -1935,16 +1993,8 @@ export class BoardState implements IBoardState {
 			);
 		}
 
-		await this.ensureAppPackagesInstalledForExecution(appId, board);
-		const { requires_local_execution, oauth_requirements } =
-			extractOAuthRequirementsFromBoard(board);
-
-		console.log("[BoardState] executeBoard board summary:", {
-			boardId,
-			pageIds: board.page_ids,
-			updatedAt: board.updated_at,
-			elementRefs: summarizeBoardElementRefs(board),
-		});
+		await this.ensureAppPackagesInstalledForExecution(appId, requirements);
+		const { requires_local_execution, oauth_requirements } = requirements;
 
 		if (requires_local_execution) {
 			try {
@@ -2001,9 +2051,12 @@ export class BoardState implements IBoardState {
 			oauth_requirements.length > 0
 				? await getHubConfig(this.backend.profile)
 				: undefined;
-		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {
-			refreshToken: oauthService.refreshToken.bind(oauthService),
-		});
+		const oauthResult = await checkOAuthTokensFromPrerun(
+			oauth_requirements,
+			oauthTokenStore,
+			hub,
+			{ refreshToken: oauthService.refreshToken.bind(oauthService) },
+		);
 
 		console.log("[OAuth] Board check result:", {
 			requiredProviders: oauthResult.requiredProviders.map((p) => p.id),
@@ -2384,6 +2437,73 @@ export class BoardState implements IBoardState {
 			offset: offset,
 		});
 		return runs;
+	}
+
+	private remoteLogsPath(logMeta: ILogMetadata, action: string): string | null {
+		if (!logMeta.is_remote || !this.backend.profile || !this.backend.auth) {
+			return null;
+		}
+		return `apps/${logMeta.app_id}/board/${logMeta.board_id}/logs/${action}`;
+	}
+
+	async queryRunLogs(
+		logMeta: ILogMetadata,
+		query: ILogQuery,
+		offset: number,
+		limit: number,
+	): Promise<ILog[]> {
+		const remote = this.remoteLogsPath(logMeta, "query");
+		if (remote && this.backend.profile) {
+			const logs = await fetcher<ILog[]>(
+				this.backend.profile,
+				remote,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						run_id: logMeta.run_id,
+						query,
+						offset,
+						limit,
+					}),
+				},
+				this.backend.auth,
+			);
+			return asArray(logs);
+		}
+		return invoke<ILog[]>("query_run_logs", { logMeta, query, offset, limit });
+	}
+
+	async countRunLogs(logMeta: ILogMetadata, query: ILogQuery): Promise<number> {
+		const remote = this.remoteLogsPath(logMeta, "count");
+		if (remote && this.backend.profile) {
+			const response = await fetcher<{ count?: number }>(
+				this.backend.profile,
+				remote,
+				{
+					method: "POST",
+					body: JSON.stringify({ run_id: logMeta.run_id, query }),
+				},
+				this.backend.auth,
+			);
+			return typeof response?.count === "number" ? response.count : 0;
+		}
+		return invoke<number>("count_run_logs", { logMeta, query });
+	}
+
+	async getRunLogSummary(
+		logMeta: ILogMetadata,
+	): Promise<IRunLogSummary | null> {
+		const remote = this.remoteLogsPath(logMeta, "summary");
+		if (remote && this.backend.profile) {
+			const summary = await fetcher<IRunLogSummary | null>(
+				this.backend.profile,
+				`${remote}?run_id=${encodeURIComponent(logMeta.run_id)}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return isRecord(summary) ? (summary as IRunLogSummary) : null;
+		}
+		return invoke<IRunLogSummary | null>("get_run_log_summary", { logMeta });
 	}
 
 	/**

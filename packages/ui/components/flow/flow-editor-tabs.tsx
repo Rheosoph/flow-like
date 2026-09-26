@@ -9,13 +9,15 @@ import {
 	LayoutTemplateIcon,
 	PaletteIcon,
 	PencilLineIcon,
+	PinIcon,
+	PinOffIcon,
 	PlusIcon,
 	SquareDashedBottomCodeIcon,
 	Trash2Icon,
 	XIcon,
 } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IGenericCommand } from "../../lib";
 import {
 	FLOWSCRIPT_KEYWORDS,
@@ -43,13 +45,21 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
+	ContextMenuRadioGroup,
+	ContextMenuRadioItem,
 	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
 	ContextMenuTrigger,
 } from "../ui/context-menu";
 import { Input } from "../ui/input";
+import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import {
+	EDITOR_TAB_COLORS,
 	type IEditorDocument,
 	type IEditorTab,
+	type IEditorTabColor,
 	isTabClosable,
 } from "./shell/editor-documents";
 import { useModuleCommands } from "./use-module-commands";
@@ -88,44 +98,55 @@ function ModuleNameField({
 		onSubmit(value.trim());
 	}, [canSubmit, onSubmit, value]);
 
+	// The error is portalled: the field can sit inside a scrolling tab lane, which clips
+	// anything that hangs below it.
 	return (
-		<div className="relative flex shrink-0 items-center gap-1">
-			<FileCode2Icon className="size-3 shrink-0 text-primary" />
-			<Input
-				autoFocus
-				value={value}
-				aria-invalid={Boolean(error)}
-				aria-label={t("moduleName", "Module name")}
-				placeholder={t("moduleNamePlaceholder", "moduleName")}
-				className="h-6 w-36 px-1.5 font-mono text-xs"
-				onChange={(event) => setValue(event.target.value)}
-				onKeyDown={(event) => {
-					if (event.key === "Enter") submit();
-					if (event.key === "Escape") onCancel();
-				}}
-			/>
-			<Button
-				size="sm"
-				className="h-6 px-2 text-xs"
-				disabled={!canSubmit}
-				onClick={submit}
+		<Popover open={Boolean(error)}>
+			<PopoverAnchor asChild>
+				<div className="flex shrink-0 items-center gap-1">
+					<FileCode2Icon className="size-3 shrink-0 text-primary" />
+					<Input
+						autoFocus
+						value={value}
+						aria-invalid={Boolean(error)}
+						aria-label={t("moduleName", "Module name")}
+						placeholder={t("moduleNamePlaceholder", "moduleName")}
+						className="h-6 w-36 px-1.5 font-mono text-xs"
+						onChange={(event) => setValue(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Enter") submit();
+							if (event.key === "Escape") onCancel();
+						}}
+					/>
+					<Button
+						size="sm"
+						className="h-6 px-2 text-xs"
+						disabled={!canSubmit}
+						onClick={submit}
+					>
+						{submitLabel}
+					</Button>
+					<Button
+						size="sm"
+						variant="ghost"
+						className="h-6 px-2 text-xs"
+						onClick={onCancel}
+					>
+						{t("cancel", "Cancel")}
+					</Button>
+				</div>
+			</PopoverAnchor>
+			<PopoverContent
+				role="alert"
+				side="bottom"
+				align="start"
+				onOpenAutoFocus={(event) => event.preventDefault()}
+				onCloseAutoFocus={(event) => event.preventDefault()}
+				className="w-auto max-w-xs border-destructive/40 px-2 py-1 text-[10px] text-destructive shadow-md"
 			>
-				{submitLabel}
-			</Button>
-			<Button
-				size="sm"
-				variant="ghost"
-				className="h-6 px-2 text-xs"
-				onClick={onCancel}
-			>
-				{t("cancel", "Cancel")}
-			</Button>
-			{error && (
-				<span className="absolute top-full left-0 z-50 mt-1 whitespace-nowrap rounded-md border border-destructive/40 bg-popover px-2 py-1 text-[10px] text-destructive shadow-md">
-					{error}
-				</span>
-			)}
-		</div>
+				{error}
+			</PopoverContent>
+		</Popover>
 	);
 }
 
@@ -138,32 +159,153 @@ const KIND_ICONS: Record<IEditorDocument["kind"], typeof FileCode2Icon> = {
 	styles: PaletteIcon,
 };
 
+const TAB_COLOR_CLASSES: Record<
+	IEditorTabColor,
+	{ readonly fill: string; readonly text: string }
+> = {
+	red: { fill: "bg-tab-red", text: "text-tab-red" },
+	orange: { fill: "bg-tab-orange", text: "text-tab-orange" },
+	yellow: { fill: "bg-tab-yellow", text: "text-tab-yellow" },
+	green: { fill: "bg-tab-green", text: "text-tab-green" },
+	teal: { fill: "bg-tab-teal", text: "text-tab-teal" },
+	blue: { fill: "bg-tab-blue", text: "text-tab-blue" },
+	purple: { fill: "bg-tab-purple", text: "text-tab-purple" },
+	pink: { fill: "bg-tab-pink", text: "text-tab-pink" },
+};
+
+const NO_TAB_COLOR = "none";
+
+function useTabColorLabels(): Record<IEditorTabColor, string> {
+	const { t } = useTranslation("flow");
+	return useMemo(
+		() => ({
+			red: t("colorRed", "Red"),
+			orange: t("colorOrange", "Orange"),
+			yellow: t("colorYellow", "Yellow"),
+			green: t("colorGreen", "Green"),
+			teal: t("colorTeal", "Teal"),
+			blue: t("colorBlue", "Blue"),
+			purple: t("colorPurple", "Purple"),
+			pink: t("colorPink", "Pink"),
+		}),
+		[t],
+	);
+}
+
+const LANE_EDGE_PX = 16;
+
+/**
+ * One horizontally scrolling run of tabs. Its scrollbar is hidden, so a vertical wheel
+ * scrolls it sideways, the active tab is brought into view when it or the set of tabs
+ * changes, and a faded edge says there is more past it.
+ */
+function EditorTabLane({
+	activeKey,
+	itemsKey,
+	className,
+	children,
+}: Readonly<{
+	activeKey: string | null;
+	/** Changes whenever the lane's tabs do; scrolling alone must not re-snap to the active tab. */
+	itemsKey: string;
+	className?: string;
+	children: ReactNode;
+}>) {
+	const laneRef = useRef<HTMLDivElement>(null);
+	const rowRef = useRef<HTMLDivElement>(null);
+	const [edges, setEdges] = useState({ start: false, end: false });
+
+	const measure = useCallback(() => {
+		const lane = laneRef.current;
+		if (!lane) return;
+		const start = lane.scrollLeft > 1;
+		const end = lane.scrollLeft + lane.clientWidth < lane.scrollWidth - 1;
+		setEdges((old) =>
+			old.start === start && old.end === end ? old : { start, end },
+		);
+	}, []);
+
+	useEffect(() => {
+		const lane = laneRef.current;
+		const row = rowRef.current;
+		if (!lane || !row || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(measure);
+		observer.observe(lane);
+		observer.observe(row);
+		return () => observer.disconnect();
+	}, [measure]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: itemsKey stands in for the rendered tabs, whose positions this reads from the DOM.
+	useEffect(() => {
+		const lane = laneRef.current;
+		if (!lane || !activeKey) return;
+		const tab = Array.from(
+			lane.querySelectorAll<HTMLElement>("[data-tab-key]"),
+		).find((element) => element.dataset.tabKey === activeKey);
+		if (!tab) return;
+		const left = tab.offsetLeft;
+		const right = left + tab.offsetWidth;
+		if (left < lane.scrollLeft) {
+			lane.scrollLeft = Math.max(0, left - LANE_EDGE_PX);
+		} else if (right > lane.scrollLeft + lane.clientWidth) {
+			lane.scrollLeft = right - lane.clientWidth + LANE_EDGE_PX;
+		}
+		measure();
+	}, [activeKey, itemsKey, measure]);
+
+	const mask =
+		edges.start || edges.end
+			? `linear-gradient(to right, ${edges.start ? "transparent" : "black"}, black ${LANE_EDGE_PX}px, black calc(100% - ${LANE_EDGE_PX}px), ${edges.end ? "transparent" : "black"})`
+			: undefined;
+
+	return (
+		<div
+			ref={laneRef}
+			onScroll={measure}
+			onWheel={(event) => {
+				if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+				event.currentTarget.scrollLeft += event.deltaY;
+			}}
+			style={{ maskImage: mask, WebkitMaskImage: mask }}
+			className={cn("no-scrollbar overflow-x-auto py-1", className)}
+		>
+			<div ref={rowRef} className="relative flex w-max items-center gap-1">
+				{children}
+			</div>
+		</div>
+	);
+}
+
 // Extra props (and ref) must reach the root span so `ContextMenuTrigger asChild`
 // can attach its right-click handler.
 function EditorTabButton({
+	tab,
 	label,
-	kind,
 	active,
 	onSelect,
 	onClose,
+	onUnpin,
 	className,
 	...rest
 }: Readonly<{
+	tab: IEditorTab;
 	label: string;
-	kind: IEditorDocument["kind"];
 	active: boolean;
 	onSelect: () => void;
 	/** Absent for the last board tab, which is what the canvas falls back to. */
 	onClose?: () => void;
+	onUnpin: () => void;
 }> &
 	Omit<ComponentProps<"span">, "children">) {
 	const { t } = useTranslation("flow");
-	const Icon = KIND_ICONS[kind];
+	const Icon = KIND_ICONS[tab.doc.kind];
+	const tint = tab.color ? TAB_COLOR_CLASSES[tab.color] : undefined;
 	return (
 		<span
 			{...rest}
+			data-tab-key={tab.key}
 			className={cn(
-				"group/tab flex shrink-0 items-center rounded-md border pr-1 transition-colors",
+				"group/tab relative flex shrink-0 items-center rounded-md border pr-1 transition-colors",
 				active
 					? "border-border bg-background text-foreground shadow-sm"
 					: "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -177,28 +319,108 @@ function EditorTabButton({
 				aria-current={active ? "page" : undefined}
 				className="flex items-center gap-1.5 py-1 pl-2.5 pr-1 font-mono text-xs"
 			>
-				<Icon className="size-3 shrink-0" />
-				<span className="max-w-48 truncate">{label}</span>
+				<Icon className={cn("size-3 shrink-0", tint?.text)} />
+				<span className={cn("truncate", tab.pinned ? "max-w-32" : "max-w-48")}>
+					{label}
+				</span>
 			</button>
-			{onClose && (
+			{tab.pinned ? (
 				<button
 					type="button"
-					aria-label={t("closeFile", "Close file")}
-					title={t("closeFile", "Close file")}
+					aria-label={t("unpinTab", "Unpin tab")}
+					title={t("unpinTab", "Unpin tab")}
 					onClick={(event) => {
 						event.stopPropagation();
-						onClose();
+						onUnpin();
 					}}
-					className={cn(
-						"flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground",
-						active ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100",
-					)}
+					className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
 				>
-					<XIcon className="size-3" />
+					<PinIcon className="size-3" />
 				</button>
+			) : (
+				onClose && (
+					<button
+						type="button"
+						aria-label={t("closeFile", "Close file")}
+						title={t("closeFile", "Close file")}
+						onClick={(event) => {
+							event.stopPropagation();
+							onClose();
+						}}
+						className={cn(
+							"flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground",
+							active ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100",
+						)}
+					>
+						<XIcon className="size-3" />
+					</button>
+				)
+			)}
+			{tint && (
+				<span
+					aria-hidden
+					className={cn(
+						"pointer-events-none absolute inset-x-2 bottom-0 h-0.5 rounded-full",
+						tint.fill,
+					)}
+				/>
 			)}
 		</span>
 	);
+}
+
+function TabColorMenu({
+	color,
+	onColor,
+}: Readonly<{
+	color: IEditorTabColor | undefined;
+	onColor: (color: IEditorTabColor | undefined) => void;
+}>) {
+	const { t } = useTranslation("flow");
+	const labels = useTabColorLabels();
+	return (
+		<ContextMenuSub>
+			<ContextMenuSubTrigger className="gap-2">
+				<PaletteIcon className="size-3.5 text-muted-foreground" />
+				{t("tabColor", "Tab color")}
+			</ContextMenuSubTrigger>
+			<ContextMenuSubContent className="w-40">
+				<ContextMenuRadioGroup
+					value={color ?? NO_TAB_COLOR}
+					onValueChange={(value) =>
+						onColor(EDITOR_TAB_COLORS.find((option) => option === value))
+					}
+				>
+					<ContextMenuRadioItem value={NO_TAB_COLOR}>
+						{t("noColor", "No color")}
+					</ContextMenuRadioItem>
+					{EDITOR_TAB_COLORS.map((option) => (
+						<ContextMenuRadioItem key={option} value={option}>
+							<span
+								aria-hidden
+								className={cn(
+									"size-2.5 shrink-0 rounded-full",
+									TAB_COLOR_CLASSES[option].fill,
+								)}
+							/>
+							{labels[option]}
+						</ContextMenuRadioItem>
+					))}
+				</ContextMenuRadioGroup>
+			</ContextMenuSubContent>
+		</ContextMenuSub>
+	);
+}
+
+interface IEditorTabActions {
+	select: () => void;
+	close: () => void;
+	split: () => void;
+	pin: (pinned: boolean) => void;
+	color: (color: IEditorTabColor | undefined) => void;
+	rename: () => void;
+	delete: () => void;
+	deleteWithContents: () => void;
 }
 
 function EditorTab({
@@ -207,72 +429,70 @@ function EditorTab({
 	active,
 	closable,
 	readOnly,
-	onSelect,
-	onClose,
-	onSplit,
-	onRename,
-	onDelete,
-	onDeleteWithContents,
+	actions,
 }: Readonly<{
 	tab: IEditorTab;
 	label: string;
 	active: boolean;
 	closable: boolean;
 	readOnly: boolean;
-	onSelect: () => void;
-	onClose: () => void;
-	onSplit: () => void;
-	onRename: () => void;
-	onDelete: () => void;
-	onDeleteWithContents: () => void;
+	actions: IEditorTabActions;
 }>) {
 	const { t } = useTranslation("flow");
 	const isBoard = tab.doc.kind === "board";
 	const isModule = isBoard && tab.doc.fileId !== MAIN_FILE_ID;
-
-	const button = (
-		<EditorTabButton
-			label={label}
-			kind={tab.doc.kind}
-			active={active}
-			onSelect={onSelect}
-			onClose={closable ? onClose : undefined}
-		/>
-	);
-
-	if (readOnly && !isBoard) return button;
+	const pinned = Boolean(tab.pinned);
 
 	return (
 		<ContextMenu>
-			<ContextMenuTrigger asChild>{button}</ContextMenuTrigger>
+			<ContextMenuTrigger asChild>
+				<EditorTabButton
+					tab={tab}
+					label={label}
+					active={active}
+					onSelect={actions.select}
+					onClose={closable ? actions.close : undefined}
+					onUnpin={() => actions.pin(false)}
+				/>
+			</ContextMenuTrigger>
 			<ContextMenuContent className="w-56">
 				{closable && (
-					<ContextMenuItem onSelect={onClose}>
+					<ContextMenuItem onSelect={actions.close}>
 						<XIcon className="size-3.5" />
 						{t("closeFile", "Close file")}
 					</ContextMenuItem>
 				)}
 				{isBoard && (
-					<ContextMenuItem onSelect={onSplit}>
+					<ContextMenuItem onSelect={actions.split}>
 						<CopyPlusIcon className="size-3.5" />
 						{t("openInNewTab", "Open in new tab")}
 					</ContextMenuItem>
 				)}
+				{(closable || isBoard) && <ContextMenuSeparator />}
+				<ContextMenuItem onSelect={() => actions.pin(!pinned)}>
+					{pinned ? (
+						<PinOffIcon className="size-3.5" />
+					) : (
+						<PinIcon className="size-3.5" />
+					)}
+					{pinned ? t("unpinTab", "Unpin tab") : t("pinTab", "Pin tab")}
+				</ContextMenuItem>
+				<TabColorMenu color={tab.color} onColor={actions.color} />
 				{isModule && !readOnly && (
 					<>
 						<ContextMenuSeparator />
-						<ContextMenuItem onSelect={onRename}>
+						<ContextMenuItem onSelect={actions.rename}>
 							<PencilLineIcon className="size-3.5" />
 							{t("rename", "Rename")}
 						</ContextMenuItem>
 						<ContextMenuSeparator />
-						<ContextMenuItem onSelect={onDelete}>
+						<ContextMenuItem onSelect={actions.delete}>
 							<Trash2Icon className="size-3.5" />
 							{t("deleteModule", "Delete module")}
 						</ContextMenuItem>
 						<ContextMenuItem
 							variant="destructive"
-							onSelect={onDeleteWithContents}
+							onSelect={actions.deleteWithContents}
 						>
 							<Trash2Icon className="size-3.5" />
 							{t("deleteWithContents", "Delete with contents")}
@@ -300,6 +520,8 @@ export function FlowEditorTabs({
 	onSelect,
 	onClose,
 	onSplit,
+	onPin,
+	onColor,
 	executeCommand,
 	readOnly,
 	reservedRoots = FLOWSCRIPT_KEYWORDS,
@@ -315,6 +537,8 @@ export function FlowEditorTabs({
 	onSelect: (key: string) => void;
 	onClose: (key: string) => void;
 	onSplit: (key: string) => void;
+	onPin: (key: string, pinned: boolean) => void;
+	onColor: (key: string, color: IEditorTabColor | undefined) => void;
 	executeCommand: (
 		command: IGenericCommand,
 		append: boolean,
@@ -433,59 +657,86 @@ export function FlowEditorTabs({
 		(tab) => tab.doc.kind === "board" && tab.doc.fileId === renamingId,
 	);
 
+	const pinnedTabs = tabs.filter((tab) => tab.pinned);
+	const looseTabs = tabs.filter((tab) => !tab.pinned);
+
+	const renderTab = (tab: IEditorTab) =>
+		tab.doc.kind === "board" && renamingId === tab.doc.fileId ? (
+			<ModuleNameField
+				key={tab.key}
+				initialValue={renamingLabel}
+				submitLabel={t("rename", "Rename")}
+				validate={validateRename}
+				onSubmit={(name) => void commitRename(name)}
+				onCancel={() => setRenamingId(null)}
+			/>
+		) : (
+			<EditorTab
+				key={tab.key}
+				tab={tab}
+				label={resolveLabel(tab)}
+				active={activeKey === tab.key}
+				closable={isTabClosable(tabs, tab.key)}
+				readOnly={readOnly}
+				actions={{
+					select: () => onSelect(tab.key),
+					close: () => onClose(tab.key),
+					split: () => onSplit(tab.key),
+					pin: (pinned) => onPin(tab.key, pinned),
+					color: (color) => onColor(tab.key, color),
+					rename: () =>
+						setRenamingId(tab.doc.kind === "board" ? tab.doc.fileId : null),
+					delete: () => {
+						if (tab.doc.kind !== "board") return;
+						void removeModule(tab.doc.fileId, true);
+					},
+					deleteWithContents: () => {
+						if (tab.doc.kind !== "board") return;
+						setPendingDelete({
+							id: tab.doc.fileId,
+							label: modulePathLabel(board.layers, tab.doc.fileId),
+						});
+					},
+				}}
+			/>
+		);
+
+	// Only the lanes scroll. Pinned tabs, the new-module control and the editor actions stay
+	// put however many files are open.
 	return (
 		<>
 			<nav
 				aria-label={t("openEditors", "Open editors")}
-				className="no-scrollbar flex w-full shrink-0 items-center gap-1 overflow-x-auto border-b bg-muted/20 px-2 py-1"
+				className="flex w-full shrink-0 items-center gap-1 border-b bg-muted/20 px-2"
 			>
-				{tabs.map((tab) =>
-					tab.doc.kind === "board" && renamingId === tab.doc.fileId ? (
+				{pinnedTabs.length > 0 && (
+					<EditorTabLane
+						activeKey={activeKey}
+						itemsKey={pinnedTabs.map((tab) => tab.key).join("|")}
+						className="max-w-[40%] shrink-0"
+					>
+						{pinnedTabs.map(renderTab)}
+					</EditorTabLane>
+				)}
+				{pinnedTabs.length > 0 && looseTabs.length > 0 && (
+					<span aria-hidden className="h-4 w-px shrink-0 bg-border" />
+				)}
+				<EditorTabLane
+					activeKey={activeKey}
+					itemsKey={looseTabs.map((tab) => tab.key).join("|")}
+					className="min-w-0"
+				>
+					{looseTabs.map(renderTab)}
+					{renamingId && !renamingHasTab && (
 						<ModuleNameField
-							key={tab.key}
 							initialValue={renamingLabel}
 							submitLabel={t("rename", "Rename")}
 							validate={validateRename}
 							onSubmit={(name) => void commitRename(name)}
 							onCancel={() => setRenamingId(null)}
 						/>
-					) : (
-						<EditorTab
-							key={tab.key}
-							tab={tab}
-							label={resolveLabel(tab)}
-							active={activeKey === tab.key}
-							closable={isTabClosable(tabs, tab.key)}
-							readOnly={readOnly}
-							onSelect={() => onSelect(tab.key)}
-							onClose={() => onClose(tab.key)}
-							onSplit={() => onSplit(tab.key)}
-							onRename={() =>
-								setRenamingId(tab.doc.kind === "board" ? tab.doc.fileId : null)
-							}
-							onDelete={() => {
-								if (tab.doc.kind !== "board") return;
-								void removeModule(tab.doc.fileId, true);
-							}}
-							onDeleteWithContents={() => {
-								if (tab.doc.kind !== "board") return;
-								setPendingDelete({
-									id: tab.doc.fileId,
-									label: modulePathLabel(board.layers, tab.doc.fileId),
-								});
-							}}
-						/>
-					),
-				)}
-				{renamingId && !renamingHasTab && (
-					<ModuleNameField
-						initialValue={renamingLabel}
-						submitLabel={t("rename", "Rename")}
-						validate={validateRename}
-						onSubmit={(name) => void commitRename(name)}
-						onCancel={() => setRenamingId(null)}
-					/>
-				)}
+					)}
+				</EditorTabLane>
 				{!readOnly &&
 					(drafting ? (
 						<ModuleNameField

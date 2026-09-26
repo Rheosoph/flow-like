@@ -39,6 +39,7 @@ use tokio::{
 
 const KEY_VALIDATION_MEMORY: usize = 256 * 1024 * 1024;
 const MAX_COALESCED: usize = 1024;
+const ACTIVATION_ATTEMPTS: usize = 3;
 const REFRESH_FAILED: &str = "Cloud table refresh failed; the last complete local snapshot remains active. Check connectivity and the mirror disk budget.";
 
 /// Fast-forward refresh before a write to an idle table.
@@ -333,7 +334,7 @@ impl WriteManager {
     pub async fn activate_table(self: &Arc<Self>, table: &BufferedTable) -> Result<TableState> {
         let overlay = self.registered(table)?;
         if overlay.activation() == TableActivation::Held {
-            overlay.refresh(self).await.inspect_err(|error| {
+            self.catch_up(&overlay).await.inspect_err(|error| {
                 let _ = self.queue.mirror_error(
                     &overlay.key,
                     Some(&format!("The cloud table could not be read: {error}")),
@@ -342,6 +343,21 @@ impl WriteManager {
             overlay.activate();
         }
         self.state_of(&overlay)
+    }
+
+    /// Refreshes until the table holds a cloud version read after the call started. A
+    /// refresh that lost its checkpoint to a concurrent one probes again.
+    async fn catch_up(&self, overlay: &TableOverlay) -> Result<()> {
+        for _ in 0..ACTIVATION_ATTEMPTS {
+            if overlay.refresh(self).await? != RefreshOutcome::Deferred
+                || self.queue.has_pending(&overlay.key)?
+            {
+                return Ok(());
+            }
+        }
+        anyhow::bail!(
+            "concurrent refreshes replaced the local copy {ACTIVATION_ATTEMPTS} times; try again"
+        )
     }
 
     /// One refresh now, ignoring `refresh_interval`. Deferred while the lane has queued changes.
@@ -467,6 +483,7 @@ impl WriteManager {
         database_path: &ObjectPath,
         store: LanceDBVectorStore,
     ) -> Result<LanceDBVectorStore> {
+        ensure!(!self.is_closed(), CLOSED);
         match self.overlay_at(database_path, store.table_name()) {
             Some(overlay) => {
                 overlay.usable()?;
@@ -484,6 +501,7 @@ impl WriteManager {
         table: &str,
         selector: DatabaseSelector,
     ) -> Result<Option<LanceDBVectorStore>> {
+        ensure!(!self.is_closed(), CLOSED);
         let Some(overlay) = self.overlay_at(database_path, table) else {
             return Ok(None);
         };
@@ -707,6 +725,7 @@ impl WriteManager {
             }
             wait = match manager.drain_one().await {
                 Ok(true) => Wait::Now,
+                Ok(false) if matches!(manager.next_head(), Ok(Some(_))) => Wait::Now,
                 Ok(false) => {
                     manager.idle_pass().await;
                     Wait::Idle(manager.next_lane_ready().min(manager.idle_poll))
@@ -972,7 +991,8 @@ impl WriteManager {
             self.queue.mark_local(&operation.operation_id, 1)?;
         }
         request.operation_id = operation.operation_id.clone();
-        if operation.attempts == 0 {
+        let first_send = operation.attempts == 0;
+        if first_send {
             request.expected = serde_json::from_value(
                 self.queue
                     .resource_revision(&operation.resource)?
@@ -1060,12 +1080,24 @@ impl WriteManager {
                         )?;
                         self.host.queue_changed();
                     }
+                    // Only a first send is provably unclaimed; an earlier send of the
+                    // same frozen request may have been applied before this answer.
                     ReplayErrorKind::NotClaimed => {
-                        self.queue.block_unclaimed(
-                            &operation.operation_id,
-                            error.code.as_deref().unwrap_or("invalid"),
-                            &error.message,
-                        )?;
+                        let code = error.code.as_deref().unwrap_or("invalid");
+                        if first_send {
+                            self.queue.block_unclaimed(
+                                &operation.operation_id,
+                                code,
+                                &error.message,
+                            )?;
+                        } else {
+                            self.queue.block_with_code(
+                                &operation.operation_id,
+                                "blocked",
+                                Some(code),
+                                &error.message,
+                            )?;
+                        }
                         self.host.queue_changed();
                     }
                     ReplayErrorKind::Unavailable => (),
@@ -1084,7 +1116,14 @@ impl WriteManager {
         head: &QueuedOperation,
         request: &mut OfflineReplayRequest,
     ) -> Result<Vec<String>> {
-        if !matches!(request.resource, OfflineResource::Table { .. }) {
+        // A table creation keeps its own rows: the cloud infers the schema from them, as the
+        // local table did.
+        if !matches!(request.resource, OfflineResource::Table { .. })
+            || matches!(
+                request.expected,
+                OfflineExpected::TableVersion { version: 0, .. }
+            )
+        {
             return Ok(Vec::new());
         }
         let limits = self.replay_limits.get();
@@ -1156,9 +1195,12 @@ fn merge_mutations(first: &OfflineMutation, next: &OfflineMutation) -> Option<Of
         (
             OfflineMutation::TableDelete { filter },
             OfflineMutation::TableDelete { filter: more },
-        ) => Some(OfflineMutation::TableDelete {
-            filter: format!("{filter} OR {more}"),
-        }),
+        ) => {
+            let filter = offline_replay::merge_key_deletes(filter, more)?;
+            offline_replay::validate_expression(&filter)
+                .is_ok()
+                .then_some(OfflineMutation::TableDelete { filter })
+        }
         _ => None,
     }
 }

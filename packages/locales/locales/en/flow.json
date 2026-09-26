@@ -910,6 +910,8 @@
 	"logViewNextError": "Next error (E)",
 	"logViewNodeWithUpstream_one": "{{name}} + {{count, number}} upstream",
 	"logViewNodeWithUpstream_other": "{{name}} + {{count, number}} upstream",
+	"logViewNoLogPermission": "Your role can't read run logs",
+	"logViewNoLogPermissionHint": "Logs of cloud runs need the Logs permission. Ask an app admin to add it to your role.",
 	"logViewNoLogSelected": "No log selected",
 	"logViewNoLogSelectedHint": "Click a row to read it here. Arrow keys move, Space selects, E jumps to the next error.",
 	"logViewNoMatches": "No logs match these filters",

@@ -42,6 +42,7 @@ impl Fixture {
             secret_overrides: BTreeMap::new(),
             resource_grant: None,
             max_replicas: 1,
+            tls_certificate_id: None,
             hosting: None,
             artifact_pins: vec![],
             bit_pins: vec![],

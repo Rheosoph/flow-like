@@ -65,8 +65,8 @@ async fn tray_update_state() -> Result<(), String> {
 use flow_like::{
     flow_like_storage::{
         Path,
+        databases::vector::lancedb::connect_lance,
         files::store::{FlowLikeStore, local_store::LocalObjectStore},
-        lancedb,
     },
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::{HTTPClient, Refetch},
@@ -519,19 +519,19 @@ pub fn run() {
     config.register_build_project_database(Arc::new(move |path: Path| {
         let directory = project_dir.join(path.to_string());
         let _ = std::fs::create_dir_all(&directory);
-        lancedb::connect(directory.to_string_lossy().as_ref())
+        connect_lance(directory.to_string_lossy().as_ref())
     }));
 
     config.register_build_user_database(Arc::new(move |path: Path| {
         let directory = user_dir.join(path.to_string());
         let _ = std::fs::create_dir_all(&directory);
-        lancedb::connect(directory.to_string_lossy().as_ref())
+        connect_lance(directory.to_string_lossy().as_ref())
     }));
 
     config.register_build_logs_database(Arc::new(move |path: Path| {
         let directory = logs_dir.join(path.to_string());
         let _ = std::fs::create_dir_all(&directory);
-        lancedb::connect(directory.to_string_lossy().as_ref())
+        connect_lance(directory.to_string_lossy().as_ref())
     }));
 
     // On Android, use a custom ObjectStore wrapper to avoid hard_link() which fails on Android SELinux
@@ -546,7 +546,8 @@ pub fn run() {
     functions::telemetry::init_crash_capture(&mut settings_state);
     let settings_state = Arc::new(Mutex::new(settings_state));
     let (http_client, refetch_rx) = HTTPClient::new();
-    let state = FlowLikeState::new(config, http_client);
+    let mut state = FlowLikeState::new(config, http_client);
+    state.lance_session = FlowLikeState::retained_lance_session(None);
     let state_ref = Arc::new(state);
     let registry_state = Arc::new(Mutex::new(None));
 
@@ -1158,6 +1159,7 @@ pub fn run() {
             functions::app::fork::apply_fork_bundle,
             functions::app::fork::summarize_local_app_bundle,
             functions::app::fork::upload_local_app_content_bundle,
+            functions::app::duplicate::duplicate_local_app,
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
             functions::app::tables::db_table_summaries,
@@ -1179,6 +1181,7 @@ pub fn run() {
             functions::app::tables::db_drop_columns,
             functions::app::tables::db_add_column,
             functions::app::tables::db_alter_column,
+            functions::app::tables::db_set_primary_key,
             functions::app::tables::db_drop_index,
             functions::app::tables::db_drop_table,
             functions::app::graph::graph_list_overlays,
@@ -1248,12 +1251,16 @@ pub fn run() {
             functions::flow::board::get_flowscript_file,
             functions::flow::board::get_execution_elements,
             functions::flow::board::element_demand,
+            functions::flow::board::get_board_run_requirements,
             functions::flow::board::save_board,
             functions::flow::run::execute_board,
             functions::flow::run::execute_event,
             functions::flow::run::list_runs,
             functions::flow::run::get_run_payload,
             functions::flow::run::query_run,
+            functions::flow::run::query_run_logs,
+            functions::flow::run::count_run_logs,
+            functions::flow::run::get_run_log_summary,
             functions::flow::run::cancel_execution,
             functions::flow::event::validate_event,
             functions::flow::event::get_event,

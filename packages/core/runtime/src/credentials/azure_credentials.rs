@@ -1,9 +1,9 @@
 #[cfg(feature = "flow-runtime")]
 use crate::credentials::{LogsDbBuilder, db_path_from_base};
 use crate::credentials::{SharedCredentialsTrait, StoreType};
-use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
-use flow_like_storage::lancedb;
+use flow_like_storage::databases::vector::lancedb::connect_lance;
+use flow_like_storage::files::store::FlowLikeStore;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store;
@@ -528,7 +528,7 @@ fn make_azure_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder + Send + Sync + 'static {
     move |path| {
         let url = format!("az://{}/{}", container, path);
-        let builder = lancedb::connect(&url).storage_option(
+        let builder = connect_lance(&url).storage_option(
             "azure_storage_account_name".to_string(),
             account_name.clone(),
         );

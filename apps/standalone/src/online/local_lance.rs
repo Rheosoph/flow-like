@@ -94,7 +94,9 @@ pub(super) fn configure(
     };
     registry.insert(SCHEME, Arc::new(provider));
     runtime.register_build_logs_database(Arc::new(|path| {
-        flow_like_storage::lancedb::connect(&format!("{SCHEME}://runtime/logs/{path}"))
+        flow_like_storage::databases::vector::lancedb::connect_lance(&format!(
+            "{SCHEME}://runtime/logs/{path}"
+        ))
     }));
     Ok(())
 }

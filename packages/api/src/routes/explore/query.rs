@@ -264,8 +264,16 @@ impl PackageFilter {
         if let Some(text) = &self.text {
             let pattern = containing(text);
             let mut matched = Condition::any()
-                .add(wasm_package::Column::Name.into_expr().ilike(pattern.clone()))
-                .add(wasm_package::Column::Description.into_expr().ilike(pattern.clone()))
+                .add(
+                    wasm_package::Column::Name
+                        .into_expr()
+                        .ilike(pattern.clone()),
+                )
+                .add(
+                    wasm_package::Column::Description
+                        .into_expr()
+                        .ilike(pattern.clone()),
+                )
                 .add(wasm_package::Column::Id.into_expr().ilike(pattern));
             if !self.collection_ids.is_empty() {
                 matched = matched.add(wasm_package::Column::Id.is_in(self.collection_ids.clone()));
@@ -295,7 +303,11 @@ impl PackageFilter {
     }
 }
 
-fn order_apps(select: Select<app::Entity>, sort: ExploreSort, language: &str) -> Select<app::Entity> {
+fn order_apps(
+    select: Select<app::Entity>,
+    sort: ExploreSort,
+    language: &str,
+) -> Select<app::Entity> {
     use app::Column as C;
     let select = match sort {
         ExploreSort::Best | ExploreSort::Installs => select
@@ -313,11 +325,16 @@ fn order_apps(select: Select<app::Entity>, sort: ExploreSort, language: &str) ->
     select.order_by_asc(C::Id)
 }
 
-fn order_packages(select: Select<wasm_package::Entity>, sort: ExploreSort) -> Select<wasm_package::Entity> {
+fn order_packages(
+    select: Select<wasm_package::Entity>,
+    sort: ExploreSort,
+) -> Select<wasm_package::Entity> {
     use wasm_package::Column as C;
     let select = match sort {
         ExploreSort::Best | ExploreSort::Installs => select.order_by_desc(C::DownloadCount),
-        ExploreSort::Newest => select.order_by_with_nulls(C::PublishedAt, Order::Desc, NullOrdering::Last),
+        ExploreSort::Newest => {
+            select.order_by_with_nulls(C::PublishedAt, Order::Desc, NullOrdering::Last)
+        }
         ExploreSort::Rating => select
             .order_by_with_nulls(C::AvgRating, Order::Desc, NullOrdering::Last)
             .order_by_desc(C::RatingCount),
@@ -379,7 +396,11 @@ pub fn top_paid_packages(since: DateTime<Utc>) -> Select<wasm_package::Entity> {
     let bought = Alias::new("bought");
     let purchases = Query::select()
         .expr(count_all())
-        .from(wasm_package_purchase::Entity.table_ref().alias(bought.clone()))
+        .from(
+            wasm_package_purchase::Entity
+                .table_ref()
+                .alias(bought.clone()),
+        )
         .and_where(
             Expr::col((bought.clone(), wasm_package_purchase::Column::PackageId))
                 .equals((wasm_package::Entity, wasm_package::Column::Id)),
@@ -389,7 +410,8 @@ pub fn top_paid_packages(since: DateTime<Utc>) -> Select<wasm_package::Entity> {
                 .eq(Expr::val(PurchaseStatus::Completed)),
         )
         .and_where(
-            Expr::col((bought, wasm_package_purchase::Column::CompletedAt)).gte(since.fixed_offset()),
+            Expr::col((bought, wasm_package_purchase::Column::CompletedAt))
+                .gte(since.fixed_offset()),
         )
         .to_owned();
     wasm_package::Entity::find()
@@ -413,7 +435,12 @@ pub fn builder_packages() -> Select<wasm_package::Entity> {
         .order_by_asc(wasm_package::Column::Id)
 }
 
-pub async fn ids<E, C>(db: &C, select: Select<E>, offset: u64, limit: u64) -> Result<Vec<String>, ApiError>
+pub async fn ids<E, C>(
+    db: &C,
+    select: Select<E>,
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<String>, ApiError>
 where
     E: EntityTrait,
     C: ConnectionTrait,
@@ -445,7 +472,10 @@ pub async fn count_apps<C: ConnectionTrait>(db: &C, filter: &AppFilter) -> Resul
     Ok(total.map(unsigned).unwrap_or_default())
 }
 
-pub async fn count_packages<C: ConnectionTrait>(db: &C, filter: &PackageFilter) -> Result<u64, ApiError> {
+pub async fn count_packages<C: ConnectionTrait>(
+    db: &C,
+    filter: &PackageFilter,
+) -> Result<u64, ApiError> {
     let total = wasm_package::Entity::find()
         .select_only()
         .expr(count_all())
@@ -457,11 +487,20 @@ pub async fn count_packages<C: ConnectionTrait>(db: &C, filter: &PackageFilter) 
 }
 
 /// `(free, paid)` apps under `filter`.
-pub async fn app_price_counts<C: ConnectionTrait>(db: &C, filter: &AppFilter) -> Result<(u64, u64), ApiError> {
+pub async fn app_price_counts<C: ConnectionTrait>(
+    db: &C,
+    filter: &AppFilter,
+) -> Result<(u64, u64), ApiError> {
     let row = app::Entity::find()
         .select_only()
-        .expr(count_where(price_condition(app::Column::Price, PriceFilter::Free)))
-        .expr(count_where(price_condition(app::Column::Price, PriceFilter::Paid)))
+        .expr(count_where(price_condition(
+            app::Column::Price,
+            PriceFilter::Free,
+        )))
+        .expr(count_where(price_condition(
+            app::Column::Price,
+            PriceFilter::Paid,
+        )))
         .filter(filter.condition())
         .into_tuple::<(i64, i64)>()
         .one(db)
@@ -477,8 +516,14 @@ pub async fn package_price_counts<C: ConnectionTrait>(
 ) -> Result<(u64, u64), ApiError> {
     let row = wasm_package::Entity::find()
         .select_only()
-        .expr(count_where(price_condition(wasm_package::Column::Price, PriceFilter::Free)))
-        .expr(count_where(price_condition(wasm_package::Column::Price, PriceFilter::Paid)))
+        .expr(count_where(price_condition(
+            wasm_package::Column::Price,
+            PriceFilter::Free,
+        )))
+        .expr(count_where(price_condition(
+            wasm_package::Column::Price,
+            PriceFilter::Paid,
+        )))
         .filter(filter.condition())
         .into_tuple::<(i64, i64)>()
         .one(db)
@@ -512,8 +557,14 @@ pub async fn app_price_split<C: ConnectionTrait>(
     let row = app::Entity::find()
         .select_only()
         .expr(count_all())
-        .expr(count_where(price_condition(app::Column::Price, PriceFilter::Free)))
-        .expr(count_where(price_condition(app::Column::Price, PriceFilter::Paid)))
+        .expr(count_where(price_condition(
+            app::Column::Price,
+            PriceFilter::Free,
+        )))
+        .expr(count_where(price_condition(
+            app::Column::Price,
+            PriceFilter::Paid,
+        )))
         .filter(filter.condition())
         .into_tuple::<(i64, i64, i64)>()
         .one(db)
@@ -568,7 +619,10 @@ pub async fn package_category_pairs<C: ConnectionTrait>(
 }
 
 /// `(primaryCategory, apps)` of the public apps, the four categories with the most downloads first.
-pub async fn top_app_categories<C: ConnectionTrait>(db: &C, limit: u64) -> Result<Vec<(Category, u64)>, ApiError> {
+pub async fn top_app_categories<C: ConnectionTrait>(
+    db: &C,
+    limit: u64,
+) -> Result<Vec<(Category, u64)>, ApiError> {
     Ok(app::Entity::find()
         .select_only()
         .column(app::Column::PrimaryCategory)
@@ -593,7 +647,10 @@ pub fn app_category_label(category: &Category) -> String {
 }
 
 /// The app categories an app's category pair names, each once.
-pub fn app_pair_names(primary: Option<&Category>, secondary: Option<&Category>) -> BTreeSet<String> {
+pub fn app_pair_names(
+    primary: Option<&Category>,
+    secondary: Option<&Category>,
+) -> BTreeSet<String> {
     primary
         .into_iter()
         .chain(secondary)
@@ -621,7 +678,11 @@ pub fn package_pair_app_names(
     primary
         .into_iter()
         .chain(secondary)
-        .flat_map(|category| app_categories_for(&package_category_from_db(category)).iter().copied())
+        .flat_map(|category| {
+            app_categories_for(&package_category_from_db(category))
+                .iter()
+                .copied()
+        })
         .collect()
 }
 
@@ -674,7 +735,10 @@ pub async fn rule_ids<C: ConnectionTrait>(
     let sort = ExploreSort::from(rule.sort);
     let (kind, found) = match rule.item_kind {
         ItemKind::App => match app_rule_filter(rule, language) {
-            Some(filter) => (ItemKind::App, ids(db, app_ids(&filter, sort), 0, limit).await?),
+            Some(filter) => (
+                ItemKind::App,
+                ids(db, app_ids(&filter, sort), 0, limit).await?,
+            ),
             None => return Ok(Vec::new()),
         },
         ItemKind::Package => match package_rule_filter(rule) {
@@ -725,8 +789,9 @@ pub(crate) mod test_database {
             let mut target = reqwest::Url::parse(&server).unwrap();
             target.set_path(&name);
             let db = Database::connect(target.as_str()).await.unwrap();
-            let migration =
-                include_str!("../../../prisma/migrations/20260924200000_explore_layout/migration.sql");
+            let migration = include_str!(
+                "../../../prisma/migrations/20260924200000_explore_layout/migration.sql"
+            );
             for statement in migration
                 .split(';')
                 .filter(|statement| !statement.trim().is_empty())
@@ -740,7 +805,11 @@ pub(crate) mod test_database {
         pub async fn drop_database(self) {
             self.db.close().await.unwrap();
             let setup = Database::connect(&self.server).await.unwrap();
-            execute(&setup, &format!("DROP DATABASE \"{}\" WITH (FORCE)", self.name)).await;
+            execute(
+                &setup,
+                &format!("DROP DATABASE \"{}\" WITH (FORCE)", self.name),
+            )
+            .await;
             setup.close().await.unwrap();
         }
     }
@@ -787,14 +856,23 @@ mod tests {
             builder_packages(),
         ] {
             let sql = sql(select.offset(0).limit(4));
-            let visibility = position(&sql, r#""WasmPackage"."visibility" IN ('PUBLIC', 'PUBLIC_REQUEST_ACCESS')"#);
+            let visibility = position(
+                &sql,
+                r#""WasmPackage"."visibility" IN ('PUBLIC', 'PUBLIC_REQUEST_ACCESS')"#,
+            );
             let status = position(&sql, r#""WasmPackage"."status" = 'ACTIVE'"#);
             let order = position(&sql, "ORDER BY");
             let limit = position(&sql, "LIMIT");
-            assert!(visibility < order && status < order && order < limit, "{sql}");
+            assert!(
+                visibility < order && status < order && order < limit,
+                "{sql}"
+            );
         }
         let sql = sql(package_ids(&filter, ExploreSort::Rating));
-        assert!(str::contains(&sql, r#""WasmPackage"."avgRating" DESC NULLS LAST"#), "{sql}");
+        assert!(
+            str::contains(&sql, r#""WasmPackage"."avgRating" DESC NULLS LAST"#),
+            "{sql}"
+        );
         assert!(sql.ends_with(r#""WasmPackage"."id" ASC"#), "{sql}");
         assert!(!str::contains(&sql, "relevanceScore"));
     }
@@ -809,17 +887,38 @@ mod tests {
         };
         let sql = sql(app_ids(&filter, ExploreSort::Name).offset(24).limit(24));
         assert!(!str::contains(&sql, "JOIN"), "{sql}");
-        assert!(sql.starts_with(r#"SELECT "App"."id" FROM "public"."App" WHERE"#), "{sql}");
-        assert!(str::contains(&sql, r#"EXISTS(SELECT 1 FROM "public"."Meta" AS "m" WHERE "m"."appId" = "App"."id""#), "{sql}");
-        assert!(str::contains(&sql, r#""m"."lang" IN ('de', 'en')"#), "{sql}");
-        assert!(str::contains(&sql, r#""m"."name" ILIKE E'%in\\_voice\\%%'"#), "{sql}");
+        assert!(
+            sql.starts_with(r#"SELECT "App"."id" FROM "public"."App" WHERE"#),
+            "{sql}"
+        );
+        assert!(
+            str::contains(
+                &sql,
+                r#"EXISTS(SELECT 1 FROM "public"."Meta" AS "m" WHERE "m"."appId" = "App"."id""#
+            ),
+            "{sql}"
+        );
+        assert!(
+            str::contains(&sql, r#""m"."lang" IN ('de', 'en')"#),
+            "{sql}"
+        );
+        assert!(
+            str::contains(&sql, r#""m"."name" ILIKE E'%in\\_voice\\%%'"#),
+            "{sql}"
+        );
         assert!(!str::contains(&sql, "ESCAPE"), "{sql}");
         let order = position(&sql, "ORDER BY");
         assert!(
             sql[order..].starts_with(r#"ORDER BY (SELECT "m"."name" FROM "public"."Meta" AS "m""#),
             "{sql}"
         );
-        assert!(str::contains(&sql, r#"ORDER BY "m"."lang" = 'de' DESC LIMIT 1) ASC NULLS LAST, "App"."id" ASC LIMIT 24 OFFSET 24"#), "{sql}");
+        assert!(
+            str::contains(
+                &sql,
+                r#"ORDER BY "m"."lang" = 'de' DESC LIMIT 1) ASC NULLS LAST, "App"."id" ASC LIMIT 24 OFFSET 24"#
+            ),
+            "{sql}"
+        );
         assert!(!str::contains(&sql, "relevanceScore"));
     }
 
@@ -827,12 +926,30 @@ mod tests {
     fn app_sorts_break_ties_by_id_and_put_missing_ratings_last() {
         let filter = AppFilter::new("en");
         let rating = sql(app_ids(&filter, ExploreSort::Rating));
-        assert!(str::contains(&rating, r#"ORDER BY "App"."avgRating" DESC NULLS LAST, "App"."ratingCount" DESC, "App"."id" ASC"#), "{rating}");
+        assert!(
+            str::contains(
+                &rating,
+                r#"ORDER BY "App"."avgRating" DESC NULLS LAST, "App"."ratingCount" DESC, "App"."id" ASC"#
+            ),
+            "{rating}"
+        );
         let best = sql(app_ids(&filter, ExploreSort::Best));
-        assert!(str::contains(&best, r#"ORDER BY "App"."downloadCount" DESC, "App"."ratingSum" DESC, "App"."id" ASC"#), "{best}");
+        assert!(
+            str::contains(
+                &best,
+                r#"ORDER BY "App"."downloadCount" DESC, "App"."ratingSum" DESC, "App"."id" ASC"#
+            ),
+            "{best}"
+        );
         let paid = sql(top_paid_apps(Utc::now().date_naive()));
-        assert!(str::contains(&paid, r#"COALESCE(SUM("sales"."purchaseCount"), 0)"#), "{paid}");
-        assert!(paid.ends_with(r#"DESC, "App"."ratingSum" DESC, "App"."id" ASC"#), "{paid}");
+        assert!(
+            str::contains(&paid, r#"COALESCE(SUM("sales"."purchaseCount"), 0)"#),
+            "{paid}"
+        );
+        assert!(
+            paid.ends_with(r#"DESC, "App"."ratingSum" DESC, "App"."id" ASC"#),
+            "{paid}"
+        );
     }
 
     #[test]
@@ -841,18 +958,24 @@ mod tests {
             categories: Some(Vec::new()),
             ..AppFilter::new("en")
         };
-        assert!(str::contains(&sql(app_ids(&filter, ExploreSort::Best)), "FALSE"));
+        assert!(str::contains(
+            &sql(app_ids(&filter, ExploreSort::Best)),
+            "FALSE"
+        ));
     }
 
     #[test]
     fn count_filters_render_as_aggregate_filters() {
-        let sql = sql(
-            wasm_package::Entity::find()
-                .select_only()
-                .expr(count_where(wasm_package::Column::Verified.eq(true)))
-                .filter(PackageFilter::default().condition()),
+        let sql = sql(wasm_package::Entity::find()
+            .select_only()
+            .expr(count_where(wasm_package::Column::Verified.eq(true)))
+            .filter(PackageFilter::default().condition()));
+        assert!(
+            sql.starts_with(
+                r#"SELECT COUNT(*) FILTER (WHERE "WasmPackage"."verified" = TRUE) FROM"#
+            ),
+            "{sql}"
         );
-        assert!(sql.starts_with(r#"SELECT COUNT(*) FILTER (WHERE "WasmPackage"."verified" = TRUE) FROM"#), "{sql}");
     }
 
     #[test]
@@ -938,7 +1061,12 @@ mod tests {
                 text: Some("pro".into()),
                 ..AppFilter::new("de")
             };
-            assert_eq!(ids(db, app_ids(&pro, ExploreSort::Best), 0, 24).await.unwrap(), ["invoicer"]);
+            assert_eq!(
+                ids(db, app_ids(&pro, ExploreSort::Best), 0, 24)
+                    .await
+                    .unwrap(),
+                ["invoicer"]
+            );
             assert_eq!(count_apps(db, &pro).await.unwrap(), 1);
 
             let invoice = AppFilter {
@@ -960,7 +1088,9 @@ mod tests {
                 assert_eq!(paged, ["invoicer", "ledger"], "{sort:?}");
             }
             assert_eq!(
-                ids(db, app_ids(&invoice, ExploreSort::Name), 0, 24).await.unwrap(),
+                ids(db, app_ids(&invoice, ExploreSort::Name), 0, 24)
+                    .await
+                    .unwrap(),
                 ["ledger", "invoicer"]
             );
             let english = AppFilter {
@@ -968,7 +1098,9 @@ mod tests {
                 ..invoice.clone()
             };
             assert_eq!(
-                ids(db, app_ids(&english, ExploreSort::Name), 0, 24).await.unwrap(),
+                ids(db, app_ids(&english, ExploreSort::Name), 0, 24)
+                    .await
+                    .unwrap(),
                 ["invoicer", "ledger"]
             );
             let french = AppFilter {

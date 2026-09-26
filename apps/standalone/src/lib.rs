@@ -1,15 +1,20 @@
 #![recursion_limit = "256"]
 
+pub mod acme;
 pub mod archives;
 pub mod broker;
+pub mod certificate_inventory;
+pub mod certificate_issuers;
+pub mod certificate_requests;
+pub mod certificates;
 pub mod config;
 pub mod crypto;
 pub mod enrollment;
 pub mod fleet;
 pub mod host;
-pub mod isolation;
 #[cfg(unix)]
 pub mod ipc;
+pub mod isolation;
 pub mod management;
 pub(crate) mod operational;
 pub mod outbox;
@@ -41,3 +46,6 @@ pub mod online;
 pub mod runtime;
 
 pub mod replicas;
+
+#[cfg(all(feature = "runtime", unix))]
+pub mod service_tls;

@@ -43,6 +43,7 @@ import {
 	Download,
 	GripVertical,
 	Info,
+	KeyRound,
 	ListTree,
 	Loader2,
 	Maximize2,
@@ -55,8 +56,6 @@ import {
 	Rows4,
 	Save,
 	Search,
-	Settings,
-	Trash2,
 	X,
 	Zap,
 } from "lucide-react";
@@ -103,7 +102,6 @@ import {
 	DropdownMenuTrigger,
 	Input,
 	Label,
-	ScrollArea,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -129,13 +127,8 @@ import {
 	TableHeader,
 	TableRow,
 } from "./table";
-import {
-	ColumnTypeSelect,
-	EDIT_COLUMN_TYPE_GROUPS,
-	IndexTypeHelp,
-	IndexTypeSelect,
-	buildAddColumnExpression,
-} from "./table-schema";
+import { canArrowFieldBeKey, isKeyFieldMetadata } from "./table-schema";
+import { TableSchemaDialog } from "./table-schema-dialog";
 import { UserIdentityCard, UserInlineTag } from "./user-identity";
 
 export type LanceFieldKind =
@@ -166,11 +159,14 @@ export interface LanceField {
 	items?: LanceFieldKind | LanceField;
 	nullable?: boolean;
 	temporal?: LanceTemporalUnit;
+	/** Set on a top-level column that could become the table key. */
+	keyEligible?: boolean;
 }
 
 export interface LanceSchema {
 	table: string;
 	fields: LanceField[];
+	/** The key column (Lance's unenforced primary key), when the table has one. */
 	primaryKey?: string;
 }
 
@@ -211,6 +207,8 @@ export interface LanceDBExplorerProps {
 	onDropColumns?: (columns: string[]) => Promise<void>;
 	onAddColumn?: (name: string, sqlExpression: string) => Promise<void>;
 	onAlterColumn?: (column: string, nullable: boolean) => Promise<void>;
+	/** Marks a column as the permanent table key; the host refreshes the schema. */
+	onSetPrimaryKey?: (column: string) => Promise<void>;
 	onBuildIndex?: (column: string, indexType: string) => Promise<void>;
 	onGetIndices?: () => Promise<IIndexConfig[]>;
 	onDropIndex?: (indexName: string) => Promise<void>;
@@ -314,6 +312,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	onDropColumns,
 	onAddColumn,
 	onAlterColumn,
+	onSetPrimaryKey,
 	onBuildIndex,
 	onGetIndices,
 	onDropIndex,
@@ -518,7 +517,7 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 	const columns = useMemo<ColumnDef<Record<string, any>>[]>(() => {
 		if (!schema) return [];
 		const base: ColumnDef<Record<string, any>>[] = schema.fields.map((f) =>
-			buildColumnForField(f),
+			buildColumnForField(f, f.name === schema.primaryKey),
 		);
 
 		base.unshift({
@@ -701,12 +700,14 @@ const LanceDBExplorer: React.FC<LanceDBExplorerProps> = ({
 					)}
 					<div className="ml-auto flex items-center gap-1.5">
 						{children}
-						<SchemaDialog
+						<TableSchemaDialog
 							schema={schema}
 							tableName={tableName}
+							rowCount={total}
 							onDropColumns={onDropColumns}
 							onAddColumn={onAddColumn}
 							onAlterColumn={onAlterColumn}
+							onSetPrimaryKey={onSetPrimaryKey}
 							onBuildIndex={onBuildIndex}
 							onGetIndices={onGetIndices}
 							onDropIndex={onDropIndex}
@@ -1328,12 +1329,34 @@ const UserCell: React.FC<{
 	/>
 );
 
+const KeyColumnHeader: React.FC<{ name: string }> = ({ name }) => {
+	const { t } = useTranslation("common");
+	const hint = t(
+		"tableKeyHint",
+		"Key column: Upserts on this column can't create duplicate rows.",
+	);
+	return (
+		<span className="inline-flex items-center gap-1">
+			{name}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex shrink-0 text-primary">
+						<KeyRound className="size-3" role="img" aria-label={hint} />
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{hint}</TooltipContent>
+			</Tooltip>
+		</span>
+	);
+};
+
 const buildColumnForField = (
 	f: LanceField,
+	isKey = false,
 ): ColumnDef<Record<string, any>> => ({
 	id: f.name,
 	accessorFn: (row: Record<string, any>) => row[f.name],
-	header: f.name,
+	header: isKey ? () => <KeyColumnHeader name={f.name} /> : f.name,
 	enableSorting: f.kind !== "binary",
 	enableColumnFilter: true,
 	cell: ({ getValue, row }) => (
@@ -2143,392 +2166,6 @@ const TableActionsMenu: React.FC<{
 	);
 };
 
-const SchemaDialog: React.FC<{
-	schema: LanceSchema | null;
-	tableName?: string;
-	onDropColumns?: (columns: string[]) => Promise<void>;
-	onAddColumn?: (name: string, sqlExpression: string) => Promise<void>;
-	onAlterColumn?: (column: string, nullable: boolean) => Promise<void>;
-	onBuildIndex?: (column: string, indexType: string) => Promise<void>;
-	onGetIndices?: () => Promise<IIndexConfig[]>;
-	onDropIndex?: (indexName: string) => Promise<void>;
-}> = ({
-	schema,
-	tableName,
-	onDropColumns,
-	onAddColumn,
-	onAlterColumn,
-	onBuildIndex,
-	onGetIndices,
-	onDropIndex,
-}) => {
-	const { t } = useTranslation("common");
-	const [open, setOpen] = useState(false);
-	const [activeTab, setActiveTab] = useState<"schema" | "indices" | "add">(
-		"schema",
-	);
-	const [indices, setIndices] = useState<IIndexConfig[]>([]);
-	const [loadingIndices, setLoadingIndices] = useState(false);
-	const [newColumnName, setNewColumnName] = useState("");
-	const [newColumnType, setNewColumnType] = useState("string");
-	const [newColumnDefault, setNewColumnDefault] = useState("");
-	const [indexColumn, setIndexColumn] = useState("");
-	const [indexType, setIndexType] = useState("auto");
-	const [processing, setProcessing] = useState(false);
-	const indexField = schema?.fields.find((field) => field.name === indexColumn);
-
-	const loadIndices = useCallback(async () => {
-		if (!onGetIndices) return;
-		setLoadingIndices(true);
-		try {
-			const result = await onGetIndices();
-			setIndices(result);
-		} finally {
-			setLoadingIndices(false);
-		}
-	}, [onGetIndices]);
-
-	useEffect(() => {
-		if (open && activeTab === "indices" && onGetIndices) {
-			loadIndices();
-		}
-	}, [open, activeTab, loadIndices, onGetIndices]);
-
-	const handleDropColumn = async (columnName: string) => {
-		if (!onDropColumns) return;
-		setProcessing(true);
-		try {
-			await onDropColumns([columnName]);
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const handleDropIndex = async (indexName: string) => {
-		if (!onDropIndex) return;
-		setProcessing(true);
-		try {
-			await onDropIndex(indexName);
-			await loadIndices();
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const handleAddColumn = async () => {
-		if (!onAddColumn || !newColumnName) return;
-		const expression = buildAddColumnExpression(
-			newColumnType,
-			newColumnDefault,
-		);
-		if (!expression) return;
-		setProcessing(true);
-		try {
-			await onAddColumn(newColumnName, expression);
-			setNewColumnName("");
-			setNewColumnDefault("");
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const handleBuildIndex = async () => {
-		if (!onBuildIndex || !indexColumn) return;
-		setProcessing(true);
-		try {
-			await onBuildIndex(indexColumn, indexType);
-			await loadIndices();
-			setIndexColumn("");
-		} finally {
-			setProcessing(false);
-		}
-	};
-
-	const hasSchemaOps = onDropColumns || onAddColumn || onAlterColumn;
-	const hasIndexOps = onBuildIndex || onGetIndices;
-
-	return (
-		<>
-			<Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-				<Settings className="h-4 w-4 mr-2" /> {t("schema", "Schema")}
-			</Button>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent className="w-full max-w-lg max-h-[80vh] overflow-y-auto">
-					<DialogHeader>
-						<DialogTitle>
-							{t("tableTablename", "Table: {{tableName}}", { tableName })}
-						</DialogTitle>
-					</DialogHeader>
-
-					{(hasSchemaOps || hasIndexOps) && (
-						<div className="flex gap-2 border-b pb-2">
-							<Button
-								variant={activeTab === "schema" ? "default" : "ghost"}
-								size="sm"
-								onClick={() => setActiveTab("schema")}
-							>
-								{t("schema", "Schema")}
-							</Button>
-							{hasIndexOps && (
-								<Button
-									variant={activeTab === "indices" ? "default" : "ghost"}
-									size="sm"
-									onClick={() => setActiveTab("indices")}
-								>
-									{t("indices", "Indices")}
-								</Button>
-							)}
-							{hasSchemaOps && (
-								<Button
-									variant={activeTab === "add" ? "default" : "ghost"}
-									size="sm"
-									onClick={() => setActiveTab("add")}
-								>
-									{t("modify", "Modify")}
-								</Button>
-							)}
-						</div>
-					)}
-
-					{activeTab === "schema" && (
-						<>
-							{schema ? (
-								<ScrollArea className="max-h-[50vh]">
-									<div className="space-y-2 pr-2">
-										{schema.fields.map((f) => (
-											<div
-												key={f.name}
-												className="flex items-center justify-between gap-3 py-2 px-2 rounded-md hover:bg-muted/50"
-											>
-												<div className="flex-1">
-													<div className="font-medium text-sm">{f.name}</div>
-													<div className="text-xs text-muted-foreground">
-														{describeField(f)}
-													</div>
-												</div>
-												{f.kind === "vector" && (
-													<Badge variant="secondary">
-														{f.dims ?? "?"} dims
-													</Badge>
-												)}
-												{onDropColumns && (
-													<Button
-														variant="ghost"
-														size="sm"
-														className="h-7 px-2 text-destructive hover:text-destructive"
-														onClick={() => handleDropColumn(f.name)}
-														disabled={processing}
-													>
-														<Trash2 className="h-3 w-3" />
-													</Button>
-												)}
-											</div>
-										))}
-									</div>
-								</ScrollArea>
-							) : (
-								<div className="text-sm text-muted-foreground py-4">
-									{t("noSchemaLoadedYet", "No schema loaded yet.")}
-								</div>
-							)}
-						</>
-					)}
-
-					{activeTab === "indices" && (
-						<div className="space-y-4">
-							<div className="space-y-2">
-								<Label>{t("currentIndices", "Current Indices")}</Label>
-								{loadingIndices ? (
-									<div className="text-sm text-muted-foreground">
-										Loading...
-									</div>
-								) : indices.length > 0 ? (
-									<ScrollArea className="max-h-[30vh]">
-										<div className="space-y-2 pr-2">
-											{indices.map((idx) => (
-												<div
-													key={idx.name}
-													className="flex items-center justify-between gap-2 p-2 rounded-md bg-muted/50"
-												>
-													<div className="min-w-0 flex-1">
-														<div className="font-medium text-sm truncate">
-															{idx.name}
-														</div>
-														<div className="text-xs text-muted-foreground truncate">
-															{idx.index_type} on {idx.columns.join(", ")}
-														</div>
-													</div>
-													{onDropIndex && (
-														<Button
-															variant="ghost"
-															size="sm"
-															className="h-7 px-2 text-destructive hover:text-destructive flex-shrink-0"
-															onClick={() => handleDropIndex(idx.name)}
-															disabled={processing}
-														>
-															<Trash2 className="h-3 w-3" />
-														</Button>
-													)}
-												</div>
-											))}
-										</div>
-									</ScrollArea>
-								) : (
-									<div className="text-sm text-muted-foreground">
-										{t("noIndicesFound", "No indices found.")}
-									</div>
-								)}
-							</div>
-
-							{onBuildIndex && schema && (
-								<div className="space-y-3 border-t pt-4">
-									<Label>{t("createNewIndex", "Create New Index")}</Label>
-									<div className="flex flex-wrap gap-2">
-										<Select
-											value={indexColumn}
-											onValueChange={(column) => {
-												setIndexColumn(column);
-												setIndexType("auto");
-											}}
-										>
-											<SelectTrigger className="flex-1">
-												<SelectValue
-													placeholder={t("selectColumn", "Select column")}
-												/>
-											</SelectTrigger>
-											<SelectContent>
-												{schema.fields.map((f) => (
-													<SelectItem key={f.name} value={f.name}>
-														{f.name}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-										<IndexTypeSelect
-											value={indexType}
-											onChange={setIndexType}
-											className="w-52"
-											columnType={indexField?.indexKind ?? indexField?.kind}
-											disabled={
-												!indexColumn ||
-												processing ||
-												indexField?.indexKind === "unsupported-geometry"
-											}
-										/>
-										<Button
-											onClick={handleBuildIndex}
-											disabled={
-												!indexColumn ||
-												processing ||
-												indexField?.indexKind === "unsupported-geometry"
-											}
-										>
-											{processing ? "Building..." : "Build"}
-										</Button>
-										<IndexTypeHelp
-											value={indexType}
-											columnType={indexField?.indexKind}
-										/>
-									</div>
-								</div>
-							)}
-						</div>
-					)}
-
-					{activeTab === "add" && (
-						<div className="space-y-4 flex flex-col">
-							{onAddColumn && (
-								<div className="space-y-3 flex-shrink-0">
-									<Label>{t("addNewColumn", "Add New Column")}</Label>
-									<div className="grid gap-2 sm:grid-cols-[1fr_150px]">
-										<Input
-											placeholder={t("columnName", "Column name")}
-											value={newColumnName}
-											onChange={(e) => setNewColumnName(e.target.value)}
-										/>
-										<ColumnTypeSelect
-											value={newColumnType}
-											onChange={setNewColumnType}
-											groups={EDIT_COLUMN_TYPE_GROUPS}
-										/>
-									</div>
-									<Input
-										placeholder={t(
-											"defaultValueOptionalLeaveEmptyForNull",
-											"Default value (optional — leave empty for NULL)",
-										)}
-										value={newColumnDefault}
-										onChange={(e) => setNewColumnDefault(e.target.value)}
-									/>
-									<div className="text-xs text-muted-foreground">
-										{t(
-											"newColumnsAreAddedAsNullableLeaveTheDefaultEmptyToBackfillExistingRowsWithNullOrProvideATypedDefaultValue",
-											"New columns are added as nullable. Leave the default empty to backfill existing rows with NULL, or provide a typed default value.",
-										)}
-									</div>
-									<Button
-										onClick={handleAddColumn}
-										disabled={!newColumnName || processing}
-										className="w-full"
-									>
-										{processing ? "Adding..." : t("addColumn", "Add Column")}
-									</Button>
-								</div>
-							)}
-
-							{onAlterColumn && schema && (
-								<div className="space-y-3 border-t pt-4 flex-1 min-h-0 flex flex-col">
-									<Label className="flex-shrink-0">
-										{t("makeColumnNullable", "Make Column Nullable")}
-									</Label>
-									<div className="text-xs text-muted-foreground mb-2 flex-shrink-0">
-										{t(
-											"noteLancedbOnlySupportsMakingColumnsNullableNotTheReverse",
-											"Note: LanceDB only supports making columns nullable, not the reverse.",
-										)}
-									</div>
-									<ScrollArea className="flex-1 min-h-0">
-										<div className="space-y-1 pr-2">
-											{schema.fields.map((f) => (
-												<div
-													key={f.name}
-													className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted/50"
-												>
-													<div className="min-w-0 flex-1">
-														<span className="text-sm truncate block">
-															{f.name}
-														</span>
-														<span className="text-xs text-muted-foreground">
-															{f.nullable
-																? "Nullable"
-																: t("notNullable", "Not Nullable")}
-														</span>
-													</div>
-													{!f.nullable && (
-														<Button
-															variant="outline"
-															size="sm"
-															className="flex-shrink-0"
-															onClick={() => onAlterColumn(f.name, true)}
-															disabled={processing}
-														>
-															{t("makeNullable", "Make Nullable")}
-														</Button>
-													)}
-												</div>
-											))}
-										</div>
-									</ScrollArea>
-								</div>
-							)}
-						</div>
-					)}
-				</DialogContent>
-			</Dialog>
-		</>
-	);
-};
-
 /** Geometry and bytes have no textual form an edit could round-trip through. */
 const isEditableKind = (kind: LanceFieldKind) =>
 	kind !== "geometry" && kind !== "binary";
@@ -2620,13 +2257,27 @@ export const buildRowIdentityFilter = (
 	return conditions.length ? conditions.join(" AND ") : null;
 };
 
-export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => ({
-	table:
-		typeof arrow?.metadata?.["name"] === "string"
-			? String(arrow.metadata["name"])
-			: "table",
-	fields: (arrow?.fields ?? []).map(arrowFieldToLance),
-});
+export const arrowToLanceSchema = (arrow: ArrowSchemaJSON): LanceSchema => {
+	const fields = arrow?.fields ?? [];
+	const key = fields.find((f) => isKeyFieldMetadata(f?.metadata));
+	return {
+		table:
+			typeof arrow?.metadata?.name === "string"
+				? String(arrow.metadata.name)
+				: "table",
+		fields: fields.map(arrowTopLevelFieldToLance),
+		...(key ? { primaryKey: String(key.name ?? "") } : {}),
+	};
+};
+
+const arrowTopLevelFieldToLance = (
+	f: ArrowSchemaJSON["fields"][number],
+): LanceField => {
+	const field = arrowFieldToLance(f);
+	return field.kind !== "geometry" && canArrowFieldBeKey(f ?? {})
+		? { ...field, keyEligible: true }
+		: field;
+};
 
 const ARROW_TIME_UNITS: Record<string, LanceTemporalUnit> = {
 	Second: "second",
@@ -2837,21 +2488,6 @@ const DateDetail: React.FC<{ value: any; unit?: LanceTemporalUnit }> = ({
 			</p>
 		</div>
 	);
-};
-
-export const describeField = (f: LanceField): string => {
-	switch (f.kind) {
-		case "vector":
-			return `${f.kind}${f.dims ? `(${f.dims})` : ""}`;
-		case "array":
-			return `array<${
-				typeof f.items === "string"
-					? f.items
-					: ((f.items as any)?.kind ?? "unknown")
-			}>`;
-		default:
-			return f.kind;
-	}
 };
 
 // Infer schema from values when no Arrow schema is provided

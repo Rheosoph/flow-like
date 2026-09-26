@@ -1063,6 +1063,45 @@ async function updateInput() {
 	};
 }
 
+test("device certificates are selected per placement and preserved or explicitly removed on updates", async () => {
+	const certificateId = "00000000-0000-4000-8000-000000000001";
+	const replacement = "00000000-0000-4000-8000-000000000002";
+	expect(
+		createDeploymentPlan({ ...input(), tlsCertificateId: certificateId }).config
+			.tls_certificate_id,
+	).toBe(certificateId);
+	const update = await updateInput();
+	update.existing.config.tls_certificate_id = certificateId;
+	expect(createDeploymentPlan(update).config.tls_certificate_id).toBe(
+		certificateId,
+	);
+	expect(
+		createDeploymentPlan({ ...update, tlsCertificateId: replacement }).config
+			.tls_certificate_id,
+	).toBe(replacement);
+	expect(
+		createDeploymentPlan({ ...update, tlsCertificateId: null }).config
+			.tls_certificate_id,
+	).toBeUndefined();
+	expect(() =>
+		createDeploymentPlan({ ...input(), tlsCertificateId: "../private-key" }),
+	).toThrow();
+	const workflow = {
+		...event,
+		hosted: false,
+		event_type: "mcp",
+		readiness_kind: "listener" as const,
+	};
+	expect(
+		createDeploymentPlan({
+			...input(),
+			events: [workflow],
+			replicas: 1,
+			tlsCertificateId: certificateId,
+		}).config.tls_certificate_id,
+	).toBe(certificateId);
+});
+
 test("isolation limits are complete and retained across project updates", async () => {
 	const limits = {
 		profile: "linux_sandbox" as const,

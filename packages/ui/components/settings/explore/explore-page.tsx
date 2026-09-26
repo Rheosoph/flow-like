@@ -981,6 +981,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		pathname,
 		router,
 		searchParams,
+		t,
 		tables,
 		userOntologies,
 		userTables,
@@ -1193,6 +1194,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					)}
 					<div className="min-h-0 flex-1">
 						<ObjectExplorerPanel
+							appId={appId}
 							ontologies={ontologyData}
 							remoteImports={usableImports}
 							initialSourceValue={searchParams.get("source") ?? undefined}
@@ -1400,7 +1402,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 									{t("remoteObjects", "Remote objects")}
 								</h2>
 								<p className="text-sm text-muted-foreground">
-									{`Installed from connected projects. Read-only previews resolve live against the source.`}
+									Installed from connected projects. Read-only previews resolve
+									live against the source.
 								</p>
 							</div>
 							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">

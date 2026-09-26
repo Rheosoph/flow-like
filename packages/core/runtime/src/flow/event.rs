@@ -748,7 +748,7 @@ async fn push_target_resolution_issues(
             return;
         }
     };
-    let board = board.lock().await;
+    let board = board.snapshot();
     if let Some(page_id) = restored.default_page_id.as_deref() {
         if !board.page_ids.iter().any(|candidate| candidate == page_id) {
             issues.push(RestoreIssue {
@@ -786,7 +786,7 @@ impl Event {
             .open_board(self.board_id.clone(), Some(true), self.board_version)
             .await?;
 
-        let board_guard = board.lock().await;
+        let board_guard = board.snapshot();
 
         if let Some(node) = board_guard.nodes.get(&self.node_id) {
             // For page-target events (A2UI/generic form), we need Input pins (what user provides)
@@ -1428,7 +1428,7 @@ impl Event {
             Ok(b) => b,
             Err(_) => return Ok(()),
         };
-        let board_mode = board.lock().await.execution_mode.clone();
+        let board_mode = board.snapshot().execution_mode.clone();
 
         match board_mode {
             super::board::ExecutionMode::Local => {
@@ -1455,7 +1455,7 @@ impl Event {
             let variant_board = app
                 .open_board(variant.board_id.clone(), Some(false), variant.board_version)
                 .await?;
-            let variant_board = variant_board.lock().await;
+            let variant_board = variant_board.snapshot();
             if let Some(page_id) = variant.default_page_id.as_deref() {
                 if !variant_board
                     .page_ids
@@ -1501,8 +1501,8 @@ impl Event {
             let version = self.board_version;
             let board = app
                 .open_board(self.board_id.clone(), Some(false), version)
-                .await?;
-            let board = board.lock().await;
+                .await?
+                .snapshot();
             if board.id != self.board_id
                 || version.is_some_and(|expected| board.version != expected)
             {
@@ -1556,7 +1556,7 @@ impl Event {
             .open_board(self.board_id.clone(), Some(false), self.board_version)
             .await?;
 
-        board.lock().await.nodes.get(&self.node_id).ok_or_else(|| {
+        board.snapshot().nodes.get(&self.node_id).ok_or_else(|| {
             flow_like_types::anyhow!(
                 "Node with id {} not found in board {}",
                 self.node_id,
@@ -1570,8 +1570,7 @@ impl Event {
                 .await?;
 
             canary_board
-                .lock()
-                .await
+                .snapshot()
                 .nodes
                 .get(&canary.node_id)
                 .ok_or_else(|| {

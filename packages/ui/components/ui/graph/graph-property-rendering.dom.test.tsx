@@ -114,6 +114,62 @@ test("ontology properties keep declared Geometry distinct from ordinary JSON", a
 	).toContain('"coordinates"');
 }, 30_000);
 
+test("declared types and the owning app turn bytes, geometries and paths into their smart readings", async () => {
+	const { container, render } = await setup();
+	const { PropertyRow, PropertyStorageScope } = await import(
+		"./graph-node-inspector"
+	);
+	const kindOf = (field: string) =>
+		container.querySelector(`[data-field="${field}"] span.shrink-0`)
+			?.textContent;
+	await render(
+		<>
+			<div data-field="bytes">
+				<PropertyRow propKey="payload" typeName="Binary" value={[123, 125]} />
+			</div>
+			<div data-field="numbers">
+				<PropertyRow propKey="payload" value={[123, 125]} />
+			</div>
+			<div data-field="outline">
+				<PropertyRow propKey="outline" typeName="Binary" value={POINT} />
+			</div>
+			<div data-field="unscoped">
+				<PropertyRow
+					propKey="report"
+					value="apps/app-1/upload/reports/q3.pdf"
+				/>
+			</div>
+			<PropertyStorageScope value="app-1">
+				<div data-field="file">
+					<PropertyRow
+						propKey="report"
+						value="apps/app-1/upload/reports/q3.pdf"
+					/>
+				</div>
+				<div data-field="foreign">
+					<PropertyRow
+						propKey="report"
+						value="apps/app-2/upload/reports/q3.pdf"
+					/>
+				</div>
+			</PropertyStorageScope>
+		</>,
+	);
+	expect(kindOf("bytes")).toBe("binary");
+	expect(container.querySelector('[data-field="bytes"] canvas')).toBeNull();
+	expect(kindOf("numbers")).toBe("vector");
+	expect(kindOf("outline")).toBe("geometry");
+	expect(
+		container.querySelector('[data-field="outline"] button')?.textContent,
+	).toContain("Point");
+	expect(kindOf("unscoped")).toBe("string");
+	expect(kindOf("file")).toBe("file");
+	expect(
+		container.querySelector('[data-field="file"] button')?.textContent,
+	).toContain("q3.pdf");
+	expect(kindOf("foreign")).toBe("string");
+}, 30_000);
+
 test("Cypher columns use account tags and metadata while keeping row alignment", async () => {
 	const { container, render } = await setup();
 	const { GraphQueryPanel } = await import("./graph-query-panel");

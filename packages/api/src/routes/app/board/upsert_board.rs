@@ -154,7 +154,7 @@ pub async fn upsert_board(
     }
 
     let board = app.open_board(id, Some(false), None).await?;
-    let mut board = board.lock().await;
+    let mut board = board.write().await;
 
     board.name = params.name.unwrap_or(board.name.clone());
     board.description = params.description.unwrap_or(board.description.clone());

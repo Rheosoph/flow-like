@@ -14,8 +14,9 @@ use flow_like_offline_writes::{
 };
 use flow_like_runtime::state::FlowLikeConfig;
 use flow_like_storage::{
+    databases::vector::lancedb::connect_lance,
     lance_io::object_store::ObjectStoreRegistry,
-    lancedb::{self, Connection, Table},
+    lancedb::{Connection, Table},
     object_store::{ObjectMeta, path::Path as ObjectPath},
 };
 use flow_like_types_contracts::authorization::AuthorizationError;
@@ -103,8 +104,7 @@ impl OfflineHost for StandaloneHost {
             .values()
             .find(|location| path.as_ref().starts_with(&location.prefix))
             .context("Database inventory is outside the project scope")?;
-        let connection = lancedb::connect(&super::database_uri(location, path))
-            .namespace_client_property("manifest_enabled", "false")
+        let connection = connect_lance(&super::database_uri(location, path))
             .session(self.session.clone())
             .execute()
             .await?;
@@ -173,8 +173,7 @@ pub(super) async fn configure(
             .locations
             .get(&selected.purpose)
             .context("Missing buffered database scope")?;
-        let connection = lancedb::connect(&format!("{}{}", location.uri, selected.database))
-            .namespace_client_property("manifest_enabled", "false")
+        let connection = connect_lance(&format!("{}{}", location.uri, selected.database))
             .session(session.clone())
             .execute()
             .await?;

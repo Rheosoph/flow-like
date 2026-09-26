@@ -155,6 +155,10 @@ async fn run_maintenance_job(
                 "Maintenance run sweep completed"
             );
 
+            if let Err(error) = crate::devices::certificates::sweep(&state).await {
+                tracing::warn!(error = %error, "Device certificate reminder pass incomplete");
+            }
+
             Ok(Json(MaintenanceRunResponse::RunSweep(
                 RunSweepMaintenanceResult {
                     swept,
@@ -166,8 +170,12 @@ async fn run_maintenance_job(
         MaintenanceRunRequest::StateCleanup => {
             if state.platform_config.standalone.enabled {
                 match crate::devices::archives::sweep_expired(&state).await {
-                    Ok(deleted) => tracing::info!(deleted, "Expired encrypted device history removed"),
-                    Err(error) => tracing::error!(%error, "Device history retention cleanup failed"),
+                    Ok(deleted) => {
+                        tracing::info!(deleted, "Expired encrypted device history removed")
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "Device history retention cleanup failed")
+                    }
                 }
             }
             // Storage-accounting tombstones are SQL rows rather than execution

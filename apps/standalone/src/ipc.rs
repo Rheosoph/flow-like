@@ -46,6 +46,9 @@ pub struct ChildBootstrap {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum ChildRequest {
+    TlsIdentity {
+        known_revision: Option<u64>,
+    },
     #[cfg(feature = "runtime")]
     OutageSeal {
         claim: crate::online::outage::SnapshotClaim,
@@ -78,6 +81,9 @@ enum ChildRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 enum ParentResponse {
+    TlsIdentity {
+        identity: Option<crate::certificates::CertificateIdentity>,
+    },
     #[cfg(feature = "runtime")]
     OutageSealed {
         seal: String,
@@ -331,6 +337,12 @@ pub struct ChildBroker {
     identity: Option<crate::config::WorkloadIdentity>,
 }
 
+pub(crate) enum TlsIdentityUpdate {
+    Busy,
+    Unchanged,
+    Changed(crate::certificates::CertificateIdentity),
+}
+
 impl ChildBroker {
     pub async fn inherited(descriptor: i32) -> Result<(ChildBootstrap, Arc<Self>)> {
         ensure!(
@@ -350,7 +362,7 @@ impl ChildBroker {
         Self::connect(UnixStream::from_std(socket)?).await
     }
 
-    async fn connect(mut stream: UnixStream) -> Result<(ChildBootstrap, Arc<Self>)> {
+    pub(crate) async fn connect(mut stream: UnixStream) -> Result<(ChildBootstrap, Arc<Self>)> {
         let bootstrap: ChildBootstrap =
             tokio::time::timeout(Duration::from_secs(15), read_frame(&mut stream)).await??;
         bootstrap.config.validate()?;
@@ -394,6 +406,13 @@ impl ChildBroker {
 
     async fn request(&self, request: &ChildRequest) -> Result<ParentResponse> {
         let mut guard = self.stream.lock().await;
+        Self::exchange(&mut guard, request).await
+    }
+
+    async fn exchange(
+        guard: &mut Option<UnixStream>,
+        request: &ChildRequest,
+    ) -> Result<ParentResponse> {
         let mut stream = guard
             .take()
             .context("Credential broker channel is closed")?;
@@ -405,6 +424,48 @@ impl ChildBroker {
         .context("Credential broker timed out")??;
         *guard = Some(stream);
         Ok(response)
+    }
+
+    /// A busy resource exchange must not interrupt a still-valid TLS identity.
+    /// Busy is distinct from an explicit supervisor denial or a closed channel.
+    pub(crate) async fn try_tls_identity(&self, known_revision: u64) -> Result<TlsIdentityUpdate> {
+        let Ok(mut guard) = self.stream.try_lock() else {
+            return Ok(TlsIdentityUpdate::Busy);
+        };
+        match &mut Self::exchange(
+            &mut guard,
+            &ChildRequest::TlsIdentity {
+                known_revision: Some(known_revision),
+            },
+        )
+        .await?
+        {
+            ParentResponse::TlsIdentity { identity } => Ok(match identity.take() {
+                Some(identity) => TlsIdentityUpdate::Changed(identity),
+                None => TlsIdentityUpdate::Unchanged,
+            }),
+            _ => anyhow::bail!("Placement TLS identity unavailable"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn lock_channel_for_test(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, Option<UnixStream>> {
+        self.stream.lock().await
+    }
+
+    pub async fn tls_identity(
+        &self,
+        known_revision: Option<u64>,
+    ) -> Result<Option<crate::certificates::CertificateIdentity>> {
+        match &mut self
+            .request(&ChildRequest::TlsIdentity { known_revision })
+            .await?
+        {
+            ParentResponse::TlsIdentity { identity } => Ok(identity.take()),
+            _ => anyhow::bail!("Placement TLS identity unavailable"),
+        }
     }
 
     pub async fn ready(&self) -> Result<()> {
@@ -623,6 +684,24 @@ pub(crate) async fn serve_with_drain(
             }
         } else {
             match request {
+                ChildRequest::TlsIdentity { known_revision } => {
+                    drop(store);
+                    match bootstrap
+                        .config
+                        .tls_certificate_id
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("No certificate assigned"))
+                        .and_then(|id| crate::certificates::load_identity(&state_dir, id))
+                    {
+                        Ok(identity) => ParentResponse::TlsIdentity {
+                            identity: (known_revision != Some(identity.revision))
+                                .then_some(identity),
+                        },
+                        Err(_) => ParentResponse::Error {
+                            code: "certificate_unavailable".into(),
+                        },
+                    }
+                }
                 #[cfg(feature = "runtime")]
                 ChildRequest::OutageSeal { ref claim }
                 | ChildRequest::OutageVerify { ref claim, .. } => {
@@ -843,6 +922,93 @@ fn validate_inherited_socket(descriptor: i32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn tls_ipc_never_accepts_a_child_selected_certificate() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = crate::supervisor::prepare_state_dir(directory.path())?;
+        let mut store = StateStore::open(&root.join("management.sqlite"))?;
+        let config: PlacementConfig = serde_json::from_value(serde_json::json!({
+            "id":"placement", "project_id":"project", "deployment_id":"deployment",
+            "revision":"v1", "source":"offline", "project_path":root,
+            "events":[{"event_id":"event","event_version":[1,0,0],"board_version":[1,0,0]}]
+        }))?;
+        store.upsert_placement(
+            "placement",
+            &serde_json::to_value(&config)?,
+            crate::state::DesiredState::Running,
+        )?;
+        store.claim_replica("placement", 0, 1, 1)?;
+        store.record_replica(
+            "placement",
+            0,
+            1,
+            1,
+            crate::state::ObservedState::Starting,
+            Some(42),
+            None,
+        )?;
+        let identity = rcgen::generate_simple_self_signed(vec!["other.example.test".into()])?;
+        let certificate_id = uuid::Uuid::new_v4().to_string();
+        crate::certificates::put(
+            &store,
+            &root,
+            &certificate_id,
+            "Another service",
+            0,
+            &identity.cert.pem(),
+            &identity.signing_key.serialize_pem(),
+            crate::enrollment::unix_time()?,
+        )?;
+        let bootstrap = ChildBootstrap {
+            config,
+            data_root: None,
+            replica_slot: 0,
+            inherited_listener: false,
+            config_revision: 1,
+            intent_revision: 1,
+            parent_pid: 1,
+            api_base_url: None,
+            workload_identity: None,
+        };
+        let (parent, mut child) = UnixStream::pair()?;
+        let server = tokio::spawn(serve(
+            parent,
+            bootstrap,
+            root,
+            42,
+            None,
+            CancellationToken::new(),
+        ));
+        let _: ChildBootstrap = read_frame(&mut child).await?;
+        write_frame(
+            &mut child,
+            &ChildRequest::TlsIdentity {
+                known_revision: None,
+            },
+        )
+        .await?;
+        assert!(
+            matches!(read_frame::<ParentResponse>(&mut child).await?, ParentResponse::Error { ref code } if code == "certificate_unavailable")
+        );
+        write_frame(
+            &mut child,
+            &serde_json::json!({
+                "operation":"tls_identity", "known_revision":null, "certificate_id":certificate_id
+            }),
+        )
+        .await?;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                read_frame::<ParentResponse>(&mut child)
+            )
+            .await?
+            .is_err()
+        );
+        assert!(server.await?.is_err());
+        Ok(())
+    }
+
     #[test]
     fn listener_validation_rejects_connected_and_unopened_tcp_sockets() -> Result<()> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;

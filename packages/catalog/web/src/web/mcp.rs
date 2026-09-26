@@ -688,7 +688,7 @@ impl NodeLogic for McpServerNode {
                 }
             };
 
-            let tls_acceptor = match super::tls::server_acceptor(&config.tls) {
+            let tls_acceptor = match super::tls::ServiceAcceptor::new(context, &config.tls).await {
                 Ok(acceptor) => acceptor,
                 Err(err) => {
                     context.log_message(
@@ -698,6 +698,8 @@ impl NodeLogic for McpServerNode {
                     return Ok(());
                 }
             };
+            let mut config = config;
+            config.tls.secure = tls_acceptor.encrypted();
 
             let tool_contexts = build_tool_contexts(context, &config.function_refs).await;
             let resources = preload_resources(context, &config.resources).await;
@@ -780,14 +782,12 @@ impl NodeLogic for McpServerNode {
                 if config.max_connections > 0
                     && active_connections.load(Ordering::Relaxed) >= config.max_connections
                 {
-                    use tokio::io::AsyncWriteExt;
-                    let mut stream = stream;
-                    let _ = stream
-                    .write_all(
-                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                    )
-                    .await;
-                    let _ = stream.shutdown().await;
+                    if !tls_acceptor.encrypted() {
+                        use tokio::io::AsyncWriteExt;
+                        let mut stream = stream;
+                        let _ = stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                        let _ = stream.shutdown().await;
+                    }
                     context.log_message(
                         "MCP server rejected request because max_connections was reached",
                         LogLevel::Warn,
@@ -795,20 +795,7 @@ impl NodeLogic for McpServerNode {
                     continue;
                 }
 
-                let stream: super::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
-                    match acceptor.accept(stream).await {
-                        Ok(stream) => Box::new(stream),
-                        Err(err) => {
-                            context.log_message(
-                                &format!("MCP TLS handshake failed: {}", err),
-                                LogLevel::Error,
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    Box::new(stream)
-                };
+                let tls_acceptor = tls_acceptor.clone();
 
                 active_connections.fetch_add(1, Ordering::Relaxed);
                 let config = config.clone();
@@ -820,6 +807,13 @@ impl NodeLogic for McpServerNode {
                 let parent_node_id = parent_node_id.clone();
                 let conn_cancel = cancellation_token.clone();
                 handles.spawn(async move {
+                    let stream = match tls_acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            active_connections.fetch_sub(1, Ordering::Relaxed);
+                            return;
+                        }
+                    };
                     handle_connection(
                         stream,
                         remote_addr.to_string(),

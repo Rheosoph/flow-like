@@ -39,6 +39,8 @@ const PAGE_CACHE_PREFIX: &str = "explore:v1";
 const QUERY_MAX: usize = 100;
 const PAGE_DEFAULT: u64 = 24;
 const PAGE_MAX: u64 = 48;
+/// Largest OFFSET PostgreSQL's BIGINT takes.
+const OFFSET_MAX: u64 = i64::MAX.unsigned_abs();
 const COLLECTION_HITS_MAX: usize = 3;
 const RELATED_MAX: u64 = 4;
 /// `?collection=` runs rules at four times their limit and shows at most this many items.
@@ -50,7 +52,7 @@ const COLLECTION_PAGE_ITEMS: usize = 48;
 pub struct ExploreQuery {
     /// `desktop` or `web` (default).
     pub platform: Option<String>,
-    /// Viewer language, one of the hub's locales or a regional variant of one (default `en`).
+    /// Viewer language such as `de` or `de-AT` (default `en`); languages the hub does not offer fall back to `en`.
     pub language: Option<String>,
     /// `true` when the viewer has developer mode on: packages and package rails appear.
     pub dev: Option<String>,
@@ -77,15 +79,17 @@ pub struct ExploreSearchQuery {
     pub sort: Option<String>,
     /// Id of a curated collection to open instead of searching.
     pub collection: Option<String>,
+    /// Apps to skip (default 0).
     pub apps_offset: Option<u64>,
-    /// Apps per page, at most 48 (default 24).
+    /// Apps per page, 1 to 48 (default 24).
     pub apps_limit: Option<u64>,
+    /// Packages to skip (default 0).
     pub packages_offset: Option<u64>,
-    /// Packages per page, at most 48 (default 24).
+    /// Packages per page, 1 to 48 (default 24).
     pub packages_limit: Option<u64>,
     /// `desktop` or `web` (default).
     pub platform: Option<String>,
-    /// Viewer language (default `en`).
+    /// Viewer language (default `en`); languages the hub does not offer fall back to `en`.
     pub language: Option<String>,
     /// `true` when the viewer has developer mode on.
     pub dev: Option<String>,
@@ -294,7 +298,7 @@ pub(crate) async fn resolve_page(
     params(ExploreQuery),
     responses(
         (status = 200, description = "The resolved Explore page", body = ResolvedExplore),
-        (status = 400, description = "Unknown platform, language or dev value"),
+        (status = 400, description = "Unknown platform or dev value, or a language that is not a language tag"),
         (status = 401, description = "This hub requires signing in to browse")
     )
 )]
@@ -407,15 +411,18 @@ struct Paging {
 impl Paging {
     fn parse(param: &str, offset: Option<u64>, limit: Option<u64>) -> Result<Self, ApiError> {
         let limit = limit.unwrap_or(PAGE_DEFAULT);
-        if limit > PAGE_MAX {
+        if !(1..=PAGE_MAX).contains(&limit) {
             return Err(ApiError::bad_request(format!(
-                "{param}_limit must be at most {PAGE_MAX} (got {limit})"
+                "{param}_limit must be between 1 and {PAGE_MAX} (got {limit})"
             )));
         }
-        Ok(Self {
-            offset: offset.unwrap_or_default(),
-            limit,
-        })
+        let offset = offset.unwrap_or_default();
+        if offset > OFFSET_MAX {
+            return Err(ApiError::bad_request(format!(
+                "{param}_offset must be at most {OFFSET_MAX} (got {offset})"
+            )));
+        }
+        Ok(Self { offset, limit })
     }
 
     fn end(self) -> u64 {
@@ -574,8 +581,10 @@ impl SearchRequest {
 
 /// Category rows from `(primary, secondary)` pair counts: each pair adds its count to every category of the
 /// set {primary, secondary}, so primary-or-secondary filters and counts agree. With both kinds in scope, an app
-/// row also counts the packages whose categories expand to it, each package once. Selected values keep their
-/// row at 0; other empty rows are dropped. App rows come first, each kind by count, then value.
+/// row also counts the packages whose categories expand to it, each package once. Every selected value keeps a
+/// row, even one of a kind the view does not list, so an active filter can always be cleared there; a selected
+/// `app:` row in the packages view counts the packages it expands to, which is what it filters. Other empty
+/// rows are dropped. App rows come first, each kind by count, then value.
 fn category_facets(
     app_pairs: &[AppCategoryPair],
     package_pairs: &[PackageCategoryPair],
@@ -597,21 +606,25 @@ fn category_facets(
                 *packages.entry(name).or_default() += count;
             }
         }
-    }
-    if scope.apps && scope.packages {
+        let selected_app = |name: &str| {
+            selected
+                .iter()
+                .any(|filter| matches!(filter, CategoryFilter::App(value) if value == name))
+        };
         for (name, count) in rails::packages_per_app_category(package_pairs) {
-            *apps.entry(name.to_owned()).or_default() += count;
+            if scope.apps || selected_app(name) {
+                *apps.entry(name.to_owned()).or_default() += count;
+            }
         }
     }
     for filter in selected {
         match filter {
-            CategoryFilter::App(name) if scope.apps => {
+            CategoryFilter::App(name) => {
                 apps.entry(name.clone()).or_default();
             }
-            CategoryFilter::Package(category) if scope.packages => {
+            CategoryFilter::Package(category) => {
                 packages.entry(category.to_string()).or_default();
             }
-            CategoryFilter::App(_) | CategoryFilter::Package(_) => {}
         }
     }
     let selected: HashSet<String> = selected.iter().map(CategoryFilter::value).collect();
@@ -707,7 +720,10 @@ fn package_mentions(package: &PackageSummary, text: &str) -> bool {
 }
 
 /// Package id → title of the first collection listing it, hand-picked items before rule results.
-fn packages_of_collections(collections: &[&PlacementDoc], rules: &RuleItems) -> Vec<(String, String)> {
+fn packages_of_collections(
+    collections: &[&PlacementDoc],
+    rules: &RuleItems,
+) -> Vec<(String, String)> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for placement in collections {
@@ -885,7 +901,9 @@ async fn packages_part(
         },
         async {
             if facets.packages {
-                Ok(query::package_verified_counts(db, &without_verified).await?.1)
+                Ok(query::package_verified_counts(db, &without_verified)
+                    .await?
+                    .1)
             } else {
                 Ok(0)
             }
@@ -907,7 +925,8 @@ async fn packages_part(
         (count, request.packages.slice(window))
     } else {
         let select = query::package_ids(&filter, request.sort);
-        let page_ids = query::ids(db, select, request.packages.offset, request.packages.limit).await?;
+        let page_ids =
+            query::ids(db, select, request.packages.offset, request.packages.limit).await?;
         let found = hydrate::packages(state, &page_ids, &viewer.language).await?;
         (count, hydrate::in_id_order(&page_ids, &found))
     };
@@ -938,7 +957,11 @@ fn related_categories(apps: &[ResolvedItem], packages: &[PackageSummary]) -> Vec
         }
     }
     for package in packages {
-        for raw in package.primary_category.iter().chain(&package.secondary_category) {
+        for raw in package
+            .primary_category
+            .iter()
+            .chain(&package.secondary_category)
+        {
             if let Some(category) = WasmPackageCategory::from_str_opt(raw) {
                 for name in app_categories_for(&category) {
                     add((*name).to_owned());
@@ -991,7 +1014,9 @@ fn resolved_collections(
 ) -> Vec<ResolvedCollection> {
     placements
         .iter()
-        .filter_map(|placement| resolve::resolve_collection(placement, hydrated, viewer, projection))
+        .filter_map(|placement| {
+            resolve::resolve_collection(placement, hydrated, viewer, projection)
+        })
         .filter(|collection| !collection.items.is_empty())
         .collect()
 }
@@ -1012,7 +1037,10 @@ async fn search(
     let featured: Vec<&PlacementDoc> = matched.iter().take(COLLECTION_HITS_MAX).copied().collect();
 
     let (rules, apps) = futures::try_join!(
-        timed("rules", hydrate::rule_items(&state.db, &featured, viewer, 1)),
+        timed(
+            "rules",
+            hydrate::rule_items(&state.db, &featured, viewer, 1)
+        ),
         timed("apps", apps_part(state, request, viewer, facets)),
     )?;
     let via_collection = if request.text.is_some() && viewer.dev {
@@ -1030,9 +1058,16 @@ async fn search(
     let mut wanted = Wanted::default();
     wanted.add_all(apps.page.iter().map(|id| (ItemKind::App, id.as_str())));
     if request.scope.lists_collections() {
-        let page_packages: HashSet<&str> = packages.page.iter().map(|package| package.id.as_str()).collect();
+        let page_packages: HashSet<&str> = packages
+            .page
+            .iter()
+            .map(|package| package.id.as_str())
+            .collect();
         for placement in &featured {
-            let picked = placement.items.iter().map(|item| (item.kind, item.id.as_str()));
+            let picked = placement
+                .items
+                .iter()
+                .map(|item| (item.kind, item.id.as_str()));
             let ruled = rules
                 .get(&placement.id)
                 .into_iter()
@@ -1064,7 +1099,9 @@ async fn search(
         empty_group()
     };
     let packages_group = if request.scope.lists_packages() && viewer.dev {
-        request.packages.group(packages.page.clone(), packages.total)
+        request
+            .packages
+            .group(packages.page.clone(), packages.total)
     } else {
         empty_group()
     };
@@ -1102,10 +1139,11 @@ async fn search(
         total: packages_group.total,
         has_more: packages_group.has_more,
     };
-    let price = |(app_free, app_paid): (u64, u64), (package_free, package_paid): (u64, u64)| PriceFacet {
-        free: app_free + package_free,
-        paid: app_paid + package_paid,
-    };
+    let price =
+        |(app_free, app_paid): (u64, u64), (package_free, package_paid): (u64, u64)| PriceFacet {
+            free: app_free + package_free,
+            paid: app_paid + package_paid,
+        };
     Ok(ExploreSearchResponse {
         query: request.text.clone().unwrap_or_default(),
         viewer: ViewerEcho::from(viewer),
@@ -1137,7 +1175,12 @@ async fn open_collection(
 ) -> Result<ExploreSearchResponse, ApiError> {
     let rules = hydrate::rule_items(&state.db, &[placement], viewer, COLLECTION_PAGE_SCALE).await?;
     let mut wanted = Wanted::default();
-    wanted.add_all(placement.items.iter().map(|item| (item.kind, item.id.as_str())));
+    wanted.add_all(
+        placement
+            .items
+            .iter()
+            .map(|item| (item.kind, item.id.as_str())),
+    );
     for items in rules.values() {
         wanted.add_all(items.iter().map(|(kind, id)| (*kind, id.as_str())));
     }
@@ -1157,7 +1200,10 @@ async fn open_collection(
     let mut collection =
         resolve::resolve_collection(placement, &hydrated, viewer, request.scope.projection())
             .ok_or_else(|| {
-                ApiError::not_found(format!("Explore collection {} is not available", placement.id))
+                ApiError::not_found(format!(
+                    "Explore collection {} is not available",
+                    placement.id
+                ))
             })?;
     collection.items.truncate(COLLECTION_PAGE_ITEMS);
     let app_items: Vec<ResolvedItem> = collection
@@ -1178,13 +1224,13 @@ async fn open_collection(
             _ => None,
         })
         .collect();
+    collection.apps = u32::try_from(app_items.len()).unwrap_or(u32::MAX);
+    collection.packages = u32::try_from(package_hits.len()).unwrap_or(u32::MAX);
     let (app_total, package_total) = (count_of(app_items.len()), count_of(package_hits.len()));
     Ok(ExploreSearchResponse {
         query: request.text.clone().unwrap_or_default(),
         viewer: ViewerEcho::from(viewer),
-        apps: request
-            .apps
-            .group(request.apps.slice(app_items), app_total),
+        apps: request.apps.group(request.apps.slice(app_items), app_total),
         packages: request
             .packages
             .group(request.packages.slice(package_hits), package_total),
@@ -1272,11 +1318,26 @@ mod tests {
         assert_eq!(request.text.as_deref(), Some("invoice"));
         assert_eq!(request.scope, SearchScope::Apps);
         assert_eq!(request.categories, [CategoryFilter::App("Finance".into())]);
-        assert_eq!(request.permissions, [PermissionGroup::Network, PermissionGroup::Models]);
+        assert_eq!(
+            request.permissions,
+            [PermissionGroup::Network, PermissionGroup::Models]
+        );
         assert_eq!(request.sort, ExploreSort::Name);
         assert!(request.verified);
-        assert_eq!(request.apps, Paging { offset: 0, limit: 48 });
-        assert_eq!(request.packages, Paging { offset: 0, limit: PAGE_DEFAULT });
+        assert_eq!(
+            request.apps,
+            Paging {
+                offset: 0,
+                limit: 48
+            }
+        );
+        assert_eq!(
+            request.packages,
+            Paging {
+                offset: 0,
+                limit: PAGE_DEFAULT
+            }
+        );
 
         let request = SearchRequest::parse(&params(
             "/store/explore/search?categories=app:Finance,package:EDUCATION",
@@ -1294,7 +1355,10 @@ mod tests {
         );
         let request = SearchRequest::parse(&params("/?categories=package:EDUCATION")).unwrap();
         assert_eq!(request.app_categories(), Some(Vec::new()));
-        assert_eq!(SearchRequest::parse(&params("/")).unwrap().app_categories(), None);
+        assert_eq!(
+            SearchRequest::parse(&params("/")).unwrap().app_categories(),
+            None
+        );
     }
 
     #[test]
@@ -1304,8 +1368,22 @@ mod tests {
             ("/?price=cheap", "price value 'cheap'"),
             ("/?sort=relevance", "sort value 'relevance'"),
             ("/?verified=maybe", "verified value 'maybe'"),
-            ("/?apps_limit=49", "apps_limit must be at most 48"),
-            ("/?packages_limit=100", "packages_limit must be at most 48"),
+            (
+                "/?apps_limit=49",
+                "apps_limit must be between 1 and 48 (got 49)",
+            ),
+            (
+                "/?apps_limit=0",
+                "apps_limit must be between 1 and 48 (got 0)",
+            ),
+            (
+                "/?packages_limit=100",
+                "packages_limit must be between 1 and 48",
+            ),
+            (
+                "/?packages_offset=9223372036854775808",
+                "packages_offset must be at most 9223372036854775807 (got 9223372036854775808)",
+            ),
             ("/?permissions=foo", "'foo'"),
             ("/?categories=package:Education", "'package:Education'"),
         ] {
@@ -1314,9 +1392,22 @@ mod tests {
             assert!(message(error).contains(expected), "{uri}");
         }
         let long = format!("/?q={}", "a".repeat(QUERY_MAX + 1));
-        assert!(message(SearchRequest::parse(&params(&long)).unwrap_err()).contains("q must be at most 100"));
+        assert!(
+            message(SearchRequest::parse(&params(&long)).unwrap_err())
+                .contains("q must be at most 100")
+        );
         let exact = format!("/?q={}", "a".repeat(QUERY_MAX));
         assert!(SearchRequest::parse(&params(&exact)).is_ok());
+        let deepest =
+            SearchRequest::parse(&params("/?apps_offset=9223372036854775807&apps_limit=1"))
+                .unwrap();
+        assert_eq!(
+            deepest.apps,
+            Paging {
+                offset: OFFSET_MAX,
+                limit: 1
+            }
+        );
     }
 
     #[test]
@@ -1331,14 +1422,19 @@ mod tests {
 
     #[test]
     fn cache_keys_cover_every_viewer_class() {
-        let key = page_cache_key("rev1", &Viewer {
-            dev: true,
-            signed_in: false,
-            platform: Platform::Desktop,
-            language: "pt-BR".into(),
-        });
+        let key = page_cache_key(
+            "rev1",
+            &Viewer {
+                dev: true,
+                signed_in: false,
+                platform: Platform::Desktop,
+                language: "pt-BR".into(),
+            },
+        );
         assert_eq!(key, "explore:v1:rev1:true:false:desktop:pt-BR");
-        let keys: HashSet<String> = viewer_classes().map(|viewer| page_cache_key("r", &viewer)).collect();
+        let keys: HashSet<String> = viewer_classes()
+            .map(|viewer| page_cache_key("r", &viewer))
+            .collect();
         assert_eq!(keys.len(), 2 * 2 * 2 * SUPPORTED_LOCALES.len());
     }
 
@@ -1366,11 +1462,31 @@ mod tests {
         assert_eq!(
             facets,
             [
-                FacetCount { value: "app:Finance".into(), kind: FacetKind::App, count: 4 },
-                FacetCount { value: "app:Business".into(), kind: FacetKind::App, count: 1 },
-                FacetCount { value: "package:LEGAL".into(), kind: FacetKind::Package, count: 4 },
-                FacetCount { value: "package:FINANCE_BILLING".into(), kind: FacetKind::Package, count: 1 },
-                FacetCount { value: "package:INSURANCE".into(), kind: FacetKind::Package, count: 1 },
+                FacetCount {
+                    value: "app:Finance".into(),
+                    kind: FacetKind::App,
+                    count: 4
+                },
+                FacetCount {
+                    value: "app:Business".into(),
+                    kind: FacetKind::App,
+                    count: 1
+                },
+                FacetCount {
+                    value: "package:LEGAL".into(),
+                    kind: FacetKind::Package,
+                    count: 4
+                },
+                FacetCount {
+                    value: "package:FINANCE_BILLING".into(),
+                    kind: FacetKind::Package,
+                    count: 1
+                },
+                FacetCount {
+                    value: "package:INSURANCE".into(),
+                    kind: FacetKind::Package,
+                    count: 1
+                },
             ]
         );
         for facet in &facets {
@@ -1385,7 +1501,10 @@ mod tests {
         let facets = category_facets(
             &[(Some(Category::Business), Some(Category::Finance), 1)],
             &[],
-            FacetScope { apps: true, packages: false },
+            FacetScope {
+                apps: true,
+                packages: false,
+            },
             &[],
         );
         assert!(facets.contains(&FacetCount {
@@ -1403,26 +1522,163 @@ mod tests {
             CategoryFilter::App("Games".into()),
             CategoryFilter::Package(WasmPackageCategory::Legal),
         ];
-        let apps_only = category_facets(&app_pairs, &package_pairs, FacetScope::of(SearchScope::Apps, true), &selected);
-        assert!(apps_only.iter().all(|facet| facet.kind == FacetKind::App));
-        assert!(apps_only.contains(&FacetCount { value: "app:Games".into(), kind: FacetKind::App, count: 0 }));
-        assert!(!apps_only.iter().any(|facet| facet.value == "app:Education"));
-        let packages_only =
-            category_facets(&app_pairs, &package_pairs, FacetScope::of(SearchScope::Packages, true), &selected);
+        let apps_only = category_facets(
+            &app_pairs,
+            &package_pairs,
+            FacetScope::of(SearchScope::Apps, true),
+            &selected,
+        );
+        assert_eq!(
+            apps_only,
+            [
+                FacetCount {
+                    value: "app:Finance".into(),
+                    kind: FacetKind::App,
+                    count: 3
+                },
+                FacetCount {
+                    value: "app:Games".into(),
+                    kind: FacetKind::App,
+                    count: 0
+                },
+                FacetCount {
+                    value: "package:LEGAL".into(),
+                    kind: FacetKind::Package,
+                    count: 0
+                },
+            ]
+        );
+        let packages_only = category_facets(
+            &app_pairs,
+            &package_pairs,
+            FacetScope::of(SearchScope::Packages, true),
+            &selected,
+        );
         assert_eq!(
             packages_only,
             [
-                FacetCount { value: "package:EDUCATION".into(), kind: FacetKind::Package, count: 2 },
-                FacetCount { value: "package:LEGAL".into(), kind: FacetKind::Package, count: 0 },
+                FacetCount {
+                    value: "app:Games".into(),
+                    kind: FacetKind::App,
+                    count: 0
+                },
+                FacetCount {
+                    value: "package:EDUCATION".into(),
+                    kind: FacetKind::Package,
+                    count: 2
+                },
+                FacetCount {
+                    value: "package:LEGAL".into(),
+                    kind: FacetKind::Package,
+                    count: 0
+                },
             ]
         );
-        let non_dev = category_facets(&app_pairs, &package_pairs, FacetScope::of(SearchScope::All, false), &[]);
-        assert_eq!(non_dev, [FacetCount { value: "app:Finance".into(), kind: FacetKind::App, count: 3 }]);
-        let all = category_facets(&app_pairs, &package_pairs, FacetScope::of(SearchScope::All, true), &[]);
-        assert!(all.contains(&FacetCount { value: "app:Education".into(), kind: FacetKind::App, count: 2 }));
+        let non_dev = category_facets(
+            &app_pairs,
+            &package_pairs,
+            FacetScope::of(SearchScope::All, false),
+            &[],
+        );
+        assert_eq!(
+            non_dev,
+            [FacetCount {
+                value: "app:Finance".into(),
+                kind: FacetKind::App,
+                count: 3
+            }]
+        );
+        let all = category_facets(
+            &app_pairs,
+            &package_pairs,
+            FacetScope::of(SearchScope::All, true),
+            &[],
+        );
+        assert!(all.contains(&FacetCount {
+            value: "app:Education".into(),
+            kind: FacetKind::App,
+            count: 2
+        }));
     }
 
-    fn placement_json(id: &str, content: serde_json::Value, extra: serde_json::Value) -> PlacementDoc {
+    #[test]
+    fn selections_outside_the_view_keep_a_row_that_matches_their_filter() {
+        let non_dev = SearchRequest::parse(&params("/?categories=package:EDUCATION")).unwrap();
+        assert_eq!(non_dev.app_categories(), Some(Vec::new()));
+        assert_eq!(
+            category_facets(
+                &[(Some(Category::Finance), None, 3)],
+                &[],
+                FacetScope::of(non_dev.scope, false),
+                &non_dev.categories,
+            ),
+            [
+                FacetCount {
+                    value: "app:Finance".into(),
+                    kind: FacetKind::App,
+                    count: 3
+                },
+                FacetCount {
+                    value: "package:EDUCATION".into(),
+                    kind: FacetKind::Package,
+                    count: 0
+                },
+            ]
+        );
+
+        let packages =
+            SearchRequest::parse(&params("/?type=packages&categories=app:Finance")).unwrap();
+        assert_eq!(
+            packages.package_categories(),
+            Some(vec![
+                DbPackageCategory::FinanceBilling,
+                DbPackageCategory::Insurance
+            ])
+        );
+        assert_eq!(
+            category_facets(
+                &[(Some(Category::Finance), None, 3)],
+                &[
+                    (
+                        Some(DbPackageCategory::FinanceBilling),
+                        Some(DbPackageCategory::Insurance),
+                        1,
+                    ),
+                    (Some(DbPackageCategory::Legal), None, 4),
+                ],
+                FacetScope::of(packages.scope, true),
+                &packages.categories,
+            ),
+            [
+                FacetCount {
+                    value: "app:Finance".into(),
+                    kind: FacetKind::App,
+                    count: 1
+                },
+                FacetCount {
+                    value: "package:LEGAL".into(),
+                    kind: FacetKind::Package,
+                    count: 4
+                },
+                FacetCount {
+                    value: "package:FINANCE_BILLING".into(),
+                    kind: FacetKind::Package,
+                    count: 1
+                },
+                FacetCount {
+                    value: "package:INSURANCE".into(),
+                    kind: FacetKind::Package,
+                    count: 1
+                },
+            ]
+        );
+    }
+
+    fn placement_json(
+        id: &str,
+        content: serde_json::Value,
+        extra: serde_json::Value,
+    ) -> PlacementDoc {
         let mut doc = json!({
             "id": id,
             "kind": content["kind"],
@@ -1476,18 +1732,33 @@ mod tests {
             ],
         );
         let viewer = viewer(false);
-        assert_eq!(collection_target(&layout, "live", &viewer, now).unwrap().id, "live");
-        for id in ["disabled", "scheduled", "devs", "default-trending", "missing"] {
+        assert_eq!(
+            collection_target(&layout, "live", &viewer, now).unwrap().id,
+            "live"
+        );
+        for id in [
+            "disabled",
+            "scheduled",
+            "devs",
+            "default-trending",
+            "missing",
+        ] {
             let error = collection_target(&layout, id, &viewer, now).unwrap_err();
             assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND, "{id}");
-            assert_eq!(message(error), format!("Explore collection {id} is not available"));
+            assert_eq!(
+                message(error),
+                format!("Explore collection {id} is not available")
+            );
         }
     }
 
     #[test]
     fn collection_hits_come_from_the_page_and_match_title_or_blurb() {
         let now = Utc::now();
-        let mut layout = layout_with(SLOT_COLLECTION, vec![collection("grid", "Finance picks", json!({}))]);
+        let mut layout = layout_with(
+            SLOT_COLLECTION,
+            vec![collection("grid", "Finance picks", json!({}))],
+        );
         layout
             .slots
             .iter_mut()
@@ -1526,16 +1797,23 @@ mod tests {
     #[test]
     fn packages_match_by_name_or_through_a_collection() {
         let mut picks = collection("picks", "Invoicing", json!({}));
-        picks.items = [(ItemKind::App, "a"), (ItemKind::Package, "pdf"), (ItemKind::Package, "ocr")]
-            .map(|(kind, id)| PlacementItemDoc::from_row(kind, id.into(), ItemOverrides::default()))
-            .to_vec();
+        picks.items = [
+            (ItemKind::App, "a"),
+            (ItemKind::Package, "pdf"),
+            (ItemKind::Package, "ocr"),
+        ]
+        .map(|(kind, id)| PlacementItemDoc::from_row(kind, id.into(), ItemOverrides::default()))
+        .to_vec();
         let mut ruled = collection("ruled", "More", json!({}));
         if let PlacementContent::Collection { source, .. } = &mut ruled.content {
             *source = CollectionSource::Rule;
         }
         let rules: RuleItems = HashMap::from([(
             "ruled".to_owned(),
-            vec![(ItemKind::Package, "ocr".to_owned()), (ItemKind::Package, "csv".to_owned())],
+            vec![
+                (ItemKind::Package, "ocr".to_owned()),
+                (ItemKind::Package, "csv".to_owned()),
+            ],
         )]);
         let via = packages_of_collections(&[&picks, &ruled], &rules);
         assert_eq!(
@@ -1553,18 +1831,32 @@ mod tests {
         let by_collection = package_hit(package("pdf", "PDF tools"), Some("invoice"), &via);
         assert_eq!(by_collection.matched_via, MatchedVia::Collection);
         assert_eq!(by_collection.collection_title.as_deref(), Some("Invoicing"));
-        assert_eq!(package_hit(package("pdf", "PDF"), None, &via).matched_via, MatchedVia::Name);
+        assert_eq!(
+            package_hit(package("pdf", "PDF"), None, &via).matched_via,
+            MatchedVia::Name
+        );
     }
 
     #[test]
     fn paging_slices_and_reports_more() {
-        let paging = Paging { offset: 2, limit: 2 };
+        let paging = Paging {
+            offset: 2,
+            limit: 2,
+        };
         assert_eq!(paging.slice(vec![1, 2, 3, 4, 5]), [3, 4]);
         let group = paging.group(vec![3, 4], 5);
         assert!(group.has_more);
         assert!(!paging.group(vec![3, 4], 4).has_more);
         let facet = permission_facet(&[package("a", "A"), package("b", "B")]);
-        assert_eq!(facet, PermissionFacet { none: 0, network: 2, models: 0, storage: 0 });
+        assert_eq!(
+            facet,
+            PermissionFacet {
+                none: 0,
+                network: 2,
+                models: 0,
+                storage: 0
+            }
+        );
     }
 
     #[test]

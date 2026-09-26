@@ -22,8 +22,14 @@ import type {
 
 const CACHE_TIME = 5 * 60 * 1000;
 
+export type ProjectUserSearch = ReturnType<typeof useProjectUserSearch>;
+
+/**
+ * Without an `appId` there is no project to draw colleagues from or to exclude
+ * members of, so only the directory is searched.
+ */
 export function useProjectUserSearch(
-	appId: string,
+	appId: string | undefined,
 	query: string,
 	open: boolean,
 ) {
@@ -35,7 +41,7 @@ export function useProjectUserSearch(
 		getApiOrigin(backend.profile),
 		backend.profile?.id ?? "",
 		auth.user?.profile.sub ?? "local",
-		appId,
+		appId ?? "",
 	];
 	const contactsKey = ["projectInviteContacts", ...scope];
 	const directoryKey = ["projectInviteDirectory", ...scope];
@@ -52,10 +58,11 @@ export function useProjectUserSearch(
 
 	const contacts = useInfiniteQuery({
 		queryKey: contactsKey,
-		queryFn: ({ pageParam }) => source.getProjectContacts(appId, pageParam),
+		queryFn: ({ pageParam }) =>
+			source.getProjectContacts(appId as string, pageParam),
 		initialPageParam: undefined as string | undefined,
 		getNextPageParam: (page) => page?.next_cursor ?? undefined,
-		enabled: open,
+		enabled: open && !!appId,
 		staleTime: CACHE_TIME,
 		gcTime: CACHE_TIME,
 		retry: 1,

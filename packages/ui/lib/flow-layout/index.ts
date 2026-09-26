@@ -164,7 +164,7 @@ export function computeFlowLayoutDetailed(
 ): LayoutResult {
 	if (style === "routed") {
 		const normalized = normalizeAutoReroutes(input);
-		const result = computeFlowLayoutDetailed(normalized.input, "compact");
+		const result = computeNodeLayout(normalized.input, getStyleConfig(style));
 		return {
 			...result,
 			routing: {
@@ -173,7 +173,13 @@ export function computeFlowLayoutDetailed(
 			},
 		};
 	}
-	const cfg = getStyleConfig(style);
+	return computeNodeLayout(input, getStyleConfig(style));
+}
+
+function computeNodeLayout(
+	input: AutoLayoutInput,
+	cfg: StyleConfig,
+): LayoutResult {
 	const graph = buildLayoutGraph(input);
 
 	const components = findComponents(graph);

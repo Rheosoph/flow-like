@@ -7,6 +7,7 @@ import type {
 	Ed25519PublicKey,
 	ProtectedSnapshot,
 } from "./types";
+import type { LocalCertificateAuthority } from "./certificate-authority";
 
 export interface DeviceAccountScope {
 	issuer: string;
@@ -149,9 +150,15 @@ async function database(): Promise<IDBDatabase> {
 	if (!globalThis.indexedDB)
 		throw new Error("Encrypted device storage is unavailable in this browser.");
 	return new Promise((resolve, reject) => {
-		const request = indexedDB.open("flow-like-device-management", 3);
+		const request = indexedDB.open("flow-like-device-management", 4);
 		request.onupgradeneeded = () => {
-			for (const name of ["vaults", "snapshots", "recovery", "fleet"])
+			for (const name of [
+				"vaults",
+				"snapshots",
+				"recovery",
+				"fleet",
+				"authorities",
+			])
 				if (!request.result.objectStoreNames.contains(name))
 					request.result.createObjectStore(name);
 		};
@@ -254,6 +261,106 @@ export function addDeviceVault(
 		store.add(vault, itemKey(scope, vault.deviceId));
 		set(undefined);
 	});
+}
+
+export function addCertificateAuthority(
+	scope: DeviceAccountScope,
+	authority: LocalCertificateAuthority,
+): Promise<void> {
+	if (
+		authority.public_bundle.account_binding !== accountStorageKey(scope) ||
+		authority.vault.length < 64 ||
+		authority.vault.length > 65_600
+	)
+		return Promise.reject(
+			new Error("Invalid encrypted certificate authority for this account."),
+		);
+	return transact(
+		"authorities",
+		"readwrite",
+		(store, set) => {
+			store.add(
+				{ public_bundle: authority.public_bundle, vault: authority.vault },
+				itemKey(scope, authority.public_bundle.authority_id),
+			);
+			set(undefined);
+		},
+		{ durability: "strict" },
+	);
+}
+
+export function readCertificateAuthorities(
+	scope: DeviceAccountScope,
+): Promise<LocalCertificateAuthority[]> {
+	return transact("authorities", "readonly", (store, set) => {
+		const prefix = `${JSON.stringify([accountStorageKey(scope)]).slice(0, -1)},`;
+		const request = store.getAll(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+		request.onsuccess = () =>
+			set(
+				(request.result as LocalCertificateAuthority[]).filter(
+					(row) =>
+						row.public_bundle.account_binding === accountStorageKey(scope),
+				),
+			);
+	});
+}
+
+export function removeCertificateAuthority(
+	scope: DeviceAccountScope,
+	authorityId: string,
+): Promise<void> {
+	return transact(
+		"authorities",
+		"readwrite",
+		(store, set) => {
+			store.delete(itemKey(scope, authorityId));
+			set(undefined);
+		},
+		{ durability: "strict" },
+	);
+}
+
+export function replaceCertificateAuthority(
+	scope: DeviceAccountScope,
+	previous: LocalCertificateAuthority,
+	next: LocalCertificateAuthority,
+): Promise<void> {
+	if (
+		next.public_bundle.account_binding !== accountStorageKey(scope) ||
+		next.public_bundle.authority_id !== previous.public_bundle.authority_id ||
+		next.public_bundle.root_certificate_pem !==
+			previous.public_bundle.root_certificate_pem ||
+		next.vault.length < 64 ||
+		next.vault.length > 65_600
+	)
+		return Promise.reject(
+			new Error("The renewed authority does not match the saved root."),
+		);
+	return transact(
+		"authorities",
+		"readwrite",
+		(store, set, fail) => {
+			const key = itemKey(scope, previous.public_bundle.authority_id);
+			const request = store.get(key);
+			request.onsuccess = () => {
+				const current = request.result as LocalCertificateAuthority | undefined;
+				if (!current || !sameBytes(current.vault, previous.vault)) {
+					fail(
+						new Error(
+							"The local authority changed. Refresh before renewing it.",
+						),
+					);
+					return;
+				}
+				store.put(
+					{ public_bundle: next.public_bundle, vault: next.vault },
+					key,
+				);
+				set(undefined);
+			};
+		},
+		{ durability: "strict" },
+	);
 }
 
 export function controllerBackup(

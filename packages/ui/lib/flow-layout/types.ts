@@ -106,6 +106,8 @@ export interface StyleConfig {
 	hGap: number;
 	/** Edge-to-edge vertical gap between nodes in a column. */
 	vGap: number;
+	/** Extra room between parallel execution paths, when routing data wires. */
+	branchGap?: number;
 	/** Gap between the exec spine and the pure-node band below it. */
 	pureVGap: number;
 	/** Gap between weakly connected components. */
@@ -134,6 +136,13 @@ export interface LayoutResult {
 export function getStyleConfig(style: LayoutStyle): StyleConfig {
 	switch (style) {
 		case "routed":
+			return {
+				hGap: 80,
+				vGap: 40,
+				branchGap: 72,
+				pureVGap: 24,
+				componentGap: 120,
+			};
 		case "compact":
 			return { hGap: 80, vGap: 40, pureVGap: 24, componentGap: 120 };
 		case "expanded":

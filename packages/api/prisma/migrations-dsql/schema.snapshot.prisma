@@ -4711,3 +4711,36 @@ model ExplorePlacementItem {
   @@id([edition, placementId, position])
   @@index([edition, itemKind, itemId])
 }
+
+/// Only opaque certificate references and expiration times leave the device.
+model DeviceCertificateInventory {
+  deviceId String @id
+  revision BigInt
+  payload String
+  updatedAt BigInt
+  nextCheckAt BigInt
+
+  @@index([nextCheckAt])
+}
+
+/// Each delivery channel retries independently with a leased, stable identity.
+model DeviceCertificateNotice {
+  id String @id
+  deviceId String
+  certificateId String
+  certificateRevision BigInt
+  fingerprint String
+  notAfter BigInt
+  userId String
+  stage String
+  channel String
+  status String
+  attempts BigInt @default(0)
+  nextAttemptAt BigInt
+  leaseId String?
+  leaseUntil BigInt?
+  completedAt BigInt?
+
+  @@index([status, nextAttemptAt])
+  @@index([deviceId])
+}

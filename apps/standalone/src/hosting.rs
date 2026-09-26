@@ -160,10 +160,17 @@ pub(crate) struct PreparedHost {
 struct ReadyListener {
     listener: TcpListener,
     ready: Option<oneshot::Sender<()>>,
+    tls: Option<Arc<dyn flow_like_runtime::flow::execution::service::ServiceTlsProvider>>,
+    handshakes: tokio::task::JoinSet<
+        Result<(
+            flow_like_runtime::flow::execution::service::BoxedServiceIo,
+            std::net::SocketAddr,
+        )>,
+    >,
 }
 
 impl axum::serve::Listener for ReadyListener {
-    type Io = tokio::net::TcpStream;
+    type Io = flow_like_runtime::flow::execution::service::BoxedServiceIo;
     type Addr = std::net::SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
@@ -172,7 +179,21 @@ impl axum::serve::Listener for ReadyListener {
         if let Some(ready) = self.ready.take() {
             let _ = ready.send(());
         }
-        axum::serve::Listener::accept(&mut self.listener).await
+        loop {
+            tokio::select! {
+                result = self.handshakes.join_next(), if !self.handshakes.is_empty() => {
+                    if let Some(Ok(Ok(connection))) = result { return connection; }
+                }
+                (stream, addr) = axum::serve::Listener::accept(&mut self.listener), if self.handshakes.len() < 64 => {
+                    let Some(tls) = self.tls.clone() else { return (Box::new(stream), addr); };
+                    self.handshakes.spawn(async move {
+                        let stream = tokio::time::timeout(std::time::Duration::from_secs(10), tls.accept(stream))
+                            .await.context("TLS handshake timed out")??;
+                        Ok((stream, addr))
+                    });
+                }
+            }
+        }
     }
 
     fn local_addr(&self) -> std::io::Result<Self::Addr> {
@@ -230,6 +251,13 @@ impl PreparedHost {
             .as_ref()
             .context("HTTP and chat events require hosting configuration")?;
         hosting.validate()?;
+        ensure!(
+            config.tls_certificate_id.is_none() || state.service_tls_provider.is_some(),
+            "Managed TLS identity is unavailable"
+        );
+        if let Some(tls) = &state.service_tls_provider {
+            tls.validate().await?;
+        }
         let secret = secret_path(config, hosting)?;
         let mut routes = HashMap::new();
         let mut pages = HashMap::new();
@@ -347,6 +375,8 @@ impl PreparedHost {
             ReadyListener {
                 listener: self.listener,
                 ready,
+                tls: self.state.state.service_tls_provider.clone(),
+                handshakes: tokio::task::JoinSet::new(),
             },
             Router::new()
                 .fallback(dispatch)
@@ -957,6 +987,7 @@ mod tests {
             package_pins: Vec::new(),
             bit_pins: Vec::new(),
             max_replicas: 1,
+            tls_certificate_id: None,
             hosting: Some(HostingConfig {
                 host: "127.0.0.1".parse().unwrap(),
                 port,

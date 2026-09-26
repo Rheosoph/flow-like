@@ -22,6 +22,11 @@ export const MAX_GEOMETRY_MEMBERS = 1_000_000;
 const isObject = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** Mirrors storage's `names_geometry_kind`: the shape a decoded geoarrow value arrives in. */
+export function namesGeometryKind(value: unknown): boolean {
+	return isObject(value) && GEOMETRY_KINDS.includes(value.type as GeometryKind);
+}
+
 export function geometryMarker(kind?: GeometryKind | null): string | null {
 	return kind
 		? JSON.stringify({ $id: GEOMETRY_SCHEMA_ID, "x-geometry": kind })

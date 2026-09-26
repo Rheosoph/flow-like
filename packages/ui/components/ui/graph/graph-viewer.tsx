@@ -2236,6 +2236,7 @@ export function GraphViewer({
 				>
 					<GraphEdgeInspector
 						edge={selectedEdge}
+						overlay={overlay}
 						sourceCaption={edgeSourceCaption}
 						targetCaption={edgeTargetCaption}
 						sourceAccountId={nodeCaptionAccountId(

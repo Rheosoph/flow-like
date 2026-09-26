@@ -59,8 +59,8 @@ async fn definitions(config: &PlacementConfig) -> Result<BTreeMap<String, Defini
         );
         let board = app
             .open_board_authoritative(event.board_id.clone(), Some(version(binding.board_version)))
-            .await?;
-        let board = board.lock().await;
+            .await?
+            .snapshot();
         ensure!(
             board.id == event.board_id && board.version == version(binding.board_version),
             "Board does not match its pin"

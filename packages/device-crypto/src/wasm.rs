@@ -31,6 +31,161 @@ fn time(now: f64) -> Result<i64> {
     Ok(now as i64)
 }
 
+#[wasm_bindgen(js_name = createCertificateAuthorityVault)]
+pub fn create_certificate_authority_vault(
+    spec: JsValue,
+    password: Vec<u8>,
+    now: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    let password = Zeroizing::new(password);
+    decode(spec)
+        .and_then(|spec| {
+            crate::certificate_authority::create_certificate_authority_vault(
+                &spec,
+                &password,
+                time(now)?,
+            )
+        })
+        .and_then(|vault| encode(&vault))
+        .map_err(error)
+}
+
+#[wasm_bindgen(js_name = inspectCertificateAuthorityVault)]
+pub fn inspect_certificate_authority_vault(
+    account_binding: &str,
+    authority_id: &str,
+    password: Vec<u8>,
+    ciphertext: &[u8],
+) -> std::result::Result<JsValue, JsValue> {
+    let password = Zeroizing::new(password);
+    crate::certificate_authority::inspect_certificate_authority_vault(
+        account_binding,
+        authority_id,
+        &password,
+        ciphertext,
+    )
+    .and_then(|public| encode(&public))
+    .map_err(error)
+}
+
+#[wasm_bindgen(js_name = rewrapCertificateAuthorityVault)]
+pub fn rewrap_certificate_authority_vault(
+    account_binding: &str,
+    authority_id: &str,
+    current_password: Vec<u8>,
+    new_password: Vec<u8>,
+    ciphertext: &[u8],
+    root_ciphertext: &[u8],
+) -> std::result::Result<JsValue, JsValue> {
+    let current_password = Zeroizing::new(current_password);
+    let new_password = Zeroizing::new(new_password);
+    crate::certificate_authority::rewrap_certificate_authority_vault(
+        account_binding,
+        authority_id,
+        &current_password,
+        &new_password,
+        ciphertext,
+        root_ciphertext,
+    )
+    .and_then(|vault| encode(&vault))
+    .map_err(error)
+}
+
+#[wasm_bindgen(js_name = inspectCertificateAuthorityBackup)]
+pub fn inspect_certificate_authority_backup(
+    account_binding: &str,
+    authority_id: &str,
+    password: Vec<u8>,
+    ciphertext: &[u8],
+    root_ciphertext: &[u8],
+) -> std::result::Result<JsValue, JsValue> {
+    let password = Zeroizing::new(password);
+    crate::certificate_authority::inspect_certificate_authority_backup(
+        account_binding,
+        authority_id,
+        &password,
+        ciphertext,
+        root_ciphertext,
+    )
+    .and_then(|public| encode(&public))
+    .map_err(error)
+}
+
+#[wasm_bindgen(js_name = renewCertificateAuthorityVault)]
+pub fn renew_certificate_authority_vault(
+    account_binding: &str,
+    authority_id: &str,
+    password: Vec<u8>,
+    ciphertext: &[u8],
+    root_ciphertext: &[u8],
+    now: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    let password = Zeroizing::new(password);
+    time(now)
+        .and_then(|now| {
+            crate::certificate_authority::renew_certificate_authority_vault(
+                account_binding,
+                authority_id,
+                &password,
+                ciphertext,
+                root_ciphertext,
+                now,
+            )
+        })
+        .and_then(|vault| encode(&vault))
+        .map_err(error)
+}
+
+#[wasm_bindgen(js_name = signServiceCertificate)]
+pub fn sign_service_certificate(
+    account_binding: &str,
+    authority_id: &str,
+    password: Vec<u8>,
+    ciphertext: &[u8],
+    request: JsValue,
+    now: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    let password = Zeroizing::new(password);
+    decode(request)
+        .and_then(|request| {
+            crate::certificate_authority::sign_service_certificate(
+                account_binding,
+                authority_id,
+                &password,
+                ciphertext,
+                &request,
+                time(now)?,
+            )
+        })
+        .and_then(|chain| encode(&chain))
+        .map_err(error)
+}
+
+#[wasm_bindgen(js_name = signDeviceCertificateIssuer)]
+pub fn sign_device_certificate_issuer(
+    account_binding: &str,
+    authority_id: &str,
+    password: Vec<u8>,
+    ciphertext: &[u8],
+    request: JsValue,
+    now: f64,
+) -> std::result::Result<JsValue, JsValue> {
+    let password = Zeroizing::new(password);
+    decode(request)
+        .and_then(|request| {
+            crate::certificate_authority::sign_device_certificate_issuer(
+                account_binding,
+                authority_id,
+                &password,
+                ciphertext,
+                &request,
+                time(now)?,
+            )
+        })
+        .and_then(|chain| encode(&chain))
+        .map_err(error)
+}
+
 trait Closeable {
     fn close(&self);
 }

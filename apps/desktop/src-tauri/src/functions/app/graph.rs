@@ -210,7 +210,7 @@ async fn derive_action_parameter_schema(
                 "Could not load the action's pinned board version to derive its parameter schema: {error}"
             )
         })?;
-    let guard = board.lock().await;
+    let guard = board.snapshot();
     validated_action_parameter_schema(&guard, start_node_id)
 }
 
@@ -235,7 +235,7 @@ async fn ensure_action_board_published_with_mode(
             )
         })?;
     let (current, existing) = {
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         (guard.version, guard.get_versions(None).await?)
     };
     let mut pinned = match action.board_version {
@@ -263,12 +263,12 @@ async fn ensure_action_board_published_with_mode(
             .map(str::trim)
             .filter(|node_id| !node_id.is_empty())
             .ok_or_else(|| flow_like_types::anyhow!("The ontology action has no start node"))?;
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         validated_action_parameter_schema(&guard, start_node_id)?;
     }
     let mut prepared = None;
     if pinned == current {
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         if existing.contains(&pinned) {
             if publish_draft && !guard.snapshot_matches_current(pinned, None).await? {
                 let snapshot = guard.prepare_snapshot_recovering_from_races(None).await?;
@@ -316,7 +316,7 @@ async fn ensure_action_board_published_with_mode(
         && pinned.1 == current.1
         && pinned.2 > current.2
     {
-        let guard = board.lock().await;
+        let guard = board.snapshot();
         if guard.snapshot_matches_current(pinned, None).await? {
             prepared = Some(guard.prepared_snapshot_at_version(pinned, None).await?);
         } else {
@@ -620,7 +620,7 @@ async fn commit_action_board_snapshots(
             .open_board_authoritative(prepared.board_id().to_string(), None)
             .await?;
         let committed = board
-            .lock()
+            .write()
             .await
             .commit_prepared_snapshot(prepared, None)
             .await?;

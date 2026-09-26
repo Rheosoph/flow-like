@@ -22,6 +22,7 @@ use crate::{
     state::AppState,
 };
 use flow_like_types::create_id;
+use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -172,6 +173,28 @@ fn pick_best_meta<'a>(metas: &'a [meta::Model], language: &str) -> Option<&'a me
     MetaSummary::pick_best(metas, language)
 }
 
+/// Meta rows store bare media ids; clients need signed URLs to render the icon and thumbnail.
+async fn presign_pin_media<'a>(
+    state: &AppState,
+    responses: impl IntoIterator<Item = &'a mut AppPackageResponse>,
+) {
+    let Ok(master_creds) = state.master_credentials().await else {
+        return;
+    };
+    let Ok(store) = master_creds.to_store(false).await else {
+        return;
+    };
+    let store = &store;
+    join_all(responses.into_iter().filter_map(|response| {
+        let package_id = response.package_id.clone();
+        response
+            .metadata
+            .as_mut()
+            .map(|metadata| async move { metadata.presign_media(&package_id, store).await })
+    }))
+    .await;
+}
+
 /// The response for a single pin, with its package, best meta and licence.
 async fn pin_response(
     state: &AppState,
@@ -192,7 +215,9 @@ async fn pin_response(
         .all(&state.db)
         .await?;
     let context = PinContext::load(state, std::slice::from_ref(pin), viewer).await?;
-    Ok(context.respond(pin, pkg.as_ref(), pick_best_meta(&metas, language)))
+    let mut response = context.respond(pin, pkg.as_ref(), pick_best_meta(&metas, language));
+    presign_pin_media(state, std::iter::once(&mut response)).await;
+    Ok(response)
 }
 
 fn license_lapsed() -> ApiError {
@@ -305,7 +330,7 @@ pub async fn list_packages(
         }
     }
 
-    let responses = packages
+    let mut responses: Vec<AppPackageResponse> = packages
         .iter()
         .map(|p| {
             let meta = metas_by_package
@@ -314,6 +339,7 @@ pub async fn list_packages(
             context.respond(p, pkg_map.get(&p.package_id), meta)
         })
         .collect();
+    presign_pin_media(&state, &mut responses).await;
 
     Ok(Json(responses))
 }

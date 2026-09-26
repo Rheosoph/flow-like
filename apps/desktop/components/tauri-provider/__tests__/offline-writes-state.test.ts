@@ -347,6 +347,7 @@ describe("Data Studio routing", () => {
 			db.dropColumns(APP, "orders", ["a"]),
 			db.addColumn(APP, "orders", { name: "a", sql_expression: "1" }),
 			db.alterColumn(APP, "orders", "a", true),
+			db.setPrimaryKey(APP, "orders", "id"),
 			db.dropTable(APP, "orders"),
 			db.databaseAction(APP, "orders", { type: "checkout" } as never),
 		];

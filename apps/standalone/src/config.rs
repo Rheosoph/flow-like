@@ -28,6 +28,8 @@ pub struct PlacementConfig {
     pub bit_pins: Vec<flow_like_device_protocol::ProjectBitPin>,
     #[serde(default)]
     pub hosting: Option<HostingConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_certificate_id: Option<String>,
     #[serde(default = "default_max_replicas")]
     pub max_replicas: u8,
     #[serde(default)]
@@ -192,6 +194,9 @@ impl PlacementConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(id) = &self.tls_certificate_id {
+            flow_like_device_protocol::validate_certificate_id(id)?;
+        }
         if let Some(resources) = &self.resources {
             resources.validate()?;
         }

@@ -2,16 +2,25 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { ArrowDown, X } from "lucide-react";
-import { useCallback, useState } from "react";
-import type { SubgraphEdge } from "../../../state/backend-state/graph-state";
+import { useCallback, useMemo, useState } from "react";
+import type {
+	GraphOverlay,
+	SubgraphEdge,
+} from "../../../state/backend-state/graph-state";
 import { Button } from "../button";
 import { ScrollArea } from "../scroll-area";
 import { UserInlineTag } from "../user-identity";
-import { CopyButton, FieldFilter, PropertyRow } from "./graph-node-inspector";
+import {
+	CopyButton,
+	FieldFilter,
+	PropertyRow,
+	declaredTypes,
+} from "./graph-node-inspector";
 import { getGraphIcon } from "./icons";
 
 export interface GraphEdgeInspectorProps {
 	edge: SubgraphEdge | null;
+	overlay?: GraphOverlay;
 	sourceCaption?: string;
 	targetCaption?: string;
 	sourceAccountId?: string | null;
@@ -21,6 +30,7 @@ export interface GraphEdgeInspectorProps {
 
 export function GraphEdgeInspector({
 	edge,
+	overlay,
 	sourceCaption,
 	targetCaption,
 	sourceAccountId,
@@ -37,6 +47,14 @@ export function GraphEdgeInspector({
 			return next;
 		});
 	}, []);
+	const typeNames = useMemo(
+		() =>
+			declaredTypes(
+				overlay?.edges.find((candidate) => candidate.label === edge?.label)
+					?.property_columns,
+			),
+		[overlay, edge?.label],
+	);
 
 	if (!edge) return null;
 
@@ -160,6 +178,7 @@ export function GraphEdgeInspector({
 										value={value}
 										propKey={key}
 										metadata={edge.property_metadata?.[key]}
+										typeName={typeNames.get(key)}
 									/>
 								))}
 							</div>

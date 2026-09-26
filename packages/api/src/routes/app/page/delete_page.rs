@@ -85,7 +85,7 @@ pub async fn delete_page(
         match app.open_board(board_id.clone(), None, None).await {
             Ok(board) => {
                 page_id_guard.ensure_held()?;
-                let mut board_guard = board.lock().await;
+                let mut board_guard = board.write().await;
                 if let Err(error) = board_guard.delete_page(&page_id, None).await {
                     if let Some(upgrade) = ApiError::from_board_format_error(&error) {
                         return Err(upgrade);

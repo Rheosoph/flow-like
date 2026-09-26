@@ -6,7 +6,7 @@ import {
 } from "@xyflow/react";
 import { buildLayoutGraph } from "./build";
 import { REROUTE_HEIGHT, REROUTE_WIDTH, stableHandleOffset } from "./measure";
-import type { AutoLayoutInput, LEdge, LayoutBox } from "./types";
+import type { AutoLayoutInput, LEdge, LGraph, LayoutBox } from "./types";
 
 interface Point {
 	x: number;
@@ -46,6 +46,7 @@ interface Wire {
 	source: Point;
 	target: Point;
 	segments: Segment[];
+	corridor?: { top: number; bottom: number };
 }
 
 interface WireSegment extends Segment {
@@ -56,7 +57,222 @@ const CLEARANCE = 8;
 const LANE_GAP = 24;
 const CELL_SIZE = 128;
 const FLATNESS = 0.25;
-const MAX_CANDIDATES = 48;
+const MAX_CANDIDATES = 64;
+const BRANCH_DISTANCE_COST = 80;
+const MAX_BRANCH_STEPS = 20_000;
+
+/** Exclusive execution descendants define branches; joins belong to neither sibling. */
+function branchAffinities(graph: LGraph) {
+	const execution = new Set(
+		graph.order.filter((id) => {
+			const node = graph.nodes.get(id);
+			return node && (node.execIn.length > 0 || node.execOut.length > 0);
+		}),
+	);
+	const families: Array<Array<Set<string>>> = [];
+	const components: Array<Set<string>> = [];
+	const visited = new Set<string>();
+	for (const id of execution) {
+		if (visited.has(id)) continue;
+		const members = new Set<string>();
+		const queue = [id];
+		visited.add(id);
+		for (let index = 0; index < queue.length; index++) {
+			const node = graph.nodes.get(queue[index]);
+			if (!node) continue;
+			members.add(node.id);
+			for (const edge of [...node.in, ...node.out]) {
+				if (edge.kind !== "exec") continue;
+				const next = edge.from === node.id ? edge.to : edge.from;
+				if (visited.has(next)) continue;
+				visited.add(next);
+				queue.push(next);
+			}
+		}
+		components.push(members);
+	}
+	if (components.length > 1) families.push(components);
+	let branchSteps = 0;
+	forks: for (const id of execution) {
+		const node = graph.nodes.get(id);
+		if (!node) continue;
+		const children = [
+			...new Set(
+				node.out.filter((edge) => edge.kind === "exec").map((edge) => edge.to),
+			),
+		].sort();
+		if (children.length < 2) continue;
+		const reached = new Map<string, Set<number>>();
+		for (const [branch, child] of children.entries()) {
+			const queue = [child];
+			const seen = new Set([id, child]);
+			for (let index = 0; index < queue.length; index++) {
+				if (++branchSteps > MAX_BRANCH_STEPS) break forks;
+				const current = graph.nodes.get(queue[index]);
+				if (!current) continue;
+				const owners = reached.get(current.id) ?? new Set<number>();
+				owners.add(branch);
+				reached.set(current.id, owners);
+				for (const edge of current.out) {
+					if (++branchSteps > MAX_BRANCH_STEPS) break forks;
+					if (edge.kind !== "exec" || seen.has(edge.to)) continue;
+					seen.add(edge.to);
+					queue.push(edge.to);
+				}
+			}
+		}
+		const branches = children.map(() => new Set<string>());
+		for (const [member, owners] of reached) {
+			if (owners.size === 1) branches[[...owners][0]].add(member);
+		}
+		const exclusive = branches.filter((members) => members.size > 0);
+		if (exclusive.length > 1) families.push(exclusive);
+	}
+	const memberships = new Map<string, Map<number, number>>();
+	for (const [family, branches] of families.entries()) {
+		for (const [branch, members] of branches.entries()) {
+			for (const id of members) {
+				const own = memberships.get(id) ?? new Map<number, number>();
+				own.set(family, branch);
+				memberships.set(id, own);
+			}
+		}
+	}
+	// Pure data chains inherit affinity only where all execution anchors agree.
+	const seenData = new Set<string>();
+	for (const id of graph.order) {
+		if (execution.has(id) || seenData.has(id)) continue;
+		const queue = [id];
+		const anchors = new Set<string>();
+		seenData.add(id);
+		for (let index = 0; index < queue.length; index++) {
+			const node = graph.nodes.get(queue[index]);
+			if (!node) continue;
+			for (const edge of [...node.in, ...node.out]) {
+				if (edge.kind !== "data") continue;
+				const next = edge.from === node.id ? edge.to : edge.from;
+				if (execution.has(next)) anchors.add(next);
+				else if (!seenData.has(next)) {
+					seenData.add(next);
+					queue.push(next);
+				}
+			}
+		}
+		const choices = new Map<number, Set<number>>();
+		for (const anchor of anchors) {
+			for (const [family, branch] of memberships.get(anchor) ?? []) {
+				const branches = choices.get(family) ?? new Set<number>();
+				branches.add(branch);
+				choices.set(family, branches);
+			}
+		}
+		for (const member of queue) {
+			const own = new Map<number, number>();
+			for (const [family, branches] of choices) {
+				if (branches.size !== 1) continue;
+				const branch = [...branches][0];
+				own.set(family, branch);
+			}
+			memberships.set(member, own);
+		}
+	}
+	const boxes = families.map((branches) =>
+		branches.map((members) =>
+			[...members].flatMap((id): Bounds[] => {
+				const node = graph.nodes.get(id);
+				return node
+					? [
+							{
+								left: node.x,
+								top: node.y,
+								right: node.x + node.width,
+								bottom: node.y + node.height,
+							},
+						]
+					: [];
+			}),
+		),
+	);
+	return { memberships, boxes };
+}
+
+function routeCorridor(
+	wire: Wire,
+	affinity: ReturnType<typeof branchAffinities>,
+) {
+	let top = Number.NEGATIVE_INFINITY;
+	let bottom = Number.POSITIVE_INFINITY;
+	const inSpan = (boxes: Bounds[]) =>
+		boxes.filter(
+			(box) =>
+				box.right >= Math.min(wire.source.x, wire.target.x) &&
+				box.left <= Math.max(wire.source.x, wire.target.x),
+		);
+	const verticalBounds = (boxes: Bounds[]) => ({
+		top: Math.min(...boxes.map((box) => box.top)),
+		bottom: Math.max(...boxes.map((box) => box.bottom)),
+	});
+	for (const [family, branch] of affinity.memberships.get(wire.edge.from) ??
+		[]) {
+		if (affinity.memberships.get(wire.edge.to)?.get(family) !== branch)
+			continue;
+		const ownBoxes = affinity.boxes[family][branch];
+		const local = inSpan(ownBoxes);
+		const own = verticalBounds(local.length ? local : ownBoxes);
+		for (const [sibling, boxes] of affinity.boxes[family].entries()) {
+			if (sibling === branch) continue;
+			const nearby = inSpan(boxes);
+			if (!nearby.length) continue;
+			const other = verticalBounds(nearby);
+			if (other.top + other.bottom < own.top + own.bottom) {
+				top = Math.max(
+					top,
+					Math.min((other.bottom + own.top) / 2, wire.source.y, wire.target.y),
+				);
+			} else if (other.top + other.bottom > own.top + own.bottom) {
+				bottom = Math.min(
+					bottom,
+					Math.max((own.bottom + other.top) / 2, wire.source.y, wire.target.y),
+				);
+			}
+		}
+	}
+	return { top, bottom };
+}
+
+function branchDistance(wire: Wire, top: number, bottom: number): number {
+	if (!wire.corridor) return 0;
+	return (
+		Math.max(0, wire.corridor.top - top) +
+		Math.max(0, bottom - wire.corridor.bottom)
+	);
+}
+
+function branchCost(wire: Wire, segments: Segment[]): number {
+	let top = Number.POSITIVE_INFINITY;
+	let bottom = Number.NEGATIVE_INFINITY;
+	for (const segment of segments) {
+		top = Math.min(top, segment.top);
+		bottom = Math.max(bottom, segment.bottom);
+	}
+	return branchDistance(wire, top, bottom) * BRANCH_DISTANCE_COST;
+}
+
+function corridorLaneCost(wire: Wire, points: Point[]): number {
+	const y = points[points.length > 2 ? 1 : 0].y + REROUTE_HEIGHT / 2;
+	const lanes = [
+		(wire.corridor?.top ?? Number.NEGATIVE_INFINITY) +
+			CLEARANCE +
+			REROUTE_HEIGHT / 2,
+		(wire.corridor?.bottom ?? Number.POSITIVE_INFINITY) -
+			CLEARANCE -
+			REROUTE_HEIGHT / 2,
+	].filter(Number.isFinite);
+	return lanes.length
+		? Math.min(...lanes.map((lane) => Math.abs(y - lane))) *
+				BRANCH_DISTANCE_COST
+		: 0;
+}
 
 function overlaps(a: Bounds, b: Bounds): boolean {
 	return (
@@ -417,6 +633,7 @@ function makeWires(
 	}
 	for (const [index, box] of (input.obstacles ?? []).entries())
 		boxes.push(obstacle(`obstacle:${index}`, box));
+	const affinity = branchAffinities(graph);
 	const wires: Wire[] = [];
 	for (const edge of graph.edges) {
 		const from = graph.nodes.get(edge.from);
@@ -437,13 +654,18 @@ function makeWires(
 			},
 			segments: [],
 		};
+		wire.corridor = routeCorridor(wire, affinity);
 		wire.segments = routeSegments(wire, [], input.edgePathType);
 		wires.push(wire);
 	}
 	return { wires, boxes };
 }
 
-function candidates(wire: Wire, boxes: Obstacle[]): Point[][] {
+function candidates(
+	wire: Wire,
+	boxes: Obstacle[],
+	pathType: AutoLayoutInput["edgePathType"],
+): Point[][] {
 	const { source, target } = wire;
 	const left = Math.min(source.x, target.x) - 64;
 	const right = Math.max(source.x, target.x) + 64;
@@ -457,26 +679,51 @@ function candidates(wire: Wire, boxes: Obstacle[]): Point[][] {
 		values.add(Math.floor(box.top - LANE_GAP));
 		values.add(Math.ceil(box.bottom + LANE_GAP));
 	}
+	const corridorLanes: number[] = [];
+	if (Number.isFinite(wire.corridor?.top))
+		corridorLanes.push(
+			Math.ceil((wire.corridor?.top ?? 0) + CLEARANCE + REROUTE_HEIGHT / 2),
+		);
+	if (Number.isFinite(wire.corridor?.bottom))
+		corridorLanes.push(
+			Math.floor((wire.corridor?.bottom ?? 0) - CLEARANCE - REROUTE_HEIGHT / 2),
+		);
 	const minY =
 		Math.min(source.y, target.y, ...nearby.map((box) => box.top)) - LANE_GAP;
 	const maxY =
 		Math.max(source.y, target.y, ...nearby.map((box) => box.bottom)) + LANE_GAP;
-	const cost = (y: number) => Math.abs(source.y - y) + Math.abs(target.y - y);
-	const lanes = [...values]
+	const cost = (y: number) =>
+		Math.abs(source.y - y) +
+		Math.abs(target.y - y) +
+		branchDistance(wire, y, y) * BRANCH_DISTANCE_COST;
+	const nearbyLanes = [...values]
 		.sort((a, b) => cost(a) - cost(b) || a - b)
 		.slice(0, 14);
-	lanes.push(Math.floor(minY), Math.ceil(maxY));
+	// Reserve local boundary lanes even when nearer samples all run through a node.
+	const lanes = [
+		...new Set([
+			...corridorLanes,
+			...nearbyLanes,
+			Math.floor(minY),
+			Math.ceil(maxY),
+		]),
+	];
 	const result: Point[][] = [];
 	const dot = (x: number, y: number): Point => ({
 		x: Math.round(x),
 		y: Math.round(y - REROUTE_HEIGHT / 2),
 	});
 	const forward = target.x - source.x;
+	// Step paths need two 20px leads before distinct insets produce distinct vertical tracks.
+	const insets =
+		pathType === "step" || pathType === "smoothstep"
+			? [40, 48, 56]
+			: [24, 32, 40];
 	for (const y of [...new Set(lanes)]) {
 		if (forward >= 48 && forward < 104) {
 			result.push([dot((source.x + target.x - REROUTE_WIDTH) / 2, y)]);
 		} else if (forward >= 104) {
-			for (const inset of [24, 40]) {
+			for (const inset of insets) {
 				result.push([
 					dot(source.x + inset, y),
 					dot(target.x - inset - REROUTE_WIDTH, y),
@@ -524,7 +771,7 @@ export function sampleDataRoute(
 function routeInOrder(
 	input: AutoLayoutInput,
 	positions: ReadonlyMap<string, [number, number]>,
-	order: "longest" | "shortest" | "reverse",
+	order: "longest" | "shortest" | "reverse" | "corridor",
 ) {
 	const { wires, boxes } = makeWires(input, positions);
 	const boxIndex = new SpatialIndex<Obstacle>();
@@ -578,6 +825,7 @@ function routeInOrder(
 			}
 			const originalHits = collisions(wire, wire.segments, boxIndex);
 			const originalCrossings = crossings(wire, wire.segments, wireIndex);
+			const originalBranchCost = branchCost(wire, wire.segments);
 			const route: DataRoute = results.get(wire.key) ?? {
 				from: wire.edge.from,
 				to: wire.edge.to,
@@ -592,20 +840,25 @@ function routeInOrder(
 					boxIndex.add(box);
 				}
 			};
-			if (originalHits === 0 && originalCrossings === 0) {
+			if (
+				originalHits === 0 &&
+				originalCrossings === 0 &&
+				originalBranchCost === 0
+			) {
 				restoreBoxes();
 				continue;
 			}
 			let bestCost = originalHits
 				? Number.POSITIVE_INFINITY
 				: originalCrossings * 2000 +
+					originalBranchCost +
 					route.waypoints.length * 80 +
 					wire.segments.reduce(
 						(sum, line) => sum + distance(line.a, line.b),
 						0,
 					);
 			let bestSegments: Segment[] | undefined;
-			for (const points of candidates(wire, boxes)) {
+			for (const points of candidates(wire, boxes, input.edgePathType)) {
 				const dots = points.map((point, index) =>
 					obstacle(
 						`candidate:${index}`,
@@ -647,9 +900,19 @@ function routeInOrder(
 				)
 					continue;
 				const crossed = crossings(wire, segments, wireIndex);
-				if (!originalHits && crossed >= originalCrossings) continue;
+				const locality = branchCost(wire, segments);
+				if (
+					!originalHits &&
+					crossed >= originalCrossings &&
+					locality >= originalBranchCost
+				)
+					continue;
 				const cost =
 					crossed * 2000 +
+					locality +
+					(order === "corridor" && pass === 0
+						? corridorLaneCost(wire, points)
+						: 0) +
 					points.length * 80 +
 					segments.reduce((sum, line) => sum + distance(line.a, line.b), 0);
 				if (cost >= bestCost) continue;
@@ -685,12 +948,14 @@ function routeInOrder(
 	let hits = 0;
 	let crossingCount = 0;
 	let length = 0;
+	let locality = 0;
 	for (const wire of eligible) {
 		const dots = routeBoxes.get(wire.key) ?? [];
 		for (const dot of dots) boxIndex.remove(dot);
 		hits += collisions(wire, wire.segments, boxIndex);
 		for (const dot of dots) boxIndex.add(dot);
 		crossingCount += crossings(wire, wire.segments, wireIndex);
+		locality += branchCost(wire, wire.segments);
 		length += wire.segments.reduce(
 			(sum, line) => sum + distance(line.a, line.b),
 			0,
@@ -703,8 +968,20 @@ function routeInOrder(
 	const dots = routes.reduce((sum, route) => sum + route.waypoints.length, 0);
 	return {
 		routes,
+		hits,
 		crossingCount,
-		score: hits * 1_000_000_000 + crossingCount * 2000 + dots * 80 + length,
+		locality,
+		hasBranchCorridors: eligible.some(
+			(wire) =>
+				Number.isFinite(wire.corridor?.top) ||
+				Number.isFinite(wire.corridor?.bottom),
+		),
+		score:
+			hits * 1_000_000_000 +
+			crossingCount * 2000 +
+			dots * 80 +
+			length +
+			locality,
 	};
 }
 
@@ -715,11 +992,20 @@ export function planDataRoutes(
 ): DataRoute[] {
 	let best = routeInOrder(input, positions, "longest");
 	// Early lane choices constrain later wires. Try other orders on tangled boards.
-	if (best.crossingCount > 0 && best.routes.length > 1) {
+	if ((best.crossingCount > 0 || best.locality > 0) && best.routes.length > 1) {
 		for (const order of ["shortest", "reverse"] as const) {
 			const candidate = routeInOrder(input, positions, order);
 			if (candidate.score < best.score) best = candidate;
 		}
+	}
+	// An early gutter choice can block a later endpoint. Try reserving local lanes first.
+	if (
+		best.hasBranchCorridors &&
+		(best.hits > 0 || best.crossingCount > 0) &&
+		best.routes.length > 1
+	) {
+		const candidate = routeInOrder(input, positions, "corridor");
+		if (candidate.score < best.score) best = candidate;
 	}
 	return best.routes;
 }

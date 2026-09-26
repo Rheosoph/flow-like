@@ -51,6 +51,38 @@ function fixture(name: string): INode[] {
 		for (const id of ["a", "b", "c", "d"]) graph.pure(id);
 		graph.dataLink("a", "b");
 		graph.dataLink("c", "d");
+	} else if (name === "parallel" || name === "parallel-swap") {
+		const swap = name === "parallel-swap";
+		graph.exec("fork", {
+			start: true,
+			execIn: false,
+			execOuts: ["upper", "lower"],
+		});
+		graph.exec("join", { execOuts: 0 });
+		for (const branch of ["upper", "lower"]) {
+			const heights = branch === "upper" ? [0, 8, 4, 2] : [0, 4, 7, 2];
+			for (let index = 0; index < 4; index++) {
+				graph.exec(`${branch}-${index}`, {
+					dataIns: swap ? 6 : heights[index],
+					dataOuts: swap ? 6 : index === 0 ? 2 : 0,
+				});
+				if (index > 0)
+					graph.execLink(`${branch}-${index - 1}`, `${branch}-${index}`);
+			}
+			graph.execLink("fork", `${branch}-0`, branch);
+			graph.execLink(`${branch}-3`, "join");
+			if (!swap) {
+				graph.dataLink(`${branch}-0`, `${branch}-3`, 0, 0);
+				graph.dataLink(`${branch}-0`, `${branch}-3`, 1, 1);
+			}
+		}
+		if (swap) {
+			graph.dataLink("upper-0", "upper-2", 2, 4);
+			graph.dataLink("lower-0", "lower-2", 3, 4);
+			graph.dataLink("lower-1", "lower-3", 5, 2);
+			graph.dataLink("lower-1", "lower-3", 0, 4);
+			graph.dataLink("lower-1", "lower-3", 3, 5);
+		}
 	} else if (name === "dense") {
 		for (let index = 0; index < 7; index++) {
 			graph.exec(`step-${index}`, {

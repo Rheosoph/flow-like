@@ -92,15 +92,18 @@ pub struct PlatformContextInput<'a> {
     pub attachments: &'a [AttachmentManifestEntry],
 }
 
-/// How the running backend executes the sealed public-web fallback. Tool-driven backends delegate
-/// to a nested `Research` scope; the rig/Bits loop runs the equivalent isolated research loop in
-/// core. Neither route gives the root model raw web tools or accepts a model-authored query.
+/// How the running backend reaches the public web. `Delegated` and `Inline` keep web access out of
+/// the root model behind the sealed `research_agent`, which never accepts a model-authored query.
+/// `Native` hands the root model its backend's own search and fetch tools, so it writes its own
+/// queries from the full conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebResearchCapability {
     /// Web tools live in the nested `research_agent` specialist.
     Delegated,
     /// The core rig/Bits host runs the isolated researcher locally.
     Inline,
+    /// The root agent's CLI (Codex, Claude Code) runs its built-in web search and fetch.
+    Native,
 }
 
 const FLOWPILOT_CORE: &str = r#"You are FlowPilot, Flow-Like's platform assistant. Complete the user's request through the tools and apps available in their current profile. Prefer doing the work over merely describing steps.
@@ -128,15 +131,13 @@ Outside BUILD intake, ask only for a genuinely blocking choice; otherwise use sa
 
 Default to DIRECT. Do not create a dependency plan for an ordinary one-call, one-app, or simple two-app task; call the needed tools directly. Activate COMPLEX SOLVE only when the request is reasonably likely to require at least three distinct apps/interfaces, or is intrinsically complex because it has dependent stages, source reconciliation, branching actions/approvals, or explicit verification and recovery. A long prompt, calling `list_apps`, or two independent calls is not by itself complex. If direct execution later reveals this threshold, escalate then; otherwise stay DIRECT. Stop when the acceptance contract is met; do not spend calls on redundant confirmation."#;
 
-const TASK_ROUTING_PLAYBOOK: &str = r#"## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH: LOCAL FIRST
-
-Local apps are the first choice, including installed research/search apps.
+const TASK_ROUTING_PLAYBOOK: &str = r#"{routing_intro}
 In DIRECT and COMPLEX SOLVE, an app's active configured Events are its primary supported interface for work an Event already performs. This includes chat and page Events plus headless simple/quick-action, REST/API, and MCP Events. Work about the data itself belongs to `data_studio_agent`.
 
 1. When a work item needs an app, private content, or an action, begin with `list_apps`. Match by capability and active interface metadata, not only exact name. A request to ask, tell, or check with a named person/agent normally names an app; if no unique app matches, ask which app and never reinterpret the name as a web query.
 2. For DIRECT/COMPLEX app use, choose the best matching active Event and invoke its exact `consumer_tool`. Inspect the interface first when its payload shape is unknown. For a page, pass its Event `id` as `event_id`; never substitute its `page_id`.
 3. Call `data_studio_agent` directly for any work item about an app's data — schema, ad-hoc queries, analytics, corrections, migrations, seeding, indexes, ontologies/overlays — whether the app already exists or is being built. It needs no preflight, no inventory round, and no permission from another tool; pass the `app_id` you already have. Choose an Event instead when one already performs exactly what was asked; a failed, declined, timed-out, or approval-blocked Event is a stop to report, not work to redo through raw data.
-4. For plainly public reference work naming no app, person, or private data, call `research_agent` in the first wave. Otherwise prefer a local app: use the sealed fallback when a returned inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors make a listing partial, not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool; once app, memory, or user data is in the run, list apps first. It is rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers in a mixed request. A public query derived from private output requires a new sanitized request.
+{public_web_route}
 5. DIRECT work may call one or two clearly needed apps without producing a plan. Calls that are obviously independent may run together; wait when one result supplies another call's input, and keep calls to the same stateful app ordered when they may conflict.
 6. Interpret and synthesize app results. Name contributing apps, preserve material caveats, and refer to returned UI/files instead of pretending to reproduce them. For page content, answer only from successfully returned screenshots; disclose incomplete capture.
    Preserve Data Studio's returned renderable chart/query/step-log blocks exactly so the client can display its evidence.
@@ -181,6 +182,25 @@ Call `research_agent` in the first wave when the request is plainly public and n
 
 Preserve its verified links, source dates, conflicts, single-source limits, and what could not be established. Never promote a search snippet or unsupported claim into verified fact."#;
 
+const NATIVE_WEB_PLAYBOOK: &str = r#"## PUBLIC WEB RESEARCH
+
+Your built-in web search and page fetch tools are available to you and to no specialist. Research public, current, or verifiable facts the request needs yourself, then put the verified facts, with their source URLs, into the owning specialist's instruction. Prefer primary sources: official sites, registries, and open data such as OpenStreetMap.
+
+Record the exact URL and retrieval date for every fact that gets persisted. Preserve disagreements, single-source limits, and what could not be established. Never promote a search snippet or unsupported claim into verified fact, and never fabricate coordinates, figures, or sources."#;
+
+const SEALED_ROUTING_INTRO: &str =
+    "## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH: LOCAL FIRST
+
+Local apps are the first choice, including installed research/search apps.";
+
+const SEALED_PUBLIC_WEB_ROUTE: &str = "4. For plainly public reference work naming no app, person, or private data, call `research_agent` in the first wave. Otherwise prefer a local app: use the sealed fallback when a returned inventory contains no suitable app/interface for that public-research work item, or after local research candidates were tried in best-fit order until one answered or no useful, nonredundant candidate remained. `complete: false`, truncation, or event-read errors make a listing partial, not proof of absence. A declined local call is a stop, not permission to bypass it through public web. Never put `research_agent` in the same call wave as a local app/content/action tool; once app, memory, or user data is in the run, list apps first. It is rebound to the immutable source request and receives no app inventory/results, root memory, or attached files. It must extract only safe public factual subquestions and never query or repeat secrets, credentials, or private identifiers in a mixed request. A public query derived from private output requires a new sanitized request.";
+
+const NATIVE_ROUTING_INTRO: &str = "## EXISTING APPS, EVENTS, DATA, AND PUBLIC RESEARCH
+
+Local apps are the first choice for app, private-content, and action work. Public facts come from your built-in web search.";
+
+const NATIVE_PUBLIC_WEB_ROUTE: &str = "4. Research public facts with your built-in web search and page fetch whenever a work item needs them, alongside other independent calls. An installed research/search app is optional and never a prerequisite: when one errors, cannot run, or returns nothing usable, search the web yourself. A call the user declined is still a stop. Queries and fetched URLs leave the device, so they carry only public subject matter (organizations, places, products, standards, topics) and never app record contents, internal IDs, file contents, credentials, personal data, or anything the user shared privately.";
+
 /// System prompt for the global (platform-level) FlowPilot assistant, for backends that delegate
 /// public-web research to the `research_agent` specialist.
 pub fn global_assistant_system_prompt() -> String {
@@ -190,13 +210,29 @@ pub fn global_assistant_system_prompt() -> String {
 /// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend; only
 /// the public-web fragment follows the backend's actual capability.
 pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> String {
-    let web = match capability {
-        WebResearchCapability::Delegated => DELEGATED_WEB_PLAYBOOK,
-        WebResearchCapability::Inline => INLINE_WEB_PLAYBOOK,
+    let (routing_intro, public_web_route, web) = match capability {
+        WebResearchCapability::Delegated => (
+            SEALED_ROUTING_INTRO,
+            SEALED_PUBLIC_WEB_ROUTE,
+            DELEGATED_WEB_PLAYBOOK,
+        ),
+        WebResearchCapability::Inline => (
+            SEALED_ROUTING_INTRO,
+            SEALED_PUBLIC_WEB_ROUTE,
+            INLINE_WEB_PLAYBOOK,
+        ),
+        WebResearchCapability::Native => (
+            NATIVE_ROUTING_INTRO,
+            NATIVE_PUBLIC_WEB_ROUTE,
+            NATIVE_WEB_PLAYBOOK,
+        ),
     };
+    let routing = TASK_ROUTING_PLAYBOOK
+        .replace("{routing_intro}", routing_intro)
+        .replace("{public_web_route}", public_web_route);
     [
         FLOWPILOT_CORE,
-        TASK_ROUTING_PLAYBOOK,
+        routing.as_str(),
         INTAKE_PLAYBOOK,
         BUILD_BRIEF_PLAYBOOK,
         APP_BUILD_PIPELINE,
@@ -362,6 +398,7 @@ pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
     let mut lines = vec![
         "## FILES ATTACHED THIS TURN".to_string(),
         "These files belong to this message. You may inspect images directly. To hand files to an app chat, set `forward_files` to the exact relevant names, or `[]` for none; never forward unrelated files.".to_string(),
+        "To load a GeoJSON file (FeatureCollection, Feature or Feature array) into an app's tables, call `data_studio_agent` with `forward_files` naming it and ask for `import_geojson`; no other attachment format can be imported.".to_string(),
     ];
     for entry in entries {
         let name = entry
@@ -685,6 +722,28 @@ mod tests {
     }
 
     #[test]
+    fn native_web_prompt_researches_directly_and_keeps_queries_public() {
+        let native = global_assistant_system_prompt_for(WebResearchCapability::Native);
+
+        assert!(native.contains("## PUBLIC WEB RESEARCH"));
+        assert!(!native.contains("research_agent"));
+        assert!(!native.contains("SEALED PUBLIC-WEB FALLBACK"));
+        assert!(!native.contains("LOCAL FIRST"));
+        assert!(native.contains("never a prerequisite"));
+        assert!(native.contains("A call the user declined is still a stop"));
+        assert!(native.contains("never app record contents, internal IDs"));
+        for capability in [
+            WebResearchCapability::Delegated,
+            WebResearchCapability::Inline,
+            WebResearchCapability::Native,
+        ] {
+            let prompt = global_assistant_system_prompt_for(capability);
+            assert!(!prompt.contains("{routing_intro}"));
+            assert!(!prompt.contains("{public_web_route}"));
+        }
+    }
+
+    #[test]
     fn task_routing_is_direct_by_default_and_gates_complex_solve() {
         let prompt = global_assistant_system_prompt();
 
@@ -954,5 +1013,20 @@ mod tests {
         assert!(context.contains("Current UTC timestamp:"));
         assert!(context.contains(&chrono::Utc::now().format("%Y-%m-%d").to_string()));
         assert!(!global_assistant_system_prompt().contains("## CURRENT TIME"));
+    }
+
+    #[test]
+    fn attachment_manifest_routes_geojson_through_data_studio_forwarding() {
+        assert!(attachments_section(&[]).is_empty());
+        let section = attachments_section(&[AttachmentManifestEntry {
+            name: Some("sites.geojson".to_string()),
+            mime_type: Some("application/geo+json".to_string()),
+            size: Some(2048),
+            url: None,
+        }]);
+        assert!(section.contains("- sites.geojson (application/geo+json, 2.0 KB)"));
+        assert!(section.contains("call `data_studio_agent` with `forward_files`"));
+        assert!(section.contains("`import_geojson`"));
+        assert!(section.contains("no other attachment format can be imported"));
     }
 }

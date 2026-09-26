@@ -42,6 +42,7 @@ const dbState = Object.fromEntries(
 		"dropColumns",
 		"addColumn",
 		"alterColumn",
+		"setPrimaryKey",
 		"getIndices",
 		"dropIndex",
 		"buildIndex",
@@ -213,6 +214,14 @@ describe("reference-aware table inspector", () => {
 			true,
 			selector,
 		]);
+		await explorer?.onSetPrimaryKey?.("id");
+		expect(calls.find((call) => call.name === "setPrimaryKey")?.args).toEqual([
+			"app",
+			"samples",
+			"id",
+			true,
+			selector,
+		]);
 	});
 	test("historical views hide row, schema and index mutations while preserving index reads", () => {
 		for (const selector of [
@@ -229,6 +238,7 @@ describe("reference-aware table inspector", () => {
 				"onDropColumns",
 				"onAddColumn",
 				"onAlterColumn",
+				"onSetPrimaryKey",
 				"onDropIndex",
 				"onBuildIndex",
 			] as const)

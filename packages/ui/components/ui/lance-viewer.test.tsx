@@ -3,10 +3,10 @@ import type { LanceField } from "./lance-viewer";
 import {
 	arrowToLanceSchema,
 	buildRowIdentityFilter,
-	describeField,
 	resolveTemporalCell,
 	resolveUserCell,
 } from "./lance-viewer";
+import { describeField } from "./table-schema-dialog";
 
 const schema = arrowToLanceSchema({
 	fields: [

@@ -27,6 +27,7 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -36,7 +37,6 @@ import {
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import type { ArrowSchemaJSON } from "../../ui/lance-viewer";
-import { ScrollArea } from "../../ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -719,9 +719,9 @@ export function OntologySetupDialog({
 					</div>
 				)}
 
-				<div className="min-h-0 flex-1 overflow-hidden">
+				<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 					{step === "sources" && (
-						<div className="flex h-full min-h-80 flex-col gap-4">
+						<div className="flex min-h-80 flex-1 flex-col gap-4">
 							<div className="space-y-1.5">
 								<Label htmlFor="ontology-name">
 									{t("ontologyName", "Ontology name")}
@@ -751,7 +751,7 @@ export function OntologySetupDialog({
 									})}
 								</Badge>
 							</div>
-							<ScrollArea className="min-h-0 flex-1 rounded-lg border">
+							<div className="min-h-0 flex-1 overflow-y-auto rounded-lg border">
 								<div className="grid gap-2 p-3 sm:grid-cols-2">
 									{projectTables.map((table) => (
 										<div
@@ -781,12 +781,12 @@ export function OntologySetupDialog({
 										</p>
 									)}
 								</div>
-							</ScrollArea>
+							</div>
 						</div>
 					)}
 
 					{step === "objects" && (
-						<ScrollArea className="h-full min-h-80 pr-3">
+						<DialogBody className="min-h-80 pr-3">
 							<div className="space-y-3">
 								<div>
 									<p className="text-sm font-medium">
@@ -952,11 +952,11 @@ export function OntologySetupDialog({
 									);
 								})}
 							</div>
-						</ScrollArea>
+						</DialogBody>
 					)}
 
 					{step === "relationships" && (
-						<ScrollArea className="h-full min-h-80 pr-3">
+						<DialogBody className="min-h-80 pr-3">
 							<div className="space-y-3">
 								<div className="flex items-start justify-between gap-3">
 									<div>
@@ -1077,11 +1077,11 @@ export function OntologySetupDialog({
 									</div>
 								)}
 							</div>
-						</ScrollArea>
+						</DialogBody>
 					)}
 
 					{step === "publish" && (
-						<div className="space-y-5 py-2">
+						<DialogBody className="space-y-5 py-2">
 							<div className="space-y-1.5">
 								<Label htmlFor="ontology-description">
 									{t("description", "Description")}
@@ -1167,7 +1167,7 @@ export function OntologySetupDialog({
 									"The ontology stays private until you expose it from Sharing. Object views and board bindings are generated automatically.",
 								)}
 							</p>
-						</div>
+						</DialogBody>
 					)}
 				</div>
 

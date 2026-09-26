@@ -7,7 +7,7 @@ use flow_like_runtime::{
         compiled::TemplateCache,
         execution::{
             ExecutionEnvironment, InternalRun, LogLevel, RunPayload, RunStatus,
-            service::{ServiceOutcome, ServiceReadyKind},
+            service::{ServiceOutcome, ServiceReadyKind, ServiceTlsProvider},
         },
         pin::{ValueType, resolve_schema},
         variable::{Variable, VariableType},
@@ -18,8 +18,8 @@ use flow_like_runtime::{
 };
 use flow_like_storage::{
     Path as StorePath,
+    databases::vector::lancedb::connect_lance,
     files::store::{FlowLikeStore, local_store::LocalObjectStore},
-    lancedb,
 };
 use flow_like_types::authorization::RequestAuthorizer;
 use flow_like_types::intercom::BufferedInterComHandler;
@@ -99,7 +99,7 @@ pub async fn validate_rollout_authorized(
                 cache.path(),
             )
             .await?;
-            let state = initialize_state(runtime, Some(authorizer), None).await?;
+            let state = initialize_state(runtime, Some(authorizer), None, None).await?;
             validate_rollout_with_state(config, state).await
         }
     }
@@ -155,6 +155,7 @@ pub async fn run_authorized_with_ready<F: Future<Output = Result<()>>>(
         None,
         None,
         None,
+        None,
         on_ready,
     )
     .await
@@ -170,6 +171,7 @@ pub async fn run_supervised_with_ready<F: Future<Output = Result<()>>>(
     inherited_listener: Option<tokio::net::TcpListener>,
     replica: Option<crate::hosting::ReplicaContext>,
     data_root: Option<&Path>,
+    service_tls: Option<Arc<dyn ServiceTlsProvider>>,
     on_ready: impl FnOnce() -> F,
 ) -> Result<()> {
     config.validate()?;
@@ -181,6 +183,13 @@ pub async fn run_supervised_with_ready<F: Future<Output = Result<()>>>(
     if let Some(root) = data_root {
         crate::placement_data::validate_root(root, config)?;
     }
+    ensure!(
+        config.tls_certificate_id.is_none() || service_tls.is_some(),
+        "Managed TLS requires the placement certificate broker"
+    );
+    if let Some(tls) = &service_tls {
+        tls.validate().await?;
+    }
     let local_data = data_root.unwrap_or(&config.project_path);
     let mut delegating_user_id = None;
     let mut revoked = CancellationToken::new();
@@ -190,6 +199,7 @@ pub async fn run_supervised_with_ready<F: Future<Output = Result<()>>>(
                 placement_local_config(config, local_data)?,
                 authorizer,
                 None,
+                service_tls.clone(),
             )
             .await?
         }
@@ -210,7 +220,13 @@ pub async fn run_supervised_with_ready<F: Future<Output = Result<()>>>(
             .await?;
             delegating_user_id = Some(online.delegating_user_id);
             revoked = online.revoked;
-            initialize_state(runtime, Some(authorizer), Some(online.registry)).await?
+            initialize_state(
+                runtime,
+                Some(authorizer),
+                Some(online.registry),
+                service_tls.clone(),
+            )
+            .await?
         }
     };
     let mut profile = Profile::default();
@@ -333,14 +349,14 @@ pub(crate) async fn inspection_state(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => memory(),
         Err(error) => return Err(error.into()),
     });
-    initialize_state(config, authorizer, None).await
+    initialize_state(config, authorizer, None, None).await
 }
 
 pub(crate) async fn offline_state(
     root: &Path,
     authorizer: Option<Arc<dyn RequestAuthorizer>>,
 ) -> Result<Arc<FlowLikeState>> {
-    initialize_state(local_config(root)?, authorizer, None).await
+    initialize_state(local_config(root)?, authorizer, None, None).await
 }
 
 fn local_config(root: &Path) -> Result<FlowLikeConfig> {
@@ -375,15 +391,15 @@ fn local_config_with_data(root: &Path, data_root: &Path) -> Result<FlowLikeConfi
 
     let project_root = data_root.to_path_buf();
     config.register_build_project_database(Arc::new(move |path: StorePath| {
-        lancedb::connect(project_root.join(path.as_ref()).to_string_lossy().as_ref())
+        connect_lance(project_root.join(path.as_ref()).to_string_lossy().as_ref())
     }));
     let user_root = data_root.join("user");
     config.register_build_user_database(Arc::new(move |path: StorePath| {
-        lancedb::connect(user_root.join(path.as_ref()).to_string_lossy().as_ref())
+        connect_lance(user_root.join(path.as_ref()).to_string_lossy().as_ref())
     }));
     let logs_root = data_root.join("logs");
     config.register_build_logs_database(Arc::new(move |path: StorePath| {
-        lancedb::connect(logs_root.join(path.as_ref()).to_string_lossy().as_ref())
+        connect_lance(logs_root.join(path.as_ref()).to_string_lossy().as_ref())
     }));
     Ok(config)
 }
@@ -392,12 +408,14 @@ async fn initialize_state(
     config: FlowLikeConfig,
     authorizer: Option<Arc<dyn RequestAuthorizer>>,
     registry: Option<Arc<flow_like_storage::lance_io::object_store::ObjectStoreRegistry>>,
+    service_tls: Option<Arc<dyn ServiceTlsProvider>>,
 ) -> Result<Arc<FlowLikeState>> {
     let mut state = FlowLikeState::new(config, HTTPClient::new_without_refetch());
     // Store-backed local data works under Server. Ambient host credentials and
     // arbitrary filesystem paths remain unavailable to deployed workflows.
     state.execution_environment = ExecutionEnvironment::Server;
     state.request_authorizer = authorizer;
+    state.service_tls_provider = service_tls;
     if let Some(registry) = registry {
         state.set_lance_store_registry(registry);
     }
@@ -557,7 +575,7 @@ async fn run_with_state_listener<F: Future<Output = Result<()>>>(
         let source_board = app
             .open_board(event.board_id.clone(), Some(false), Some(board_version))
             .await?;
-        crate::dependencies::validate_board_packages(config, &*source_board.lock().await)?;
+        crate::dependencies::validate_board_packages(config, &source_board.snapshot())?;
         let template = template_cache
             .resolve(
                 &state,
@@ -1292,6 +1310,7 @@ mod tests {
             package_pins: Vec::new(),
             bit_pins: Vec::new(),
             max_replicas: 1,
+            tls_certificate_id: None,
             hosting: None,
             variables: Default::default(),
             secret_overrides: Default::default(),
@@ -1596,8 +1615,8 @@ mod tests {
         let mut board = app
             .open_board(event.board_id.clone(), Some(false), event.board_version)
             .await?
-            .lock()
-            .await
+            .snapshot()
+            .as_ref()
             .clone();
         assert_eq!(
             service_readiness_source(&event, &board)?.unwrap().1,

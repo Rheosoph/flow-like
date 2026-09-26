@@ -53,6 +53,7 @@ const capabilities: Capability[] = [
 	"remove",
 	"scale",
 	"update_agent",
+	"manage_certificates",
 	"reboot",
 ];
 
@@ -61,13 +62,17 @@ export function DeviceSharingForm({
 	manifest,
 	receipt,
 	invitationVault,
+	certificateManagement = false,
 }: {
 	profile: IProfile;
 	manifest: OnboardingManifest;
 	receipt: DeviceReceipt;
 	invitationVault: Uint8Array;
+	certificateManagement?: boolean;
 }) {
 	const backend = useBackend();
+	const certificateSupport = useRef(certificateManagement);
+	certificateSupport.current = certificateManagement;
 	const formId = useId();
 	const [recipients, setRecipients] = useState("");
 	const [password, setPassword] = useState("");
@@ -170,6 +175,17 @@ export function DeviceSharingForm({
 		const secret = password;
 		setPassword("");
 		try {
+			const checkCertificateSupport = () => {
+				if (
+					!removeGrant &&
+					selected.includes("manage_certificates") &&
+					!certificateSupport.current
+				)
+					throw new Error(
+						"Update the device's standalone binary before sharing certificate management permission.",
+					);
+			};
+			checkCertificateSupport();
 			const users = removeGrant
 				? []
 				: recipientsSchema.parse(JSON.parse(recipients));
@@ -182,10 +198,11 @@ export function DeviceSharingForm({
 				scope !== "device" &&
 				(!project ||
 					selected.includes("reboot") ||
-					selected.includes("update_agent"))
+					selected.includes("update_agent") ||
+					selected.includes("manage_certificates"))
 			)
 				throw new Error(
-					"Select a project and remove host reboot/update from project permissions.",
+					"Select a project and remove device reboot, update and certificate management from project permissions.",
 				);
 			if (!removeGrant && scope === "placement" && !placement)
 				throw new Error("Enter a placement ID.");
@@ -266,9 +283,10 @@ export function DeviceSharingForm({
 				issued_at: now,
 				expires_at: now + 31 * 86_400,
 			};
-			const signed = await withPassword(secret, (bytes) =>
-				module.signManagementPolicy(policy, bytes, invitationVault),
-			);
+			const signed = await withPassword(secret, (bytes) => {
+				checkCertificateSupport();
+				return module.signManagementPolicy(policy, bytes, invitationVault);
+			});
 			if (!current.current) return;
 			const result = await backend.apiState.put<PolicyView>(profile, path, {
 				policy_jws: signed,
@@ -338,7 +356,19 @@ export function DeviceSharingForm({
 				<select
 					className="ml-2 rounded border bg-background p-2"
 					value={scope}
-					onChange={(event) => setScope(event.target.value as typeof scope)}
+					onChange={(event) => {
+						const next = event.target.value as typeof scope;
+						setScope(next);
+						if (next !== "device")
+							setSelected((values) =>
+								values.filter(
+									(capability) =>
+										!["reboot", "update_agent", "manage_certificates"].includes(
+											capability,
+										),
+								),
+							);
+					}}
 					disabled={busy}
 				>
 					<option value="device">Whole device</option>
@@ -380,14 +410,28 @@ export function DeviceSharingForm({
 							}
 							disabled={
 								busy ||
-								(["reboot", "update_agent"].includes(capability) &&
+								(capability === "manage_certificates" &&
+									!certificateManagement &&
+									!selected.includes(capability)) ||
+								(["reboot", "update_agent", "manage_certificates"].includes(
+									capability,
+								) &&
 									scope !== "device")
 							}
 						/>
-						{capability}
+						{capability === "manage_certificates"
+							? "Manage service certificates"
+							: capability}
 					</label>
 				))}
 			</fieldset>
+			{!certificateManagement && (
+				<p className="text-sm text-muted-foreground">
+					Update the device's standalone binary and reconnect before sharing
+					certificate management permission. Other sharing permissions remain
+					available.
+				</p>
+			)}
 			<details>
 				<summary className="cursor-pointer text-sm">
 					Record an approved group roster

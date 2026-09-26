@@ -176,7 +176,7 @@ impl NodeLogic for MqttBrokerNode {
         };
 
         let local_addr = listener.local_addr()?.to_string();
-        let tls_acceptor = match crate::web::tls::server_acceptor(&config.tls) {
+        let tls_acceptor = match crate::web::tls::ServiceAcceptor::new(context, &config.tls).await {
             Ok(acceptor) => acceptor,
             Err(err) => {
                 context.log_message(
@@ -267,36 +267,41 @@ impl NodeLogic for MqttBrokerNode {
                 continue;
             }
 
-            let mut stream: crate::web::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
-                match acceptor.accept(stream).await {
-                    Ok(stream) => Box::new(stream),
-                    Err(err) => {
-                        context.log_message(
-                            &format!("MQTT TLS handshake failed: {}", err),
-                            LogLevel::Error,
-                        );
-                        continue;
-                    }
+            let mut stream: crate::web::tls::BoxedIo = match tls_acceptor.accept(stream).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    context.log_message(
+                        &format!("MQTT TLS handshake failed: {}", err),
+                        LogLevel::Error,
+                    );
+                    continue;
                 }
-            } else {
-                Box::new(stream)
             };
 
-            let connect = match read_mqtt_packet(&mut stream).await {
-                Ok(Some(Packet::Connect(connect))) => connect,
-                Ok(Some(packet)) => {
+            let connect = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                read_mqtt_packet(&mut stream),
+            )
+            .await
+            {
+                Ok(Ok(Some(Packet::Connect(connect)))) => connect,
+                Ok(Ok(Some(packet))) => {
                     context.log_message(
                         &format!("MQTT expected CONNECT, received {:?}", packet),
                         LogLevel::Error,
                     );
                     continue;
                 }
-                Ok(None) => continue,
-                Err(err) => {
+                Ok(Ok(None)) => continue,
+                Ok(Err(err)) => {
                     context.log_message(
                         &format!("MQTT CONNECT read failed: {}", err),
                         LogLevel::Error,
                     );
+                    continue;
+                }
+                Err(_) => {
+                    context.log_message("MQTT CONNECT timed out", LogLevel::Warn);
                     continue;
                 }
             };

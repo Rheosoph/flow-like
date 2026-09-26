@@ -10,11 +10,15 @@ import {
 	sameDocument,
 	serializeTabs,
 	tabAfterClose,
+	tabByKey,
 	withBoardTabPosition,
 	withDocumentOpened,
 	withMissingTabsDropped,
+	withPinnedFirst,
 	withTabClosed,
+	withTabColor,
 	withTabLayerPath,
+	withTabPinned,
 } from "./editor-documents";
 
 const main: IEditorDocument = { kind: "board", fileId: "main" };
@@ -290,5 +294,110 @@ describe("persistence", () => {
 		const restored = deserializeTabs(raw);
 		expect(restored.tabs.map((tab) => tab.key)).toEqual(["board:main"]);
 		expect(restored.activeKey).toBeNull();
+	});
+});
+
+describe("pinned tabs", () => {
+	const keys = (tabs: readonly IEditorTab[]) => tabs.map((tab) => tab.key);
+
+	test("pinning moves a tab to the end of the pinned group", () => {
+		let tabs = open(main, module("a"), module("b"), module("c"));
+		tabs = withTabPinned(tabs, "board:c", true);
+		tabs = withTabPinned(tabs, "board:a", true);
+		expect(keys(tabs)).toEqual(["board:c", "board:a", "board:main", "board:b"]);
+		expect(tabs.filter((tab) => tab.pinned).map((tab) => tab.key)).toEqual([
+			"board:c",
+			"board:a",
+		]);
+	});
+
+	test("unpinning puts a tab first among the unpinned ones", () => {
+		let tabs = open(main, module("a"), module("b"));
+		tabs = withTabPinned(tabs, "board:a", true);
+		tabs = withTabPinned(tabs, "board:b", true);
+		tabs = withTabPinned(tabs, "board:a", false);
+		expect(keys(tabs)).toEqual(["board:b", "board:a", "board:main"]);
+		expect(tabByKey(tabs, "board:a")).not.toHaveProperty("pinned");
+	});
+
+	// Opening next to a pinned tab would otherwise land inside the pinned group and the
+	// strip would render it in a lane its flag does not belong to.
+	test("a document opened beside a pinned tab lands after the group", () => {
+		let tabs = open(main, module("a"), module("b"));
+		tabs = withTabPinned(tabs, "board:b", true);
+		const result = withDocumentOpened(tabs, module("c"), { after: "board:b" });
+		expect(keys(result.tabs)).toEqual([
+			"board:b",
+			"board:c",
+			"board:main",
+			"board:a",
+		]);
+	});
+
+	test("a split of a pinned tab is an ordinary tab", () => {
+		const tabs = withTabPinned(open(main, module("a")), "board:a", true);
+		const result = withDocumentOpened(tabs, module("a"), {
+			newTab: true,
+			after: "board:a",
+		});
+		expect(tabByKey(result.tabs, result.key)?.pinned).toBeUndefined();
+		expect(keys(result.tabs)).toEqual(["board:a", "board:a#2", "board:main"]);
+	});
+
+	test("the canvas position keeps the pin and colour", () => {
+		let tabs = withTabPinned(open(main, module("a")), "board:a", true);
+		tabs = withTabColor(tabs, "board:a", "teal");
+		tabs = withBoardTabPosition(tabs, "board:a", "a", "a/fn");
+		tabs = withTabLayerPath(tabs, "board:a", undefined);
+		expect(tabByKey(tabs, "board:a")).toMatchObject({
+			pinned: true,
+			color: "teal",
+		});
+	});
+});
+
+describe("withTabColor", () => {
+	test("sets and clears a colour", () => {
+		let tabs = open(main, module("a"));
+		tabs = withTabColor(tabs, "board:a", "blue");
+		expect(tabByKey(tabs, "board:a")?.color).toBe("blue");
+		tabs = withTabColor(tabs, "board:a", undefined);
+		expect(tabByKey(tabs, "board:a")).not.toHaveProperty("color");
+	});
+});
+
+describe("pin and colour persistence", () => {
+	test("round-trips pin and colour", () => {
+		let tabs = open(main, module("a"));
+		tabs = withTabPinned(tabs, "board:a", true);
+		tabs = withTabColor(tabs, "board:main", "red");
+		expect(deserializeTabs(serializeTabs(tabs, null)).tabs).toEqual(tabs);
+	});
+
+	test("restores pinned tabs first and drops an unknown colour", () => {
+		const raw = JSON.stringify({
+			v: 1,
+			tabs: [
+				{ key: "board:main", doc: main, color: "chartreuse" },
+				{ key: "board:a", doc: module("a"), pinned: true, color: "pink" },
+				{ key: "board:b", doc: module("b"), pinned: "yes" },
+			],
+		});
+		expect(deserializeTabs(raw).tabs).toEqual([
+			{ key: "board:a", doc: module("a"), pinned: true, color: "pink" },
+			{ key: "board:main", doc: main },
+			{ key: "board:b", doc: module("b") },
+		]);
+	});
+
+	test("an unpinned main tab joins after the pinned group", () => {
+		const restored = [
+			{ key: "board:a", doc: module("a"), pinned: true },
+		] satisfies IEditorTab[];
+		expect(
+			withPinnedFirst([{ key: "board:main", doc: main }, ...restored]).map(
+				(tab) => tab.key,
+			),
+		).toEqual(["board:a", "board:main"]);
 	});
 });

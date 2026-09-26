@@ -124,6 +124,7 @@ import type {
 	FlowScriptRunMode,
 } from "../../components/flow/flowscript/flowscript-run-lens";
 import { useFlowScriptFiles } from "../../components/flow/flowscript/use-flowscript-files";
+import { useSyncCurrentRunSummary } from "../../components/flow/logs/use-log-window";
 import { MediaNode } from "../../components/flow/media-node";
 import { BoardAccountItem } from "../../components/flow/shell/board-account-item";
 import { BoardActivityRail } from "../../components/flow/shell/board-activity-rail";
@@ -152,6 +153,7 @@ import {
 	type IEditorDocument,
 	type IEditorScope,
 	type IEditorTab,
+	type IEditorTabColor,
 	deserializeTabs,
 	documentKey,
 	serializeTabs,
@@ -160,7 +162,10 @@ import {
 	withBoardTabPosition,
 	withDocumentOpened,
 	withMissingTabsDropped,
+	withPinnedFirst,
 	withTabClosed,
+	withTabColor,
+	withTabPinned,
 } from "../../components/flow/shell/editor-documents";
 import type { IBoardCommand } from "../../components/flow/shell/use-board-commands";
 import {
@@ -596,6 +601,7 @@ export function FlowBoard({
 	useRetainBoardHistory(appId, boardId);
 	const router = useRouter();
 	const backend = useBackend();
+	useSyncCurrentRunSummary(backend.boardState);
 	const selected = useRef(new Set<string>());
 	const hub = useHub();
 	const edgeReconnectSuccessful = useRef(true);
@@ -1274,6 +1280,19 @@ export function FlowBoard({
 		restoreTabPositionRef.current(tabByKey(result.tabs, result.key), key);
 	}, []);
 
+	const handlePinTab = useCallback((key: string, pinned: boolean) => {
+		openTabsRef.current = withTabPinned(openTabsRef.current, key, pinned);
+		setOpenTabs(openTabsRef.current);
+	}, []);
+
+	const handleColorTab = useCallback(
+		(key: string, color: IEditorTabColor | undefined) => {
+			openTabsRef.current = withTabColor(openTabsRef.current, key, color);
+			setOpenTabs(openTabsRef.current);
+		},
+		[],
+	);
+
 	const activeDocumentKindRef = useRef(activeDocument.kind);
 	activeDocumentKindRef.current = activeDocument.kind;
 
@@ -1361,7 +1380,10 @@ export function FlowBoard({
 		}
 		const withMain = restored.tabs.some((tab) => tab.key === MAIN_TAB_KEY)
 			? restored.tabs
-			: [{ key: MAIN_TAB_KEY, doc: MAIN_DOCUMENT }, ...restored.tabs];
+			: withPinnedFirst([
+					{ key: MAIN_TAB_KEY, doc: MAIN_DOCUMENT },
+					...restored.tabs,
+				]);
 		openTabsRef.current = withMain;
 		setOpenTabs(withMain);
 		const active = restored.activeKey ?? MAIN_TAB_KEY;
@@ -5586,6 +5608,8 @@ export function FlowBoard({
 							onSelect={selectTab}
 							onClose={handleCloseTab}
 							onSplit={handleSplitTab}
+							onPin={handlePinTab}
+							onColor={handleColorTab}
 							executeCommand={executeCommand}
 							readOnly={typeof version !== "undefined"}
 							reservedRoots={moduleReservedRoots}

@@ -1281,7 +1281,7 @@ impl NodeLogic for RestServerNode {
                 }
             };
 
-            let tls_acceptor = match super::tls::server_acceptor(&config.tls) {
+            let tls_acceptor = match super::tls::ServiceAcceptor::new(context, &config.tls).await {
                 Ok(acceptor) => acceptor,
                 Err(err) => {
                     context.log_message(
@@ -1291,6 +1291,8 @@ impl NodeLogic for RestServerNode {
                     return Ok(());
                 }
             };
+            let mut config = config;
+            config.tls.secure = tls_acceptor.encrypted();
 
             let local_addr = listener.local_addr()?.to_string();
             let function_contexts = build_function_contexts(context, &config.function_routes).await;
@@ -1382,20 +1384,7 @@ impl NodeLogic for RestServerNode {
                     continue;
                 }
 
-                let stream: super::tls::BoxedIo = if let Some(acceptor) = &tls_acceptor {
-                    match acceptor.accept(stream).await {
-                        Ok(stream) => Box::new(stream),
-                        Err(err) => {
-                            context.log_message(
-                                &format!("REST TLS handshake failed: {}", err),
-                                LogLevel::Error,
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    Box::new(stream)
-                };
+                let tls_acceptor = tls_acceptor.clone();
 
                 active_connections.fetch_add(1, Ordering::Relaxed);
                 let config = config.clone();
@@ -1406,6 +1395,13 @@ impl NodeLogic for RestServerNode {
                 let active_connections = active_connections.clone();
                 let parent_node_id = parent_node_id.clone();
                 handles.spawn(async move {
+                    let stream = match tls_acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            active_connections.fetch_sub(1, Ordering::Relaxed);
+                            return;
+                        }
+                    };
                     handle_connection(
                         stream,
                         remote_addr.to_string(),

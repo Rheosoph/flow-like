@@ -5,7 +5,9 @@ use crate::state::{AppState, State};
 #[cfg(feature = "gcp")]
 use flow_like::credentials::{SharedCredentials, gcp_credentials::GcpSharedCredentials};
 use flow_like::{
-    flow_like_storage::lancedb::{connect, connection::ConnectBuilder},
+    flow_like_storage::{
+        databases::vector::lancedb::connect_lance, lancedb::connection::ConnectBuilder,
+    },
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
@@ -1480,7 +1482,7 @@ fn make_gcs_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("gs://{}/{}", bucket, path);
-        let builder = connect(&url);
+        let builder = connect_lance(&url);
         match &credential {
             Some((option, value)) => builder.storage_option(option.to_string(), value.clone()),
             None => builder,

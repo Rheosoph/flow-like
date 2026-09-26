@@ -917,6 +917,129 @@ async fn not_claimed_rejection_resets_attempts_and_skip_needs_no_acknowledgement
 }
 
 #[tokio::test]
+async fn not_claimed_resend_keeps_the_attempt_so_skip_needs_acknowledgement() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = seed(cloud.path()).await?;
+    let server = replay_server(remote.clone(), false, true);
+    let host = TestHost::new(remote.clone(), Some(server.clone()));
+    let (writer, table) = open_table(desktop_options(root.path()), host, active()).await?;
+    let id = insert(&table, 3, 30).await?;
+    assert!(writer.drain_once().await.is_err());
+    server.not_claimed.store(true, Ordering::Release);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(writer.drain_once().await.is_err());
+    let head = writer.queue.head()?.unwrap();
+    assert_eq!((head.state.as_str(), head.attempts), ("blocked", 1));
+    assert_eq!(
+        writer
+            .queue
+            .operation_state(&id)?
+            .unwrap()
+            .error_code
+            .as_deref(),
+        Some("subject_mismatch")
+    );
+    assert!(
+        writer
+            .queue
+            .request_skip(&id, "The account changed", false)
+            .is_err()
+    );
+    writer.queue.retry(&id)?;
+    server.not_claimed.store(false, Ordering::Release);
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert!(writer.drain_once().await?);
+    assert_eq!(cloud_rows(&remote).await?.len(), 3);
+    Ok(())
+}
+
+async fn cloud_with_rows(root: &Path, count: i64) -> Result<Connection> {
+    let db = lancedb::connect(root.to_str().unwrap()).execute().await?;
+    db.create_table(
+        "measurements",
+        flow_like_storage::arrow_utils::value_to_batch_reader(
+            (0..count)
+                .map(|id| json!({"id": id, "value": id}))
+                .collect(),
+        )?,
+    )
+    .execute()
+    .await?;
+    Ok(db)
+}
+
+#[tokio::test]
+async fn deletes_of_many_rows_freeze_to_one_replayable_filter() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = cloud_with_rows(cloud.path(), 100).await?;
+    let (writer, table) = manager(
+        root.path(),
+        remote.clone(),
+        Some(replay_server(remote.clone(), false, false)),
+    )
+    .await?;
+    table
+        .apply(LogicalTableMutation::Delete {
+            filter: "id >= 10".into(),
+        })
+        .await?;
+    let OfflineMutation::TableDelete { filter } = head_request(&writer)?.mutation else {
+        anyhow::bail!("delete was not frozen")
+    };
+    assert!(filter.starts_with("`id` IN ("));
+    assert_eq!(
+        table.read_table().await?.unwrap().count_rows(None).await?,
+        10
+    );
+    assert!(writer.drain_once().await?);
+    assert_eq!(cloud_rows(&remote).await?.len(), 10);
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_deletes_stay_within_the_replayable_filter_limit() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let cloud = tempfile::tempdir()?;
+    let remote = cloud_with_rows(cloud.path(), 20_000).await?;
+    let host = TestHost::new(
+        remote.clone(),
+        Some(replay_server(remote.clone(), false, false)),
+    );
+    let (writer, table) = open_table(desktop_options(root.path()), host, active()).await?;
+    let mut deleted = Vec::new();
+    // Each delete freezes about 7 KB of keys, so the 64 KiB filter limit splits the merge.
+    for start in (0..20_000).step_by(1_000) {
+        deleted.push(
+            table
+                .apply(LogicalTableMutation::Delete {
+                    filter: format!("id >= {start} AND id < {}", start + 1_000),
+                })
+                .await?
+                .operation_id,
+        );
+    }
+    assert!(writer.drain_once().await?);
+    let superseded = deleted
+        .iter()
+        .filter(|id| {
+            writer
+                .queue
+                .operation_state(id)
+                .ok()
+                .flatten()
+                .is_some_and(|lookup| lookup.state == "superseded")
+        })
+        .count();
+    assert!(superseded > 0 && superseded < deleted.len() - 1);
+    while writer.drain_once().await? {}
+    assert!(cloud_rows(&remote).await?.is_empty());
+    assert_eq!(writer.queue.status()?.pending_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn blocked_and_unavailable_lanes_do_not_stop_other_lanes() -> Result<()> {
     let root = tempfile::tempdir()?;
     let cloud = tempfile::tempdir()?;
@@ -1454,7 +1577,16 @@ async fn close_releases_files_and_stops_the_drain() -> Result<()> {
     let closed = "Offline changes for this project were removed from this device";
     assert_eq!(writer.drain_once().await.unwrap_err().to_string(), closed);
     assert_eq!(writer.queue.status().unwrap_err().to_string(), closed);
-    assert!(table.read_table().await.is_err());
+    assert_eq!(table.read_table().await.unwrap_err().to_string(), closed);
+    assert_eq!(
+        writer
+            .decorate(&database_path(), store_for(&remote)?)
+            .await
+            .map(|_| ())
+            .unwrap_err()
+            .to_string(),
+        closed
+    );
     writer.close().await?;
     let (reopened, _) = open_table(
         desktop_options(root.path()),

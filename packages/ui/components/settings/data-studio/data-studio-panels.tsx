@@ -44,6 +44,7 @@ import { useBackend } from "../../../state/backend-state";
 import type {
 	EdgeLabelMapping,
 	GraphOverlay,
+	GraphSchema,
 	InvokeOntologyActionPayload,
 	NodeLabelMapping,
 	OntologyActionDefinition,
@@ -82,8 +83,12 @@ import {
 } from "../../ui/dropdown-menu";
 import {
 	CopyButton,
+	PropertyStorageScope,
 	PropertyValue,
+	type PropertyValueContext,
+	type ValueKind,
 	inferValueKind,
+	usePropertyStorageAppId,
 } from "../../ui/graph/graph-node-inspector";
 import { getGraphIcon } from "../../ui/graph/icons";
 import { Input } from "../../ui/input";
@@ -108,6 +113,8 @@ import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
 import { OntologySchemaGraph, useRevealTarget } from "./ontology-schema-graph";
 import { externalTargetKey } from "./ontology-schema-model";
+import type { ColumnKind } from "./query-workbench/column-types";
+import { ResultCellValue } from "./query-workbench/result-value";
 import {
 	AddRelationshipForm,
 	type RelationshipPrefill,
@@ -389,7 +396,74 @@ interface ExplorerSource {
 	sourceLabel?: string;
 }
 
+/**
+ * What the ontology knows about each property besides its value. The live
+ * schema carries the Arrow metadata that marks a geometry column; the declared
+ * columns are the fallback, and all a remote contract has.
+ */
+function propertyFields(
+	objectType: NodeLabelMapping | undefined,
+	schema: GraphSchema | undefined,
+): ReadonlyMap<string, PropertyValueContext> {
+	const fields = new Map<string, PropertyValueContext>(
+		(objectType?.property_columns ?? []).map((column) => [
+			column.name,
+			{ typeName: column.data_type },
+		]),
+	);
+	const live = schema?.node_labels.find(
+		(label) => label.label === objectType?.label,
+	);
+	for (const property of live?.properties ?? []) {
+		fields.set(property.name, {
+			typeName: property.data_type,
+			metadata: property.metadata,
+		});
+	}
+	return fields;
+}
+
+const CELL_KINDS: Record<ValueKind, ColumnKind> = {
+	geometry: "geometry",
+	binary: "binary",
+	file: "file",
+	user: "user",
+	date: "temporal",
+	number: "number",
+	boolean: "boolean",
+	vector: "json",
+	array: "json",
+	object: "json",
+	string: "text",
+	unknown: "text",
+};
+
+/** The same one-line reading the query workbench gives a result cell. */
+function ObjectCellValue({
+	name,
+	value,
+	field,
+	appId,
+}: Readonly<{
+	name: string;
+	value: unknown;
+	field?: PropertyValueContext;
+	appId?: string;
+}>) {
+	const { kind } = inferValueKind(value, name, { ...field, appId });
+	return (
+		<ResultCellValue
+			value={value}
+			kind={CELL_KINDS[kind]}
+			name={name}
+			appId={appId}
+			metadata={field?.metadata}
+		/>
+	);
+}
+
 export function ObjectExplorerPanel({
+	appId,
 	ontologies,
 	remoteImports,
 	initialSourceValue,
@@ -400,6 +474,7 @@ export function ObjectExplorerPanel({
 	resolveSourceName,
 }: Readonly<
 	StudioPanelBaseProps & {
+		appId?: string;
 		remoteImports?: RemoteOntologyImport[];
 		initialSourceValue?: string;
 		onSample: (
@@ -467,6 +542,20 @@ export function ObjectExplorerPanel({
 				(object) => objectKey(object) === selectedObjectKey,
 			) ?? ontology?.nodes[0],
 		[ontology, selectedObjectKey],
+	);
+	// A remote object's paths name its source app's storage, which this app
+	// cannot open, and its schema is not ours to read.
+	const storageAppId = source?.remoteImportId ? undefined : appId;
+	const backend = useBackend();
+	const schema = useInvoke(
+		backend.graphState.getSchema,
+		backend.graphState,
+		[storageAppId ?? "", source?.overlay.id ?? ""],
+		Boolean(storageAppId && source),
+	);
+	const fields = useMemo(
+		() => propertyFields(objectType, schema.data),
+		[objectType, schema.data],
 	);
 
 	useEffect(() => {
@@ -739,9 +828,12 @@ export function ObjectExplorerPanel({
 												key={column}
 												className="max-w-64 truncate px-4 py-2.5"
 											>
-												{typeof row[column] === "object"
-													? JSON.stringify(row[column])
-													: String(row[column] ?? "—")}
+												<ObjectCellValue
+													name={column}
+													value={row[column]}
+													field={fields.get(column)}
+													appId={storageAppId}
+												/>
 											</td>
 										))}
 										<td className="pr-3">
@@ -770,14 +862,17 @@ export function ObjectExplorerPanel({
 				</div>
 			</section>
 
-			<ObjectViewSheet
-				ontology={ontology}
-				objectType={objectType}
-				row={selectedRow}
-				onClose={() => setSelectedRow(null)}
-				onInvokeAction={onInvokeAction}
-				onActionApplied={loadObjects}
-			/>
+			<PropertyStorageScope value={storageAppId}>
+				<ObjectViewSheet
+					ontology={ontology}
+					objectType={objectType}
+					fields={fields}
+					row={selectedRow}
+					onClose={() => setSelectedRow(null)}
+					onInvokeAction={onInvokeAction}
+					onActionApplied={loadObjects}
+				/>
+			</PropertyStorageScope>
 		</div>
 	);
 }
@@ -807,20 +902,27 @@ function CopyChip({ text, label }: Readonly<{ text: string; label: string }>) {
 }
 
 function ObjectFieldCard({
-	label,
+	name,
 	value,
-}: Readonly<{ label: string; value: unknown }>) {
+	field,
+}: Readonly<{ name: string; value: unknown; field?: PropertyValueContext }>) {
+	const appId = usePropertyStorageAppId();
 	return (
 		<div className="min-w-0 rounded-xl border bg-muted/30 p-3">
 			<div className="mb-1 flex items-center justify-between gap-2">
 				<p className="truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-					{label}
+					{humanizeIdentifier(name)}
 				</p>
 				<span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground/50">
-					{inferValueKind(value).kind}
+					{inferValueKind(value, name, { ...field, appId }).kind}
 				</span>
 			</div>
-			<PropertyValue value={value} propKey={label} />
+			<PropertyValue
+				value={value}
+				propKey={name}
+				metadata={field?.metadata}
+				typeName={field?.typeName}
+			/>
 		</div>
 	);
 }
@@ -828,6 +930,7 @@ function ObjectFieldCard({
 function ObjectViewSheet({
 	ontology,
 	objectType,
+	fields,
 	row,
 	onClose,
 	onInvokeAction,
@@ -835,6 +938,7 @@ function ObjectViewSheet({
 }: Readonly<{
 	ontology?: GraphOverlay;
 	objectType?: NodeLabelMapping;
+	fields: ReadonlyMap<string, PropertyValueContext>;
 	row: Record<string, unknown> | null;
 	onClose: () => void;
 	onInvokeAction: (
@@ -989,8 +1093,9 @@ function ObjectViewSheet({
 											{prominentEntries.map(([key, value]) => (
 												<ObjectFieldCard
 													key={key}
-													label={humanizeIdentifier(key)}
+													name={key}
 													value={value}
+													field={fields.get(key)}
 												/>
 											))}
 										</div>
@@ -1014,8 +1119,9 @@ function ObjectViewSheet({
 												{restEntries.map(([key, value]) => (
 													<ObjectFieldCard
 														key={key}
-														label={humanizeIdentifier(key)}
+														name={key}
 														value={value}
+														field={fields.get(key)}
 													/>
 												))}
 											</div>

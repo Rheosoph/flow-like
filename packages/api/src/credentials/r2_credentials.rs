@@ -13,7 +13,8 @@ use flow_like::credentials::{
 };
 use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
-use flow_like_storage::lancedb::{connect, connection::ConnectBuilder};
+use flow_like_storage::databases::vector::lancedb::connect_lance;
+use flow_like_storage::lancedb::connection::ConnectBuilder;
 use flow_like_storage::object_store;
 use flow_like_types::{Result, anyhow, async_trait};
 use serde::{Deserialize, Serialize};
@@ -680,7 +681,7 @@ fn make_r2_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
-        let builder = connect(&url)
+        let builder = connect_lance(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
             .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
             .storage_option("aws_region".to_string(), "auto".to_string());

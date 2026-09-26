@@ -90,6 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),
     );
     let _package_license_sweeper = flow_like_api::package_license::spawn_sweeper(state.clone());
+    let _device_certificate_sweeper =
+        flow_like_api::spawn_device_certificate_sweeper(state.clone());
     let _channel_sweeper = spawn_channel_sweeper(
         Arc::new(state.db.clone()),
         state.db_dialect,

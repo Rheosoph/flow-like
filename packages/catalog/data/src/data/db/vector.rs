@@ -18,6 +18,8 @@ pub use flow_like_catalog_core::CachedDB;
 pub use flow_like_catalog_core::NodeDBConnection;
 
 pub mod add_column;
+#[cfg(feature = "execute")]
+pub(crate) mod connection;
 pub mod count;
 pub mod delete;
 pub mod drop_column;
@@ -38,6 +40,7 @@ pub mod optimize;
 pub mod purge;
 pub mod references;
 pub mod schema;
+pub mod set_primary_key;
 pub mod update;
 pub mod upsert;
 pub mod vector_search;
@@ -197,16 +200,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
         let cache_key = references::selection_cache_key(&base_key, &selector)?;
         let cache_set = context.cache.read().await.contains_key(&cache_key);
         if !cache_set {
-            let context_cache = context
-                .execution_cache
-                .clone()
-                .ok_or(flow_like_types::anyhow!("No execution cache found"))?;
-            let app_id = context_cache.app_id.clone();
-            let database_path = if user_scoped {
-                context_cache.get_user_dir(false)?.join("db")
-            } else {
-                context_cache.get_storage(false)?.join("db")
-            };
+            let database_path = connection::database_path(context, user_scoped)?;
             let callbacks = context.app_state.config.read().await.callbacks.clone();
             let decorator = callbacks.decorate_database.clone();
             let managed = callbacks
@@ -222,53 +216,7 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 }
             }
 
-            let db = if let Some(credentials) = &context.credentials {
-                if user_scoped {
-                    credentials
-                        .to_db_scoped(&context_cache.sub, &app_id)
-                        .await?
-                } else {
-                    credentials.to_db(&app_id).await?
-                }
-            } else if user_scoped {
-                let user_dir = context_cache.get_user_dir(false)?;
-                let user_dir = user_dir.join("db");
-                context
-                    .app_state
-                    .config
-                    .read()
-                    .await
-                    .callbacks
-                    .build_user_database
-                    .clone()
-                    .ok_or(flow_like_types::anyhow!("No user database builder found"))?(
-                    user_dir
-                )
-            } else {
-                let board_dir = context_cache.get_storage(false)?;
-                let board_dir = board_dir.join("db");
-                context
-                    .app_state
-                    .config
-                    .read()
-                    .await
-                    .callbacks
-                    .build_project_database
-                    .clone()
-                    .ok_or(flow_like_types::anyhow!("No database builder found"))?(
-                    board_dir
-                )
-            };
-
-            let db = if managed {
-                // LanceDB 0.31 creates a directory namespace on connection.
-                // Its optional manifest must not probe cloud storage before
-                // the complete local table adapter is installed.
-                db.namespace_client_property("manifest_enabled", "false")
-            } else {
-                db
-            };
-            let db = context.app_state.with_lance_session(db).execute().await?;
+            let db = connection::open_shared(context, user_scoped).await?;
             let mut lance_store = if managed {
                 LanceDBVectorStore::from_connection_for_overlay(db, table, selector)?
             } else if selector.branch == "main"

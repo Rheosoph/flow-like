@@ -18,23 +18,36 @@ import {
 	X,
 } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { inferTemporalValue } from "../../../lib/date";
+import { namesGeometryKind } from "../../../lib/geometry";
 import { isGeometryMetadata } from "../../../lib/geometry-columns";
+import { resolveStorageFile } from "../../../lib/storage-file";
 import { looksLikeUserColumnName } from "../../../lib/user-display";
 import type {
 	GraphOverlay,
 	NodeLabelMapping,
 	OntologyActionDefinition,
+	PropertyColumn,
 	SubgraphNode,
 } from "../../../state/backend-state/graph-state";
 import { accountIdFromValue } from "../../../state/backend-state/user-state";
 import { Badge } from "../badge";
+import { BinaryCellPreview, BinaryValueDetail } from "../binary-value-cell";
 import { Button } from "../button";
 import { GeometryCell } from "../geometry-cell";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { RelativeTime } from "../relative-time";
 import { ScrollArea } from "../scroll-area";
+import { StorageFileCell } from "../storage-file-cell";
 import { UserInlineTag } from "../user-identity";
 import { nodeCaptionAccountId } from "./graph-user-caption";
 import { getGraphIcon } from "./icons";
@@ -80,6 +93,8 @@ function objectTypeMatches(
 
 export type ValueKind =
 	| "geometry"
+	| "binary"
+	| "file"
 	| "string"
 	| "number"
 	| "boolean"
@@ -90,7 +105,40 @@ export type ValueKind =
 	| "object"
 	| "unknown";
 
-export { inferValueKind, PropertyValue, PropertyRow, FieldFilter, CopyButton };
+export {
+	inferValueKind,
+	declaredTypes,
+	PropertyValue,
+	PropertyRow,
+	FieldFilter,
+	CopyButton,
+};
+
+/**
+ * The app whose storage the properties below it live in. Only the app that
+ * owns the objects may provide it: a bare stored path resolves into the given
+ * app's root, so a remote ontology's paths would open the wrong file.
+ */
+const PropertyStorageAppContext = createContext<string | undefined>(undefined);
+export const PropertyStorageScope = PropertyStorageAppContext.Provider;
+export const usePropertyStorageAppId = () =>
+	useContext(PropertyStorageAppContext);
+
+export interface PropertyValueContext {
+	metadata?: Record<string, string>;
+	/** The column type the ontology declares; most properties arrive without one. */
+	typeName?: string;
+	appId?: string;
+}
+
+/** Declared column types by property name, for the properties a mapping lists. */
+function declaredTypes(
+	columns?: readonly PropertyColumn[],
+): ReadonlyMap<string, string> {
+	return new Map(
+		(columns ?? []).map((column) => [column.name, column.data_type]),
+	);
+}
 
 /**
  * `propKey` is what makes an epoch integer readable: an ontology property is
@@ -100,10 +148,16 @@ export { inferValueKind, PropertyValue, PropertyRow, FieldFilter, CopyButton };
 function inferValueKind(
 	value: unknown,
 	propKey?: string,
-	metadata?: Record<string, string>,
+	{ metadata, typeName, appId }: PropertyValueContext = {},
 ): { kind: ValueKind; dims?: number } {
 	if (value === null || value === undefined) return { kind: "unknown" };
 	if (isGeometryMetadata(metadata)) return { kind: "geometry" };
+	if (typeName && /binary/i.test(typeName)) {
+		// Storage hands a geoarrow column over as GeoJSON, and a declared type
+		// string keeps only its `Binary` storage — plain bytes arrive as octets.
+		if (namesGeometryKind(value)) return { kind: "geometry" };
+		if (Array.isArray(value)) return { kind: "binary" };
+	}
 	if (typeof value === "boolean") return { kind: "boolean" };
 	if (typeof value === "number" || typeof value === "bigint") {
 		if (propKey && inferTemporalValue(propKey, value)) return { kind: "date" };
@@ -139,6 +193,8 @@ function inferValueKind(
 			accountIdFromValue(value)
 		)
 			return { kind: "user" };
+		if (propKey && resolveStorageFile(propKey, value, appId))
+			return { kind: "file" };
 		return { kind: "string" };
 	}
 	return { kind: "unknown" };
@@ -226,29 +282,53 @@ function PropertyValue({
 	value,
 	propKey,
 	metadata,
+	typeName,
 	compact = false,
 }: {
 	value: unknown;
 	propKey: string;
 	metadata?: Record<string, string>;
+	typeName?: string;
 	compact?: boolean;
 }) {
 	const { t } = useTranslation("common");
-	const { kind, dims } = inferValueKind(value, propKey, metadata);
+	const appId = usePropertyStorageAppId();
+	const { kind, dims } = inferValueKind(value, propKey, {
+		metadata,
+		typeName,
+		appId,
+	});
+
+	if (kind === "geometry")
+		return (
+			<GeometryCell
+				value={value}
+				metadata={metadata}
+				variant={compact ? "compact" : "card"}
+			/>
+		);
+	if (kind === "binary")
+		return compact ? (
+			<BinaryCellPreview value={value} />
+		) : (
+			<BinaryValueDetail value={value} />
+		);
+	const file =
+		kind === "file" ? resolveStorageFile(propKey, value, appId) : null;
+	if (file && appId)
+		return (
+			<div className="group flex min-w-0 items-center justify-between gap-2">
+				<StorageFileCell appId={appId} file={file} className="-ml-2 min-w-0" />
+				<CopyButton text={String(value)} />
+			</div>
+		);
+
 	const display =
 		typeof value === "object"
 			? JSON.stringify(value, null, 2)
 			: String(value ?? "—");
 
 	switch (kind) {
-		case "geometry":
-			return (
-				<GeometryCell
-					value={value}
-					metadata={metadata}
-					variant={compact ? "compact" : "card"}
-				/>
-			);
 		case "boolean":
 			return (
 				<div className="group flex min-w-0 items-center justify-between gap-2">
@@ -405,7 +485,14 @@ function PropertyRow({
 	propKey,
 	value,
 	metadata,
-}: { propKey: string; value: unknown; metadata?: Record<string, string> }) {
+	typeName,
+}: {
+	propKey: string;
+	value: unknown;
+	metadata?: Record<string, string>;
+	typeName?: string;
+}) {
+	const appId = usePropertyStorageAppId();
 	return (
 		<div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5">
 			<div className="mb-1.5 flex min-w-0 items-start justify-between gap-2">
@@ -413,10 +500,15 @@ function PropertyRow({
 					{propKey}
 				</p>
 				<span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
-					{inferValueKind(value, propKey, metadata).kind}
+					{inferValueKind(value, propKey, { metadata, typeName, appId }).kind}
 				</span>
 			</div>
-			<PropertyValue value={value} propKey={propKey} metadata={metadata} />
+			<PropertyValue
+				value={value}
+				propKey={propKey}
+				metadata={metadata}
+				typeName={typeName}
+			/>
 		</div>
 	);
 }
@@ -445,6 +537,10 @@ export function GraphNodeInspector({
 	const mapping = useMemo(
 		() => overlay?.nodes.find((candidate) => candidate.label === node?.label),
 		[overlay, node?.label],
+	);
+	const typeNames = useMemo(
+		() => declaredTypes(mapping?.property_columns),
+		[mapping],
 	);
 	const objectView = useMemo(
 		() =>
@@ -739,6 +835,7 @@ export function GraphNodeInspector({
 										propKey={key}
 										value={value}
 										metadata={node.property_metadata?.[key]}
+										typeName={typeNames.get(key)}
 									/>
 								))}
 								{!collapsedOthers &&
@@ -748,6 +845,7 @@ export function GraphNodeInspector({
 											propKey={key}
 											value={value}
 											metadata={node.property_metadata?.[key]}
+											typeName={typeNames.get(key)}
 										/>
 									))}
 							</div>

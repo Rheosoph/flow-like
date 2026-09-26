@@ -27,7 +27,14 @@ use lance_table::{
 };
 use lancedb::{Connection, Table, table::WriteOptions};
 use object_store::{ObjectStoreExt, path::Path};
-use sqlparser::{ast::Expr, dialect::GenericDialect, parser::Parser, tokenizer::Token};
+use sqlparser::{
+    ast::{BinaryOperator, Expr, Ident, UnaryOperator, Value as SqlValue},
+    dialect::GenericDialect,
+    parser::Parser,
+    tokenizer::Token,
+};
+
+use super::lancedb::connect_lance;
 
 const OPERATION_KEY: &str = "flow_like.offline.operation_id";
 const DIGEST_KEY: &str = "flow_like.offline.digest";
@@ -422,12 +429,7 @@ pub fn validate_expression(expression: &str) -> Result<()> {
         expression.len() <= 64 * 1024,
         "offline expression exceeds 64 KiB"
     );
-    let mut parser = Parser::new(&GenericDialect).try_with_sql(expression)?;
-    let expression = parser.parse_expr()?;
-    ensure!(
-        parser.peek_token().token == Token::EOF,
-        "unexpected trailing offline expression tokens"
-    );
+    let expression = parse_expression(expression)?;
     fn deterministic(expression: &Expr, depth: usize) -> bool {
         if depth > 64 {
             return false;
@@ -479,6 +481,80 @@ pub fn validate_expression(expression: &str) -> Result<()> {
     Ok(())
 }
 
+fn parse_expression(expression: &str) -> Result<Expr> {
+    let mut parser = Parser::new(&GenericDialect).try_with_sql(expression)?;
+    let expression = parser.parse_expr()?;
+    ensure!(
+        parser.peek_token().token == Token::EOF,
+        "unexpected trailing offline expression tokens"
+    );
+    Ok(expression)
+}
+
+/// Two key-set deletes (`k = v`, `k IN (…)` or `false`) as one flat `IN` list.
+/// An `OR` chain would nest one level per merged delete, and Lance plans filters
+/// recursively. `None` unless both sides are key sets of the same column.
+pub fn merge_key_deletes(first: &str, next: &str) -> Option<String> {
+    let (column, mut keys) = key_set(first)?;
+    let (other, more) = key_set(next)?;
+    let column = match (column, other) {
+        (Some(column), Some(other)) if column != other => return None,
+        (column, other) => column.or(other),
+    };
+    let Some(column) = column else {
+        return Some("false".into());
+    };
+    keys.extend(more);
+    Some(
+        Expr::InList {
+            expr: Box::new(Expr::Identifier(column)),
+            list: keys,
+            negated: false,
+        }
+        .to_string(),
+    )
+}
+
+fn key_set(filter: &str) -> Option<(Option<Ident>, Vec<Expr>)> {
+    fn literal(expression: &Expr) -> bool {
+        match expression {
+            Expr::Value(literal) => matches!(
+                literal.value,
+                SqlValue::Number(..) | SqlValue::SingleQuotedString(_)
+            ),
+            Expr::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr,
+            } => {
+                matches!(&**expr, Expr::Value(literal) if matches!(literal.value, SqlValue::Number(..)))
+            }
+            _ => false,
+        }
+    }
+    match parse_expression(filter).ok()? {
+        Expr::Value(literal) if literal.value == SqlValue::Boolean(false) => {
+            Some((None, Vec::new()))
+        }
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Eq,
+            right,
+        } => match *left {
+            Expr::Identifier(column) if literal(&right) => Some((Some(column), vec![*right])),
+            _ => None,
+        },
+        Expr::InList {
+            expr,
+            list,
+            negated: false,
+        } => match *expr {
+            Expr::Identifier(column) if list.iter().all(literal) => Some((Some(column), list)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub async fn replay(
     table: &Table,
     marker: &ReplayMarker,
@@ -523,13 +599,15 @@ pub async fn replay(
                         .all(|item| item.get(&id_field).is_some_and(|key| !key.is_null())),
                     "offline upsert requires a non-null key in every row"
                 );
+                let keyed = super::schema::primary_key_columns(&schema) == [id_field.as_str()];
                 let reader =
                     crate::arrow_utils::value_to_batch_reader_with_fields(items, Some(fields))?;
                 let mut builder = MergeInsertBuilder::try_new(dataset, vec![id_field])?;
                 builder
                     .when_matched(WhenMatched::UpdateAll)
                     .when_not_matched(WhenNotMatched::InsertAll)
-                    .conflict_retries(0);
+                    .conflict_retries(0)
+                    .use_index(!keyed);
                 builder.try_build()?.execute_reader(reader).await?;
             }
             ReplayMutation::Update { filter, updates } => {
@@ -1326,7 +1404,7 @@ pub async fn budgeted_local_connection(
     // The native `file` scheme bypasses ObjectStore wrappers for reads, writes
     // and copies. This scheme routes every operation through the budget.
     let uri = uri.as_str().replacen("file:", "file-object-store:", 1);
-    Ok(lancedb::connect(&uri).session(session).execute().await?)
+    Ok(connect_lance(&uri).session(session).execute().await?)
 }
 
 /// Prune obsolete history without rewriting the current local table or changing
@@ -1767,6 +1845,33 @@ mod tests {
             "CAST('today' AS DATE)",
         ] {
             assert!(validate_expression(expression).is_err(), "{expression}");
+        }
+    }
+
+    #[test]
+    fn key_deletes_merge_into_one_flat_in_list() {
+        let mut filter = "`id` = 0".to_string();
+        for id in 1..200 {
+            filter = merge_key_deletes(&filter, &format!("`id` = {id}")).unwrap();
+        }
+        let expected: Vec<_> = (0..200).map(|id| id.to_string()).collect();
+        assert_eq!(filter, format!("`id` IN ({})", expected.join(", ")));
+        validate_expression(&filter).unwrap();
+
+        assert_eq!(
+            merge_key_deletes("`k` IN ('a', 'it''s')", "`k` = -3").unwrap(),
+            "`k` IN ('a', 'it''s', -3)"
+        );
+        assert_eq!(merge_key_deletes("false", "`k` = 1").unwrap(), "`k` IN (1)");
+        assert_eq!(merge_key_deletes("false", "false").unwrap(), "false");
+        for (first, next) in [
+            ("`k` = 1", "`other` = 2"),
+            ("`k` = 1", "`k` = 2 OR `k` = 3"),
+            ("`k` = 1", "`k` NOT IN (2)"),
+            ("`k` = 1", "`k` > 2"),
+            ("`k` = 1", "`k` = now()"),
+        ] {
+            assert!(merge_key_deletes(first, next).is_none(), "{first} + {next}");
         }
     }
 

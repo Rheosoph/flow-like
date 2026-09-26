@@ -345,8 +345,11 @@ pub async fn insert_recording_to_board(
     .await?;
     tracing::info!("Generated {} commands", commands.len());
 
-    let mut board = board.lock().await;
-    let commands = board.execute_commands(commands, flow_state.clone()).await?;
+    let commands = board
+        .write()
+        .await
+        .execute_commands(commands, flow_state.clone())
+        .await?;
 
     tracing::info!("Successfully inserted {} nodes to board", commands.len());
     recording

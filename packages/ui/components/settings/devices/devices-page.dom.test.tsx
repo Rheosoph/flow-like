@@ -62,6 +62,22 @@ const backend = {
 	apiState: {
 		get: async (_profile: unknown, path: string) => {
 			calls.push(["GET", path]);
+			if (path.endsWith("/certificate-inventory"))
+				return {
+					revision: 1,
+					updated_at: 100,
+					certificates:
+						account === "certificate-owner"
+							? [
+									{
+										certificate_id: "00000000-0000-4000-8000-000000000001",
+										revision: 1,
+										fingerprint_sha256: "a".repeat(64),
+										not_after: Math.floor(Date.now() / 1000) + 3600,
+									},
+								]
+							: [],
+				};
 			if (path !== "devices") {
 				if (resourceError)
 					throw new ApiResponseError({
@@ -339,6 +355,40 @@ test("gates inventory, confirms revocation, keeps errors actionable, and isolate
 			(button) => button.textContent === "Revoke access",
 		),
 	).toBe(false);
+});
+
+test("locked device cards show expiration warnings and notification links open the matching device", async () => {
+	account = "certificate-owner";
+	window.history.replaceState(
+		null,
+		"",
+		"/settings/devices?device=certificate-owner-device",
+	);
+	await render();
+	expect(container.textContent).toContain(
+		"service certificate expiring within 7 days",
+	);
+	expect(container.textContent).toContain("Earliest expiry");
+	expect(activeManagementDialog().device.device_id).toBe(
+		"certificate-owner-device",
+	);
+	expect(
+		client
+			.getQueryCache()
+			.getAll()
+			.find(
+				(query) =>
+					query.queryKey[0] === "device-certificate-inventory" &&
+					query.queryKey.includes(account),
+			)?.meta?.persist,
+	).toBe(false);
+	await clickButton("Close management");
+	window.history.replaceState(null, "", "/settings/devices");
+	account = "after-certificate-owner";
+	await render();
+	expect(container.textContent).not.toContain(
+		"service certificate expiring within 7 days",
+	);
 });
 
 test("separates consent, recovers ambiguous outcomes, exports public bindings, and blocks stale authority", async () => {

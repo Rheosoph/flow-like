@@ -2,6 +2,7 @@
 
 use super::agent_surface::{build_flowpilot_agent_surface, live_board_handle};
 use super::attachments::build_copilot_attachments;
+use super::backend_types::FlowPilotAgentBackendKind;
 use super::client_pool::{
     COPILOT_CLIENT, COPILOT_SINGLETON_CLIENT_GATE, NestedCopilotClientLease,
     acquire_nested_copilot_run_permit, checkout_nested_copilot_client,
@@ -91,11 +92,8 @@ pub(super) async fn copilot_sdk_chat_internal(
         register_copilot_run(request_id.as_deref().or(parent_request_id.as_deref()));
 
     let live_board = live_board_handle(&app_handle, board);
-    let live_board_snapshot = match live_board.as_ref() {
-        Some(live_board) => Some(live_board.lock().await.clone()),
-        None => None,
-    };
-    let authoritative_board = live_board_snapshot.as_ref().or(board);
+    let live_board_snapshot = live_board.as_ref().map(|live_board| live_board.snapshot());
+    let authoritative_board = live_board_snapshot.as_deref().or(board);
     let public_user_prompt = tool_context
         .as_ref()
         .and_then(|context| context.source_user_prompt.as_deref())
@@ -117,6 +115,7 @@ pub(super) async fn copilot_sdk_chat_internal(
         &request_identity_prompt,
         host_context_guidance.as_deref(),
         global.as_deref(),
+        FlowPilotAgentBackendKind::GithubCopilot.web_research(),
         tool_context
             .as_ref()
             .and_then(|context| context.board_context_manifest.as_ref()),

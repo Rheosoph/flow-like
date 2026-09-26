@@ -898,10 +898,16 @@ declare namespace db {
      * @param name — Name of the Table
      * @param userScoped (optional) — Store database in user directory instead of project directory
      * @param batchSize (optional) — Number of items to buffer before flushing writes to storage. 0 = no buffering.
+     * @param branch (optional) — Branch to open. A tag resolves its own branch.
+     * @param revision (optional) — Latest stays writable; Version and Tag select a read-only snapshot.
+     * @param version (optional) — Version within the selected branch, used when Revision is Version.
+     * @param tag (optional) — Named snapshot, used when Revision is Tag.
+     * @param readOnly (optional) — Disallow writes even when opening the latest revision.
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
      * @returns database — Database Connection Reference
      * @impure has side effects / drives control flow
      */
-    function open({ name: string, userScoped?: bool, batchSize?: int }): Struct;
+    function open({ name: string, userScoped?: bool, batchSize?: int, branch?: string, revision?: string, version?: int, tag?: string, readOnly?: bool }): { reference: Struct, database: Struct };
 
     /**
      * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. The run reuses the connection and refreshes its scoped credentials automatically.
@@ -910,10 +916,16 @@ declare namespace db {
      * @param flowRemoteDatabase (optional) — Shared database of the selected project
      * @param writeAccess (optional) — Request write access to the remote database. Requires the connection role to allow writing databases (or files).
      * @param batchSize (optional) — Number of items to buffer before flushing writes to storage. 0 = no buffering.
+     * @param branch (optional) — Branch to open. A tag resolves its own branch.
+     * @param revision (optional) — Latest stays writable; Version and Tag select a read-only snapshot.
+     * @param version (optional) — Version within the selected branch, used when Revision is Version.
+     * @param tag (optional) — Named snapshot, used when Revision is Tag.
+     * @param readOnly (optional) — Disallow writes even when opening the latest revision.
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
      * @returns database — Database Connection Reference
      * @impure has side effects / drives control flow
      */
-    function openRemote({ flowRemoteAppId?: string, flowRemoteDatabase?: string, writeAccess?: bool, batchSize?: int }): Struct;
+    function openRemote({ flowRemoteAppId?: string, flowRemoteDatabase?: string, writeAccess?: bool, batchSize?: int, branch?: string, revision?: string, version?: int, tag?: string, readOnly?: bool }): { reference: Struct, database: Struct };
 
     // === Data/Database/Delete ===
 
@@ -923,10 +935,12 @@ declare namespace db {
      * @param database — Database Connection Reference (receiver: `this` in `x.delete(...)`)
      * @param filter (optional) — Optional SQL filter on the table's columns; leave empty to delete all rows. Use $name for a value that comes from a wire — `id = $id` mints a `$id` pin, and the value is bound as a literal instead of being pasted into the predicate.
      * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
      * @returns deletedValues — Rows that were deleted
      * @impure has side effects / drives control flow
      */
-    function delete(this: NodeDBConnection, { database: Struct, filter?: string, params?: Struct }): Struct[];
+    function delete(this: NodeDBConnection, { database: Struct, filter?: string, params?: Struct }): { writeState: string, operationId: string, deletedValues: Struct[] };
 
     /**
      * Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema. This is irreversible and cannot be undone. Buffered writes that have not been flushed yet are discarded instead of written back. Graph overlays referencing the table are pruned and reported on References; saved queries are never modified. Known limitation: a DataFusion table provider registered from this table earlier in the same run keeps pointing at the deleted dataset, because mounts are only refreshed when the credential generation changes.
@@ -939,7 +953,7 @@ declare namespace db {
     function dropTable(this: NodeDBConnection, { database: Struct }): { dropped: bool, references: string[] };
 
     /**
-     * Purge Database
+     * Delete all rows from the selected writable branch. The schema and version history remain available.
      * @node purge_local_db @receiver database @alias purgeLocalDb
      * @param database — Database Connection Reference (receiver: `this` in `x.purge(...)`)
      * @impure has side effects / drives control flow
@@ -954,9 +968,11 @@ declare namespace db {
      * @param database — Database Connection Reference (receiver: `this` in `x.batchInsert(...)`)
      * @param value — Value to Insert
      * @returns errorMessage — Error details
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
      * @impure has side effects / drives control flow
      */
-    function batchInsert(this: NodeDBConnection, { database: Struct, value: Struct[] }): string;
+    function batchInsert(this: NodeDBConnection, { database: Struct, value: Struct[] }): { errorMessage: string, writeState: string, operationId: string };
 
     /**
      * Inserts if the Item does not exist, Updates if it does
@@ -965,9 +981,11 @@ declare namespace db {
      * @param idRow — The ID Column
      * @param value — Value to Insert
      * @returns errorMessage — Error details
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
      * @impure has side effects / drives control flow
      */
-    function batchUpsert(this: NodeDBConnection, { database: Struct, idRow: string, value: Struct[] }): string;
+    function batchUpsert(this: NodeDBConnection, { database: Struct, idRow: string, value: Struct[] }): { errorMessage: string, writeState: string, operationId: string };
 
     /**
      * Inserts multiple items at once. Faster than Upsert but might produce duplicates.
@@ -977,9 +995,11 @@ declare namespace db {
      * @param chunkSize (optional) — Chunk Size for Buffered Read
      * @param delimiter (optional) — Delimiter for CSV
      * @returns errorMessage — Error details
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
      * @impure has side effects / drives control flow
      */
-    function insertCsv(this: NodeDBConnection, { database: Struct, csv: Struct, chunkSize?: int, delimiter?: string }): string;
+    function insertCsv(this: NodeDBConnection, { database: Struct, csv: Struct, chunkSize?: int, delimiter?: string }): { errorMessage: string, writeState: string, operationId: string };
 
     /**
      * Faster than Upsert, but might write duplicate items.
@@ -987,9 +1007,11 @@ declare namespace db {
      * @param database — Database Connection Reference (receiver: `this` in `x.insertOne(...)`)
      * @param value — Value to Insert
      * @returns errorMessage — Error details
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
      * @impure has side effects / drives control flow
      */
-    function insertOne(this: NodeDBConnection, { database: Struct, value: Struct }): string;
+    function insertOne(this: NodeDBConnection, { database: Struct, value: Struct }): { errorMessage: string, writeState: string, operationId: string };
 
     /**
      * Reads a LabVIEW TDMS file and batch-inserts its channel data as rows into a vector database.
@@ -1008,9 +1030,11 @@ declare namespace db {
      * @param idRow — The ID Column
      * @param value — Value to Insert
      * @returns errorMessage — Error details
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
      * @impure has side effects / drives control flow
      */
-    function upsert(this: NodeDBConnection, { database: Struct, idRow: string, value: Struct }): string;
+    function upsert(this: NodeDBConnection, { database: Struct, idRow: string, value: Struct }): { errorMessage: string, writeState: string, operationId: string };
 
     // === Data/Database/Meta ===
 
@@ -1089,9 +1113,10 @@ declare namespace db {
      * @node flush_local_db @receiver database @alias flushLocalDb
      * @param database — Database Connection Reference (receiver: `this` in `x.flush(...)`)
      * @returns errorMessage — Error details
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
      * @impure has side effects / drives control flow
      */
-    function flush(this: NodeDBConnection, { database: Struct }): string;
+    function flush(this: NodeDBConnection, { database: Struct }): { errorMessage: string, reference: Struct };
 
     /**
      * Optimize and Update the Database
@@ -1135,6 +1160,16 @@ declare namespace db {
      * @impure has side effects / drives control flow
      */
     function makeColumnOptional(this: NodeDBConnection, { database: Struct, columnName?: string, optional?: bool }): Struct;
+
+    /**
+     * Marks a column as the table key so concurrent Upserts on it never create duplicate rows. The column must be required, hold unique values and be a string, 32/64-bit integer or binary column. The key cannot be changed or removed afterwards; setting the current key again succeeds.
+     * @node set_primary_key_local_db @receiver database @alias setPrimaryKeyLocalDb
+     * @param database — Database Connection Reference (receiver: `this` in `x.setPrimaryKey(...)`)
+     * @param columnName (optional) — Column that uniquely identifies each row, usually the ID Column your Upserts use
+     * @returns schema — Updated database schema
+     * @impure has side effects / drives control flow
+     */
+    function setPrimaryKey(this: NodeDBConnection, { database: Struct, columnName?: string }): Struct;
 
     // === Data/Database/Search ===
 
@@ -1196,6 +1231,185 @@ declare namespace db {
      * @impure has side effects / drives control flow
      */
     function vectorSearch(this: NodeDBConnection, { database: Struct, vector: float[], filter?: string, params?: Struct, limit?: int, offset?: int }): Struct[];
+
+    // === Data/Database/Update ===
+
+    /**
+     * Set fields on rows matching a filter. With offline buffering enabled, success means durable local acceptance; Write State reports pending cloud replay.
+     * @node update_local_db @receiver database @alias updateLocalDb
+     * @param database — Database connection (receiver: `this` in `x.update(...)`)
+     * @param filter (optional) — Rows to update. Use true to update every row. Values from $name pins are bound as literals.
+     * @param params (optional) — Values for the filter's $placeholders, as an object keyed by placeholder name without the $ (e.g. {"customer_id": 42}). Only needed when the filter itself comes from a wire — a literal filter derives one pin per placeholder instead. Where both supply the same name, the derived pin wins unless it is empty.
+     * @param updates — Object mapping column names to replacement values
+     * @returns writeState — pending means durable on this device and awaiting cloud replay; buffered means process-local batching; applied means the configured store accepted the write
+     * @returns operationId — Durable offline operation ID, or empty when this write has no offline receipt. For chunked imports this is the last accepted chunk.
+     * @impure has side effects / drives control flow
+     */
+    function update(this: NodeDBConnection, { database: Struct, filter?: string, params?: Struct, updates: Struct }): { writeState: string, operationId: string };
+
+    // === Data/Database/Versioning ===
+
+    /**
+     * List branches and their parent references.
+     * @node database_branches @receiver database @alias databaseBranches
+     * @param database — Database connection (receiver: `this` in `x.branches(...)`)
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns branches — Table branches
+     * @impure has side effects / drives control flow
+     */
+    function branches(this: NodeDBConnection, { database: Struct }): { reference: Struct, branches: Struct[] };
+
+    /**
+     * Open an independent branch or snapshot handle without changing the source connection.
+     * @node database_checkout @receiver database @alias databaseCheckout
+     * @param database — Database connection (receiver: `this` in `x.checkout(...)`)
+     * @param branch (optional) — Branch to open. A tag resolves its own branch.
+     * @param revision (optional) — Latest stays writable; Version and Tag select a read-only snapshot.
+     * @param version (optional) — Version within the selected branch, used when Revision is Version.
+     * @param tag (optional) — Named snapshot, used when Revision is Tag.
+     * @param readOnly (optional) — Disallow writes even when opening the latest revision.
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns databaseOut — Independent connection for the resulting reference
+     * @impure has side effects / drives control flow
+     */
+    function checkout(this: NodeDBConnection, { database: Struct, branch?: string, revision?: string, version?: int, tag?: string, readOnly?: bool }): { reference: Struct, databaseOut: Struct };
+
+    /**
+     * Remove old unprotected versions according to an explicit age threshold.
+     * @node database_cleanup_versions @receiver database @alias databaseCleanupVersions
+     * @param database — Database connection (receiver: `this` in `x.cleanupVersions(...)`)
+     * @param olderThanDays (optional) — Minimum age of versions eligible for cleanup; must be at least one day.
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns stats — Removed versions and storage
+     * @impure has side effects / drives control flow
+     */
+    function cleanupVersions(this: NodeDBConnection, { database: Struct, olderThanDays?: int }): { reference: Struct, stats: Struct };
+
+    /**
+     * Create a shallow clone of this snapshot as another table. Shared source data remains protected while the clone exists.
+     * @node database_clone @receiver database @alias databaseClone
+     * @param database — Database connection (receiver: `this` in `x.clone(...)`)
+     * @param name — Name of the new table
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns databaseOut — Independent connection for the resulting reference
+     * @impure has side effects / drives control flow
+     */
+    function clone(this: NodeDBConnection, { database: Struct, name: string }): { reference: Struct, databaseOut: Struct };
+
+    /**
+     * Compare two snapshots by a unique, non-null string or integer key. Return counts, schema changes and bounded row previews.
+     * @node database_compare @receiver database @alias databaseCompare
+     * @param database — Database connection (receiver: `this` in `x.compare(...)`)
+     * @param other — Target database view
+     * @param key (optional) — Unique, non-null string or integer application key present in both views
+     * @param limit (optional) — Maximum changed rows returned, from 0 to 1000. Counts cover the full comparison.
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns diff — Added, removed, changed and unchanged counts with row previews
+     * @impure has side effects / drives control flow
+     */
+    function compare(this: NodeDBConnection, { database: Struct, other: Struct, key?: string, limit?: int }): { reference: Struct, diff: Struct };
+
+    /**
+     * Create a writable branch from the current committed snapshot and return its connection.
+     * @node database_create_branch @receiver database @alias databaseCreateBranch
+     * @param database — Database connection (receiver: `this` in `x.createBranch(...)`)
+     * @param name — Branch or tag name
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns databaseOut — Independent connection for the resulting reference
+     * @impure has side effects / drives control flow
+     */
+    function createBranch(this: NodeDBConnection, { database: Struct, name: string }): { reference: Struct, databaseOut: Struct };
+
+    /**
+     * Flush pending writes and create a tag for the selected branch version.
+     * @node database_create_tag @receiver database @alias databaseCreateTag
+     * @param database — Database connection (receiver: `this` in `x.createTag(...)`)
+     * @param name — Branch or tag name
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @impure has side effects / drives control flow
+     */
+    function createTag(this: NodeDBConnection, { database: Struct, name: string }): Struct;
+
+    /**
+     * Delete a named branch. Use Drop Table only to delete the entire table.
+     * @node database_delete_branch @receiver database @alias databaseDeleteBranch
+     * @param database — Database connection (receiver: `this` in `x.deleteBranch(...)`)
+     * @param name — Branch or tag name
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @impure has side effects / drives control flow
+     */
+    function deleteBranch(this: NodeDBConnection, { database: Struct, name: string }): Struct;
+
+    /**
+     * Remove a tag. Its old snapshot may become eligible for version cleanup.
+     * @node database_delete_tag @receiver database @alias databaseDeleteTag
+     * @param database — Database connection (receiver: `this` in `x.deleteTag(...)`)
+     * @param name — Branch or tag name
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @impure has side effects / drives control flow
+     */
+    function deleteTag(this: NodeDBConnection, { database: Struct, name: string }): Struct;
+
+    /**
+     * Explicitly move an existing tag to the selected branch version.
+     * @node database_update_tag @receiver database @alias databaseUpdateTag
+     * @param database — Database connection (receiver: `this` in `x.moveTag(...)`)
+     * @param name — Branch or tag name
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @impure has side effects / drives control flow
+     */
+    function moveTag(this: NodeDBConnection, { database: Struct, name: string }): Struct;
+
+    /**
+     * Read the selected branch, version and access state without flushing pending writes.
+     * @node database_reference @receiver database @alias databaseReference
+     * @param database — Database connection (receiver: `this` in `x.reference(...)`)
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns pendingWrites — Whether writes are queued but not yet committed
+     * @impure has side effects / drives control flow
+     */
+    function reference(this: NodeDBConnection, { database: Struct }): { reference: Struct, pendingWrites: bool };
+
+    /**
+     * Restore the selected historical snapshot as a new committed version of its branch.
+     * @node database_restore @receiver database @alias databaseRestore
+     * @param database — Database connection (receiver: `this` in `x.restore(...)`)
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns databaseOut — Independent connection for the resulting reference
+     * @impure has side effects / drives control flow
+     */
+    function restore(this: NodeDBConnection, { database: Struct }): { reference: Struct, databaseOut: Struct };
+
+    /**
+     * Flush pending writes and pin an independent read-only snapshot. Optionally create a retention tag.
+     * @node database_snapshot @receiver database @alias databaseSnapshot
+     * @param database — Database connection (receiver: `this` in `x.snapshot(...)`)
+     * @param name (optional) — Optional unique tag protecting this snapshot from cleanup.
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns databaseOut — Independent connection for the resulting reference
+     * @impure has side effects / drives control flow
+     */
+    function snapshot(this: NodeDBConnection, { database: Struct, name?: string }): { reference: Struct, databaseOut: Struct };
+
+    /**
+     * List tags and the exact branch versions they reference.
+     * @node database_tags @receiver database @alias databaseTags
+     * @param database — Database connection (receiver: `this` in `x.tags(...)`)
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns tags — Named snapshots
+     * @impure has side effects / drives control flow
+     */
+    function tags(this: NodeDBConnection, { database: Struct }): { reference: Struct, tags: Struct[] };
+
+    /**
+     * List committed versions of the selected branch.
+     * @node database_versions @receiver database @alias databaseVersions
+     * @param database — Database connection (receiver: `this` in `x.versions(...)`)
+     * @returns reference — Resolved table, branch, version and access state. An unopened new table has no reference yet.
+     * @returns versions — Committed branch history
+     * @impure has side effects / drives control flow
+     */
+    function versions(this: NodeDBConnection, { database: Struct }): { reference: Struct, versions: Struct[] };
 
     namespace graph {
         // === Data/Database/Graph ===
@@ -5376,6 +5590,146 @@ declare namespace microsoft {
         function subscribeNotifications({ provider: Struct, notificationUrl: string, expirationMinutes?: int, clientState?: string }): { subscriptionId: string, expirationDateTime: string, errorMessage: string };
     }
 
+    namespace copilotStudio {
+        // === Data/Microsoft/Copilot Studio ===
+
+        /**
+         * Reference a published Copilot Studio agent by its Microsoft 365 Agents SDK connection string (Copilot Studio → Channels → Native app). Only commercial-cloud Power Platform hosts are accepted.
+         * @node data_microsoft_copilot_studio_agent @alias dataMicrosoftCopilotStudioAgent
+         * @param connectionString (optional) — https://….environment.api.powerplatform.com/copilotstudio/dataverse-backed/authenticated/bots/{schema name}/conversations?api-version=…
+         * @returns agent — Validated Copilot Studio agent reference
+         */
+        function agent({ connectionString?: string }): Struct;
+
+        /**
+         * Send a message to a published Copilot Studio agent and stream its reply. Leave the conversation ID empty to start a new conversation; pass the returned ID to continue it. Billed to the agent's tenant in Copilot Credits.
+         * @node data_microsoft_copilot_studio_chat @alias dataMicrosoftCopilotStudioChat
+         * @param provider — Copilot Studio provider with a delegated Power Platform token
+         * @param agent — Copilot Studio agent reference (from the Copilot Studio Agent node)
+         * @param prompt — The user's message
+         * @param conversationId (optional) — Conversation to continue; leave empty to start a new one
+         * @param locale (optional) — Language of the conversation, e.g. en-US or de-DE
+         * @returns chunk — Streamed chunk: answer text as content, progress updates as reasoning
+         * @returns result — The agent's reply with citations as annotations
+         * @returns newConversationId — Pass this into the next call to continue the conversation
+         * @returns suggestedActions — Quick replies the agent offered; send one back as the next message
+         * @returns cards — Adaptive Cards and other attachments the agent sent
+         * @returns attachments — Citations from generative answers, as chat attachments
+         * @returns expectingInput — The agent asked a question and waits for the user's answer
+         * @returns conversationEnded — The agent ended the conversation; start a new one for the next message
+         * @returns activities — Every raw Bot Framework activity received in this call
+         * @returns errorMessage — Why the call failed
+         * @impure has side effects / drives control flow
+         */
+        function chat({ provider: Struct, agent: Struct, prompt: string, conversationId?: string, locale?: string }): { chunk: Struct, result: Struct, newConversationId: string, suggestedActions: string[], cards: Struct[], attachments: Struct[], expectingInput: bool, conversationEnded: bool, activities: Struct[], errorMessage: string };
+
+        /**
+         * Chat with a Copilot Studio agent over Direct Line, for agents without Microsoft authentication (anonymous or manual auth). Uses the token endpoint (Channels → Mobile app) or the Web channel security secret; no Microsoft sign-in. Pass the returned session back in to continue the conversation.
+         * @node data_microsoft_copilot_studio_direct_line_chat @alias dataMicrosoftCopilotStudioDirectLineChat
+         * @param tokenEndpoint (optional) — The agent's token endpoint from Channels → Mobile app (when secured access is off)
+         * @param secret (optional) — Web channel security secret (when secured access is on); never stored in the session
+         * @param region (optional) — Direct Line cluster; Auto asks the agent's environment (needs the token endpoint)
+         * @param timeoutSeconds (optional) — How long to wait for the agent's reply
+         * @param session (optional) — Session returned by a previous call; leave unconnected to start a new conversation
+         * @param prompt — The user's message
+         * @param userId (optional) — Stable id for the user in this conversation
+         * @param locale (optional) — Language of the conversation, e.g. en-US or de-DE
+         * @param runGreeting (optional) — On a new conversation, run the agent's Conversation Start topic first
+         * @returns chunk — Streamed chunk: answer text as content, progress updates as reasoning
+         * @returns result — The agent's reply with citations as annotations
+         * @returns newConversationId — Pass this into the next call to continue the conversation
+         * @returns suggestedActions — Quick replies the agent offered; send one back as the next message
+         * @returns cards — Adaptive Cards and other attachments the agent sent
+         * @returns attachments — Citations from generative answers, as chat attachments
+         * @returns expectingInput — The agent asked a question and waits for the user's answer
+         * @returns conversationEnded — The agent ended the conversation; start a new one for the next message
+         * @returns activities — Every raw Bot Framework activity received in this call
+         * @returns errorMessage — Why the call failed
+         * @returns newSession — Pass this into the next call to continue the conversation
+         * @impure has side effects / drives control flow
+         */
+        function directLineChat({ tokenEndpoint?: string, secret?: string, region?: string, timeoutSeconds?: int, session?: Struct, prompt: string, userId?: string, locale?: string, runGreeting?: bool }): { chunk: Struct, result: Struct, newConversationId: string, suggestedActions: string[], cards: Struct[], attachments: Struct[], expectingInput: bool, conversationEnded: bool, activities: Struct[], errorMessage: string, newSession: Struct };
+
+        /**
+         * List the Copilot Studio agents in the Dataverse environments the user can access (Dataverse bot table). Signs in to Microsoft Dataverse separately; plain chat users may lack read access to the bot table. Each result carries a connection string and agent reference.
+         * @node data_microsoft_copilot_studio_list_agents @alias dataMicrosoftCopilotStudioListAgents
+         * @param environmentUrl (optional) — Dataverse URL of one environment (https://<org>.crm.dynamics.com); leave empty for all accessible environments
+         * @param publishedOnly (optional) — Only return agents that have been published
+         * @returns agents — Agents with their environment, connection string and agent reference
+         * @returns errorMessage — Why listing failed
+         * @impure has side effects / drives control flow
+         */
+        function listAgents({ environmentUrl?: string, publishedOnly?: bool }): { agents: Struct[], errorMessage: string };
+
+        /**
+         * List the Power Platform environments the signed-in user can access (Power Platform API, preview). Needs the EnvironmentManagement.Environments.Read permission in addition to Copilot Studio's.
+         * @node data_microsoft_copilot_studio_list_environments @alias dataMicrosoftCopilotStudioListEnvironments
+         * @param provider — Copilot Studio provider with a delegated Power Platform token
+         * @param filter (optional) — Optional OData $filter on dataverseId, type, geo, state, environmentGroupId or domainName, e.g. type eq 'Production'
+         * @returns environments — Environments available to the user
+         * @returns errorMessage — Why listing failed
+         * @impure has side effects / drives control flow
+         */
+        function listEnvironments({ provider: Struct, filter?: string }): { environments: Struct[], errorMessage: string };
+
+        /**
+         * Sign in to Microsoft Copilot Studio with delegated OAuth (Power Platform API). The account must be in the same Entra tenant as the agent, and the agent must be published and shared with it. Agent usage is billed to that tenant in Copilot Credits.
+         * @node data_microsoft_copilot_studio_provider_oauth @alias dataMicrosoftCopilotStudioProviderOauth
+         * @returns provider — Copilot Studio provider with a delegated Power Platform token
+         */
+        function providerOauth(): Struct;
+
+        /**
+         * Use a delegated Power Platform access token (audience https://api.powerplatform.com, scope CopilotStudio.Copilots.Invoke), for example from your own identity broker. App-only tokens are not supported by Copilot Studio.
+         * @node data_microsoft_copilot_studio_provider_token @alias dataMicrosoftCopilotStudioProviderToken
+         * @param token — Delegated Power Platform access token (audience https://api.powerplatform.com)
+         * @returns provider — Copilot Studio provider with a delegated Power Platform token
+         */
+        function providerToken({ token: string }): Struct;
+
+        /**
+         * Send a raw Bot Framework activity into a Copilot Studio conversation, e.g. an Adaptive Card submit ({"type":"message","value":{…}}) or an event ({"type":"event","name":…}). The type defaults to message.
+         * @node data_microsoft_copilot_studio_send_activity @alias dataMicrosoftCopilotStudioSendActivity
+         * @param provider — Copilot Studio provider with a delegated Power Platform token
+         * @param agent — Copilot Studio agent reference (from the Copilot Studio Agent node)
+         * @param conversationId — Conversation to send the activity into
+         * @param activity (optional) — Bot Framework activity object; conversation.id is set for you
+         * @returns chunk — Streamed chunk: answer text as content, progress updates as reasoning
+         * @returns result — The agent's reply with citations as annotations
+         * @returns newConversationId — Pass this into the next call to continue the conversation
+         * @returns suggestedActions — Quick replies the agent offered; send one back as the next message
+         * @returns cards — Adaptive Cards and other attachments the agent sent
+         * @returns attachments — Citations from generative answers, as chat attachments
+         * @returns expectingInput — The agent asked a question and waits for the user's answer
+         * @returns conversationEnded — The agent ended the conversation; start a new one for the next message
+         * @returns activities — Every raw Bot Framework activity received in this call
+         * @returns errorMessage — Why the call failed
+         * @impure has side effects / drives control flow
+         */
+        function sendActivity({ provider: Struct, agent: Struct, conversationId: string, activity?: Struct }): { chunk: Struct, result: Struct, newConversationId: string, suggestedActions: string[], cards: Struct[], attachments: Struct[], expectingInput: bool, conversationEnded: bool, activities: Struct[], errorMessage: string };
+
+        /**
+         * Open a conversation with a published Copilot Studio agent and return its ID, plus the agent's greeting when enabled (e.g. to show a welcome message when a chat opens).
+         * @node data_microsoft_copilot_studio_start_conversation @alias dataMicrosoftCopilotStudioStartConversation
+         * @param provider — Copilot Studio provider with a delegated Power Platform token
+         * @param agent — Copilot Studio agent reference (from the Copilot Studio Agent node)
+         * @param locale (optional) — Language of the conversation, e.g. en-US or de-DE
+         * @param runGreeting (optional) — Run the agent's Conversation Start topic and return its greeting
+         * @returns chunk — Streamed chunk: answer text as content, progress updates as reasoning
+         * @returns result — The agent's reply with citations as annotations
+         * @returns newConversationId — Pass this into the next call to continue the conversation
+         * @returns suggestedActions — Quick replies the agent offered; send one back as the next message
+         * @returns cards — Adaptive Cards and other attachments the agent sent
+         * @returns attachments — Citations from generative answers, as chat attachments
+         * @returns expectingInput — The agent asked a question and waits for the user's answer
+         * @returns conversationEnded — The agent ended the conversation; start a new one for the next message
+         * @returns activities — Every raw Bot Framework activity received in this call
+         * @returns errorMessage — Why the call failed
+         * @impure has side effects / drives control flow
+         */
+        function startConversation({ provider: Struct, agent: Struct, locale?: string, runGreeting?: bool }): { chunk: Struct, result: Struct, newConversationId: string, suggestedActions: string[], cards: Struct[], attachments: Struct[], expectingInput: bool, conversationEnded: bool, activities: Struct[], errorMessage: string };
+    }
+
     namespace excel {
         // === Data/Microsoft/Excel ===
 
@@ -6406,6 +6760,60 @@ declare namespace microsoft {
          * @impure has side effects / drives control flow
          */
         function updateTask({ provider: Struct, listId: string, taskId: string, title?: string, status?: string, importance?: string }): { task: Struct, errorMessage: string };
+    }
+
+    namespace workiq {
+        // === Data/Microsoft/Work IQ ===
+
+        /**
+         * Chat with Microsoft 365 Copilot through the Work IQ REST API, grounded in the user's Microsoft 365 data and optionally the web. Streams the reply and returns citations. Billed per use in Copilot Credits.
+         * @node data_microsoft_workiq_chat @alias dataMicrosoftWorkiqChat
+         * @param provider — Microsoft Work IQ provider
+         * @param prompt — User message to send to Copilot
+         * @param additionalContext (optional) — Extra grounding context (e.g., document excerpts, facts) to provide to Copilot
+         * @param fileUrls (optional) — OneDrive/SharePoint file URLs to include as context (full URLs like https://contoso.sharepoint.com/...)
+         * @param webGrounding (optional) — Enable web search grounding for real-time information
+         * @param timezone (optional) — User timezone in IANA format (e.g., America/New_York, Europe/London). Auto-detected from system if empty.
+         * @param conversationId (optional) — Optional conversation ID to continue a chat (leave empty for new conversation)
+         * @returns chunk — Streaming chunk
+         * @returns result — Complete response with annotations from citations
+         * @returns response — Full Copilot response with attributions and adaptive cards
+         * @returns attachments — Attachments created from Copilot's attributions (citations and references)
+         * @returns newConversationId — Conversation ID for follow-up messages
+         * @returns errorMessage
+         * @impure has side effects / drives control flow
+         */
+        function chat({ provider: Struct, prompt: string, additionalContext?: string[], fileUrls?: string[], webGrounding?: bool, timezone?: string, conversationId?: string }): { chunk: Struct, result: Struct, response: Struct, attachments: Struct[], newConversationId: string, errorMessage: string };
+
+        /**
+         * Connect to Microsoft Work IQ with delegated OAuth. A tenant admin must enable Work IQ and consent to WorkIQAgent.Ask. Work IQ usage is billed in Copilot Credits.
+         * @node data_microsoft_workiq_provider_oauth @alias dataMicrosoftWorkiqProviderOauth
+         * @returns provider — Microsoft Work IQ provider with delegated authentication
+         */
+        function providerOauth(): Struct;
+
+        /**
+         * Connect to Microsoft Work IQ with a delegated access token for api://workiq.svc.cloud.microsoft (for example from an on-behalf-of exchange). App-only tokens are rejected by Work IQ.
+         * @node data_microsoft_workiq_provider_token @alias dataMicrosoftWorkiqProviderToken
+         * @param token — Delegated Work IQ access token (audience api://workiq.svc.cloud.microsoft)
+         * @returns provider — Microsoft Work IQ provider with delegated authentication
+         */
+        function providerToken({ token: string }): Struct;
+
+        /**
+         * Read or change Microsoft 365 data through the Work IQ MCP entity tools, addressed by a relative Microsoft Graph path. Collections return at most 100 items and cannot be paged. Create, Update, Delete and Action are blocked until a tenant admin allows them in Work IQ policy.
+         * @node data_microsoft_workiq_request @alias dataMicrosoftWorkiqRequest
+         * @param provider — Microsoft Work IQ provider
+         * @param operation (optional) — Fetch reads, Create posts to a collection, Update patches an entity, Delete removes it, Action runs a side-effect action (e.g. /me/sendMail), Function calls a Graph function (e.g. /me/calendarView?...)
+         * @param path — Relative Microsoft Graph path such as /me/messages?$top=10 or /me/events/{id}. Allowed prefixes depend on tenant policy (by default /me/, /users/, /sites/).
+         * @param body (optional) — JSON body for Create, Update and Action
+         * @returns status — HTTP status code Microsoft Graph returned through Work IQ
+         * @returns response — JSON returned by Microsoft Graph
+         * @returns values — Collection items when the response has a value array
+         * @returns errorMessage
+         * @impure has side effects / drives control flow
+         */
+        function request({ provider: Struct, operation?: string, path: string, body?: Struct }): { status: int, response: Struct, values: Struct[], errorMessage: string };
     }
 }
 

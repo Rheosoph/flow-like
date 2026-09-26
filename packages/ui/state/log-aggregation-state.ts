@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ILogLevel, ILogMetadata } from "../lib";
+import type { ILogLevel, ILogMetadata, IRunLogSummary } from "../lib";
 import type { IBackendState } from "./backend-state";
 
 export interface ILogAggregationFilter {
@@ -58,12 +58,16 @@ interface ILogAggregationState {
 	/** When enabled, the board renders aggregated run activity per node. */
 	heatmapEnabled: boolean;
 	heatmap?: IBoardHeatmap;
+	/** Log summary of `currentMetadata`, loaded by the Logs panel. */
+	currentSummary?: IRunLogSummary;
+	currentSummaryRunId?: string;
 	refetchLogs: (backend: IBackendState) => Promise<void>;
 	setFilter(
 		backend: IBackendState,
 		filter: ILogAggregationFilter,
 	): Promise<void>;
 	setCurrentMetadata: (meta?: ILogMetadata) => void;
+	setCurrentSummary: (runId: string, summary?: IRunLogSummary | null) => void;
 	setHeatmapEnabled: (enabled: boolean) => void;
 }
 
@@ -77,10 +81,40 @@ function withHeatmap(
 	};
 }
 
+export interface INodeLogCounts {
+	total: number;
+	problems: number;
+	warnings: number;
+}
+
+/** Per-node counts from the current run's summary. Select it through `useShallow`. */
+export function nodeLogCounts(
+	state: Pick<
+		ILogAggregationState,
+		"currentSummary" | "currentSummaryRunId" | "currentMetadata"
+	>,
+	nodeId: string,
+): INodeLogCounts | undefined {
+	if (state.currentMetadata?.run_id !== state.currentSummaryRunId) {
+		return undefined;
+	}
+	const levels = state.currentSummary?.nodes?.[nodeId];
+	if (!levels) return undefined;
+	let total = 0;
+	for (const count of levels) total += count ?? 0;
+	return {
+		total,
+		problems: (levels[3] ?? 0) + (levels[4] ?? 0),
+		warnings: levels[2] ?? 0,
+	};
+}
+
 export const useLogAggregation = create<ILogAggregationState>((set, get) => ({
 	currentLogs: [],
 	filter: undefined,
 	currentMetadata: undefined,
+	currentSummary: undefined,
+	currentSummaryRunId: undefined,
 	isLoading: false,
 	heatmapEnabled: false,
 	heatmap: undefined,
@@ -124,7 +158,19 @@ export const useLogAggregation = create<ILogAggregationState>((set, get) => ({
 		}
 	},
 	setCurrentMetadata: (meta?: ILogMetadata) => {
-		set({ currentMetadata: meta });
+		if (meta?.run_id === get().currentSummaryRunId) {
+			set({ currentMetadata: meta });
+			return;
+		}
+		set({
+			currentMetadata: meta,
+			currentSummary: undefined,
+			currentSummaryRunId: undefined,
+		});
+	},
+	setCurrentSummary: (runId: string, summary?: IRunLogSummary | null) => {
+		if (get().currentMetadata?.run_id !== runId) return;
+		set({ currentSummary: summary ?? undefined, currentSummaryRunId: runId });
 	},
 	setHeatmapEnabled: (enabled: boolean) => {
 		set({

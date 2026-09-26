@@ -33,9 +33,10 @@ pub async fn load<C: ConnectionTrait>(
     dev: bool,
     now: DateTime<Utc>,
 ) -> Result<HashMap<RailKey, RailData>, ApiError> {
-    let rails = try_join_all(keys.iter().map(|key| async move {
-        Ok::<_, ApiError>((*key, rail(db, *key, dev, now).await?))
-    }))
+    let rails = try_join_all(
+        keys.iter()
+            .map(|key| async move { Ok::<_, ApiError>((*key, rail(db, *key, dev, now).await?)) }),
+    )
     .await?;
     Ok(rails.into_iter().collect())
 }
@@ -52,8 +53,16 @@ pub async fn rail<C: ConnectionTrait>(
         RailKey::Trending => {
             ranked(
                 db,
-                Some((query::app_ids(&AppFilter::new(DEFAULT_LANGUAGE), ExploreSort::Best), TRENDING_APPS)),
-                dev.then(|| (query::package_ids(&PackageFilter::default(), ExploreSort::Best), TRENDING_PACKAGES)),
+                Some((
+                    query::app_ids(&AppFilter::new(DEFAULT_LANGUAGE), ExploreSort::Best),
+                    TRENDING_APPS,
+                )),
+                dev.then(|| {
+                    (
+                        query::package_ids(&PackageFilter::default(), ExploreSort::Best),
+                        TRENDING_PACKAGES,
+                    )
+                }),
             )
             .await
         }
@@ -69,20 +78,33 @@ pub async fn rail<C: ConnectionTrait>(
             ranked(
                 db,
                 Some((query::app_ids(&apps, ExploreSort::Newest), NEW_ITEMS)),
-                dev.then(|| (query::package_ids(&packages, ExploreSort::Newest), NEW_ITEMS)),
+                dev.then(|| {
+                    (
+                        query::package_ids(&packages, ExploreSort::Newest),
+                        NEW_ITEMS,
+                    )
+                }),
             )
             .await
         }
         RailKey::TopPaid => {
             ranked(
                 db,
-                Some((query::top_paid_apps(sales_since.date_naive()), TOP_PAID_ITEMS)),
+                Some((
+                    query::top_paid_apps(sales_since.date_naive()),
+                    TOP_PAID_ITEMS,
+                )),
                 dev.then(|| (query::top_paid_packages(sales_since), TOP_PAID_ITEMS)),
             )
             .await
         }
         RailKey::ForBuilders => {
-            ranked(db, None, dev.then(|| (query::builder_packages(), BUILDER_PACKAGES))).await
+            ranked(
+                db,
+                None,
+                dev.then(|| (query::builder_packages(), BUILDER_PACKAGES)),
+            )
+            .await
         }
         RailKey::NewCount => new_count(db, recent, dev).await,
         RailKey::ByCategory => by_category(db, dev).await,
@@ -129,16 +151,14 @@ async fn new_count<C: ConnectionTrait>(
         published_since: Some(since),
         ..PackageFilter::default()
     };
-    let ((apps, free_apps, paid_apps), (packages, verified_packages)) = futures::try_join!(
-        query::app_price_split(db, &apps),
-        async {
+    let ((apps, free_apps, paid_apps), (packages, verified_packages)) =
+        futures::try_join!(query::app_price_split(db, &apps), async {
             if dev {
                 query::package_verified_counts(db, &packages).await
             } else {
                 Ok((0, 0))
             }
-        },
-    )?;
+        },)?;
     Ok(RailData {
         stat: Some(RailStat {
             total: saturate(apps + packages),
@@ -179,7 +199,12 @@ async fn by_category<C: ConnectionTrait>(db: &C, dev: bool) -> Result<RailData, 
             .map(|(category, apps)| {
                 let app_category = query::app_category_label(&category);
                 RailCategory {
-                    packages: saturate(packages.get(app_category.as_str()).copied().unwrap_or_default()),
+                    packages: saturate(
+                        packages
+                            .get(app_category.as_str())
+                            .copied()
+                            .unwrap_or_default(),
+                    ),
                     app_category,
                     apps: saturate(apps),
                 }
@@ -192,16 +217,13 @@ async fn by_category<C: ConnectionTrait>(db: &C, dev: bool) -> Result<RailData, 
 /// Public apps, and for developer viewers public packages, on the whole hub.
 pub async fn type_counts<C: ConnectionTrait>(db: &C, dev: bool) -> Result<TypeCounts, ApiError> {
     let apps = AppFilter::new(DEFAULT_LANGUAGE);
-    let (apps, packages) = futures::try_join!(
-        query::count_apps(db, &apps),
-        async {
-            if dev {
-                query::count_packages(db, &PackageFilter::default()).await
-            } else {
-                Ok(0)
-            }
-        },
-    )?;
+    let (apps, packages) = futures::try_join!(query::count_apps(db, &apps), async {
+        if dev {
+            query::count_packages(db, &PackageFilter::default()).await
+        } else {
+            Ok(0)
+        }
+    },)?;
     Ok(TypeCounts { apps, packages })
 }
 

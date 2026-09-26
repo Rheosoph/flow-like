@@ -51,6 +51,11 @@ export async function readDeviceInspection(
 	const placements: PlacementStatus[] = [];
 	let after: string | null = null;
 	let boot: string | null | undefined;
+	let certificateManagement: 1 | undefined;
+	let canManageCertificates = false;
+	let certificateIssuance: 1 | undefined;
+	let certificateAcme: 1 | undefined;
+	let canDelegateCertificateRenewal = false;
 	for (let page = 0; page < 512; page++) {
 		const response = await call({ type: "inspect_page", after, limit: 2 });
 		if (response.state !== "completed")
@@ -64,8 +69,16 @@ export async function readDeviceInspection(
 			(result.next !== null && !identifier(result.next))
 		)
 			throw new Error("Invalid device inspection page.");
-		if (page === 0) boot = result.boot_id as string | null;
-		else if (result.boot_id !== boot)
+		if (page === 0) {
+			boot = result.boot_id as string | null;
+			certificateManagement =
+				result.certificate_management === 1 ? 1 : undefined;
+			canManageCertificates = result.can_manage_certificates === true;
+			certificateIssuance = result.certificate_issuance === 1 ? 1 : undefined;
+			certificateAcme = result.certificate_acme === 1 ? 1 : undefined;
+			canDelegateCertificateRenewal =
+				result.can_delegate_certificate_renewal === true;
+		} else if (result.boot_id !== boot)
 			throw new Error(
 				"The device rebooted while status was being read. Refresh its status.",
 			);
@@ -81,6 +94,24 @@ export async function readDeviceInspection(
 				boot_id: boot ?? null,
 				placements,
 				observed_at: Date.now(),
+				...(certificateManagement
+					? {
+							certificate_management: certificateManagement,
+							can_manage_certificates: canManageCertificates,
+						}
+					: {}),
+				...(certificateIssuance
+					? {
+							certificate_issuance: certificateIssuance,
+							can_delegate_certificate_renewal: canDelegateCertificateRenewal,
+						}
+					: {}),
+				...(certificateAcme
+					? {
+							certificate_acme: certificateAcme,
+							can_delegate_certificate_renewal: canDelegateCertificateRenewal,
+						}
+					: {}),
 			};
 		if (!result.placements.length || result.next !== after)
 			throw new Error("Device inspection returned an invalid continuation.");

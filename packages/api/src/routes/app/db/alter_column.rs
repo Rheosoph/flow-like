@@ -34,6 +34,7 @@ pub struct AlterColumnPayload {
     request_body = AlterColumnPayload,
     responses(
         (status = 200, description = "Column altered", body = ()),
+        (status = 400, description = "The table key column must stay required and keep its type"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -78,7 +79,9 @@ pub async fn alter_column(
         alteration = alteration.set_nullable(nullable);
     }
 
-    db.alter_column(&[alteration]).await?;
+    db.alter_column(&[alteration])
+        .await
+        .map_err(super::table_key_error)?;
 
     Ok(Json(()))
 }

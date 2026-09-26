@@ -8,7 +8,9 @@ use flow_like::credentials::{
     aws_credentials::{AwsSharedCredentials, sse_kms_storage_options},
 };
 use flow_like::{
-    flow_like_storage::lancedb::{connect, connection::ConnectBuilder},
+    flow_like_storage::{
+        databases::vector::lancedb::connect_lance, lancedb::connection::ConnectBuilder,
+    },
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
@@ -1229,7 +1231,7 @@ fn make_s3_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("s3://{}/{}", bucket, path);
-        let mut builder = connect(&url)
+        let mut builder = connect_lance(&url)
             .storage_option("aws_access_key_id".to_string(), access_key.clone())
             .storage_option("aws_secret_access_key".to_string(), secret_key.clone())
             .storage_option("aws_region".to_string(), region.clone());

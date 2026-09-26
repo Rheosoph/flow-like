@@ -659,7 +659,12 @@ pub async fn db_drop_columns(
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AddColumnPayload {
     pub name: String,
-    pub sql_expression: String,
+    #[serde(default)]
+    pub sql_expression: Option<String>,
+    #[serde(default, rename = "type")]
+    pub data_type: Option<String>,
+    #[serde(default)]
+    pub vector_size: Option<u32>,
 }
 
 #[tauri::command(async)]
@@ -683,7 +688,13 @@ pub async fn db_add_column(
         selector,
     )
     .await?;
-    db.add_column(&column.name, &column.sql_expression).await?;
+    db.add_column_definition(
+        &column.name,
+        column.sql_expression.as_deref(),
+        column.data_type.as_deref(),
+        column.vector_size,
+    )
+    .await?;
     Ok(())
 }
 
@@ -710,6 +721,31 @@ pub async fn db_alter_column(
     )
     .await?;
     db.make_column_nullable(&column, nullable).await?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub async fn db_set_primary_key(
+    app_handle: AppHandle,
+    app_id: String,
+    table_name: String,
+    credentials: Option<Arc<SharedCredentials>>,
+    column: String,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
+    selector: Option<DatabaseSelector>,
+) -> Result<(), TauriFunctionError> {
+    let db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+        selector,
+    )
+    .await?;
+    db.set_primary_key(&column).await?;
     Ok(())
 }
 

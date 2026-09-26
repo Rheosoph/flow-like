@@ -15,7 +15,9 @@ use flow_like::credentials::{
     SharedCredentials, StoreType, azure_credentials::AzureSharedCredentials,
 };
 use flow_like::{
-    flow_like_storage::lancedb::{connect, connection::ConnectBuilder},
+    flow_like_storage::{
+        databases::vector::lancedb::connect_lance, lancedb::connection::ConnectBuilder,
+    },
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
@@ -1350,7 +1352,7 @@ fn make_azure_builder(
 ) -> impl Fn(object_store::path::Path) -> ConnectBuilder {
     move |path| {
         let url = format!("az://{}/{}", container, path);
-        let builder = connect(&url).storage_option(
+        let builder = connect_lance(&url).storage_option(
             "azure_storage_account_name".to_string(),
             account_name.clone(),
         );

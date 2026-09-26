@@ -3,7 +3,7 @@
 import { usePaymentDistribution } from "../payments/use-payments";
 
 import { useTranslation } from "@flow-like/locales";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	ArrowLeft,
 	BookOpen,
@@ -16,56 +16,35 @@ import {
 	HelpCircle,
 	KeyRound,
 	Loader2,
+	LogIn,
 	Package,
 	RefreshCw,
-	RotateCcw,
-	Send,
 	Settings,
 	Shield,
 	ShoppingCart,
 	Star,
 	Tag,
 	Target,
-	Trash2,
 	User,
 } from "lucide-react";
-import { useState } from "react";
-import { toast } from "sonner";
+import Link from "next/link";
 import { useInvoke } from "../../hooks/use-invoke";
 import { getErrorMessage } from "../../lib/error-message";
 import {
 	readManifestWidgetBundleHash,
 	readManifestWidgets,
 } from "../../lib/package-widgets";
-import {
-	isMaintainer,
-	isOwner,
-} from "../../lib/permission/wasm-package-permission";
+import { isMaintainer } from "../../lib/permission/wasm-package-permission";
 import { asArray } from "../../lib/response-shape";
 import {
 	type PackageMeta,
-	type PackageReview,
 	PackageStatus,
 	type PackageVersion,
 	type RegistryEntry,
 } from "../../lib/schema/wasm";
-import {
-	userAvatarUrl,
-	userDisplayName,
-	userInitials,
-} from "../../lib/user-display";
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-	AlertDialogTrigger,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -89,11 +68,8 @@ import {
 	type CompileStatus,
 	PackageStatusBadge,
 } from "../ui/package-status-badge";
-import { PackageAccessTab } from "./package-access-tab";
-import { PackageMetaTab } from "./package-meta-tab";
-import { PackagePricingCard } from "./package-pricing-card";
 import { PackageReviewsTab } from "./package-reviews-tab";
-import { PackageUsersContainer } from "./package-users-container";
+import { packageWorkspaceHref } from "./package-workspace/workspace-href";
 import { WidgetCardGrid } from "./widget-card";
 import { WidgetNetworkAccessCard } from "./widget-network-access";
 
@@ -142,24 +118,14 @@ function NodeCard({
 function VersionRow({
 	version,
 	isLatest,
-	canInstall,
-	installedVersion,
-	isInstalling,
-	onInstall,
 }: {
 	version: PackageVersion;
 	isLatest: boolean;
-	canInstall: boolean;
-	installedVersion?: string | null;
-	isInstalling?: boolean;
-	onInstall?: (version: string) => void;
 }) {
 	const { t } = useTranslation("store");
-	const isInstalled = installedVersion === version.version;
 	const isPending = version.status === PackageStatus.PendingReview;
 	const isRejected = version.status === PackageStatus.Rejected;
 	const isDisabled = version.status === PackageStatus.Disabled;
-	const isVersionInstallable = !version.yanked && !isRejected && !isDisabled;
 
 	return (
 		<div className="flex items-center justify-between gap-3 py-2 border-b last:border-0">
@@ -181,256 +147,11 @@ function VersionRow({
 					<Badge variant="destructive">{t("yanked", "Yanked")}</Badge>
 				)}
 			</div>
-			<div className="flex shrink-0 items-center gap-3">
-				<RelativeTime
-					className="text-sm text-muted-foreground"
-					value={version.publishedAt}
-				/>
-				{canInstall && isVersionInstallable && onInstall && (
-					<Button
-						size="sm"
-						variant={isInstalled ? "secondary" : "outline"}
-						disabled={isInstalled || isInstalling}
-						onClick={() => onInstall(version.version)}
-					>
-						{isInstalled ? (
-							<Check className="mr-2 h-3.5 w-3.5" />
-						) : (
-							<Download className="mr-2 h-3.5 w-3.5" />
-						)}
-						{isInstalled
-							? t("installed", "Installed")
-							: isPending
-								? t("installForTesting", "Install for testing")
-								: t("install", "Install")}
-					</Button>
-				)}
-			</div>
+			<RelativeTime
+				className="shrink-0 text-sm text-muted-foreground"
+				value={version.publishedAt}
+			/>
 		</div>
-	);
-}
-
-function formatReviewAction(action: PackageReview["action"]) {
-	return action.replaceAll("_", " ");
-}
-
-function getReviewerLabel(review: PackageReview) {
-	return userDisplayName(review.reviewer, review.reviewerId);
-}
-
-function PublicationReviewCard({
-	packageId,
-	status,
-	fetcher,
-	auth,
-}: {
-	packageId: string;
-	status: RegistryEntry["status"];
-	fetcher: GenericFetcher;
-	auth?: unknown;
-}) {
-	const { t } = useTranslation("store");
-	const backend = useBackend();
-	const profile = useInvoke(
-		backend.userState.getSettingsProfile,
-		backend.userState,
-		[],
-	);
-
-	const reviewQuery = useQuery({
-		queryKey: ["package-publication-reviews", packageId],
-		queryFn: async () => {
-			if (!profile.data) throw new Error("Profile not loaded");
-			return fetcher<PackageReview[]>(
-				profile.data.hub_profile,
-				`registry/package/${packageId}/publication-reviews`,
-				{ method: "GET" },
-				auth,
-			);
-		},
-		enabled: !!profile.data,
-		retry: false,
-	});
-
-	const reviews = asArray(reviewQuery.data);
-	const statusLabel =
-		status === PackageStatus.PendingReview
-			? t("pendingReview", "Pending Review")
-			: status === PackageStatus.Disabled
-				? t("reviewOutcomeAvailable", "Review outcome available")
-				: t("reviewHistory", "Review history");
-
-	return (
-		<Card className="border-amber-500/30 bg-amber-500/5">
-			<CardHeader>
-				<CardTitle className="text-base flex items-center gap-2">
-					<RefreshCw className="h-4 w-4" />
-					{t("publicationReview", "Publication Review")}
-				</CardTitle>
-				<CardDescription>
-					{t(
-						"currentStatusStatuslabelSubmissionEventsAndAuditorCommentsAppearHereForPackageMaintainers",
-						"Current status: {{statusLabel}}. Submission events and auditor comments appear here for package maintainers.",
-						{ statusLabel },
-					)}
-				</CardDescription>
-			</CardHeader>
-			<CardContent className="space-y-4">
-				{reviewQuery.isLoading ? (
-					<Skeleton className="h-24 w-full" />
-				) : reviewQuery.isError ? (
-					<p className="text-sm text-destructive">
-						{reviewQuery.error?.message ??
-							t("failedToLoadReviewHistory", "Failed to load review history")}
-					</p>
-				) : reviews.length === 0 ? (
-					<p className="text-sm text-muted-foreground">
-						{t(
-							"noPublicationReviewEventsRecordedYet",
-							"No publication review events recorded yet.",
-						)}
-					</p>
-				) : (
-					<div className="space-y-3">
-						{reviews.map((review) => {
-							const reviewerLabel = getReviewerLabel(review);
-							const reviewerAvatar = userAvatarUrl(review.reviewer);
-
-							return (
-								<div
-									key={review.id}
-									className="rounded-lg border bg-background/80 p-4"
-								>
-									<div className="flex items-start gap-3">
-										<Avatar className="h-9 w-9">
-											{reviewerAvatar ? (
-												<AvatarImage src={reviewerAvatar} alt={reviewerLabel} />
-											) : null}
-											<AvatarFallback>
-												{userInitials(review.reviewer)}
-											</AvatarFallback>
-										</Avatar>
-										<div className="min-w-0 flex-1 space-y-1">
-											<div className="flex flex-wrap items-center gap-2">
-												<span className="font-medium capitalize">
-													{formatReviewAction(review.action)}
-												</span>
-												<span className="text-sm text-muted-foreground">
-													{t("byReviewerlabel", "by {{reviewerLabel}}", {
-														reviewerLabel,
-													})}
-												</span>
-												<span className="text-sm text-muted-foreground">
-													<RelativeTime value={review.createdAt} />
-												</span>
-											</div>
-											{review.comment && (
-												<p className="text-sm text-muted-foreground">
-													{review.comment}
-												</p>
-											)}
-										</div>
-									</div>
-								</div>
-							);
-						})}
-					</div>
-				)}
-			</CardContent>
-		</Card>
-	);
-}
-
-function PublicationRequestCard({
-	packageId,
-	fetcher,
-	auth,
-}: {
-	packageId: string;
-	fetcher: GenericFetcher;
-	auth?: unknown;
-}) {
-	const { t } = useTranslation("store");
-	const backend = useBackend();
-	const queryClient = useQueryClient();
-	const profile = useInvoke(
-		backend.userState.getSettingsProfile,
-		backend.userState,
-		[],
-	);
-
-	const requestMutation = useMutation({
-		mutationFn: async () => {
-			if (!profile.data) throw new Error("Profile not loaded");
-			return fetcher<{ message: string }>(
-				profile.data.hub_profile,
-				`registry/package/${packageId}/request-publication`,
-				{ method: "POST" },
-				auth,
-			);
-		},
-		onSuccess: () => {
-			queryClient.invalidateQueries({
-				queryKey: ["registry-package", packageId],
-			});
-			queryClient.invalidateQueries({
-				queryKey: ["admin", "packages"],
-			});
-			queryClient.invalidateQueries({
-				queryKey: ["admin", "packages", "publications"],
-			});
-		},
-	});
-
-	return (
-		<Card className="border-primary/30 bg-primary/5">
-			<CardHeader>
-				<CardTitle className="text-base flex items-center gap-2">
-					<Send className="h-4 w-4" />
-					{t("requestPublication", "Request Publication")}
-				</CardTitle>
-				<CardDescription>
-					{t(
-						"thisPackageIsCurrentlyPrivateSubmitItForReviewToMakeItPubliclyAvailableOnTheRegistry",
-						"This package is currently private. Submit it for review to make it publicly available on the registry.",
-					)}
-				</CardDescription>
-			</CardHeader>
-			<CardContent>
-				{requestMutation.isSuccess ? (
-					<div className="flex items-center gap-2 text-sm text-green-600">
-						<Check className="h-4 w-4" />
-						{t(
-							"publicationReviewRequestedWeWillReviewYourPackageAndNotifyYouOnceADecisionHasBeenMade",
-							"Publication review requested. We will review your package and notify you once a decision has been made.",
-						)}
-					</div>
-				) : (
-					<div className="flex items-center gap-3">
-						<Button
-							onClick={() => requestMutation.mutate()}
-							disabled={requestMutation.isPending}
-						>
-							{requestMutation.isPending ? (
-								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-							) : (
-								<Send className="mr-2 h-4 w-4" />
-							)}
-							{t("requestPublicationReview", "Request Publication Review")}
-						</Button>
-						{requestMutation.isError && (
-							<p className="text-sm text-destructive">
-								{requestMutation.error?.message ??
-									t(
-										"failedToRequestPublication",
-										"Failed to request publication",
-									)}
-							</p>
-						)}
-					</div>
-				)}
-			</CardContent>
-		</Card>
 	);
 }
 
@@ -456,7 +177,8 @@ export interface PackageDetailViewProps {
 	onBuy?: () => void;
 	onRequestAccess?: () => void;
 	onGetOrBuy?: () => void;
-	onDeleteSuccess?: () => void;
+	/** Set while the viewer's session has expired and nothing could be loaded without it. */
+	onSignIn?: () => void;
 	currentUserPermission?: number;
 	fetcher?: GenericFetcher;
 	auth?: unknown;
@@ -487,78 +209,18 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		onBuy,
 		onRequestAccess,
 		onGetOrBuy,
-		onDeleteSuccess,
+		onSignIn,
 		currentUserPermission,
 		fetcher,
 		auth,
 	} = props;
 
 	const backend = useBackend();
-	const queryClient = useQueryClient();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
 		[],
 	);
-
-	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-
-	const deleteMutation = useMutation({
-		mutationFn: async () => {
-			if (!profile.data || !pkg?.id || !fetcher)
-				throw new Error("Missing context");
-			return fetcher<{ message: string }>(
-				profile.data.hub_profile,
-				`registry/package/${pkg.id}`,
-				{ method: "DELETE" },
-				auth,
-			);
-		},
-		onSuccess: (data) => {
-			toast.success(data.message);
-			onDeleteSuccess?.();
-		},
-		onError: (err: Error) =>
-			toast.error(
-				t(
-					"failedToDeletePackageMessage",
-					"Failed to delete package: {{message}}",
-					{
-						message: err.message,
-					},
-				),
-			),
-	});
-
-	const restoreMutation = useMutation({
-		mutationFn: async () => {
-			if (!profile.data || !pkg?.id || !fetcher)
-				throw new Error("Missing context");
-			return fetcher<{ message: string }>(
-				profile.data.hub_profile,
-				`registry/package/${pkg.id}/restore`,
-				{ method: "POST" },
-				auth,
-			);
-		},
-		onSuccess: (data) => {
-			toast.success(data.message);
-			queryClient.invalidateQueries({
-				queryKey: ["registry-package", pkg?.id],
-			});
-			onDeleteSuccess?.();
-		},
-		onError: (err: Error) =>
-			toast.error(
-				t(
-					"failedToRestorePackageMessage",
-					"Failed to restore package: {{message}}",
-					{
-						message: err.message,
-					},
-				),
-			),
-	});
 
 	const { data: meta } = useQuery<PackageMeta | null>({
 		queryKey: ["package-meta", pkg?.id],
@@ -593,11 +255,39 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	}
 
 	if (!pkg) {
-		const actions: { label: string; onClick: () => void }[] = [
-			{ label: t("backToPackages", "Back to packages"), onClick: onBack },
-		];
-		if (onRetry)
-			actions.unshift({ label: t("tryAgain", "Try again"), onClick: onRetry });
+		const back = {
+			label: t("backToPackages", "Back to packages"),
+			onClick: onBack,
+		};
+		const primary = onSignIn
+			? { label: t("common:signIn", "Sign in"), onClick: onSignIn }
+			: onRetry
+				? { label: t("tryAgain", "Try again"), onClick: onRetry }
+				: undefined;
+		const copy = onSignIn
+			? {
+					title: t("common:yourSessionExpired", "Your session expired"),
+					description: t(
+						"common:signInAgainToSeeThisPackage",
+						"Sign in again to see this package.",
+					),
+				}
+			: loadError
+				? {
+						title: t("couldntLoadThisPackage", "Couldn't load this package"),
+						description: t(
+							"valCheckYourConnectionOrSignInIfThePackageIsPrivate",
+							"{{val}} — check your connection, or sign in if the package is private.",
+							{ val: getErrorMessage(loadError) },
+						),
+					}
+				: {
+						title: t("packageNotFound", "Package not found"),
+						description: t(
+							"thisPackageDoesntExistIsNoLongerPublishedOrYouDontHaveAccessToIt",
+							"This package doesn't exist, is no longer published, or you don't have access to it.",
+						),
+					};
 
 		return (
 			<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
@@ -608,25 +298,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 					</Button>
 					<div className="flex justify-center">
 						<EmptyState
-							icons={[Package]}
-							title={
-								loadError
-									? t("couldntLoadThisPackage", "Couldn't load this package")
-									: t("packageNotFound", "Package not found")
-							}
-							description={
-								loadError
-									? t(
-											"valCheckYourConnectionOrSignInIfThePackageIsPrivate",
-											"{{val}} — check your connection, or sign in if the package is private.",
-											{ val: getErrorMessage(loadError) },
-										)
-									: t(
-											"thisPackageDoesntExistIsNoLongerPublishedOrYouDontHaveAccessToIt",
-											"This package doesn't exist, is no longer published, or you don't have access to it.",
-										)
-							}
-							action={actions}
+							icons={[onSignIn ? LogIn : Package]}
+							title={copy.title}
+							description={copy.description}
+							action={primary ? [primary, back] : [back]}
 						/>
 					</div>
 				</div>
@@ -637,10 +312,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	const manifest = pkg.manifest;
 	const versions = asArray(pkg.versions);
 	const widgets = readManifestWidgets(manifest);
-	const canManagePublication =
-		currentUserPermission != null &&
-		isMaintainer(currentUserPermission) &&
-		!!fetcher;
+	const canManage =
+		currentUserPermission != null && isMaintainer(currentUserPermission);
 	const hasPendingVersion = versions.some(
 		(version) => version.status === PackageStatus.PendingReview,
 	);
@@ -656,7 +329,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		versions.find((v) => v.version === latestVersion)?.widgetBundleHash ??
 		undefined;
 	const canInstallForReview =
-		canManagePublication &&
+		canManage &&
 		!!latestVersion &&
 		(hasPendingVersion || pkg.status === PackageStatus.PendingReview);
 	const isInstallable =
@@ -696,15 +369,6 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 				"Install is unavailable while this package is {{val}}.",
 				{ val: unavailableActionState },
 			);
-	const showPublicationAudit =
-		canManagePublication &&
-		(pkg.status !== PackageStatus.Active || hasPendingVersion);
-	const showPublicationRequest =
-		currentUserPermission != null &&
-		isOwner(currentUserPermission) &&
-		visibility === "private" &&
-		pkg.status === PackageStatus.Active &&
-		!!fetcher;
 
 	return (
 		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
@@ -929,6 +593,14 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 											: t("install", "Install")}
 									</Button>
 								)}
+								{canManage && (
+									<Button variant="outline" asChild>
+										<Link href={packageWorkspaceHref({ id: pkg.id })}>
+											<Settings className="mr-2 h-4 w-4" />
+											{t("common:managePackage", "Manage package")}
+										</Link>
+									</Button>
+								)}
 							</div>
 						</div>
 					</CardHeader>
@@ -961,20 +633,6 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 							})}
 						</TabsTrigger>
 						<TabsTrigger value="reviews">{t("reviews", "Reviews")}</TabsTrigger>
-						{currentUserPermission != null &&
-							isMaintainer(currentUserPermission) &&
-							fetcher && (
-								<>
-									<TabsTrigger value="access">
-										{t("accessRequests", "Access Requests")}
-									</TabsTrigger>
-									<TabsTrigger value="users">{t("users", "Users")}</TabsTrigger>
-									<TabsTrigger value="metadata" className="gap-1">
-										<Settings className="h-3.5 w-3.5" />
-										{t("metadata", "Metadata")}
-									</TabsTrigger>
-								</>
-							)}
 					</TabsList>
 
 					<TabsContent value="overview" className="space-y-4">
@@ -1209,153 +867,6 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 								</div>
 							</CardContent>
 						</Card>
-
-						{/* Publication review state for maintainers */}
-						{showPublicationAudit && fetcher && (
-							<PublicationReviewCard
-								packageId={pkg.id}
-								status={pkg.status}
-								fetcher={fetcher}
-								auth={auth}
-							/>
-						)}
-
-						{/* Request Publication - visible to owners of eligible private packages */}
-						{showPublicationRequest && fetcher && (
-							<PublicationRequestCard
-								packageId={pkg.id}
-								fetcher={fetcher}
-								auth={auth}
-							/>
-						)}
-
-						{currentUserPermission != null &&
-							isOwner(currentUserPermission) &&
-							fetcher &&
-							visibility !== "local" &&
-							pkg.status !== PackageStatus.Disabled && (
-								<PackagePricingCard
-									packageId={pkg.id}
-									price={price ?? 0}
-									visibility={visibility}
-									fetcher={fetcher}
-									auth={auth}
-								/>
-							)}
-
-						{/* Package Management - visible to owners */}
-						{currentUserPermission != null &&
-							isOwner(currentUserPermission) &&
-							fetcher &&
-							pkg.status === PackageStatus.Disabled && (
-								<Card className="border-primary/30">
-									<CardHeader>
-										<CardTitle className="text-base flex items-center gap-2">
-											<RotateCcw className="h-4 w-4" />
-											{t("packageDisabled", "Package Disabled")}
-										</CardTitle>
-									</CardHeader>
-									<CardContent className="flex items-center justify-between">
-										<div>
-											<p className="text-sm font-medium">
-												{t("restoreThisPackage", "Restore this package")}
-											</p>
-											<p className="text-sm text-muted-foreground">
-												{t(
-													"disabledPackageRestoreDescription",
-													"This package is currently disabled and hidden from search. Restore it to make it active again.",
-												)}
-											</p>
-										</div>
-										<Button
-											size="sm"
-											className="gap-1.5 shrink-0 ml-4"
-											onClick={() => restoreMutation.mutate()}
-											disabled={restoreMutation.isPending}
-										>
-											{restoreMutation.isPending ? (
-												<Loader2 className="h-4 w-4 animate-spin" />
-											) : (
-												<RotateCcw className="h-4 w-4" />
-											)}
-											{t("restore", "Restore")}
-										</Button>
-									</CardContent>
-								</Card>
-							)}
-
-						{/* Delete Package - visible to owners, only when not already disabled */}
-						{currentUserPermission != null &&
-							isOwner(currentUserPermission) &&
-							fetcher &&
-							pkg.status !== PackageStatus.Disabled && (
-								<Card className="border-destructive/30">
-									<CardHeader>
-										<CardTitle className="text-base text-destructive">
-											{t("dangerZone", "Danger Zone")}
-										</CardTitle>
-									</CardHeader>
-									<CardContent className="flex items-center justify-between">
-										<div>
-											<p className="text-sm font-medium">
-												{t("deleteThisPackage", "Delete this package")}
-											</p>
-											<p className="text-sm text-muted-foreground">
-												{t(
-													"deletePackageDescription",
-													"The package will be disabled and hidden from search. Existing installs will keep working.",
-												)}
-											</p>
-										</div>
-										<AlertDialog
-											open={showDeleteDialog}
-											onOpenChange={setShowDeleteDialog}
-										>
-											<AlertDialogTrigger asChild>
-												<Button
-													variant="destructive"
-													size="sm"
-													className="gap-1.5 shrink-0 ml-4"
-												>
-													<Trash2 className="h-4 w-4" />
-													{t("delete", "Delete")}
-												</Button>
-											</AlertDialogTrigger>
-											<AlertDialogContent>
-												<AlertDialogHeader>
-													<AlertDialogTitle>
-														{t("deletePackage", "Delete package?")}
-													</AlertDialogTitle>
-													<AlertDialogDescription>
-														{t(
-															"disablePackageWarning",
-															"This will disable {{name}} and remove it from search results. Existing installs and offline projects will continue to work.",
-															{ name: meta?.name || manifest.name },
-														)}
-													</AlertDialogDescription>
-												</AlertDialogHeader>
-												<AlertDialogFooter>
-													<AlertDialogCancel>
-														{t("cancel", "Cancel")}
-													</AlertDialogCancel>
-													<AlertDialogAction
-														className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-														onClick={() => deleteMutation.mutate()}
-														disabled={deleteMutation.isPending}
-													>
-														{deleteMutation.isPending ? (
-															<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-														) : (
-															<Trash2 className="mr-2 h-4 w-4" />
-														)}
-														{t("deletePackage2", "Delete Package")}
-													</AlertDialogAction>
-												</AlertDialogFooter>
-											</AlertDialogContent>
-										</AlertDialog>
-									</CardContent>
-								</Card>
-							)}
 					</TabsContent>
 
 					<TabsContent value="nodes" className="space-y-4">
@@ -1549,10 +1060,6 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												key={v.version}
 												version={v}
 												isLatest={idx === 0}
-												canInstall={canManagePublication}
-												installedVersion={installedVersion}
-												isInstalling={isInstalling}
-												onInstall={onInstall}
 											/>
 										))}
 									</div>
@@ -1564,35 +1071,6 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 					<TabsContent value="reviews" className="space-y-4">
 						<PackageReviewsTab packageId={pkg.id} />
 					</TabsContent>
-
-					{currentUserPermission != null &&
-						isMaintainer(currentUserPermission) &&
-						fetcher && (
-							<>
-								<TabsContent value="access" className="space-y-4">
-									<PackageAccessTab
-										packageId={pkg.id}
-										fetcher={fetcher}
-										auth={auth}
-									/>
-								</TabsContent>
-								<TabsContent value="users" className="space-y-4">
-									<PackageUsersContainer
-										packageId={pkg.id}
-										fetcher={fetcher}
-										auth={auth}
-										currentUserPermission={currentUserPermission}
-									/>
-								</TabsContent>
-								<TabsContent value="metadata" className="space-y-4">
-									<PackageMetaTab
-										packageId={pkg.id}
-										fetcher={fetcher}
-										auth={auth}
-									/>
-								</TabsContent>
-							</>
-						)}
 				</Tabs>
 			</div>
 		</main>

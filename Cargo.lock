@@ -9399,16 +9399,22 @@ dependencies = [
  "openmls_rust_crypto",
  "openmls_traits",
  "rand_core 0.6.4",
+ "rcgen",
+ "ring",
  "rusqlite",
+ "rustls 0.23.38",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sha2 0.10.9",
  "snow",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "tls_codec 0.5.0",
  "wasm-bindgen",
  "x25519-dalek 2.0.1",
+ "x509-parser 0.18.1",
  "zeroize",
 ]
 
@@ -9795,6 +9801,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hmac 0.12.1",
+ "instant-acme",
  "jsonschema",
  "libc",
  "openmls",
@@ -9802,8 +9809,11 @@ dependencies = [
  "openmls_rust_crypto",
  "openmls_traits",
  "rand_core 0.6.4",
+ "rcgen",
  "reqwest 0.12.28",
  "rusqlite",
+ "rustls 0.23.38",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -9813,6 +9823,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tls_codec 0.5.0",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tracing",
@@ -9822,6 +9833,7 @@ dependencies = [
  "wat",
  "webrtc",
  "x25519-dalek 2.0.1",
+ "x509-parser 0.18.1",
  "zeroize",
 ]
 
@@ -12797,6 +12809,7 @@ dependencies = [
  "log",
  "rustls 0.23.38",
  "rustls-native-certs 0.8.3",
+ "rustls-platform-verifier 0.7.1",
  "tokio",
  "tokio-rustls 0.26.4",
  "tower-service",
@@ -13473,6 +13486,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
 dependencies = [
  "cfg-if 1.0.4",
+]
+
+[[package]]
+name = "instant-acme"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f05ad37c421b962354c358d347d4a6130151df9407978372d3ad7f0c8f71a64"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "httpdate",
+ "hyper 1.10.1",
+ "hyper-rustls",
+ "hyper-util",
+ "rcgen",
+ "ring",
+ "rustls 0.23.38",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -21503,6 +21542,7 @@ dependencies = [
  "time",
  "x509-parser 0.18.1",
  "yasna",
+ "zeroize",
 ]
 
 [[package]]
@@ -22021,7 +22061,7 @@ dependencies = [
  "quinn",
  "rustls 0.23.38",
  "rustls-pki-types",
- "rustls-platform-verifier",
+ "rustls-platform-verifier 0.6.2",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -23023,7 +23063,28 @@ dependencies = [
  "once_cell",
  "rustls 0.23.38",
  "rustls-native-certs 0.8.3",
- "rustls-platform-verifier-android",
+ "rustls-platform-verifier-android 0.1.1",
+ "rustls-webpki 0.103.13",
+ "security-framework 3.7.0",
+ "security-framework-sys",
+ "webpki-root-certs",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rustls-platform-verifier"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1167586491e2b18b8bfbb293e8180ec17c201c4f076d7cb3070ca964e7598f98"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "jni 0.22.4",
+ "log",
+ "once_cell",
+ "rustls 0.23.38",
+ "rustls-native-certs 0.8.3",
+ "rustls-platform-verifier-android 0.2.0",
  "rustls-webpki 0.103.13",
  "security-framework 3.7.0",
  "security-framework-sys",
@@ -23036,6 +23097,12 @@ name = "rustls-platform-verifier-android"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
+
+[[package]]
+name = "rustls-platform-verifier-android"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
@@ -26527,7 +26594,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.4.1",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

@@ -841,6 +841,14 @@ eventsSimple() {
 				createdAppId: "new-app",
 				requestedAppId: "older-similar-app",
 				toolName: "database_tool",
+				operation: "import_geojson",
+			}),
+		).toBe(true);
+		expect(
+			isCreatedAppBuildTargetMismatch({
+				createdAppId: "new-app",
+				requestedAppId: "older-similar-app",
+				toolName: "database_tool",
 				operation: "describe_table",
 			}),
 		).toBe(false);

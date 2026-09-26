@@ -40,6 +40,7 @@ import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Card, CardContent } from "../../ui/card";
 import { DeviceAccessDialog } from "./device-access-dialog";
+import { DeviceCertificateSummary } from "./device-certificate-summary";
 import { DeviceManagementDialog } from "./device-management-dialog";
 import { DeviceResourcesDialog } from "./device-resources-dialog";
 import { DeviceRetainedInventory } from "./device-retained-inventory";
@@ -163,6 +164,10 @@ function DeviceInventory({
 	const [selected, setSelected] = useState<DeviceStatus | null>(null);
 	const [resourceDevice, setResourceDevice] = useState<string | null>(null);
 	const [managementDevice, setManagementDevice] = useState<string | null>(null);
+	useEffect(() => {
+		const device = new URLSearchParams(window.location.search).get("device");
+		if (device && device.length <= 128) setManagementDevice(device);
+	}, []);
 	const [setup, setSetup] = useState(false);
 	const [fleet, setFleet] = useState<Record<string, OpenFleet>>({});
 	const [requestAccess, setRequestAccess] = useState(false);
@@ -374,6 +379,13 @@ function DeviceInventory({
 												<dd>{formatDate(device.registered_at)}</dd>
 											</div>
 										</dl>
+										{device.status === "active" && (
+											<DeviceCertificateSummary
+												deviceId={device.device_id}
+												profile={profile}
+												scope={scope}
+											/>
+										)}
 										{projectId && device.status === "active" && (
 											<div className="space-y-2 border-t pt-3 text-sm">
 												{observations[device.device_id] ? (
@@ -495,6 +507,7 @@ function DeviceInventory({
 			)}
 			{selectedManagementDevice && (
 				<DeviceManagementDialog
+					key={selectedManagementDevice.device_id}
 					device={selectedManagementDevice}
 					profile={profile}
 					scope={scope}

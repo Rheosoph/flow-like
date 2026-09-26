@@ -154,7 +154,7 @@ pub async fn upsert_page(
         })?;
 
     {
-        let mut board_guard = board.lock().await;
+        let mut board_guard = board.write().await;
         page_id_guard.ensure_held()?;
         board_guard.save_page(&page, None).await?;
         board_guard.save(None).await?;

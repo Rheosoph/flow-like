@@ -1,6 +1,7 @@
 //! Device cryptography shared by native agents and browser controllers.
 
 pub mod archive;
+pub mod certificate_authority;
 pub mod controller;
 pub mod fleet;
 mod inventory;
