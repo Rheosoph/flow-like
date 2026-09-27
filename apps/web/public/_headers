@@ -1,3 +1,43 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-XSS-Protection: 0
+  Content-Security-Policy-Report-Only: script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; object-src 'none'; base-uri 'self'
+  ! X-Powered-By
+
+# Callback URLs can contain authorization codes. Replace the global policy.
+/callback
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+
+/callback/
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+
+/callback.html
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+
+/thirdparty/callback
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+
+/thirdparty/callback/
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+
+/thirdparty/callback.html
+  ! Referrer-Policy
+  Referrer-Policy: no-referrer
+
+# Next includes a content hash or build ID in these asset URLs.
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Deployment settings use a stable URL and must always be read from the host.
+/runtime-config.js
+  Cache-Control: no-store
+
 /.well-known/apple-app-site-association
   Content-Type: application/json; charset=utf-8
 

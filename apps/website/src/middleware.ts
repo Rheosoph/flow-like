@@ -24,13 +24,20 @@ const securityHeaders: Record<string, string> = {
 	].join("; "),
 };
 
-export const onRequest = defineMiddleware(async (_context, next) => {
+export const onRequest = defineMiddleware(async (context, next) => {
 	const response = await next();
 	const headers = new Headers(response.headers);
 
 	if (!import.meta.env.DEV) {
 		for (const [key, value] of Object.entries(securityHeaders)) {
 			headers.set(key, value);
+		}
+		if (
+			/^\/(?:thirdparty\/|desktop\/)?callback(?:\/|\.html)?$/.test(
+				context.url.pathname,
+			)
+		) {
+			headers.set("Referrer-Policy", "no-referrer");
 		}
 	}
 
