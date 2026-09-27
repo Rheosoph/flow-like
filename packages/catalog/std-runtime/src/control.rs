@@ -17,4 +17,5 @@ pub mod reroute;
 pub mod sequence;
 pub mod switch;
 pub mod timeout;
+pub mod try_catch;
 pub mod while_loop;

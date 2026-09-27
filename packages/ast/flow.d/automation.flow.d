@@ -1867,16 +1867,6 @@ declare namespace rpa {
     function takeSnapshot({ session: Struct, filePath: Struct, monitor?: int }): bool;
 
     /**
-     * Executes an action branch and routes errors to Catch.
-     * @node rpa_try_catch @alias rpaTryCatch
-     * @param errorOccurred (optional) — Whether an error occurred (wire from action)
-     * @param errorMessage (optional) — Error message if any (wire from action)
-     * @returns message — Error message
-     * @impure has side effects / drives control flow
-     */
-    function tryCatch({ errorOccurred?: bool, errorMessage?: string }): string;
-
-    /**
      * Types text using keyboard simulation
      * @node rpa_type_text @alias rpaTypeText
      * @param session — Automation session

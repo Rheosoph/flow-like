@@ -72,7 +72,7 @@ deliberate fallbacks.
 | Parallel | [Parallel Execution](/nodes/control/control-par-execution/) |
 | Delay | [Delay](/nodes/control/delay/) |
 | Retry Scope | [Retry Loop](/nodes/automation/rpa/rpa-retry-loop/) |
-| Try Catch in a UI automation | [Try Catch](/nodes/automation/rpa/rpa-try-catch/) |
+| Try Catch in a UI automation | [Try Catch](/nodes/control/rpa-try-catch/) |
 | Verify visual state | Assert Template Exists or Assert Color At Position |
 | Save diagnostic state | [Take Snapshot](/nodes/automation/rpa/rpa-take-snapshot/) |
 

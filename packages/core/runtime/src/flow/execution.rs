@@ -45,6 +45,7 @@ use std::time::{Duration, Instant};
 use std::{sync::Arc, time::SystemTime};
 use trace::Trace;
 
+pub mod branch;
 pub mod context;
 pub mod device;
 pub mod egress;
