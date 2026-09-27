@@ -417,7 +417,7 @@ async fn extract_fingerprint_atspi(x: i32, y: i32) -> Option<RecordedFingerprint
     };
 
     use atspi::CoordType;
-    use atspi::proxies::{accessible::AccessibleProxy, component::ComponentProxy};
+    use atspi::proxy::{accessible::AccessibleProxy, component::ComponentProxy};
     let bus = conn.inner().connection();
     let root = AccessibleProxy::builder(bus)
         .destination("org.a11y.atspi.Registry")
