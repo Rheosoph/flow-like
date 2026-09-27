@@ -1730,7 +1730,7 @@ mod tests {
     fn immutable() -> ObjectPath {
         ObjectPath::from(format!(
             "apps/project/storage/db/table.lance/data/{}.lance",
-            "0".repeat(24) + &"a".repeat(26)
+            "0".repeat(24) + "a".repeat(26).as_str()
         ))
     }
     async fn body(store: &dyn ObjectStore, path: &ObjectPath) -> Bytes {

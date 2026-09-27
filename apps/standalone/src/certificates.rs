@@ -594,7 +594,9 @@ mod tests {
         assert_eq!(metadata.sha256_fingerprint.len(), 64);
         assert!(validate_material(&id, "REST", 1, &chain, &identity()?.1, now).is_err());
         assert!(validate_material("../escape", "REST", 1, &chain, &key, now).is_err());
-        assert!(validate_material(&id, "REST", 1, &chain, &(key.clone() + &key), now).is_err());
+        assert!(
+            validate_material(&id, "REST", 1, &chain, &(key.clone() + key.as_str()), now).is_err()
+        );
         let key = KeyPair::generate()?;
         let mut params = CertificateParams::new(vec!["service.example.test".into()])?;
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
@@ -643,7 +645,7 @@ mod tests {
         let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate()?)?;
         let leaf =
             CertificateParams::new(vec!["service.example.test".into()])?.signed_by(&key, &ca)?;
-        let chain = leaf.pem() + &ca.pem();
+        let chain = leaf.pem() + ca.pem().as_str();
         assert_eq!(
             validate_material(&id, "chain", 1, &chain, &key.serialize_pem(), now)?
                 .0
@@ -655,7 +657,7 @@ mod tests {
                 &id,
                 "reversed",
                 1,
-                &(ca.pem() + &leaf.pem()),
+                &(ca.pem() + leaf.pem().as_str()),
                 &key.serialize_pem(),
                 now
             )
