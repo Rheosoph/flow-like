@@ -169,6 +169,7 @@ jobs:
           name: embedded-frontend
           path: apps/standalone/frontend/out/
       - name: Build twice from clean compiler outputs and require identical binaries
+        id: reproducibility
         shell: bash
         run: |
           export CC=clang
@@ -178,8 +179,23 @@ jobs:
           cp "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone" "$RUNNER_TEMP/standalone-first"
           cargo clean --target-dir "$CARGO_TARGET_DIR"
           cargo build --locked --release --package flow-like-standalone --features frontend --target "$RELEASE_TARGET"
-          cmp "$RUNNER_TEMP/standalone-first" "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone"
+          if ! cmp "$RUNNER_TEMP/standalone-first" "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone"; then
+            mkdir -p "$RUNNER_TEMP/reproducibility"
+            mv "$RUNNER_TEMP/standalone-first" "$RUNNER_TEMP/reproducibility/flow-like-standalone-first"
+            mv "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone" "$RUNNER_TEMP/reproducibility/flow-like-standalone-second"
+            echo "mismatch=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Clean rebuilds produced different binaries for $RELEASE_TARGET"
+            exit 1
+          fi
           python3 .github/scripts/standalone_release.py describe --binary "$CARGO_TARGET_DIR/$RELEASE_TARGET/release/flow-like-standalone" --target "$RELEASE_TARGET" --output "$RUNNER_TEMP/release-artifacts"
+      - name: Upload binaries that failed the reproducibility check
+        if: failure() && steps.reproducibility.outputs.mismatch == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reproducibility-${{ matrix.target }}
+          path: ${{ runner.temp }}/reproducibility/
+          retention-days: 7
+          if-no-files-found: error
       - name: Assemble Linux container runtime from the exact binary and resolved libraries
         if: runner.os == 'Linux'
         shell: bash

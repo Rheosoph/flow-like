@@ -98,7 +98,7 @@
 		"release_trust": {
 			"manifest_url": "https://cdn.flow-like.com/standalone/release.jws",
 			"public_keys": [
-				"BiOj5QJR7W4o-c7g3kqw6dXATQlul5m40h8mUhOX9y8"
+				"bBiDwIzIj9LLEfJMS4PDyCwRoJ0E5vnoWgFq5UFNkK4"
 			],
 			"minimum_sequence": 1
 		},
