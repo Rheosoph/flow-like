@@ -89,11 +89,14 @@ impl NodeLogic for TakeSnapshotNode {
         let file_path: FlowPath = context.evaluate_pin("file_path").await?;
         let monitor_index: i64 = context.evaluate_pin("monitor").await?;
 
-        let monitors = xcap::Monitor::all()?;
-        let monitor = monitors
-            .get(usize::try_from(monitor_index)?)
-            .ok_or_else(|| flow_like_types::anyhow!("Monitor index is unavailable"))?;
-        let screenshot = crate::types::screen_match::capture_monitor(&monitor)?;
+        // Windows monitor handles must be dropped before awaiting.
+        let screenshot = {
+            let monitors = xcap::Monitor::all()?;
+            let monitor = monitors
+                .get(usize::try_from(monitor_index)?)
+                .ok_or_else(|| flow_like_types::anyhow!("Monitor index is unavailable"))?;
+            crate::types::screen_match::capture_monitor(monitor)?
+        };
         let mut bytes = Vec::new();
         screenshot.write_with_encoder(image::codecs::png::PngEncoder::new(&mut bytes))?;
         file_path.put(context, bytes, false).await?;

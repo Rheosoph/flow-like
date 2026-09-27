@@ -500,9 +500,12 @@ impl NodeLogic for GetScreenSizeNode {
         session.ensure_active(context).await?;
         let monitor_index: i64 = context.evaluate_pin("monitor").await?;
 
-        let monitors = xcap::Monitor::all()?;
-        let monitor = select_monitor(&monitors, monitor_index)?;
-        let (width, height) = (monitor.width()?, monitor.height()?);
+        // Windows monitor handles must be dropped before awaiting.
+        let (width, height) = {
+            let monitors = xcap::Monitor::all()?;
+            let monitor = select_monitor(&monitors, monitor_index)?;
+            (monitor.width()?, monitor.height()?)
+        };
 
         context.set_pin_value("width", json!(width as i64)).await?;
         context
