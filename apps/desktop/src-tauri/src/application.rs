@@ -30,6 +30,8 @@ mod tray;
 pub mod utils;
 mod widget_grants;
 mod widget_protocol;
+#[cfg(desktop)]
+mod window_layout;
 
 #[tauri::command]
 fn execution_open_auth_session(webview: tauri::Webview) -> Result<String, String> {
@@ -620,6 +622,7 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(handle_instance));
+        builder = window_layout::register(builder);
     }
 
     builder = widget_protocol::register(builder);
@@ -872,21 +875,6 @@ pub fn run() {
                     eprintln!("Failed to initialize tray: {}", err);
                 } else {
                     tray::spawn_tray_refresh(relay_handle.clone());
-                }
-            }
-
-            #[cfg(desktop)]
-            {
-                use tauri_plugin_window_state::StateFlags;
-
-                if let Err(e) = app.handle().plugin(
-                    tauri_plugin_window_state::Builder::default()
-                        .with_state_flags(StateFlags::all())
-                        .build(),
-                ) {
-                    eprintln!("Failed to register window state plugin: {}", e);
-                } else {
-                    println!("Window state plugin registered successfully");
                 }
             }
 
@@ -1449,8 +1437,12 @@ pub fn run() {
         .expect("context thread");
 
     frontend_assets::register(builder, &context)
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(desktop)]
+            window_layout::on_event(_app, &_event);
+        });
 }
 
 pub(crate) fn application_context() -> tauri::Context<tauri::Wry> {
