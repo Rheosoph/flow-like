@@ -8,6 +8,7 @@ default-members = [
     "packages/types/contracts",
 ]
 members = [
+    "packages/vendor/matchgen",
     "apps/standalone",
     "packages/device-crypto",
     "packages/device-protocol",
@@ -314,6 +315,8 @@ wasmtime-wasi = "48.0.1"
 wasmtime-wasi-http = "48.0.1"
 
 [patch.crates-io]
+# Stabilize htmlize's generated entity matcher across clean release builds.
+matchgen = { path = "packages/vendor/matchgen" }
 # Pin the complete Lance workspace to the create-only commit fix. Its crates
 # must share a source because their public types cross crate boundaries.
 lance = { git = "https://github.com/Rheosoph/lance.git", rev = "82a122e817e1cd61af9d3bc20aee9600fae066f9" }

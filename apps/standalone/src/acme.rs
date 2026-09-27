@@ -894,7 +894,7 @@ mod tests {
                             params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
                             params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
                             let issuer = rcgen::CertifiedIssuer::self_signed(params, KeyPair::generate()?)?;
-                            state.chain = Some(csr.signed_by(&issuer)?.pem() + &issuer.pem());
+                            state.chain = Some(csr.signed_by(&issuer)?.pem() + issuer.pem().as_str());
                             fake_order(&state).to_string()
                         }
                         "/certificate" => state.chain.clone().context("Certificate not finalized")?,
