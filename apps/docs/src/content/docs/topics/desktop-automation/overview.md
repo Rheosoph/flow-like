@@ -173,7 +173,7 @@ RPA helpers make failures explicit instead of hiding them inside a long chain of
 | Retry | [Retry Loop](/nodes/automation/rpa/rpa-retry-loop/), **Wait For Template**, **Wait For Color** |
 | Assertions | **Assert Template Exists**, **Assert Color At Position** |
 | Checkpoints | **Save Checkpoint**, **Parse Checkpoint**, [Take Snapshot](/nodes/automation/rpa/rpa-take-snapshot/) |
-| Error paths | **Try Catch**, **Error Recovery**, **Diagnose Failure** |
+| Error paths | [Try Catch](/nodes/control/rpa-try-catch/) (Control), **Error Recovery**, **Diagnose Failure** |
 | Audit trail | **Log Action** |
 
 For an important interaction:

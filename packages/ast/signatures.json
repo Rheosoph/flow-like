@@ -92811,7 +92811,7 @@
       "node_type": "rpa_try_catch",
       "display": "rpaTryCatch",
       "friendly": "Try Catch",
-      "category": "Automation/RPA",
+      "category": "Control",
       "inputs": [
         {
           "name": "error_occurred",

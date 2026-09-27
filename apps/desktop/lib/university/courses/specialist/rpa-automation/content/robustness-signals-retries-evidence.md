@@ -16,7 +16,7 @@ But retry *what*, exactly? Re-reading the status table is safe to repeat; so is 
 
 Kestrel will redesign the portal eventually, and they will not email you first. Your defense is asserting landmarks. Before trusting the status table, verify something you know: the table's header text, the PO column label. On the visual side, **Assert Template Exists** and **Assert Color At Position** do the same job for desktop surfaces. If the landmark is gone, the layout changed, and the flow should stop — loudly. A wrong-looking page that fails the run at 6 a.m. is a gift; a wrong-looking page that gets extracted anyway is Friday's silent corruption.
 
-For the failure paths, the RPA family gives you structure: **Try Catch** to route errors, **Error Recovery** and **Diagnose Failure** to react to them, **Save Checkpoint** and **Take Snapshot** to record how far the flow got and what the screen looked like, **Log Action** to leave an audit trail a colleague can follow.
+Use **Try Catch** from **Control** to route errors. The RPA family provides **Error Recovery** and **Diagnose Failure** to react to them, **Save Checkpoint** and **Take Snapshot** to record how far the flow got and what the screen looked like, and **Log Action** to leave an audit trail a colleague can follow.
 
 ## Watch the run
 
