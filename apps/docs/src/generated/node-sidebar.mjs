@@ -2357,10 +2357,6 @@ export const generatedNodeSidebar = [
             "slug": "nodes/automation/rpa/rpa-take-snapshot"
           },
           {
-            "label": "Try Catch",
-            "slug": "nodes/automation/rpa/rpa-try-catch"
-          },
-          {
             "label": "Type Text",
             "slug": "nodes/automation/rpa/rpa-type-text"
           },
@@ -2637,6 +2633,10 @@ export const generatedNodeSidebar = [
       {
         "label": "Timeout",
         "slug": "nodes/control/control-timeout"
+      },
+      {
+        "label": "Try Catch",
+        "slug": "nodes/control/rpa-try-catch"
       },
       {
         "label": "While Loop",

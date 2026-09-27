@@ -113,6 +113,7 @@ assert_legacy_registry![
     catalog::control::sequence::SequenceNode,
     catalog::control::switch::SwitchNode,
     catalog::control::timeout::TimeoutNode,
+    catalog::control::try_catch::TryCatchNode,
     catalog::control::while_loop::WhileLoopNode,
     catalog::faker::address::FakeStreetName,
     catalog::faker::address::FakeStreetAddress,

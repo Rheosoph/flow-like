@@ -9,13 +9,14 @@ use flow_like::{
             internal_pin::InternalPin,
         },
         node::{Node, NodeLogic},
+        pin::PinType,
         variable::VariableType,
     },
     profile::Profile,
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
-use flow_like_catalog_automation::rpa::{retry::RetryLoopNode, timeout::WithTimeoutNode};
+use flow_like_catalog_std_runtime::{control::try_catch::TryCatchNode, get_catalog};
 use flow_like_types::{
     async_trait,
     json::json,
@@ -29,7 +30,6 @@ use std::sync::{
 struct Action {
     calls: Arc<AtomicUsize>,
     failures: usize,
-    delay: u64,
 }
 #[async_trait]
 impl NodeLogic for Action {
@@ -39,7 +39,6 @@ impl NodeLogic for Action {
         node
     }
     async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        tokio::time::sleep(std::time::Duration::from_millis(self.delay)).await;
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call < self.failures {
             return Err(flow_like_types::anyhow!("test action failed"));
@@ -62,10 +61,10 @@ fn internal(logic: Arc<dyn NodeLogic>) -> Arc<InternalNode> {
     node
 }
 
-async fn context(logic: Arc<dyn NodeLogic>, branch: &str, action: Action) -> ExecutionContext {
+async fn context(logic: Arc<dyn NodeLogic>, action: Action) -> ExecutionContext {
     let parent = internal(logic);
     let child = internal(Arc::new(action));
-    let output = parent.get_pin_by_name(branch).await.unwrap();
+    let output = parent.get_pin_by_name("exec_try").await.unwrap();
     let input = child.get_pin_by_name("exec_in").await.unwrap();
     for pin in parent.pins.iter() {
         pin.init_connected_to(if pin.id == output.id {
@@ -124,50 +123,80 @@ async fn value(context: &ExecutionContext, name: &str) -> flow_like_types::Value
         .unwrap_or_default()
 }
 
-#[tokio::test]
-async fn retries_execute_the_action_and_clear_the_branch() {
-    let logic = Arc::new(RetryLoopNode::new());
-    let calls = Arc::new(AtomicUsize::new(0));
-    let mut context = context(
-        logic.clone(),
-        "exec_attempt",
-        Action {
-            calls: calls.clone(),
-            failures: 2,
-            delay: 0,
-        },
-    )
-    .await;
-    context
-        .set_pin_value("initial_delay_ms", json!(0))
-        .await
-        .unwrap();
-    logic.run(&mut context).await.unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 3);
-    assert_eq!(value(&context, "exec_success").await, json!(true));
-    assert_eq!(value(&context, "exec_attempt").await, json!(false));
-    assert_eq!(value(&context, "total_attempts").await, json!(3));
+#[test]
+fn try_catch_is_registered_once_as_an_online_control_node_with_compatible_pins() {
+    let nodes: Vec<_> = get_catalog()
+        .into_iter()
+        .map(|logic| logic.get_node())
+        .filter(|node| node.name == "rpa_try_catch")
+        .collect();
+    assert_eq!(nodes.len(), 1);
+    let node = &nodes[0];
+    assert_eq!(node.category, "Control");
+    assert!(!node.only_offline);
+    assert_eq!(node.version, Some(1));
+    assert_eq!(node.namespace.as_deref(), Some("rpa"));
+    assert_eq!(node.alias.as_deref(), Some("tryCatch"));
+
+    let expected_pins = [
+        ("exec_in", PinType::Input, VariableType::Execution),
+        ("error_occurred", PinType::Input, VariableType::Boolean),
+        ("error_message", PinType::Input, VariableType::String),
+        ("exec_try", PinType::Output, VariableType::Execution),
+        ("exec_success", PinType::Output, VariableType::Execution),
+        ("exec_catch", PinType::Output, VariableType::Execution),
+        ("message", PinType::Output, VariableType::String),
+    ];
+    assert_eq!(node.pins.len(), expected_pins.len());
+    for (name, pin_type, data_type) in expected_pins {
+        let pin = node.pins.values().find(|pin| pin.name == name).unwrap();
+        assert_eq!(pin.pin_type, pin_type, "{name}");
+        assert_eq!(pin.data_type, data_type, "{name}");
+    }
 }
 
 #[tokio::test]
-async fn timeout_stops_pending_actions_and_does_not_fire_success() {
-    let logic = Arc::new(WithTimeoutNode::new());
+async fn try_catch_routes_real_action_errors() {
+    let logic = Arc::new(TryCatchNode::new());
     let calls = Arc::new(AtomicUsize::new(0));
     let mut context = context(
         logic.clone(),
-        "exec_action",
         Action {
             calls: calls.clone(),
-            failures: 0,
-            delay: 100,
+            failures: 1,
         },
     )
     .await;
-    context.set_pin_value("timeout_ms", json!(5)).await.unwrap();
     logic.run(&mut context).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(value(&context, "exec_timeout").await, json!(true));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(value(&context, "exec_catch").await, json!(true));
     assert_eq!(value(&context, "exec_success").await, json!(false));
-    assert_eq!(value(&context, "exec_action").await, json!(false));
+    assert_eq!(value(&context, "exec_try").await, json!(false));
+    assert!(
+        value(&context, "message")
+            .await
+            .as_str()
+            .unwrap()
+            .contains("test action failed")
+    );
+}
+
+#[tokio::test]
+async fn try_catch_executes_successful_actions_once_and_clears_the_branch() {
+    let logic = Arc::new(TryCatchNode::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut context = context(
+        logic.clone(),
+        Action {
+            calls: calls.clone(),
+            failures: 0,
+        },
+    )
+    .await;
+    logic.run(&mut context).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(value(&context, "exec_success").await, json!(true));
+    assert_eq!(value(&context, "exec_catch").await, json!(false));
+    assert_eq!(value(&context, "exec_try").await, json!(false));
+    assert_eq!(value(&context, "message").await, json!(""));
 }

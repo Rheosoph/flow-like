@@ -212,3 +212,17 @@ declare namespace control {
      */
     function gather(): void;
 }
+
+declare namespace rpa {
+    // === Control ===
+
+    /**
+     * Executes an action branch and routes errors to Catch.
+     * @node rpa_try_catch @alias rpaTryCatch
+     * @param errorOccurred (optional) — Whether an error occurred (wire from action)
+     * @param errorMessage (optional) — Error message if any (wire from action)
+     * @returns message — Error message
+     * @impure has side effects / drives control flow
+     */
+    function tryCatch({ errorOccurred?: bool, errorMessage?: string }): string;
+}

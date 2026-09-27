@@ -41574,104 +41574,6 @@ export const catalogNodes: CatalogNode[] = [
     "permissions": []
   },
   {
-    "slug": "nodes/automation/rpa/rpa-try-catch",
-    "packageName": "automation",
-    "name": "rpa_try_catch",
-    "friendlyName": "Try Catch",
-    "description": "Executes an action branch and routes errors to Catch.",
-    "category": "Automation/RPA",
-    "categoryPath": [
-      "Automation",
-      "RPA"
-    ],
-    "categorySlug": "nodes/automation/rpa",
-    "icon": "/flow/icons/rpa.svg",
-    "scores": {
-      "privacy": 6,
-      "security": 6,
-      "performance": 8,
-      "governance": 5,
-      "reliability": 8,
-      "cost": 9
-    },
-    "pins": [
-      {
-        "name": "exec_in",
-        "friendlyName": "▶",
-        "description": "Trigger",
-        "pinType": "Input",
-        "dataType": "Execution",
-        "valueType": "Normal",
-        "index": 1
-      },
-      {
-        "name": "error_occurred",
-        "friendlyName": "Error Occurred",
-        "description": "Whether an error occurred (wire from action)",
-        "pinType": "Input",
-        "dataType": "Boolean",
-        "valueType": "Normal",
-        "defaultValue": false,
-        "index": 2
-      },
-      {
-        "name": "error_message",
-        "friendlyName": "Error Message",
-        "description": "Error message if any (wire from action)",
-        "pinType": "Input",
-        "dataType": "String",
-        "valueType": "Normal",
-        "defaultValue": "",
-        "index": 3
-      },
-      {
-        "name": "exec_try",
-        "friendlyName": "Try",
-        "description": "Execute the action",
-        "pinType": "Output",
-        "dataType": "Execution",
-        "valueType": "Normal",
-        "index": 1
-      },
-      {
-        "name": "exec_success",
-        "friendlyName": "Success",
-        "description": "Action succeeded",
-        "pinType": "Output",
-        "dataType": "Execution",
-        "valueType": "Normal",
-        "index": 2
-      },
-      {
-        "name": "exec_catch",
-        "friendlyName": "Catch",
-        "description": "Error occurred",
-        "pinType": "Output",
-        "dataType": "Execution",
-        "valueType": "Normal",
-        "index": 3
-      },
-      {
-        "name": "message",
-        "friendlyName": "Message",
-        "description": "Error message",
-        "pinType": "Output",
-        "dataType": "String",
-        "valueType": "Normal",
-        "index": 4
-      }
-    ],
-    "inputCount": 3,
-    "outputCount": 4,
-    "flags": [
-      "Local only"
-    ],
-    "version": 1,
-    "oauthProviders": [],
-    "requiredOauthScopes": {},
-    "permissions": []
-  },
-  {
     "slug": "nodes/automation/rpa/rpa-type-text",
     "packageName": "automation",
     "name": "rpa_type_text",
@@ -45234,6 +45136,101 @@ export const catalogNodes: CatalogNode[] = [
     "flags": [
       "Long running"
     ],
+    "oauthProviders": [],
+    "requiredOauthScopes": {},
+    "permissions": []
+  },
+  {
+    "slug": "nodes/control/rpa-try-catch",
+    "packageName": "std",
+    "name": "rpa_try_catch",
+    "friendlyName": "Try Catch",
+    "description": "Executes an action branch and routes errors to Catch.",
+    "category": "Control",
+    "categoryPath": [
+      "Control"
+    ],
+    "categorySlug": "nodes/control",
+    "icon": "/flow/icons/split.svg",
+    "scores": {
+      "privacy": 6,
+      "security": 6,
+      "performance": 8,
+      "governance": 5,
+      "reliability": 8,
+      "cost": 9
+    },
+    "pins": [
+      {
+        "name": "exec_in",
+        "friendlyName": "▶",
+        "description": "Trigger",
+        "pinType": "Input",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "error_occurred",
+        "friendlyName": "Error Occurred",
+        "description": "Whether an error occurred (wire from action)",
+        "pinType": "Input",
+        "dataType": "Boolean",
+        "valueType": "Normal",
+        "defaultValue": false,
+        "index": 2
+      },
+      {
+        "name": "error_message",
+        "friendlyName": "Error Message",
+        "description": "Error message if any (wire from action)",
+        "pinType": "Input",
+        "dataType": "String",
+        "valueType": "Normal",
+        "defaultValue": "",
+        "index": 3
+      },
+      {
+        "name": "exec_try",
+        "friendlyName": "Try",
+        "description": "Execute the action",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 1
+      },
+      {
+        "name": "exec_success",
+        "friendlyName": "Success",
+        "description": "Action succeeded",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 2
+      },
+      {
+        "name": "exec_catch",
+        "friendlyName": "Catch",
+        "description": "Error occurred",
+        "pinType": "Output",
+        "dataType": "Execution",
+        "valueType": "Normal",
+        "index": 3
+      },
+      {
+        "name": "message",
+        "friendlyName": "Message",
+        "description": "Error message",
+        "pinType": "Output",
+        "dataType": "String",
+        "valueType": "Normal",
+        "index": 4
+      }
+    ],
+    "inputCount": 3,
+    "outputCount": 4,
+    "flags": [],
+    "version": 1,
     "oauthProviders": [],
     "requiredOauthScopes": {},
     "permissions": []
@@ -172165,8 +172162,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Automation",
     "slug": "nodes/automation",
     "depth": 1,
-    "count": 154,
-    "description": "Browse 154 generated Flow-Like node references in Automation with pin details and available schema, package, and risk-rating metadata."
+    "count": 153,
+    "description": "Browse 153 generated Flow-Like node references in Automation with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Browser",
@@ -172381,8 +172378,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Automation/RPA",
     "slug": "nodes/automation/rpa",
     "depth": 2,
-    "count": 22,
-    "description": "Browse 22 generated Flow-Like node references in Automation/RPA with pin details and available schema, package, and risk-rating metadata."
+    "count": 21,
+    "description": "Browse 21 generated Flow-Like node references in Automation/RPA with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Selector",
@@ -172413,8 +172410,8 @@ export const catalogCategories: CatalogCategory[] = [
     "path": "Control",
     "slug": "nodes/control",
     "depth": 1,
-    "count": 21,
-    "description": "Browse 21 generated Flow-Like node references in Control with pin details and available schema, package, and risk-rating metadata."
+    "count": 22,
+    "description": "Browse 22 generated Flow-Like node references in Control with pin details and available schema, package, and risk-rating metadata."
   },
   {
     "label": "Call",
