@@ -59,6 +59,8 @@ interface StorageOperationResult {
 	error?: string;
 }
 
+const NO_VIRTUAL_FOLDERS: string[] = [];
+
 /** Compact "time remaining" for the upload panel. */
 function formatEta(seconds?: number): string | null {
 	if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) {
@@ -248,7 +250,11 @@ export function StorageSystem({
 	// ---------- Virtual folders (sessionStorage) ----------
 	const [creatingFolder, setCreatingFolder] = useState(false);
 	const [newFolderName, setNewFolderName] = useState("");
-	const [virtualFoldersHere, setVirtualFoldersHere] = useState<string[]>([]);
+	const [virtualFolders, setVirtualFolders] = useState<{
+		storeKey: string;
+		parentKey: string;
+		names: string[];
+	} | null>(null);
 
 	const storeKey = useMemo(
 		() => `vfolders:${storageScopeKey}:${appId}`,
@@ -261,6 +267,20 @@ export function StorageSystem({
 	const currentParentKey = useMemo(
 		() => normalizePrefix(prefix),
 		[prefix, normalizePrefix],
+	);
+	const virtualFoldersHere =
+		virtualFolders?.storeKey === storeKey &&
+		virtualFolders.parentKey === currentParentKey
+			? virtualFolders.names
+			: NO_VIRTUAL_FOLDERS;
+	const backendFolderNames = useMemo(
+		() =>
+			new Set(
+				asArray(files.data)
+					.filter((file) => file.is_dir)
+					.map((file) => storageDisplayName(file.location)),
+			),
+		[files.data],
 	);
 
 	type VFMap = Record<string, string[]>; // parentPrefix -> [childFolderNames]
@@ -285,8 +305,18 @@ export function StorageSystem({
 
 	useEffect(() => {
 		const map = readVF();
-		setVirtualFoldersHere(map[currentParentKey] ?? []);
-	}, [currentParentKey, readVF]);
+		const stored = map[currentParentKey] ?? [];
+		const names = stored.filter(
+			(name) => !backendFolderNames.has(storageDisplayName(name)),
+		);
+		// Once storage lists a folder, its session placeholder is no longer needed.
+		if (names.length !== stored.length) {
+			if (names.length > 0) map[currentParentKey] = names;
+			else delete map[currentParentKey];
+			writeVF(map);
+		}
+		setVirtualFolders({ storeKey, parentKey: currentParentKey, names });
+	}, [backendFolderNames, currentParentKey, readVF, storeKey, writeVF]);
 
 	const addVirtualFolder = useCallback(
 		(name: string) => {
@@ -306,13 +336,11 @@ export function StorageSystem({
 
 			// check duplicates against visible folders (backend + virtual)
 			const existingFolderNames = new Set(
-				asArray(files.data)
-					.filter((f) => f.is_dir)
-					.map((f) => storageDisplayName(f.location).toLowerCase()),
+				Array.from(backendFolderNames, (name) => name.toLowerCase()),
 			);
 			for (const v of virtualFoldersHere)
-				existingFolderNames.add(v.toLowerCase());
-			if (existingFolderNames.has(clean.toLowerCase())) {
+				existingFolderNames.add(storageDisplayName(v).toLowerCase());
+			if (existingFolderNames.has(storageDisplayName(clean).toLowerCase())) {
 				toast.error("A folder with that name already exists");
 				return false;
 			}
@@ -322,22 +350,33 @@ export function StorageSystem({
 			next.add(clean);
 			all[currentParentKey] = Array.from(next);
 			writeVF(all);
-			setVirtualFoldersHere(all[currentParentKey]);
+			setVirtualFolders({
+				storeKey,
+				parentKey: currentParentKey,
+				names: all[currentParentKey],
+			});
 			toast.success("Folder created");
 			return true;
 		},
-		[files.data, virtualFoldersHere, currentParentKey, readVF, writeVF],
+		[
+			backendFolderNames,
+			virtualFoldersHere,
+			currentParentKey,
+			readVF,
+			storeKey,
+			writeVF,
+		],
 	);
 
 	// Merge backend items with virtual folders for current prefix
 	const filesWithVirtual = useMemo<IStorageItem[]>(() => {
 		const base = asArray(files.data).slice();
-		const have = new Set(base.map((f) => storageDisplayName(f.location)));
+		const have = new Set(base.map((file) => storageDisplayName(file.location)));
 		const basePrefixNorm = normalizePrefix(prefix);
 		const locFor = (name: string) =>
 			basePrefixNorm ? `${basePrefixNorm}/${name}` : name;
 		const virtualItems: IStorageItem[] = virtualFoldersHere
-			.filter((name) => !have.has(name))
+			.filter((name) => !have.has(storageDisplayName(name)))
 			.map(
 				(name) =>
 					({
