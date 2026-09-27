@@ -374,6 +374,18 @@ impl ModelFactory {
         }
 
         if provider.starts_with("custom:") {
+            if flow_like_model_provider::llm::external::ExternalProvider::from_provider_name(
+                &provider,
+            )
+            .is_some()
+            {
+                let capabilities = FlowLikeState::completion_model_capabilities(&app_state).await;
+                return flow_like_model_provider::llm::external::build(
+                    &model_provider,
+                    capabilities.local_credentials,
+                )
+                .await;
+            }
             ensure_no_ambient_model_credentials(&app_state, &provider, &model_provider)?;
             return self
                 .build_custom_model(bit, &provider, &model_provider)

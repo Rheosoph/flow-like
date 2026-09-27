@@ -627,6 +627,8 @@ pub struct FlowLikeState {
 pub struct CompletionModelCapabilities {
     pub local_server: bool,
     pub mlx: bool,
+    /// Local CLI execution and the current desktop user's credentials.
+    pub local_credentials: bool,
 }
 
 impl FlowLikeState {
@@ -1193,11 +1195,20 @@ impl FlowLikeState {
     pub async fn completion_model_capabilities(
         state: &Arc<FlowLikeState>,
     ) -> CompletionModelCapabilities {
-        completion_model_capabilities_for_host(
+        let mut capabilities = completion_model_capabilities_for_host(
             Self::can_execute_local_bit_models(state).await,
             cfg!(any(target_os = "ios", target_os = "android")),
             crate::bit::can_host_mlx(),
-        )
+        );
+        capabilities.local_credentials = matches!(
+            state.execution_environment,
+            ExecutionEnvironment::Local | ExecutionEnvironment::Desktop
+        ) && !cfg!(any(
+            target_arch = "wasm32",
+            target_os = "ios",
+            target_os = "android"
+        ));
+        capabilities
     }
 
     #[inline]
@@ -1225,6 +1236,7 @@ fn completion_model_capabilities_for_host(
     CompletionModelCapabilities {
         local_server: local_bit_models_available && !is_mobile,
         mlx: local_bit_models_available && can_host_mlx,
+        local_credentials: false,
     }
 }
 
@@ -1524,6 +1536,7 @@ mod tests {
             CompletionModelCapabilities {
                 local_server: false,
                 mlx: true,
+                local_credentials: false,
             }
         );
         assert_eq!(
@@ -1531,12 +1544,46 @@ mod tests {
             CompletionModelCapabilities {
                 local_server: true,
                 mlx: false,
+                local_credentials: false,
             }
         );
         assert_eq!(
             completion_model_capabilities_for_host(false, false, true),
             CompletionModelCapabilities::default()
         );
+    }
+
+    #[tokio::test]
+    async fn local_agent_credentials_follow_the_execution_host_without_local_ml() {
+        for environment in [
+            ExecutionEnvironment::Local,
+            ExecutionEnvironment::Desktop,
+            ExecutionEnvironment::Mobile,
+            ExecutionEnvironment::Server,
+            ExecutionEnvironment::BrowserSandbox,
+        ] {
+            let mut state = FlowLikeState::new(
+                FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+                    flow_like_storage::object_store::memory::InMemory::new(),
+                ))),
+                HTTPClient::new_without_refetch(),
+            );
+            state.execution_environment = environment;
+            let capabilities = FlowLikeState::completion_model_capabilities(&Arc::new(state)).await;
+            assert!(!capabilities.local_server);
+            assert_eq!(
+                capabilities.local_credentials,
+                matches!(
+                    environment,
+                    ExecutionEnvironment::Local | ExecutionEnvironment::Desktop
+                ) && !cfg!(any(
+                    target_arch = "wasm32",
+                    target_os = "ios",
+                    target_os = "android"
+                )),
+                "{environment:?}"
+            );
+        }
     }
 
     #[tokio::test]

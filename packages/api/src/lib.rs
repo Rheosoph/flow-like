@@ -10,6 +10,7 @@ use flow_like_types::Value;
 use middleware::deadline::deadline_middleware;
 use middleware::error_reporting::error_reporting_middleware;
 use middleware::jwt::jwt_middleware;
+use middleware::response_headers::response_headers_middleware;
 use state::{AppState, State};
 use tower::ServiceBuilder;
 use tower_http::{
@@ -230,7 +231,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
                 )),
-        );
+        )
+        .layer(from_fn(response_headers_middleware));
 
     // Inbound REST/MCP routers. They deliberately bypass the JWT
     // middleware (per-registration auth is enforced inside the handler)

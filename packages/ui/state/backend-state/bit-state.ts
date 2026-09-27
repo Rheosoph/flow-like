@@ -1,8 +1,16 @@
 import type { IBit, IBitPack, IDownloadProgress } from "../../lib";
+import type {
+	ExternalModelCatalog,
+	ExternalModelProvider,
+} from "../../lib/bit/external-model-providers";
 import type { IBitSearchQuery } from "../../lib/schema/hub/bit-search-query";
 import type { ISettingsProfile } from "../../types";
 
 export interface IBitState {
+	/** Discover concrete models from an already signed-in native runtime. */
+	listExternalModels?(
+		provider: ExternalModelProvider,
+	): Promise<ExternalModelCatalog>;
 	getInstalledBit(bits: IBit[]): Promise<IBit[]>;
 	getPackFromBit(bit: IBit): Promise<{
 		bits: IBit[];

@@ -49,8 +49,8 @@ import type {
 	ICommandSync,
 	ICommandSyncArchive,
 } from "@flow-like/flow-like-ui/lib";
-import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
@@ -63,7 +63,7 @@ import { appsDB } from "../lib/apps-db";
 import { installNativeDeviceAdapter } from "../lib/device-adapter";
 import { ExecutionAuthBridge } from "../lib/execution-auth";
 import { scheduleIDBCleanup } from "../lib/idb-maintenance";
-import { isIOSDevice } from "../lib/platform";
+import { isIOSDevice, isMobileDevice } from "../lib/platform";
 import {
 	type OnlineProfile,
 	createProfileSyncQueue,
@@ -213,6 +213,7 @@ export class TauriBackend implements IBackendState {
 			canHostMLX: this.canHostMLX,
 			canHostEmbeddings: true,
 			canExecuteLocally: true,
+			canUseNativeAgentProviders: !isMobileDevice(),
 		};
 	}
 

@@ -26,8 +26,10 @@ use super::{
 
 pub mod anthropic;
 pub mod bedrock;
+pub mod claude_code;
 pub mod cohere;
 pub mod deepseek;
+pub mod external;
 pub mod galadriel;
 pub mod gemini;
 pub mod groq;
@@ -44,6 +46,7 @@ pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod perplexity;
+pub mod subscription;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod together;

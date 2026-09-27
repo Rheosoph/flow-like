@@ -20,6 +20,7 @@ export const LOCAL_LLM_PROVIDER_NAMES: ReadonlySet<string> =
 export interface LocalModelHostCapabilities {
 	canHostLlamaCPP: boolean;
 	canHostMLX: boolean;
+	canUseNativeAgentProviders?: boolean;
 }
 
 function normalizedProviderName(bit: IBit): string | undefined {
@@ -57,6 +58,9 @@ export function isHostableLlmModel(
 	bit: IBit,
 	capabilities: LocalModelHostCapabilities,
 ): boolean {
+	if (normalizedProviderName(bit) === "custom:claude-code") {
+		return capabilities.canUseNativeAgentProviders === true;
+	}
 	if (isMlxLlmModel(bit)) return capabilities.canHostMLX;
 	if (!isLlamaCppLlmModel(bit)) return true;
 	if (capabilities.canHostLlamaCPP) return true;
@@ -103,7 +107,12 @@ export function filterHostableLlmModels(
 	models: IBit[],
 	capabilities: LocalModelHostCapabilities,
 ): IBit[] {
-	if (capabilities.canHostLlamaCPP && capabilities.canHostMLX) return models;
+	if (
+		capabilities.canHostLlamaCPP &&
+		capabilities.canHostMLX &&
+		capabilities.canUseNativeAgentProviders
+	)
+		return models;
 	return models.filter((model) => isHostableLlmModel(model, capabilities));
 }
 

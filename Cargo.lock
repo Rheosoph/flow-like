@@ -9610,6 +9610,7 @@ dependencies = [
  "google-cloud-auth",
  "http 1.4.0",
  "image",
+ "jsonschema",
  "ndarray 0.17.2",
  "ndk-sys",
  "ort",
