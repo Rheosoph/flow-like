@@ -105,14 +105,7 @@ pub async fn upsert_event(
             )),
         })?;
 
-    let mut app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let mut app = super::editable_event_app(&state, &sub, &app_id).await?;
 
     // Upsert to bucket (handles versioning)
     let event = app.upsert_event(event, params.version_type, None).await?;

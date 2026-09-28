@@ -60,14 +60,7 @@ pub async fn validate_event(
             None => None,
         };
 
-    let app = state
-        .scoped_app(
-            &sub,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let app = super::editable_event_app(&state, &sub, &app_id).await?;
 
     let event = app.get_event(&event_id, version_opt).await?;
     event.validate_event_references(&app).await?;

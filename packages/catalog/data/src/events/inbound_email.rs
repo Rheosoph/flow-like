@@ -5,13 +5,15 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::{
-    FlowPath, InboundEmail, InboundEmailAddress, InboundEmailAttachment, MailMessageRef,
-    MailSession,
+    FlowPath, InboundEmail, InboundEmailAddress, InboundEmailAttachment,
+    InboundEmailAuthentication, InboundEmailHeader, MailMessageRef, MailSession,
 };
 use flow_like_types::{
     Value, anyhow, async_trait,
     json::{self, json},
 };
+use schemars::JsonSchema;
+use serde::Serialize;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -21,6 +23,51 @@ impl InboundEmailEventNode {
     pub fn new() -> Self {
         Self
     }
+}
+
+#[derive(Serialize, JsonSchema)]
+struct InboundEmailAddresses {
+    /// Sender header, falling back to the first From address
+    sender: Option<InboundEmailAddress>,
+    from: Vec<InboundEmailAddress>,
+    to: Vec<InboundEmailAddress>,
+    cc: Vec<InboundEmailAddress>,
+    reply_to: Vec<InboundEmailAddress>,
+    /// SMTP envelope sender
+    envelope_from: String,
+    /// The automation address that received the email
+    recipient: String,
+}
+
+#[derive(Serialize, JsonSchema)]
+struct InboundEmailContent {
+    subject: String,
+    text: String,
+    html: String,
+    /// Text is a preview. Read text_path for the complete plain text body
+    text_truncated: bool,
+    /// HTML is a preview. Read html_path for the complete HTML body
+    html_truncated: bool,
+    text_path: Option<FlowPath>,
+    html_path: Option<FlowPath>,
+}
+
+#[derive(Serialize, JsonSchema)]
+struct InboundEmailDelivery {
+    /// Bounce, auto-reply, mailing list or other machine-generated mail. Platform replies to it are refused to prevent mail loops
+    automated: bool,
+    /// When the raw, body and attachment files are deleted
+    #[schemars(extend("format" = "date-time"))]
+    expires_at: Option<String>,
+    /// Complete MIME message as a temporary EML file
+    raw_path: FlowPath,
+    #[schemars(extend("format" = "date-time"))]
+    received_at: Option<String>,
+    message_id: Option<String>,
+    /// The mail provider's delivery ID
+    provider_delivery_id: String,
+    headers: Vec<InboundEmailHeader>,
+    authentication: Option<InboundEmailAuthentication>,
 }
 
 fn email_from_payload(payload: Option<&Value>) -> flow_like_types::Result<InboundEmail> {
@@ -73,50 +120,78 @@ fn resolve_mail_references(
     Ok(())
 }
 
-fn email_outputs(email: &InboundEmail) -> flow_like_types::Result<[(&'static str, Value); 22]> {
-    let session = email
-        .session
-        .as_ref()
-        .ok_or_else(|| anyhow!("Missing mail session"))?;
-    let reference = email
-        .reference
-        .as_ref()
-        .ok_or_else(|| anyhow!("Missing mail message reference"))?;
+fn email_outputs(email: InboundEmail) -> flow_like_types::Result<[(&'static str, Value); 6]> {
+    let InboundEmail {
+        id: _,
+        delivery_id,
+        envelope_from,
+        recipient,
+        session,
+        reference,
+        sender,
+        from,
+        to,
+        cc,
+        reply_to,
+        subject,
+        message_id,
+        text,
+        html,
+        text_truncated,
+        html_truncated,
+        text_path,
+        html_path,
+        headers,
+        attachments,
+        raw_path,
+        received_at,
+        expires_at,
+        authentication,
+        automated,
+    } = email;
+    let session = session.ok_or_else(|| anyhow!("Missing mail session"))?;
+    let reference = reference.ok_or_else(|| anyhow!("Missing mail message reference"))?;
     Ok([
-        ("email", json!(email)),
-        ("session", json!(session)),
         ("message", json!(reference)),
+        ("session", json!(session)),
         (
-            "attachments",
-            json!(
-                email
-                    .attachments
-                    .iter()
-                    .map(|part| &part.path)
-                    .collect::<Vec<_>>()
-            ),
+            "addresses",
+            json!(InboundEmailAddresses {
+                sender,
+                from,
+                to,
+                cc,
+                reply_to,
+                envelope_from,
+                recipient,
+            }),
         ),
-        ("attachment_metadata", json!(email.attachments)),
-        ("sender", json!(email.sender)),
-        ("from", json!(email.from)),
-        ("to", json!(email.to)),
-        ("cc", json!(email.cc)),
-        ("reply_to", json!(email.reply_to)),
         (
-            "subject",
-            json!(email.subject.as_deref().unwrap_or_default()),
+            "content",
+            json!(InboundEmailContent {
+                subject: subject.unwrap_or_default(),
+                text: text.unwrap_or_default(),
+                html: html.unwrap_or_default(),
+                text_truncated,
+                html_truncated,
+                text_path,
+                html_path,
+            }),
         ),
-        ("text", json!(email.text.as_deref().unwrap_or_default())),
-        ("html", json!(email.html.as_deref().unwrap_or_default())),
-        ("envelope_from", json!(email.envelope_from)),
-        ("recipient", json!(email.recipient)),
-        ("automated", json!(email.automated)),
-        ("raw", json!(email.raw_path)),
-        ("text_path", json!(email.text_path)),
-        ("html_path", json!(email.html_path)),
-        ("expires_at", json!(email.expires_at)),
-        ("text_truncated", json!(email.text_truncated)),
-        ("html_truncated", json!(email.html_truncated)),
+        ("attachments", json!(attachments)),
+        (
+            "delivery",
+            json!(InboundEmailDelivery {
+                automated,
+                expires_at,
+                raw_path,
+                received_at,
+                message_id,
+                provider_delivery_id: delivery_id,
+                headers,
+                authentication,
+            }),
+        ),
     ])
 }
 
@@ -132,7 +207,7 @@ impl NodeLogic for InboundEmailEventNode {
         node.set_flowscript_name("events", "inboundEmail");
         node.add_icon("/flow/icons/event.svg");
         node.set_start(true);
-        node.set_version(2);
+        node.set_version(3);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(4)
@@ -150,116 +225,48 @@ impl NodeLogic for InboundEmailEventNode {
             VariableType::Execution,
         );
         node.add_output_pin(
-            "email",
-            "Email",
-            "Email content, envelope recipients, headers and temporary file paths that expire at Expires At",
-            VariableType::Struct,
-        )
-        .set_schema::<InboundEmail>();
-        node.add_output_pin(
-            "session",
-            "Mail Session",
-            "App and Event reference for sending through this automation address",
-            VariableType::Struct,
-        )
-        .set_schema::<MailSession>();
-        node.add_output_pin(
             "message",
-            "Mail Message",
-            "Original inbound message reference for replies",
+            "Message",
+            "Reference to this email for Reply Platform Email",
             VariableType::Struct,
         )
         .set_schema::<MailMessageRef>();
         node.add_output_pin(
-            "attachments",
-            "Attachments",
-            "Temporary attachment files for file and path nodes. Copy them to app storage to keep them",
+            "session",
+            "Mail Session",
+            "App and Event reference for sending new mail from this automation address",
             VariableType::Struct,
         )
-        .set_schema::<FlowPath>()
-        .set_value_type(ValueType::Array);
+        .set_schema::<MailSession>();
         node.add_output_pin(
-            "attachment_metadata",
-            "Attachment Metadata",
-            "Attachment filenames, content types, byte sizes and temporary file paths",
+            "addresses",
+            "Addresses",
+            "Sender, header recipients and SMTP envelope addresses",
+            VariableType::Struct,
+        )
+        .set_schema::<InboundEmailAddresses>();
+        node.add_output_pin(
+            "content",
+            "Content",
+            "Subject and body previews, plus temporary files with the complete bodies",
+            VariableType::Struct,
+        )
+        .set_schema::<InboundEmailContent>();
+        node.add_output_pin(
+            "attachments",
+            "Attachments",
+            "Attachment filenames, content types, byte sizes and temporary files. Copy files to app storage to keep them",
             VariableType::Struct,
         )
         .set_schema::<InboundEmailAttachment>()
         .set_value_type(ValueType::Array);
         node.add_output_pin(
-            "sender",
-            "Sender",
-            "Sender header, falling back to the first From address",
+            "delivery",
+            "Delivery",
+            "Machine-generated flag, file expiry, raw EML file, headers and authentication verdicts",
             VariableType::Struct,
         )
-        .set_schema::<Option<InboundEmailAddress>>();
-        for (name, label, description) in [
-            ("from", "From", "From header addresses"),
-            ("to", "To", "To header addresses"),
-            ("cc", "Cc", "Carbon copy header addresses"),
-            ("reply_to", "Reply To", "Addresses for replies"),
-        ] {
-            node.add_output_pin(name, label, description, VariableType::Struct)
-                .set_schema::<InboundEmailAddress>()
-                .set_value_type(ValueType::Array);
-        }
-        for (name, label, description) in [
-            ("subject", "Subject", "Email subject, empty when absent"),
-            ("text", "Text", "Plain text preview, empty when absent"),
-            ("html", "HTML", "HTML preview, empty when absent"),
-            ("envelope_from", "Envelope From", "SMTP envelope sender"),
-            ("recipient", "Recipient", "The receiving automation address"),
-        ] {
-            node.add_output_pin(name, label, description, VariableType::String);
-        }
-        node.add_output_pin(
-            "automated",
-            "Automated",
-            "True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops",
-            VariableType::Boolean,
-        );
-        node.add_output_pin(
-            "raw",
-            "Raw Email",
-            "Complete MIME message as a temporary EML file. Copy it to app storage to keep it",
-            VariableType::Struct,
-        )
-        .set_schema::<FlowPath>();
-        for (name, label, description) in [
-            (
-                "text_path",
-                "Text File",
-                "Complete plain text body as a temporary file, when present",
-            ),
-            (
-                "html_path",
-                "HTML File",
-                "Complete HTML body as a temporary file, when present",
-            ),
-        ] {
-            node.add_output_pin(name, label, description, VariableType::Struct)
-                .set_schema::<Option<FlowPath>>();
-        }
-        node.add_output_pin(
-            "expires_at",
-            "Expires At",
-            "When the email's stored files are deleted. Copy files to app storage before then to keep them",
-            VariableType::Date,
-        );
-        for (name, label, description) in [
-            (
-                "text_truncated",
-                "Text Truncated",
-                "Read Text File for the complete plain text body",
-            ),
-            (
-                "html_truncated",
-                "HTML Truncated",
-                "Read HTML File for the complete HTML body",
-            ),
-        ] {
-            node.add_output_pin(name, label, description, VariableType::Boolean);
-        }
+        .set_schema::<InboundEmailDelivery>();
         node
     }
 
@@ -278,7 +285,7 @@ impl NodeLogic for InboundEmailEventNode {
             .await
             .ok_or_else(|| anyhow!("Inbound email requires an Event execution"))?;
         resolve_mail_references(&mut email, &app_id, &event_id)?;
-        for (name, value) in email_outputs(&email)? {
+        for (name, value) in email_outputs(email)? {
             context.set_pin_value(name, value).await?;
         }
         let exec_out = context.get_pin_by_name("exec_out").await?;
@@ -291,10 +298,19 @@ impl NodeLogic for InboundEmailEventNode {
 mod tests {
     use super::*;
     use flow_like::flow::{
-        board::cleanup::sync_node_schema::sync_node_with_catalog,
-        pin::{Pin, PinType},
+        board::cleanup::sync_node_schema::sync_node_with_catalog, pin::Pin,
     };
     use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
+    use std::collections::HashMap;
+
+    const DATA_PINS: [&str; 6] = [
+        "message",
+        "session",
+        "addresses",
+        "content",
+        "attachments",
+        "delivery",
+    ];
 
     fn payload() -> Value {
         let file = |path: &str| json!({"path": path, "store_ref": REQUEST_FILES_STORE_REF});
@@ -305,65 +321,78 @@ mod tests {
             "reference": {"session": {"app_id": "app-1", "event_id": "event-1"}, "delivery_id": "mail-1"},
             "from": [{"name": "Author", "email": "author@example.com"}],
             "to": [{"email": "displayed@example.com"}],
-            "subject": "Order", "text": "New order", "text_truncated": true,
+            "subject": "Order", "message_id": "<order@example.com>",
+            "text": "New order", "text_truncated": true,
             "text_path": file("tmp/mail/body.txt"),
+            "headers": [{"name": "X-Priority", "value": "1"}],
             "attachments": [{"filename": "invoice.pdf", "content_type": "application/pdf", "size": 42,
                 "path": file("tmp/mail/attachments/0/invoice.pdf")}],
             "raw_path": file("tmp/mail/raw.eml"),
             "automated": true,
+            "received_at": "2026-09-28T10:00:00+00:00",
             "expires_at": "2026-09-29T10:00:00+00:00",
             "authentication": {"provider": "ses", "dkim": {"status": "PASS"}}
         }})
     }
 
-    #[test]
-    fn exposes_paths_and_metadata_that_match_every_output_schema() {
-        let email = email_from_payload(Some(&payload())).unwrap();
-        let node = InboundEmailEventNode.get_node();
-        let values: std::collections::HashMap<_, _> =
-            email_outputs(&email).unwrap().into_iter().collect();
-        let attachments: Vec<FlowPath> = json::from_value(values["attachments"].clone()).unwrap();
-        assert_eq!(attachments[0].path, "tmp/mail/attachments/0/invoice.pdf");
-        assert_eq!(attachments[0].store_ref, REQUEST_FILES_STORE_REF);
-        let reader_paths: Vec<flow_like_catalog_data_support::data::path::FlowPath> =
-            json::from_value(values["attachments"].clone()).unwrap();
-        assert_eq!(reader_paths[0].path, attachments[0].path);
-        assert_eq!(reader_paths[0].store_ref, attachments[0].store_ref);
-        assert_eq!(values["attachment_metadata"][0]["filename"], "invoice.pdf");
-        assert_eq!(values["email"]["authentication"]["dkim"]["status"], "PASS");
-        assert_eq!(values["recipient"], "orders@example.com");
-        assert_eq!(values["to"][0]["email"], "displayed@example.com");
-        assert_eq!(values["text_truncated"], true);
-        assert_eq!(values["html_truncated"], false);
-        assert_eq!(values["text_path"]["path"], "tmp/mail/body.txt");
-        assert_eq!(values["automated"], true);
-        assert_eq!(values["expires_at"], "2026-09-29T10:00:00+00:00");
-        assert_eq!(values["html"], "");
-        assert!(values["html_path"].is_null());
-        assert_eq!(values["sender"]["email"], "author@example.com");
-        assert_eq!(values["session"], values["email"]["session"]);
-        assert_eq!(values["message"], values["email"]["reference"]);
-        assert_eq!(values["message"]["delivery_id"], "mail-1");
+    fn outputs(payload: &Value) -> HashMap<&'static str, Value> {
+        let email = email_from_payload(Some(payload)).unwrap();
+        email_outputs(email).unwrap().into_iter().collect()
+    }
 
-        for pin in node.pins.values().filter(|pin| pin.name != "exec_out") {
-            let value = &values[pin.name.as_str()];
-            assert_eq!(pin.pin_type, PinType::Output);
-            if let Some(schema) = &pin.schema {
-                let schema: Value = json::from_str(schema).unwrap();
-                let validator = jsonschema::validator_for(&schema).unwrap();
-                if pin.value_type == ValueType::Array {
-                    for item in value.as_array().unwrap() {
-                        assert!(validator.is_valid(item), "Invalid {} item", pin.name);
-                    }
-                } else {
-                    assert!(validator.is_valid(value), "Invalid {} output", pin.name);
+    #[test]
+    fn routes_every_payload_field_to_exactly_one_schema_valid_pin() {
+        let values = outputs(&payload());
+        let attachments: Vec<InboundEmailAttachment> =
+            json::from_value(values["attachments"].clone()).unwrap();
+        assert_eq!(attachments[0].filename.as_deref(), Some("invoice.pdf"));
+        assert_eq!(attachments[0].path.path, "tmp/mail/attachments/0/invoice.pdf");
+        assert_eq!(attachments[0].path.store_ref, REQUEST_FILES_STORE_REF);
+        let reader_path: flow_like_catalog_data_support::data::path::FlowPath =
+            json::from_value(values["attachments"][0]["path"].clone()).unwrap();
+        assert_eq!(reader_path.path, attachments[0].path.path);
+
+        assert_eq!(values["message"]["delivery_id"], "mail-1");
+        assert_eq!(values["message"]["session"], values["session"]);
+        assert_eq!(values["session"]["event_id"], "event-1");
+
+        let addresses = &values["addresses"];
+        assert_eq!(addresses["sender"]["email"], "author@example.com");
+        assert_eq!(addresses["from"][0]["email"], "author@example.com");
+        assert_eq!(addresses["to"][0]["email"], "displayed@example.com");
+        assert_eq!(addresses["recipient"], "orders@example.com");
+        assert_eq!(addresses["envelope_from"], "bounce@example.com");
+
+        let content = &values["content"];
+        assert_eq!(content["subject"], "Order");
+        assert_eq!(content["text"], "New order");
+        assert_eq!(content["html"], "");
+        assert_eq!(content["text_truncated"], true);
+        assert_eq!(content["html_truncated"], false);
+        assert_eq!(content["text_path"]["path"], "tmp/mail/body.txt");
+        assert!(content["html_path"].is_null());
+
+        let delivery = &values["delivery"];
+        assert_eq!(delivery["automated"], true);
+        assert_eq!(delivery["expires_at"], "2026-09-29T10:00:00+00:00");
+        assert_eq!(delivery["received_at"], "2026-09-28T10:00:00+00:00");
+        assert_eq!(delivery["raw_path"]["path"], "tmp/mail/raw.eml");
+        assert_eq!(delivery["message_id"], "<order@example.com>");
+        assert_eq!(delivery["provider_delivery_id"], "provider-1");
+        assert_eq!(delivery["headers"][0]["name"], "X-Priority");
+        assert_eq!(delivery["authentication"]["dkim"]["status"], "PASS");
+
+        let node = InboundEmailEventNode.get_node();
+        for name in DATA_PINS {
+            let pin = node.get_pin_by_name(name).unwrap();
+            let schema: Value = json::from_str(pin.schema.as_deref().unwrap()).unwrap();
+            let validator = jsonschema::validator_for(&schema).unwrap();
+            if pin.value_type == ValueType::Array {
+                for item in values[name].as_array().unwrap() {
+                    assert!(validator.is_valid(item), "Invalid {name} item");
                 }
             } else {
-                match pin.data_type {
-                    VariableType::String | VariableType::Date => assert!(value.is_string()),
-                    VariableType::Boolean => assert!(value.is_boolean()),
-                    _ => panic!("Untyped {} output", pin.name),
-                }
+                assert!(validator.is_valid(&values[name]), "Invalid {name} output");
             }
         }
     }
@@ -375,112 +404,94 @@ mod tests {
         for field in ["subject", "text", "from", "attachments", "automated"] {
             payload["email"].as_object_mut().unwrap().remove(field);
         }
-        let email = email_from_payload(Some(&payload)).unwrap();
-        let values: std::collections::HashMap<_, _> =
-            email_outputs(&email).unwrap().into_iter().collect();
-        assert_eq!(values["sender"]["email"], "agent@example.com");
-        assert_eq!(values["email"]["sender"], values["sender"]);
-        assert_eq!(values["subject"], "");
-        assert_eq!(values["text"], "");
-        assert_eq!(values["from"], json!([]));
+        let values = outputs(&payload);
+        assert_eq!(values["addresses"]["sender"]["email"], "agent@example.com");
+        assert_eq!(values["addresses"]["from"], json!([]));
+        assert_eq!(values["content"]["subject"], "");
+        assert_eq!(values["content"]["text"], "");
         assert_eq!(values["attachments"], json!([]));
-        assert_eq!(values["automated"], false);
+        assert_eq!(values["delivery"]["automated"], false);
         payload["email"].as_object_mut().unwrap().remove("sender");
         assert!(email_from_payload(Some(&payload)).unwrap().sender.is_none());
     }
 
     #[test]
-    fn catalog_pins_use_native_schema_identity_and_array_types() {
+    fn catalog_exposes_one_typed_struct_per_concern() {
         let node = InboundEmailEventNode.get_node();
-        assert_eq!(node.version, Some(2));
+        assert_eq!(node.version, Some(3));
         assert!(node.scores.is_some());
-        for (name, data_type) in [
-            ("automated", VariableType::Boolean),
-            ("expires_at", VariableType::Date),
+        let mut names: Vec<_> = node.pins.values().map(|pin| pin.name.as_str()).collect();
+        names.sort_unstable();
+        let mut expected = DATA_PINS.to_vec();
+        expected.push("exec_out");
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+        for name in DATA_PINS {
+            let pin = node.get_pin_by_name(name).unwrap();
+            assert_eq!(pin.data_type, VariableType::Struct);
+            assert_eq!(
+                pin.value_type == ValueType::Array,
+                name == "attachments",
+                "{name} value type"
+            );
+        }
+        for (name, schema) in [
+            ("message", Pin::schema_string_for::<MailMessageRef>()),
+            ("session", Pin::schema_string_for::<MailSession>()),
+            ("addresses", Pin::schema_string_for::<InboundEmailAddresses>()),
+            ("content", Pin::schema_string_for::<InboundEmailContent>()),
+            ("attachments", Pin::schema_string_for::<InboundEmailAttachment>()),
+            ("delivery", Pin::schema_string_for::<InboundEmailDelivery>()),
         ] {
-            assert_eq!(node.get_pin_by_name(name).unwrap().data_type, data_type);
+            assert_eq!(node.get_pin_by_name(name).unwrap().schema, schema, "{name}");
         }
         assert_eq!(
             Pin::schema_string_for::<FlowPath>(),
             Pin::schema_string_for::<flow_like_catalog_data_support::data::path::FlowPath>()
         );
-        assert_eq!(
-            node.get_pin_by_name("email").unwrap().schema,
-            Pin::schema_string_for::<InboundEmail>()
-        );
-        assert_eq!(
-            node.get_pin_by_name("session").unwrap().schema,
-            Pin::schema_string_for::<MailSession>()
-        );
-        assert_eq!(
-            node.get_pin_by_name("message").unwrap().schema,
-            Pin::schema_string_for::<MailMessageRef>()
-        );
-        for name in ["attachments", "raw"] {
-            assert_eq!(
-                node.get_pin_by_name(name).unwrap().schema,
-                Pin::schema_string_for::<FlowPath>()
-            );
-        }
-        for name in ["text_path", "html_path"] {
-            assert_eq!(
-                node.get_pin_by_name(name).unwrap().schema,
-                Pin::schema_string_for::<Option<FlowPath>>()
-            );
-        }
-        assert_eq!(
-            node.get_pin_by_name("sender").unwrap().schema,
-            Pin::schema_string_for::<Option<InboundEmailAddress>>()
-        );
-        assert_eq!(
-            node.get_pin_by_name("attachment_metadata").unwrap().schema,
-            Pin::schema_string_for::<InboundEmailAttachment>()
-        );
-        for name in ["from", "to", "cc", "reply_to"] {
-            assert_eq!(
-                node.get_pin_by_name(name).unwrap().schema,
-                Pin::schema_string_for::<InboundEmailAddress>()
-            );
-        }
-        for name in [
-            "attachments",
-            "attachment_metadata",
-            "from",
-            "to",
-            "cc",
-            "reply_to",
-        ] {
-            assert_eq!(
-                node.get_pin_by_name(name).unwrap().value_type,
-                ValueType::Array
-            );
-        }
     }
 
     #[test]
-    fn catalog_upgrade_preserves_existing_email_and_execution_wires() {
+    fn catalog_upgrade_keeps_reference_wires_and_drops_unwired_flat_duplicates() {
         let mut placed = Node::new("events_inbound_email", "Inbound Email Event", "", "Events");
+        placed.set_version(2);
         placed
             .add_output_pin("exec_out", "Output", "", VariableType::Execution)
             .connected_to
             .insert("next-exec".into());
         placed
-            .add_output_pin("email", "Email", "", VariableType::Struct)
-            .set_open_schema()
+            .add_output_pin("message", "Mail Message", "", VariableType::Struct)
+            .set_schema::<MailMessageRef>()
             .connected_to
-            .insert("break-email".into());
-        let email_id = placed.get_pin_by_name("email").unwrap().id.clone();
-        let exec_id = placed.get_pin_by_name("exec_out").unwrap().id.clone();
+            .insert("reply-message".into());
+        for name in ["email", "sender"] {
+            placed
+                .add_output_pin(name, name, "", VariableType::Struct)
+                .connected_to
+                .insert(format!("{name}-consumer"));
+        }
+        placed.add_output_pin("subject", "Subject", "", VariableType::String);
+        let message_id = placed.get_pin_by_name("message").unwrap().id.clone();
         sync_node_with_catalog(&mut placed, &InboundEmailEventNode.get_node());
-        assert_eq!(placed.version, Some(2));
-        let email = placed.get_pin_by_name("email").unwrap();
-        assert_eq!(email.id, email_id);
-        assert!(email.connected_to.contains("break-email"));
-        assert!(!email.has_open_schema());
-        let exec = placed.get_pin_by_name("exec_out").unwrap();
-        assert_eq!(exec.id, exec_id);
-        assert!(exec.connected_to.contains("next-exec"));
-        assert!(placed.get_pin_by_name("attachments").is_some());
+        assert_eq!(placed.version, Some(3));
+        let message = placed.get_pin_by_name("message").unwrap();
+        assert_eq!(message.id, message_id);
+        assert!(message.connected_to.contains("reply-message"));
+        assert!(
+            placed
+                .get_pin_by_name("exec_out")
+                .unwrap()
+                .connected_to
+                .contains("next-exec")
+        );
+        assert!(placed.get_pin_by_name("subject").is_none());
+        for name in ["email", "sender"] {
+            let retired = placed.get_pin_by_name(name).unwrap();
+            assert!(retired.connected_to.contains(&format!("{name}-consumer")));
+        }
+        for name in DATA_PINS {
+            assert!(placed.get_pin_by_name(name).is_some(), "{name} missing");
+        }
     }
 
     #[test]
@@ -505,14 +516,14 @@ mod tests {
             .unwrap()
             .remove("reference");
         let mut email = email_from_payload(Some(&payload)).unwrap();
-        assert!(email_outputs(&email).is_err());
+        assert!(email_outputs(email.clone()).is_err());
         resolve_mail_references(&mut email, "app-1", "event-1").unwrap();
         let reference = email.reference.as_ref().unwrap();
         assert_eq!(reference.delivery_id, email.id);
         assert_ne!(reference.delivery_id, email.delivery_id);
         assert_eq!(reference.session.app_id, "app-1");
         assert_eq!(reference.session.event_id, "event-1");
-        assert!(email_outputs(&email).is_ok());
+        assert!(email_outputs(email).is_ok());
     }
 
     #[test]

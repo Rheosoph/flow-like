@@ -1417,6 +1417,27 @@ impl State {
         Ok(app)
     }
 
+    /// Replace the manifest's `visibility` with the database value. The manifest
+    /// is written as `Offline` at creation and never follows visibility changes,
+    /// so every server-side decision that reads `App::visibility` needs this.
+    pub async fn hydrate_app_visibility(&self, app: &mut App) -> flow_like_types::Result<()> {
+        use sea_orm::{EntityTrait, QuerySelect};
+        let visibility = crate::entity::app::Entity::find_by_id(&app.id)
+            .select_only()
+            .column(crate::entity::app::Column::Visibility)
+            .into_tuple::<crate::entity::sea_orm_active_enums::Visibility>()
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "App '{}' has no database row to read visibility from",
+                    app.id
+                )
+            })?;
+        app.visibility = visibility.into();
+        Ok(())
+    }
+
     #[tracing::instrument(
         name = "scoped_board",
         skip(self, state),

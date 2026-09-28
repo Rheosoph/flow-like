@@ -124,6 +124,7 @@ pub async fn export(
     let permission = ensure_permission!(user, &app_id, &state, required);
     let sub = permission.sub()?;
     let mut app = state.master_app(&sub, &app_id, &state).await?;
+    state.hydrate_app_visibility(&mut app).await?;
     require!(
         !matches!(app.visibility, AppVisibility::Offline),
         "Only online projects use executable metadata export"

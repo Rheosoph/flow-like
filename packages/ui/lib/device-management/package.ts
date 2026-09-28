@@ -2,6 +2,7 @@ export {
 	buildStandalonePackage,
 	fetchVerifiedRelease,
 	standalonePackageModes,
+	standalonePackageDownloadsBinary,
 	validateReleaseConfig,
 	validateStandalonePackageSelection,
 	verifyReleaseManifest,

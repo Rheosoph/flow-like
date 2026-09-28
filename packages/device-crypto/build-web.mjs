@@ -1,7 +1,70 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+	cpSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+function rustOutput(command, args, env) {
+	return execFileSync(command, args, {
+		cwd: resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
+		encoding: "utf8",
+		env,
+		stdio: ["ignore", "pipe", "inherit"],
+	}).trim();
+}
+
+// Some macOS Rust toolchains omit sysroot/lib from rust-lld's runtime search path.
+export function rustLibraryEnvironment({
+	env = process.env,
+	platform = process.platform,
+	probe = (command, args) => rustOutput(command, args, env),
+	exists = existsSync,
+} = {}) {
+	if (platform !== "darwin") return {};
+	const lib = join(probe(env.RUSTC || "rustc", ["--print", "sysroot"]), "lib");
+	if (!exists(join(lib, "libLLVM.dylib"))) return {};
+	const fallback =
+		env.DYLD_FALLBACK_LIBRARY_PATH ??
+		[join(env.HOME || homedir(), "lib"), "/usr/local/lib", "/usr/lib"].join(
+			":",
+		);
+	return {
+		DYLD_FALLBACK_LIBRARY_PATH: [
+			...new Set([lib, ...fallback.split(":")]),
+		].join(":"),
+	};
+}
+
+export function wasmLinkerEnvironment({
+	directory,
+	env = process.env,
+	platform = process.platform,
+	probe = (command, args) => rustOutput(command, args, env),
+	exists = existsSync,
+}) {
+	if (env.CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER) return {};
+	const libraries = rustLibraryEnvironment({ env, platform, probe, exists });
+	if (!libraries.DYLD_FALLBACK_LIBRARY_PATH) return {};
+	const targetLib = probe(env.RUSTC || "rustc", ["--print", "target-libdir"]);
+	const linker = join(dirname(targetLib), "bin", "rust-lld");
+	const wrapper = resolve(directory, "rust-lld");
+	const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+	// macOS strips DYLD_* when a shell-based RUSTC_WRAPPER starts. Set the path
+	// in the linker launcher so it reaches rust-lld even through those wrappers.
+	mkdirSync(directory, { recursive: true });
+	writeFileSync(
+		wrapper,
+		`#!/bin/sh\nexport DYLD_FALLBACK_LIBRARY_PATH=${quote(libraries.DYLD_FALLBACK_LIBRARY_PATH)}\nexec ${quote(linker)} "$@"\n`,
+		{ mode: 0o755 },
+	);
+	return { CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_LINKER: wrapper };
+}
 
 // ring compiles C for wasm32. Apple's system clang has no WebAssembly backend.
 export function wasmCompilerEnvironment({
@@ -71,11 +134,12 @@ function build() {
 			process.platform === "win32" ? "wasm-bindgen.exe" : "wasm-bindgen",
 		);
 	const compiler = wasmCompilerEnvironment();
+	const linker = wasmLinkerEnvironment({ directory: tools });
 	const run = (command, args) =>
 		execFileSync(command, args, {
 			cwd: root,
 			stdio: "inherit",
-			env: { ...process.env, ...compiler, CARGO_TARGET_DIR: target },
+			env: { ...process.env, ...compiler, ...linker, CARGO_TARGET_DIR: target },
 		});
 	let installed = "";
 	try {

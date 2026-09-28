@@ -18,6 +18,53 @@ spec.loader.exec_module(check)
 
 
 class CompilerReproducibilityTests(unittest.TestCase):
+    def linked_builds(self, directory, outputs):
+        target = "aarch64-apple-darwin"
+        builds, executions = [], []
+
+        def run(command, **options):
+            if command[0] != "cargo":
+                self.assertEqual(options["timeout"], 15)
+                executions.append(command[0])
+                return subprocess.CompletedProcess(command, 0)
+            target_dir = Path(command[command.index("--target-dir") + 1])
+            self.assertFalse(target_dir.exists())
+            self.assertEqual(command[1], "build")
+            self.assertIn("--bin", command)
+            self.assertNotIn("--emit=obj", command)
+            self.assertEqual(options["env"]["RUSTFLAGS"], "--remap-path-prefix=/checkout=/src")
+            self.assertEqual(options["env"]["CARGO_PROFILE_RELEASE_STRIP"], "debuginfo")
+            self.assertEqual(options["env"]["RUSTC_WRAPPER"], "")
+            release = target_dir / target / "release"
+            release.mkdir(parents=True)
+            # Identical objects must not conceal a changed linked executable.
+            (release / "fixture.o").write_bytes(b"same object")
+            (release / "compiler-reproducibility").write_bytes(outputs[len(builds)])
+            builds.append(target_dir)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(check.subprocess, "check_output", return_value="rustc test\n"), \
+                patch.object(check.subprocess, "run", side_effect=run), \
+                patch.dict(os.environ, {
+                    "RUSTFLAGS": "--remap-path-prefix=/checkout=/src",
+                    "CARGO_PROFILE_RELEASE_STRIP": "debuginfo",
+                    "RUSTC_WRAPPER": "sccache",
+                }), contextlib.redirect_stdout(io.StringIO()):
+            check.check_reproducibility(target, len(outputs), directory, linked=True)
+        self.assertEqual(len(builds), len(executions))
+
+    def test_links_runs_and_compares_independent_executables_with_release_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.linked_builds(directory, [b"linked executable"] * 3)
+            self.assertEqual(len(list(Path(directory).glob("build-*"))), 3)
+
+    def test_rejects_linker_changes_even_when_objects_are_identical(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "Linked executable differs"):
+                self.linked_builds(directory, [b"executable1", b"executable2"])
+            self.assertNotEqual((Path(directory) / "build-1").read_bytes(),
+                                (Path(directory) / "build-2").read_bytes())
+
     def run_builds(self, directory, outputs):
         target = "x86_64-pc-windows-msvc"
         builds = []

@@ -6,6 +6,7 @@ import {
 	type ReleaseTarget,
 	type VerifiedRelease,
 	fetchVerifiedRelease,
+	standalonePackageDownloadsBinary,
 	standalonePackageModes,
 } from "../../../lib/device-management/package";
 import {
@@ -116,9 +117,7 @@ export function DeviceSetupDialog({
 								: "docker",
 						);
 					} else {
-						setError(
-							"This release has no browser package: its binaries exceed 256 MiB and no supported Docker alternative is signed.",
-						);
+						setError("This release has no supported deployment package.");
 					}
 				}
 			})
@@ -283,6 +282,14 @@ export function DeviceSetupDialog({
 							The package is ready. Start it on the target device within one day
 							to complete enrollment.
 						</p>
+						{verified &&
+							mode !== "docker" &&
+							standalonePackageDownloadsBinary(verified.manifest, target) && (
+								<p>
+									The native binary downloads on first start. The target device
+									needs internet access, curl, and sha256sum or shasum.
+								</p>
+							)}
 						{backupSaved || result.accountBackup === "saved" ? (
 							<Button asChild>
 								<a
@@ -358,7 +365,7 @@ export function DeviceSetupDialog({
 										>
 											{value}
 											{!available.binary && !available.docker
-												? " (binary exceeds 256 MiB; no Docker alternative)"
+												? " (no supported deployment package)"
 												: ""}
 										</option>
 									);
@@ -383,15 +390,14 @@ export function DeviceSetupDialog({
 									Binary and Docker Compose
 								</option>
 							</select>
-							{verified && !modes.binary && (
-								<p className="text-muted-foreground">
-									The selected binary exceeds the browser package limit of 256
-									MiB.
-									{modes.docker
-										? " Docker Compose is available for this target."
-										: " This target has no Docker alternative in this release."}
-								</p>
-							)}
+							{verified &&
+								mode !== "docker" &&
+								standalonePackageDownloadsBinary(verified.manifest, target) && (
+									<p className="text-muted-foreground">
+										The native binary downloads on first start. The target
+										device needs internet access, curl, and sha256sum or shasum.
+									</p>
+								)}
 						</label>
 						<label
 							htmlFor={`${formId}-password`}

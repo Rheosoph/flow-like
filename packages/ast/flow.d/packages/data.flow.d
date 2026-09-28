@@ -2175,11 +2175,11 @@ declare namespace events {
     /**
      * Run a server workflow when an email arrives at its assigned address
      * @node events_inbound_email @alias eventsInboundEmail
-     * @returns email — Email content, envelope recipients, headers and attachment storage paths
+     * @returns email — Email content, envelope recipients, headers and temporary file paths that expire at Expires At
      * @returns session — App and Event reference for sending through this automation address
      * @returns message — Original inbound message reference for replies
-     * @returns attachments — Stored attachment paths for file and path nodes
-     * @returns attachmentMetadata — Attachment filenames, content types, byte sizes and storage paths
+     * @returns attachments — Temporary attachment files for file and path nodes. Copy them to app storage to keep them
+     * @returns attachmentMetadata — Attachment filenames, content types, byte sizes and temporary file paths
      * @returns sender — Sender header, falling back to the first From address
      * @returns from — From header addresses
      * @returns to — To header addresses
@@ -2190,14 +2190,16 @@ declare namespace events {
      * @returns html — HTML preview, empty when absent
      * @returns envelopeFrom — SMTP envelope sender
      * @returns recipient — The receiving automation address
-     * @returns raw — Complete MIME message stored as an EML file
-     * @returns textPath — Complete plain text body, when present
-     * @returns htmlPath — Complete HTML body, when present
+     * @returns automated — True for bounces, auto-replies, mailing lists and other machine-generated mail. Platform replies to it are refused to prevent mail loops
+     * @returns raw — Complete MIME message as a temporary EML file. Copy it to app storage to keep it
+     * @returns textPath — Complete plain text body as a temporary file, when present
+     * @returns htmlPath — Complete HTML body as a temporary file, when present
+     * @returns expiresAt — When the email's stored files are deleted. Copy files to app storage before then to keep them
      * @returns textTruncated — Read Text File for the complete plain text body
      * @returns htmlTruncated — Read HTML File for the complete HTML body
      * @impure has side effects / drives control flow
      */
-    function inboundEmail(): { email: Struct, session: Struct, message: Struct, attachments: Struct[], attachmentMetadata: Struct[], sender: Struct, from: Struct[], to: Struct[], cc: Struct[], replyTo: Struct[], subject: string, text: string, html: string, envelopeFrom: string, recipient: string, raw: Struct, textPath: Struct, htmlPath: Struct, textTruncated: bool, htmlTruncated: bool };
+    function inboundEmail(): { email: Struct, session: Struct, message: Struct, attachments: Struct[], attachmentMetadata: Struct[], sender: Struct, from: Struct[], to: Struct[], cc: Struct[], replyTo: Struct[], subject: string, text: string, html: string, envelopeFrom: string, recipient: string, automated: bool, raw: Struct, textPath: Struct, htmlPath: Struct, expiresAt: Date, textTruncated: bool, htmlTruncated: bool };
 
     /**
      * A simple event without input or output
@@ -7376,7 +7378,7 @@ declare namespace teams {
     // === Events/Chat/Teams ===
 
     /**
-     * Reply to the Teams conversation from a Chat Event session
+     * Send an Adaptive Card to the Teams conversation of a Chat Event session
      * @node events_teams_send_card @alias eventsTeamsSendCard
      * @param session — Local or global session from the Teams Chat Event
      * @param text (optional) — Message text with Teams Markdown formatting
@@ -7387,7 +7389,7 @@ declare namespace teams {
     function sendCard({ session: Struct, text?: string, card: Struct }): string;
 
     /**
-     * Reply to the Teams conversation from a Chat Event session
+     * Send a text reply to the Teams conversation of a Chat Event session
      * @node events_teams_send_message @alias eventsTeamsSendMessage
      * @param session — Local or global session from the Teams Chat Event
      * @param text (optional) — Message text with Teams Markdown formatting
@@ -7397,13 +7399,13 @@ declare namespace teams {
     function sendMessage({ session: Struct, text?: string }): string;
 
     /**
-     * Reply to the Teams conversation from a Chat Event session
+     * Replace the text of a message a Teams send node posted in this conversation
      * @node events_teams_update_message @alias eventsTeamsUpdateMessage
      * @param session — Local or global session from the Teams Chat Event
      * @param text (optional) — Message text with Teams Markdown formatting
-     * @param messageId — Message returned by a Teams send node in this conversation
+     * @param inputMessageId — Message returned by a Teams send node in this conversation
      * @returns messageId — The Teams message identifier
      * @impure has side effects / drives control flow
      */
-    function updateMessage({ session: Struct, text?: string, messageId: string }): string;
+    function updateMessage({ session: Struct, text?: string, inputMessageId: string }): string;
 }

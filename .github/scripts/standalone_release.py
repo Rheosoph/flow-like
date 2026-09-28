@@ -21,16 +21,14 @@ TARGETS = {
     "x86_64-apple-darwin": None,
     "aarch64-apple-darwin": None,
 }
-MAX_BROWSER_BINARY_BYTES = 256 * 1024 * 1024
+MAX_RELEASE_BINARY_BYTES = 2 * 1024**3
 
 
 def usable_package_modes(records, container):
-    platforms = container.get("platforms", []) if isinstance(container, dict) else []
+    # Browser packages embed small binaries and download larger signed binaries on first start.
     for record in records:
-        if record["size"] > MAX_BROWSER_BINARY_BYTES:
-            architecture = TARGETS.get(record["target"])
-            if not architecture or f"linux/{architecture}" not in platforms:
-                raise ValueError(f"{record['target']} binary exceeds the 256 MiB browser limit and has no signed Docker alternative; reduce its release size before publishing")
+        if type(record.get("size")) is not int or not 0 < record["size"] <= MAX_RELEASE_BINARY_BYTES:
+            raise ValueError(f"{record['target']} binary exceeds the release size limit of 2 GiB")
 
 
 def binary_info(binary, target):
@@ -51,6 +49,7 @@ def binary_info(binary, target):
 def describe(binary, target, output):
     if target not in TARGETS or binary.is_symlink() or not binary.is_file():
         raise ValueError("Expected a regular standalone binary for a supported target")
+    usable_package_modes([{"target": target, "size": binary.stat().st_size}], None)
     info = binary_info(binary, target)
     output.mkdir(parents=True, exist_ok=True)
     name = f"flow-like-standalone-{target}"
@@ -83,7 +82,7 @@ def manifest(artifacts, base_url, sequence, image, output, issued_at=None):
             version, schema = info["version"], info["state_schema_version"]
         if info["version"] != version or info["state_schema_version"] != schema:
             raise ValueError("Release binaries disagree on version or database schema")
-        if binary.is_symlink() or not binary.is_file() or not 0 < binary.stat().st_size <= 2 * 1024**3:
+        if binary.is_symlink() or not binary.is_file() or not 0 < binary.stat().st_size <= MAX_RELEASE_BINARY_BYTES:
             raise ValueError("Release binary exceeds its size or filesystem bounds")
         with binary.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -283,7 +282,7 @@ def publish_bundle(artifacts, base_url, prefix, public_keys, store, verify_publi
         name = f"flow-like-standalone-{record['target']}"
         path = artifacts / name
         if (path.is_symlink() or not path.is_file() or type(record.get("size")) is not int
-                or not 0 < record["size"] <= 2 * 1024**3 or path.stat().st_size != record["size"]
+                or not 0 < record["size"] <= MAX_RELEASE_BINARY_BYTES or path.stat().st_size != record["size"]
                 or record.get("url") != f"{base_url}/releases/{sequence}/{name}"):
             raise ValueError("Signed artifact path, size or immutable URL mismatch")
         with path.open("rb") as stream:
